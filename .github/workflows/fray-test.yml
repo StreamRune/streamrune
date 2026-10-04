@@ -21,7 +21,7 @@ jobs:
   fray:
     runs-on: ubuntu-latest  # x86_64 Linux: the only platform with a Fray JVMTI agent in 0.8.5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-java@v6
         with:
