@@ -47,7 +47,7 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # ubuntu-latest ships a Docker daemon; the integration tests need it for Testcontainers.
       - name: Verify Docker available
@@ -80,7 +80,7 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Verify Docker available
         run: docker info
