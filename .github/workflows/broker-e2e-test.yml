@@ -51,7 +51,7 @@ jobs:
           java-version: '25'
           distribution: 'temurin'  # matches build.yml; brokerTest needs only a JDK 25
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # Testcontainers boots Postgres, Kafka and RabbitMQ for these tests.
       - name: Verify Docker available

@@ -18,7 +18,7 @@ jobs:
           java-version: '25'
           distribution: 'graalvm'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Check for dependency updates
         run: ./gradlew dependencyUpdates -Drevision=release --no-daemon --no-parallel
