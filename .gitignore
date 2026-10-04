@@ -1,0 +1,10 @@
+.gradle/
+build/
+.idea/
+*.iml
+.DS_Store
+.worktrees/
+reports
+
+# SonarScanner working directory
+.scannerwork/

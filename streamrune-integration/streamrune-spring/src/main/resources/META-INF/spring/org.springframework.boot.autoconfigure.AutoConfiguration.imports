@@ -1,0 +1,7 @@
+org.streamrune.spring.StreamRuneAutoConfiguration
+org.streamrune.spring.ProjectionAutoConfig
+org.streamrune.spring.CryptoPropertiesConfiguration
+org.streamrune.spring.FileSystemCryptoEngineConfiguration
+org.streamrune.spring.PostgresCryptoEngineConfiguration
+org.streamrune.spring.VaultCryptoEngineConfiguration
+org.streamrune.spring.AwsKmsCryptoEngineConfiguration

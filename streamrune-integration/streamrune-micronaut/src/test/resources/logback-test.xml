@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Test-only logging config (mirroring the streamrune-runtime and streamrune-postgres
+     precedent). logback-classic is on the test classpath solely so log-assertion tests can capture
+     events with a ListAppender: the SseController failure-path WARNs are only observable as the
+     log line itself. A logger under test must pass WARN for the capture to see its events.
+
+     The root stays at WARN, not ERROR: an ERROR root would silence every WARN in the suite,
+     including the warnings a failing test's own subsystem emits on the way down. WARN is quiet
+     enough to keep the ApplicationContext tests from flooding the build log with INFO/DEBUG
+     chatter. -->
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <root level="WARN">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

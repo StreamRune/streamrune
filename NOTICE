@@ -1,0 +1,17 @@
+StreamRune
+Copyright (c) 2026 Martin Bednář
+
+SPDX-License-Identifier: BUSL-1.1
+
+This product is licensed under the Business Source License 1.1.
+See LICENSE for the full license text, including the Additional Use Grant
+(production use is free below USD 5,000,000 total annual gross revenue) and
+the Change License (Apache License 2.0, four years after each version is
+published).
+
+Above that revenue threshold a commercial license is required.
+For commercial licensing inquiries, see LICENSE-COMMERCIAL.md
+or contact licensing@streamrune.com.
+
+In a published artifact all three files are bundled at META-INF/LICENSE,
+META-INF/NOTICE and META-INF/LICENSE-COMMERCIAL.md.

@@ -1,0 +1,319 @@
+{
+  "groups": [
+    {
+      "name": "streamrune",
+      "type": "org.streamrune.micronaut.StreamRuneMicronautProperties",
+      "description": "StreamRune framework configuration"
+    },
+    {
+      "name": "streamrune.crypto",
+      "type": "org.streamrune.micronaut.StreamRuneMicronautCryptoProperties",
+      "description": "Crypto engine configuration (immutable; bound once at startup)."
+    },
+    {
+      "name": "streamrune.crypto.cache",
+      "type": "org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$CacheConfig",
+      "description": "Crypto cache configuration."
+    },
+    {
+      "name": "streamrune.crypto.filesystem",
+      "type": "org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$FileSystemConfig",
+      "description": "File system crypto engine configuration."
+    },
+    {
+      "name": "streamrune.crypto.postgres",
+      "type": "org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$PostgresConfig",
+      "description": "PostgreSQL crypto engine configuration."
+    },
+    {
+      "name": "streamrune.crypto.vault",
+      "type": "org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$VaultConfig",
+      "description": "HashiCorp Vault crypto engine configuration."
+    },
+    {
+      "name": "streamrune.crypto.aws",
+      "type": "org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$AwsConfig",
+      "description": "AWS KMS crypto engine configuration."
+    }
+  ],
+  "properties": [
+    {
+      "name": "streamrune.snapshot-every-n-events",
+      "type": "java.lang.Integer",
+      "description": "Number of events between automatic snapshots",
+      "defaultValue": 100
+    },
+    {
+      "name": "streamrune.retry-max-attempts",
+      "type": "java.lang.Integer",
+      "description": "Maximum retry attempts for optimistic lock conflicts",
+      "defaultValue": 3
+    },
+    {
+      "name": "streamrune.retry-initial-delay-ms",
+      "type": "java.lang.Long",
+      "description": "Initial delay in milliseconds between retry attempts",
+      "defaultValue": 50
+    },
+    {
+      "name": "streamrune.retry-backoff-multiplier",
+      "type": "java.lang.Double",
+      "description": "Backoff multiplier for retry delays",
+      "defaultValue": 2.0
+    },
+    {
+      "name": "streamrune.polling-interval-ms",
+      "type": "java.lang.Long",
+      "description": "Subscription polling interval in milliseconds",
+      "defaultValue": 5000
+    },
+    {
+      "name": "streamrune.polling-jitter-ms",
+      "type": "java.lang.Long",
+      "description": "Random jitter added to polling interval in milliseconds",
+      "defaultValue": 1000
+    },
+    {
+      "name": "streamrune.lock-timeout",
+      "type": "java.time.Duration",
+      "description": "Timeout for acquiring aggregate locks",
+      "defaultValue": "5s"
+    },
+    {
+      "name": "streamrune.event-store.statement-timeout",
+      "type": "java.time.Duration",
+      "description": "Bound on every statement the event store runs, applied per transaction or per statement (never on the pooled session); 0s sets none",
+      "defaultValue": "30s"
+    },
+    {
+      "name": "streamrune.stripe-count",
+      "type": "java.lang.Integer",
+      "description": "Number of stripes for the local striped locker",
+      "defaultValue": 1024
+    },
+    {
+      "name": "streamrune.circuit-breaker-failure-threshold",
+      "type": "java.lang.Integer",
+      "description": "Number of consecutive failures to trip the circuit breaker",
+      "defaultValue": 5
+    },
+    {
+      "name": "streamrune.circuit-breaker-cooldown",
+      "type": "java.time.Duration",
+      "description": "Time the circuit breaker stays open before allowing a probe",
+      "defaultValue": "30s"
+    },
+    {
+      "name": "streamrune.event-audit-enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable per-event audit logging",
+      "defaultValue": false
+    },
+    {
+      "name": "streamrune.projection-dlq-enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable projection dead letter queue",
+      "defaultValue": false
+    },
+    {
+      "name": "streamrune.saga.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable saga auto-configuration",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.outbox.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable outbox polling (opt-in, requires message broker)",
+      "defaultValue": false
+    },
+    {
+      "name": "streamrune.outbox.batch-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum events per outbox poll cycle",
+      "defaultValue": 100
+    },
+    {
+      "name": "streamrune.outbox.flush-interval-ms",
+      "type": "java.lang.Long",
+      "description": "Outbox polling interval in milliseconds",
+      "defaultValue": 5000
+    },
+    {
+      "name": "streamrune.outbox.skipped-retention-max-age",
+      "type": "java.time.Duration",
+      "description": "How long to keep SKIPPED outbox entries (the audit of an operator's skip) before the retention sweeper prunes them; zero or negative disables the SKIPPED sweep. FAILED entries are never pruned",
+      "defaultValue": "30d"
+    },
+    {
+      "name": "streamrune.dead-letter.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable the automatic dead letter retry runner. Only the automatic replays: the command bus keeps dead-lettering into a DeadLetterQueue bean and the retention sweeper keeps pruning it",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.dead-letter.max-retries",
+      "type": "java.lang.Integer",
+      "description": "Maximum retry attempts before permanent failure",
+      "defaultValue": 5
+    },
+    {
+      "name": "streamrune.dead-letter.retry-interval-ms",
+      "type": "java.lang.Long",
+      "description": "Interval between dead letter retry attempts in milliseconds",
+      "defaultValue": 60000
+    },
+    {
+      "name": "streamrune.dead-letter.retention-max-age",
+      "type": "java.time.Duration",
+      "description": "How long to keep command dead-letter-queue entries (which hold command payloads) before the retention sweeper prunes them; zero or negative disables pruning. Independent of streamrune.dead-letter.enabled",
+      "defaultValue": "30d"
+    },
+    {
+      "name": "streamrune.metrics.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable Micrometer metrics publishing",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.metrics.prefix",
+      "type": "java.lang.String",
+      "description": "Metric name prefix for all StreamRune metrics",
+      "defaultValue": "streamrune"
+    },
+    {
+      "name": "streamrune.validation-enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable command validation interceptor via JSR-380",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.startup-log",
+      "type": "java.lang.Boolean",
+      "description": "Log StreamRune banner and configuration summary at startup",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.subscription.single-active-consumer.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable single-active-consumer subscription leadership so at most one replica of each projection/subscription is the active consumer (requires a DataSource); when false or absent, runners always lead (single-instance behavior)",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.subscription.health.lag-threshold",
+      "type": "java.lang.Long",
+      "description": "Lag, in events between the head of the event stream and a subscription's checkpoint, at or above which a running subscription is reported DEGRADED in the health details. Lag never turns the health indicator DOWN (it is part of /health/readiness): only a stopped or terminally halted subscription does. At least 1",
+      "defaultValue": 1000
+    },
+    {
+      "name": "streamrune.runner-lifecycle-enabled",
+      "type": "java.lang.Boolean",
+      "description": "Automatically start and stop projection runners, outbox poller, and dead letter retry runner with the application context",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.sse.timeout",
+      "type": "java.time.Duration",
+      "description": "How long an SSE stream may stay open before the server completes it (dead-client reaping). Finite so a half-open client on an idle stream is reaped and its subscription, worker and socket FD released; zero or negative disables it, leaving the keepalive as the sole reaper",
+      "defaultValue": "5m"
+    },
+    {
+      "name": "streamrune.sse.keep-alive-interval",
+      "type": "java.time.Duration",
+      "description": "How often a keepalive comment frame is written to every SSE subscriber (dead-client reaping). Detection requires a write, so an idle stream needs this to surface a dead peer; zero or negative disables it",
+      "defaultValue": "30s"
+    },
+    {
+      "name": "streamrune.security.trust-user-id-header",
+      "type": "java.lang.Boolean",
+      "description": "Trusted-gateway mode: when true, the request filter and the SSE endpoint take the authorization identity (RequestContext.userId) from the X-User-Id header, even when Micronaut Security is present. Enable it only when a gateway in front of the service authenticates every caller, overwrites X-User-Id with the authenticated id and strips any client-supplied value, and the service is reachable only through that gateway; otherwise any client can act as any user. When false, the identity is the authenticated principal if an AuthenticatedUserResolver is available (Micronaut Security enabled), and otherwise every request is anonymous and the header is ignored; in that anonymous mode a configured CommandAuthorizationPolicy or UserRoleResolver refuses startup",
+      "defaultValue": false
+    },
+    {
+      "name": "streamrune.crypto.cache.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the decrypted-plaintext crypto cache wraps the engine. false skips the cache entirely so no decrypted PII is retained in heap (the no-cache GDPR posture).",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.crypto.cache.maximum-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum number of entries in the crypto cache.",
+      "defaultValue": 10000
+    },
+    {
+      "name": "streamrune.crypto.cache.expire-after-write",
+      "type": "java.time.Duration",
+      "description": "Duration after which a cached crypto entry expires once written; also the only cross-replica erasure bound when no DataSource wires the forget channel.",
+      "defaultValue": "5m"
+    },
+    {
+      "name": "streamrune.crypto.cache.expire-after-access",
+      "type": "java.time.Duration",
+      "description": "Duration after which a cached crypto entry expires when not accessed. Unset disables access-based expiry."
+    },
+    {
+      "name": "streamrune.crypto.filesystem.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable the file system crypto engine.",
+      "defaultValue": false
+    },
+    {
+      "name": "streamrune.crypto.filesystem.key-directory",
+      "type": "java.lang.String",
+      "description": "Directory holding the file system engine's encryption keys. Required when the engine is enabled.",
+      "defaultValue": "/var/lib/streamrune/keys"
+    },
+    {
+      "name": "streamrune.crypto.postgres.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable the PostgreSQL crypto engine.",
+      "defaultValue": false
+    },
+    {
+      "name": "streamrune.crypto.postgres.table-name",
+      "type": "java.lang.String",
+      "description": "Key-table name of the PostgreSQL engine; must be a plain SQL identifier. The shipped migration creates only the default-named table, so a custom name requires creating that table.",
+      "defaultValue": "encryption_keys"
+    },
+    {
+      "name": "streamrune.crypto.vault.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable the HashiCorp Vault crypto engine.",
+      "defaultValue": false
+    },
+    {
+      "name": "streamrune.crypto.vault.address",
+      "type": "java.lang.String",
+      "description": "Vault server address.",
+      "defaultValue": "http://localhost:8200"
+    },
+    {
+      "name": "streamrune.crypto.vault.token",
+      "type": "java.lang.String",
+      "description": "Vault authentication token. Required when the Vault engine is enabled."
+    },
+    {
+      "name": "streamrune.crypto.vault.engine-mount",
+      "type": "java.lang.String",
+      "description": "Mount path of the Vault transit engine.",
+      "defaultValue": "transit"
+    },
+    {
+      "name": "streamrune.crypto.aws.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable the AWS KMS crypto engine.",
+      "defaultValue": false
+    },
+    {
+      "name": "streamrune.crypto.aws.region",
+      "type": "java.lang.String",
+      "description": "AWS region of the KMS key. Required when the AWS KMS engine is enabled."
+    },
+    {
+      "name": "streamrune.crypto.aws.kms-key-id",
+      "type": "java.lang.String",
+      "description": "AWS KMS key id or ARN. Required when the AWS KMS engine is enabled."
+    }
+  ]
+}

@@ -1,0 +1,668 @@
+package org.streamrune.quarkus;
+
+import io.quarkus.arc.properties.IfBuildProperty;
+import io.smallrye.mutiny.Multi;
+import io.smallrye.mutiny.subscription.BackPressureStrategy;
+import io.smallrye.mutiny.subscription.MultiEmitter;
+import jakarta.annotation.PreDestroy;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.inject.Provider;
+import jakarta.ws.rs.BadRequestException;
+import jakarta.ws.rs.ForbiddenException;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.NotFoundException;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.sse.OutboundSseEvent;
+import java.lang.reflect.Type;
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.streamrune.core.DomainEvent;
+import org.streamrune.core.types.AggregateId;
+import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.LogSanitizer;
+import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.UserId;
+import org.streamrune.integration.AuthenticatedUserResolver;
+import org.streamrune.integration.RequestIdentityPolicy;
+import org.streamrune.integration.SseAuthorizer;
+import org.streamrune.runtime.SseEventPublisher;
+
+/**
+ * Quarkus JAX-RS endpoint for Server-Sent Events. Streams events from {@link SseEventPublisher} for
+ * one aggregate stream.
+ *
+ * <p>Endpoint: {@code GET /api/sse/{aggregateType}/{aggregateId}} — the two parts of the typed
+ * {@link StreamId}; an invalid part is answered with {@code 400 Bad Request}.
+ *
+ * <p>Each SSE event carries the full domain event as JSON in the {@code data} field and the global
+ * offset in the {@code id} field, matching the Spring integration's {@code SseController}. JSON
+ * serialization of the event payload requires a JSON message body writer on the application
+ * classpath (e.g. {@code quarkus-rest-jackson}).
+ *
+ * <p>Back-pressure: events for a slow client are buffered up to {@link #SLOW_CLIENT_BUFFER} items;
+ * beyond that the stream fails and the client must reconnect, instead of growing heap without
+ * bound. This is the SECOND of two independent slow-consumer bounds: {@code SseEventPublisher} also
+ * caps its own per-subscriber queue. Because this buffer absorbs each emit promptly, the delivery
+ * worker rarely stalls and the publisher's queue rarely fills — for a steadily slow client the
+ * bound here is the one that trips, and the publisher's slow-consumer eviction is reached only when
+ * the publish rate outruns the worker's drain rate (the disconnect hook wired below therefore acts
+ * as defence in depth on this integration, unlike on Spring where the publisher queue is the only
+ * bound). Worst case a slow client holds this buffer's items PLUS the publisher's queue — decrypted
+ * domain events in both — before either bound fires.
+ *
+ * <p><b>Dead-client reaping (ported by).</b> Every stream gets a <em>finite</em> lifetime ({@code
+ * streamrune.sse.timeout}, default 5m) and a periodic keepalive comment frame ({@code
+ * streamrune.sse.keep-alive-interval}, default 30s). A half-open TCP client (a mobile/NAT drop with
+ * no FIN/RST) on an idle stream produces no writes on its own, and {@link #SLOW_CLIENT_BUFFER} only
+ * bounds a stream that is still <em>emitting</em> — so without these the {@code SseEventPublisher}
+ * subscription, its delivery worker, and the socket FD would linger forever, accumulating across
+ * reconnect churn until FD exhaustion (Vert.x disables its idle timeout by default). The keepalive
+ * turns a dead connection into a failed socket write, which Quarkus REST surfaces by cancelling the
+ * subscription — {@code onTermination} then unsubscribes, so eviction rides the framework's own
+ * cancellation path rather than a hand-rolled catch. The finite timeout is the backstop; SSE
+ * clients auto-reconnect. Matches the Spring and Micronaut integrations.
+ *
+ * <p><b>The shared scheduler thread is never parked.</b> One single-threaded {@link
+ * ScheduledThreadPoolExecutor} drives every stream's keepalive ticks and every stream's deadline,
+ * so neither may block on a per-stream send lock: both probe it with {@code tryLock()}. A keepalive
+ * that loses the probe is skipped (the in-flight write is that stream's liveness signal); a
+ * deadline that loses it is retried, because a missed completion would leak the subscription.
+ * Spring and Micronaut need neither: Spring's deadline is enforced by the servlet container ({@code
+ * SseEmitter(timeout)}) and Micronaut's runs as {@code Flux.take(Duration)} on the multi-threaded
+ * {@code Schedulers.parallel()} against a self-serializing sink.
+ *
+ * <p><b>Security:</b> registered only when {@code streamrune.sse.enabled=true} (build-time gate).
+ * Access is authorized by the {@link SseAuthorizer} bean using the caller and the requested {@link
+ * StreamId}; a denied request is rejected with {@code 403 Forbidden}. When SSE is enabled but the
+ * application provides no authorizer, the framework installs a fail-closed deny-all authorizer.
+ *
+ * <p><b>Caller identity.</b> The caller handed to the authorizer is resolved by the same {@link
+ * RequestIdentityPolicy} bean the {@link StreamRuneRequestFilter} binds {@code
+ * RequestContext.userId} with, so a stream subscription and a command from the same request see the
+ * same user: the authenticated principal when an {@link AuthenticatedUserResolver} is available
+ * (the {@code X-User-Id} header ignored), the {@code X-User-Id} header only in the explicit
+ * trusted-gateway mode ({@code streamrune.security.trust-user-id-header=true}), and otherwise
+ * nobody ({@code null}). This endpoint used to ignore the header even behind a trusted gateway, so
+ * it authorized a different caller than the commands of the same request. Both read every {@code
+ * X-User-Id} value as received ({@link HttpHeaders#getRequestHeader} here, the same multivalued
+ * view as the filter's {@code getHeaders()}), never a single-valued {@code @HeaderParam} that takes
+ * the first value, so a repeated header cannot resolve to one caller here and another there.
+ *
+ * <p><b>Runtime kill switch.</b> {@code @IfBuildProperty} only decides whether this resource is
+ * <em>registered</em> at build/augmentation time — it cannot be flipped on a running or redeployed
+ * instance. {@link #stream} therefore re-reads the <em>runtime</em> value of {@code
+ * streamrune.sse.enabled} and returns {@code 404 Not Found} when it is {@code false}, so an
+ * operator disabling SSE at runtime (e.g. during an incident) actually disables it — matching the
+ * Spring ({@code @ConditionalOnProperty}) and Micronaut ({@code @Requires}) integrations, where
+ * flipping the flag removes the endpoint entirely. Without this, the flag would be a silent no-op
+ * on Quarkus and the endpoint would keep streaming decrypted domain events.
+ */
+@Path("/api/sse")
+@ApplicationScoped
+@IfBuildProperty(name = "streamrune.sse.enabled", stringValue = "true")
+public class SseController {
+
+  private static final Logger log = LoggerFactory.getLogger(SseController.class);
+
+  /** Maximum number of events buffered for a slow SSE client before the stream is terminated. */
+  static final int SLOW_CLIENT_BUFFER = 256;
+
+  /**
+   * How soon a deadline task that found its stream's send lock held retries.
+   *
+   * <p>A deadline may be <em>retried</em> but never <em>skipped</em> — unlike a keepalive tick,
+   * whose whole purpose is served by the in-flight write it collided with. Short enough that the
+   * dead-client FD-reclaim window is not meaningfully widened, long enough that a stream stalled
+   * for minutes costs a handful of cheap probe wakeups rather than a spin.
+   */
+  static final long DEADLINE_RETRY_MILLIS = 50L;
+
+  /**
+   * The single keepalive frame instance. Comment-only: {@code getData()} is {@code null}, and
+   * Quarkus REST's SSE serializer omits the {@code data} field entirely for a null payload, so the
+   * wire form is a bare {@code : keepalive} comment — ignored by every SSE client, but still a
+   * socket write.
+   */
+  static final OutboundSseEvent KEEP_ALIVE = new KeepAliveSseFrame();
+
+  private final SseEventPublisher publisher;
+  private final SseAuthorizer authorizer;
+  private final RequestIdentityPolicy identityPolicy;
+  // A Provider so each request re-reads the current runtime value rather than a value frozen at
+  // bean creation — the runtime kill switch.
+  private final Provider<Boolean> sseEnabled;
+  private final Duration timeout;
+  private final Duration keepAliveInterval;
+
+  /**
+   * Shared keepalive/deadline scheduler; {@code null} when both are disabled.
+   *
+   * <p>An explicit {@link ScheduledThreadPoolExecutor} (not {@link
+   * java.util.concurrent.Executors#newSingleThreadScheduledExecutor}, whose returned {@code
+   * DelegatedScheduledExecutorService} wrapper exposes no way to reach {@code
+   * setRemoveOnCancelPolicy}) so a cancelled deadline/keepalive task is purged from the delay queue
+   * immediately instead of lingering there until it would have fired — see the constructor.
+   */
+  private final ScheduledThreadPoolExecutor keepAlive;
+
+  /**
+   * The constructor Quarkus/Arc uses.
+   *
+   * @param publisher the event fan-out the subscriptions attach to
+   * @param authorizer decides whether the caller may subscribe to a stream
+   * @param identityPolicy resolves the caller — the same policy bean the request filter uses
+   * @param sseEnabled the runtime value of {@code streamrune.sse.enabled} (runtime kill switch)
+   * @param properties the bound StreamRune Quarkus properties (dead-client reaping windows)
+   * @throws IllegalArgumentException if {@code identityPolicy} is {@code null}
+   */
+  @Inject
+  public SseController(
+      SseEventPublisher publisher,
+      SseAuthorizer authorizer,
+      RequestIdentityPolicy identityPolicy,
+      @ConfigProperty(name = "streamrune.sse.enabled", defaultValue = "true")
+          Provider<Boolean> sseEnabled,
+      StreamRuneQuarkusProperties properties) {
+    this(
+        publisher,
+        identityPolicy,
+        authorizer,
+        sseEnabled,
+        properties.sse().timeout(),
+        properties.sse().keepAliveInterval());
+  }
+
+  /** Test convenience: SSE always enabled at runtime, production reaping defaults. */
+  SseController(
+      SseEventPublisher publisher, SseAuthorizer authorizer, RequestIdentityPolicy identityPolicy) {
+    this(
+        publisher,
+        identityPolicy,
+        authorizer,
+        () -> Boolean.TRUE,
+        Duration.ofMinutes(5),
+        Duration.ofSeconds(30));
+  }
+
+  /** Test convenience: explicit runtime kill switch, production dead-client reaping defaults. */
+  SseController(
+      SseEventPublisher publisher,
+      SseAuthorizer authorizer,
+      RequestIdentityPolicy identityPolicy,
+      Provider<Boolean> sseEnabled) {
+    this(
+        publisher,
+        identityPolicy,
+        authorizer,
+        sseEnabled,
+        Duration.ofMinutes(5),
+        Duration.ofSeconds(30));
+  }
+
+  /** Test convenience: SSE always enabled at runtime, explicit dead-client reaping windows. */
+  SseController(
+      SseEventPublisher publisher,
+      SseAuthorizer authorizer,
+      RequestIdentityPolicy identityPolicy,
+      Duration timeout,
+      Duration keepAliveInterval) {
+    this(publisher, identityPolicy, authorizer, () -> Boolean.TRUE, timeout, keepAliveInterval);
+  }
+
+  // Canonical constructor. The parameter order differs from the public one only to keep the
+  // delegating overloads above unambiguous.
+  private SseController(
+      SseEventPublisher publisher,
+      RequestIdentityPolicy identityPolicy,
+      SseAuthorizer authorizer,
+      Provider<Boolean> sseEnabled,
+      Duration timeout,
+      Duration keepAliveInterval) {
+    if (identityPolicy == null) {
+      throw new IllegalArgumentException("identityPolicy is required");
+    }
+    this.publisher = publisher;
+    this.authorizer = authorizer;
+    this.identityPolicy = identityPolicy;
+    this.sseEnabled = sseEnabled;
+    this.timeout = positiveOrNull(timeout);
+    this.keepAliveInterval = positiveOrNull(keepAliveInterval);
+    // One shared daemon scheduler drives both dead-client reapers (per-stream keepalive ticks and
+    // per-stream deadlines); none is created when both are disabled.
+    if (this.keepAliveInterval == null && this.timeout == null) {
+      this.keepAlive = null;
+    } else {
+      this.keepAlive =
+          new ScheduledThreadPoolExecutor(
+              1,
+              r -> {
+                Thread t = new Thread(r, "streamrune-sse-keepalive");
+                t.setDaemon(true);
+                return t;
+              });
+      // ScheduledThreadPoolExecutor defaults removeOnCancelPolicy to false, so a
+      // cancelled ScheduledFutureTask (every normal disconnect calls Future.cancel(false) — see
+      // emitter.onTermination below) stays parked in the DelayedWorkQueue until it would have
+      // fired, i.e. for up to the full configured timeout. At churny reconnect rates that retains
+      // one dead emitter chain (and its MultiEmitter, subscriber, and REST request context) per
+      // disconnect for the whole timeout window — heap growth proportional to reconnect rate x
+      // timeout that looks exactly like a leak. true purges a cancelled task from the queue
+      // immediately instead.
+      this.keepAlive.setRemoveOnCancelPolicy(true);
+      // A cancelled/shutdown task must never fire after shutdown — matches shutdown()'s
+      // shutdownNow() below, which already discards queued tasks; explicit for clarity.
+      this.keepAlive.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+    }
+  }
+
+  private static Duration positiveOrNull(Duration d) {
+    return (d == null || d.isZero() || d.isNegative()) ? null : d;
+  }
+
+  /** Stops the keepalive scheduler when the bean is destroyed. */
+  @PreDestroy
+  void shutdown() {
+    if (keepAlive != null) {
+      keepAlive.shutdownNow();
+    }
+  }
+
+  /** Test seam: exposes the shared scheduler so a test can inspect its delay queue. */
+  ScheduledThreadPoolExecutor testKeepAliveExecutor() {
+    return keepAlive;
+  }
+
+  /**
+   * Opens an SSE stream of one aggregate's events: {@code GET
+   * /api/sse/{aggregateType}/{aggregateId}} (for example {@code /api/sse/order/o-1}). Stays open
+   * until the client disconnects.
+   *
+   * @param aggregateType the aggregate type of the stream to subscribe to
+   * @param aggregateId the aggregate id of the stream to subscribe to
+   * @param headers the request headers; every {@code X-User-Id} value they carry is handed to the
+   *     {@link RequestIdentityPolicy}, an identity only in the trusted-gateway mode (see the class
+   *     documentation)
+   * @return reactive Multi that emits one SSE event per published domain event
+   * @throws BadRequestException if the aggregate type or the aggregate id is invalid
+   * @throws ForbiddenException if the {@link SseAuthorizer} denies access to the stream
+   */
+  @GET
+  @Path("/{aggregateType}/{aggregateId}")
+  @Produces(MediaType.SERVER_SENT_EVENTS)
+  public Multi<OutboundSseEvent> stream(
+      @PathParam("aggregateType") String aggregateType,
+      @PathParam("aggregateId") String aggregateId,
+      @Context HttpHeaders headers) {
+    return stream(
+        aggregateType, aggregateId, headers.getRequestHeader(RequestIdentityPolicy.USER_ID_HEADER));
+  }
+
+  /**
+   * Opens an SSE stream of one aggregate's events for a caller whose {@code X-User-Id} values were
+   * already read off the request.
+   *
+   * @param aggregateType the aggregate type of the stream to subscribe to
+   * @param aggregateId the aggregate id of the stream to subscribe to
+   * @param userIdHeaderValues every {@code X-User-Id} value the request carried, as received;
+   *     {@code null} or empty when absent
+   * @return reactive Multi that emits one SSE event per published domain event
+   * @throws BadRequestException if the aggregate type or the aggregate id is invalid (the {@link
+   *     SseAuthorizer} is never consulted)
+   * @throws ForbiddenException if the {@link SseAuthorizer} denies access to the stream
+   */
+  public Multi<OutboundSseEvent> stream(
+      String aggregateType, String aggregateId, List<String> userIdHeaderValues) {
+    // Runtime kill switch. The @IfBuildProperty class gate is fixed at build time, so
+    // without this re-check flipping streamrune.sse.enabled to false on a running/redeployed
+    // instance would silently keep streaming decrypted domain events. Return 404 (matching
+    // Spring/Micronaut, where the endpoint bean does not exist when disabled).
+    if (!Boolean.TRUE.equals(sseEnabled.get())) {
+      throw new NotFoundException("SSE endpoint is disabled (streamrune.sse.enabled=false)");
+    }
+    StreamId sid = streamIdOf(aggregateType, aggregateId);
+    UserId principal = identityPolicy.resolve(userIdHeaderValues, SseController::logMismatch);
+    if (!authorizer.isAuthorized(principal, sid)) {
+      throw new ForbiddenException("Not authorized for this stream");
+    }
+    return Multi.createFrom()
+        .<OutboundSseEvent>emitter(
+            emitter -> {
+              // Serializes event delivery (on the subscriber's worker thread) with keepalive
+              // writes (on the scheduler thread): a Mutiny emitter must not be driven
+              // concurrently, and Reactive Streams requires serial onNext. A ReentrantLock
+              // (not a monitor) so the shared keepalive tick can PROBE it non-blockingly with
+              // tryLock() — see scheduleKeepAlive() (mirroring Spring's
+              // SseController#sendKeepAlives /). The event path takes it
+              // unconditionally, exactly like the previous synchronized block.
+              ReentrantLock sendLock = new ReentrantLock();
+              SseEventPublisher.SseSubscriber subscriber =
+                  envelope -> {
+                    sendLock.lock();
+                    try {
+                      emitter.emit(
+                          new EnvelopeSseFrame(
+                              String.valueOf(envelope.globalOffset().value()), envelope.event()));
+                    } finally {
+                      sendLock.unlock();
+                    }
+                  };
+              // Without a disconnect hook the publisher's slow-consumer eviction
+              // unregisters the subscriber but never terminates the Multi, so the client keeps
+              // an open, apparently-healthy stream that receives zero further events while its
+              // keepalive still succeeds (it is slow, not dead) — a permanent silent event gap
+              // plus a leaked emitter, ticker and FD. Deliberately does NOT take sendLock: this
+              // hook can run on the PUBLISHER's thread and that lock is held by the stalled
+              // write that caused the eviction; emitter.fail() is a terminal signal the emitter
+              // settles atomically, and the termination hook below does the rest of the
+              // teardown.
+              publisher.subscribe(
+                  sid,
+                  subscriber,
+                  cause -> {
+                    try {
+                      emitter.fail(cause);
+                    } catch (Throwable t) {
+                      // Both parts arrive percent-decoded from the
+                      // request path; every id in a log line is rendered through the sanitizer
+                      // so no value can forge a line (CWE-117).
+                      log.warn(
+                          "Failed to fail an evicted SSE stream for {}: {}",
+                          LogSanitizer.sanitizeForLog(sid.value()),
+                          t.toString());
+                    }
+                  });
+              Future<?> ticker = scheduleKeepAlive(emitter, sendLock);
+              Future<?> deadline = scheduleTimeout(emitter, sendLock);
+              emitter.onTermination(
+                  () -> {
+                    if (ticker != null) {
+                      ticker.cancel(false);
+                    }
+                    if (deadline != null) {
+                      deadline.cancel(false);
+                    }
+                    publisher.unsubscribe(sid, subscriber);
+                  });
+            },
+            BackPressureStrategy.ERROR)
+        .onOverflow()
+        .buffer(SLOW_CLIENT_BUFFER);
+  }
+
+  /** The two path segments through their ingress doors; an invalid part is the caller's error. */
+  private static StreamId streamIdOf(String aggregateType, String aggregateId) {
+    try {
+      return StreamId.of(AggregateType.of(aggregateType), AggregateId.of(aggregateId));
+    } catch (IllegalArgumentException _) {
+      throw new BadRequestException("Invalid aggregate type or aggregate id");
+    }
+  }
+
+  private static void logMismatch(UserId headerUserId, UserId principal) {
+    // The header is attacker-controlled — sanitize it (and the
+    // principal, an IdP assertion) before it reaches the log record (CWE-117).
+    log.warn(
+        "X-User-Id header '{}' on an SSE subscription does not match authenticated principal '{}';"
+            + " ignoring the header and authorizing as the authenticated principal",
+        LogSanitizer.sanitizeForLog(headerUserId.value()),
+        LogSanitizer.sanitizeForLog(principal.value()));
+  }
+
+  /**
+   * Schedules this stream's deadline: completing the <em>emitter</em> (not merely the downstream)
+   * at the configured lifetime, so the termination hook runs and the {@code SseEventPublisher}
+   * subscription is released. A downstream-only operator such as {@code select().first(Duration)}
+   * completes the subscriber but leaves the emitter — and therefore the subscription, its worker
+   * and the FD — alive, which is precisely the leak this fix closes.
+   *
+   * <p><b>Never blocks on a mid-send stream.</b> {@link #keepAlive} is the process's SINGLE shared
+   * scheduler thread for every stream's keepalive ticks AND deadline tasks, which is exactly why
+   * {@link #scheduleKeepAlive}'s tick is a {@code tryLock()} probe. This task used to take {@code
+   * lock.lock()} unconditionally, so the fleet-wide stall that the probe removes on the keepalive
+   * path survived here: a delivery worker parked inside a slow {@code emitter.emit()} holds its
+   * stream's send lock, this task parks the one scheduler thread behind it, and EVERY other
+   * stream's keepalives stop (idle proxies drop healthy connections) while their own deadlines fire
+   * late — reopening, for all of them, the FD-leak window the deadline exists to close.
+   *
+   * <p>A deadline differs from a keepalive tick in one way that decides the remedy: a missed
+   * keepalive is harmless (the in-flight write it collided with IS the liveness signal), whereas a
+   * missed completion would leak the stream forever. So the lock is probed rather than taken, and a
+   * lost probe is <em>retried</em> — the task is periodic ({@value #DEADLINE_RETRY_MILLIS} ms) and
+   * cancels itself once the completion has actually landed. Completing without the lock was
+   * rejected: the delivery path drives {@code emitter.emit()} under it, and Reactive Streams
+   * forbids a terminal signal racing an {@code onNext} — the disconnect hook in {@link #stream} may
+   * skip the lock only because it runs on the publisher's thread while THIS stream's writer is the
+   * stalled one, which is not the case here.
+   */
+  private Future<?> scheduleTimeout(
+      MultiEmitter<? super OutboundSseEvent> emitter, ReentrantLock lock) {
+    if (timeout == null || keepAlive == null) {
+      return null;
+    }
+    // Self-reference so the task can stop rescheduling once it has completed the emitter; mirrors
+    // scheduleKeepAlive below. A run that observes a not-yet-published reference (possible only for
+    // a sub-retry-interval timeout) simply completes again on the next run — completion is
+    // idempotent — and cancels then.
+    AtomicReference<Future<?>> self = new AtomicReference<>();
+    Future<?> deadline =
+        keepAlive.scheduleWithFixedDelay(
+            () -> {
+              if (!lock.tryLock()) {
+                // Mid-send: retry on the next run rather than park the ONE shared scheduler thread
+                // behind this stream's stalled write, starving every other stream.
+                return;
+              }
+              try {
+                try {
+                  emitter.complete();
+                } finally {
+                  lock.unlock();
+                }
+              } catch (Throwable t) {
+                log.warn(
+                    "Failed to complete an SSE stream at its configured timeout: {}", t.toString());
+              } finally {
+                // The completion above fires onTermination, which cancels this future too; doing it
+                // here as well keeps the task self-terminating even if the emitter was already
+                // settled (a terminated emitter never fires the hook a second time).
+                Future<?> f = self.get();
+                if (f != null) {
+                  f.cancel(false);
+                }
+              }
+            },
+            timeout.toMillis(),
+            DEADLINE_RETRY_MILLIS,
+            TimeUnit.MILLISECONDS);
+    self.set(deadline);
+    return deadline;
+  }
+
+  /**
+   * Starts this stream's keepalive ticks, or returns {@code null} when the keepalive is disabled.
+   * Each subscriber gets its OWN periodic task, so a throwing tick can only stop that stream's
+   * keepalive — never every other subscriber's (the failure mode the Spring integration had to fix,
+   * whose reaper is a single shared tick over all emitters).
+   *
+   * <p><b>Never blocks on a mid-send stream.</b> {@link #keepAlive} is the process's SINGLE shared
+   * scheduler thread for every stream's keepalive ticks AND deadline tasks. Parking that one thread
+   * waiting for {@code lock} — held by a delivery worker stalled inside a slow/blocked {@code
+   * emitter.emit()} — would starve every OTHER stream's keepalive and deadline tasks too, not just
+   * this one, exactly the fleet-wide stall {@code SseController#sendKeepAlives} on Spring already
+   * guards against with the identical {@code tryLock()} probe. So the lock is only probed: if it is
+   * held, the emit is in flight and IS this subscriber's liveness signal, so this tick is skipped
+   * rather than blocking; the next scheduled tick probes again. The event-delivery path (the {@code
+   * subscriber} lambda in {@link #stream}) still takes the lock unconditionally, so emits are never
+   * interleaved.
+   */
+  private Future<?> scheduleKeepAlive(
+      MultiEmitter<? super OutboundSseEvent> emitter, ReentrantLock lock) {
+    if (keepAliveInterval == null || keepAlive == null) {
+      return null;
+    }
+    long intervalMillis = keepAliveInterval.toMillis();
+    // Self-reference so a failing tick can cancel itself: scheduleAtFixedRate already stops
+    // rescheduling a task that throws, but we swallow throwables to fail the stream cleanly
+    // instead.
+    AtomicReference<Future<?>> self = new AtomicReference<>();
+    // Initial delay = interval so a keepalive never fires before the client has had a full window.
+    Future<?> ticker =
+        keepAlive.scheduleAtFixedRate(
+            () -> {
+              if (!lock.tryLock()) {
+                // Mid-send: the in-flight event write is this subscriber's liveness probe; skip
+                // this tick rather than park the shared scheduler thread for every other stream.
+                return;
+              }
+              try {
+                try {
+                  emitter.emit(KEEP_ALIVE);
+                } finally {
+                  lock.unlock();
+                }
+              } catch (Throwable t) {
+                Future<?> f = self.get();
+                if (f != null) {
+                  f.cancel(false);
+                }
+                log.warn(
+                    "Evicting an SSE subscriber after a failed keepalive tick: {}", t.toString());
+                try {
+                  emitter.fail(t);
+                } catch (Throwable _) {
+                  // already terminated; onTermination has already unsubscribed
+                }
+              }
+            },
+            intervalMillis,
+            intervalMillis,
+            TimeUnit.MILLISECONDS);
+    self.set(ticker);
+    return ticker;
+  }
+
+  /**
+   * A comment-only SSE frame used as the keepalive. {@code getData()} is {@code null}, which
+   * Quarkus REST's {@code SseUtil.serialiseEvent} handles by omitting the {@code data} field, and
+   * no {@code content-type} field is written for a non-{@code OutboundSseEventImpl} event — so the
+   * wire form is exactly {@code : keepalive}, a comment every SSE client ignores. It carries no id,
+   * so it never disturbs a client's {@code Last-Event-ID} resume position.
+   */
+  record KeepAliveSseFrame() implements OutboundSseEvent {
+
+    @Override
+    public Class<?> getType() {
+      return null;
+    }
+
+    @Override
+    public Type getGenericType() {
+      return null;
+    }
+
+    @Override
+    public MediaType getMediaType() {
+      return null;
+    }
+
+    @Override
+    public String getId() {
+      return null;
+    }
+
+    @Override
+    public String getName() {
+      return null;
+    }
+
+    @Override
+    public String getComment() {
+      return "keepalive";
+    }
+
+    @Override
+    public long getReconnectDelay() {
+      return -1;
+    }
+
+    @Override
+    public boolean isReconnectDelaySet() {
+      return false;
+    }
+
+    @Override
+    public Object getData() {
+      return null;
+    }
+  }
+
+  /**
+   * Explicit {@link OutboundSseEvent} for a published domain event: {@code id} is the global
+   * offset, {@code data} is the domain event serialized as JSON. No event name is set, so clients
+   * receive default {@code message} events — the same wire contract as the Spring integration.
+   *
+   * @param id the SSE event id (the event's global offset)
+   * @param data the domain event payload
+   */
+  record EnvelopeSseFrame(String id, DomainEvent data) implements OutboundSseEvent {
+
+    @Override
+    public Class<?> getType() {
+      return data.getClass();
+    }
+
+    @Override
+    public Type getGenericType() {
+      return data.getClass();
+    }
+
+    @Override
+    public MediaType getMediaType() {
+      return MediaType.APPLICATION_JSON_TYPE;
+    }
+
+    @Override
+    public String getId() {
+      return id;
+    }
+
+    @Override
+    public String getName() {
+      return null;
+    }
+
+    @Override
+    public String getComment() {
+      return null;
+    }
+
+    @Override
+    public long getReconnectDelay() {
+      return -1;
+    }
+
+    @Override
+    public boolean isReconnectDelaySet() {
+      return false;
+    }
+
+    @Override
+    public Object getData() {
+      return data;
+    }
+  }
+}

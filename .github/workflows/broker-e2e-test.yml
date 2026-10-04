@@ -1,0 +1,69 @@
+name: Broker E2E Tests
+
+# Runs the @Tag("broker") outbox → relay → broker end-to-end tests
+# (streamrune-integration/streamrune-e2e: OutboxBrokerE2EIT) against REAL Kafka and
+# RabbitMQ containers, through the real OutboxPoller and the real
+# KafkaOutboxPublisher / RabbitMqOutboxPublisher, with nothing stubbed.
+#
+# THIS IS THE ONLY PLACE `brokerTest` RUNS. Booting a Kafka or RabbitMQ
+# container is materially slower and flakier than the Postgres container the rest of
+# the e2e suite shares, so the module's default `test` task EXCLUDES the tag and
+# `brokerTest` is deliberately not wired into `check` — which left the only
+# end-to-end strict per-aggregate ordering assertion in the repo never executed by
+# any pipeline. A change to OutboxPoller's claim/ordering logic that reordered or
+# duplicated messages on the wire passed `./gradlew build` and the Build workflow
+# green: every OutboxPollerTest uses a fake publisher, and every broker integration
+# test in the outbox modules calls publisher.publish(entry) directly, bypassing the
+# poller, the claim lease, and per-aggregate ordering entirely.
+#
+# Three triggers:
+#   - push of a v* tag  — the release cut itself.
+#   - nightly cron      — catches a regression within a day of it landing on main.
+#   - workflow_dispatch — on demand, e.g. before opening a release PR.
+#
+# Release gate: the tag-push trigger only STARTS this workflow; nothing here makes a
+# publish wait for or check its result. The actual gate is verifyReleaseChecks in the root
+# build.gradle.kts (a dependency of the Central upload task), which queries the GitHub Checks
+# API for THIS workflow's check-run (job name "broker-e2e") on the exact tagged commit and
+# REFUSES to publish unless it concluded `success` there — overridable only by an explicit,
+# loudly-logged `-PskipCiVerification=true`.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  schedule:
+    - cron: '0 3 * * *'  # nightly 03:00 UTC
+
+concurrency:
+  group: broker-e2e-${{ github.ref }}
+  cancel-in-progress: false  # never cancel a tag/release run
+
+jobs:
+  broker-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'  # matches build.yml; brokerTest needs only a JDK 25
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Testcontainers boots Postgres, Kafka and RabbitMQ for these tests.
+      - name: Verify Docker available
+        run: docker info
+
+      - name: Run broker E2E tests (Kafka + RabbitMQ, real relay)
+        run: ./gradlew :streamrune-integration:streamrune-e2e:brokerTest --no-daemon --console=plain
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: broker-e2e-reports
+          path: 'streamrune-integration/streamrune-e2e/build/reports/tests/'
+          if-no-files-found: ignore

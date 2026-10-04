@@ -1,0 +1,10 @@
+{
+  "resources": {
+    "includes": [
+      { "pattern": "\\Qdb/streamrune-migration/\\E[^/]*\\.sql" },
+      { "pattern": "\\Qdb/crypto-migration/\\E[^/]*\\.sql" },
+      { "pattern": "\\Qorg/flywaydb/core/internal/version.txt\\E" }
+    ]
+  },
+  "bundles": []
+}

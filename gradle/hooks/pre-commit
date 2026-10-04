@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Pre-commit hook for StreamRune.
+# Runs Spotless check (formatting + license headers).
+# Installed by Gradle's installGitHooks task.
+set -e
+./gradlew spotlessCheck -q || {
+    echo "✘ Spotless check failed. Run: ./gradlew spotlessApply"
+    exit 1
+}

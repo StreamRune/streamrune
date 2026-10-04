@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Test-only logging config (mirroring the streamrune-postgres precedent). logback-classic is on the test classpath solely so
+     log-assertion tests can capture events with a ListAppender — the OutboxPoller aggregated
+     transport WARN's diagnosability (naming a representative entry, not over-claiming
+     "broker-wide") is only observable as the log line itself. The OutboxPoller logger must pass
+     WARN for the capture to see the events under test.
+
+     The root stays at WARN, not ERROR: an ERROR root would silence every WARN in the suite —
+     including the warnings a failing test's own subsystem emits on the way down, which is exactly
+     the diagnostic an unrelated CI failure depends on. WARN is quiet enough to keep the
+     failure-path unit tests from flooding the build log with INFO/DEBUG chatter. -->
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <root level="WARN">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

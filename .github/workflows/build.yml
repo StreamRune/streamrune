@@ -1,0 +1,97 @@
+name: Build
+
+# Full framework build on every push to main, every pull request, and every v* tag push:
+# compiles all modules, runs the test suite (Testcontainers — PostgreSQL, Kafka, RabbitMQ) and
+# enforces the per-module JaCoCo 0.80 instruction + branch coverage gates. The slow Fray
+# concurrency probes are NOT run here — they have their own scheduled workflow (fray-test.yml).
+#
+# StreamRune declares PostgreSQL 17 or newer, and says so only because both ends of that range
+# are tested. The `build` job below runs everything against the newest supported server (18, the
+# default of the shared PostgresTestImage); the `postgres-17` job re-runs exactly the
+# PostgreSQL-backed suites (`postgresTest`: streamrune-postgres, streamrune-postgres-crypto,
+# streamrune-spring, streamrune-quarkus, streamrune-e2e) against postgres:17-alpine. It is a
+# separate job, not a matrix leg of `build`, so `build` keeps the exact check-run name
+# verifyReleaseChecks looks up and the 17 leg skips the compile/coverage/Javadoc work that does not
+# depend on the server version.
+#
+# Release gate: the `tags: ['v*']` trigger is what makes this workflow's `check-runs` entry
+# (job name "build") exist for a release commit at all — verifyReleaseChecks in the root
+# build.gradle.kts (dependsOn'd by the Central upload task) queries the GitHub Checks API for
+# that entry on the exact tagged commit and REFUSES to publish unless it concluded `success`.
+# Without this trigger, a release commit would simply have no "build" check to find, and that
+# Gradle-side gate would fail closed for the wrong reason (never having run) rather than the
+# right one (having failed). `postgres-17` is gated the same way — see requiredCiCheckNames in the
+# root build.gradle.kts.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  # A tag push is a release cut; matches the broker-e2e-test.yml sibling's reasoning for the
+  # same trigger — never auto-cancel a release-critical run.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # ubuntu-latest ships a Docker daemon; the integration tests need it for Testcontainers.
+      - name: Verify Docker available
+        run: docker info
+
+      - name: Build (compile + test + JaCoCo 0.80 gates)
+        run: ./gradlew build --no-daemon --console=plain
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: '**/build/reports/tests/'
+          if-no-files-found: ignore
+
+  # The PostgreSQL-backed suites against the OLDEST supported server. The default leg above is
+  # PostgreSQL 18; this one proves the declared minimum. -PpostgresImage reaches every Testcontainers
+  # container through PostgresTestImage (verifyPostgresTestImage, part of `check`, fails the build
+  # when a test names an image of its own), and it is a test-task input, so this run is never served
+  # from a result cached by the 18 run.
+  postgres-17:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Verify Docker available
+        run: docker info
+
+      - name: PostgreSQL-backed suites on postgres:17-alpine
+        run: ./gradlew postgresTest -PpostgresImage=postgres:17-alpine --no-daemon --console=plain
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-postgres-17
+          path: '**/build/reports/tests/'
+          if-no-files-found: ignore
