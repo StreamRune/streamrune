@@ -66,7 +66,7 @@ junit = "5.12.2"
 testcontainers = "1.21.4"
 mockito = "5.20.0"
 assertj = "3.27.3"
-archunit = "1.4.1"
+archunit = "1.5.1"
 wiremock = "3.12.1"
 awaitility = "4.2.2"
 
