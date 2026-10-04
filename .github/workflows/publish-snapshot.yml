@@ -16,7 +16,7 @@ name: Publish Snapshot
 #   -SNAPSHOT version and uploads it unsigned; any other version requires a signature, so a
 #   release version could not be published from here even by mistake.
 # - workflow_dispatch republishes the current main on demand.
-# - Run it only once this repository is public: every POM's licence URL points at this
+# - It never runs while this repository is private: every POM's licence URL points at this
 #   repository's raw LICENSE file, which answers 404 while the repository is private.
 on:
   workflow_run:
@@ -36,11 +36,12 @@ concurrency:
 jobs:
   publish-snapshot:
     if: >-
+      github.event.repository.private == false && (
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+       github.event.workflow_run.head_repository.full_name == github.repository) )
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

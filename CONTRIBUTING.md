@@ -1,5 +1,12 @@
 # Contributing to StreamRune
 
+## Contributions — please read first
+
+StreamRune is dual-licensed (Business Source License 1.1 and a commercial license). Until a
+Contributor License Agreement (CLA) is in place, **we do not accept external code contributions**
+(pull requests with code). Bug reports, reproducers, questions and feature ideas are very welcome —
+please open an issue. Security problems: see `SECURITY.md`.
+
 ## Licensing of Contributions
 
 By contributing to StreamRune, you agree that your contributions are
@@ -26,6 +33,13 @@ the name and email from `git config user.name` / `user.email`.
 To retroactively sign off the most recent commit:
 
     git commit --amend --signoff --no-edit
+
+## Commit messages
+
+We use [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>`,
+for example `fix(outbox): release a claim the poller no longer holds`. Types: `feat`, `fix`, `docs`,
+`test`, `refactor`, `perf`, `build`, `ci`, `chore`. Run `git config commit.template .gitmessage`
+once to get the template in your editor.
 
 ### Pre-commit hook
 

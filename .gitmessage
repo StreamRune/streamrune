@@ -1,0 +1,8 @@
+# <type>(<optional scope>): <summary in the imperative, max ~72 chars>
+#
+# Types: feat, fix, docs, test, refactor, perf, build, ci, chore
+# Scope: the module or area, e.g. core, runtime, postgres, outbox, saga, spring, quarkus, micronaut
+#
+# Body: what changed and why (wrap at ~100 chars). Mention behaviour changes explicitly.
+#
+# Footer: Refs/Closes #<issue>. Keep the Signed-off-by line (git commit --signoff).

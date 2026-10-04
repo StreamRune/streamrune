@@ -1,0 +1,42 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Security problems: please do not file them here — see SECURITY.md."
+  - type: input
+    id: version
+    attributes:
+      label: StreamRune version or commit
+      placeholder: 1.0.0-alpha-SNAPSHOT (date) or a commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: integration
+    attributes:
+      label: Integration
+      options: [Plain Java, Spring Boot, Quarkus, Micronaut, Native image]
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Java and PostgreSQL versions
+      placeholder: Java 25, PostgreSQL 17.x
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps or a test to reproduce
+      render: java
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      render: text
