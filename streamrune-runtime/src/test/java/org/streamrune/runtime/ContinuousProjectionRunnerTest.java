@@ -3306,7 +3306,9 @@ class ContinuousProjectionRunnerTest {
           }
           if (payload.equals("block")) {
             try {
-              release.await(10, TimeUnit.SECONDS);
+              // finish() always releases it; the bound only keeps a broken test from hanging, so
+              // it sits far above every wait a test makes while the runner is held here.
+              release.await(60, TimeUnit.SECONDS);
             } catch (InterruptedException _) {
               Thread.currentThread().interrupt();
             }
@@ -3424,18 +3426,23 @@ class ContinuousProjectionRunnerTest {
     // deploy) streamrune.projections.dead_letter_backlog was never sampled: it read 0/absent until
     // the runner went live. The runner is held inside catch-up here, so the sample must have been
     // taken by the catch-up path itself.
+    //
+    // Wait for the sample that reads the dead-lettered range, not for "any sample": the runner
+    // also samples on entering CATCHING_UP, before the poison chunk, and that sample reads 0. The
+    // dead-letter becomes visible in the store a moment before the runner samples it, so the
+    // count of samples alone says nothing about whether the post-write sample has happened yet.
     var metrics = new RecordingStreamRuneMetrics();
     var harness = startPoisonThenBlockingCatchUp(null, metrics);
     try {
       assertTrue(
-          awaitCondition(() -> metrics.count("projection.deadLetterBacklog") >= 1, 3),
+          awaitCondition(() -> metrics.lastProjectionDeadLetterBacklog() == 1, 5),
           "the dead-letter backlog gauge must be sampled during catch-up, right after a"
-              + " dead-letter write — not only once the runner is live");
+              + " dead-letter write, and reflect the one dead-lettered range — not only once the"
+              + " runner is live; last sample: "
+              + metrics.lastProjectionDeadLetterBacklog());
+      // Read after the sample was seen: the runner only leaves CATCHING_UP forwards (to LIVE), so
+      // still catching up now means the sample above was taken by the catch-up path.
       assertEquals(ProjectionState.CATCHING_UP, harness.runner().state(), "still catching up");
-      assertEquals(
-          1,
-          metrics.lastProjectionDeadLetterBacklog(),
-          "the sample reflects the one dead-lettered range");
     } finally {
       harness.finish();
     }
