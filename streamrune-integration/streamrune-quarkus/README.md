@@ -230,7 +230,13 @@ nothing. This contract is identical across the Spring, Quarkus, and Micronaut in
   it `new HikariDataSource(config)` copies an empty configuration and startup fails with *Failed to
   initialize pool: null*), and with the Flyway migration scripts schema auto-initialization reads by
   name (`db/streamrune-migration/*.sql`, `db/crypto-migration/*.sql`, Flyway's `version.txt`) as
-  resources. The application registers its own records with `@RegisterForReflection`,
+  resources. It also carries a native-image substitution for Flyway's class-path scanner
+  (`org.streamrune.quarkus.graal`): Quarkus links every class at build time, and since Flyway 13 a
+  `Flyway` instance reaches that scanner, whose JBoss VFS and OSGi branches need optional Flyway
+  dependencies (`jboss-vfs`, `org.osgi.core`), so the build failed with *Discovered unresolved
+  type during parsing: org.jboss.vfs.VirtualFileFilter*. The substitution leaves out those two
+  branches, which a native image's class path can never take, and keeps Flyway's others; nothing
+  changes on the JVM. The application registers its own records with `@RegisterForReflection`,
   plus any projection class that declares `process(List, ProjectionRepository)` itself. **Sealed
   command/event interfaces need a `{"type": "…"}` entry in the application's
   `META-INF/native-image/<groupId>/<artifactId>/reachability-metadata.json`**:

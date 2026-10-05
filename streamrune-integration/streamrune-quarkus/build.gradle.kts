@@ -36,6 +36,10 @@ dependencies {
     // when the injected DataSource is Agroal (every quarkus-agroal application); compile-only so an
     // application without Agroal does not inherit it.
     compileOnly(libs.agroal.api)
+    // Annotations of the native-image substitution in org.streamrune.quarkus.graal; the image
+    // builder provides them, so nothing is added to the application.
+    compileOnly(libs.graalvm.nativeimage)
+    testImplementation(libs.graalvm.nativeimage)
     implementation(libs.jakarta.validation.api)
     implementation(libs.micrometer.core)
     testImplementation(libs.micrometer.core)

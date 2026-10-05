@@ -24,6 +24,7 @@ postgresql = "42.7.10"
 # newer than this version of Flyway" WARN that 10.22.0 logged on every migration against the 18 the suite runs on.
 # The API in use (Flyway.configure()...migrate()) is the same across 10 - 13.
 flyway = "13.9.0"
+graalvm-sdk = "23.1.2"
 slf4j = "2.0.16"
 # Test-only slf4j binding for log-assertion tests (capturing operator-facing log lines with a
 # ListAppender); no main artifact depends on a logging backend.
@@ -98,6 +99,7 @@ dropwizard-metrics5-core = { module = "io.dropwizard.metrics5:metrics-core", ver
 dropwizard-metrics5-healthchecks = { module = "io.dropwizard.metrics5:metrics-healthchecks", version.ref = "dropwizard-metrics5" }
 flyway-core = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
 flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
+graalvm-nativeimage = { module = "org.graalvm.sdk:nativeimage", version.ref = "graalvm-sdk" }
 caffeine = { module = "com.github.ben-manes.caffeine:caffeine", version.ref = "caffeine" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
