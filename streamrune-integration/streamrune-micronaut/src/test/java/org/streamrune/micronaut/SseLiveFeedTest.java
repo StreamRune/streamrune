@@ -1,6 +1,7 @@
 package org.streamrune.micronaut;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,7 +46,10 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.integration.SseAuthorizer;
+import org.streamrune.runtime.BackgroundRelayHealthContributor;
 import org.streamrune.runtime.DeciderRegistration;
+import org.streamrune.runtime.SseEventFeed;
+import org.streamrune.runtime.SseEventPublisher;
 import org.streamrune.test.InMemoryEventStore;
 
 /**
@@ -59,6 +63,10 @@ import org.streamrune.test.InMemoryEventStore;
 class SseLiveFeedTest {
 
   private static final String SPEC = "SseLiveFeedTest";
+
+  /** Switches the fixture's own {@link SseEventFeed} bean on. */
+  private static final String OWN_FEED = "sse-live-feed-test.own-feed";
+
   private static final AggregateType ORDER = AggregateType.of("order");
   private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -270,6 +278,82 @@ class SseLiveFeedTest {
       }
     } catch (IOException _) {
       // the stream was cut instead of completed; the test asserts on what was read
+    }
+  }
+
+  /** The feed's polling thread is watched like the framework's other pollers. */
+  @Test
+  void theFeedIsReportedByTheRelayHealthContributor() {
+    try (ApplicationContext context = ApplicationContext.run(sseEnabled())) {
+      assertThat(context.getBean(BackgroundRelayHealthContributor.class).components())
+          .filteredOn(component -> component.name().equals("sse-event-feed"))
+          .singleElement()
+          .satisfies(
+              feed -> {
+                assertThat(feed.started()).isTrue();
+                assertThat(feed.alive()).isTrue();
+                assertThat(feed.status()).isEqualTo(BackgroundRelayHealthContributor.Status.UP);
+              });
+    }
+  }
+
+  /**
+   * A polling interval below one millisecond would be no pause between two reads of the global
+   * stream. The application does not start, and the failure names the property.
+   */
+  @Test
+  void aPollingIntervalBelowOneMillisecondFailsTheStartAndNamesTheProperty() {
+    Map<String, Object> props = sseEnabled();
+    props.put("streamrune.sse.polling-interval", "PT0.0005S");
+
+    assertThatThrownBy(() -> ApplicationContext.run(props).close())
+        .hasRootCauseInstanceOf(IllegalArgumentException.class)
+        .rootCause()
+        .hasMessageContaining("streamrune.sse.polling-interval")
+        .hasMessageContaining("at least 1ms");
+  }
+
+  /**
+   * An application that declares its own feed replaces the framework's and starts and stops it
+   * itself: the framework neither creates a second feed nor starts the application's.
+   */
+  @Test
+  void anApplicationsOwnFeedReplacesTheFrameworksAndIsLeftToTheApplication() {
+    Map<String, Object> props = sseEnabled();
+    props.put(OWN_FEED, "true");
+
+    try (ApplicationContext context = ApplicationContext.run(props)) {
+      assertThat(context.getBeansOfType(SseEventFeed.class))
+          .as("the framework's feed backs off")
+          .singleElement()
+          .satisfies(
+              feed ->
+                  assertThat(feed.isStarted())
+                      .as("the framework does not start a feed it did not create")
+                      .isFalse());
+      assertThat(context.getBean(SseEventFeedLifecycle.class).isRunning()).isFalse();
+      assertThat(context.getBean(BackgroundRelayHealthContributor.class).components())
+          .noneMatch(component -> component.name().equals("sse-event-feed"));
+    }
+  }
+
+  private static Map<String, Object> sseEnabled() {
+    Map<String, Object> props = new HashMap<>();
+    props.put("spec.name", SPEC);
+    props.put("micronaut.security.enabled", "false");
+    props.put("streamrune.sse.enabled", "true");
+    return props;
+  }
+
+  /** The application's own feed, which the application would start and stop. */
+  @Factory
+  @Requires(property = "spec.name", value = SPEC)
+  @Requires(property = OWN_FEED, value = "true")
+  static class ApplicationFeedFixture {
+
+    @Singleton
+    SseEventFeed applicationFeed(EventStore eventStore, SseEventPublisher publisher) {
+      return new SseEventFeed(eventStore, publisher, Duration.ofSeconds(1));
     }
   }
 

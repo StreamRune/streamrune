@@ -431,11 +431,11 @@ public interface StreamRuneQuarkusProperties {
     Duration keepAliveInterval();
 
     /**
-     * How often the endpoint's feed reads the global stream for new events: the upper bound on the
-     * delay between a commit and its frame. The feed starts at the head of the global stream when
-     * the application starts and delivers live, best-effort and at-most-once (see {@code
-     * org.streamrune.runtime.SseEventFeed}). Must be positive. Matches {@code
-     * streamrune.sse.polling-interval} on Spring and Micronaut.
+     * How often the endpoint's feed reads the global stream for new events: the usual delay between
+     * a commit and its frame. The feed starts at the head of the global stream when the application
+     * starts and delivers live, best-effort and at-most-once (see {@code
+     * org.streamrune.runtime.SseEventFeed}). At least one millisecond; a smaller value fails the
+     * start-up. Matches {@code streamrune.sse.polling-interval} on Spring and Micronaut.
      */
     @WithDefault("PT1S")
     Duration pollingInterval();

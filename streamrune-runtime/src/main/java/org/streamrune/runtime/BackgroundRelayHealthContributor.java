@@ -7,7 +7,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * Aggregates the liveness/degradation of the background relay threads — the outbox relay ({@link
  * OutboxPoller}), the command dead-letter retry runner ({@link DeadLetterRetryRunner}), the saga
- * drivers and the four retention sweepers ({@link RetentionSweeper}) — into a single health signal.
+ * drivers, the four retention sweepers ({@link RetentionSweeper}) and the feed of the Server-Sent
+ * Events endpoint ({@link SseEventFeed}) — into a single health signal.
  *
  * <p>Before this, both runners kept their virtual thread alive and logged cycle failures at ERROR,
  * while {@code consecutiveFailures()}/{@code isRunning()} were exposed but consumed by nothing: the
@@ -237,6 +238,40 @@ public class BackgroundRelayHealthContributor {
           @Override
           public int consecutiveFailures() {
             return sweeper.consecutiveFailures();
+          }
+        });
+  }
+
+  /**
+   * Registers the feed of the Server-Sent Events endpoint to be reported on. A {@code null} is
+   * ignored. The component name is {@code sse-event-feed}. A feed whose polling thread has died
+   * ({@code isStarted() && !isRunning()}) is reported DOWN: the endpoint keeps admitting clients
+   * and writing keepalives, and no event reaches them. A feed whose reads fail is DEGRADED.
+   */
+  public void registerSseEventFeed(SseEventFeed feed) {
+    if (feed == null) {
+      return;
+    }
+    register(
+        new RelayStatusSource() {
+          @Override
+          public String name() {
+            return "sse-event-feed";
+          }
+
+          @Override
+          public boolean started() {
+            return feed.isStarted();
+          }
+
+          @Override
+          public boolean alive() {
+            return feed.isRunning();
+          }
+
+          @Override
+          public int consecutiveFailures() {
+            return feed.consecutiveFailures();
           }
         });
   }

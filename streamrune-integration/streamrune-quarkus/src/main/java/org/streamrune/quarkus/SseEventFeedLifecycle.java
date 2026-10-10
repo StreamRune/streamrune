@@ -6,11 +6,13 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.interceptor.Interceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventStore;
+import org.streamrune.runtime.BackgroundRelayHealthContributor;
 import org.streamrune.runtime.SseEventFeed;
 import org.streamrune.runtime.SseEventPublisher;
 
@@ -23,7 +25,15 @@ import org.streamrune.runtime.SseEventPublisher;
  * streamrune.sse.enabled=true}). On {@link StartupEvent} the feed starts at the head of the global
  * stream, unless the endpoint is switched off at runtime ({@code streamrune.sse.enabled=false}: the
  * controller answers {@code 404}, so nothing is read for it). On {@link ShutdownEvent} the feed
- * stops.
+ * stops. A {@code streamrune.sse.polling-interval} below one millisecond fails the start-up.
+ *
+ * <p><b>Health.</b> The started feed is registered with the {@link
+ * BackgroundRelayHealthContributor} as {@code sse-event-feed}, so the readiness check reports
+ * {@code DOWN} once its polling thread has died.
+ *
+ * <p><b>A feed of the application's own.</b> When the application declares an {@link SseEventFeed}
+ * bean, this lifecycle creates and starts none: the application owns its feed and starts and stops
+ * it, as with the other runners the framework would otherwise assemble.
  *
  * <p>Delivery is live, best-effort and at-most-once; see {@link SseEventFeed}.
  */
@@ -36,15 +46,34 @@ public class SseEventFeedLifecycle {
   private final EventStore eventStore;
   private final SseEventPublisher publisher;
   private final StreamRuneQuarkusProperties properties;
+  private final Instance<BackgroundRelayHealthContributor> relayHealthInstance;
+  private final Instance<SseEventFeed> applicationFeedInstance;
 
   private volatile SseEventFeed feed;
 
+  /**
+   * The constructor Quarkus/Arc uses.
+   *
+   * @param eventStore the store whose global stream the feed reads
+   * @param publisher the fan-out the SSE controller subscribes its clients to
+   * @param properties supplies {@code streamrune.sse.polling-interval} and the runtime switch
+   * @param relayHealthInstance the health contributor the started feed is registered with, when the
+   *     application has one
+   * @param applicationFeedInstance the feed the application declares, if any; this lifecycle then
+   *     starts none
+   */
   @Inject
   public SseEventFeedLifecycle(
-      EventStore eventStore, SseEventPublisher publisher, StreamRuneQuarkusProperties properties) {
+      EventStore eventStore,
+      SseEventPublisher publisher,
+      StreamRuneQuarkusProperties properties,
+      Instance<BackgroundRelayHealthContributor> relayHealthInstance,
+      Instance<SseEventFeed> applicationFeedInstance) {
     this.eventStore = eventStore;
     this.publisher = publisher;
     this.properties = properties;
+    this.relayHealthInstance = relayHealthInstance;
+    this.applicationFeedInstance = applicationFeedInstance;
   }
 
   /**
@@ -55,6 +84,8 @@ public class SseEventFeedLifecycle {
     this.eventStore = null;
     this.publisher = null;
     this.properties = null;
+    this.relayHealthInstance = null;
+    this.applicationFeedInstance = null;
   }
 
   // The same priority as StreamRuneLifecycle: after every fail-closed validator
@@ -66,8 +97,16 @@ public class SseEventFeedLifecycle {
       logger.info("StreamRune: SSE endpoint is disabled at runtime; its event feed is not started");
       return;
     }
+    if (!applicationFeedInstance.isUnsatisfied()) {
+      logger.info(
+          "StreamRune: the application declares its own SseEventFeed; the framework starts none");
+      return;
+    }
     SseEventFeed started =
         new SseEventFeed(eventStore, publisher, properties.sse().pollingInterval());
+    if (relayHealthInstance.isResolvable()) {
+      relayHealthInstance.get().registerSseEventFeed(started);
+    }
     started.start();
     feed = started;
     logger.info("StreamRune: started SseEventFeed");
@@ -88,10 +127,11 @@ public class SseEventFeedLifecycle {
   }
 
   /**
-   * Whether the feed is started and its polling thread has not stopped.
+   * Whether the feed this lifecycle started is running: started and with a live polling thread.
    *
    * @return {@code true} between the startup and the shutdown event of an application whose
-   *     endpoint is enabled
+   *     endpoint is enabled, for as long as the feed's polling thread is alive; {@code false} when
+   *     the endpoint is switched off at runtime or the application declares its own feed
    */
   public boolean isRunning() {
     SseEventFeed running = feed;

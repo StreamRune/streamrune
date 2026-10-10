@@ -35,14 +35,24 @@ import org.streamrune.core.types.ProjectionName;
  * state it missed from a query or a projection after each (re)connect and treats the frames as a
  * notification; durable processing belongs in a projection.
  *
- * <p><b>Latency and cost.</b> A frame is written within one polling interval of the commit. The
- * feed reads every event of the global stream once per replica, whether or not a client is
- * subscribed to its stream, with the same deserialization and decryption as any other global
- * reader.
+ * <p><b>Latency.</b> A frame is normally written within one polling interval of the commit. That is
+ * the usual delay, not a bound: a failed read is retried with backoff, up to 60 seconds between
+ * attempts.
+ *
+ * <p><b>Cost.</b> While it runs, the feed reads every event of the global stream once per replica
+ * and decrypts it, whether or not a client is subscribed to the event's stream or connected at all:
+ * the same deserialization and decryption as any other global reader, paid by every replica.
  *
  * <p><b>Failures.</b> A failed read is retried with backoff, from the same position. While an event
  * of the global stream cannot be read (an unregistered event type, a corrupt payload) the feed
- * delivers nothing, and continues once the read succeeds or the application restarts.
+ * delivers nothing, and continues once the read succeeds or the application restarts. An event the
+ * publisher refuses is logged and skipped; the rest of its page is published. An {@link Error} out
+ * of a read or a publish ends the polling thread: the feed then reports {@link #isStarted()} and
+ * not {@link #isRunning()}, and the next {@link #start()} replaces the dead subscription.
+ *
+ * <p><b>Health.</b> {@link BackgroundRelayHealthContributor#registerSseEventFeed} reports the feed
+ * with the framework's other polling threads: {@code DOWN} when its thread has died, {@code
+ * DEGRADED} while its reads fail.
  *
  * <p>Thread-safe. {@link #start()} and {@link #close()} are idempotent, and a closed feed can be
  * started again.
@@ -63,7 +73,10 @@ public final class SseEventFeed implements AutoCloseable {
   private final SseEventPublisher publisher;
   private final SubscriptionConfig config;
 
-  /** The running subscription; {@code null} while the feed is stopped. Guarded by {@code this}. */
+  /**
+   * The subscription of a started feed; {@code null} while the feed is stopped. Not running any
+   * more when its polling thread has died. Guarded by {@code this}.
+   */
   private PollingEventSubscription subscription;
 
   /**
@@ -72,8 +85,11 @@ public final class SseEventFeed implements AutoCloseable {
    * @param eventStore the store whose global stream is read (required); it must implement {@link
    *     EventStore#lastGlobalOffset()}
    * @param publisher the fan-out the events are published to (required)
-   * @param pollingInterval how often the global stream is read for new events (required, positive)
-   * @throws IllegalArgumentException if an argument is missing or the interval is not positive
+   * @param pollingInterval how often the global stream is read for new events (required, at least
+   *     one millisecond: the polling thread sleeps whole milliseconds, so a shorter interval would
+   *     be no pause at all between two reads)
+   * @throws IllegalArgumentException if an argument is missing or the interval is below one
+   *     millisecond
    */
   public SseEventFeed(
       EventStore eventStore, SseEventPublisher publisher, Duration pollingInterval) {
@@ -83,18 +99,21 @@ public final class SseEventFeed implements AutoCloseable {
     if (publisher == null) {
       throw new IllegalArgumentException("publisher is required");
     }
-    if (pollingInterval == null || pollingInterval.isZero() || pollingInterval.isNegative()) {
+    if (pollingInterval == null || pollingInterval.toMillis() < 1) {
       throw new IllegalArgumentException(
-          "pollingInterval (streamrune.sse.polling-interval) must be positive: " + pollingInterval);
+          "pollingInterval (streamrune.sse.polling-interval) must be at least 1ms: "
+              + pollingInterval);
     }
     this.eventStore = eventStore;
     this.publisher = publisher;
-    // No jitter: one feed per replica, and the interval is the latency bound the docs state.
+    // No jitter: one feed per replica, and the interval is the delay the documentation states.
     this.config = new SubscriptionConfig(false, pollingInterval, Duration.ZERO);
   }
 
   /**
-   * Starts the feed at the current head of the global stream. No-op when it is already running.
+   * Starts the feed at the current head of the global stream. No-op when it is already running. A
+   * feed whose polling thread has died is started again: its subscription is replaced by one that
+   * begins at the head of this moment, like the feed of a restarted application.
    *
    * @throws IllegalStateException if the event store does not implement {@link
    *     EventStore#lastGlobalOffset()}
@@ -102,7 +121,12 @@ public final class SseEventFeed implements AutoCloseable {
    */
   public synchronized void start() {
     if (subscription != null) {
-      return;
+      if (subscription.isRunning()) {
+        return;
+      }
+      log.warn("SSE event feed: the polling thread has stopped; starting a new subscription");
+      subscription.close();
+      subscription = null;
     }
     GlobalOffset head = head();
     PollingEventSubscription started =
@@ -123,12 +147,35 @@ public final class SseEventFeed implements AutoCloseable {
   }
 
   /**
-   * Whether the feed is started and its polling thread has not stopped.
+   * Whether the feed is started and its polling thread is alive.
    *
-   * @return {@code true} between {@link #start()} and {@link #close()}
+   * @return {@code true} after {@link #start()} for as long as the polling thread runs; {@code
+   *     false} before the start, after {@link #close()}, and once an {@link Error} has ended the
+   *     polling thread
    */
   public synchronized boolean isRunning() {
     return subscription != null && subscription.isRunning();
+  }
+
+  /**
+   * Whether the feed has been started and not closed, whatever became of its polling thread. A feed
+   * that is started and not {@linkplain #isRunning() running} has lost its thread.
+   *
+   * @return {@code true} between {@link #start()} and {@link #close()}
+   */
+  public synchronized boolean isStarted() {
+    return subscription != null;
+  }
+
+  /**
+   * The number of reads of the global stream that have failed in a row; {@code 0} after a read that
+   * succeeded and while the feed is stopped. A non-zero value means the feed is retrying with
+   * backoff and delivers nothing meanwhile.
+   *
+   * @return the consecutive failed reads
+   */
+  public synchronized int consecutiveFailures() {
+    return subscription == null ? 0 : subscription.consecutiveFailures();
   }
 
   /**

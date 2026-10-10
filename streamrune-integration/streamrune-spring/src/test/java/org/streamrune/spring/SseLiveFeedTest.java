@@ -30,8 +30,11 @@ import org.springframework.boot.http.converter.autoconfigure.HttpMessageConverte
 import org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration;
 import org.springframework.boot.tomcat.autoconfigure.servlet.TomcatServletWebServerAutoConfiguration;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
+import org.springframework.boot.web.server.context.WebServerInitializedEvent;
 import org.springframework.boot.webmvc.autoconfigure.DispatcherServletAutoConfiguration;
 import org.springframework.boot.webmvc.autoconfigure.WebMvcAutoConfiguration;
+import org.springframework.context.ApplicationEvent;
+import org.springframework.context.ApplicationListener;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -218,6 +221,37 @@ class SseLiveFeedTest {
     } finally {
       context.close();
       client.shutdownNow();
+    }
+  }
+
+  /**
+   * The feed is running before the web server accepts its first request, so no client can be
+   * subscribed to a stream nothing feeds yet. The feed and Spring Boot's web server start in the
+   * same lifecycle phase; this pins the order within it.
+   */
+  @Test
+  void theFeedIsRunningWhenTheWebServerStartsToAcceptRequests() {
+    List<Boolean> feedRunningWhenTheWebServerStarted = new CopyOnWriteArrayList<>();
+    ApplicationListener<ApplicationEvent> atWebServerStart =
+        event -> {
+          if (event instanceof WebServerInitializedEvent started) {
+            feedRunningWhenTheWebServerStarted.add(
+                started.getApplicationContext().getBean(SseEventFeed.class).isRunning());
+          }
+        };
+    ConfigurableApplicationContext context =
+        new SpringApplicationBuilder(SseApplication.class)
+            .web(WebApplicationType.SERVLET)
+            .registerShutdownHook(false)
+            .listeners(atWebServerStart)
+            .properties("server.port=0", "streamrune.sse.enabled=true")
+            .run();
+    try {
+      assertThat(feedRunningWhenTheWebServerStarted)
+          .as("the state of the feed at the moment the web server was started")
+          .containsExactly(true);
+    } finally {
+      context.close();
     }
   }
 

@@ -226,7 +226,7 @@
     {
       "name": "streamrune.sse.polling-interval",
       "type": "java.time.Duration",
-      "description": "How often the SSE endpoint's feed reads the global stream for new events: the upper bound on the delay between a commit and its frame. The feed starts at the head of the global stream when the application starts and delivers live, best-effort and at-most-once. Must be positive",
+      "description": "How often the SSE endpoint's feed reads the global stream for new events: the usual delay between a commit and its frame. The feed starts at the head of the global stream when the application starts and delivers live, best-effort and at-most-once. At least 1ms; a smaller value fails the start-up",
       "defaultValue": "1s"
     },
     {

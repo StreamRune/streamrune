@@ -1,6 +1,7 @@
 package org.streamrune.quarkus;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import io.quarkus.runtime.ShutdownEvent;
@@ -37,7 +38,9 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.integration.RequestIdentityPolicy;
 import org.streamrune.integration.SseAuthorizer;
+import org.streamrune.runtime.BackgroundRelayHealthContributor;
 import org.streamrune.runtime.DeciderRegistration;
+import org.streamrune.runtime.SseEventFeed;
 import org.streamrune.runtime.SseEventPublisher;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.test.InMemoryEventStore;
@@ -115,6 +118,74 @@ class SseLiveFeedTest {
     }
   }
 
+  /** The feed's polling thread is watched like the framework's other pollers. */
+  @Test
+  void theStartedFeedIsReportedByTheRelayHealthContributor() throws Exception {
+    try (var arc = RealArcTestContainer.boot(beans(SseEnabledInfrastructure.class), SSE_BUILT_IN)) {
+      BackgroundRelayHealthContributor relayHealth =
+          arc.container().instance(BackgroundRelayHealthContributor.class).get();
+      assertThat(relayHealth.components())
+          .as("nothing is registered before the feed is started")
+          .noneMatch(component -> component.name().equals("sse-event-feed"));
+
+      startUp(arc);
+
+      assertThat(relayHealth.components())
+          .filteredOn(component -> component.name().equals("sse-event-feed"))
+          .singleElement()
+          .satisfies(
+              feed -> {
+                assertThat(feed.started()).isTrue();
+                assertThat(feed.alive()).isTrue();
+                assertThat(feed.status()).isEqualTo(BackgroundRelayHealthContributor.Status.UP);
+              });
+      shutDown(arc);
+    }
+  }
+
+  /**
+   * A polling interval below one millisecond would be no pause between two reads of the global
+   * stream. The start-up event's observer throws, which fails the start of a Quarkus application,
+   * and the failure names the property.
+   */
+  @Test
+  void aPollingIntervalBelowOneMillisecondFailsTheStartAndNamesTheProperty() throws Exception {
+    try (var arc =
+        RealArcTestContainer.boot(
+            beans(SubMillisecondIntervalInfrastructure.class), SSE_BUILT_IN)) {
+      assertThatThrownBy(() -> startUp(arc))
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("streamrune.sse.polling-interval")
+          .hasMessageContaining("at least 1ms");
+      assertThat(arc.container().instance(SseEventFeedLifecycle.class).get().isRunning()).isFalse();
+    }
+  }
+
+  /**
+   * An application that declares its own feed owns it: the framework creates and starts none, and
+   * does not start the application's.
+   */
+  @Test
+  void anApplicationsOwnFeedIsLeftToTheApplication() throws Exception {
+    List<Class<?>> beans = new java.util.ArrayList<>(beans(SseEnabledInfrastructure.class));
+    beans.add(ApplicationFeedConfig.class);
+    try (var arc = RealArcTestContainer.boot(beans, SSE_BUILT_IN)) {
+      startUp(arc);
+
+      assertThat(arc.container().instance(SseEventFeedLifecycle.class).get().isRunning())
+          .as("the framework starts no feed beside the application's")
+          .isFalse();
+      SseEventFeed applicationFeed = arc.container().instance(SseEventFeed.class).get();
+      assertThat(applicationFeed.isStarted())
+          .as("the framework does not start a feed it did not create")
+          .isFalse();
+      assertThat(
+              arc.container().instance(BackgroundRelayHealthContributor.class).get().components())
+          .noneMatch(component -> component.name().equals("sse-event-feed"));
+      shutDown(arc);
+    }
+  }
+
   // ---- harness ----------------------------------------------------------------------------------
 
   private static List<Class<?>> beans(Class<?> infrastructure) {
@@ -175,10 +246,40 @@ class SseLiveFeedTest {
   // ---- beans ------------------------------------------------------------------------------------
 
   private static StreamRuneQuarkusProperties properties(boolean sseEnabledAtRuntime) {
+    return properties(sseEnabledAtRuntime, "PT0.05S");
+  }
+
+  private static StreamRuneQuarkusProperties properties(
+      boolean sseEnabledAtRuntime, String pollingInterval) {
     Map<String, String> overrides = new HashMap<>();
     overrides.put("streamrune.sse.enabled", String.valueOf(sseEnabledAtRuntime));
-    overrides.put("streamrune.sse.polling-interval", "PT0.05S");
+    overrides.put("streamrune.sse.polling-interval", pollingInterval);
     return TestProperties.of(overrides);
+  }
+
+  @ApplicationScoped
+  public static class SubMillisecondIntervalInfrastructure {
+    @Produces
+    @Singleton
+    public DataSource dataSource() {
+      return mock(DataSource.class);
+    }
+
+    @Produces
+    @Singleton
+    public StreamRuneQuarkusProperties properties() {
+      return SseLiveFeedTest.properties(true, "PT0.0005S");
+    }
+  }
+
+  /** The application's own feed, which the application would start and stop. */
+  @ApplicationScoped
+  public static class ApplicationFeedConfig {
+    @Produces
+    @Singleton
+    public SseEventFeed applicationFeed(EventStore eventStore, SseEventPublisher publisher) {
+      return new SseEventFeed(eventStore, publisher, Duration.ofSeconds(1));
+    }
   }
 
   @ApplicationScoped

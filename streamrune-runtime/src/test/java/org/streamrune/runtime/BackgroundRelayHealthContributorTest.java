@@ -122,6 +122,99 @@ class BackgroundRelayHealthContributorTest {
   }
 
   @Test
+  void reportsTheSseEventFeed_downOnceItsPollingThreadHasDied() {
+    var store = new org.streamrune.test.InMemoryEventStore();
+    var dying = new java.util.concurrent.atomic.AtomicBoolean();
+    var failing = new java.util.concurrent.atomic.AtomicBoolean();
+    org.streamrune.core.EventStore reads =
+        new org.streamrune.core.EventStore() {
+          @Override
+          public org.streamrune.core.AggregateHistory load(
+              org.streamrune.core.types.StreamId streamId) {
+            return store.load(streamId);
+          }
+
+          @Override
+          public AppendResult append(
+              org.streamrune.core.types.StreamId streamId,
+              java.util.List<org.streamrune.core.EventEnvelope> events,
+              org.streamrune.core.types.Version expectedVersion) {
+            return store.append(streamId, events, expectedVersion);
+          }
+
+          @Override
+          public void saveSnapshot(
+              org.streamrune.core.types.StreamId streamId,
+              org.streamrune.core.types.Version version,
+              org.streamrune.core.AggregateState state) {
+            store.saveSnapshot(streamId, version, state);
+          }
+
+          @Override
+          public java.util.List<org.streamrune.core.EventEnvelope> readGlobalStream(
+              org.streamrune.core.types.GlobalOffset afterOffset, int maxCount) {
+            if (dying.get()) {
+              throw new NoClassDefFoundError("an event class is missing");
+            }
+            if (failing.get()) {
+              throw new IllegalStateException("the database is away");
+            }
+            return store.readGlobalStream(afterOffset, maxCount);
+          }
+
+          @Override
+          public java.util.List<org.streamrune.core.EventEnvelope> readStream(
+              org.streamrune.core.types.StreamId streamId,
+              org.streamrune.core.types.Version afterVersion,
+              int maxCount) {
+            return store.readStream(streamId, afterVersion, maxCount);
+          }
+
+          @Override
+          public org.streamrune.core.types.GlobalOffset lastGlobalOffset() {
+            return store.lastGlobalOffset();
+          }
+        };
+    var contributor = new BackgroundRelayHealthContributor();
+    contributor.registerSseEventFeed(null);
+    assertTrue(contributor.components().isEmpty(), "a null feed is ignored");
+
+    try (var publisher = new SseEventPublisher();
+        var feed = new SseEventFeed(reads, publisher, java.time.Duration.ofMillis(20))) {
+      contributor.registerSseEventFeed(feed);
+      var notStarted = contributor.components().getFirst();
+      assertEquals("sse-event-feed", notStarted.name());
+      assertFalse(notStarted.started());
+      assertEquals(
+          Status.UP, notStarted.status(), "a feed that was never started is not unhealthy");
+
+      feed.start();
+      assertEquals(Status.UP, contributor.overallStatus());
+
+      failing.set(true);
+      org.awaitility.Awaitility.await()
+          .atMost(java.time.Duration.ofSeconds(5))
+          .until(() -> contributor.overallStatus() == Status.DEGRADED);
+      failing.set(false);
+      org.awaitility.Awaitility.await()
+          .atMost(java.time.Duration.ofSeconds(10))
+          .until(() -> contributor.overallStatus() == Status.UP);
+
+      dying.set(true);
+      org.awaitility.Awaitility.await()
+          .atMost(java.time.Duration.ofSeconds(5))
+          .until(() -> contributor.overallStatus() == Status.DOWN);
+      var dead = contributor.components().getFirst();
+      assertTrue(dead.started());
+      assertFalse(dead.alive());
+
+      dying.set(false);
+      feed.start();
+      assertEquals(Status.UP, contributor.overallStatus(), "a restarted feed is healthy again");
+    }
+  }
+
+  @Test
   void reportsThroughRegisteredSagaTimeoutRunner() {
     // The saga-driver typed adapter builds a saga-type-named component wired to the driver's
     // liveness accessors, so a dead saga driver surfaces DOWN (mapping proven by statusMapping).

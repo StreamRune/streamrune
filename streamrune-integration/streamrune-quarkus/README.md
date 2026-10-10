@@ -54,7 +54,8 @@ streamrune.query-cache.enabled=false
 # build-time flag: decides whether SseController and its event feed exist (default false;
 # deny-all SseAuthorizer unless you produce your own)
 streamrune.sse.enabled=false
-# how often the SSE feed reads the global stream: the bound on commit-to-frame latency
+# how often the SSE feed reads the global stream: the usual commit-to-frame delay; at least
+# PT0.001S
 streamrune.sse.polling-interval=PT1S
 ```
 
@@ -79,8 +80,11 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
 - **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
   polling subscription that starts at the head of the global stream when the application starts
   and publishes every event stored from then on to the clients of the event's own stream, every
-  `streamrune.sse.polling-interval` (default `1s`). No stored offset, no replay of history. Do not
-  call `SseEventPublisher.publish` yourself for this endpoint — every frame would be written twice.
+  `streamrune.sse.polling-interval` (default `1s`, at least `1ms`). No stored offset, no replay of
+  history. While the endpoint is enabled every instance reads and decrypts every event of the
+  global stream, whether or not a client is connected. Do not call `SseEventPublisher.publish`
+  yourself for this endpoint — every frame would be written twice. To run a feed of your own,
+  declare an `SseEventFeed` bean: it replaces the integration's, and you start and stop it.
 - **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
   receives the caller the request filter resolved and the requested `StreamId`.
 - **Threads** — the resource method is `@Blocking`: Quarkus REST runs the request filter and the
@@ -98,6 +102,8 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   and the feed exist) and again at runtime: switched off at runtime, the endpoint answers `404` and
   the feed does not start. The feed starts on the startup event and stops on the shutdown event,
   which also completes every open stream.
+- **Health** — the feed is the `sse-event-feed` component of the readiness check: `DOWN` when its
+  polling thread has died, `DEGRADED` while its reads fail and are retried.
 
 Crypto engines bind through `StreamRuneQuarkusCryptoProperties`
 (`streamrune.crypto.*`). Engine selection is **fixed at build time** via

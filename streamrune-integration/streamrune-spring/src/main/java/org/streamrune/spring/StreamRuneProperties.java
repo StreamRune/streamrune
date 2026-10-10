@@ -258,9 +258,10 @@ public record StreamRuneProperties(
    *     before the {@code timeout} backstop. {@link Duration#ZERO} (or negative) disables the
    *     keepalive, leaving the timeout as the sole reaper.
    * @param pollingInterval how often the endpoint's feed reads the global stream for new events:
-   *     the upper bound on the delay between a commit and its frame. The feed starts at the head of
-   *     the global stream when the application starts and delivers live, best-effort and
-   *     at-most-once (see {@link org.streamrune.runtime.SseEventFeed}). Must be positive.
+   *     the usual delay between a commit and its frame. The feed starts at the head of the global
+   *     stream when the application starts and delivers live, best-effort and at-most-once (see
+   *     {@link org.streamrune.runtime.SseEventFeed}). At least one millisecond; a smaller value
+   *     fails the start-up.
    */
   public record Sse(
       @DefaultValue("false") boolean enabled,

@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.AggregateHistory;
 import org.streamrune.core.AggregateState;
@@ -144,6 +145,155 @@ class SseEventFeedTest {
       assertThatThrownBy(() -> new SseEventFeed(store, publisher, Duration.ZERO))
           .isInstanceOf(IllegalArgumentException.class)
           .hasMessageContaining("streamrune.sse.polling-interval");
+      assertThatThrownBy(() -> new SseEventFeed(store, publisher, Duration.ofMillis(-5)))
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("streamrune.sse.polling-interval");
+    }
+  }
+
+  @Test
+  void rejectsAPositiveIntervalBelowOneMillisecond() {
+    // The polling thread sleeps whole milliseconds: half a millisecond would be no sleep at all,
+    // one read of the global stream after another.
+    var store = new InMemoryEventStore();
+    try (var publisher = new SseEventPublisher()) {
+      assertThatThrownBy(() -> new SseEventFeed(store, publisher, Duration.ofNanos(500_000)))
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("streamrune.sse.polling-interval")
+          .hasMessageContaining("at least 1ms")
+          .hasMessageContaining("PT0.0005S");
+      assertThatThrownBy(() -> new SseEventFeed(store, publisher, Duration.ofNanos(999_999)))
+          .isInstanceOf(IllegalArgumentException.class);
+
+      try (var feed = new SseEventFeed(store, publisher, Duration.ofMillis(1))) {
+        assertThat(feed.isRunning()).as("one millisecond is the smallest interval").isFalse();
+      }
+    }
+  }
+
+  @Test
+  void aFailedReadIsRetriedFromTheSamePosition() {
+    var store = new FailingReadsEventStore();
+    var received = new CopyOnWriteArrayList<EventEnvelope>();
+    try (var publisher = new SseEventPublisher();
+        var feed = new SseEventFeed(store, publisher, FAST)) {
+      publisher.subscribe(ORDER_1, received::add);
+      feed.start();
+      store.failNextReads(3, new IllegalStateException("the database is away"));
+
+      store.append(ORDER_1, List.of(envelope(ORDER_1, 1, "first")), Version.initial());
+      store.append(ORDER_1, List.of(envelope(ORDER_1, 2, "second")), new Version(1));
+
+      await().atMost(Duration.ofSeconds(10)).until(() -> received.size() == 2);
+      assertThat(received)
+          .as("nothing stored while the reads failed is skipped, nothing is delivered twice")
+          .extracting(e -> ((Placed) e.event()).note())
+          .containsExactly("first", "second");
+      assertThat(store.failedReadsAfter())
+          .as("every failed read and the read that succeeded asked for the same position")
+          .hasSize(3)
+          .containsOnly(store.firstSuccessfulReadAfter());
+      assertThat(feed.isRunning()).as("a failed read does not stop the feed").isTrue();
+    }
+  }
+
+  @Test
+  void anEventThePublisherRefusesDoesNotStopItsPageAndIsNotRetried() {
+    var store = new InMemoryEventStore();
+    var received = new CopyOnWriteArrayList<EventEnvelope>();
+    var publishCalls = new CopyOnWriteArrayList<String>();
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void publish(EventEnvelope envelope) {
+            String note = ((Placed) envelope.event()).note();
+            publishCalls.add(note);
+            if (note.equals("refused")) {
+              throw new IllegalStateException("the publisher refuses this event");
+            }
+            super.publish(envelope);
+          }
+        };
+    try (publisher;
+        var feed = new SseEventFeed(store, publisher, FAST)) {
+      publisher.subscribe(ORDER_1, received::add);
+      feed.start();
+
+      // One append, so the three events are read as one page.
+      store.append(
+          ORDER_1,
+          List.of(
+              envelope(ORDER_1, 1, "before"),
+              envelope(ORDER_1, 2, "refused"),
+              envelope(ORDER_1, 3, "after")),
+          Version.initial());
+
+      await().atMost(Duration.ofSeconds(5)).until(() -> received.size() == 2);
+      assertThat(received)
+          .as("the events around the refused one are delivered")
+          .extracting(e -> ((Placed) e.event()).note())
+          .containsExactly("before", "after");
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(
+              () ->
+                  assertThat(publishCalls)
+                      .as("the page is not read again: no event is published twice")
+                      .containsExactly("before", "refused", "after"));
+    }
+  }
+
+  @Test
+  void aFeedWhosePollingThreadDiedReportsItAndIsReplacedByTheNextStart() {
+    var store = new FailingReadsEventStore();
+    var received = new CopyOnWriteArrayList<EventEnvelope>();
+    try (var publisher = new SseEventPublisher();
+        var feed = new SseEventFeed(store, publisher, FAST)) {
+      publisher.subscribe(ORDER_1, received::add);
+      feed.start();
+      assertThat(feed.isStarted()).isTrue();
+      assertThat(feed.isRunning()).isTrue();
+
+      // An Error is not retried: it ends the polling thread.
+      store.failNextReads(1, new NoClassDefFoundError("an event class is missing"));
+      await().atMost(Duration.ofSeconds(5)).until(() -> !feed.isRunning());
+      assertThat(feed.isStarted())
+          .as("started and not running: the state a health check reports as DOWN")
+          .isTrue();
+
+      store.append(ORDER_1, List.of(envelope(ORDER_1, 1, "while-dead")), Version.initial());
+      feed.start();
+
+      assertThat(feed.isRunning()).as("start() replaces the dead subscription").isTrue();
+      store.append(ORDER_1, List.of(envelope(ORDER_1, 2, "after-restart")), new Version(1));
+      await().atMost(Duration.ofSeconds(5)).until(() -> !received.isEmpty());
+      assertThat(received)
+          .as("the replacement begins at the head of its own start")
+          .extracting(e -> ((Placed) e.event()).note())
+          .containsExactly("after-restart");
+    }
+  }
+
+  @Test
+  void theFeedCountsItsConsecutiveFailedReads() {
+    var store = new FailingReadsEventStore();
+    try (var publisher = new SseEventPublisher();
+        var feed = new SseEventFeed(store, publisher, FAST)) {
+      assertThat(feed.isStarted()).isFalse();
+      assertThat(feed.consecutiveFailures()).as("a stopped feed has failed nothing").isZero();
+      feed.start();
+
+      store.failNextReads(Integer.MAX_VALUE, new IllegalStateException("the database is away"));
+      await().atMost(Duration.ofSeconds(5)).until(() -> feed.consecutiveFailures() >= 2);
+      assertThat(feed.isRunning()).as("retrying, not dead").isTrue();
+
+      store.failNextReads(0, null);
+      await().atMost(Duration.ofSeconds(10)).until(() -> feed.consecutiveFailures() == 0);
+
+      feed.close();
+      assertThat(feed.isStarted()).isFalse();
+      assertThat(feed.consecutiveFailures()).isZero();
     }
   }
 
@@ -163,6 +313,72 @@ class SseEventFeedTest {
             null,
             null,
             Instant.now()));
+  }
+
+  /** An in-memory store whose next reads of the global stream fail on request. */
+  private static final class FailingReadsEventStore implements EventStore {
+
+    private final InMemoryEventStore delegate = new InMemoryEventStore();
+    private final AtomicInteger readsToFail = new AtomicInteger();
+    private volatile Throwable failure;
+    private final List<GlobalOffset> failedReadsAfter = new CopyOnWriteArrayList<>();
+    private volatile GlobalOffset firstSuccessfulReadAfter;
+
+    void failNextReads(int count, Throwable failure) {
+      this.failure = failure;
+      this.firstSuccessfulReadAfter = null;
+      readsToFail.set(count);
+    }
+
+    List<GlobalOffset> failedReadsAfter() {
+      return failedReadsAfter;
+    }
+
+    GlobalOffset firstSuccessfulReadAfter() {
+      return firstSuccessfulReadAfter;
+    }
+
+    @Override
+    public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
+      if (readsToFail.getAndUpdate(left -> left > 0 ? left - 1 : 0) > 0) {
+        failedReadsAfter.add(afterOffset);
+        switch (failure) {
+          case Error error -> throw error;
+          case RuntimeException exception -> throw exception;
+          default -> throw new IllegalStateException(failure);
+        }
+      }
+      if (firstSuccessfulReadAfter == null && !failedReadsAfter.isEmpty()) {
+        firstSuccessfulReadAfter = afterOffset;
+      }
+      return delegate.readGlobalStream(afterOffset, maxCount);
+    }
+
+    @Override
+    public AggregateHistory load(StreamId streamId) {
+      return delegate.load(streamId);
+    }
+
+    @Override
+    public EventStore.AppendResult append(
+        StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
+      return delegate.append(streamId, events, expectedVersion);
+    }
+
+    @Override
+    public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
+      delegate.saveSnapshot(streamId, version, state);
+    }
+
+    @Override
+    public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
+      return delegate.readStream(streamId, afterVersion, maxCount);
+    }
+
+    @Override
+    public GlobalOffset lastGlobalOffset() {
+      return delegate.lastGlobalOffset();
+    }
   }
 
   /** An event store that keeps the default {@code lastGlobalOffset()}. */

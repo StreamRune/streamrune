@@ -760,20 +760,40 @@ public class StreamRuneAutoConfiguration {
      * The feed of the endpoint: a polling subscription that starts at the head of the global stream
      * and publishes every event stored from then on to the subscribers of the event's own stream,
      * every {@code streamrune.sse.polling-interval}. Live, best-effort and at-most-once — see
-     * {@link SseEventFeed}. Started and stopped by {@link #streamRuneSseEventFeedLifecycle}.
+     * {@link SseEventFeed}. Started and stopped by {@link #streamRuneSseEventFeedLifecycle}, and
+     * reported by the {@link org.streamrune.runtime.BackgroundRelayHealthContributor} as {@code
+     * sse-event-feed}: {@code DOWN} once its polling thread has died.
+     *
+     * <p>An application that declares its own {@link SseEventFeed} bean replaces this one and
+     * starts and stops its feed itself: the lifecycle below belongs to the auto-configured bean
+     * only. A {@code streamrune.sse.polling-interval} below one millisecond fails the start-up
+     * here.
      */
     @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(SseEventFeed.class)
     public SseEventFeed streamRuneSseEventFeed(
-        EventStore eventStore, SseEventPublisher publisher, StreamRuneProperties properties) {
-      return new SseEventFeed(eventStore, publisher, properties.sse().pollingInterval());
+        EventStore eventStore,
+        SseEventPublisher publisher,
+        StreamRuneProperties properties,
+        ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>
+            relayHealthProvider) {
+      SseEventFeed feed =
+          new SseEventFeed(eventStore, publisher, properties.sse().pollingInterval());
+      relayHealthProvider.ifAvailable(c -> c.registerSseEventFeed(feed));
+      return feed;
     }
 
     /**
-     * Starts the {@link SseEventFeed} on context refresh, before the web server accepts requests,
-     * and stops it on context close, after the web server has drained and the controller has ended
-     * its open streams.
+     * Starts the auto-configured {@link SseEventFeed} on context refresh, before the web server
+     * accepts requests, and stops it on context close, after the web server has drained and the
+     * controller has ended its open streams. Conditional on the auto-configured bean name, so a
+     * feed the application declares (and starts and stops itself) is never started twice.
+     *
+     * <p>The feed and Spring Boot's web server start in the same lifecycle phase ({@link
+     * RunnerLifecycle#PHASE}); see there for why the feed comes first.
      */
     @Bean
+    @ConditionalOnBean(name = "streamRuneSseEventFeed")
     public RunnerLifecycle streamRuneSseEventFeedLifecycle(
         @Qualifier("streamRuneSseEventFeed") SseEventFeed feed) {
       return new RunnerLifecycle("SseEventFeed", feed::start, feed::close);

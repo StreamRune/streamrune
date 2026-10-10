@@ -471,7 +471,8 @@ public final class SseEventFeed implements AutoCloseable {
 - `SseEventFeed` is what publishes. The integrations create one per application instance when the
   endpoint is enabled, start it with the application and close it on shutdown. It is a
   `PollingEventSubscription` on the global stream that starts at the head of the stream, keeps its
-  position in memory, and never replays history.
+  position in memory, and never replays history. An application's own `SseEventFeed` bean replaces
+  the integration's; the application then starts and stops it.
 
 | | |
 |---|---|
@@ -479,7 +480,9 @@ public final class SseEventFeed implements AutoCloseable {
 | Authorization | the `SseAuthorizer` bean decides per caller and `StreamId` before a stream is opened; without one every stream answers `403` |
 | Delivery | live, best-effort, at-most-once: only to clients connected at that moment, nothing is redelivered, `Last-Event-ID` is not honoured |
 | Order | version order within a stream |
-| Latency | up to `streamrune.sse.polling-interval` (default `1s`) after the commit |
+| Latency | normally within `streamrune.sse.polling-interval` (default `1s`, at least `1ms`) of the commit; longer while a failed read is retried with backoff |
+| Cost | while the endpoint is enabled every instance reads and decrypts every event of the global stream, whether or not a client is connected |
+| Health | the feed is the `sse-event-feed` component of the health indicator: `DOWN` when its polling thread has died, `DEGRADED` while its reads fail |
 | Properties | `streamrune.sse.enabled`, `.polling-interval`, `.timeout`, `.keep-alive-interval` |
 
 Use the endpoint to tell a connected client that an aggregate changed; a consumer that must see
