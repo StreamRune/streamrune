@@ -1056,6 +1056,7 @@ class ContinuousProjectionRunnerTest {
             Thread.currentThread().interrupt();
           }
           throw new org.streamrune.core.projection.ProjectionCommitFencedException(
+              org.streamrune.core.projection.ProjectionCommitFencedException.Guard.EPOCH_FENCE,
               "commit fenced out: caller epoch 1 is below the stored epoch 2");
         };
 
@@ -1169,6 +1170,7 @@ class ContinuousProjectionRunnerTest {
               Thread.currentThread().interrupt();
             }
             throw new org.streamrune.core.projection.ProjectionCommitFencedException(
+                org.streamrune.core.projection.ProjectionCommitFencedException.Guard.EPOCH_FENCE,
                 "commit fenced out: caller epoch " + fencingEpoch + " is below the stored epoch 2");
           }
           updater.update(null); // runs the projection → it throws → drives the SKIP path
@@ -1577,7 +1579,9 @@ class ContinuousProjectionRunnerTest {
     org.streamrune.core.projection.AtomicBatchProcessor guarded =
         (pn, batch, newOffset, fencingEpoch, updater, os) -> {
           if (fencingEpoch != 0L && fencingEpoch < 2L) {
-            throw new org.streamrune.core.projection.ProjectionCommitFencedException("fenced");
+            throw new org.streamrune.core.projection.ProjectionCommitFencedException(
+                org.streamrune.core.projection.ProjectionCommitFencedException.Guard.EPOCH_FENCE,
+                "fenced");
           }
           if (batch.isEmpty()) {
             emptyBatchAdvances.add(newOffset.value()); // the SKIP checkpoint-only advance

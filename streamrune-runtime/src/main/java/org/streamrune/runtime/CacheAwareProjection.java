@@ -87,24 +87,34 @@ public final class CacheAwareProjection implements Projection {
   }
 
   /**
-   * Forwards to the delegate's OWN {@link Projection#processDeadLetterReplay}, notifies the
-   * invalidator only when the delegate reports it APPLIED something, and reports the delegate's
-   * answer. The inherited default would call THIS decorator's {@link #process(List)} — reaching the
-   * delegate's {@code process}, never its override — and report {@code true}, so a decorated
-   * self-fencing projection ({@code WindowedProjection}) read as "applied" on a wholly fenced
-   * replay, the replayer discarded the range's only record (back for every cache-aware projection),
-   * and the cache was invalidated for a read model that did not change.
+   * Forwards to the delegate's OWN {@link Projection#processDeadLetterReplay} with the repository
+   * it was handed, notifies the invalidator only when the delegate reports it APPLIED something,
+   * and reports the delegate's answer. As in {@link #process(List, ProjectionRepository)}, the
+   * notification waits for the replay transaction's commit when a repository is handed, and happens
+   * at once when it is {@code null}. The inherited default would call THIS decorator's {@code
+   * process} — reaching the delegate's {@code process}, never its override — and report {@code
+   * true}, so a decorated self-fencing projection ({@code WindowedProjection}) would read as
+   * "applied" on a wholly fenced replay, the replayer would discard the range's only record, and
+   * the cache would be invalidated for a read model that did not change.
    *
    * @param batch the re-read dead-lettered range; must not be {@code null}
+   * @param repository the replay transaction's repository, or {@code null} for an at-least-once
+   *     registration
    * @return the delegate's answer
    */
   @Override
-  public boolean processDeadLetterReplay(List<EventEnvelope> batch) {
-    boolean applied = delegate.processDeadLetterReplay(batch);
-    if (applied) {
-      invalidator.onEventsProcessed(batch);
+  public boolean processDeadLetterReplay(
+      List<EventEnvelope> batch, ProjectionRepository repository) {
+    boolean applied = delegate.processDeadLetterReplay(batch, repository);
+    if (!applied) {
+      return false;
     }
-    return applied;
+    if (repository == null) {
+      invalidator.onEventsProcessed(batch);
+    } else {
+      repository.afterCommit(() -> invalidator.onEventsProcessed(batch));
+    }
+    return true;
   }
 
   /**

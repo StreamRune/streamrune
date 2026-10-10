@@ -1,6 +1,8 @@
 package org.streamrune.runtime;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
+import static org.streamrune.core.projection.ProjectionDeliveryMode.TRANSACTIONAL_LOCAL;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -13,9 +15,12 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeadLetterEntry;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
+import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
@@ -25,6 +30,7 @@ import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemoryProjectionDeadLetterStore;
+import org.streamrune.test.InMemoryProjectionRepository;
 
 class ProjectionDeadLetterReplayerTest {
 
@@ -76,9 +82,9 @@ class ProjectionDeadLetterReplayerTest {
     dlqStore.save(entry(2, 3, 2, Instant.now()));
 
     var processed = new ArrayList<List<EventEnvelope>>();
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, processed::add, 10);
+    var result = replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
     assertEquals(1, processed.size());
@@ -98,9 +104,9 @@ class ProjectionDeadLetterReplayerTest {
     dlqStore.save(entry(4, 4, 1, Instant.parse("2026-02-01T00:00:00Z")));
 
     var processed = new ArrayList<List<EventEnvelope>>();
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, processed::add, 10);
+    var result = replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(2, 0, 0), result);
     assertEquals(List.of(2L), offsets(processed.get(0)));
@@ -123,9 +129,9 @@ class ProjectionDeadLetterReplayerTest {
           }
           processed.add(batch);
         };
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, poisonedAtOffset1, 10);
+    var result = replayer.replay(PROJ, poisonedAtOffset1, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 1, 0), result);
     assertEquals(List.of(3L), offsets(processed.getFirst()));
@@ -143,9 +149,9 @@ class ProjectionDeadLetterReplayerTest {
     dlqStore.save(entry(10, 12, 3, Instant.now()));
 
     var processed = new ArrayList<List<EventEnvelope>>();
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, processed::add, 10);
+    var result = replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
     assertTrue(processed.isEmpty(), "an erased range has nothing to process");
@@ -161,9 +167,9 @@ class ProjectionDeadLetterReplayerTest {
     dlqStore.save(entry(2, 4, 3, Instant.now()));
 
     var processed = new ArrayList<List<EventEnvelope>>();
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, processed::add, 10);
+    var result = replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
     assertEquals(List.of(2L, 4L), offsets(processed.getFirst()));
@@ -179,9 +185,9 @@ class ProjectionDeadLetterReplayerTest {
     dlqStore.save(entry(1, 3, 3, Instant.now()));
 
     var processed = new ArrayList<List<EventEnvelope>>();
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, processed::add, 10);
+    var result = replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
     assertEquals(List.of(1L, 2L, 3L), offsets(processed.getFirst()));
@@ -196,9 +202,9 @@ class ProjectionDeadLetterReplayerTest {
     dlqStore.save(entry(2, 2, 1, Instant.parse("2026-01-02T00:00:00Z")));
 
     var processed = new ArrayList<List<EventEnvelope>>();
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, processed::add, 1);
+    var result = replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 1);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
     assertEquals(1, processed.size());
@@ -213,9 +219,9 @@ class ProjectionDeadLetterReplayerTest {
     dlqStore.save(entry(1, 1, 1, Instant.now()));
 
     var processed = new ArrayList<List<EventEnvelope>>();
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, processed::add, 10);
+    var result = replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     // The projection ran, but the entry could not be discarded — at-least-once: a later pass
     // replays it again, which the (idempotent) projection must tolerate.
@@ -239,13 +245,14 @@ class ProjectionDeadLetterReplayerTest {
           public void process(List<EventEnvelope> batch) {}
 
           @Override
-          public boolean processDeadLetterReplay(List<EventEnvelope> batch) {
+          public boolean processDeadLetterReplay(
+              List<EventEnvelope> batch, ProjectionRepository repository) {
             return false;
           }
         };
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, fencing, 10);
+    var result = replayer.replay(PROJ, fencing, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(0, 0, 1), result);
     assertEquals(
@@ -254,10 +261,9 @@ class ProjectionDeadLetterReplayerTest {
 
   @Test
   void whollyFencedWindowedProjection_endToEnd_keepsTheEntry() {
-    // The repro on the real projection: the live runner dead-lettered [2-3], skipped past
-    // it and applied a LATER batch, advancing WindowedProjection's offset fence past the hole. The
-    // replay feed then returns normally having accumulated nothing — pre-fix the replayer read
-    // that as success and discarded the entry.
+    // On the real projection: the live runner dead-lettered [2-3], skipped past it and applied a
+    // LATER batch, advancing WindowedProjection's offset fence past the hole. The replay feed then
+    // returns normally having accumulated nothing, and the entry must be kept.
     var eventStore = new FixedOffsetEventStore();
     eventStore.addEvents(envelope(1), envelope(2), envelope(3), envelope(4));
     var dlqStore = new InMemoryProjectionDeadLetterStore();
@@ -271,21 +277,20 @@ class ProjectionDeadLetterReplayerTest {
             .sink(r -> {})
             .build();
     windowed.process(List.of(envelope(4))); // the live runner's later batch: fence = 4
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, windowed, 10);
+    var result = replayer.replay(PROJ, windowed, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(0, 0, 1), result);
     assertEquals(1, dlqStore.all().size(), "the never-accumulated range's entry must survive");
   }
 
   /**
-   * The three shipped decorators override both {@code process} overloads but inherited the {@code
-   * processDeadLetterReplay} default — which calls the DECORATOR's own {@code process}, reaching
-   * the delegate's {@code process} and never the delegate's override, then reports {@code true}. A
-   * decorated {@code WindowedProjection} therefore read as "applied" on a wholly fenced replay and
-   * the replayer discarded the range's only record — back, for every decorated projection. Each
-   * decorator must forward to the delegate's {@code processDeadLetterReplay} and report ITS answer.
+   * A decorator that inherited the {@code processDeadLetterReplay} default would call its OWN
+   * {@code process}, reach the delegate's {@code process} and never the delegate's override, and
+   * report {@code true}: a decorated {@code WindowedProjection} would read as "applied" on a wholly
+   * fenced replay and the replayer would discard the range's only record. Each shipped decorator
+   * forwards to the delegate's {@code processDeadLetterReplay} and reports ITS answer.
    */
   @Test
   void whollyFencedWindowedProjection_throughEachShippedDecorator_keepsTheEntry() {
@@ -321,9 +326,10 @@ class ProjectionDeadLetterReplayerTest {
               .sink(r -> {})
               .build();
       windowed.process(List.of(envelope(4))); // the live runner's later batch: fence = 4
-      var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+      var replayer = replayer(eventStore, dlqStore);
 
-      var result = replayer.replay(PROJ, decorator.wrap().apply(windowed), 10);
+      var result =
+          replayer.replay(PROJ, decorator.wrap().apply(windowed), AT_LEAST_ONCE_IDEMPOTENT, 10);
 
       assertEquals(
           new ProjectionDeadLetterReplayer.ReplayResult(0, 0, 1),
@@ -349,9 +355,11 @@ class ProjectionDeadLetterReplayerTest {
     var processed = new ArrayList<EventEnvelope>();
     Projection plain = processed::addAll; // the default processDeadLetterReplay: process + true
     var invalidated = new ArrayList<List<EventEnvelope>>();
-    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore);
+    var replayer = replayer(eventStore, dlqStore);
 
-    var result = replayer.replay(PROJ, new CacheAwareProjection(plain, invalidated::add), 10);
+    var result =
+        replayer.replay(
+            PROJ, new CacheAwareProjection(plain, invalidated::add), AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
     assertEquals(List.of(2L, 3L), offsets(processed));
@@ -371,7 +379,7 @@ class ProjectionDeadLetterReplayerTest {
     var processed = new ArrayList<List<EventEnvelope>>();
 
     var result =
-        new ProjectionDeadLetterReplayer(eventStore, dlqStore).replay(PROJ, processed::add, 10);
+        replayer(eventStore, dlqStore).replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
     assertEquals(1, processed.size());
@@ -382,24 +390,299 @@ class ProjectionDeadLetterReplayerTest {
   void constructorRejectsNullArguments() {
     var eventStore = new FixedOffsetEventStore();
     var dlqStore = new InMemoryProjectionDeadLetterStore();
+    var processor = new InMemoryProjectionRepository();
     assertThrows(
-        IllegalArgumentException.class, () -> new ProjectionDeadLetterReplayer(null, dlqStore));
+        IllegalArgumentException.class,
+        () -> new ProjectionDeadLetterReplayer(null, dlqStore, processor));
     assertThrows(
-        IllegalArgumentException.class, () -> new ProjectionDeadLetterReplayer(eventStore, null));
+        IllegalArgumentException.class,
+        () -> new ProjectionDeadLetterReplayer(eventStore, null, processor));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new ProjectionDeadLetterReplayer(eventStore, dlqStore, null));
   }
 
   @Test
   void replayRejectsInvalidArguments() {
-    var replayer =
-        new ProjectionDeadLetterReplayer(
-            new FixedOffsetEventStore(), new InMemoryProjectionDeadLetterStore());
+    var replayer = replayer(new FixedOffsetEventStore(), new InMemoryProjectionDeadLetterStore());
     Projection noop = batch -> {};
     assertThrows(
-        IllegalArgumentException.class, () -> replayer.replay((ProjectionName) null, noop, 1));
+        IllegalArgumentException.class,
+        () -> replayer.replay((ProjectionName) null, noop, AT_LEAST_ONCE_IDEMPOTENT, 1));
     // A blank projection name never reaches replay: ProjectionName rejects it first.
     assertThrows(IllegalArgumentException.class, () -> ProjectionName.of("  "));
-    assertThrows(IllegalArgumentException.class, () -> replayer.replay(PROJ, null, 1));
-    assertThrows(IllegalArgumentException.class, () -> replayer.replay(PROJ, noop, 0));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> replayer.replay(PROJ, null, AT_LEAST_ONCE_IDEMPOTENT, 1));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> replayer.replay(PROJ, noop, AT_LEAST_ONCE_IDEMPOTENT, 0));
+    assertThrows(IllegalArgumentException.class, () -> replayer.replay(PROJ, noop, null, 1));
+  }
+
+  // --- Replay runs through the processor, under the lock a live batch takes ---
+
+  /** A read-modify-write read model: one row, one counter per kind of event. */
+  record Tally(int replayed, int live) {}
+
+  /** Reads the row, adds one to the replayed or the live count, saves it. */
+  private static final class TallyProjection extends BaseProjection {
+    volatile Runnable afterLiveRead = () -> {};
+    volatile RuntimeException failAfterReplayWrite;
+    final java.util.concurrent.atomic.AtomicBoolean replayEntered =
+        new java.util.concurrent.atomic.AtomicBoolean();
+
+    TallyProjection(ProjectionRepository repository) {
+      super(repository, PROJ.value());
+    }
+
+    @Override
+    public void process(List<EventEnvelope> batch) {
+      for (var envelope : batch) {
+        boolean live = ((TestEvent) envelope.event()).payload().startsWith("live");
+        if (!live) {
+          replayEntered.set(true);
+        }
+        Tally row = findById("row", Tally.class).orElse(new Tally(0, 0));
+        if (live) {
+          afterLiveRead.run();
+          save("row", new Tally(row.replayed(), row.live() + 1));
+        } else {
+          save("row", new Tally(row.replayed() + 1, row.live()));
+          if (failAfterReplayWrite != null) {
+            throw failAfterReplayWrite;
+          }
+        }
+      }
+    }
+  }
+
+  private static EventEnvelope liveEnvelope(long globalOffset) {
+    var template = envelope(globalOffset);
+    return new EventEnvelope(
+        template.globalOffset(),
+        template.streamId(),
+        template.version(),
+        template.eventType(),
+        new TestEvent("live" + globalOffset),
+        template.metadata());
+  }
+
+  @Test
+  void replay_waitsForAnOpenLiveBatch_andBothReadModifyWritesSurvive() throws Exception {
+    var repository = new InMemoryProjectionRepository();
+    var projection = new TallyProjection(repository);
+    var eventStore = new FixedOffsetEventStore();
+    eventStore.addEvents(envelope(1), liveEnvelope(2));
+    var dlqStore = new InMemoryProjectionDeadLetterStore();
+    dlqStore.save(entry(1, 1, 1, Instant.now()));
+    repository.saveOffset(PROJ, GlobalOffset.of(1)); // the runner moved past the dead-lettered [1]
+
+    var liveIsOpen = new java.util.concurrent.CountDownLatch(1);
+    var releaseLive = new java.util.concurrent.CountDownLatch(1);
+    projection.afterLiveRead =
+        () -> {
+          liveIsOpen.countDown();
+          try {
+            releaseLive.await(30, java.util.concurrent.TimeUnit.SECONDS);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          }
+        };
+    var liveBatch = List.of(liveEnvelope(2));
+    Thread live =
+        Thread.ofPlatform()
+            .start(
+                () ->
+                    repository.executeAtomically(
+                        PROJ,
+                        liveBatch,
+                        GlobalOffset.of(2),
+                        0L,
+                        tx -> projection.process(liveBatch, tx),
+                        repository));
+    assertTrue(liveIsOpen.await(10, java.util.concurrent.TimeUnit.SECONDS));
+
+    var result = new java.util.concurrent.atomic.AtomicReference<Object>();
+    Thread replay =
+        Thread.ofPlatform()
+            .start(
+                () -> {
+                  try {
+                    result.set(
+                        new ProjectionDeadLetterReplayer(eventStore, dlqStore, repository)
+                            .replay(PROJ, projection, TRANSACTIONAL_LOCAL, 10));
+                  } catch (RuntimeException e) {
+                    result.set(e);
+                  }
+                });
+    replay.join(300);
+    boolean replayWaited = replay.isAlive();
+    boolean replayReadTheRow = projection.replayEntered.get();
+    releaseLive.countDown();
+    live.join(10_000);
+    replay.join(10_000);
+
+    assertTrue(replayWaited, "the replay waits while a live batch of the projection is open");
+    assertFalse(replayReadTheRow, "the replay must not read the row the open live batch changes");
+    assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result.get());
+    assertEquals(
+        new Tally(1, 1),
+        repository.findById(PROJ, "row", Tally.class).orElseThrow(),
+        "the replayed change and the live change both survive");
+    assertEquals(
+        GlobalOffset.of(2), repository.getLastOffset(PROJ), "replay does not move the checkpoint");
+    assertTrue(dlqStore.all().isEmpty());
+  }
+
+  @Test
+  void transactionalReplay_thatFailsAfterItsWrite_rollsBack_keepsTheEntry_thenConverges() {
+    var repository = new InMemoryProjectionRepository();
+    var projection = new TallyProjection(repository);
+    var eventStore = new FixedOffsetEventStore();
+    eventStore.addEvents(envelope(1));
+    var dlqStore = new InMemoryProjectionDeadLetterStore();
+    dlqStore.save(entry(1, 1, 1, Instant.now()));
+    repository.saveOffset(PROJ, GlobalOffset.of(5));
+    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore, repository);
+
+    projection.failAfterReplayWrite = new IllegalStateException("crash before the replay commit");
+    var crashed = replayer.replay(PROJ, projection, TRANSACTIONAL_LOCAL, 10);
+
+    assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(0, 1, 0), crashed);
+    assertTrue(
+        repository.findById(PROJ, "row", Tally.class).isEmpty(),
+        "the write went through the replay transaction and rolled back with it");
+    assertEquals(1, dlqStore.all().size());
+
+    projection.failAfterReplayWrite = null;
+    var rerun = replayer.replay(PROJ, projection, TRANSACTIONAL_LOCAL, 10);
+
+    assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), rerun);
+    assertEquals(new Tally(1, 0), repository.findById(PROJ, "row", Tally.class).orElseThrow());
+    assertEquals(GlobalOffset.of(5), repository.getLastOffset(PROJ));
+    assertTrue(dlqStore.all().isEmpty());
+  }
+
+  @Test
+  void atLeastOnceReplay_handsNoRepository_andWritesStandWhenItFails() {
+    var repository = new InMemoryProjectionRepository();
+    var projection = new TallyProjection(repository);
+    var eventStore = new FixedOffsetEventStore();
+    eventStore.addEvents(envelope(1));
+    var dlqStore = new InMemoryProjectionDeadLetterStore();
+    dlqStore.save(entry(1, 1, 1, Instant.now()));
+    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore, repository);
+
+    projection.failAfterReplayWrite = new IllegalStateException("crash after the write");
+    var crashed = replayer.replay(PROJ, projection, AT_LEAST_ONCE_IDEMPOTENT, 10);
+
+    assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(0, 1, 0), crashed);
+    assertEquals(
+        new Tally(1, 0),
+        repository.findById(PROJ, "row", Tally.class).orElseThrow(),
+        "an at-least-once projection writes through its own repository, outside the replay"
+            + " transaction");
+    assertEquals(1, dlqStore.all().size(), "the entry is kept, so the range is applied again");
+  }
+
+  @Test
+  void appliedTransactionalReplay_throughCacheAwareProjection_invalidatesAfterTheCommit() {
+    var repository = new InMemoryProjectionRepository();
+    var projection = new TallyProjection(repository);
+    var eventStore = new FixedOffsetEventStore();
+    eventStore.addEvents(envelope(1));
+    var dlqStore = new InMemoryProjectionDeadLetterStore();
+    dlqStore.save(entry(1, 1, 1, Instant.now()));
+    var rowsSeenByTheInvalidator = new ArrayList<java.util.Optional<Tally>>();
+    var cacheAware =
+        new CacheAwareProjection(
+            projection,
+            batch -> rowsSeenByTheInvalidator.add(repository.findById(PROJ, "row", Tally.class)));
+
+    var result =
+        new ProjectionDeadLetterReplayer(eventStore, dlqStore, repository)
+            .replay(PROJ, cacheAware, TRANSACTIONAL_LOCAL, 10);
+
+    assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
+    assertEquals(
+        List.of(java.util.Optional.of(new Tally(1, 0))),
+        rowsSeenByTheInvalidator,
+        "the invalidation runs once, after the replayed row is committed");
+  }
+
+  @Test
+  void replay_refusesAProcessorWithoutAReplayLock_beforeItReadsAnEntry() {
+    var eventStore = new FixedOffsetEventStore();
+    eventStore.addEvents(envelope(1));
+    var dlqStore = new InMemoryProjectionDeadLetterStore();
+    dlqStore.save(entry(1, 1, 1, Instant.now()));
+    var processed = new ArrayList<List<EventEnvelope>>();
+    var replayer =
+        new ProjectionDeadLetterReplayer(
+            eventStore, dlqStore, AtomicBatchProcessor.nonAtomicAtLeastOnce());
+
+    var refusal =
+        assertThrows(
+            IllegalStateException.class,
+            () -> replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10));
+
+    assertTrue(refusal.getMessage().contains("nonAtomicAtLeastOnce"), refusal.getMessage());
+    assertTrue(refusal.getMessage().contains("replayWithRunnerStopped"), refusal.getMessage());
+    assertTrue(processed.isEmpty(), "nothing is fed to the projection");
+    assertEquals(1, dlqStore.all().size(), "the entry is untouched");
+  }
+
+  @Test
+  void replayWithRunnerStopped_feedsTheRangeOnAProcessorWithoutAReplayLock() {
+    var eventStore = new FixedOffsetEventStore();
+    eventStore.addEvents(envelope(1), envelope(2));
+    var dlqStore = new InMemoryProjectionDeadLetterStore();
+    dlqStore.save(entry(1, 2, 2, Instant.now()));
+    var processed = new ArrayList<List<EventEnvelope>>();
+    var replayer =
+        new ProjectionDeadLetterReplayer(
+            eventStore, dlqStore, AtomicBatchProcessor.nonAtomicAtLeastOnce());
+
+    var result = replayer.replayWithRunnerStopped(PROJ, processed::add, 10);
+
+    assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
+    assertEquals(List.of(1L, 2L), offsets(processed.getFirst()));
+    assertTrue(dlqStore.all().isEmpty());
+  }
+
+  @Test
+  void replayWithRunnerStopped_isRefusedOnAProcessorThatSerializesReplays() {
+    var dlqStore = new InMemoryProjectionDeadLetterStore();
+    dlqStore.save(entry(1, 1, 1, Instant.now()));
+    var processed = new ArrayList<List<EventEnvelope>>();
+    var replayer = replayer(new FixedOffsetEventStore(), dlqStore);
+
+    var refusal =
+        assertThrows(
+            IllegalStateException.class,
+            () -> replayer.replayWithRunnerStopped(PROJ, processed::add, 10));
+
+    assertTrue(refusal.getMessage().contains("replay(...)"), refusal.getMessage());
+    assertTrue(processed.isEmpty());
+    assertEquals(1, dlqStore.all().size());
+  }
+
+  @Test
+  void replay_refusesATransactionalRegistrationThatDoesNotWriteThroughTheHandedRepository() {
+    var replayer = replayer(new FixedOffsetEventStore(), new InMemoryProjectionDeadLetterStore());
+    Projection ignoresTheRepository = batch -> {};
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> replayer.replay(PROJ, ignoresTheRepository, TRANSACTIONAL_LOCAL, 10));
+  }
+
+  /** A replayer over an in-memory processor, which serializes replays. */
+  private static ProjectionDeadLetterReplayer replayer(
+      EventStore eventStore, ProjectionDeadLetterStore dlqStore) {
+    return new ProjectionDeadLetterReplayer(
+        eventStore, dlqStore, new InMemoryProjectionRepository());
   }
 
   // --- In-memory test doubles ---

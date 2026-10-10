@@ -27,6 +27,10 @@ import org.streamrune.core.types.ProjectionName;
  * <p>The transaction-scoped repository must also override {@link ProjectionRepository#afterCommit}:
  * an action registered on it (such as the query-cache eviction of {@code CacheAwareProjection})
  * runs only once the transaction has committed, and is dropped if it rolls back.
+ *
+ * <p>A processor that keeps a lock per projection also applies dead-lettered ranges under it
+ * ({@link #executeReplay}, announced by {@link #serializesReplay()}), so a dead-letter replay never
+ * interleaves with a live batch of the same projection.
  */
 @FunctionalInterface
 public interface AtomicBatchProcessor {
@@ -198,6 +202,85 @@ public interface AtomicBatchProcessor {
   }
 
   /**
+   * Makes the read-model storage of {@code projectionName} ready before a batch writes to it
+   * through the handed repository. A runner calls it before each batch of a {@link
+   * ProjectionDeliveryMode#TRANSACTIONAL_LOCAL} or {@link ProjectionDeliveryMode#EXTERNAL_EFFECT}
+   * registration, and never for an {@link ProjectionDeliveryMode#AT_LEAST_ONCE_IDEMPOTENT} one,
+   * whose read models live wherever the projection writes them. Implementations make it cheap to
+   * repeat. The framework's {@code JdbcProjectionRepository} creates the {@code <name>_view} table
+   * here, outside the batch transaction.
+   *
+   * <p>The default does nothing: a store without a per-projection structure has nothing to prepare.
+   *
+   * @param projectionName the projection about to write through the handed repository
+   */
+  default void prepareReadModel(ProjectionName projectionName) {
+    // Nothing to prepare unless the implementation keeps a structure per projection.
+  }
+
+  /**
+   * Whether {@link #executeReplay} excludes {@link #executeAtomically} for the same projection:
+   * while one of them runs for a projection name, the other waits. {@code true} is what lets a
+   * dead-letter replay run beside a live runner.
+   *
+   * <p>Defaults to {@code false}: a processor that has not implemented the exclusion does not have
+   * it. The framework's {@code JdbcProjectionRepository} returns {@code true}: both take the
+   * projection's checkpoint row {@code FOR UPDATE}.
+   *
+   * @return {@code true} if a replay and a batch of one projection never run at the same time
+   */
+  default boolean serializesReplay() {
+    return false;
+  }
+
+  /**
+   * Applies a dead-lettered range to the read model beside a live runner. The range lies behind the
+   * checkpoint: the runner moved past it when it dead-lettered it.
+   *
+   * <p>An implementation takes the same per-projection lock as {@link #executeAtomically} for the
+   * whole call, so a replay and a live batch of one projection never interleave: a
+   * read-modify-write projection reads rows no other writer of that projection is changing. It runs
+   * {@code projectionUpdater} once, with the repository {@link #executeAtomically} would hand it —
+   * a transactional implementation hands one bound to the replay's own transaction, so the range is
+   * applied all-or-nothing. It never writes the checkpoint: neither the offset nor the fencing
+   * epoch moves.
+   *
+   * <p>An exception from {@code projectionUpdater} propagates; a transactional implementation rolls
+   * the range back first.
+   *
+   * <p>The default refuses: a processor whose {@link #serializesReplay()} is {@code false} has no
+   * lock to take, and running the range unlocked beside a live batch loses one of the two writes
+   * whenever both read a row before either saves it. Idempotency does not prevent that — neither
+   * side applies anything twice.
+   *
+   * @param projectionName the projection whose dead-lettered range is replayed
+   * @param batch the re-read range, in stream order
+   * @param projectionUpdater applies the range; receives the transaction-scoped repository, or
+   *     {@code null} from a non-transactional implementation
+   * @throws UnsupportedOperationException if this processor cannot serialize a replay with a live
+   *     batch
+   */
+  default void executeReplay(
+      ProjectionName projectionName,
+      List<EventEnvelope> batch,
+      ProjectionUpdater projectionUpdater) {
+    throw new UnsupportedOperationException(
+        "AtomicBatchProcessor "
+            + (this instanceof NonAtomicAtLeastOnce
+                ? "nonAtomicAtLeastOnce()"
+                : getClass().getName())
+            + " cannot replay a dead-lettered range of projection '"
+            + (projectionName != null
+                ? LogSanitizer.sanitizeForLog(projectionName.value())
+                : "null")
+            + "' beside a live runner: it holds no per-projection lock, so the replay and a live"
+            + " batch could both read a row before either saves it, and one of the two writes would"
+            + " be lost. Stop the projection's runner and call"
+            + " ProjectionDeadLetterReplayer.replayWithRunnerStopped, or run the projection on a"
+            + " processor whose serializesReplay() is true (JdbcProjectionRepository).");
+  }
+
+  /**
    * The non-transactional processor: {@code process(batch, null)} then {@code
    * offsetStore.saveOffset(...)}, two commits. Legal only for {@link
    * ProjectionDeliveryMode#AT_LEAST_ONCE_IDEMPOTENT} registrations and only under {@link
@@ -206,6 +289,10 @@ public interface AtomicBatchProcessor {
    * nothing else — no field, constant or {@code null} coercion — produces it. A failure of {@code
    * saveOffset} after the updater returned is rethrown as {@link
    * ProjectionCheckpointSaveException}.
+   *
+   * <p>It holds no per-projection lock, so it refuses {@link #executeReplay}: a dead-lettered range
+   * of a registration on this processor is replayed with its runner stopped ({@code
+   * ProjectionDeadLetterReplayer.replayWithRunnerStopped}).
    *
    * @return the one nonatomic processor
    */

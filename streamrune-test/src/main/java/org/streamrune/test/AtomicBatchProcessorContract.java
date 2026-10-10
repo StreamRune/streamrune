@@ -3,6 +3,7 @@ package org.streamrune.test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,9 +15,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
@@ -40,11 +44,13 @@ import org.streamrune.core.types.Version;
  * handed to the updater is non-null; (ii) an updater exception commits nothing; (iii) a write
  * through the handed repository and the checkpoint become visible together, never one without the
  * other; (iv) a stale epoch is rejected before the updater runs; (v) {@code writesTo(this)} is
- * true, and stays true through a {@link Proxy} that forwards to the real object. Run by {@code
- * InMemoryProjectionRepositoryContractTest} (streamrune-test) and {@code
- * JdbcProjectionRepositoryContractTest} (streamrune-postgres): the test-time half of "startup
- * verifies the shared transaction" — the static {@code ProjectionDeliveryPolicy} trusts the flag,
- * this suite is what makes the flag honest.
+ * true, and stays true through a {@link Proxy} that forwards to the real object. And what {@link
+ * AtomicBatchProcessor#serializesReplay()} {@code == true} promises: a replay and a batch of one
+ * projection never run at the same time, a replay applies its writes all-or-nothing, and it moves
+ * neither the offset nor the epoch. Run by {@code InMemoryProjectionRepositoryContractTest}
+ * (streamrune-test) and {@code JdbcProjectionRepositoryContractTest} (streamrune-postgres): the
+ * test-time half of "startup verifies the shared transaction" — the static {@code
+ * ProjectionDeliveryPolicy} trusts the flag, this suite is what makes the flag honest.
  */
 public abstract class AtomicBatchProcessorContract {
 
@@ -246,20 +252,22 @@ public abstract class AtomicBatchProcessorContract {
     var name = freshName();
     processor().stampFencingEpoch(name, 2L);
     var updaterRan = new AtomicBoolean();
-    assertThrows(
-        ProjectionCommitFencedException.class,
-        () ->
-            processor()
-                .executeAtomically(
-                    name,
-                    batch(1, 1),
-                    GlobalOffset.of(1),
-                    1L,
-                    repo -> {
-                      updaterRan.set(true);
-                      repo.save(name, "a", new ContractView("a", "stale"));
-                    },
-                    offsetStore()));
+    var rejection =
+        assertThrows(
+            ProjectionCommitFencedException.class,
+            () ->
+                processor()
+                    .executeAtomically(
+                        name,
+                        batch(1, 1),
+                        GlobalOffset.of(1),
+                        1L,
+                        repo -> {
+                          updaterRan.set(true);
+                          repo.save(name, "a", new ContractView("a", "stale"));
+                        },
+                        offsetStore()));
+    assertEquals(ProjectionCommitFencedException.Guard.EPOCH_FENCE, rejection.guard());
     assertFalse(updaterRan.get(), "(iv) the fence runs before the updater");
     assertTrue(readFromOutside(name, "a").isEmpty());
     assertEquals(GlobalOffset.initial(), committedOffset(name));
@@ -277,19 +285,253 @@ public abstract class AtomicBatchProcessorContract {
             0L,
             repo -> repo.save(name, "a", new ContractView("a", "once")),
             offsetStore());
+    var overlap =
+        assertThrows(
+            ProjectionCommitFencedException.class,
+            () ->
+                processor()
+                    .executeAtomically(
+                        name,
+                        batch(2, 3),
+                        GlobalOffset.of(3),
+                        0L,
+                        repo -> repo.save(name, "a", new ContractView("a", "twice")),
+                        offsetStore()));
+    assertEquals(ProjectionCommitFencedException.Guard.OVERLAP, overlap.guard());
+    assertEquals(Optional.of(new ContractView("a", "once")), readFromOutside(name, "a"));
+    assertEquals(GlobalOffset.of(2), committedOffset(name));
+
+    var nonAdvancing =
+        assertThrows(
+            ProjectionCommitFencedException.class,
+            () ->
+                processor()
+                    .executeAtomically(
+                        name, List.of(), GlobalOffset.of(2), 0L, repo -> {}, offsetStore()));
+    assertEquals(ProjectionCommitFencedException.Guard.MONOTONIC, nonAdvancing.guard());
+  }
+
+  /** A replay writes behind the checkpoint and moves neither the offset nor the epoch. */
+  @Test
+  public void replayAppliesItsWrites_andMovesNeitherTheOffsetNorTheEpoch() {
+    var name = freshName();
+    assertTrue(processor().serializesReplay(), "the processor serializes a replay with a batch");
+    processor().stampFencingEpoch(name, 5L);
+    processor()
+        .executeAtomically(
+            name,
+            batch(1, 3),
+            GlobalOffset.of(3),
+            5L,
+            repo -> repo.save(name, "a", new ContractView("a", "live")),
+            offsetStore());
+    var handed = new AtomicReference<ProjectionRepository>();
+
+    processor()
+        .executeReplay(
+            name,
+            batch(2, 2),
+            repo -> {
+              handed.set(repo);
+              repo.save(name, "b", new ContractView("b", "replayed"));
+              assertTrue(readFromOutside(name, "b").isEmpty(), "row invisible before the commit");
+            });
+
+    assertNotNull(handed.get(), "a replay is handed a repository like a batch");
+    assertEquals(Optional.of(new ContractView("b", "replayed")), readFromOutside(name, "b"));
+    assertEquals(Optional.of(new ContractView("a", "live")), readFromOutside(name, "a"));
+    assertEquals(GlobalOffset.of(3), committedOffset(name), "the offset did not move");
+    // The epoch did not move either: the leader's next batch commits, an older epoch is rejected.
     assertThrows(
         ProjectionCommitFencedException.class,
         () ->
             processor()
                 .executeAtomically(
+                    name, batch(4, 4), GlobalOffset.of(4), 4L, repo -> {}, offsetStore()));
+    processor()
+        .executeAtomically(name, batch(4, 4), GlobalOffset.of(4), 5L, repo -> {}, offsetStore());
+    assertEquals(GlobalOffset.of(4), committedOffset(name));
+  }
+
+  /** A replay for a projection that has no checkpoint yet leaves it at the start. */
+  @Test
+  public void replayForAProjectionWithoutACheckpoint_leavesTheCheckpointAtTheStart() {
+    var name = freshName();
+    processor()
+        .executeReplay(name, batch(1, 1), repo -> repo.save(name, "a", new ContractView("a", "r")));
+    assertEquals(Optional.of(new ContractView("a", "r")), readFromOutside(name, "a"));
+    assertEquals(GlobalOffset.initial(), committedOffset(name));
+    assertEquals(GlobalOffset.initial(), offsetStore().getLastOffset(name));
+  }
+
+  /** A replay whose updater throws commits nothing; its after-commit actions never run. */
+  @Test
+  public void replayUpdaterExceptionCommitsNothing() {
+    var name = freshName();
+    var afterCommitRan = new AtomicBoolean();
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            processor()
+                .executeReplay(
                     name,
-                    batch(2, 3),
-                    GlobalOffset.of(3),
-                    0L,
-                    repo -> repo.save(name, "a", new ContractView("a", "twice")),
-                    offsetStore()));
-    assertEquals(Optional.of(new ContractView("a", "once")), readFromOutside(name, "a"));
-    assertEquals(GlobalOffset.of(2), committedOffset(name));
+                    batch(1, 1),
+                    repo -> {
+                      repo.save(name, "a", new ContractView("a", "replayed"));
+                      repo.afterCommit(() -> afterCommitRan.set(true));
+                      throw new IllegalStateException("boom after the write");
+                    }));
+    assertTrue(readFromOutside(name, "a").isEmpty(), "the replayed write was rolled back");
+    assertFalse(afterCommitRan.get());
+    assertEquals(GlobalOffset.initial(), committedOffset(name));
+
+    var ran = new AtomicReference<String>();
+    processor()
+        .executeReplay(
+            name,
+            batch(1, 1),
+            repo -> {
+              repo.save(name, "a", new ContractView("a", "replayed"));
+              repo.afterCommit(
+                  () ->
+                      ran.set(
+                          readFromOutside(name, "a").isPresent() ? "after-commit" : "too-early"));
+            });
+    assertEquals("after-commit", ran.get());
+  }
+
+  /** A replay does not start while a batch of the same projection is open. */
+  @Test
+  public void replayWaitsForAnOpenBatchOfTheSameProjection() throws InterruptedException {
+    var name = freshName();
+    assertSecondWaitsForFirst(
+        updater ->
+            processor()
+                .executeAtomically(
+                    name, batch(1, 1), GlobalOffset.of(1), 0L, updater, offsetStore()),
+        updater -> processor().executeReplay(name, batch(1, 1), updater));
+  }
+
+  /** A batch does not start while a replay of the same projection is open. */
+  @Test
+  public void batchWaitsForAnOpenReplayOfTheSameProjection() throws InterruptedException {
+    var name = freshName();
+    assertSecondWaitsForFirst(
+        updater -> processor().executeReplay(name, batch(1, 1), updater),
+        updater ->
+            processor()
+                .executeAtomically(
+                    name, batch(1, 1), GlobalOffset.of(1), 0L, updater, offsetStore()));
+  }
+
+  /** A replay of one projection does not wait for an open batch of another. */
+  @Test
+  public void replayDoesNotWaitForAnOpenBatchOfAnotherProjection() throws InterruptedException {
+    var open = freshName();
+    var other = freshName();
+    var firstIsOpen = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var failure = new AtomicReference<Throwable>();
+    Thread first =
+        Thread.ofPlatform()
+            .start(
+                () -> {
+                  try {
+                    processor()
+                        .executeAtomically(
+                            open,
+                            batch(1, 1),
+                            GlobalOffset.of(1),
+                            0L,
+                            repo -> {
+                              firstIsOpen.countDown();
+                              awaitRelease(release);
+                            },
+                            offsetStore());
+                  } catch (Throwable t) {
+                    failure.set(t);
+                  }
+                });
+    try {
+      assertTrue(firstIsOpen.await(30, TimeUnit.SECONDS), "the first transaction opened");
+      var replayed = new AtomicBoolean();
+      processor().executeReplay(other, batch(1, 1), repo -> replayed.set(true));
+      assertTrue(replayed.get(), "the lock is per projection");
+    } finally {
+      release.countDown();
+      first.join(30_000);
+    }
+    assertNull(failure.get());
+  }
+
+  /**
+   * Opens {@code first} and holds its updater, starts {@code second} on another thread, and asserts
+   * that the second updater runs only after the first transaction is over.
+   */
+  private static void assertSecondWaitsForFirst(
+      Consumer<AtomicBatchProcessor.ProjectionUpdater> first,
+      Consumer<AtomicBatchProcessor.ProjectionUpdater> second)
+      throws InterruptedException {
+    var firstIsOpen = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var firstIsOver = new AtomicBoolean();
+    var secondRanWhileFirstWasOpen = new AtomicBoolean();
+    var secondRan = new CountDownLatch(1);
+    var failure = new AtomicReference<Throwable>();
+    Thread holder =
+        Thread.ofPlatform()
+            .start(
+                () -> {
+                  try {
+                    first.accept(
+                        repo -> {
+                          firstIsOpen.countDown();
+                          awaitRelease(release);
+                          firstIsOver.set(true);
+                        });
+                  } catch (Throwable t) {
+                    failure.compareAndSet(null, t);
+                  }
+                });
+    assertTrue(firstIsOpen.await(30, TimeUnit.SECONDS), "the first transaction opened");
+    Thread waiter =
+        Thread.ofPlatform()
+            .start(
+                () -> {
+                  try {
+                    second.accept(
+                        repo -> {
+                          secondRanWhileFirstWasOpen.set(!firstIsOver.get());
+                          secondRan.countDown();
+                        });
+                  } catch (Throwable t) {
+                    failure.compareAndSet(null, t);
+                    secondRan.countDown();
+                  }
+                });
+    try {
+      assertFalse(
+          secondRan.await(500, TimeUnit.MILLISECONDS),
+          "the second transaction must wait while the first holds the projection's lock");
+    } finally {
+      release.countDown();
+      holder.join(30_000);
+      waiter.join(30_000);
+    }
+    assertNull(failure.get());
+    assertTrue(secondRan.await(0, TimeUnit.MILLISECONDS), "the second transaction ran afterwards");
+    assertFalse(secondRanWhileFirstWasOpen.get());
+  }
+
+  private static void awaitRelease(CountDownLatch release) {
+    try {
+      if (!release.await(60, TimeUnit.SECONDS)) {
+        throw new IllegalStateException("the open transaction was never released");
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(e);
+    }
   }
 
   /** An after-commit action sees the committed write, and never runs after a rollback. */
