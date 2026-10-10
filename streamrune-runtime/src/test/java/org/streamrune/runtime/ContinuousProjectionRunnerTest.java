@@ -1720,6 +1720,12 @@ class ContinuousProjectionRunnerTest {
     assertEquals("java.lang.RuntimeException", entries.get(0).errorType());
 
     // The runner is NOT halted: it advanced past the dead-lettered range and never entered ERROR.
+    // The dead-letter write and the checkpoint advance past the range are two separate steps, so
+    // the entry is readable before the offset moves: wait for the advance too.
+    while (offsetStore.getLastOffset(ProjectionName.of("dlq-proj")).value() < 1
+        && System.nanoTime() < deadline) {
+      Thread.sleep(20);
+    }
     assertNotEquals(ProjectionState.ERROR, runner.state());
     assertEquals(1, offsetStore.getLastOffset(ProjectionName.of("dlq-proj")).value());
 
