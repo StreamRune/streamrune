@@ -173,6 +173,10 @@ public class OrderDecider implements Decider<OrderCommand, OrderState, OrderEven
 }
 ```
 
+`CreateOrder` first checks that the order does not exist yet: the bus runs `decide` whether or not
+the stream already has events, so without the check a second `CreateOrder` for the same id would
+append another `OrderCreated` and reset the order.
+
 The optional `guard(command, state)` hook runs on the loaded state before `decide` — override it
 for ownership checks (see [Authorization](advanced/authorization.md#ownership-checks-in-deciderguard)).
 It also runs for the command that creates the aggregate, where `state` is still `initialState()`, so

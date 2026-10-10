@@ -3,9 +3,9 @@
 ## At a Glance
 
 - StreamRune uses plain Java interfaces (`Decider`, `EventStore`) with explicit builder wiring; Axon uses annotation-driven Spring magic (`@Aggregate`, `@CommandHandler`, `@EventSourcingHandler`).
-- Axon requires Axon Server (or a custom event bus) for command routing; StreamRune stores events directly in PostgreSQL with no separate infrastructure service.
+- Axon applications usually run with Axon Server for command routing and event storage (the framework can also be configured with a relational event store and another message bus); StreamRune stores events directly in PostgreSQL with no separate infrastructure service.
 - StreamRune's `Decider` is a pure function (`decide(command, state) → events`, `evolve(state, event) → state`) with no framework callbacks; Axon aggregates carry mutable state and are wired by the framework.
-- StreamRune targets Java 21 virtual threads; Axon has reactive support via Reactor but also supports traditional threading models.
+- StreamRune requires Java 25 and runs commands on virtual threads; Axon has reactive support via Reactor but also supports traditional threading models.
 - StreamRune is BSL 1.1 with an Apache 2.0 conversion clause; Axon Framework is Apache 2.0 (Axon Server has a separate commercial tier).
 
 ## Concept Mapping
@@ -41,16 +41,16 @@ graph LR
 ```
 
 **1. Annotation magic vs. explicit wiring.**
-Axon relies heavily on Spring's dependency injection and annotation scanning to wire aggregates, command handlers, event handlers, and sagas. StreamRune inverts this: you wire everything explicitly using a builder (`VirtualThreadCommandBus.builder().register(ORDER, CreateOrder.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider()).build()`). The explicit approach is more verbose for trivial cases but eliminates "magic" failures where the framework cannot find a handler because of a missing annotation, a component scan exclusion, or a proxy issue.
+Axon relies heavily on Spring's dependency injection and annotation scanning to wire aggregates, command handlers, event handlers, and sagas. StreamRune inverts this: you wire everything explicitly using a builder (`VirtualThreadCommandBus.builder().eventStore(eventStore).register(ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider()).build()` — the sealed command root, one registration for every command it permits). The explicit approach is more verbose for trivial cases but eliminates "magic" failures where the framework cannot find a handler because of a missing annotation, a component scan exclusion, or a proxy issue.
 
 **2. Aggregate model: stateful object vs. pure functions.**
 An Axon aggregate is a stateful object. State is carried as fields on the aggregate class; `@EventSourcingHandler` methods mutate those fields when replaying events. StreamRune's `Decider` is a pure function interface with no mutable state — `decide()` and `evolve()` are stateless methods. `AggregateState` is an immutable record. This means StreamRune deciders are trivially unit-testable without a Spring context, an `AggregateTestFixture`, or any framework infrastructure.
 
 **3. Infrastructure dependencies.**
-A minimal Axon application requires Axon Server for command routing, event distribution, and tracking event processors. Axon Server is a separate JVM process that must be deployed, monitored, and scaled. StreamRune's only infrastructure dependency is PostgreSQL, which most teams already run.
+Axon's default setup uses Axon Server for command routing, event storage and event distribution: a separate process to deploy, monitor and scale. Axon Framework can also run without it, on a relational event store and a local or third-party message bus, and then those pieces are yours to configure and operate. StreamRune's only infrastructure dependency is PostgreSQL, which most teams already run.
 
 **4. Concurrency model.**
-Axon's tracking event processors support both traditional thread-pool and reactive (Project Reactor) modes. StreamRune's `VirtualThreadCommandBus` uses Java 21 virtual threads: each `executeAsync()` call runs the full load-decide-append cycle on a dedicated virtual thread. There is no reactive layer in StreamRune Horizon 1.
+Axon's tracking event processors support both traditional thread-pool and reactive (Project Reactor) modes. StreamRune's `VirtualThreadCommandBus` uses virtual threads: each `executeAsync()` call runs the full load-decide-append cycle on a dedicated virtual thread. StreamRune has no reactive layer.
 
 **5. Testability.**
 Axon provides `AggregateTestFixture` and `SagaTestFixture` — specialized test utilities that simulate the framework's command/event lifecycle. StreamRune deciders are pure Java: `List<OrderEvent> events = decider.decide(new PlaceOrder(...), OrderState.empty())` — a plain JUnit assertion. No fixtures, no Spring context, no Axon test module needed.
@@ -172,8 +172,8 @@ void placeOrder() {
 
 - You want testable domain logic without a Spring context or Axon test fixtures.
 - Your team prefers reading code over reading annotations. Wiring is explicit; nothing happens behind the framework's back.
-- PostgreSQL is already in your stack and you do not want to operate Axon Server as an additional service.
-- You are starting a new Java 21 project and want virtual threads without a reactive learning curve.
+- PostgreSQL is already in your stack and you do not want to operate an additional service such as Axon Server.
+- You are starting a new Java 25 project and want virtual threads without a reactive learning curve.
 - You want an event sourcing framework that does not lock you into a Spring Boot monoculture — StreamRune integrations exist for Quarkus and Micronaut.
 
 ## When to Choose Axon

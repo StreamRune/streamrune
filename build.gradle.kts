@@ -494,8 +494,8 @@ subprojects {
         // (StreamRune, PostgresEventStoreFactory, the three integrations) were exactly the ones
         // without a declared name.
         //
-        // Rejected the auditor's mechanical `project.name` transform ("streamrune-" prefix
-        // stripped, '-' -> '.'). It disagrees with both the explicit module names and the real
+        // A mechanical `project.name` transform ("streamrune-" prefix stripped, '-' -> '.') is
+        // deliberately not used. It disagrees with both the explicit module names and the real
         // package roots — streamrune-crypto-api would become org.streamrune.crypto.api (its
         // module-info says org.streamrune.crypto), streamrune-postgres-crypto would become
         // org.streamrune.postgres.crypto (its package is org.streamrune.crypto.postgres, and the

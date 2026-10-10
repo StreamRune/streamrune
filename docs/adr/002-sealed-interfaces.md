@@ -51,6 +51,6 @@ Use sealed interfaces as the idiomatic representation for all closed domain type
 
 **Negative:**
 
-- Sealed interfaces require Java 17 at minimum (StreamRune targets Java 21, so this is not an additional constraint).
+- Sealed interfaces require Java 17 at minimum (StreamRune requires Java 25, so this is not an additional constraint).
 - Adding a new permitted subtype to a sealed interface that is used in exhaustive `switch` expressions is a breaking change for all downstream callers. This is intentional — it is the point — but framework authors must version sealed hierarchies carefully to avoid surprising API consumers.
 - Some JSON libraries (Jackson 2.x without explicit configuration) do not automatically detect sealed subtype hierarchies. Users must register subtypes or configure Jackson's `@JsonSubTypes` / module-based sealed type support.

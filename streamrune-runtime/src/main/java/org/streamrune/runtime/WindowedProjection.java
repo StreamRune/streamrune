@@ -215,8 +215,8 @@ public final class WindowedProjection<W> implements Projection {
       // attempt: that attempt had committed every event, advanced the fence AND the
       // watermark, and aborted the scan with windows still open past end+grace. On a quiescent
       // stream no later event will ever re-run the scan, so those isFinal emissions would be
-      // stranded forever — the pre-fix "complete no-op, including the sink" early return was
-      // falsified by its own crashed run. Re-run the close scan and the eviction against the
+      // stranded forever if this branch returned early as a complete no-op, sink included.
+      // Re-run the close scan and the eviction against the
       // current watermark: both are idempotent per window (a closed window leaves openWindows; a
       // window whose emission threw before it.remove() is re-emitted with the SAME correct value —
       // the duplicate-never-wrong discipline). No accumulation, no fence move, no

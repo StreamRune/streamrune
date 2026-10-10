@@ -76,7 +76,7 @@ In both modes the *head* of stream `A` is its lowest-`seq` row that is `PENDING`
 
 **`seq` is commit order** because every append holds the global-offset counter lock through commit: a second append cannot assign its `seq` values until the first has committed, so no poll can see a higher `seq` of an aggregate while a lower one is still uncommitted. Entries written through the standalone `OutboxStore.save(entry)` are outside that lock; strict order is a promise for entries written by `append`, the only production path.
 
-**Mixed workloads.** 1.0 has one channel per application, so an application that needs strict order for orders and tolerance for telemetry runs one strict channel and either accepts strict order for its telemetry too or routes telemetry outside the outbox. Several channels with their own modes ("named outbox channels") are on the Horizon 2 backlog.
+**Mixed workloads.** 1.0 has one channel per application, so an application that needs strict order for orders and tolerance for telemetry runs one strict channel and either accepts strict order for its telemetry too or routes telemetry outside the outbox. Several channels with their own modes ("named outbox channels") are not available in 1.0.
 
 ## Quick example
 

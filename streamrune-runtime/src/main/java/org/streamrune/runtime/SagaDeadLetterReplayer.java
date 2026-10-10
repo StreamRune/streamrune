@@ -311,7 +311,7 @@ public final class SagaDeadLetterReplayer {
     // never pruned — the InboxRetentionSweeper/SagaRetentionValidator convention), so no key can
     // ever go stale and the staleness guards have nothing to protect against. Normalize to null
     // (guard inert), matching SagaCompensationRetrySweeper and SagaTimeoutRunner.
-    // Pre-fix, a raw ZERO made the guard compare every entry's positive key age against a
+    // A raw ZERO would make the guard compare every entry's positive key age against a
     // zero-width window and refuse EVERY mid-compensation replay as STALE_COMPENSATION_BLOCKED —
     // training operators to routinely force, the exact bypass that matters when pruning IS on.
     this.inboxRetentionMaxAge =

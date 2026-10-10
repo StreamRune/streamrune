@@ -83,12 +83,12 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   // Dedicated INSERT for NULL-saga entries. The UNIQUE
   // constraint treats NULLs as distinct, so a null-saga publish at an existing offset can never
   // conflict — it always INSERTs a fresh row (the accepted duplicate accumulation documented on
-  // the class). Pre-fix that fresh row was born with first_replay_started_at = NULL and a fresh
-  // first_faulted_at, while the replayer's findEntry reads the NEWEST row of the set — so a
-  // re-quarantine LAUNDERED the set's prior-attempt evidence: a plain replay more than one
-  // inbox-retention window after the first attempt looked like a "first-EVER replay", skipped the
-  // key-age guard, re-derived the same forward key, MISSED the pruned inbox, and
-  // re-executed an already-committed forward command (duplicate CapturePayment). The COALESCE
+  // the class). The replayer's findEntry reads the NEWEST row of the set, so a fresh row born
+  // with first_replay_started_at = NULL and a fresh first_faulted_at would LAUNDER the set's
+  // prior-attempt evidence on a re-quarantine: a plain replay more than one inbox-retention
+  // window after the first attempt would look like a "first-EVER replay", skip the key-age
+  // guard, re-derive the same forward key, MISS the pruned inbox, and re-execute an
+  // already-committed forward command (duplicate CapturePayment). The COALESCE
   // subqueries below make every new row inherit the duplicate set's IMMUTABLE evidence from ONE
   // statement snapshot: the OLDEST first_faulted_at, the OLDEST first_replay_started_at, and
   // the NEWEST resolved target_saga_id among type-matching null-saga

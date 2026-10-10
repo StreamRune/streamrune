@@ -576,10 +576,9 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
       }
       case COMPENSATING_REFUSED -> {
         // Every compensation command was REFUSED ADMISSION (open breaker, closing bus,
-        // interceptor veto) — nothing was attempted, so this is NOT recorded as a re-drive: the
-        // pre-fix sweeper counted it and, one cycle past giveUpAfter, FAULTED the saga with zero
-        // actual dispatches (the class DeadLetterRetryRunner already guards against). The saga
-        // stays
+        // interceptor veto) — nothing was attempted, so this is NOT recorded as a re-drive:
+        // counting it would, one cycle past giveUpAfter, FAULT the saga with zero actual
+        // dispatches (the class DeadLetterRetryRunner also guards against). The saga stays
         // COMPENSATING and is re-driven next cycle once the gate lifts. The staleKeys route above
         // is untouched: an episode whose dedup keys may already be pruned still gives up on the
         // key-age bound regardless of how its re-drives fared.

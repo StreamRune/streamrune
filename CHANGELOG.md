@@ -966,4 +966,5 @@ StreamRune is dual-licensed.
 
 Every published jar, sources jar and Javadoc jar bundles `LICENSE`, `NOTICE` and
 `LICENSE-COMMERCIAL.md` under `META-INF`, and the POM's single `<license>` entry names `Business
-Source License 1.1`. Contributions are accepted under BSL 1.1 with DCO sign-off (`CONTRIBUTING.md`).
+Source License 1.1`. External code contributions are not accepted until a Contributor License
+Agreement is in place; issues and bug reports are welcome (`CONTRIBUTING.md`).
