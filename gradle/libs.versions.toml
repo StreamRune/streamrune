@@ -1,6 +1,6 @@
 [versions]
 # Frameworks
-spring-boot = "4.0.3"
+spring-boot = "4.1.1"
 quarkus = "3.32.0"
 # The Agroal connection pool Quarkus 3.32 pins; streamrune-quarkus compiles against its API only
 # (compileOnly) to open the crypto-forget LISTEN pool from the application's Agroal datasource.
@@ -46,12 +46,12 @@ aws-sdk = "2.30.0"
 
 # Observability
 opentelemetry = "1.47.0"
-# Managed by the Spring Boot 4.0.x BOM — keep aligned when bumping spring-boot
-micrometer = "1.16.3"
+# Managed by the Spring Boot 4.1.x BOM — keep aligned when bumping spring-boot
+micrometer = "1.17.1"
 
 # Security
-# Managed by the Spring Boot 4.0.x BOM — keep aligned when bumping spring-boot
-spring-security = "7.0.3"
+# Managed by the Spring Boot 4.1.x BOM — keep aligned when bumping spring-boot
+spring-security = "7.1.1"
 
 # Jakarta
 jakarta-annotation = "3.0.0"
@@ -59,8 +59,8 @@ jakarta-servlet = "6.0.0"
 
 # Other
 snakeyaml = "2.2"
-# Reactor 3.8.x per the Spring Boot 4.0.x BOM (reactor-bom 2025.0.x) — keep aligned
-reactor = "3.8.3"
+# Reactor 3.8.x per the Spring Boot 4.1.x BOM (reactor-bom 2025.0.x) — keep aligned
+reactor = "3.8.7"
 
 # Testing
 junit = "5.12.2"
