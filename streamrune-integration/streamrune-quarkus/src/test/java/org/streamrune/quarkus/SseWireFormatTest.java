@@ -130,7 +130,8 @@ class SseWireFormatTest {
       assertThat(payload.path("quantity").asInt()).isEqualTo(3);
       assertThat(payload.size()).as("the event's own fields and nothing else").isEqualTo(2);
 
-      assertThat(frames).as("a keepalive is a comment-only frame").contains(List.of(":keepalive"));
+      // A keepalive is a comment-only frame.
+      await().atMost(Duration.ofSeconds(5)).until(() -> frames.contains(List.of(":keepalive")));
 
       controller.completeOpenStreams(mock(ShutdownEvent.class));
       reader.join(Duration.ofSeconds(5));
