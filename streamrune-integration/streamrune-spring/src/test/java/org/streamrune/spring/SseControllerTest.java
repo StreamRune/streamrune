@@ -4,6 +4,7 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -12,7 +13,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.streamrune.core.types.AggregateId;
@@ -434,6 +438,80 @@ class SseControllerTest {
     controller.stream("customer", "c-1", List.of());
     assertEquals(AggregateType.of("customer"), seen.get().aggregateType());
     assertEquals(AggregateId.of("c-1"), seen.get().aggregateId());
+  }
+
+  @Test
+  void aFailureSpringMvcReportsForTheRequestReleasesItsStream() {
+    // Spring MVC writes the opening frame while it takes the emitter over, before it attaches the
+    // emitter's callbacks to the request. A failure of that write reaches no callback; it reaches
+    // Spring MVC's exception resolvers, and the resolver finds the stream on the request.
+    var publisher = mock(SseEventPublisher.class);
+    try (var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS)) {
+      var request = new MockHttpServletRequest("GET", "/api/sse/cart/cart-reset");
+      var emitter = controller.stream("cart", "cart-reset", request);
+      var subscriberCaptor = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
+      verify(publisher).subscribe(any(), subscriberCaptor.capture(), any());
+      assertEquals(1, controller.activeCountForTest());
+      var resolver = new SseHandoverFailureResolver();
+      var failure = new IOException("Broken pipe");
+
+      assertNull(
+          resolver.resolveException(request, new MockHttpServletResponse(), null, failure),
+          "the resolver releases the stream and resolves nothing");
+
+      assertEquals(0, controller.activeCountForTest());
+      verify(publisher)
+          .unsubscribe(
+              StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-reset")),
+              subscriberCaptor.getValue());
+      var completed = assertThrows(IllegalStateException.class, () -> emitter.send("anything"));
+      assertTrue(completed.getMessage().contains("Broken pipe"), completed.getMessage());
+
+      // A second report for the same request finds nothing left to release.
+      assertNull(resolver.resolveException(request, new MockHttpServletResponse(), null, failure));
+      verify(publisher, times(1)).unsubscribe(any(), any());
+    }
+  }
+
+  @Test
+  void aFailureOfARequestThatOpenedNoStreamIsLeftToTheOtherResolvers() {
+    var request = new MockHttpServletRequest("GET", "/api/orders/o-1");
+
+    assertNull(
+        new SseHandoverFailureResolver()
+            .resolveException(
+                request, new MockHttpServletResponse(), null, new IllegalStateException("other")));
+  }
+
+  @Test
+  void aStreamAnsweredAfterTheStopHasNothingToReleaseWhenItsRequestFails() {
+    var publisher = mock(SseEventPublisher.class);
+    try (var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS)) {
+      controller.stop();
+      var request = new MockHttpServletRequest("GET", "/api/sse/cart/cart-late");
+      controller.stream("cart", "cart-late", request);
+
+      assertNull(
+          new SseHandoverFailureResolver()
+              .resolveException(
+                  request, new MockHttpServletResponse(), null, new IOException("Broken pipe")));
+
+      verify(publisher, never()).subscribe(any(), any(), any());
+      verify(publisher, never()).unsubscribe(any(), any());
+    }
+  }
+
+  @Test
+  void theResolverIsInstalledAheadOfSpringMvcsOwn() {
+    var resolvers = new java.util.ArrayList<HandlerExceptionResolver>();
+    HandlerExceptionResolver springMvcs = (request, response, handler, ex) -> null;
+    resolvers.add(springMvcs);
+
+    SseHandoverFailureResolver.asFirstResolver().extendHandlerExceptionResolvers(resolvers);
+
+    assertEquals(2, resolvers.size());
+    assertInstanceOf(SseHandoverFailureResolver.class, resolvers.getFirst());
+    assertSame(springMvcs, resolvers.getLast());
   }
 
   /** The lock Spring's emitter holds across a send and takes to complete. */

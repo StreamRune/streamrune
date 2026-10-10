@@ -80,6 +80,13 @@ import org.streamrune.runtime.SseEventPublisher;
  * completion/timeout/error cleanup path never touches the send lock, so eviction itself cannot
  * block on a stalled send either.
  *
+ * <p><b>A client that resets before the response is written.</b> Spring MVC writes the opening
+ * frame while it takes the emitter over, before it attaches the emitter's callbacks to the request.
+ * When that write fails, no callback runs and nothing ends the asynchronous request. The stream is
+ * therefore remembered on the request, and a {@link SseHandoverFailureResolver} — installed by the
+ * auto-configuration — releases it the moment Spring MVC reports the failure: the client is
+ * unsubscribed and the request ended. See {@link #releaseStreamOf}.
+ *
  * <p><b>Slow-consumer eviction.</b> The publisher evicts a client whose queue is full on the thread
  * that publishes: the feed's polling thread, which serves every stream. The disconnect hook
  * unsubscribes the client inline and fails its emitter on a virtual thread of its own, because
@@ -125,6 +132,12 @@ public class SseController implements SmartLifecycle, AutoCloseable {
    * client ignores a comment line whatever it holds.
    */
   static final String KEEP_ALIVE_COMMENT = " keepalive";
+
+  /**
+   * The request attribute that holds the stream a request opened ({@link RequestStream}), for
+   * {@link #releaseStreamOf}.
+   */
+  static final String STREAM_ATTRIBUTE = SseController.class.getName() + ".stream";
 
   private static final Duration DEFAULT_TIMEOUT = Duration.ofMinutes(5);
   private static final Duration DEFAULT_KEEP_ALIVE_INTERVAL = Duration.ofSeconds(30);
@@ -253,7 +266,12 @@ public class SseController implements SmartLifecycle, AutoCloseable {
       @PathVariable("aggregateType") String aggregateType,
       @PathVariable("aggregateId") String aggregateId,
       HttpServletRequest request) {
-    return stream(aggregateType, aggregateId, ScopedValueFilter.userIdHeaderValues(request));
+    RequestStream stream =
+        open(aggregateType, aggregateId, ScopedValueFilter.userIdHeaderValues(request));
+    // From here Spring MVC takes the emitter over. Should that fail, the stream is found on the
+    // request and released: see releaseStreamOf.
+    request.setAttribute(STREAM_ATTRIBUTE, stream);
+    return stream.emitter();
   }
 
   /**
@@ -270,6 +288,12 @@ public class SseController implements SmartLifecycle, AutoCloseable {
    *     authorizer denies the caller
    */
   public SseEmitter stream(
+      String aggregateType, String aggregateId, List<String> userIdHeaderValues) {
+    return open(aggregateType, aggregateId, userIdHeaderValues).emitter();
+  }
+
+  /** Authorizes the caller and opens the stream: its emitter and the cleanup that releases it. */
+  private RequestStream open(
       String aggregateType, String aggregateId, List<String> userIdHeaderValues) {
     StreamId sid = streamIdOf(aggregateType, aggregateId);
     UserId principal = identityPolicy.resolve(userIdHeaderValues, SseController::logMismatch);
@@ -338,7 +362,7 @@ public class SseController implements SmartLifecycle, AutoCloseable {
       // Stopping: a stream that is already complete makes the client reconnect (elsewhere)
       // instead of opening a request the web server's graceful-shutdown drain would wait for.
       emitter.complete();
-      return emitter;
+      return new RequestStream(emitter, () -> {});
     }
     emitter.onCompletion(cleanup);
     emitter.onTimeout(cleanup);
@@ -347,7 +371,49 @@ public class SseController implements SmartLifecycle, AutoCloseable {
     // frame that commits the response.
     sendOpeningFrame(registration, sid);
 
-    return emitter;
+    return new RequestStream(emitter, cleanup);
+  }
+
+  /**
+   * Releases the stream a request opened when Spring MVC reports that handling the request failed;
+   * does nothing for a request that opened none. Called by {@link SseHandoverFailureResolver}, on
+   * the request's own thread.
+   *
+   * <p><b>Why the emitter's callbacks are not enough.</b> The opening frame is handed to the
+   * emitter before the handler method returns, so Spring MVC writes it while it takes the emitter
+   * over ({@code ResponseBodyEmitter.initialize}), and it attaches the emitter's completion,
+   * timeout and error callbacks to the request only after that write. A client that reset its
+   * connection in the meantime makes the write fail: the failure is thrown out of the hand-over, no
+   * callback of the emitter ever runs, and the request stays in asynchronous mode with nobody left
+   * to end it. The client would stay subscribed until a keepalive write failed (never with {@code
+   * streamrune.sse.keep-alive-interval=0}), and the request would hold the web server's graceful
+   * shutdown for its whole phase.
+   *
+   * <p><b>What this does.</b> It runs the stream's cleanup — the registration leaves {@link
+   * #active} and the client is unsubscribed from the publisher — and fails the emitter, which hands
+   * Spring MVC the result that ends the asynchronous request. Both are idempotent: the cleanup may
+   * already have run through a callback, an eviction or a stop, and failing an emitter that is
+   * already complete changes nothing.
+   *
+   * @param request the request whose handling failed
+   * @param failure what Spring MVC reported
+   */
+  static void releaseStreamOf(HttpServletRequest request, Exception failure) {
+    if (!(request.getAttribute(STREAM_ATTRIBUTE) instanceof RequestStream stream)) {
+      return;
+    }
+    request.removeAttribute(STREAM_ATTRIBUTE);
+    try {
+      stream.cleanup().run();
+    } catch (RuntimeException e) {
+      log.warn("The cleanup of an SSE stream threw after its request failed", e);
+    }
+    try {
+      stream.emitter().completeWithError(failure);
+    } catch (RuntimeException alreadyCompleted) {
+      log.debug("The SSE stream of a failed request was already complete", alreadyCompleted);
+    }
+    log.debug("Released the SSE stream of a request Spring MVC reported as failed", failure);
   }
 
   /**
@@ -370,8 +436,9 @@ public class SseController implements SmartLifecycle, AutoCloseable {
    * <p>The only failure possible here is an emitter that is already complete: the controller was
    * stopped, or the publisher evicted the client, between the registration and this call. Whoever
    * completed it has unsubscribed the client, so there is nothing to write and nothing to clean up.
-   * A failure to write the held frames to the socket surfaces in Spring MVC, which reports it to
-   * the emitter's error callback: the cleanup a failed keepalive runs.
+   * A failure to write the held frames to the socket happens later, inside Spring MVC, before the
+   * emitter's callbacks are attached to the request: no callback reports it, and {@link
+   * #releaseStreamOf} releases the stream instead.
    */
   private static void sendOpeningFrame(ActiveEmitter registration, StreamId sid) {
     registration.sendLock.lock();
@@ -638,6 +705,13 @@ public class SseController implements SmartLifecycle, AutoCloseable {
       keepAlive.shutdownNow();
     }
   }
+
+  /**
+   * The stream a request opened: its emitter and the idempotent cleanup that drops its registration
+   * and unsubscribes its client. A request answered with an emitter that is already complete has
+   * nothing to clean up.
+   */
+  private record RequestStream(SseEmitter emitter, Runnable cleanup) {}
 
   /**
    * A live emitter, the lock that serializes its event and keepalive writes, and the hook that
