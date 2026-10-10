@@ -225,14 +225,10 @@ public class SseController implements SmartLifecycle, AutoCloseable {
    * SseEmitter}: {@code null} (unset) keeps the finite {@link #DEFAULT_TIMEOUT}, and a
    * <strong>non-positive</strong> value disables the deadline entirely.
    *
-   * <p>Zero/negative previously fell back to the 5-minute default here, while the Quarkus and
-   * Micronaut ports (whose {@code positiveOrNull} helper drops the deadline) — and their property
-   * docs, which advertise parity with Spring — treated it as "disabled". The same key therefore
-   * meant opposite things per framework, and on Spring the cap could not be turned off at all: an
-   * operator trying to keep a live dashboard connected had every client dropped every five minutes.
-   * One contract now, across all three: non-positive disables the deadline and the keepalive stays
-   * the primary dead-client reaper. {@code SseEmitter(0)} is the servlet-async "never time out"
-   * value ({@code AsyncContext.setTimeout(0)}), so no separate null path is needed.
+   * <p>One contract across the three integrations: the Quarkus and Micronaut controllers drop the
+   * deadline for a non-positive value ({@code positiveOrNull}), and so does this one, leaving the
+   * keepalive as the dead-client reaper. {@code SseEmitter(0)} is the servlet-async "never time
+   * out" value ({@code AsyncContext.setTimeout(0)}), so no separate null path is needed.
    */
   private static long timeoutMillisFor(Duration timeout) {
     if (timeout == null) {
@@ -305,8 +301,7 @@ public class SseController implements SmartLifecycle, AutoCloseable {
     // Serializes event delivery (on the subscriber's worker thread) with keepalive writes (on the
     // scheduler thread): SseEmitter is not safe for concurrent send(). A ReentrantLock (not a
     // monitor) so the shared keepalive tick can PROBE it non-blockingly with tryLock() — see
-    // sendKeepAlives(). The event path takes it unconditionally, exactly like the
-    // previous synchronized block.
+    // sendKeepAlives(). The event path takes it unconditionally.
     ReentrantLock sendLock = new ReentrantLock();
 
     SseEventPublisher.SseSubscriber subscriber =

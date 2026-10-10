@@ -103,15 +103,22 @@ streamrune:
   yourself for this endpoint — every frame would be written twice. To run a feed of your own,
   declare an `SseEventFeed` bean: it replaces the integration's, and you start and stop it.
 - **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
-  receives the caller the request filter resolved and the requested `StreamId`.
+  receives the caller the request filter resolved and the requested `StreamId`. It is asked once,
+  when the stream opens: a caller whose access ends afterwards keeps reading until the stream ends,
+  so `streamrune.sse.timeout` (default `5m`) is also the bound on that. Keep it finite where access
+  can change.
 - **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
   is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
   client connected, while it was reconnecting, or while the instance was down are never sent to it.
   Read the current state from a query after every (re)connect, and use a projection for anything
   that must see every event.
 - **Lifecycle** — the feed is a `SmartLifecycle`-managed bean: started on context refresh before the
-  web server accepts requests, stopped on context close. A non-servlet application (a headless
+  web server accepts requests (the two start in one lifecycle phase, the feed first), stopped on
+  context close. A non-servlet application (a headless
   worker sharing the same configuration) gets neither the endpoint nor the feed.
+- **Clients that stall or vanish** — a client that stops reading is disconnected once 256 events
+  are queued for it; the feed is not held while its blocked write times out. A client that resets
+  its connection before the response is written is unsubscribed at once and its request ended.
 - **Health** — the feed is the `sse-event-feed` component of `StreamRuneHealthIndicator`: `DOWN`
   when its polling thread has died, `DEGRADED` while its reads fail and are retried.
 

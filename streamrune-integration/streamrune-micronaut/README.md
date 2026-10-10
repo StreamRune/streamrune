@@ -129,14 +129,25 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   yourself for this endpoint — every frame would be written twice. To run a feed of your own,
   declare an `SseEventFeed` bean: it replaces the integration's, and you start and stop it.
 - **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
-  receives the caller the request filter resolved and the requested `StreamId`.
+  receives the caller the request filter resolved and the requested `StreamId`. It is asked once,
+  when the stream opens: a caller whose access ends afterwards keeps reading until the stream ends,
+  so `streamrune.sse.timeout` (default `5m`) is also the bound on that. Keep it finite where access
+  can change.
+- **Threads** — the controller declares no executor: it calls the `SseAuthorizer` on the thread the
+  request filter chain leaves the request on. `StreamRuneContextFilter` runs on the blocking
+  executor and proceeds synchronously, so with it the authorizer runs there, inside the filter's
+  request context, and may read a database. If you replace that filter, run yours on the blocking
+  executor too (`@ExecuteOn(TaskExecutors.BLOCKING)`), or the authorizer runs on a Netty event
+  loop.
 - **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
   is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
   client connected, while it was reconnecting, or while the instance was down are never sent to it.
   Read the current state from a query after every (re)connect, and use a projection for anything
   that must see every event.
 - **Lifecycle** — the feed starts on the startup event and stops when the application context
-  closes, which also completes every open stream.
+  closes, which also completes every open stream and releases what it holds. The embedded server
+  stops before that, so a connected client sees the server close its connection, not a completed
+  stream; an `EventSource` reconnects either way.
 - **Health** — the feed is the `sse-event-feed` component of the health indicator: `DOWN` when its
   polling thread has died, `DEGRADED` while its reads fail and are retried.
 

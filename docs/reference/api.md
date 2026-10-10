@@ -477,7 +477,7 @@ public final class SseEventFeed implements AutoCloseable {
 | | |
 |---|---|
 | Frame | `id` = global offset, `data` = the decrypted domain event as JSON; a `: keepalive` comment as soon as the client is subscribed and every keepalive interval |
-| Authorization | the `SseAuthorizer` bean decides per caller and `StreamId` before a stream is opened; without one every stream answers `403` |
+| Authorization | the `SseAuthorizer` bean decides per caller and `StreamId` once, before a stream is opened, and is not asked again while it is open; `streamrune.sse.timeout` ends the stream and so bounds how long a revoked caller keeps reading; without an authorizer every stream answers `403` |
 | Delivery | live, best-effort, at-most-once: only to clients connected at that moment, nothing is redelivered, `Last-Event-ID` is not honoured |
 | Order | version order within a stream |
 | Latency | normally within `streamrune.sse.polling-interval` (default `1s`, at least `1ms`) of the commit; longer while a failed read is retried with backoff |

@@ -15,6 +15,14 @@ import org.streamrune.core.types.UserId;
  * of this SPI. If SSE is enabled but the application provides no {@code SseAuthorizer} bean, the
  * framework installs {@link #DENY_ALL} (fail closed) so a misconfiguration cannot silently expose
  * every stream.
+ *
+ * <p><b>Decided once, when the stream opens.</b> The authorizer is asked before the subscription
+ * and not again while the stream is open. A caller whose access ends afterwards (a role removed, a
+ * token expired, an aggregate handed to another owner) keeps receiving the stream's decrypted
+ * events until the stream ends. {@code streamrune.sse.timeout} (default five minutes) ends every
+ * stream, and a client that reconnects is authorized again: the timeout is therefore the bound on
+ * how long a revoked caller keeps reading. Keep it finite wherever access can change; {@code
+ * streamrune.sse.timeout=0} removes that bound.
  */
 @FunctionalInterface
 public interface SseAuthorizer {
@@ -33,8 +41,13 @@ public interface SseAuthorizer {
    * }</pre>
    *
    * <p>An implementation may block, for example to look the owner of the stream up in a database:
-   * every integration calls it on a thread that may block (the servlet request thread on Spring, a
-   * worker thread on Quarkus, the blocking executor on Micronaut), never on an event loop.
+   * the integrations call it on a thread that may block, not on an event loop. On Spring that is
+   * the servlet request thread and on Quarkus a worker thread, whatever the application adds. On
+   * Micronaut it is the thread the request filter chain leaves the request on: the blocking
+   * executor with the framework's {@code StreamRuneContextFilter}, and whatever an application's
+   * own filter chooses once it replaces that one.
+   *
+   * <p>The answer holds for the life of the stream: see the class documentation.
    *
    * @param principal the authenticated caller, or {@code null} when the request is unauthenticated
    * @param streamId the requested aggregate stream

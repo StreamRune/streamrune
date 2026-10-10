@@ -86,7 +86,10 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   yourself for this endpoint — every frame would be written twice. To run a feed of your own,
   declare an `SseEventFeed` bean: it replaces the integration's, and you start and stop it.
 - **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
-  receives the caller the request filter resolved and the requested `StreamId`.
+  receives the caller the request filter resolved and the requested `StreamId`. It is asked once,
+  when the stream opens: a caller whose access ends afterwards keeps reading until the stream ends,
+  so `streamrune.sse.timeout` (default `5m`) is also the bound on that. Keep it finite where access
+  can change.
 - **Threads** — the resource method is `@Blocking`: Quarkus REST runs the request filter and the
   `SseAuthorizer` on a worker thread, never on a Vert.x event loop, so an authorizer may read a
   database. The CDI request scope is active there: an authorizer can inject
