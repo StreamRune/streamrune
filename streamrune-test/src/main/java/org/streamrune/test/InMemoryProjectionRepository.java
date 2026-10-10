@@ -34,7 +34,8 @@ import org.streamrune.core.types.ProjectionName;
  * mirrors {@code JdbcProjectionRepository}: one lock per projection name, the epoch fence and the
  * first-offset overlap guard BEFORE the updater, the writes staged in a transaction-scoped view and
  * applied together with the checkpoint, the monotonic guard on the checkpoint move, after-commit
- * actions run after the apply and dropped on rollback. Pass the same instance as {@code
+ * actions run after the apply and dropped on rollback. {@link #executeReplay} takes the same
+ * per-name lock and leaves the checkpoint alone. Pass the same instance as {@code
  * .offsetStore(...)} and {@code .atomicProcessor(...)} of a runner, exactly as {@code
  * PostgresOffsetStore} and {@code JdbcProjectionRepository} share {@code projection_offset}. Passes
  * {@link AtomicBatchProcessorContract}.
@@ -375,6 +376,36 @@ public final class InMemoryProjectionRepository
     tx.runAfterCommit();
   }
 
+  /** A replay and a batch of one projection run under the same per-name lock. */
+  @Override
+  public boolean serializesReplay() {
+    return true;
+  }
+
+  /**
+   * Runs the updater against a transaction-scoped view under the projection's lock — the lock
+   * {@link #executeAtomically} takes — and applies its writes together; the checkpoint is not
+   * touched. An updater exception drops the staged writes. After-commit actions behave as in {@link
+   * #executeAtomically}.
+   */
+  @Override
+  public void executeReplay(
+      ProjectionName projectionName,
+      List<EventEnvelope> batch,
+      ProjectionUpdater projectionUpdater) {
+    validateName(projectionName);
+    var tx = new Transaction();
+    try {
+      synchronized (lockFor(projectionName)) {
+        projectionUpdater.update(tx); // throws → the staged writes are dropped
+        write(tx::apply);
+      }
+    } finally {
+      tx.close();
+    }
+    tx.runAfterCommit();
+  }
+
   private void commit(
       ProjectionName projectionName,
       List<EventEnvelope> batch,
@@ -385,6 +416,7 @@ public final class InMemoryProjectionRepository
     Checkpoint cp = checkpoints.getOrDefault(projectionName, Checkpoint.NONE);
     if (fencingEpoch != 0L && fencingEpoch < cp.epoch()) {
       throw new ProjectionCommitFencedException(
+          ProjectionCommitFencedException.Guard.EPOCH_FENCE,
           "Projection "
               + quoted(projectionName)
               + " commit fenced out: caller epoch "
@@ -395,6 +427,7 @@ public final class InMemoryProjectionRepository
     }
     if (!batch.isEmpty() && batch.getFirst().globalOffset().value() <= cp.offset()) {
       throw new ProjectionCommitFencedException(
+          ProjectionCommitFencedException.Guard.OVERLAP,
           "Projection "
               + quoted(projectionName)
               + " batch starting at offset "
@@ -409,6 +442,7 @@ public final class InMemoryProjectionRepository
     Checkpoint current = checkpoints.getOrDefault(projectionName, Checkpoint.NONE);
     if (newOffset.value() <= current.offset()) {
       throw new ProjectionCommitFencedException(
+          ProjectionCommitFencedException.Guard.MONOTONIC,
           "Projection "
               + quoted(projectionName)
               + " checkpoint advance to "

@@ -206,24 +206,65 @@ cause is fixed, an operator re-reads each dead-lettered range from the event sto
 through the projection. There is no background loop — replay is explicit and operator-driven,
 because a batch that failed deterministically would only re-fail on a schedule.
 
-Construct it directly (no builder) and call `replay(ProjectionName, Projection, int maxEntries)`,
-which replays up to `maxEntries` entries oldest-range-first and returns a `ReplayResult(int
-replayed, int failed, int fenced)`. `Projection#process(List)` must be idempotent; a range none of
-whose events is left in the event store is discarded without processing (crypto-shredding does not
-empty a range — the erased subject's events replay with `[REDACTED]` fields). The projection's offset
-checkpoint is never moved — replay fills the hole behind it.
+Construct it directly (no builder) with the event store, the dead-letter store and **the
+`AtomicBatchProcessor` the projection's runner commits through**, and call
+`replay(ProjectionName, Projection, ProjectionDeliveryMode, int maxEntries)` with the delivery mode
+the projection is registered with. It replays up to `maxEntries` entries oldest-range-first and
+returns a `ReplayResult(int replayed, int failed, int fenced)`. A range none of whose events is left
+in the event store is discarded without processing (crypto-shredding does not empty a range — the
+erased subject's events replay with `[REDACTED]` fields). The projection's offset checkpoint is
+never moved — replay fills the hole behind it.
 
-Replay is at-least-once and runs outside the checkpoint transaction for every
-[delivery mode](../concepts.md#delivery-modes--what-a-projection-promises), possibly concurrently
-with the live runner and with an older event after a newer one — `process` must tolerate both. A
-`BaseProjection` registered `TRANSACTIONAL_LOCAL` writes the replayed range through the repository it
-was constructed with, autocommit. Under `nonAtomicAtLeastOnce()` a dead-letter entry can only come
-from a projection failure, never from a checkpoint-save failure.
+**Replay is serialized with the live runner.** Each range runs through
+`AtomicBatchProcessor.executeReplay`, which takes the lock a live batch takes: on
+`JdbcProjectionRepository`, the projection's `projection_offset` row, `FOR UPDATE`. A replay and a
+live batch of one projection therefore never run at the same time, in one process or across
+replicas, and a replay is safe while the runner is live. The lock is what protects a
+read-modify-write projection (`findById` → change a field → `save`): without it both sides can read
+a row before either saves it, and one of the two writes is lost. **Idempotency does not prevent
+that** — neither side applies anything twice; one side's read is stale.
 
-Each range is fed through `Projection#processDeadLetterReplay(List)`, which reports whether the
-projection applied anything, and an entry is discarded only when it did:
+Inside the lock the projection is handed what a live batch of its registration is handed
+([delivery mode](../concepts.md#delivery-modes--what-a-projection-promises)):
 
-- `replayed` — the feed succeeded (or the range no longer exists) and the entry was discarded;
+| registration | what the replay hands the projection | a failure part-way |
+|---|---|---|
+| `TRANSACTIONAL_LOCAL`, `EXTERNAL_EFFECT` | the replay transaction's repository; a `BaseProjection` writes through it | rolls the whole range back |
+| `AT_LEAST_ONCE_IDEMPOTENT` | `null`; the projection writes through its own repository while the replay holds the lock | leaves the writes made so far |
+
+**A processor without that lock is refused.** `AtomicBatchProcessor.nonAtomicAtLeastOnce()` holds no
+per-projection lock, so `replay` throws an `IllegalStateException` for it before it reads an entry —
+the fail-safe choice, because beside a live batch the unlocked replay is exactly the lost update
+above. For such a registration stop the projection's runner and call
+`replayWithRunnerStopped(ProjectionName, Projection, int maxEntries)`: it feeds each range with no
+lock and no transaction, and the method name is your statement that nothing else is processing the
+projection, in this process or any other. Nothing verifies it. `replayWithRunnerStopped` is in turn
+refused on a processor that serializes replays, where `replay` gives the same result with the
+runner live or stopped. Under `nonAtomicAtLeastOnce()` a dead-letter entry can only come from a
+projection failure, never from a checkpoint-save failure.
+
+**`process` must still be idempotent, under every delivery mode.** That covers what the lock does
+not — re-application and order:
+
+- Replay is at-least-once. For each entry it commits the range first and discards the entry second:
+  - a crash **before the replay commits** leaves the entry queued; a transactional registration's
+    range rolled back, an at-least-once registration's writes so far stand, and the next replay
+    applies the whole range;
+  - a crash **after the replay commits and before the entry is discarded** (or a failed discard)
+    leaves the range applied and the entry queued, so the next replay applies the range a second
+    time and then discards the entry;
+  - a crash **after the discard** leaves nothing to do.
+
+  The checkpoint is written at none of these points, so a rerun converges on the range applied and
+  no entry.
+- Replay is out of order: the runner already applied later events when it moved past the range, so
+  the projection sees an older event after a newer one.
+
+Each range is fed through `Projection#processDeadLetterReplay(List, ProjectionRepository)`, which
+reports whether the projection applied anything, and an entry is discarded only when it did:
+
+- `replayed` — the feed succeeded (or the range's events are not in the event store) and the entry
+  was discarded;
 - `failed` — the feed threw; the entry is kept for a later replay, and the remaining entries are
   still attempted;
 - `fenced` — the feed returned normally but applied **nothing**, because a self-fencing projection
@@ -232,19 +273,24 @@ projection applied anything, and an entry is discarded only when it did:
   it from a fresh process (the fence is per-JVM) before the live runner advances again, or discard
   it deliberately.
 
-The default `processDeadLetterReplay` calls `process(batch)` and reports `true`. **A projection
-wrapper or decorator must override it and forward to its delegate's `processDeadLetterReplay`**
-(the shipped `TracingProjectionDecorator`, `ValidatingProjectionDecorator` and
-`CacheAwareProjection` do) — a wrapper that inherits the default reaches only the delegate's
-`process`, reports "applied" for a wholly fenced range, and the replayer discards the range's only
-record.
+The default `processDeadLetterReplay` calls `process(batch, repository)` and reports `true`. **A
+projection wrapper or decorator must override it and forward to its delegate's
+`processDeadLetterReplay`** (the shipped `TracingProjectionDecorator`,
+`ValidatingProjectionDecorator` and `CacheAwareProjection` do) — a wrapper that inherits the default
+reaches only the delegate's `process`, reports "applied" for a wholly fenced range, and the replayer
+discards the range's only record.
 
 ```java
 ProjectionDeadLetterReplayer replayer =
-    new ProjectionDeadLetterReplayer(eventStore, projectionDeadLetterStore);
+    new ProjectionDeadLetterReplayer(
+        eventStore, projectionDeadLetterStore, jdbcRepo); // the runner's atomicProcessor
 
 ProjectionDeadLetterReplayer.ReplayResult result =
-    replayer.replay(ProjectionName.of("order_summary"), orderSummaryProjection, 100);
+    replayer.replay(
+        ProjectionName.of("order_summary"),
+        orderSummaryProjection,
+        ProjectionDeliveryMode.TRANSACTIONAL_LOCAL, // as registered
+        100);
 // result.replayed(), result.failed(), result.fenced()
 ```
 

@@ -71,16 +71,17 @@ public final class TracingProjectionDecorator implements Projection {
   }
 
   /**
-   * Forwards to the delegate's OWN {@link Projection#processDeadLetterReplay}, inside the span, and
-   * reports the delegate's answer. The inherited default would call THIS decorator's {@link
-   * #process(List)} — reaching the delegate's {@code process}, never its override — and report
-   * {@code true}, so a decorated self-fencing projection ({@code WindowedProjection}) read as
-   * "applied" on a wholly fenced replay and the replayer discarded the range's only record (back
-   * for every traced projection).
+   * Forwards to the delegate's OWN {@link Projection#processDeadLetterReplay}, inside the span,
+   * with the repository it was handed, and reports the delegate's answer. The inherited default
+   * would call THIS decorator's {@code process} — reaching the delegate's {@code process}, never
+   * its override — and report {@code true}, so a decorated self-fencing projection ({@code
+   * WindowedProjection}) would read as "applied" on a wholly fenced replay and the replayer would
+   * discard the range's only record.
    */
   @Override
-  public boolean processDeadLetterReplay(List<EventEnvelope> batch) {
-    return traced(batch, () -> delegate.processDeadLetterReplay(batch));
+  public boolean processDeadLetterReplay(
+      List<EventEnvelope> batch, ProjectionRepository repository) {
+    return traced(batch, () -> delegate.processDeadLetterReplay(batch, repository));
   }
 
   /**

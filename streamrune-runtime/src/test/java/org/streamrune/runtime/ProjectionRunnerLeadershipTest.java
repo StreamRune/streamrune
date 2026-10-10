@@ -1003,7 +1003,8 @@ class ProjectionRunnerLeadershipTest {
           ProjectionUpdater projectionUpdater,
           OffsetStore offsetStore) {
         // Never reached once the stamp fails closed; if it ever is, behave like the real fence.
-        throw new ProjectionCommitFencedException("stale epoch " + fencingEpoch);
+        throw new ProjectionCommitFencedException(
+            ProjectionCommitFencedException.Guard.EPOCH_FENCE, "stale epoch " + fencingEpoch);
       }
 
       @Override
