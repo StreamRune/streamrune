@@ -15,11 +15,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.UserRoleResolver;
+import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.integration.AuthenticatedUserResolver;
 import org.streamrune.integration.RequestIdentityPolicy;
@@ -57,7 +59,16 @@ class SseEndpointThreadTest {
           authorizerCalls.add(CalledOn.currentThread());
           return true;
         };
-    var publisher = new SseEventPublisher();
+    List<CalledOn> subscriptions = new CopyOnWriteArrayList<>();
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void subscribe(
+              StreamId streamId, SseSubscriber subscriber, Consumer<Throwable> onDisconnect) {
+            subscriptions.add(CalledOn.currentThread());
+            super.subscribe(streamId, subscriber, onDisconnect);
+          }
+        };
     var controller =
         new SseController(
             publisher, allowing, ANONYMOUS, Duration.ofMinutes(5), Duration.ofMillis(100));
@@ -72,6 +83,12 @@ class SseEndpointThreadTest {
       List<List<String>> frames = new CopyOnWriteArrayList<>();
       Thread.ofVirtual().start(() -> SseWireFormatTest.collectFrames(response.body(), frames));
       await().atMost(Duration.ofSeconds(5)).until(() -> controller.openStreamCount() == 1);
+      // The worker is held for the checks only: Quarkus REST subscribes to the returned stream,
+      // and with it registers the client with the publisher, from an event loop.
+      assertThat(subscriptions)
+          .as("the client is registered with the publisher on a Vert.x event loop")
+          .singleElement()
+          .satisfies(subscription -> assertThat(subscription.eventLoop()).isTrue());
       publisher.publish(SseWireFormatTest.envelope(7, new OrderPlaced("o-1")));
       await()
           .atMost(Duration.ofSeconds(10))

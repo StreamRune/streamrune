@@ -93,27 +93,33 @@ import org.streamrune.runtime.SseEventPublisher;
  * instant before the registration and the comment frame, not the head, is the signal that the
  * client is subscribed.
  *
- * <p><b>Dead-client reaping (ported by).</b> Every stream gets a <em>finite</em> lifetime ({@code
+ * <p><b>Dead-client reaping.</b> Every stream gets a <em>finite</em> lifetime ({@code
  * streamrune.sse.timeout}, default 5m) and a periodic keepalive comment frame ({@code
  * streamrune.sse.keep-alive-interval}, default 30s). A half-open TCP client (a mobile/NAT drop with
  * no FIN/RST) on an idle stream produces no writes on its own, and {@link #SLOW_CLIENT_BUFFER} only
  * bounds a stream that is still <em>emitting</em> — so without these the {@code SseEventPublisher}
- * subscription, its delivery worker, and the socket FD would linger forever, accumulating across
- * reconnect churn until FD exhaustion (Vert.x disables its idle timeout by default). The keepalive
- * turns a dead connection into a failed socket write, which Quarkus REST surfaces by cancelling the
- * subscription — {@code onTermination} then unsubscribes, so eviction rides the framework's own
- * cancellation path rather than a hand-rolled catch. The finite timeout is the backstop; SSE
- * clients auto-reconnect. Matches the Spring and Micronaut integrations.
+ * subscription, its delivery worker, and the socket FD would linger, accumulating across reconnect
+ * churn, until the HTTP server's idle timeout closes the connection ({@code
+ * quarkus.http.idle-timeout}, 30 minutes unless configured). The keepalive turns a dead connection
+ * into a failed socket write, which Quarkus REST surfaces by cancelling the subscription — {@code
+ * onTermination} then unsubscribes, so eviction rides the framework's own cancellation path rather
+ * than a hand-rolled catch. The finite timeout is the backstop; SSE clients auto-reconnect. Matches
+ * the Spring and Micronaut integrations.
  *
- * <p><b>A downstream that throws.</b> Mutiny's serialized emitter claims a work-in-progress flag
- * around every {@code emit} and does not release it when the downstream throws from {@code onNext}.
- * From then on {@code fail} and {@code complete} only record the signal: nothing is delivered and
- * the termination hook never runs, so the publisher subscription, the ticker and the deadline of
- * that stream would be held for the life of the JVM. Reactive Streams §2.13 says a subscriber that
- * throws from {@code onNext} must be considered cancelled, so every path that observes such a
- * failure (the opening frame, a keepalive tick, the publisher's disconnect hook) runs the stream's
- * teardown itself after attempting {@code emitter.fail}. The teardown runs once: on the normal path
- * the termination hook has already run it.
+ * <p><b>A downstream that throws.</b> Quarkus REST serializes a frame inside its subscriber's
+ * {@code onNext}, so a message body writer that throws an unchecked exception is a downstream that
+ * throws. The last operator of every stream is a {@link DownstreamFailureGuard}: it catches the
+ * exception, cancels the stream — the termination hook runs the teardown — and signals the failure
+ * to Quarkus REST's subscriber, which ends the HTTP response. The client is not left on an open
+ * connection nothing writes to, and an {@code EventSource} reconnects.
+ *
+ * <p>Behind the guard stands a second line. Mutiny's serialized emitter claims a work-in-progress
+ * flag around every {@code emit} and does not release it when an exception does reach it; from then
+ * on {@code fail} and {@code complete} only record the signal and the termination hook never runs.
+ * Every path that observes a failed emission (the opening frame, a keepalive tick, the publisher's
+ * disconnect hook) therefore runs the stream's teardown itself after attempting {@code
+ * emitter.fail}. The teardown runs once: on the normal path the termination hook has already run
+ * it.
  *
  * <p><b>The shared scheduler thread is never parked.</b> One single-threaded {@link
  * ScheduledThreadPoolExecutor} drives every stream's keepalive ticks and every stream's deadline,
@@ -137,11 +143,10 @@ import org.streamrune.runtime.SseEventPublisher;
  * same user: the authenticated principal when an {@link AuthenticatedUserResolver} is available
  * (the {@code X-User-Id} header ignored), the {@code X-User-Id} header only in the explicit
  * trusted-gateway mode ({@code streamrune.security.trust-user-id-header=true}), and otherwise
- * nobody ({@code null}). This endpoint used to ignore the header even behind a trusted gateway, so
- * it authorized a different caller than the commands of the same request. Both read every {@code
- * X-User-Id} value as received ({@link HttpHeaders#getRequestHeader} here, the same multivalued
- * view as the filter's {@code getHeaders()}), never a single-valued {@code @HeaderParam} that takes
- * the first value, so a repeated header cannot resolve to one caller here and another there.
+ * nobody ({@code null}). Both read every {@code X-User-Id} value as received ({@link
+ * HttpHeaders#getRequestHeader} here, the same multivalued view as the filter's {@code
+ * getHeaders()}), never a single-valued {@code @HeaderParam} that takes the first value, so a
+ * repeated header cannot resolve to one caller here and another there.
  *
  * <p><b>Runtime kill switch.</b> {@code @IfBuildProperty} only decides whether this resource is
  * <em>registered</em> at build/augmentation time — it cannot be flipped on a running or redeployed
@@ -206,6 +211,13 @@ public class SseController {
 
   /** The open streams, tracked so the shutdown can complete them. */
   private final Set<OpenStream> openStreams = ConcurrentHashMap.newKeySet();
+
+  /**
+   * Set once the application shuts down; a stream opened from then on is answered already complete.
+   * Written before the shutdown takes its snapshot of {@link #openStreams}, and read by a stream
+   * after it added itself to them, so a stream is either in the snapshot or sees the flag.
+   */
+  private volatile boolean shuttingDown;
 
   /** One open stream and the lock that serializes the writes to it. */
   private record OpenStream(
@@ -329,13 +341,16 @@ public class SseController {
    * Completes every open stream when the application shuts down, so each client sees its stream end
    * normally (an {@code EventSource} reconnects, reaching another replica) while the HTTP server is
    * still up. A stream's send lock is awaited for at most {@link #SHUTDOWN_LOCK_WAIT_MILLIS}: a
-   * write stalled on one client does not hold the shutdown, and that stream is completed anyway.
-   * Observed only by a resource that exists: the shutdown does not create one to find no stream.
+   * write stalled on one client does not hold the shutdown, and that stream is completed anyway. A
+   * stream opened from here on is answered already complete: the client reconnects, and nothing of
+   * it outlives the shutdown. Observed only by a resource that exists: the shutdown does not create
+   * one to find no stream.
    *
    * @param event the Quarkus shutdown event
    */
   public void completeOpenStreams(
       @Observes(notifyObserver = Reception.IF_EXISTS) ShutdownEvent event) {
+    shuttingDown = true;
     List<OpenStream> open = List.copyOf(openStreams);
     if (open.isEmpty()) {
       return;
@@ -364,9 +379,14 @@ public class SseController {
     return openStreams.size();
   }
 
-  /** Stops the keepalive scheduler when the bean is destroyed. */
+  /**
+   * Stops the keepalive scheduler when the bean is destroyed. A stream opened afterwards is
+   * answered already complete, like one opened after the shutdown event: a stopped scheduler
+   * accepts neither its keepalive nor its deadline.
+   */
   @PreDestroy
   void shutdown() {
+    shuttingDown = true;
     if (keepAlive != null) {
       keepAlive.shutdownNow();
     }
@@ -478,8 +498,7 @@ public class SseController {
               // concurrently, and Reactive Streams requires serial onNext. A ReentrantLock
               // (not a monitor) so the shared keepalive tick can PROBE it non-blockingly with
               // tryLock() — see scheduleKeepAlive() (mirroring Spring's
-              // SseController#sendKeepAlives /). The event path takes it
-              // unconditionally, exactly like the previous synchronized block.
+              // SseController#sendKeepAlives). The event path takes it unconditionally.
               ReentrantLock sendLock = new ReentrantLock();
               // This stream's ONE teardown (publisher subscription, open-stream entry, keepalive
               // ticker, deadline), run by the emitter's termination hook on every normal end and
@@ -497,6 +516,16 @@ public class SseController {
                       sendLock.unlock();
                     }
                   };
+              // The termination hook comes first, before anything is acquired: whatever ends the
+              // stream from here on, a failure of a later step of this set-up included, runs the
+              // teardown, and a step added to a teardown that has already run is run on the spot.
+              emitter.onTermination(teardown);
+              if (shuttingDown) {
+                // The application is shutting down: a stream that is already complete makes the
+                // client reconnect (elsewhere) and holds nothing here.
+                emitter.complete();
+                return;
+              }
               // The send lock is held from before the client is registered until its opening
               // frame is emitted. Taken here, where nothing else knows the lock, it is free: this
               // lambda runs on the event loop Quarkus REST subscribes from, which must not wait.
@@ -534,9 +563,17 @@ public class SseController {
                 OpenStream open = new OpenStream(emitter, sendLock);
                 openStreams.add(open);
                 teardown.add(() -> openStreams.remove(open));
+                if (shuttingDown) {
+                  // The shutdown began after the first look at the flag. It may have taken its
+                  // snapshot of the open streams before this one was added, so the stream ends
+                  // itself; completing a stream the shutdown also completes is harmless. The flag
+                  // is set before the snapshot is taken and read here after the stream was added,
+                  // so one of the two always sees the other.
+                  emitter.complete();
+                  return;
+                }
                 teardown.add(cancelling(scheduleKeepAlive(emitter, sendLock, teardown)));
                 teardown.add(cancelling(scheduleTimeout(emitter, sendLock)));
-                emitter.onTermination(teardown);
                 // Last, when the client is registered with the publisher and the teardown is in
                 // place: the first frame of the body.
                 emitOpeningFrame(emitter, teardown);
@@ -546,7 +583,10 @@ public class SseController {
             },
             BackPressureStrategy.ERROR)
         .onOverflow()
-        .buffer(SLOW_CLIENT_BUFFER);
+        .buffer(SLOW_CLIENT_BUFFER)
+        // Directly in front of the subscriber that writes the response: a frame that subscriber
+        // cannot write ends the stream and the response (see DownstreamFailureGuard).
+        .plug(DownstreamFailureGuard::new);
   }
 
   /** The two path segments through their ingress doors; an invalid part is the caller's error. */
@@ -573,13 +613,13 @@ public class SseController {
    * at the configured lifetime, so the termination hook runs and the {@code SseEventPublisher}
    * subscription is released. A downstream-only operator such as {@code select().first(Duration)}
    * completes the subscriber but leaves the emitter — and therefore the subscription, its worker
-   * and the FD — alive, which is precisely the leak this fix closes.
+   * and the FD — alive, which is the leak the deadline exists to close.
    *
    * <p><b>Never blocks on a mid-send stream.</b> {@link #keepAlive} is the process's SINGLE shared
    * scheduler thread for every stream's keepalive ticks AND deadline tasks, which is exactly why
-   * {@link #scheduleKeepAlive}'s tick is a {@code tryLock()} probe. This task used to take {@code
-   * lock.lock()} unconditionally, so the fleet-wide stall that the probe removes on the keepalive
-   * path survived here: a delivery worker parked inside a slow {@code emitter.emit()} holds its
+   * {@link #scheduleKeepAlive}'s tick is a {@code tryLock()} probe. Were this task to take {@code
+   * lock.lock()} unconditionally, the fleet-wide stall the probe removes on the keepalive path
+   * would be back here: a delivery worker parked inside a slow {@code emitter.emit()} holds its
    * stream's send lock, this task parks the one scheduler thread behind it, and EVERY other
    * stream's keepalives stop (idle proxies drop healthy connections) while their own deadlines fire
    * late — reopening, for all of them, the FD-leak window the deadline exists to close.
@@ -641,8 +681,8 @@ public class SseController {
   /**
    * Starts this stream's keepalive ticks, or returns {@code null} when the keepalive is disabled.
    * Each subscriber gets its OWN periodic task, so a throwing tick can only stop that stream's
-   * keepalive — never every other subscriber's (the failure mode the Spring integration had to fix,
-   * whose reaper is a single shared tick over all emitters).
+   * keepalive — never every other subscriber's (the Spring integration, whose reaper is a single
+   * shared tick over all emitters, guards that tick against it instead).
    *
    * <p><b>Never blocks on a mid-send stream.</b> {@link #keepAlive} is the process's SINGLE shared
    * scheduler thread for every stream's keepalive ticks AND deadline tasks. Parking that one thread
@@ -716,10 +756,11 @@ public class SseController {
    * delivery worker and is emitted after this frame, which is therefore the first frame of every
    * stream; none is lost, and events keep their order because one worker delivers them.
    *
-   * <p>A failed emission ends the stream like a failed keepalive tick ({@link
-   * #evictAfterFailedWrite}): the emitter is failed and the stream's teardown unsubscribes the
-   * client from the publisher. A write the socket refuses is reported by Quarkus REST as a
-   * cancellation, whose termination hook runs the same teardown.
+   * <p>A subscriber that throws while it is handed this frame is ended by the {@link
+   * DownstreamFailureGuard}. An emission that fails nevertheless ends the stream like a failed
+   * keepalive tick ({@link #evictAfterFailedWrite}): the emitter is failed and the stream's
+   * teardown unsubscribes the client from the publisher. A write the socket refuses is reported by
+   * Quarkus REST as a cancellation, whose termination hook runs the same teardown.
    */
   private static void emitOpeningFrame(
       MultiEmitter<? super OutboundSseEvent> emitter, Runnable teardown) {
@@ -733,8 +774,9 @@ public class SseController {
   /**
    * Ends a stream one of whose comment frames could not be emitted: fails the emitter, then runs
    * the stream's teardown. {@code emitter.fail} is the normal terminal signal and runs the teardown
-   * through the termination hook; running it here as well covers the emitter a throwing downstream
-   * left unable to terminate (see the class documentation), whose hook would never run.
+   * through the termination hook; running it here as well covers an emitter left unable to
+   * terminate by an exception that reached it (see the class documentation), whose hook would never
+   * run.
    */
   private static void evictAfterFailedWrite(
       MultiEmitter<? super OutboundSseEvent> emitter,

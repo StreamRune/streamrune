@@ -294,6 +294,82 @@ class SseControllerTest {
   }
 
   @Test
+  void anEventDeliveredWhileTheClientIsBeingRegisteredIsWrittenAheadOfTheOpeningFrame() {
+    // The publisher delivers an event to the client before the registration returns. The sink
+    // takes it at once, so it is the frame before the opening comment: it is not lost, and the
+    // comment still comes after the registration.
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void subscribe(
+              StreamId streamId,
+              SseSubscriber subscriber,
+              java.util.function.Consumer<Throwable> onDisconnect) {
+            subscriber.send(envelope(1, new ProductCreated("product-early")));
+          }
+
+          @Override
+          public void unsubscribe(StreamId streamId, SseSubscriber subscriber) {}
+        };
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+
+    StepVerifier.create(controller.stream("cart", "cart-early", List.of()))
+        .assertNext(frame -> assertEquals("1", frame.getId()))
+        .assertNext(frame -> assertSame(SseController.KEEP_ALIVE, frame))
+        .thenCancel()
+        .verify(java.time.Duration.ofSeconds(5));
+  }
+
+  @Test
+  void aStreamOpenedAfterTheShutdownBeganIsAnsweredCompletedAndNeverSubscribed() {
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    controller.completeOpenStreams();
+
+    StepVerifier.create(controller.stream("cart", "cart-late", List.of()))
+        .expectComplete()
+        .verify(java.time.Duration.ofSeconds(5));
+
+    verify(publisher, never()).subscribe(any(), any(), any());
+    assertEquals(0, controller.openStreamCount());
+  }
+
+  @Test
+  void aShutdownThatBeginsWhileAStreamIsBeingOpenedCompletesItAndUnsubscribesIt() {
+    // The shutdown takes its snapshot of the open streams between this stream's first look at
+    // the flag and its registration: the snapshot misses the stream, so the stream ends itself.
+    var controllerRef = new AtomicReference<SseController>();
+    var subscribed = new AtomicReference<SseEventPublisher.SseSubscriber>();
+    var unsubscribed = new AtomicReference<SseEventPublisher.SseSubscriber>();
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void subscribe(
+              StreamId streamId,
+              SseSubscriber subscriber,
+              java.util.function.Consumer<Throwable> onDisconnect) {
+            subscribed.set(subscriber);
+            controllerRef.get().completeOpenStreams();
+          }
+
+          @Override
+          public void unsubscribe(StreamId streamId, SseSubscriber subscriber) {
+            unsubscribed.set(subscriber);
+          }
+        };
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    controllerRef.set(controller);
+
+    StepVerifier.create(controller.stream("cart", "cart-racing", List.of()))
+        .expectComplete()
+        .verify(java.time.Duration.ofSeconds(5));
+
+    assertNotNull(subscribed.get());
+    assertSame(subscribed.get(), unsubscribed.get(), "the client is unsubscribed again");
+    assertEquals(0, controller.openStreamCount());
+  }
+
+  @Test
   void disposingFluxUnsubscribesFromPublisher() {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);

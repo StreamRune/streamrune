@@ -26,7 +26,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
@@ -107,6 +109,11 @@ class SseLiveFeedTest {
     }
   }
 
+  @BeforeEach
+  void forgetEarlierAuthorizerCalls() {
+    AUTHORIZER_ON_VIRTUAL_THREAD.clear();
+  }
+
   @Test
   void aCommandExecutedThroughTheBusReachesTheClientOfItsStreamAndNoOtherStreamsEventDoes()
       throws Exception {
@@ -141,7 +148,8 @@ class SseLiveFeedTest {
           .isNotEmpty()
           .containsOnly(true);
       List<String> dataLines = new CopyOnWriteArrayList<>();
-      Thread reader = Thread.ofVirtual().start(() -> collectDataLines(response.body(), dataLines));
+      CompletableFuture<Ending> ending = new CompletableFuture<>();
+      Thread.ofVirtual().start(() -> ending.complete(collectDataLines(response.body(), dataLines)));
       SseController controller = context.getBean(SseController.class);
       await().atMost(Duration.ofSeconds(5)).until(() -> controller.openStreamCount() == 1);
 
@@ -168,8 +176,12 @@ class SseLiveFeedTest {
       stopped = true;
       assertThat(feed.isRunning()).as("the feed stops with the application").isFalse();
       assertThat(controller.openStreamCount()).as("no stream is left open").isZero();
-      reader.join(Duration.ofSeconds(5));
-      assertThat(reader.isAlive()).as("the client's stream ended").isFalse();
+      // The embedded server stops before the application context destroys its beans: the client
+      // sees the server close its connection, and the controller then releases the stream. The
+      // wire shows that the stream ended, not that it was completed.
+      assertThat(ending)
+          .as("the client's connection ended with the server")
+          .succeedsWithin(Duration.ofSeconds(5));
     } finally {
       if (!stopped) {
         server.stop();
@@ -267,7 +279,19 @@ class SseLiveFeedTest {
     }
   }
 
-  private static void collectDataLines(InputStream body, List<String> dataLines) {
+  /** How a response body ended: completed by the server, or cut with the connection. */
+  enum Ending {
+    COMPLETED,
+    CUT
+  }
+
+  /**
+   * Reads the stream's data lines until the body ends, and reports how it ended. A completed
+   * chunked response ends with its terminating chunk and reads as end of stream; a connection cut
+   * before that chunk fails the read. Which of the two a stopping server produces is the server's
+   * behaviour, so the test above asserts only that the body ended.
+   */
+  private static Ending collectDataLines(InputStream body, List<String> dataLines) {
     try (BufferedReader lines =
         new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
       String line;
@@ -276,8 +300,9 @@ class SseLiveFeedTest {
           dataLines.add(line);
         }
       }
+      return Ending.COMPLETED;
     } catch (IOException _) {
-      // the stream was cut instead of completed; the test asserts on what was read
+      return Ending.CUT;
     }
   }
 

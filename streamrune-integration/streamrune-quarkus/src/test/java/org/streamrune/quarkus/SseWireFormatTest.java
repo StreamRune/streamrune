@@ -28,7 +28,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
@@ -109,7 +111,8 @@ class SseWireFormatTest {
       assertThat(response.headers().firstValue("Content-Type"))
           .hasValueSatisfying(type -> assertThat(type).startsWith("text/event-stream"));
       List<List<String>> frames = new CopyOnWriteArrayList<>();
-      Thread reader = Thread.ofVirtual().start(() -> collectFrames(response.body(), frames));
+      CompletableFuture<Ending> ending = new CompletableFuture<>();
+      Thread.ofVirtual().start(() -> ending.complete(collectFrames(response.body(), frames)));
       await().atMost(Duration.ofSeconds(5)).until(() -> controller.openStreamCount() == 1);
 
       publisher.publish(envelope(42, new OrderPlaced("o-1", 3)));
@@ -135,8 +138,9 @@ class SseWireFormatTest {
       await().atMost(Duration.ofSeconds(5)).until(() -> frames.contains(List.of(": keepalive")));
 
       controller.completeOpenStreams(mock(ShutdownEvent.class));
-      reader.join(Duration.ofSeconds(5));
-      assertThat(reader.isAlive()).as("the client's stream ended").isFalse();
+      assertThat(ending.get(5, TimeUnit.SECONDS))
+          .as("the server completed the client's stream; it did not cut the connection")
+          .isEqualTo(Ending.COMPLETED);
     } finally {
       client.shutdownNow();
       controller.shutdown();
@@ -182,6 +186,74 @@ class SseWireFormatTest {
     }
   }
 
+  /**
+   * A JSON message body writer that fails the way JSON-B's does: with an unchecked exception thrown
+   * while a frame is serialized.
+   */
+  @Provider
+  @Produces(MediaType.APPLICATION_JSON)
+  public static class FailingJsonWriter implements MessageBodyWriter<Object> {
+
+    @Override
+    public boolean isWriteable(
+        Class<?> type, Type genericType, Annotation[] annotations, MediaType mediaType) {
+      return true;
+    }
+
+    @Override
+    public void writeTo(
+        Object entity,
+        Class<?> type,
+        Type genericType,
+        Annotation[] annotations,
+        MediaType mediaType,
+        MultivaluedMap<String, Object> httpHeaders,
+        OutputStream entityStream) {
+      throw new IllegalStateException("this event cannot be serialized");
+    }
+  }
+
+  /**
+   * An event the application's body writer cannot serialize ends the response. Quarkus REST
+   * serializes a frame inside its subscriber's {@code onNext}, so the writer's exception is a
+   * downstream that throws. The stream's own keepalive and deadline are far beyond the test: only
+   * the endpoint's handling of the failed frame can end the response, and without it the client
+   * would hold an open connection on which nothing is ever written again.
+   */
+  @Test
+  void aFrameTheBodyWriterCannotSerializeEndsTheResponse() throws Exception {
+    var publisher = new SseEventPublisher();
+    var controller =
+        new SseController(
+            publisher, ALLOW_ALL, ANONYMOUS, Duration.ofMinutes(5), Duration.ofSeconds(30));
+    HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
+    try (var server = QuarkusRestTestServer.start(controller, FailingJsonWriter.class)) {
+      HttpResponse<InputStream> response = open(client, server, "/api/sse/order/o-1", OPENS_WITHIN);
+      assertThat(response.statusCode()).isEqualTo(200);
+      List<List<String>> frames = new CopyOnWriteArrayList<>();
+      CompletableFuture<Ending> ending = new CompletableFuture<>();
+      Thread.ofVirtual().start(() -> ending.complete(collectFrames(response.body(), frames)));
+      await().atMost(OPENS_WITHIN).until(() -> !frames.isEmpty());
+      assertThat(controller.openStreamCount()).isEqualTo(1);
+
+      publisher.publish(envelope(42, new OrderPlaced("o-1", 3)));
+
+      assertThat(ending)
+          .as("the response ended: the client is not left on a connection nothing writes to")
+          .succeedsWithin(Duration.ofSeconds(5))
+          .as("a failed stream is cut, so an EventSource reconnects; it is not completed")
+          .isEqualTo(Ending.CUT);
+      assertThat(frames)
+          .as("the opening frame and nothing of the event that could not be serialized")
+          .containsExactly(List.of(": keepalive"));
+      await().atMost(Duration.ofSeconds(5)).until(() -> controller.openStreamCount() == 0);
+    } finally {
+      client.shutdownNow();
+      controller.shutdown();
+      publisher.close();
+    }
+  }
+
   static HttpResponse<InputStream> open(
       HttpClient client, QuarkusRestTestServer server, String path) throws Exception {
     return open(client, server, path, Duration.ofSeconds(60));
@@ -203,8 +275,18 @@ class SseWireFormatTest {
     return frame.stream().anyMatch(line -> line.startsWith("data:"));
   }
 
-  /** Reads the stream as frames: the lines up to each blank line. */
-  static void collectFrames(InputStream body, List<List<String>> frames) {
+  /** How a response body ended: completed by the server, or cut with the connection. */
+  enum Ending {
+    COMPLETED,
+    CUT
+  }
+
+  /**
+   * Reads the stream as frames, the lines up to each blank line, until the body ends, and reports
+   * how it ended. A completed chunked response ends with its terminating chunk and reads as end of
+   * stream; a connection cut before that chunk fails the read.
+   */
+  static Ending collectFrames(InputStream body, List<List<String>> frames) {
     try (BufferedReader lines =
         new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
       List<String> frame = new ArrayList<>();
@@ -217,8 +299,9 @@ class SseWireFormatTest {
           frame.add(line);
         }
       }
+      return Ending.COMPLETED;
     } catch (IOException _) {
-      // the stream was cut instead of completed; the test asserts on what was read
+      return Ending.CUT;
     }
   }
 
