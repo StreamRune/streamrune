@@ -5,11 +5,11 @@ quarkus = "3.32.0"
 # The Agroal connection pool Quarkus 3.32 pins; streamrune-quarkus compiles against its API only
 # (compileOnly) to open the crypto-forget LISTEN pool from the application's Agroal datasource.
 agroal = "3.0"
-micronaut = "4.10.15"
-micronaut-security = "4.14.0"
-micronaut-serde = "2.16.2"
-micronaut-validation = "4.12.0"
-micronaut-test = "4.10.2"
+micronaut = "5.2.12"
+micronaut-security = "5.4.0"
+micronaut-serde = "3.2.4"
+micronaut-validation = "5.2.1"
+micronaut-test = "5.2.0"
 micronaut-application = "4.2.1"
 
 # Core
