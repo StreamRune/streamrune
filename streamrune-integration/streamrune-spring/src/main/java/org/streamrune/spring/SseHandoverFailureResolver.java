@@ -2,10 +2,10 @@ package org.streamrune.spring;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import java.util.List;
+import org.springframework.core.Ordered;
+import org.springframework.core.PriorityOrdered;
 import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.springframework.web.servlet.ModelAndView;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
  * Releases the Server-Sent Events stream of a request whose handling Spring MVC reports as failed.
@@ -22,15 +22,21 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  *
  * <p>The resolver never resolves anything. It returns {@code null} for every exception, so Spring
  * MVC goes on to the resolvers after it exactly as if this one were absent:
- * {@code @ExceptionHandler} methods, {@code ResponseStatusException}, the defaults. For a request
- * that opened no stream it reads one request attribute and returns.
+ * {@code @ExceptionHandler} methods, {@code ResponseStatusException}, the defaults, the
+ * application's own. For a request that opened no stream it reads one request attribute and
+ * returns.
  *
- * <p>The auto-configuration installs it as the first resolver of Spring MVC's own list, through
- * {@link WebMvcConfigurer#extendHandlerExceptionResolvers}. It is deliberately not a bean of type
- * {@link HandlerExceptionResolver}: the dispatcher servlet replaces its default resolvers by the
- * resolver beans it finds, and this one must only ever be added to them.
+ * <p><b>First of all resolvers.</b> The auto-configuration declares it as a {@link
+ * HandlerExceptionResolver} bean. The dispatcher servlet consults the resolver beans of the context
+ * in their order and stops at the first that resolves, so a resolver of the application that
+ * resolves the failure ends the search. This one is {@link PriorityOrdered} with the highest
+ * precedence: it is sorted ahead of Spring MVC's own list ({@code handlerExceptionResolver}) and
+ * ahead of every resolver ordered through {@code Ordered} or {@code @Order}, whatever its value,
+ * and has released the stream before any of them is asked. Because it resolves nothing, standing
+ * first changes the outcome of no resolution. The bean is not an autowire candidate: an application
+ * that injects a {@link HandlerExceptionResolver} keeps getting the one it got without it.
  */
-final class SseHandoverFailureResolver implements HandlerExceptionResolver {
+final class SseHandoverFailureResolver implements HandlerExceptionResolver, PriorityOrdered {
 
   @Override
   public ModelAndView resolveException(
@@ -39,18 +45,8 @@ final class SseHandoverFailureResolver implements HandlerExceptionResolver {
     return null;
   }
 
-  /**
-   * The Spring MVC configurer that puts a {@link SseHandoverFailureResolver} ahead of the resolvers
-   * Spring MVC has configured.
-   *
-   * @return the configurer
-   */
-  static WebMvcConfigurer asFirstResolver() {
-    return new WebMvcConfigurer() {
-      @Override
-      public void extendHandlerExceptionResolvers(List<HandlerExceptionResolver> resolvers) {
-        resolvers.addFirst(new SseHandoverFailureResolver());
-      }
-    };
+  @Override
+  public int getOrder() {
+    return Ordered.HIGHEST_PRECEDENCE;
   }
 }

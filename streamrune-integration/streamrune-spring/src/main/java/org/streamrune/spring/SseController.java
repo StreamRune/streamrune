@@ -83,9 +83,10 @@ import org.streamrune.runtime.SseEventPublisher;
  * <p><b>A client that resets before the response is written.</b> Spring MVC writes the opening
  * frame while it takes the emitter over, before it attaches the emitter's callbacks to the request.
  * When that write fails, no callback runs and nothing ends the asynchronous request. The stream is
- * therefore remembered on the request, and a {@link SseHandoverFailureResolver} — installed by the
- * auto-configuration — releases it the moment Spring MVC reports the failure: the client is
- * unsubscribed and the request ended. See {@link #releaseStreamOf}.
+ * therefore remembered on the request, and a {@link SseHandoverFailureResolver} — a bean of the
+ * auto-configuration, consulted before every other exception resolver of the application — releases
+ * it the moment Spring MVC reports the failure: the client is unsubscribed and the request ended.
+ * See {@link #releaseStreamOf}.
  *
  * <p><b>Slow-consumer eviction.</b> The publisher evicts a client whose queue is full on the thread
  * that publishes: the feed's polling thread, which serves every stream. The disconnect hook

@@ -20,7 +20,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.ImportRuntimeHints;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.annotation.Order;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.streamrune.core.AsyncCommandBus;
 import org.streamrune.core.CommandAuthorizationPolicy;
 import org.streamrune.core.CommandInbox;
@@ -744,16 +744,19 @@ public class StreamRuneAutoConfiguration {
     }
 
     /**
-     * Puts a {@link SseHandoverFailureResolver} ahead of Spring MVC's exception resolvers. It
-     * releases the stream of a request whose handling failed while Spring MVC was taking the
-     * emitter over (a client that reset its connection before the response was written) and
-     * resolves nothing itself: every exception goes on to the resolvers after it.
+     * The exception resolver the dispatcher servlet consults before every other: Spring MVC's own
+     * list and the application's resolvers, whatever their order (see {@link
+     * SseHandoverFailureResolver}). It releases the stream of a request whose handling failed while
+     * Spring MVC was taking the emitter over (a client that reset its connection before the
+     * response was written) and resolves nothing itself: every exception goes on to the resolvers
+     * after it. Not an autowire candidate, so it never competes for an injection point of the
+     * application that asks for a {@link HandlerExceptionResolver}.
      *
-     * @return the Spring MVC configurer that adds the resolver
+     * @return the resolver
      */
-    @Bean
-    public WebMvcConfigurer streamRuneSseHandoverFailureResolver() {
-      return SseHandoverFailureResolver.asFirstResolver();
+    @Bean(autowireCandidate = false)
+    public HandlerExceptionResolver streamRuneSseHandoverFailureResolver() {
+      return new SseHandoverFailureResolver();
     }
 
     /**

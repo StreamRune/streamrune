@@ -4,6 +4,8 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
@@ -13,10 +15,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.HandlerExceptionResolver;
+import org.springframework.web.servlet.ModelAndView;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.streamrune.core.types.AggregateId;
@@ -502,16 +507,29 @@ class SseControllerTest {
   }
 
   @Test
-  void theResolverIsInstalledAheadOfSpringMvcsOwn() {
+  void theResolverSortsAheadOfAResolverThatClaimsTheHighestPrecedence() {
+    // The dispatcher servlet sorts the resolver beans of the context with this comparator.
+    class ClaimsTheHighestPrecedence implements HandlerExceptionResolver, Ordered {
+      @Override
+      public int getOrder() {
+        return Ordered.HIGHEST_PRECEDENCE;
+      }
+
+      @Override
+      public ModelAndView resolveException(
+          HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
+        return new ModelAndView();
+      }
+    }
+    var applications = new ClaimsTheHighestPrecedence();
     var resolvers = new java.util.ArrayList<HandlerExceptionResolver>();
-    HandlerExceptionResolver springMvcs = (request, response, handler, ex) -> null;
-    resolvers.add(springMvcs);
+    resolvers.add(applications);
+    resolvers.add(new SseHandoverFailureResolver());
 
-    SseHandoverFailureResolver.asFirstResolver().extendHandlerExceptionResolvers(resolvers);
+    AnnotationAwareOrderComparator.sort(resolvers);
 
-    assertEquals(2, resolvers.size());
     assertInstanceOf(SseHandoverFailureResolver.class, resolvers.getFirst());
-    assertSame(springMvcs, resolvers.getLast());
+    assertSame(applications, resolvers.getLast());
   }
 
   /** The lock Spring's emitter holds across a send and takes to complete. */

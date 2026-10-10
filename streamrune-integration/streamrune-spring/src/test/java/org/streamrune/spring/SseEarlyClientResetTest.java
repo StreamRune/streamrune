@@ -4,16 +4,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import javax.sql.DataSource;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.WebApplicationType;
@@ -30,6 +39,14 @@ import org.springframework.boot.webmvc.autoconfigure.WebMvcAutoConfiguration;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.core.Ordered;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.HandlerExceptionResolver;
+import org.springframework.web.servlet.ModelAndView;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
@@ -54,6 +71,12 @@ import org.streamrune.runtime.SseEventPublisher;
  *       reaping does not end a request Spring MVC never finished taking over, and that request is
  *       what a graceful shutdown waits for.
  * </ul>
+ *
+ * <p>A third case adds what an application may bring: an exception resolver of its own that claims
+ * the highest precedence and resolves every failure. The dispatcher servlet stops at the first
+ * resolver that resolves, and the stream is released all the same, because the framework's resolver
+ * is consulted before it. The last case shows the other side: with the framework's resolver in
+ * front, an error of an ordinary controller is still resolved by Spring MVC's own resolvers.
  */
 class SseEarlyClientResetTest {
 
@@ -63,18 +86,59 @@ class SseEarlyClientResetTest {
   @ValueSource(strings = {"0", "200ms"})
   void aClientResetBeforeTheResponseIsWrittenReleasesTheSubscriptionAndDoesNotHoldTheShutdown(
       String keepAliveInterval) throws Exception {
-    ConfigurableApplicationContext context =
-        new SpringApplicationBuilder(SseApplication.class)
-            .web(WebApplicationType.SERVLET)
-            .registerShutdownHook(false)
-            .properties(
-                "server.port=0",
-                "server.shutdown=graceful",
-                "spring.lifecycle.timeout-per-shutdown-phase=" + PHASE_TIMEOUT.toSeconds() + "s",
-                "streamrune.sse.enabled=true",
-                "streamrune.sse.polling-interval=1h",
-                "streamrune.sse.keep-alive-interval=" + keepAliveInterval)
-            .run();
+    resetBeforeTheResponseIsWritten(SseApplication.class, keepAliveInterval);
+  }
+
+  @Test
+  void anApplicationResolverThatResolvesEveryFailureFirstDoesNotKeepTheStreamOfAResetClient()
+      throws Exception {
+    ResolvesEverything.seen.clear();
+
+    // No keepalive: nothing but the framework's resolver can release the stream.
+    resetBeforeTheResponseIsWritten(SseApplicationWithACatchAllResolver.class, "0");
+
+    assertThat(ResolvesEverything.seen)
+        .as("the application's resolver was asked about the failed write, and resolved it")
+        .isNotEmpty();
+  }
+
+  @Test
+  void anErrorOfAnOrdinaryControllerIsStillResolvedBySpringMvcsOwnResolvers() throws Exception {
+    ConfigurableApplicationContext context = start(SseApplication.class, "0");
+    try (HttpClient client = HttpClient.newHttpClient()) {
+      int port = ((WebServerApplicationContext) context).getWebServer().getPort();
+
+      HttpResponse<String> response =
+          client.send(
+              HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/teapot")).build(),
+              HttpResponse.BodyHandlers.ofString());
+
+      assertThat(response.statusCode())
+          .as("a ResponseStatusException is resolved to its status by Spring MVC's resolver")
+          .isEqualTo(HttpStatus.I_AM_A_TEAPOT.value());
+    } finally {
+      context.close();
+    }
+  }
+
+  private static ConfigurableApplicationContext start(
+      Class<?> application, String keepAliveInterval) {
+    return new SpringApplicationBuilder(application)
+        .web(WebApplicationType.SERVLET)
+        .registerShutdownHook(false)
+        .properties(
+            "server.port=0",
+            "server.shutdown=graceful",
+            "spring.lifecycle.timeout-per-shutdown-phase=" + PHASE_TIMEOUT.toSeconds() + "s",
+            "streamrune.sse.enabled=true",
+            "streamrune.sse.polling-interval=1h",
+            "streamrune.sse.keep-alive-interval=" + keepAliveInterval)
+        .run();
+  }
+
+  private static void resetBeforeTheResponseIsWritten(
+      Class<?> application, String keepAliveInterval) throws Exception {
+    ConfigurableApplicationContext context = start(application, keepAliveInterval);
     boolean closed = false;
     try {
       int port = ((WebServerApplicationContext) context).getWebServer().getPort();
@@ -195,6 +259,53 @@ class SseEarlyClientResetTest {
     @Bean
     CountingPublisher sseEventPublisher() {
       return new CountingPublisher();
+    }
+
+    @Bean
+    TeapotController teapotController() {
+      return new TeapotController();
+    }
+  }
+
+  /** An ordinary controller of the application whose handler fails with a status. */
+  @RestController
+  static class TeapotController {
+
+    @GetMapping("/teapot")
+    String teapot() {
+      throw new ResponseStatusException(HttpStatus.I_AM_A_TEAPOT);
+    }
+  }
+
+  /** The same application with a resolver of its own ahead of Spring MVC's. */
+  @Configuration(proxyBeanMethods = false)
+  @Import(SseApplication.class)
+  static class SseApplicationWithACatchAllResolver {
+
+    @Bean
+    ResolvesEverything applicationResolver() {
+      return new ResolvesEverything();
+    }
+  }
+
+  /**
+   * What a global "render every error" resolver of an application looks like: it claims the highest
+   * precedence and resolves whatever it is asked about, so no resolver after it is consulted.
+   */
+  static final class ResolvesEverything implements HandlerExceptionResolver, Ordered {
+
+    static final List<String> seen = new CopyOnWriteArrayList<>();
+
+    @Override
+    public int getOrder() {
+      return Ordered.HIGHEST_PRECEDENCE;
+    }
+
+    @Override
+    public ModelAndView resolveException(
+        HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
+      seen.add(ex.getClass().getSimpleName());
+      return new ModelAndView();
     }
   }
 }
