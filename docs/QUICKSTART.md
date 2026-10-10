@@ -5,7 +5,8 @@ Step-by-step guide to building your first event-sourced application with StreamR
 ## Prerequisites
 
 - **Java 25** — StreamRune uses virtual threads and modern APIs
-- **Gradle 9.1 or newer** — the first Gradle release that runs on Java 25
+- **Gradle 9.1 or newer** — the first Gradle release that runs on Java 25. StreamRune itself is
+  built and tested with Gradle 9.3.1 (its wrapper)
 - **PostgreSQL 17 or newer** (only if using `streamrune-postgres`; the test module works without it) —
   tested on 17 and 18; an older server is refused at startup
 
