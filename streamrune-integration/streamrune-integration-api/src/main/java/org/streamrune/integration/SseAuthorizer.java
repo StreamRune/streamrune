@@ -44,8 +44,8 @@ public interface SseAuthorizer {
    * the integrations call it on a thread that may block, not on an event loop. On Spring that is
    * the servlet request thread and on Quarkus a worker thread, whatever the application adds. On
    * Micronaut it is the thread the request filter chain leaves the request on: the blocking
-   * executor with the framework's {@code StreamRuneContextFilter}, and whatever an application's
-   * own filter chooses once it replaces that one or runs behind it on another executor.
+   * executor with the framework's {@code StreamRuneContextFilter}; an application that replaces
+   * that filter, or adds one behind it that runs on another executor, decides the thread itself.
    *
    * <p>The answer holds for the life of the stream: see the class documentation.
    *

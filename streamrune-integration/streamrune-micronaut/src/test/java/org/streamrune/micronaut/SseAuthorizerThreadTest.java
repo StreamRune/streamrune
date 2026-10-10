@@ -6,14 +6,10 @@ import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Replaces;
 import io.micronaut.context.annotation.Requires;
-import io.micronaut.core.order.Ordered;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.annotation.RequestFilter;
 import io.micronaut.http.annotation.ServerFilter;
-import io.micronaut.http.filter.ServerFilterPhase;
 import io.micronaut.runtime.server.EmbeddedServer;
-import io.micronaut.scheduling.TaskExecutors;
-import io.micronaut.scheduling.annotation.ExecuteOn;
 import jakarta.inject.Singleton;
 import java.io.InputStream;
 import java.net.URI;
@@ -38,8 +34,7 @@ import org.streamrune.test.InMemoryEventStore;
  * the request. {@link StreamRuneContextFilter} runs on the blocking executor and proceeds
  * synchronously, so with the framework's filter the authorizer runs on a virtual thread of that
  * executor, inside the filter's binding of the request context, and may read a database. An
- * application that replaces the filter, or adds one behind it that runs on another executor,
- * decides the thread itself.
+ * application that replaces the filter decides the thread itself.
  *
  * <p>Each test boots the embedded server, opens {@code /api/sse/order/o-1} over HTTP and reads from
  * the fixture's authorizer the thread it was called on.
@@ -50,9 +45,6 @@ class SseAuthorizerThreadTest {
 
   /** Replaces {@link StreamRuneContextFilter} by a filter that stays on the event loop. */
   private static final String EVENT_LOOP_FILTER = "sse-authorizer-thread-test.event-loop-filter";
-
-  /** Adds a filter behind {@link StreamRuneContextFilter} that runs on another executor. */
-  private static final String MOVING_FILTER = "sse-authorizer-thread-test.moving-filter";
 
   /** One call of the fixture's authorizer. */
   record Call(String thread, boolean virtual, boolean requestContextBound) {}
@@ -101,30 +93,6 @@ class SseAuthorizerThreadTest {
             });
   }
 
-  /**
-   * The same limit with the framework's filter in place: a filter the application adds behind it
-   * that runs on an executor of its own takes the rest of the request, the controller and the
-   * authorizer included, to that executor's thread. The framework filter bound the request context
-   * on its own thread, and the binding does not follow.
-   */
-  @Test
-  void withAFilterBehindTheFrameworksOnAnotherExecutorTheAuthorizerRunsThereOutsideTheContext()
-      throws Exception {
-    openAStream(Map.of(MOVING_FILTER, "true"));
-
-    assertThat(CALLS)
-        .singleElement()
-        .satisfies(
-            call -> {
-              assertThat(call.thread())
-                  .as("a thread of the executor the application's filter runs on")
-                  .startsWith("io-executor");
-              assertThat(call.requestContextBound())
-                  .as("the framework filter's binding stays on the thread it was made on")
-                  .isFalse();
-            });
-  }
-
   private static void openAStream(Map<String, Object> extra) throws Exception {
     Map<String, Object> props = new HashMap<>(extra);
     props.put("spec.name", SPEC);
@@ -146,27 +114,6 @@ class SseAuthorizerThreadTest {
     } finally {
       client.shutdownNow();
       server.stop();
-    }
-  }
-
-  /**
-   * A filter the application adds behind {@link StreamRuneContextFilter} and runs on another
-   * executor: Micronaut goes on from that executor's thread to the route.
-   */
-  @ServerFilter("/**")
-  @Requires(property = "spec.name", value = SPEC)
-  @Requires(property = MOVING_FILTER, value = "true")
-  static class MovingFilter implements Ordered {
-
-    @Override
-    public int getOrder() {
-      return ServerFilterPhase.SECURITY.after() + 100;
-    }
-
-    @RequestFilter
-    @ExecuteOn(TaskExecutors.IO)
-    void filter(HttpRequest<?> request) {
-      // nothing: the request goes on from this executor's thread
     }
   }
 

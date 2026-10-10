@@ -110,10 +110,11 @@ import reactor.core.scheduler.Schedulers;
  * of the request context, so an authorizer may read a database. An application that replaces that
  * filter chooses the thread itself: a filter that stays on a Netty event loop takes the authorizer
  * there, and such an application runs its filter on the blocking executor
- * ({@code @ExecuteOn(TaskExecutors.BLOCKING)}) or keeps its authorizer from blocking. So does an
+ * ({@code @ExecuteOn(TaskExecutors.BLOCKING)}) or keeps its authorizer from blocking. An
  * application that keeps the framework's filter and adds one behind it that runs on another
- * executor: the controller and the authorizer run on that executor's thread, outside the framework
- * filter's binding of the request context.
+ * executor gives up the guarantee too: the controller and the authorizer can run on that executor's
+ * thread, outside the framework filter's binding of the request context, and which thread a given
+ * request goes on from depends on timing inside Micronaut.
  *
  * <p><b>Caller identity.</b> The caller handed to the authorizer is resolved by the same {@link
  * RequestIdentityPolicy} bean the {@link StreamRuneContextFilter} binds {@code
