@@ -56,6 +56,20 @@ final class ShippedMigrationSeries {
 
   private static final String CLASSPATH_PREFIX = "classpath:";
 
+  /**
+   * The logging back end Flyway is told to use: SLF4J, the facade the framework itself logs
+   * through.
+   *
+   * <p>Left to its default ({@code auto}), Flyway picks a back end by probing for SLF4J, Log4j 2
+   * and Apache Commons Logging by class name, and instantiates the matching log creator
+   * reflectively. In a GraalVM native image the probe sees only the classes registered for
+   * reflection, so the outcome depends on what the rest of the image happens to register, and a log
+   * creator chosen that way but not registered itself stops Flyway with "Unable to instantiate
+   * class". Naming the back end leaves one log creator to register, which the Quarkus and Micronaut
+   * integrations do.
+   */
+  static final String FLYWAY_LOGGER = "slf4j";
+
   private final String location;
   private final String directory;
   private final String artifact;
@@ -97,6 +111,7 @@ final class ShippedMigrationSeries {
     return configuration
         .dataSource(dataSource)
         .locations(location)
+        .loggers(FLYWAY_LOGGER)
         .resourceProvider(new Scripts(resources))
         .javaMigrationClassProvider(List::<Class<? extends JavaMigration>>of);
   }

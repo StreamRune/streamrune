@@ -188,6 +188,13 @@ it that way.
 It also ships `resource-config.json`, which registers the Flyway migration scripts schema
 auto-initialization reads by name (`db/streamrune-migration/*.sql`, `db/crypto-migration/*.sql`)
 and Flyway's own `version.txt` as resources; without them the image cannot initialize the schema.
+`META-INF/native-image/org.streamrune/streamrune-micronaut-flyway/reachability-metadata.json`
+registers what Flyway reaches reflectively while it does: the no-argument constructor and declared
+fields of the configuration extensions it copies field by field (without them the binary stops at
+startup with a `MissingReflectionRegistrationError`), and the SLF4J log creator it instantiates
+from its class name (`streamrune-postgres` tells Flyway to log through SLF4J). Flyway's plugins
+need no entry: native-image registers the providers of a `ServiceLoader` lookup on its own.
+`FlywayNativeImageMetadataTest` checks the list against the Flyway on the class path.
 
 The application registers its own records (a `reflect-config.json` of its own, or `@TypeHint` /
 `@ReflectiveAccess`), plus any projection class that declares `process(List,

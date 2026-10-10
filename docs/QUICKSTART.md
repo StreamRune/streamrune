@@ -724,8 +724,15 @@ table as missing. The scripts must therefore be in the image. The Spring, Quarku
 integrations register `db/streamrune-migration/*.sql`, `db/crypto-migration/*.sql` and Flyway's
 own `org/flywaydb/core/internal/version.txt` as resources, and `streamrune-postgres` adds the build
 argument `--enable-url-protocols=https`, without which Flyway cannot construct itself in a native
-image (it builds its help links as `https` URLs; nothing is downloaded). A plain-Java native
-application registers the resources in its own `reachability-metadata.json`:
+image (it builds its help links as `https` URLs; nothing is downloaded). Flyway also reaches
+parts of itself by name at run time: it finds its plugins with `ServiceLoader`, copies its
+configuration extensions field by field, and instantiates its log creator from a class name (the
+factory tells it to log through SLF4J, so the back end does not depend on what the image registers).
+The Quarkus and Micronaut integrations ship the reachability metadata for that
+(`META-INF/native-image/org.streamrune/streamrune-quarkus-flyway` and `streamrune-micronaut-flyway`);
+a Spring Boot build takes it from the GraalVM reachability-metadata repository, which
+native-build-tools applies. A plain-Java native application registers the resources in its own
+`reachability-metadata.json`:
 
 ```json
 {

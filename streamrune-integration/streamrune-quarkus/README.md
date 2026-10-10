@@ -230,7 +230,22 @@ nothing. This contract is identical across the Spring, Quarkus, and Micronaut in
   it `new HikariDataSource(config)` copies an empty configuration and startup fails with *Failed to
   initialize pool: null*), and with the Flyway migration scripts schema auto-initialization reads by
   name (`db/streamrune-migration/*.sql`, `db/crypto-migration/*.sql`, Flyway's `version.txt`) as
-  resources. It also carries a native-image substitution for Flyway's class-path scanner
+  resources. A second directory, `META-INF/native-image/org.streamrune/streamrune-quarkus-flyway`,
+  holds what Flyway reaches by name when it initializes the schema; a Quarkus build registers no
+  `ServiceLoader` provider on its own and does not apply the GraalVM reachability-metadata
+  repository, so without it the binary fails at startup inside Flyway. Its
+  `reachability-metadata.json` registers the `META-INF/services` file Flyway reads its plugins
+  from and every plugin that file names (the PostgreSQL database type among them), the declared
+  fields of the configuration extensions Flyway copies field by field, and the SLF4J log creator
+  Flyway instantiates from its class name (`streamrune-postgres` tells Flyway to log through
+  SLF4J). Its `native-image.properties` initializes Flyway's `InsertRowLock` at run time: Quarkus
+  initializes classes at image build time, and that class keeps a `java.util.Random` in a static
+  field, which native-image refuses in the image heap. `FlywayNativeImageMetadataTest` checks the
+  list against the Flyway on the class path. An application that adds a Flyway module of its own
+  (another database type) registers that module's plugins the same way, or sets
+  `quarkus.native.auto-service-loader-registration=true`: `ServiceLoader` refuses the lookup when
+  a service file names a provider the image cannot load. The module also carries a native-image
+  substitution for Flyway's class-path scanner
   (`org.streamrune.quarkus.graal`): Quarkus links every class at build time, and since Flyway 13 a
   `Flyway` instance reaches that scanner, whose JBoss VFS and OSGi branches need optional Flyway
   dependencies (`jboss-vfs`, `org.osgi.core`), so the build failed with *Discovered unresolved
