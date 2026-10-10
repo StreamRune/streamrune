@@ -817,6 +817,11 @@ class OutboxPollerTest {
       assertFalse(
           delivered.isEmpty(),
           "relay must survive transient store failures and deliver after recovery");
+      // The counter is reset when the poll cycle that published returns, which is after the
+      // publisher call: wait for that cycle to end.
+      while (poller.consecutiveFailures() != 0 && System.nanoTime() < deadline) {
+        Thread.sleep(10);
+      }
       assertEquals(0, poller.consecutiveFailures(), "failure counter resets after recovery");
     } finally {
       poller.close();

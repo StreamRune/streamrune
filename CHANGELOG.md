@@ -800,8 +800,9 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
 - `streamrune-postgres` brings Flyway 13.9.0 (`flyway-core`, `flyway-database-postgresql`), HikariCP
   6.2.1 (for its dedicated LISTEN and lock pools), the PostgreSQL JDBC driver 42.7.10 and SLF4J 2.0.
 - Frameworks: Spring Boot 4.1.x (built and tested against 4.1.1, Spring Security 7.1.x), Quarkus
-  3.32.x, Micronaut 5.2.x (Micronaut Security 5.4, Validation 5.2, Serde 3.2). Micrometer 1.17,
-  OpenTelemetry API 1.47 (optional).
+  3.32.x, Micronaut 5.2.x (Micronaut Security 5.4, Validation 5.2, Serde 3.2). Micrometer 1.16 or
+  newer: the framework declares 1.16.3, the version Quarkus 3.32 manages, and an application runs
+  the version its framework manages (1.17 with Spring Boot 4.1). OpenTelemetry API 1.47 (optional).
 - Outbox brokers: Kafka clients 3.9 (`streamrune-kafka-outbox`), RabbitMQ `amqp-client` 5.25
   (`streamrune-rabbitmq-outbox`). Crypto backends: AWS SDK v2 KMS 2.30 (`streamrune-aws-kms-crypto`);
   HashiCorp Vault with the transit engine enabled, over its HTTP API (`streamrune-vault-crypto`).
