@@ -88,7 +88,7 @@ class SseEventPublisherLogForgingTest {
           workerThreadName.set(Thread.currentThread().getName());
           delivered.countDown();
         });
-    publisher.publish(stream, envelope(stream, 1L));
+    publisher.publish(envelope(stream, 1L));
 
     assertTrue(delivered.await(5, TimeUnit.SECONDS), "the delivery worker must have run");
     assertNoForgedLine(workerThreadName.get(), "the SSE delivery worker's thread name");
@@ -125,10 +125,10 @@ class SseEventPublisherLogForgingTest {
           evicted.countDown();
         });
 
-    publisher.publish(stream, envelope(stream, 1L));
+    publisher.publish(envelope(stream, 1L));
     assertTrue(insideSend.await(5, TimeUnit.SECONDS), "the worker must be parked inside send()");
-    publisher.publish(stream, envelope(stream, 2L));
-    publisher.publish(stream, envelope(stream, 3L));
+    publisher.publish(envelope(stream, 2L));
+    publisher.publish(envelope(stream, 3L));
 
     assertTrue(evicted.await(5, TimeUnit.SECONDS), "the slow consumer must have been evicted");
     releaseSend.countDown();
@@ -143,5 +143,60 @@ class SseEventPublisherLogForgingTest {
         "only the human-readable MESSAGE is sanitized — the carried StreamId stays the exact value"
             + " the caller supplied, because it is data, not a log line");
     publisher.close();
+  }
+
+  /**
+   * The text of a failed send comes from the transport, which may quote what the client sent. Both
+   * WARN lines that render a failure (a failed send, a failed disconnect hook) pass it through the
+   * sanitizer.
+   */
+  @Test
+  void theFailureOfASendOrOfADisconnectHookCannotCarryAForgedLogLine() throws Exception {
+    var logger =
+        (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SseEventPublisher.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    var publisher = new SseEventPublisher();
+    var stream = StreamId.of(CART, AggregateId.of("cart-1"));
+    var hookRan = new CountDownLatch(1);
+    try {
+      publisher.subscribe(
+          stream,
+          envelope -> {
+            throw new IllegalStateException("write failed for " + FORGED);
+          },
+          cause -> {
+            hookRan.countDown();
+            throw new IllegalStateException("hook failed for " + FORGED);
+          });
+      publisher.publish(envelope(stream, 1L));
+
+      assertTrue(hookRan.await(5, TimeUnit.SECONDS), "the failed send must evict the subscriber");
+      org.awaitility.Awaitility.await()
+          .atMost(java.time.Duration.ofSeconds(5))
+          .until(
+              () ->
+                  appender.list.stream()
+                          .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+                          .count()
+                      == 2);
+      var warnings =
+          appender.list.stream()
+              .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+              .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+              .toList();
+      assertTrue(
+          warnings.get(0).startsWith("SSE subscriber send failed for stream"), warnings.get(0));
+      assertTrue(warnings.get(0).contains("IllegalStateException"), warnings.get(0));
+      assertNoForgedLine(warnings.get(0), "the WARN of a failed send");
+      assertTrue(
+          warnings.get(1).startsWith("SSE disconnect hook failed for stream"), warnings.get(1));
+      assertNoForgedLine(warnings.get(1), "the WARN of a failed disconnect hook");
+    } finally {
+      logger.detachAppender(appender);
+      publisher.close();
+    }
   }
 }

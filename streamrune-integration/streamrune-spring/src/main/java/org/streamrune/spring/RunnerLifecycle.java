@@ -13,17 +13,28 @@ import org.springframework.context.SmartLifecycle;
  * projections, the outbox relay, and dead-letter retries silently do nothing.
  *
  * <p>Stop ordering: all {@code SmartLifecycle} beans are stopped before singleton destruction, so
- * runners always shut down before the {@code DataSource} they poll is closed. The {@link #PHASE}
- * additionally places runners before the web server in the start order, which means they stop
- * <em>after</em> graceful web shutdown completes — in-flight HTTP work can still observe projection
- * progress during shutdown.
+ * runners always shut down before the {@code DataSource} they poll is closed. The {@link #PHASE} is
+ * below the web server's graceful-shutdown phase, so runners stop <em>after</em> graceful web
+ * shutdown completes — in-flight HTTP work can still observe projection progress during shutdown.
  */
 public final class RunnerLifecycle implements SmartLifecycle {
 
   /**
-   * Runs before Spring Boot's web server lifecycles (graceful shutdown uses {@code DEFAULT_PHASE -
-   * 1024}, start/stop uses {@code DEFAULT_PHASE}): runners start before HTTP traffic is accepted
-   * and stop after it has drained.
+   * The phase of every runner: below the phase of Spring Boot's graceful web-server shutdown
+   * ({@code DEFAULT_PHASE - 1024}) and equal to the phase in which Spring Boot starts and stops the
+   * web server itself ({@code DEFAULT_PHASE - 2048}, {@code
+   * WebServerApplicationContext.START_STOP_LIFECYCLE_PHASE}).
+   *
+   * <p><b>Stop.</b> A higher phase stops first, so HTTP traffic has drained before any runner
+   * stops.
+   *
+   * <p><b>Start.</b> The runners and the web server start in one phase. Within a phase Spring
+   * starts the lifecycle beans in the order the bean factory lists them, bean definitions before
+   * the singletons registered by hand, and Spring Boot registers its web-server lifecycle by hand
+   * when it creates the server. The runners are bean definitions, so they are started before the
+   * web server accepts its first request. This order is Spring's and Spring Boot's behaviour, not a
+   * contract of the phase; {@code SseLiveFeedTest} pins it for the feed of the Server-Sent Events
+   * endpoint.
    */
   public static final int PHASE = SmartLifecycle.DEFAULT_PHASE - 2048;
 

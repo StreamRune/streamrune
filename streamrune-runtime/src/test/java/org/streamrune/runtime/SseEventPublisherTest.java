@@ -74,7 +74,7 @@ class SseEventPublisherTest {
       publisher.subscribe(streamId, received::add);
 
       var envelope = createEnvelope(streamId);
-      publisher.publish(streamId, envelope);
+      publisher.publish(envelope);
 
       Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> received.size() == 1);
       assertSame(envelope, received.get(0));
@@ -85,7 +85,7 @@ class SseEventPublisherTest {
   void publishToNonexistentStreamDoesNotThrow() {
     try (var publisher = new SseEventPublisher()) {
       var streamId = StreamId.of(TYPE, AggregateId.of("nonexistent"));
-      assertDoesNotThrow(() -> publisher.publish(streamId, createEnvelope(streamId)));
+      assertDoesNotThrow(() -> publisher.publish(createEnvelope(streamId)));
     }
   }
 
@@ -99,7 +99,7 @@ class SseEventPublisherTest {
       publisher.subscribe(streamId, subscriber);
       publisher.unsubscribe(streamId, subscriber);
 
-      publisher.publish(streamId, createEnvelope(streamId));
+      publisher.publish(createEnvelope(streamId));
 
       // Give any (incorrect) async delivery a chance to land, then assert nothing arrived.
       Thread.sleep(200);
@@ -117,7 +117,7 @@ class SseEventPublisherTest {
       publisher.unsubscribe(streamId, subscriber);
 
       // Publishing to cleaned up stream should not throw
-      assertDoesNotThrow(() -> publisher.publish(streamId, createEnvelope(streamId)));
+      assertDoesNotThrow(() -> publisher.publish(createEnvelope(streamId)));
     }
   }
 
@@ -132,7 +132,7 @@ class SseEventPublisherTest {
       publisher.subscribe(streamId, received2::add);
 
       var envelope = createEnvelope(streamId);
-      publisher.publish(streamId, envelope);
+      publisher.publish(envelope);
 
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
@@ -154,7 +154,7 @@ class SseEventPublisherTest {
       publisher.subscribe(streamId, received::add);
 
       var envelope = createEnvelope(streamId);
-      publisher.publish(streamId, envelope);
+      publisher.publish(envelope);
 
       Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> received.size() == 1);
     }
@@ -176,14 +176,14 @@ class SseEventPublisherTest {
           },
           cause::set);
 
-      publisher.publish(streamId, createEnvelope(streamId));
+      publisher.publish(createEnvelope(streamId));
 
       // Hook fired with the thrown exception, subscriber evicted.
       Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> cause.get() != null);
       assertSame(thrown, cause.get());
 
       // A second publish must not reach the evicted subscriber.
-      publisher.publish(streamId, createEnvelope(streamId, GlobalOffset.of(1)));
+      publisher.publish(createEnvelope(streamId, GlobalOffset.of(1)));
       Awaitility.await()
           .during(Duration.ofMillis(300))
           .atMost(Duration.ofSeconds(2))
@@ -212,7 +212,7 @@ class SseEventPublisherTest {
           });
       publisher.subscribe(streamId, fastReceived::add);
 
-      publisher.publish(streamId, createEnvelope(streamId));
+      publisher.publish(createEnvelope(streamId));
 
       // The fast subscriber gets its event even though the slow one is still blocked.
       assertTrue(slowEntered.await(5, TimeUnit.SECONDS), "slow subscriber should have started");
@@ -249,7 +249,7 @@ class SseEventPublisherTest {
               .start(
                   () -> {
                     for (long i = 0; i < 1_000; i++) {
-                      publisher.publish(streamId, createEnvelope(streamId, GlobalOffset.of(i)));
+                      publisher.publish(createEnvelope(streamId, GlobalOffset.of(i)));
                     }
                   });
 
@@ -291,7 +291,7 @@ class SseEventPublisherTest {
 
       // Overflow the capacity-1 queue to trigger eviction.
       for (long i = 0; i < 50; i++) {
-        publisher.publish(streamId, createEnvelope(streamId, GlobalOffset.of(i)));
+        publisher.publish(createEnvelope(streamId, GlobalOffset.of(i)));
       }
       assertTrue(evicted.await(5, TimeUnit.SECONDS), "slow subscriber should be evicted");
 
@@ -299,7 +299,7 @@ class SseEventPublisherTest {
       gate.countDown();
       int afterEviction = delivered.get();
       for (long i = 50; i < 100; i++) {
-        publisher.publish(streamId, createEnvelope(streamId, GlobalOffset.of(i)));
+        publisher.publish(createEnvelope(streamId, GlobalOffset.of(i)));
       }
       Awaitility.await()
           .during(Duration.ofMillis(300))
@@ -399,7 +399,7 @@ class SseEventPublisherTest {
         unsubscriber.join();
         subscriber.join();
 
-        publisher.publish(streamId, createEnvelope(streamId));
+        publisher.publish(createEnvelope(streamId));
         Awaitility.await(
                 "subscriber added concurrently with an unsubscribe must receive events (iteration "
                     + i
@@ -408,6 +408,27 @@ class SseEventPublisherTest {
             .until(() -> received.get() == 1);
         publisher.unsubscribe(streamId, arriving);
       }
+    }
+  }
+
+  @Test
+  void anEventIsRoutedByItsOwnStreamAndNeverToTheSubscribersOfAnother() {
+    try (var publisher = new SseEventPublisher()) {
+      var order = StreamId.of(AggregateType.of("order"), AggregateId.of("p-1"));
+      var inventory = StreamId.of(AggregateType.of("inventory"), AggregateId.of("p-1"));
+      var orderFrames = new CopyOnWriteArrayList<EventEnvelope>();
+      var inventoryFrames = new CopyOnWriteArrayList<EventEnvelope>();
+      publisher.subscribe(order, orderFrames::add);
+      publisher.subscribe(inventory, inventoryFrames::add);
+
+      publisher.publish(createEnvelope(inventory, GlobalOffset.of(1)));
+      publisher.publish(createEnvelope(order, GlobalOffset.of(2)));
+
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> orderFrames.size() == 1 && inventoryFrames.size() == 1);
+      assertEquals(order, orderFrames.getFirst().streamId());
+      assertEquals(inventory, inventoryFrames.getFirst().streamId());
     }
   }
 
@@ -421,7 +442,7 @@ class SseEventPublisherTest {
     publisher.close();
 
     // After close, the stream has no subscribers and publish is a no-op.
-    assertDoesNotThrow(() -> publisher.publish(streamId, createEnvelope(streamId)));
+    assertDoesNotThrow(() -> publisher.publish(createEnvelope(streamId)));
   }
 
   private void awaitUninterruptibly(CountDownLatch latch) {

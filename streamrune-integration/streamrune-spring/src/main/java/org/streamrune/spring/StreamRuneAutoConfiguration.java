@@ -6,6 +6,7 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -19,6 +20,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.ImportRuntimeHints;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.annotation.Order;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.streamrune.core.AsyncCommandBus;
 import org.streamrune.core.CommandAuthorizationPolicy;
 import org.streamrune.core.CommandInbox;
@@ -64,6 +66,7 @@ import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.OutboxRetentionSweeper;
 import org.streamrune.runtime.SimpleQueryBus;
+import org.streamrune.runtime.SseEventFeed;
 import org.streamrune.runtime.SseEventPublisher;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.runtime.gdpr.ExportSubjectDataService;
@@ -657,8 +660,9 @@ public class StreamRuneAutoConfiguration {
 
   /**
    * Creates a default {@link SseEventPublisher} for Server-Sent Events, matching the Quarkus and
-   * Micronaut integrations. The publisher is fed by application code (e.g. an inline projection)
-   * and consumed by {@code streamRuneSseController(...)} on the nested SSE configuration.
+   * Micronaut integrations. When the endpoint is enabled, the nested SSE configuration feeds the
+   * publisher from the event store ({@code streamRuneSseEventFeed(...)}) and subscribes its clients
+   * to it ({@code streamRuneSseController(...)}).
    */
   @Bean
   @ConditionalOnMissingBean(SseEventPublisher.class)
@@ -686,7 +690,12 @@ public class StreamRuneAutoConfiguration {
    * <p>The class-name gate also keeps the ENCLOSING configuration free of the MVC-bound type: a
    * top-level {@code @Bean} signature returning {@link SseController} would be resolved by {@code
    * Class#getDeclaredMethods} on every classpath. {@link #sseEventPublisher()} stays outside — the
-   * publisher is fed by application code (e.g. an inline projection) and is stack-independent.
+   * publisher is stack-independent.
+   *
+   * <p><strong>The feed belongs to the endpoint.</strong> The {@link SseEventFeed} that publishes
+   * the stored events is registered here, under the same conditions as the controller: an
+   * application without the endpoint (a headless worker sharing the web application's
+   * configuration) does not read the global stream for it.
    */
   @Configuration(proxyBeanMethods = false)
   @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
@@ -732,6 +741,65 @@ public class StreamRuneAutoConfiguration {
           requestIdentityPolicy,
           properties.sse().timeout(),
           properties.sse().keepAliveInterval());
+    }
+
+    /**
+     * The exception resolver the dispatcher servlet consults before every other: Spring MVC's own
+     * list and the application's resolvers, whatever their order (see {@link
+     * SseHandoverFailureResolver}). It releases the stream of a request whose handling failed while
+     * Spring MVC was taking the emitter over (a client that reset its connection before the
+     * response was written) and resolves nothing itself: every exception goes on to the resolvers
+     * after it. Not an autowire candidate, so it never competes for an injection point of the
+     * application that asks for a {@link HandlerExceptionResolver}.
+     *
+     * @return the resolver
+     */
+    @Bean(autowireCandidate = false)
+    public HandlerExceptionResolver streamRuneSseHandoverFailureResolver() {
+      return new SseHandoverFailureResolver();
+    }
+
+    /**
+     * The feed of the endpoint: a polling subscription that starts at the head of the global stream
+     * and publishes every event stored from then on to the subscribers of the event's own stream,
+     * every {@code streamrune.sse.polling-interval}. Live, best-effort and at-most-once — see
+     * {@link SseEventFeed}. Started and stopped by {@link #streamRuneSseEventFeedLifecycle}, and
+     * reported by the {@link org.streamrune.runtime.BackgroundRelayHealthContributor} as {@code
+     * sse-event-feed}: {@code DOWN} once its polling thread has died.
+     *
+     * <p>An application that declares its own {@link SseEventFeed} bean replaces this one and
+     * starts and stops its feed itself: the lifecycle below belongs to the auto-configured bean
+     * only. A {@code streamrune.sse.polling-interval} below one millisecond fails the start-up
+     * here.
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(SseEventFeed.class)
+    public SseEventFeed streamRuneSseEventFeed(
+        EventStore eventStore,
+        SseEventPublisher publisher,
+        StreamRuneProperties properties,
+        ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>
+            relayHealthProvider) {
+      SseEventFeed feed =
+          new SseEventFeed(eventStore, publisher, properties.sse().pollingInterval());
+      relayHealthProvider.ifAvailable(c -> c.registerSseEventFeed(feed));
+      return feed;
+    }
+
+    /**
+     * Starts the auto-configured {@link SseEventFeed} on context refresh, before the web server
+     * accepts requests, and stops it on context close, after the web server has drained and the
+     * controller has ended its open streams. Conditional on the auto-configured bean name, so a
+     * feed the application declares (and starts and stops itself) is never started twice.
+     *
+     * <p>The feed and Spring Boot's web server start in the same lifecycle phase ({@link
+     * RunnerLifecycle#PHASE}); see there for why the feed comes first.
+     */
+    @Bean
+    @ConditionalOnBean(name = "streamRuneSseEventFeed")
+    public RunnerLifecycle streamRuneSseEventFeedLifecycle(
+        @Qualifier("streamRuneSseEventFeed") SseEventFeed feed) {
+      return new RunnerLifecycle("SseEventFeed", feed::start, feed::close);
     }
   }
 

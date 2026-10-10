@@ -48,6 +48,12 @@ class SseControllerTest {
     return envelope;
   }
 
+  private static EventEnvelope envelope(StreamId stream, long offset, DomainEvent event) {
+    var envelope = envelope(offset, event);
+    when(envelope.streamId()).thenReturn(stream);
+    return envelope;
+  }
+
   @Test
   void deniedStreamIsRejectedAndNeverSubscribes() {
     // An unauthorized caller must be rejected with 403 and never subscribed.
@@ -288,6 +294,90 @@ class SseControllerTest {
   }
 
   @Test
+  void anEventDeliveredWhileTheClientIsBeingRegisteredIsWrittenAheadOfTheOpeningFrame() {
+    // The publisher delivers an event to the client before the registration returns. The sink
+    // takes it at once, so it is the frame before the opening comment: it is not lost, and the
+    // comment still comes after the registration.
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void subscribe(
+              StreamId streamId,
+              SseSubscriber subscriber,
+              java.util.function.Consumer<Throwable> onDisconnect) {
+            subscriber.send(envelope(1, new ProductCreated("product-early")));
+          }
+
+          @Override
+          public void unsubscribe(StreamId streamId, SseSubscriber subscriber) {}
+        };
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+
+    StepVerifier.create(controller.stream("cart", "cart-early", List.of()))
+        .assertNext(frame -> assertEquals("1", frame.getId()))
+        .assertNext(frame -> assertSame(SseController.KEEP_ALIVE, frame))
+        .thenCancel()
+        .verify(java.time.Duration.ofSeconds(5));
+  }
+
+  @Test
+  void aStreamOpenedAfterTheShutdownBeganIsAnsweredCompletedAndNeverSubscribed() {
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    controller.completeOpenStreams();
+
+    StepVerifier.create(controller.stream("cart", "cart-late", List.of()))
+        .expectComplete()
+        .verify(java.time.Duration.ofSeconds(5));
+
+    verify(publisher, never()).subscribe(any(), any(), any());
+    assertEquals(0, controller.openStreamCount());
+  }
+
+  /**
+   * Pins the look at the shutdown flag that follows the registration. The controller subscribes the
+   * client before it adds the stream to the open streams, so a shutdown that runs during the
+   * subscription takes its snapshot without this stream; the stream then sees the flag and ends
+   * itself. Without that second look the stream stays open and subscribed.
+   *
+   * <p>The outcome alone (completed, unsubscribed) does not tell the two steps' order apart: a
+   * controller that adds the stream before it subscribes reaches it through the shutdown's
+   * snapshot. What this test adds is that no stream registered in that order is missed.
+   */
+  @Test
+  void aStreamTheShutdownsSnapshotMissedSeesTheFlagAfterItsRegistrationAndEndsItself() {
+    var controllerRef = new AtomicReference<SseController>();
+    var subscribed = new AtomicReference<SseEventPublisher.SseSubscriber>();
+    var unsubscribed = new AtomicReference<SseEventPublisher.SseSubscriber>();
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void subscribe(
+              StreamId streamId,
+              SseSubscriber subscriber,
+              java.util.function.Consumer<Throwable> onDisconnect) {
+            subscribed.set(subscriber);
+            controllerRef.get().completeOpenStreams();
+          }
+
+          @Override
+          public void unsubscribe(StreamId streamId, SseSubscriber subscriber) {
+            unsubscribed.set(subscriber);
+          }
+        };
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    controllerRef.set(controller);
+
+    StepVerifier.create(controller.stream("cart", "cart-racing", List.of()))
+        .expectComplete()
+        .verify(java.time.Duration.ofSeconds(5));
+
+    assertNotNull(subscribed.get());
+    assertSame(subscribed.get(), unsubscribed.get(), "the client is unsubscribed again");
+    assertEquals(0, controller.openStreamCount());
+  }
+
+  @Test
   void disposingFluxUnsubscribesFromPublisher() {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
@@ -310,8 +400,10 @@ class SseControllerTest {
 
     var event = new ProductCreated("product-1");
 
-    StepVerifier.create(controller.stream("cart", "cart-3", List.of()).take(1))
-        .then(() -> realPublisher.publish(cartStream("cart-3"), envelope(99L, event)))
+    StepVerifier.create(controller.stream("cart", "cart-3", List.of()).take(2))
+        // The stream opens with the comment frame, emitted once the client is registered.
+        .assertNext(sse -> assertSame(SseController.KEEP_ALIVE, sse))
+        .then(() -> realPublisher.publish(envelope(cartStream("cart-3"), 99L, event)))
         .assertNext(
             sse -> {
               // Framework-serialized event: id = global offset, data = full domain event.
@@ -364,6 +456,7 @@ class SseControllerTest {
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
     StepVerifier.create(controller.stream("cart", "cart-evicted", List.of()))
+        .assertNext(SseControllerTest::assertKeepAliveFrame)
         .then(
             () -> {
               var hookCaptor = ArgumentCaptor.forClass(java.util.function.Consumer.class);
@@ -396,8 +489,10 @@ class SseControllerTest {
             java.time.Duration.ofMinutes(5),
             java.time.Duration.ofMillis(50));
 
-    // No domain event is ever published — every frame below is a keepalive.
-    StepVerifier.create(controller.stream("cart", "cart-keepalive", List.of()).take(2))
+    // No domain event is ever published — every frame below is a keepalive: the opening frame and
+    // two ticks.
+    StepVerifier.create(controller.stream("cart", "cart-keepalive", List.of()).take(3))
+        .assertNext(SseControllerTest::assertKeepAliveFrame)
         .assertNext(SseControllerTest::assertKeepAliveFrame)
         .assertNext(SseControllerTest::assertKeepAliveFrame)
         .expectComplete()
@@ -409,7 +504,7 @@ class SseControllerTest {
   private static void assertKeepAliveFrame(Event<?> frame) {
     assertEquals("keepalive", frame.getComment(), "a keepalive must be a comment frame");
     // TextStreamCodec writes CharSequence data verbatim, so an EMPTY payload emits no data: line at
-    // all — the wire form is a bare ":keepalive" comment that every SSE client ignores.
+    // all — the wire form is a bare ": keepalive" comment that every SSE client ignores.
     assertEquals("", frame.getData(), "a keepalive must carry an empty payload");
     assertNull(frame.getId(), "a keepalive must not disturb the client's Last-Event-ID");
     assertNull(frame.getName());
@@ -431,10 +526,11 @@ class SseControllerTest {
     // subscription step has been processed: any hiccup >10ms between the two put the onComplete
     // INSIDE the window and failed with "expected no event: onComplete()" (reproduced here by
     // inserting a 20ms pause after expectSubscription). Both halves of the assertion survive, now
-    // exactly rather than probabilistically: nothing is emitted through 99ms, and the completion
-    // lands the moment the clock crosses the configured 100ms.
+    // exactly rather than probabilistically: nothing but the opening frame is emitted through
+    // 99ms, and the completion lands the moment the clock crosses the configured 100ms.
     StepVerifier.withVirtualTime(() -> controller.stream("cart", "cart-timeout", List.of()))
         .expectSubscription()
+        .assertNext(SseControllerTest::assertKeepAliveFrame)
         .expectNoEvent(java.time.Duration.ofMillis(99))
         .thenAwait(java.time.Duration.ofMillis(1))
         .expectComplete()
@@ -444,9 +540,10 @@ class SseControllerTest {
   }
 
   @Test
-  void keepAliveDisabledByZeroInterval_streamStaysSilent() {
+  void keepAliveDisabledByZeroInterval_theOpeningFrameIsTheOnlyComment() {
     // Zero/negative disables the keepalive, leaving the timeout as the sole reaper (the documented
-    // knob semantics, shared with Spring and Quarkus).
+    // knob semantics, shared with Spring and Quarkus). The opening frame is not a keepalive tick:
+    // it is written whatever the interval.
     var publisher = mock(SseEventPublisher.class);
     var controller =
         new SseController(
@@ -460,6 +557,7 @@ class SseControllerTest {
     // scheduled.
     StepVerifier.create(controller.stream("cart", "cart-no-keepalive", List.of()))
         .expectSubscription()
+        .assertNext(SseControllerTest::assertKeepAliveFrame)
         .expectNoEvent(java.time.Duration.ofMillis(300))
         .thenCancel()
         .verify(java.time.Duration.ofSeconds(5));
@@ -481,7 +579,7 @@ class SseControllerTest {
     // sink.next; only a JVM-fatal error (a LinkageError here) escapes it to the tick's catch.
     var cause = new LinkageError("client gone");
 
-    var subscriber = new ThrowingSubscriber(Callback.NEXT, cause);
+    var subscriber = new ThrowingSubscriber(Callback.TICK, cause);
     try (var warnings = new CapturedSseControllerLog()) {
       controller.stream("cart", "cart-dead-tick", List.of()).subscribe(subscriber);
 
@@ -534,13 +632,39 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller =
         new SseController(publisher, ALLOW_ALL, ANONYMOUS, null, java.time.Duration.ofMillis(50));
-    var subscriber = new ThrowingSubscriber(Callback.NEXT, new LinkageError("client gone"));
+    var subscriber = new ThrowingSubscriber(Callback.TICK, new LinkageError("client gone"));
     var droppedKeepAlives = countDroppedKeepAlives();
     try (var warnings = new CapturedSseControllerLog()) {
       controller.stream("cart", "cart-fatal-tick", List.of()).subscribe(subscriber);
       assertEquals(1, warnings.awaitMessages(1).size(), "the first keepalive tick must fail");
 
       assertStreamReleased(publisher, "cart-fatal-tick", droppedKeepAlives);
+    } finally {
+      Hooks.resetOnNextDropped();
+      subscriber.cancel();
+    }
+  }
+
+  @Test
+  void aFatalOpeningFrameFailureReleasesThePublisherSubscriptionLikeAFailedKeepAliveTick()
+      throws InterruptedException {
+    // The opening frame is the first write to the client. When it fails the client is already
+    // registered with the publisher, so the stream must be torn down the way a failed tick tears
+    // it down.
+    var publisher = mock(SseEventPublisher.class);
+    var controller =
+        new SseController(publisher, ALLOW_ALL, ANONYMOUS, null, java.time.Duration.ofMillis(50));
+    var cause = new LinkageError("client gone");
+    var subscriber = new ThrowingSubscriber(Callback.NEXT, cause);
+    var droppedKeepAlives = countDroppedKeepAlives();
+    try (var warnings = new CapturedSseControllerLog()) {
+      controller.stream("cart", "cart-fatal-opening", List.of()).subscribe(subscriber);
+
+      assertEquals(
+          List.of("Evicting an SSE subscriber after a failed opening frame: " + cause),
+          warnings.awaitMessages(1));
+      assertStreamReleased(publisher, "cart-fatal-opening", droppedKeepAlives);
+      assertEquals(0, controller.openStreamCount());
     } finally {
       Hooks.resetOnNextDropped();
       subscriber.cancel();
@@ -613,18 +737,21 @@ class SseControllerTest {
 
   private enum Callback {
     NEXT,
+    TICK,
     EVENT,
     ERROR
   }
 
   /**
    * A downstream that throws from one callback, so the controller's sink call driving it ({@code
-   * next} or {@code error}) throws in turn: the failure each WARN reports. NEXT throws for
-   * keepalive frames only, EVENT for domain-event frames only.
+   * next} or {@code error}) throws in turn: the failure each WARN reports. NEXT throws for every
+   * keepalive frame, so for the opening frame; TICK lets the opening frame pass and throws for the
+   * keepalive frames after it, the periodic ticks; EVENT throws for domain-event frames only.
    */
   private static final class ThrowingSubscriber implements reactor.core.CoreSubscriber<Event<?>> {
     private final Callback callback;
     private final Throwable cause;
+    private final AtomicInteger keepAlives = new AtomicInteger();
     private volatile org.reactivestreams.Subscription subscription;
 
     ThrowingSubscriber(Callback callback, Throwable cause) {
@@ -647,10 +774,14 @@ class SseControllerTest {
 
     @Override
     public void onNext(Event<?> item) {
-      if (callback == Callback.NEXT && item == SseController.KEEP_ALIVE) {
-        sneakyThrow(cause);
+      if (item != SseController.KEEP_ALIVE) {
+        if (callback == Callback.EVENT) {
+          sneakyThrow(cause);
+        }
+        return;
       }
-      if (callback == Callback.EVENT && item != SseController.KEEP_ALIVE) {
+      int seen = keepAlives.incrementAndGet();
+      if (callback == Callback.NEXT || (callback == Callback.TICK && seen > 1)) {
         sneakyThrow(cause);
       }
     }

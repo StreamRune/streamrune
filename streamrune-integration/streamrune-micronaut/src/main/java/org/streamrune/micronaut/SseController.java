@@ -10,9 +10,12 @@ import io.micronaut.http.annotation.PathVariable;
 import io.micronaut.http.annotation.Produces;
 import io.micronaut.http.exceptions.HttpStatusException;
 import io.micronaut.http.sse.Event;
+import jakarta.annotation.PreDestroy;
 import jakarta.inject.Inject;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
@@ -39,6 +42,16 @@ import reactor.core.scheduler.Schedulers;
  * <p>Endpoint: {@code GET /api/sse/{aggregateType}/{aggregateId}} — the two parts of the typed
  * {@link StreamId}; an invalid part is answered with {@code 400 Bad Request}.
  *
+ * <p><b>Where the frames come from.</b> {@link SseEventFeedLifecycle} runs an {@link
+ * org.streamrune.runtime.SseEventFeed} beside this controller. It starts at the head of the global
+ * stream when the application starts and publishes every event stored from then on to the
+ * subscribers of the event's own stream, every {@code streamrune.sse.polling-interval}. Delivery is
+ * live, best-effort and at-most-once: a frame reaches only the clients connected at that moment,
+ * nothing is redelivered after a reconnect, and {@code Last-Event-ID} is not honoured. When the
+ * application context closes, every open stream is completed and what it holds is released. The
+ * embedded server stops before the context destroys its beans, so a client connected over HTTP has
+ * by then seen the server close its connection; an {@code EventSource} reconnects either way.
+ *
  * <p>Each SSE event carries the full domain event as JSON in the {@code data} field and the global
  * offset in the {@code id} field, matching the Spring integration's {@code SseController}.
  * Micronaut serializes the {@link Event} wrapper to the SSE wire format — no hand-rolled framing.
@@ -54,7 +67,15 @@ import reactor.core.scheduler.Schedulers;
  * bound). Worst case a slow client holds this buffer's items PLUS the publisher's queue — decrypted
  * domain events in both — before either bound fires.
  *
- * <p><b>Dead-client reaping (ported by).</b> Every stream gets a <em>finite</em> lifetime ({@code
+ * <p><b>Opening frame.</b> The last step of a subscription writes one {@code : keepalive} comment
+ * frame, the same frame on the wire as the Spring and Quarkus integrations write. It commits the
+ * response: the client sees the status line, the headers and this frame as soon as it is
+ * subscribed, not with the first event or the first periodic keepalive. It is emitted after the
+ * client is registered with the {@link SseEventPublisher}, and nothing of the response is written
+ * before the first frame: a client that has received the first bytes of the response receives every
+ * event of the stream published from then on, for as long as it stays connected.
+ *
+ * <p><b>Dead-client reaping.</b> Every stream gets a <em>finite</em> lifetime ({@code
  * streamrune.sse.timeout}, default 5m) and a periodic keepalive comment frame ({@code
  * streamrune.sse.keep-alive-interval}, default 30s). A half-open TCP client (a mobile/NAT drop with
  * no FIN/RST) on an idle stream produces no writes on its own, and {@link #SLOW_CLIENT_BUFFER} only
@@ -71,17 +92,29 @@ import reactor.core.scheduler.Schedulers;
  * RuntimeException}, but rethrows a JVM-fatal error ({@code LinkageError}, {@code
  * VirtualMachineError}) <em>before</em> releasing that flag. From then on every {@code sink.error}
  * merely records the error: no terminal signal is delivered and {@code onDispose} never runs, so a
- * stream whose keepalive tick or delivery hit such an error kept its publisher subscription and its
- * ticker for the life of the JVM. Reactive Streams §2.13 says a subscriber that throws from {@code
- * onNext} must be considered cancelled, so both paths that observe the failure (the keepalive tick
- * and the publisher's disconnect hook) run the stream's cancel teardown themselves after attempting
- * {@code sink.error}. The teardown is idempotent: on the normal path {@code sink.error} has already
- * run it through {@code onDispose}.
+ * stream whose keepalive tick or delivery hit such an error would keep its publisher subscription
+ * and its ticker for the life of the JVM. Reactive Streams §2.13 says a subscriber that throws from
+ * {@code onNext} must be considered cancelled, so both paths that observe the failure (the
+ * keepalive tick and the publisher's disconnect hook) run the stream's cancel teardown themselves
+ * after attempting {@code sink.error}. The teardown is idempotent: on the normal path {@code
+ * sink.error} has already run it through {@code onDispose}.
  *
  * <p><b>Security:</b> registered only when {@code streamrune.sse.enabled=true}. Access is
  * authorized by the {@link SseAuthorizer} bean using the caller and the requested {@link StreamId};
  * a denied request is rejected with {@code 403 Forbidden}. When SSE is enabled but the application
  * provides no authorizer, the framework installs a fail-closed deny-all authorizer.
+ *
+ * <p><b>Threads.</b> The controller declares no executor: it runs, and calls the authorizer, on the
+ * thread the request filter chain leaves the request on. With the framework's {@link
+ * StreamRuneContextFilter} that is a thread of the blocking executor, inside the filter's binding
+ * of the request context, so an authorizer may read a database. An application that replaces that
+ * filter chooses the thread itself: a filter that stays on a Netty event loop takes the authorizer
+ * there, and such an application runs its filter on the blocking executor
+ * ({@code @ExecuteOn(TaskExecutors.BLOCKING)}) or keeps its authorizer from blocking. An
+ * application that keeps the framework's filter and adds one behind it that runs on another
+ * executor gives up the guarantee too: the controller and the authorizer can run on that executor's
+ * thread, outside the framework filter's binding of the request context, and which thread a given
+ * request goes on from depends on timing inside Micronaut.
  *
  * <p><b>Caller identity.</b> The caller handed to the authorizer is resolved by the same {@link
  * RequestIdentityPolicy} bean the {@link StreamRuneContextFilter} binds {@code
@@ -89,10 +122,9 @@ import reactor.core.scheduler.Schedulers;
  * same user: the authenticated principal when an {@link AuthenticatedUserResolver} is available
  * (the {@code X-User-Id} header ignored), the {@code X-User-Id} header only in the explicit
  * trusted-gateway mode ({@code streamrune.security.trust-user-id-header=true}), and otherwise
- * nobody ({@code null}). This endpoint used to ignore the header even behind a trusted gateway, so
- * it authorized a different caller than the commands of the same request. Both read the header
- * through {@link StreamRuneContextFilter#userIdHeaderValues}, every value as received, so a
- * repeated {@code X-User-Id} cannot resolve to one caller here and another there.
+ * nobody ({@code null}). Both read the header through {@link
+ * StreamRuneContextFilter#userIdHeaderValues}, every value as received, so a repeated {@code
+ * X-User-Id} cannot resolve to one caller here and another there.
  */
 @Controller("/api/sse")
 @Requires(property = "streamrune.sse.enabled", value = "true")
@@ -104,11 +136,12 @@ public class SseController {
   static final int SLOW_CLIENT_BUFFER = 256;
 
   /**
-   * The single keepalive frame instance. Comment-only: the data payload is the EMPTY string, which
-   * {@code TextStreamCodec} writes verbatim as a {@code CharSequence} — zero bytes, so no {@code
-   * data:} line is emitted at all and the wire form is a bare {@code :keepalive} comment, ignored
-   * by every SSE client. It carries no id, so it never disturbs a client's {@code Last-Event-ID}
-   * resume position.
+   * The single keepalive frame instance, written once when a stream opens ({@link
+   * #emitOpeningFrame}) and then every keepalive interval. Comment-only: the data payload is the
+   * EMPTY string, which {@code TextStreamCodec} writes verbatim as a {@code CharSequence} — zero
+   * bytes, so no {@code data:} line is emitted at all and the wire form is a bare {@code :
+   * keepalive} comment, ignored by every SSE client. It carries no id, so it never disturbs a
+   * client's {@code Last-Event-ID} resume position.
    */
   static final Event<?> KEEP_ALIVE = Event.of("").comment("keepalive");
 
@@ -117,6 +150,16 @@ public class SseController {
   private final RequestIdentityPolicy identityPolicy;
   private final Duration timeout;
   private final Duration keepAliveInterval;
+
+  /** The open streams, tracked so the shutdown can complete them. */
+  private final Set<FluxSink<Event<?>>> openStreams = ConcurrentHashMap.newKeySet();
+
+  /**
+   * Set once the application context closes; a stream opened from then on is answered already
+   * complete. Written before the shutdown takes its snapshot of {@link #openStreams}, and read by a
+   * stream after it added itself to them, so a stream is either in the snapshot or sees the flag.
+   */
+  private volatile boolean shuttingDown;
 
   /**
    * Creates the SSE controller.
@@ -170,6 +213,35 @@ public class SseController {
   }
 
   /**
+   * Completes every open stream when the application context closes, so its subscription, keepalive
+   * and buffered events are released with the context instead of with the connection. The embedded
+   * server has stopped by then and closed the clients' connections (an {@code EventSource}
+   * reconnects, reaching another replica); a stream served by another transport sees the
+   * completion. A stream opened from here on is answered already complete.
+   */
+  @PreDestroy
+  void completeOpenStreams() {
+    shuttingDown = true;
+    List<FluxSink<Event<?>>> open = List.copyOf(openStreams);
+    if (open.isEmpty()) {
+      return;
+    }
+    log.info("Completing {} open SSE stream(s) as the application shuts down", open.size());
+    for (FluxSink<Event<?>> sink : open) {
+      try {
+        sink.complete();
+      } catch (RuntimeException e) {
+        log.warn("Failed to complete an SSE stream at shutdown: {}", e.toString());
+      }
+    }
+  }
+
+  /** The number of streams currently open; for tests. */
+  int openStreamCount() {
+    return openStreams.size();
+  }
+
+  /**
    * Opens an SSE stream of one aggregate's events: {@code GET
    * /api/sse/{aggregateType}/{aggregateId}} (for example {@code /api/sse/order/o-1}). Stays open
    * until the client disconnects.
@@ -216,31 +288,54 @@ public class SseController {
     Flux<Event<?>> stream =
         Flux.<Event<?>>create(
                 sink -> {
-                  // This stream's ONE teardown (publisher subscription + keepalive ticker),
-                  // run by onDispose on every normal termination and explicitly by terminate()
-                  // when a JVM-fatal error has poisoned the sink. Idempotent; a resource added
-                  // after it ran is disposed on the spot.
+                  // This stream's ONE teardown (publisher subscription, open-stream entry,
+                  // keepalive ticker), run by onDispose on every normal termination and explicitly
+                  // by terminate() when a JVM-fatal error has poisoned the sink. Idempotent; a
+                  // resource added after it ran is disposed on the spot.
                   Disposable.Composite resources = Disposables.composite();
+                  // Attached first, before anything is acquired: whatever ends the stream from
+                  // here on, a failure of a later step of this set-up included, releases what the
+                  // stream holds.
+                  sink.onDispose(resources);
+                  if (shuttingDown) {
+                    // The application is shutting down: a stream that is already complete makes
+                    // the client reconnect (elsewhere) and holds nothing here.
+                    sink.complete();
+                    return;
+                  }
                   Consumer<Throwable> terminate = cause -> terminate(sink, sid, cause, resources);
                   SseEventPublisher.SseSubscriber subscriber =
                       envelope ->
                           sink.next(
                               Event.of(envelope.event())
                                   .id(String.valueOf(envelope.globalOffset().value())));
-                  resources.add(() -> publisher.unsubscribe(sid, subscriber));
                   // Without a disconnect hook the publisher's slow-consumer eviction
                   // unregisters the subscriber but never terminates the Flux, so the client keeps
                   // an open, apparently-healthy stream that receives zero further events while its
                   // keepalive still succeeds (it is slow, not dead) — a permanent silent event gap
                   // plus a leaked sink, ticker and FD. sink.error() is a terminal signal
-                  // Flux.create settles for us, and it fires onDispose below, which unsubscribes
+                  // Flux.create settles for us, and it fires onDispose, which unsubscribes
                   // and cancels the ticker (terminate() also runs that teardown itself, for the
                   // poisoned-sink case where sink.error() is swallowed).
                   publisher.subscribe(sid, subscriber, terminate);
+                  resources.add(() -> publisher.unsubscribe(sid, subscriber));
+                  openStreams.add(sink);
+                  resources.add(() -> openStreams.remove(sink));
+                  if (shuttingDown) {
+                    // The shutdown began after the first look at the flag. It may have taken its
+                    // snapshot of the open streams before this one was added, so the stream ends
+                    // itself; completing a stream the shutdown also completes is harmless. The
+                    // flag is set before the snapshot is taken and read here after the stream was
+                    // added, so one of the two always sees the other.
+                    sink.complete();
+                    return;
+                  }
                   // Flux.create serializes the sink, so the keepalive tick and the delivery worker
                   // may both call next() without extra locking.
                   resources.add(scheduleKeepAlive(sink, terminate));
-                  sink.onDispose(resources);
+                  // Last, when the client is registered with the publisher and the teardown is in
+                  // place: the frame that commits the response.
+                  emitOpeningFrame(sink, terminate);
                 },
                 FluxSink.OverflowStrategy.ERROR)
             .onBackpressureBuffer(SLOW_CLIENT_BUFFER);
@@ -295,18 +390,49 @@ public class SseController {
   }
 
   /**
+   * Writes the comment frame that opens a stream: the {@link #KEEP_ALIVE} frame, once, as the last
+   * step of the subscription.
+   *
+   * <p><b>What it guarantees.</b> The server writes the status line and the headers of the response
+   * with the first frame of the stream, and every frame comes out of this sink. This one is emitted
+   * after {@link SseEventPublisher#subscribe} returned, so the first bytes of the response cannot
+   * reach the client before the client is registered: a client that has received them receives
+   * every event of the stream published from then on, for as long as it stays connected. Without
+   * this frame the response would be committed by the first event or the first periodic keepalive,
+   * up to a whole {@code streamrune.sse.keep-alive-interval} later.
+   *
+   * <p>An event published between the registration and this call is emitted by the delivery worker
+   * first and is the frame before this one; none is lost, and events keep their order because one
+   * worker delivers them. The sink is serialized, so the two emissions need no lock.
+   *
+   * <p>A failed emission ends the stream like a failed keepalive tick, through {@code terminate}. A
+   * write the socket refuses is reported by the server as a cancellation, which disposes the
+   * stream's resources and with them the publisher subscription.
+   */
+  private static void emitOpeningFrame(FluxSink<Event<?>> sink, Consumer<Throwable> terminate) {
+    try {
+      sink.next(KEEP_ALIVE);
+    } catch (Throwable t) {
+      // Only a JVM-fatal error escapes the serialized sink's next(), and it leaves the sink
+      // poisoned: terminate() therefore tears the stream down itself.
+      log.warn("Evicting an SSE subscriber after a failed opening frame: {}", t.toString());
+      terminate.accept(t);
+    }
+  }
+
+  /**
    * Starts this stream's keepalive ticks, or returns a no-op {@link Disposable} when the keepalive
    * is disabled. Each subscriber gets its OWN periodic task, so a throwing tick can only stop that
-   * stream's keepalive — never every other subscriber's (the failure mode the Spring integration
-   * had to fix, whose reaper is a single shared tick over all emitters). A failed tick terminates
-   * the stream through {@code terminate}, which also disposes this ticker.
+   * stream's keepalive — never every other subscriber's (the Spring integration, whose reaper is a
+   * single shared tick over all emitters, guards that tick against it instead). A failed tick
+   * terminates the stream through {@code terminate}, which also disposes this ticker.
    */
   private Disposable scheduleKeepAlive(FluxSink<Event<?>> sink, Consumer<Throwable> terminate) {
     if (keepAliveInterval == null) {
       return () -> {}; // nothing scheduled, nothing to cancel
     }
     long intervalMillis = keepAliveInterval.toMillis();
-    // Initial delay = interval so a keepalive never fires before the client has had a full window.
+    // Initial delay = interval: the opening frame is this stream's write at time zero.
     return Schedulers.parallel()
         .schedulePeriodically(
             () -> {

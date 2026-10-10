@@ -130,7 +130,9 @@ class ProjectionFactoryTest {
             Duration.ofMinutes(5),
             Duration.ofSeconds(30),
             // event-store.statement-timeout
-            java.time.Duration.ofSeconds(30));
+            java.time.Duration.ofSeconds(30),
+            // sse.polling-interval
+            Duration.ofSeconds(1));
 
     MultiProjectionRunner runner =
         factory.multiProjectionRunner(

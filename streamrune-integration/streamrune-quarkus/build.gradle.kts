@@ -46,6 +46,8 @@ dependencies {
     testImplementation(libs.jakarta.validation.api)
     testImplementation(libs.quarkus.security)
     testImplementation(libs.quarkus.rest)
+    // SseWireFormatTest serves SseController through Quarkus REST over HTTP (QuarkusRestTestServer).
+    testImplementation(libs.quarkus.rest.processor)
     testImplementation(libs.quarkus.smallrye.health)
 
     // Testing

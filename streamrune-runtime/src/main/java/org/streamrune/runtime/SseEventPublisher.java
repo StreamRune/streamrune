@@ -17,6 +17,12 @@ import org.streamrune.core.types.StreamId;
 /**
  * Event publisher for Server-Sent Events.
  *
+ * <p><b>Who publishes.</b> When {@code streamrune.sse.enabled=true} the Spring, Quarkus and
+ * Micronaut integrations run an {@link SseEventFeed} that publishes every event stored from then
+ * on, so an application does not call {@link #publish} for the shipped endpoint — a second
+ * publisher would deliver every frame twice. An event is always routed by its own {@link
+ * EventEnvelope#streamId()}: a subscriber of one stream cannot be handed the event of another.
+ *
  * <p>Fan-out is asynchronous and isolated per subscriber. Each subscriber owns a bounded queue and
  * a dedicated virtual-thread delivery worker; {@link #publish} only enqueues (never blocks) and
  * then returns, so a slow or stuck subscriber can never stall delivery to other subscribers nor the
@@ -52,9 +58,8 @@ import org.streamrune.core.types.StreamId;
  * buffered items — decrypted domain events in both — before either bound fires. Spring has no
  * second buffer, so this queue is its only bound.
  *
- * <p>This class is {@link AutoCloseable}: {@link #close()} stops every worker. The no-argument
- * constructor keeps the publisher drop-in for the existing DI wiring (Spring/Quarkus/Micronaut all
- * construct it with no arguments); workers are created lazily per subscription.
+ * <p>This class is {@link AutoCloseable}: {@link #close()} stops every worker. The integrations
+ * construct it with no arguments; workers are created lazily per subscription.
  */
 public class SseEventPublisher implements AutoCloseable {
 
@@ -129,8 +134,10 @@ public class SseEventPublisher implements AutoCloseable {
    * </ul>
    *
    * <p>The hook must therefore be non-blocking and prompt: {@link #publish}'s "only enqueues, never
-   * blocks" guarantee extends only as far as the hook honours it. Complete or fail the transport
-   * handle and return; do not take a lock a stalled writer may hold, and do not perform I/O.
+   * blocks" guarantee extends only as far as the hook honours it. Release what the subscriber holds
+   * and signal the transport handle without waiting; do not take a lock a stalled writer may hold,
+   * and do not perform I/O. A transport whose completion waits for a write in progress (Spring's
+   * {@code SseEmitter}) is completed from a thread of the stream's own.
    *
    * @param streamId the stream to subscribe to
    * @param subscriber the subscriber to deliver events to
@@ -185,16 +192,18 @@ public class SseEventPublisher implements AutoCloseable {
   }
 
   /**
-   * Enqueues the envelope for every subscriber of the stream and returns immediately.
+   * Enqueues the envelope for every subscriber of the envelope's own stream ({@link
+   * EventEnvelope#streamId()}) and returns immediately. The stream is not a parameter, so an event
+   * cannot be routed to the subscribers of a stream it does not belong to.
    *
    * <p>Delivery happens asynchronously on each subscriber's own worker thread, so a slow or blocked
    * subscriber never delays any other subscriber or this caller. A subscriber whose bounded queue
    * is full is evicted per the {@linkplain SseEventPublisher class-level} slow-consumer policy.
    *
-   * @param streamId the stream the envelope belongs to
-   * @param envelope the event to deliver
+   * @param envelope the event to deliver to the subscribers of its stream
    */
-  public void publish(StreamId streamId, EventEnvelope envelope) {
+  public void publish(EventEnvelope envelope) {
+    StreamId streamId = envelope.streamId();
     var list = subscribers.get(streamId);
     if (list == null) {
       return;
@@ -308,13 +317,17 @@ public class SseEventPublisher implements AutoCloseable {
           } catch (Throwable t) {
             // Throwable, not Exception. An Error out of send (a NoClassDefFoundError or
             // ExceptionInInitializerError rethrown through Jackson inside the transport's send, an
-            // OutOfMemoryError) used to end this worker WITHOUT evict(): the subscription stayed
-            // registered and running, its disconnect hook never fired, and the transport's
-            // keepalives kept the connection looking healthy, so the client never reconnected and
-            // received nothing further (the silent gap). Evict first so the hook tears
-            // the transport down, then let an Error propagate: it is not this loop's to swallow.
+            // OutOfMemoryError) that ended this worker WITHOUT evict() would leave the
+            // subscription registered and running, its disconnect hook unfired and the transport's
+            // keepalives keeping the connection healthy: the client would never reconnect and
+            // receive nothing further (the silent gap). Evict first so the hook tears the transport
+            // down, then let an Error propagate: it is not this loop's to swallow.
+            // A transport's failure text can carry what the client sent; like every value in these
+            // log lines it goes through the sanitizer (CWE-117).
             log.warn(
-                "SSE subscriber send failed for stream {}: {}", logSafeStreamId, t.getMessage());
+                "SSE subscriber send failed for stream {}: {}",
+                logSafeStreamId,
+                LogSanitizer.sanitizeForLog(t.toString()));
             evict(this, t);
             if (t instanceof Error error) {
               throw error;
@@ -332,10 +345,11 @@ public class SseEventPublisher implements AutoCloseable {
      *
      * <p><b>Never interrupts the calling thread.</b> On the send-failure path the worker evicts
      * ITSELF ({@code deliverLoop} → {@code evict} → {@code fail} → {@code stop}), so an
-     * unconditional {@code worker.interrupt()} set the flag on the very thread that then runs the
-     * disconnect hook — and the hook's job is interruptible work (completing an emitter, acquiring
-     * a lock, writing a final frame). The worker is returning from {@code deliverLoop} on that path
-     * anyway; the interrupt exists only to break another thread out of {@code queue.take()}.
+     * unconditional {@code worker.interrupt()} would set the flag on the very thread that then runs
+     * the disconnect hook — and the hook's job is interruptible work (completing an emitter,
+     * acquiring a lock, writing a final frame). The worker is returning from {@code deliverLoop} on
+     * that path anyway; the interrupt exists only to break another thread out of {@code
+     * queue.take()}.
      */
     void stop() {
       if (running.compareAndSet(true, false)) {
@@ -353,7 +367,10 @@ public class SseEventPublisher implements AutoCloseable {
         try {
           onDisconnect.accept(cause);
         } catch (Exception e) {
-          log.warn("SSE disconnect hook failed for stream {}: {}", logSafeStreamId, e.getMessage());
+          log.warn(
+              "SSE disconnect hook failed for stream {}: {}",
+              logSafeStreamId,
+              LogSanitizer.sanitizeForLog(e.toString()));
         }
       }
     }
@@ -367,7 +384,7 @@ public class SseEventPublisher implements AutoCloseable {
    * bounded queue fills the subscriber is evicted per the {@linkplain SseEventPublisher
    * class-level} slow-consumer policy. Throwing from {@code send} also evicts the subscriber and
    * invokes its disconnect hook; an {@link Error} does so too and is then rethrown on the delivery
-   * thread. A slow {@code send} no longer stalls other subscribers or the publisher.
+   * thread. A slow {@code send} stalls neither other subscribers nor the publisher.
    */
   @FunctionalInterface
   public interface SseSubscriber {

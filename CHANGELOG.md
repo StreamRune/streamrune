@@ -619,7 +619,28 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   process-local and never persisted.
 - Server-Sent Events `GET /api/sse/{aggregateType}/{aggregateId}` (all three integrations) is off by
   default (`streamrune.sse.enabled`); when on, every stream is denied until an `SseAuthorizer` bean
-  checks the caller against the requested `StreamId`.
+  checks the caller against the requested `StreamId`. The authorizer is called on a thread that may
+  block — the servlet request thread on Spring, a worker thread with the request scope active on
+  Quarkus, the blocking executor on Micronaut with the framework's request filter — so it can look
+  ownership up in a database, and a refusal is the `403` response. It decides once, when the stream
+  opens; `streamrune.sse.timeout` ends every stream and is the bound on how long a revoked caller
+  keeps reading. The integration feeds the endpoint itself: one
+  `SseEventFeed` per application instance, a polling subscription (`streamrune.sse.polling-interval`,
+  default `1s`) that starts at the head of the global stream with the application, keeps no stored
+  offset, never replays history, and stops with the application; open streams end with it:
+  completed before the web server stops on Spring, and on Quarkus in an application built with
+  `quarkus.shutdown.delay-enabled=true`; closed with the server on Micronaut and in a Quarkus
+  application built without that property, where a connected client also holds a graceful
+  shutdown for the whole `quarkus.shutdown.timeout`. While the endpoint is enabled every instance reads and decrypts every event of the
+  global stream. The feed is the `sse-event-feed` component of the health indicators (`DOWN` when
+  its polling thread has died, until the application restarts or calls `start()` on the feed), and an application's own `SseEventFeed` bean replaces it. Each frame carries the global offset as `id` and the decrypted event as JSON. A stream
+  opens with one `: keepalive` comment frame, written as soon as the client is subscribed, so the
+  response is committed at once and a client that has read the frame receives every event of the
+  stream stored from then on while it stays connected; the same comment is written every
+  `streamrune.sse.keep-alive-interval`. Delivery is
+  live, best-effort and at-most-once: only clients connected at that moment receive a frame, nothing
+  is redelivered and `Last-Event-ID` is not honoured. `SseEventPublisher.publish(EventEnvelope)`
+  routes an event by its own `streamId()`, so it cannot reach the subscribers of another stream.
 - Only allow-listed OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist`) reach event
   metadata. `LogSanitizer` strips control characters from every value the framework logs or persists
   as free text.
@@ -946,8 +967,8 @@ Each statement below is a property of the shipped code and holds under the state
 - **Metrics**: `stream.id` is never a metric tag; `subscriptions.listener.reconnects` cannot signal a
   dead push path — use the health detail.
 - **Integrations**: `@StreamRuneComponent` needs component scan; the `StreamRune` facade is a
-  programmatic bootstrap, not an injectable bean (inject `CommandBus`); SSE is basic — a slow
-  subscriber is disconnected; Quarkus needs Quarkus REST for the request filter and SSE and selects
+  programmatic bootstrap, not an injectable bean (inject `CommandBus`); SSE is live and not durable
+  — at-most-once to connected clients, no replay, and a slow subscriber is disconnected; Quarkus needs Quarkus REST for the request filter and SSE and selects
   crypto backends, SSE and the query cache at build time; a permanent takeover stamp failure keeps a
   leader in a WARN-and-retry standby loop rather than turning health `DOWN`.
 - **Native image**: sealed hierarchies must be registered at the sealed type in

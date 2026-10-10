@@ -52,6 +52,7 @@ import org.streamrune.runtime.LocalStripedLocker;
 import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.SimpleQueryBus;
+import org.streamrune.runtime.SseEventFeed;
 import org.streamrune.runtime.SseEventPublisher;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.runtime.gdpr.ExportSubjectDataService;
@@ -99,6 +100,12 @@ public class StreamRuneMicronautModule {
       "streamRuneSagaDeadLetterRetentionSweeper";
   static final String FRAMEWORK_DEAD_LETTER_RETENTION_SWEEPER =
       "streamRuneDeadLetterRetentionSweeper";
+
+  /**
+   * The framework's Server-Sent Events feed. {@link SseEventFeedLifecycle} injects it by this name,
+   * so a feed the application declares is never started by the framework.
+   */
+  static final String FRAMEWORK_SSE_EVENT_FEED = "streamRuneSseEventFeed";
 
   /** Creates a {@link StreamRuneMicronautModule}. */
   public StreamRuneMicronautModule() {}
@@ -425,7 +432,9 @@ public class StreamRuneMicronautModule {
   }
 
   /**
-   * Creates an {@link SseEventPublisher} for Server-Sent Events.
+   * Creates the {@link SseEventPublisher} the Server-Sent Events endpoint subscribes its clients
+   * to. When the endpoint is enabled, {@link SseEventFeedLifecycle} publishes the stored events to
+   * it.
    *
    * <p>{@code @Bean(preDestroy = "close")} is required — Micronaut does not auto-close a
    * {@code @Factory}-produced {@link AutoCloseable} singleton without it (see this class's other
@@ -442,6 +451,53 @@ public class StreamRuneMicronautModule {
   @Bean(preDestroy = "close")
   public SseEventPublisher sseEventPublisher() {
     return new SseEventPublisher();
+  }
+
+  /**
+   * Creates the feed of the Server-Sent Events endpoint when {@code streamrune.sse.enabled=true}: a
+   * polling subscription that starts at the head of the global stream and publishes every event
+   * stored from then on to the subscribers of the event's own stream, every {@code
+   * streamrune.sse.polling-interval}. Live, best-effort and at-most-once — see {@link
+   * SseEventFeed}. Started and stopped by {@link SseEventFeedLifecycle}.
+   *
+   * <p>The feed is registered with the {@link
+   * org.streamrune.runtime.BackgroundRelayHealthContributor} as {@code sse-event-feed}, so the
+   * health indicator reports {@code DOWN} once its polling thread has died. A {@code
+   * streamrune.sse.polling-interval} below one millisecond fails the start-up here.
+   *
+   * <p>An application that declares its own {@link SseEventFeed} bean replaces this one and starts
+   * and stops its feed itself: {@link SseEventFeedLifecycle} takes the framework's bean by name.
+   *
+   * @param eventStore the store whose global stream the feed reads
+   * @param publisher the fan-out the SSE controller subscribes its clients to
+   * @param properties supplies {@code streamrune.sse.polling-interval}
+   * @param relayHealth the health contributor the feed is registered with, when present
+   * @return a stopped {@link SseEventFeed}
+   * @throws IllegalArgumentException if the polling interval is below one millisecond
+   */
+  @Singleton
+  @Secondary
+  @Requires(property = "streamrune.sse.enabled", value = "true")
+  // Back off entirely when the application defines its own feed.
+  @Requires(missingBeans = SseEventFeed.class)
+  @Bean(preDestroy = "close")
+  @jakarta.inject.Named(FRAMEWORK_SSE_EVENT_FEED)
+  public SseEventFeed sseEventFeed(
+      EventStore eventStore,
+      SseEventPublisher publisher,
+      StreamRuneMicronautProperties properties,
+      @jakarta.annotation.Nullable
+          org.streamrune.runtime.BackgroundRelayHealthContributor relayHealth) {
+    Duration pollingInterval = properties.ssePollingInterval();
+    SseEventFeed feed =
+        new SseEventFeed(
+            eventStore,
+            publisher,
+            pollingInterval != null ? pollingInterval : SseEventFeed.DEFAULT_POLLING_INTERVAL);
+    if (relayHealth != null) {
+      relayHealth.registerSseEventFeed(feed);
+    }
+    return feed;
   }
 
   /**

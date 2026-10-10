@@ -36,7 +36,12 @@ class SseControllerTest {
   private static final SseAuthorizer ALLOW_ALL = (principal, streamId) -> true;
 
   private static EventEnvelope envelope(long offset, DomainEvent event) {
+    return envelope(null, offset, event);
+  }
+
+  private static EventEnvelope envelope(StreamId stream, long offset, DomainEvent event) {
     var envelope = mock(EventEnvelope.class);
+    when(envelope.streamId()).thenReturn(stream);
     when(envelope.globalOffset()).thenReturn(GlobalOffset.of(offset));
     when(envelope.event()).thenReturn(event);
     return envelope;
@@ -153,13 +158,17 @@ class SseControllerTest {
 
     var event = new OrderCreated("order-1");
     publisher.publish(
-        StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-3")), envelope(42L, event));
+        envelope(StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-3")), 42L, event));
 
     // Delivery is asynchronous (per-subscriber queue drained by a worker thread), so await it.
-    testSubscriber.awaitItems(1, java.time.Duration.ofSeconds(5));
+    testSubscriber.awaitItems(2, java.time.Duration.ofSeconds(5));
     testSubscriber.assertNotTerminated();
-    assertEquals(1, testSubscriber.getItems().size());
-    OutboundSseEvent item = testSubscriber.getItems().get(0);
+    assertEquals(2, testSubscriber.getItems().size());
+    assertSame(
+        SseController.KEEP_ALIVE,
+        testSubscriber.getItems().get(0),
+        "the stream opens with the comment frame, emitted once the client is registered");
+    OutboundSseEvent item = testSubscriber.getItems().get(1);
     // Framework-serialized event: id = global offset, data = full domain event as JSON.
     // No hand-rolled "id:...\ndata:..." framing — Quarkus REST writes the wire format.
     assertEquals("42", item.getId());
@@ -237,6 +246,217 @@ class SseControllerTest {
             sseSubscriberCaptor.getValue());
   }
 
+  // ── the opening frame and an event that arrives while the client is registered ──
+
+  @Test
+  void anEventDeliveredWhileTheClientIsBeingRegisteredIsEmittedAfterTheOpeningFrame()
+      throws Exception {
+    // The publisher's delivery worker already has an event for the client when the registration
+    // returns. The stream holds its send lock from before the registration until the opening
+    // frame is out, so the worker waits and the comment stays the first frame; the event is not
+    // lost.
+    var worker = new AtomicReference<Thread>();
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void subscribe(
+              StreamId streamId,
+              SseSubscriber subscriber,
+              java.util.function.Consumer<Throwable> onDisconnect) {
+            Thread delivering =
+                Thread.ofPlatform()
+                    .name("delivery-worker")
+                    .start(() -> subscriber.send(envelope(1, new OrderCreated("order-early"))));
+            worker.set(delivering);
+            // Until the worker is parked on the send lock, or has delivered if nothing held it.
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (delivering.getState() != Thread.State.WAITING
+                && delivering.isAlive()
+                && System.nanoTime() < deadline) {
+              Thread.onSpinWait();
+            }
+          }
+
+          @Override
+          public void unsubscribe(StreamId streamId, SseSubscriber subscriber) {}
+        };
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    try {
+      var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
+      controller.stream("cart", "cart-early", List.of()).subscribe(client);
+
+      client.awaitItems(2, java.time.Duration.ofSeconds(5));
+      worker.get().join(5_000);
+      assertSame(
+          SseController.KEEP_ALIVE,
+          client.getItems().get(0),
+          "the opening comment is the first frame of the stream");
+      assertEquals("1", client.getItems().get(1).getId(), "the event follows it and is not lost");
+    } finally {
+      controller.shutdown();
+    }
+  }
+
+  // ── streams opened while the application shuts down ────────────────────────
+
+  @Test
+  void aStreamOpenedAfterTheShutdownBeganIsAnsweredCompletedAndNeverSubscribed() {
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    controller.completeOpenStreams(mock(io.quarkus.runtime.ShutdownEvent.class));
+
+    var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
+    controller.stream("cart", "cart-late", List.of()).subscribe(client);
+
+    client.awaitCompletion(java.time.Duration.ofSeconds(5));
+    assertTrue(client.getItems().isEmpty(), "no frame: the stream is complete, not open");
+    verify(publisher, never()).subscribe(any(), any(), any());
+    assertEquals(0, controller.openStreamCount());
+    controller.shutdown();
+  }
+
+  @Test
+  void theShutdownDelayEventCompletesAnOpenStreamAndUnsubscribesIt() {
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
+    controller.stream("cart", "cart-open", List.of()).subscribe(client);
+    assertEquals(1, controller.openStreamCount());
+
+    controller.completeOpenStreams(new io.quarkus.runtime.ShutdownDelayInitiatedEvent());
+
+    client.awaitCompletion(java.time.Duration.ofSeconds(5));
+    verify(publisher).unsubscribe(any(), any());
+    assertEquals(0, controller.openStreamCount());
+    controller.shutdown();
+  }
+
+  @Test
+  void aStreamOpenedAfterTheShutdownDelayEventIsAnsweredCompletedAndNeverSubscribed() {
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    controller.completeOpenStreams(new io.quarkus.runtime.ShutdownDelayInitiatedEvent());
+
+    var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
+    controller.stream("cart", "cart-during-the-delay", List.of()).subscribe(client);
+
+    client.awaitCompletion(java.time.Duration.ofSeconds(5));
+    assertTrue(client.getItems().isEmpty(), "no frame: the stream is complete, not open");
+    verify(publisher, never()).subscribe(any(), any(), any());
+    assertEquals(0, controller.openStreamCount());
+    controller.shutdown();
+  }
+
+  @Test
+  void theShutdownDelayEventReachesAResourceNoRequestHasCreatedYet() throws Exception {
+    // The server keeps serving after the shutdown-delay event, so a resource that does not exist
+    // yet must still learn of it and turn the later streams away; at the shutdown event the server
+    // has stopped and a resource is not created to find no stream. The resource cannot be a bean
+    // of this module's Arc test container (Quarkus adds the no-args constructor its client proxy
+    // needs at build time), so the two receptions are pinned structurally.
+    var atTheDelay =
+        SseController.class
+            .getMethod("completeOpenStreams", io.quarkus.runtime.ShutdownDelayInitiatedEvent.class)
+            .getParameters()[0]
+            .getAnnotation(jakarta.enterprise.event.Observes.class);
+    var atTheShutdownEvent =
+        SseController.class
+            .getMethod("completeOpenStreams", io.quarkus.runtime.ShutdownEvent.class)
+            .getParameters()[0]
+            .getAnnotation(jakarta.enterprise.event.Observes.class);
+
+    assertEquals(jakarta.enterprise.event.Reception.ALWAYS, atTheDelay.notifyObserver());
+    assertEquals(jakarta.enterprise.event.Reception.IF_EXISTS, atTheShutdownEvent.notifyObserver());
+  }
+
+  @Test
+  void aStreamOpenedAfterTheControllerWasDestroyedIsAnsweredCompletedAndNeverSubscribed() {
+    // The scheduler is stopped by then: scheduling this stream's keepalive would be rejected.
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    controller.shutdown();
+
+    var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
+    controller.stream("cart", "cart-after-destroy", List.of()).subscribe(client);
+
+    client.awaitCompletion(java.time.Duration.ofSeconds(5));
+    verify(publisher, never()).subscribe(any(), any(), any());
+    assertEquals(0, controller.openStreamCount());
+  }
+
+  @Test
+  void aShutdownThatBeginsWhileAStreamIsBeingOpenedCompletesItAndUnsubscribesIt() {
+    // The shutdown takes its snapshot of the open streams between this stream's first look at
+    // the flag and its registration: the snapshot misses the stream, so the stream ends itself.
+    var controllerRef = new AtomicReference<SseController>();
+    var subscribed = new AtomicReference<SseEventPublisher.SseSubscriber>();
+    var unsubscribed = new AtomicReference<SseEventPublisher.SseSubscriber>();
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void subscribe(
+              StreamId streamId,
+              SseSubscriber subscriber,
+              java.util.function.Consumer<Throwable> onDisconnect) {
+            subscribed.set(subscriber);
+            controllerRef.get().completeOpenStreams(mock(io.quarkus.runtime.ShutdownEvent.class));
+          }
+
+          @Override
+          public void unsubscribe(StreamId streamId, SseSubscriber subscriber) {
+            unsubscribed.set(subscriber);
+          }
+        };
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    controllerRef.set(controller);
+
+    var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
+    controller.stream("cart", "cart-racing", List.of()).subscribe(client);
+
+    client.awaitCompletion(java.time.Duration.ofSeconds(5));
+    assertNotNull(subscribed.get());
+    assertSame(subscribed.get(), unsubscribed.get(), "the client is unsubscribed again");
+    assertEquals(0, controller.openStreamCount());
+    controller.shutdown();
+  }
+
+  @Test
+  void aFailureWhileAStreamIsBeingOpenedReleasesWhatTheStreamHadAcquired() {
+    // The termination hook is registered before anything is acquired, so a failure of a later
+    // step releases the earlier ones. Here the scheduler is gone by the time the keepalive is
+    // scheduled: the scheduling is rejected, the stream fails, the client is unsubscribed.
+    var controllerRef = new AtomicReference<SseController>();
+    var subscribed = new AtomicReference<SseEventPublisher.SseSubscriber>();
+    var unsubscribed = new AtomicReference<SseEventPublisher.SseSubscriber>();
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void subscribe(
+              StreamId streamId,
+              SseSubscriber subscriber,
+              java.util.function.Consumer<Throwable> onDisconnect) {
+            subscribed.set(subscriber);
+            controllerRef.get().testKeepAliveExecutor().shutdownNow();
+          }
+
+          @Override
+          public void unsubscribe(StreamId streamId, SseSubscriber subscriber) {
+            unsubscribed.set(subscriber);
+          }
+        };
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    controllerRef.set(controller);
+
+    var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
+    controller.stream("cart", "cart-rejected", List.of()).subscribe(client);
+
+    client.awaitFailure(java.time.Duration.ofSeconds(5));
+    client.assertFailedWith(java.util.concurrent.RejectedExecutionException.class);
+    assertNotNull(subscribed.get());
+    assertSame(subscribed.get(), unsubscribed.get(), "the client is unsubscribed again");
+    assertEquals(0, controller.openStreamCount());
+  }
+
   // ── dead-client reaping (keepalive + finite timeout) ───────────────────────
 
   @Test
@@ -258,12 +478,13 @@ class SseControllerTest {
     var testSubscriber = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
     multi.subscribe(testSubscriber);
 
-    // No domain event is ever published — every item below is a keepalive.
-    testSubscriber.awaitItems(2, java.time.Duration.ofSeconds(5));
+    // No domain event is ever published — every item below is a keepalive: the opening frame and
+    // two ticks.
+    testSubscriber.awaitItems(3, java.time.Duration.ofSeconds(5));
     testSubscriber.assertNotTerminated();
 
     for (OutboundSseEvent frame : testSubscriber.getItems()) {
-      assertEquals("keepalive", frame.getComment(), "a keepalive must be a comment frame");
+      assertEquals(" keepalive", frame.getComment(), "a keepalive must be a comment frame");
       assertNull(frame.getData(), "a keepalive must carry no data — clients must ignore it");
       assertNull(frame.getId(), "a keepalive must not disturb the client's Last-Event-ID");
       assertNull(frame.getName());
@@ -302,10 +523,11 @@ class SseControllerTest {
   }
 
   @Test
-  void keepAliveDisabledByZeroInterval_streamStaysSilentUntilAnEventArrives()
+  void keepAliveDisabledByZeroInterval_theOpeningFrameIsTheOnlyComment()
       throws InterruptedException {
     // Zero/negative disables the keepalive, leaving the timeout as the sole reaper (the documented
-    // knob semantics, shared with Spring and Micronaut).
+    // knob semantics, shared with Spring and Micronaut). The opening frame is not a keepalive tick:
+    // it is written whatever the interval.
     var publisher = mock(SseEventPublisher.class);
     var controller =
         new SseController(
@@ -321,7 +543,7 @@ class SseControllerTest {
 
     // Long enough that a 50ms-style keepalive would have fired many times had one been scheduled.
     Thread.sleep(300);
-    testSubscriber.assertHasNotReceivedAnyItem();
+    assertEquals(List.of(SseController.KEEP_ALIVE), testSubscriber.getItems());
     testSubscriber.assertNotTerminated();
     testSubscriber.cancel();
     controller.shutdown();
@@ -348,7 +570,7 @@ class SseControllerTest {
     var event = new OrderCreated("order-race");
     for (int i = 0; i < 50; i++) {
       publisher.publish(
-          StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-race")), envelope(i, event));
+          envelope(StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-race")), i, event));
     }
 
     long deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
@@ -453,8 +675,10 @@ class SseControllerTest {
 
     // Trigger the slow stream's blocking onItem.
     publisher.publish(
-        StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-slow")),
-        envelope(1L, new OrderCreated("order-slow")));
+        envelope(
+            StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-slow")),
+            1L,
+            new OrderCreated("order-slow")));
 
     // Observe for well past the block window, then inspect the largest inter-arrival gap on the
     // FAST stream. A shared-thread stall shows up as one gap close to blockMillis; a healthy
@@ -538,8 +762,10 @@ class SseControllerTest {
     fastMulti.subscribe(fastSubscriber);
 
     publisher.publish(
-        StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-slow-deadline")),
-        envelope(1L, new OrderCreated("order-slow")));
+        envelope(
+            StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-slow-deadline")),
+            1L,
+            new OrderCreated("order-slow")));
     assertTrue(
         insideBlockingSend.await(5, TimeUnit.SECONDS),
         "the slow stream's delivery worker must be inside its blocking send (holding its sendLock)"
@@ -576,12 +802,50 @@ class SseControllerTest {
     var cause = new IllegalStateException("client gone");
 
     try (var warnings = new CapturedSseControllerLog()) {
+      // The downstream throws for the tick and again when it is told of the failure, so the
+      // exception reaches the emitter: the emission itself fails.
       controller.stream("cart", "cart-dead-tick", List.of())
-          .subscribe(new ThrowingSubscriber(Callback.ITEM, cause));
+          .subscribe(new ThrowingSubscriber(Callback.TICK_AND_FAILURE, cause));
 
       assertEquals(
           List.of("Evicting an SSE subscriber after a failed keepalive tick: " + cause),
           warnings.awaitMessages(1));
+      // An exception reached the emitter, which may then be unable to terminate: the eviction
+      // itself makes sure the stream is released.
+      verify(publisher, timeout(1000))
+          .unsubscribe(
+              eq(StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-dead-tick"))), any());
+      assertEquals(0, controller.openStreamCount());
+    } finally {
+      controller.shutdown();
+    }
+  }
+
+  @Test
+  void aFailedOpeningFrameEvictsTheSubscriberLikeAFailedKeepAliveTick()
+      throws InterruptedException {
+    // The opening frame is the first write to the client. When it fails the client is already
+    // registered with the publisher, so the stream must be torn down the way a failed tick tears
+    // it down: failed, removed from the open streams, unsubscribed.
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    var cause = new IllegalStateException("client gone");
+
+    try (var warnings = new CapturedSseControllerLog()) {
+      // The downstream throws for the frame and again when it is told of the failure, so the
+      // exception reaches the emitter: the emission itself fails.
+      controller.stream("cart", "cart-dead-opening", List.of())
+          .subscribe(new ThrowingSubscriber(Callback.ITEM_AND_FAILURE, cause));
+
+      assertEquals(
+          List.of("Evicting an SSE subscriber after a failed opening frame: " + cause),
+          warnings.awaitMessages(1));
+      var registered = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
+      var stream = StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-dead-opening"));
+      var order = inOrder(publisher);
+      order.verify(publisher).subscribe(eq(stream), registered.capture(), any());
+      order.verify(publisher).unsubscribe(stream, registered.getValue());
+      assertEquals(0, controller.openStreamCount());
     } finally {
       controller.shutdown();
     }
@@ -628,6 +892,60 @@ class SseControllerTest {
       assertEquals(
           List.of("Failed to fail an evicted SSE stream for cart:cart-dead-evict: " + cause),
           warnings.awaitMessages(1));
+      // The emitter could not be failed, so its termination hook is not what releases the stream.
+      verify(publisher)
+          .unsubscribe(
+              eq(StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-dead-evict"))), any());
+      assertEquals(0, controller.openStreamCount());
+    } finally {
+      controller.shutdown();
+    }
+  }
+
+  @Test
+  void aSubscriberThatThrowsForItsOpeningFrameIsToldTheFailureAndUnsubscribed() {
+    // What a message body writer that throws looks like to the stream: the subscriber that writes
+    // the response throws from onItem. The stream ends, the subscriber is told why, and nothing
+    // of the stream is left behind.
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    var cause = new IllegalStateException("this frame cannot be written");
+    var downstream = new ThrowingSubscriber(Callback.ITEM, cause);
+    try {
+      controller.stream("cart", "cart-unwritable", List.of()).subscribe(downstream);
+
+      assertEquals(List.of(cause), downstream.failures);
+      var registered = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
+      var stream = StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-unwritable"));
+      var order = inOrder(publisher);
+      order.verify(publisher).subscribe(eq(stream), registered.capture(), any());
+      order.verify(publisher).unsubscribe(stream, registered.getValue());
+      assertEquals(0, controller.openStreamCount());
+    } finally {
+      controller.shutdown();
+    }
+  }
+
+  @Test
+  void aSubscriberThatThrowsForAnEventIsToldTheFailureAndUnsubscribed() {
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    var cause = new IllegalStateException("this event cannot be serialized");
+    var downstream = new ThrowingSubscriber(Callback.EVENT, cause);
+    try {
+      controller.stream("cart", "cart-unserializable", List.of()).subscribe(downstream);
+      var registered = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
+      var stream = StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-unserializable"));
+      verify(publisher).subscribe(eq(stream), registered.capture(), any());
+      assertEquals(1, controller.openStreamCount());
+
+      // The delivery worker's send returns normally: the exception does not reach the emitter.
+      assertDoesNotThrow(
+          () -> registered.getValue().send(envelope(7, new OrderCreated("order-7"))));
+
+      assertEquals(List.of(cause), downstream.failures);
+      verify(publisher).unsubscribe(stream, registered.getValue());
+      assertEquals(0, controller.openStreamCount());
     } finally {
       controller.shutdown();
     }
@@ -635,19 +953,32 @@ class SseControllerTest {
 
   private enum Callback {
     ITEM,
+    ITEM_AND_FAILURE,
+    EVENT,
+    TICK,
+    TICK_AND_FAILURE,
     FAILURE,
     COMPLETION
   }
 
   /**
-   * A downstream that throws from one callback, so the controller's emitter call driving it ({@code
-   * emit}, {@code fail} or {@code complete}) throws in turn: the failure each WARN reports. ITEM
-   * throws for keepalive frames only.
+   * A downstream that throws from its callbacks. ITEM throws for every keepalive frame, so for the
+   * opening frame; TICK lets the opening frame pass and throws for the keepalive frames after it,
+   * the periodic ticks; EVENT throws for a frame that carries an event. Each of those is caught
+   * before it reaches the emitter. The {@code _AND_FAILURE} variants throw again from {@code
+   * onFailure}, and FAILURE and COMPLETION throw from the terminal callback alone: then the
+   * controller's emitter call ({@code emit}, {@code fail} or {@code complete}) throws in turn, the
+   * failure each WARN reports.
    */
   private static final class ThrowingSubscriber
       implements io.smallrye.mutiny.subscription.MultiSubscriber<OutboundSseEvent> {
     private final Callback callback;
     private final RuntimeException cause;
+    private final java.util.concurrent.atomic.AtomicInteger keepAlives =
+        new java.util.concurrent.atomic.AtomicInteger();
+
+    /** The failures this subscriber was told of. */
+    private final List<Throwable> failures = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     ThrowingSubscriber(Callback callback, RuntimeException cause) {
       this.callback = callback;
@@ -661,14 +992,26 @@ class SseControllerTest {
 
     @Override
     public void onItem(OutboundSseEvent item) {
-      if (callback == Callback.ITEM && item == SseController.KEEP_ALIVE) {
+      if (item != SseController.KEEP_ALIVE) {
+        if (callback == Callback.EVENT) {
+          throw cause;
+        }
+        return;
+      }
+      int seen = keepAlives.incrementAndGet();
+      boolean everyFrame = callback == Callback.ITEM || callback == Callback.ITEM_AND_FAILURE;
+      boolean everyTick = callback == Callback.TICK || callback == Callback.TICK_AND_FAILURE;
+      if (everyFrame || (everyTick && seen > 1)) {
         throw cause;
       }
     }
 
     @Override
     public void onFailure(Throwable failure) {
-      if (callback == Callback.FAILURE) {
+      failures.add(failure);
+      if (callback == Callback.FAILURE
+          || callback == Callback.ITEM_AND_FAILURE
+          || callback == Callback.TICK_AND_FAILURE) {
         throw cause;
       }
     }

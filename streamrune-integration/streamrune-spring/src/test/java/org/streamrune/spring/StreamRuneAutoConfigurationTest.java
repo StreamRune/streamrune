@@ -225,7 +225,109 @@ class StreamRuneAutoConfigurationTest {
           assertThat(ctx).hasSingleBean(org.streamrune.runtime.SseEventPublisher.class);
           assertThat(ctx).doesNotHaveBean(SseController.class);
           assertThat(ctx).doesNotHaveBean(org.streamrune.integration.SseAuthorizer.class);
+          assertThat(ctx).doesNotHaveBean(org.streamrune.runtime.SseEventFeed.class);
         });
+  }
+
+  /**
+   * The endpoint and its feed come and go together: the feed that publishes the stored events is
+   * registered, and running, exactly where the controller is.
+   */
+  @Test
+  void sseEventFeedRunsWhereTheEndpointIsEnabled() {
+    webContextRunner
+        .withPropertyValues("streamrune.sse.enabled=true")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasSingleBean(org.streamrune.runtime.SseEventFeed.class);
+              assertThat(ctx.getBean(org.streamrune.runtime.SseEventFeed.class).isRunning())
+                  .isTrue();
+            });
+  }
+
+  /** The feed's polling thread is watched like the framework's other pollers. */
+  @Test
+  void sseEventFeedIsReportedByTheRelayHealthContributor() {
+    webContextRunner
+        .withPropertyValues("streamrune.sse.enabled=true")
+        .run(
+            ctx -> {
+              var relayHealth =
+                  ctx.getBean(org.streamrune.runtime.BackgroundRelayHealthContributor.class);
+              assertThat(relayHealth.components())
+                  .filteredOn(component -> component.name().equals("sse-event-feed"))
+                  .singleElement()
+                  .satisfies(
+                      feed -> {
+                        assertThat(feed.started()).isTrue();
+                        assertThat(feed.alive()).isTrue();
+                        assertThat(feed.status())
+                            .isEqualTo(
+                                org.streamrune.runtime.BackgroundRelayHealthContributor.Status.UP);
+                      });
+            });
+  }
+
+  /**
+   * A polling interval below one millisecond would be no pause between two reads of the global
+   * stream. The application does not start, and the failure names the property.
+   */
+  @Test
+  void anSsePollingIntervalBelowOneMillisecondFailsTheStartAndNamesTheProperty() {
+    webContextRunner
+        .withPropertyValues("streamrune.sse.enabled=true", "streamrune.sse.polling-interval=500us")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .rootCause()
+                  .isInstanceOf(IllegalArgumentException.class)
+                  .hasMessageContaining("streamrune.sse.polling-interval")
+                  .hasMessageContaining("at least 1ms");
+            });
+    webContextRunner
+        .withPropertyValues("streamrune.sse.enabled=true", "streamrune.sse.polling-interval=0")
+        .run(
+            ctx ->
+                assertThat(ctx.getStartupFailure())
+                    .rootCause()
+                    .hasMessageContaining("streamrune.sse.polling-interval"));
+    webContextRunner
+        .withPropertyValues("streamrune.sse.enabled=true", "streamrune.sse.polling-interval=1ms")
+        .run(ctx -> assertThat(ctx).hasNotFailed());
+  }
+
+  /**
+   * An application that declares its own feed replaces the framework's and starts and stops it
+   * itself: the framework neither creates a second feed nor starts the application's.
+   */
+  @Test
+  void anApplicationsOwnSseEventFeedReplacesTheFrameworksAndIsLeftToTheApplication() {
+    webContextRunner
+        .withPropertyValues("streamrune.sse.enabled=true")
+        .withUserConfiguration(ApplicationFeedConfig.class)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(ctx).hasSingleBean(org.streamrune.runtime.SseEventFeed.class);
+              assertThat(ctx).hasBean("applicationFeed");
+              assertThat(ctx).doesNotHaveBean("streamRuneSseEventFeed");
+              assertThat(ctx).doesNotHaveBean("streamRuneSseEventFeedLifecycle");
+              assertThat(ctx.getBean(org.streamrune.runtime.SseEventFeed.class).isStarted())
+                  .as("the framework does not start a feed it did not create")
+                  .isFalse();
+              assertThat(ctx).hasSingleBean(SseController.class);
+            });
+  }
+
+  @Configuration(proxyBeanMethods = false)
+  static class ApplicationFeedConfig {
+    @Bean
+    org.streamrune.runtime.SseEventFeed applicationFeed(
+        EventStore eventStore, org.streamrune.runtime.SseEventPublisher publisher) {
+      return new org.streamrune.runtime.SseEventFeed(
+          eventStore, publisher, java.time.Duration.ofSeconds(1));
+    }
   }
 
   @Test
@@ -259,6 +361,8 @@ class StreamRuneAutoConfigurationTest {
               assertThat(ctx).doesNotHaveBean(SseController.class);
               assertThat(ctx).doesNotHaveBean(org.streamrune.integration.SseAuthorizer.class);
               assertThat(ctx).hasSingleBean(org.streamrune.runtime.SseEventPublisher.class);
+              // No endpoint, so nothing reads the global stream for it.
+              assertThat(ctx).doesNotHaveBean(org.streamrune.runtime.SseEventFeed.class);
             });
   }
 
@@ -727,7 +831,7 @@ class StreamRuneAutoConfigurationTest {
   static class StubEventStoreConfig {
     @Bean
     EventStoreFactory eventStoreFactory() {
-      return () -> mock(EventStore.class);
+      return SpringTestMocks::emptyEventStore;
     }
   }
 

@@ -7,15 +7,16 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * Aggregates the liveness/degradation of the background relay threads — the outbox relay ({@link
  * OutboxPoller}), the command dead-letter retry runner ({@link DeadLetterRetryRunner}), the saga
- * drivers and the four retention sweepers ({@link RetentionSweeper}) — into a single health signal.
+ * drivers, the four retention sweepers ({@link RetentionSweeper}) and the feed of the Server-Sent
+ * Events endpoint ({@link SseEventFeed}) — into a single health signal.
  *
- * <p>Before this, both runners kept their virtual thread alive and logged cycle failures at ERROR,
- * while {@code consecutiveFailures()}/{@code isRunning()} were exposed but consumed by nothing: the
- * framework health indicators aggregated only the DataSource and subscription health, so {@code
- * /health} reported UP even while a relay was stalled in backoff or its thread had died outright
- * (an {@link Error} escaping the poll loop leaves {@code started=true} but the thread dead). A
- * metrics gauge sampled by the loop cannot report the loop's own death, so this health contributor
- * is the piece that catches a wholly dead relay.
+ * <p>Each relay keeps its own thread alive, logs a failed cycle at ERROR and exposes {@code
+ * consecutiveFailures()}/{@code isRunning()}; this contributor is what reads them. The framework
+ * health indicators fold it in beside the DataSource and the subscription health, so {@code
+ * /health} shows a relay stalled in backoff and one whose thread has died outright (an {@link
+ * Error} escaping the poll loop leaves {@code started=true} with the thread dead). A metrics gauge
+ * sampled by the loop cannot report the loop's own death, so this health contributor is the piece
+ * that catches a wholly dead relay.
  *
  * <p>Status per component:
  *
@@ -173,7 +174,7 @@ public class BackgroundRelayHealthContributor {
    * component name is {@code saga-timeout:<saga type>}, the saga type being {@link
    * SagaTimeoutRunner#sagaTypeName()} — the saga state's fully-qualified class name, unique where
    * the simple name is not. A dead timeout-runner thread ({@code isStarted() && !isAlive()}) is
-   * reported DOWN, so a timed-out saga that never fires its compensation is no longer silent.
+   * reported DOWN, so a timed-out saga that never fires its compensation shows in the health check.
    */
   public void registerSagaTimeoutRunner(SagaTimeoutRunner<?> runner) {
     if (runner == null) {
@@ -237,6 +238,40 @@ public class BackgroundRelayHealthContributor {
           @Override
           public int consecutiveFailures() {
             return sweeper.consecutiveFailures();
+          }
+        });
+  }
+
+  /**
+   * Registers the feed of the Server-Sent Events endpoint to be reported on. A {@code null} is
+   * ignored. The component name is {@code sse-event-feed}. A feed whose polling thread has died
+   * ({@code isStarted() && !isRunning()}) is reported DOWN: the endpoint keeps admitting clients
+   * and writing keepalives, and no event reaches them. A feed whose reads fail is DEGRADED.
+   */
+  public void registerSseEventFeed(SseEventFeed feed) {
+    if (feed == null) {
+      return;
+    }
+    register(
+        new RelayStatusSource() {
+          @Override
+          public String name() {
+            return "sse-event-feed";
+          }
+
+          @Override
+          public boolean started() {
+            return feed.isStarted();
+          }
+
+          @Override
+          public boolean alive() {
+            return feed.isRunning();
+          }
+
+          @Override
+          public int consecutiveFailures() {
+            return feed.consecutiveFailures();
           }
         });
   }
