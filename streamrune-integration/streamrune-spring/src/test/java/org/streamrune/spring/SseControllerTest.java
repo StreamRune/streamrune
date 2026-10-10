@@ -1,11 +1,15 @@
 package org.streamrune.spring;
 
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.web.server.ResponseStatusException;
@@ -287,11 +291,58 @@ class SseControllerTest {
         .unsubscribe(
             StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-slow")),
             subscriberCaptor.getValue());
-    assertThrows(
-        IllegalStateException.class,
-        () -> emitter.send("anything"),
-        "the emitter must be completed so the client reconnects instead of holding a silent"
-            + " stream");
+    // The hook hands the completion to a thread of the stream's own and does not wait for it.
+    await()
+        .atMost(Duration.ofSeconds(5))
+        .untilAsserted(
+            () ->
+                assertThrows(
+                    IllegalStateException.class,
+                    () -> emitter.send("anything"),
+                    "the emitter must be completed so the client reconnects instead of holding a"
+                        + " silent stream"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void slowConsumerEviction_returnsWhileAWriteStillHoldsTheEmitter() throws Exception {
+    // Spring's emitter completes under the lock a send holds, and a send to a client that has
+    // stopped reading holds it until the container's write timeout. The hook runs on the
+    // publisher's thread, which serves every stream: it must return while that lock is held.
+    var publisher = mock(SseEventPublisher.class);
+    try (var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS)) {
+      var emitter = controller.stream("cart", "cart-stalled", List.of());
+      var hookCaptor = ArgumentCaptor.forClass(java.util.function.Consumer.class);
+      verify(publisher).subscribe(any(), any(), hookCaptor.capture());
+
+      // The test thread stands in for a delivery worker inside a blocked servlet write.
+      Lock emitterLock = emitterLockOf(emitter);
+      emitterLock.lock();
+      try {
+        var hookReturned = new CountDownLatch(1);
+        Thread.ofVirtual()
+            .name("publishing-thread")
+            .start(
+                () -> {
+                  hookCaptor.getValue().accept(new RuntimeException("queue of 256 full"));
+                  hookReturned.countDown();
+                });
+
+        assertTrue(
+            hookReturned.await(5, TimeUnit.SECONDS),
+            "the eviction hook must return while a write still holds the emitter");
+        assertEquals(
+            0, controller.activeCountForTest(), "the registration is dropped by the hook itself");
+      } finally {
+        emitterLock.unlock();
+      }
+
+      // With the write over, the stream's own thread completes the emitter.
+      await()
+          .atMost(Duration.ofSeconds(5))
+          .untilAsserted(
+              () -> assertThrows(IllegalStateException.class, () -> emitter.send("anything")));
+    }
   }
 
   @Test
@@ -322,7 +373,10 @@ class SseControllerTest {
 
     assertEquals(0, controller.activeCountForTest());
     assertEquals(1, unsubscribed.get());
-    assertThrows(IllegalStateException.class, () -> emitter.send("anything"));
+    await()
+        .atMost(Duration.ofSeconds(5))
+        .untilAsserted(
+            () -> assertThrows(IllegalStateException.class, () -> emitter.send("anything")));
   }
 
   @Test
@@ -380,6 +434,18 @@ class SseControllerTest {
     controller.stream("customer", "c-1", List.of());
     assertEquals(AggregateType.of("customer"), seen.get().aggregateType());
     assertEquals(AggregateId.of("c-1"), seen.get().aggregateId());
+  }
+
+  /** The lock Spring's emitter holds across a send and takes to complete. */
+  private static Lock emitterLockOf(SseEmitter emitter) {
+    try {
+      var field = ResponseBodyEmitter.class.getDeclaredField("writeLock");
+      field.setAccessible(true);
+      return (Lock) field.get(emitter);
+    } catch (ReflectiveOperationException e) {
+      throw new AssertionError(
+          "Spring ResponseBodyEmitter internals changed: no accessible 'writeLock' field", e);
+    }
   }
 
   private static void runEmitterCallback(SseEmitter emitter, String fieldName) {

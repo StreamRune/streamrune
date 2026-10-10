@@ -80,6 +80,13 @@ import org.streamrune.runtime.SseEventPublisher;
  * completion/timeout/error cleanup path never touches the send lock, so eviction itself cannot
  * block on a stalled send either.
  *
+ * <p><b>Slow-consumer eviction.</b> The publisher evicts a client whose queue is full on the thread
+ * that publishes: the feed's polling thread, which serves every stream. The disconnect hook
+ * unsubscribes the client inline and fails its emitter on a virtual thread of its own, because
+ * completing an emitter waits for a write in progress on it and the write to a client that has
+ * stopped reading lasts until the container's write timeout. The feed is not held; the stalled
+ * connection is closed when that write gives up.
+ *
  * <p><b>Timeout contract.</b> A <em>non-positive</em> {@code streamrune.sse.timeout} disables the
  * deadline — identical semantics on Spring, Quarkus and Micronaut — leaving the keepalive as the
  * sole reaper. Disabling both knobs re-opens the dead-client FD leak.
@@ -302,15 +309,12 @@ public class SseController implements SmartLifecycle, AutoCloseable {
           registration.unsubscribe.run();
         };
 
-    // The publisher's slow-consumer eviction is only as good as this hook. Without it
-    // an evicted client kept an OPEN emitter that received zero further events — the keepalive
-    // still wrote successfully (the client is slow, not dead) so the dead-client reaper never
-    // reaped it,
-    // and with streamrune.sse.timeout=0 no deadline fired either: a permanent silent event gap,
-    // plus a leaked ActiveEmitter, subscriber closure and socket FD. Deliberately does NOT take
-    // sendLock — like the completion/timeout/error cleanup path, and for the same reason the
-    // keepalive only tryLock()s it: the lock is held by the stalled write that caused
-    // the eviction, and this hook can run on the PUBLISHER's thread.
+    // The publisher's slow-consumer eviction is only as good as this hook: an evicted client
+    // whose emitter stayed open would receive no further event while its keepalive still wrote
+    // successfully (the client is slow, not dead), and with streamrune.sse.timeout=0 no deadline
+    // would end it either. The hook can run on the PUBLISHER's thread, inline in publish(), so it
+    // waits for nothing: the cleanup takes no lock a write holds, and the emitter is failed on a
+    // thread of its own (see failOnItsOwnThread).
     boolean admitted;
     admission.lock();
     try {
@@ -324,17 +328,7 @@ public class SseController implements SmartLifecycle, AutoCloseable {
             subscriber,
             cause -> {
               cleanup.run();
-              try {
-                emitter.completeWithError(cause);
-              } catch (RuntimeException alreadyCompleted) {
-                // Both parts arrive percent-decoded from the request path; every id in a log line
-                // is rendered through the sanitizer so no value can forge a line (CWE-117).
-                log.debug(
-                    "SSE emitter for stream {} was already completed when its subscription was"
-                        + " evicted",
-                    LogSanitizer.sanitizeForLog(sid.value()),
-                    alreadyCompleted);
-              }
+              failOnItsOwnThread(emitter, cause);
             });
       }
     } finally {
@@ -393,6 +387,32 @@ public class SseController implements SmartLifecycle, AutoCloseable {
     } finally {
       registration.sendLock.unlock();
     }
+  }
+
+  /**
+   * Fails a stream's emitter on a virtual thread of its own and returns at once.
+   *
+   * <p>Spring's emitter serializes {@code send} and completion on one lock, and a {@code send} is a
+   * blocking servlet write: to a client that has stopped reading it holds that lock until the
+   * container's write timeout (Tomcat: {@code server.tomcat.connection-timeout}, 60 seconds unless
+   * configured). Completing the emitter therefore waits for the write in progress on it. The two
+   * callers each serve every stream of the application — the publisher's thread on a slow-consumer
+   * eviction (the {@link org.streamrune.runtime.SseEventFeed}'s one polling thread) and the shared
+   * keepalive tick — so neither waits: the stalled client's own thread does. By the time this is
+   * called the client is unsubscribed and out of {@link #active}; what the thread ends is the HTTP
+   * response.
+   */
+  private static void failOnItsOwnThread(SseEmitter emitter, Throwable cause) {
+    Thread.ofVirtual()
+        .name("streamrune-sse-evict")
+        .start(
+            () -> {
+              try {
+                emitter.completeWithError(cause);
+              } catch (RuntimeException alreadyCompleted) {
+                log.debug("SSE eviction: the stream was already complete", alreadyCompleted);
+              }
+            });
   }
 
   /** The two path segments through their ingress doors; an invalid part is the caller's error. */
@@ -454,8 +474,9 @@ public class SseController implements SmartLifecycle, AutoCloseable {
         // contract is availability: one bad emitter must never kill the keepalive for every other
         // subscriber, so catch broadly here, log loudly, and continue to the next registration.
         // Dead connection: reap it directly (do not rely on the servlet firing onError), then
-        // complete the emitter. unsubscribe is idempotent, so a later container-driven onError is
-        // harmless.
+        // fail the emitter on a thread of its own: this tick serves every stream, and a delivery
+        // worker may have entered a blocking write on the emitter since the send lock was
+        // released. unsubscribe is idempotent, so a later container-driven onError is harmless.
         active.remove(registration);
         try {
           registration.unsubscribe.run();
@@ -466,9 +487,10 @@ public class SseController implements SmartLifecycle, AutoCloseable {
               unsubscribeError);
         }
         try {
-          registration.emitter.completeWithError(t);
-        } catch (Throwable _) {
-          // emitter may already be completing; the subscription is already unsubscribed
+          failOnItsOwnThread(registration.emitter, t);
+        } catch (Throwable startFailure) {
+          // Guarded like the unsubscribe: nothing may abort the tick.
+          log.warn("SSE keepalive: could not fail a reaped subscriber's emitter", startFailure);
         }
         log.warn("Evicted an SSE subscriber on keepalive after a failed tick: {}", t.toString());
       }
