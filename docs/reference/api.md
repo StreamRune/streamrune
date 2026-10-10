@@ -458,9 +458,15 @@ public class SseEventPublisher implements AutoCloseable {
 
 public final class SseEventFeed implements AutoCloseable {
     SseEventFeed(EventStore eventStore, SseEventPublisher publisher, Duration pollingInterval);
-    void start();        // begins at EventStore.lastGlobalOffset()
-    boolean isRunning();
+    void start();              // begins at EventStore.lastGlobalOffset(); replaces a subscription whose thread has died
+    boolean isRunning();       // started, and the polling thread is alive
+    boolean isStarted();       // between start() and close(), whatever became of the thread
+    int consecutiveFailures(); // failed reads in a row; the feed retries with backoff
     void close();
+}
+
+public class BackgroundRelayHealthContributor {
+    void registerSseEventFeed(SseEventFeed feed);   // reports the feed as the sse-event-feed component
 }
 ```
 
@@ -472,7 +478,11 @@ public final class SseEventFeed implements AutoCloseable {
   endpoint is enabled, start it with the application and close it on shutdown. It is a
   `PollingEventSubscription` on the global stream that starts at the head of the stream, keeps its
   position in memory, and never replays history. An application's own `SseEventFeed` bean replaces
-  the integration's; the application then starts and stops it.
+  the integration's; the application then starts and stops it, and registers it with
+  `BackgroundRelayHealthContributor.registerSseEventFeed` to have it reported by the health
+  indicator. A feed that is started and not running has lost its polling thread to a JVM `Error`;
+  nothing restarts it, and the next `start()` replaces its subscription by one that begins at the
+  head of that moment.
 
 | | |
 |---|---|

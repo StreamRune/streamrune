@@ -120,7 +120,10 @@ streamrune:
   are queued for it; the feed is not held while its blocked write times out. A client that resets
   its connection before the response is written is unsubscribed at once and its request ended.
 - **Health** — the feed is the `sse-event-feed` component of `StreamRuneHealthIndicator`: `DOWN`
-  when its polling thread has died, `DEGRADED` while its reads fail and are retried.
+  when its polling thread has died, `DEGRADED` while its reads fail and are retried. A polling
+  thread dies only of a JVM `Error`, and nothing restarts it: the indicator stays `DOWN` until the
+  application restarts or calls `start()` on the `SseEventFeed` bean, which begins again at the
+  head of the stream.
 
 ## Request identity
 

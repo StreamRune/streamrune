@@ -152,8 +152,7 @@ public record StreamRuneMicronautProperties(
     // the same keys and defaults as Spring and Quarkus. Detecting a half-open peer requires a
     // WRITE, so an idle stream needs the periodic keepalive comment frame; the finite timeout is
     // the backstop that completes the stream (SSE clients auto-reconnect). Zero or negative
-    // disables either one — that timeout contract genuinely holds on all three
-    // frameworks (Spring used to map a non-positive timeout back to its 5-minute default).
+    // disables either one — the same contract on all three frameworks.
     // Disabling both knobs re-opens the dead-client FD leak. Appended at the end so the
     // positional withDefaults() stays aligned.
     @Bindable(defaultValue = "5m")

@@ -48,11 +48,15 @@ import org.streamrune.core.types.ProjectionName;
  * delivers nothing, and continues once the read succeeds or the application restarts. An event the
  * publisher refuses is logged and skipped; the rest of its page is published. An {@link Error} out
  * of a read or a publish ends the polling thread: the feed then reports {@link #isStarted()} and
- * not {@link #isRunning()}, and the next {@link #start()} replaces the dead subscription.
+ * not {@link #isRunning()}, and the next {@link #start()} replaces the dead subscription. Nothing
+ * calls {@code start()} a second time on its own: the integrations start their feed once, so a feed
+ * in that state stays in it until the application restarts or calls {@code start()} itself. Every
+ * replica reads the same events, so an event that kills one replica's feed kills them all; a
+ * replacement begins past it.
  *
  * <p><b>Health.</b> {@link BackgroundRelayHealthContributor#registerSseEventFeed} reports the feed
- * with the framework's other polling threads: {@code DOWN} when its thread has died, {@code
- * DEGRADED} while its reads fail.
+ * with the framework's other polling threads: {@code DOWN} when its thread has died, until the feed
+ * is started again, and {@code DEGRADED} while its reads fail.
  *
  * <p>Thread-safe. {@link #start()} and {@link #close()} are idempotent, and a closed feed can be
  * started again.

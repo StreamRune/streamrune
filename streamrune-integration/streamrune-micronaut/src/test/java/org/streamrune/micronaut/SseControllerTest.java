@@ -334,10 +334,18 @@ class SseControllerTest {
     assertEquals(0, controller.openStreamCount());
   }
 
+  /**
+   * Pins the look at the shutdown flag that follows the registration. The controller subscribes the
+   * client before it adds the stream to the open streams, so a shutdown that runs during the
+   * subscription takes its snapshot without this stream; the stream then sees the flag and ends
+   * itself. Without that second look the stream stays open and subscribed.
+   *
+   * <p>The outcome alone (completed, unsubscribed) does not tell the two steps' order apart: a
+   * controller that adds the stream before it subscribes reaches it through the shutdown's
+   * snapshot. What this test adds is that no stream registered in that order is missed.
+   */
   @Test
-  void aShutdownThatBeginsWhileAStreamIsBeingOpenedCompletesItAndUnsubscribesIt() {
-    // The shutdown takes its snapshot of the open streams between this stream's first look at
-    // the flag and its registration: the snapshot misses the stream, so the stream ends itself.
+  void aStreamTheShutdownsSnapshotMissedSeesTheFlagAfterItsRegistrationAndEndsItself() {
     var controllerRef = new AtomicReference<SseController>();
     var subscribed = new AtomicReference<SseEventPublisher.SseSubscriber>();
     var unsubscribed = new AtomicReference<SseEventPublisher.SseSubscriber>();

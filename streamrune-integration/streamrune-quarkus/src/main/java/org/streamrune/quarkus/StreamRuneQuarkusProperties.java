@@ -413,8 +413,8 @@ public interface StreamRuneQuarkusProperties {
      * would let dead subscriptions accumulate across reconnect churn until FD exhaustion. Zero or
      * negative disables the timeout, leaving the keepalive as the sole reaper — disabling both
      * knobs re-opens the dead-client leak. Matches {@code streamrune.sse.timeout} on Spring and
-     * Micronaut: that advertised parity is real (Spring used to map a non-positive timeout back to
-     * its 5-minute default, so the same key meant opposite things per framework).
+     * Micronaut: the same key, the same default, and the same meaning of a non-positive value on
+     * the three.
      */
     @WithDefault("PT5M")
     Duration timeout();

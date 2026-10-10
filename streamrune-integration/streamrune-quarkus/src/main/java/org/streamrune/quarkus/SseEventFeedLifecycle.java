@@ -29,11 +29,16 @@ import org.streamrune.runtime.SseEventPublisher;
  *
  * <p><b>Health.</b> The started feed is registered with the {@link
  * BackgroundRelayHealthContributor} as {@code sse-event-feed}, so the readiness check reports
- * {@code DOWN} once its polling thread has died.
+ * {@code DOWN} once its polling thread has died. A polling thread dies only of a JVM {@link Error},
+ * and this lifecycle starts the feed once: the check stays {@code DOWN} until the application
+ * restarts. The feed is an object of this lifecycle, not a bean, so an application cannot start it
+ * again; one that wants to restart a feed without restarting itself declares its own.
  *
  * <p><b>A feed of the application's own.</b> When the application declares an {@link SseEventFeed}
- * bean, this lifecycle creates and starts none: the application owns its feed and starts and stops
- * it, as with the other runners the framework would otherwise assemble.
+ * bean, this lifecycle creates and starts none: the application owns its feed, starts and stops it,
+ * may call {@link SseEventFeed#start()} again on a feed whose polling thread has died, and
+ * registers it with {@link BackgroundRelayHealthContributor#registerSseEventFeed} to have it
+ * reported — as with the other runners the framework would otherwise assemble.
  *
  * <p>Delivery is live, best-effort and at-most-once; see {@link SseEventFeed}.
  */

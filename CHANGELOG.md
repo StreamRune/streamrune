@@ -627,10 +627,13 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   keeps reading. The integration feeds the endpoint itself: one
   `SseEventFeed` per application instance, a polling subscription (`streamrune.sse.polling-interval`,
   default `1s`) that starts at the head of the global stream with the application, keeps no stored
-  offset, never replays history, and stops with the application; open streams end with it
-  (completed before the server stops on Spring and Quarkus, closed with the server on Micronaut). While the endpoint is enabled every instance reads and decrypts every event of the
+  offset, never replays history, and stops with the application; open streams end with it:
+  completed before the web server stops on Spring, and on Quarkus in an application built with
+  `quarkus.shutdown.delay-enabled=true`; closed with the server on Micronaut and in a Quarkus
+  application built without that property, where a connected client also holds a graceful
+  shutdown for the whole `quarkus.shutdown.timeout`. While the endpoint is enabled every instance reads and decrypts every event of the
   global stream. The feed is the `sse-event-feed` component of the health indicators (`DOWN` when
-  its polling thread has died), and an application's own `SseEventFeed` bean replaces it. Each frame carries the global offset as `id` and the decrypted event as JSON. A stream
+  its polling thread has died, until the application restarts or calls `start()` on the feed), and an application's own `SseEventFeed` bean replaces it. Each frame carries the global offset as `id` and the decrypted event as JSON. A stream
   opens with one `: keepalive` comment frame, written as soon as the client is subscribed, so the
   response is committed at once and a client that has read the frame receives every event of the
   stream stored from then on while it stays connected; the same comment is written every

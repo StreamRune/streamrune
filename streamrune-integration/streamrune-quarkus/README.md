@@ -103,10 +103,23 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   that must see every event.
 - **Lifecycle** — `streamrune.sse.enabled` is read at build time (it decides whether the resource
   and the feed exist) and again at runtime: switched off at runtime, the endpoint answers `404` and
-  the feed does not start. The feed starts on the startup event and stops on the shutdown event,
-  which also completes every open stream.
+  the feed does not start. The feed starts on the startup event and stops on the shutdown event.
+- **Shutdown** — Quarkus stops its HTTP server before it fires the shutdown event, so what a
+  connected client sees depends on a build-time property of your application.
+  Built with `quarkus.shutdown.delay-enabled=true`, the application fires the shutdown-delay event
+  at the start of its shutdown: the resource completes every open stream then (an `EventSource`
+  sees a normal end and reconnects), answers a stream opened later in the shutdown already
+  complete, and the graceful phase has no stream to wait for.
+  Built without it (the Quarkus default), the server closes the connections as it stops: a
+  connected client sees its connection cut, not a completed stream (an `EventSource` reconnects
+  either way), and with `quarkus.shutdown.timeout` set a connected client holds the shutdown for
+  that whole timeout, because an open stream is a request the graceful phase waits for. Build
+  with `quarkus.shutdown.delay-enabled=true` wherever you set `quarkus.shutdown.timeout`.
 - **Health** — the feed is the `sse-event-feed` component of the readiness check: `DOWN` when its
-  polling thread has died, `DEGRADED` while its reads fail and are retried.
+  polling thread has died, `DEGRADED` while its reads fail and are retried. A polling thread dies
+  only of a JVM `Error`, and nothing restarts it: the check stays `DOWN` until the application
+  restarts. The integration's feed is not a bean; to restart a feed without restarting the
+  application, declare your own `SseEventFeed` bean (see "Who feeds it") and call `start()` on it.
 
 Crypto engines bind through `StreamRuneQuarkusCryptoProperties`
 (`streamrune.crypto.*`). Engine selection is **fixed at build time** via

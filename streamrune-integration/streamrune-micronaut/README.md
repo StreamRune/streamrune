@@ -138,7 +138,9 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   executor and proceeds synchronously, so with it the authorizer runs there, inside the filter's
   request context, and may read a database. If you replace that filter, run yours on the blocking
   executor too (`@ExecuteOn(TaskExecutors.BLOCKING)`), or the authorizer runs on a Netty event
-  loop.
+  loop. A filter you add behind it that runs on another executor (its own `@ExecuteOn`) takes the
+  controller and the authorizer to that executor's thread as well, and out of the request context
+  the framework's filter bound: `StreamRuneContext.CURRENT` is not bound there.
 - **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
   is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
   client connected, while it was reconnecting, or while the instance was down are never sent to it.
@@ -149,7 +151,10 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   stops before that, so a connected client sees the server close its connection, not a completed
   stream; an `EventSource` reconnects either way.
 - **Health** — the feed is the `sse-event-feed` component of the health indicator: `DOWN` when its
-  polling thread has died, `DEGRADED` while its reads fail and are retried.
+  polling thread has died, `DEGRADED` while its reads fail and are retried. A polling thread dies
+  only of a JVM `Error`, and nothing restarts it: the indicator stays `DOWN` until the application
+  restarts or calls `start()` on the `SseEventFeed` bean, which begins again at the head of the
+  stream.
 
 ## Request identity
 
