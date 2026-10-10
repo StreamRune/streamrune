@@ -295,6 +295,37 @@ class SseControllerTest {
   }
 
   @Test
+  void aClientEvictedBeforeItsOpeningFrameIsAnsweredWithACompletedStream() {
+    // The publisher may evict a client the moment it is registered. The opening frame then finds
+    // an emitter the eviction has completed and cleaned up after: nothing is written, nothing is
+    // cleaned up twice, and the request is answered with that completed emitter.
+    var unsubscribed = new java.util.concurrent.atomic.AtomicInteger();
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void subscribe(
+              StreamId streamId,
+              SseSubscriber subscriber,
+              java.util.function.Consumer<Throwable> onDisconnect) {
+            onDisconnect.accept(new IllegalStateException("queue of 256 full"));
+          }
+
+          @Override
+          public void unsubscribe(StreamId streamId, SseSubscriber subscriber) {
+            unsubscribed.incrementAndGet();
+          }
+        };
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+
+    var emitter =
+        assertDoesNotThrow(() -> controller.stream("cart", "cart-evicted-at-once", List.of()));
+
+    assertEquals(0, controller.activeCountForTest());
+    assertEquals(1, unsubscribed.get());
+    assertThrows(IllegalStateException.class, () -> emitter.send("anything"));
+  }
+
+  @Test
   @SuppressWarnings("unchecked")
   void evictionHook_isIdempotentAgainstAnAlreadyCompletedEmitter() {
     // The transport may already have gone (client closed, deadline fired) when the eviction

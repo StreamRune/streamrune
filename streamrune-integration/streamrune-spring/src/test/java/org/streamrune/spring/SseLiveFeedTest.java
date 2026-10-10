@@ -16,6 +16,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import javax.sql.DataSource;
@@ -70,6 +71,9 @@ class SseLiveFeedTest {
   private static final AggregateType ORDER = AggregateType.of("order");
   private static final ObjectMapper JSON = new ObjectMapper();
 
+  /** How soon a client sees the stream open: far below the keepalive interval of the test. */
+  private static final Duration OPENS_WITHIN = Duration.ofSeconds(5);
+
   sealed interface OrderCommand extends Command permits OrderCommand.Place {
     record Place(String orderId, String note) implements OrderCommand {}
   }
@@ -110,8 +114,6 @@ class SseLiveFeedTest {
                 "server.port=0",
                 "streamrune.sse.enabled=true",
                 "streamrune.sse.polling-interval=50ms",
-                // The response headers reach the client with the first frame; a short keepalive
-                // makes that frame arrive at once.
                 "streamrune.sse.keep-alive-interval=100ms")
             .run();
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
@@ -161,6 +163,80 @@ class SseLiveFeedTest {
         context.close();
       }
       client.shutdownNow();
+    }
+  }
+
+  /**
+   * The response is committed when the client is subscribed, not with the first event or the first
+   * periodic keepalive: the endpoint writes one comment frame right after it registered the client
+   * with the publisher. A client that has read that frame is therefore subscribed, and an event
+   * stored from then on reaches it.
+   */
+  @Test
+  void theStreamOpensWithACommentFrameAtOnce_andAnEventStoredAfterItIsDelivered() throws Exception {
+    ConfigurableApplicationContext context =
+        new SpringApplicationBuilder(SseApplication.class)
+            .web(WebApplicationType.SERVLET)
+            .registerShutdownHook(false)
+            .properties(
+                "server.port=0",
+                "streamrune.sse.enabled=true",
+                "streamrune.sse.polling-interval=50ms",
+                // The periodic keepalive is far beyond every bound below: it is not what opens the
+                // stream.
+                "streamrune.sse.keep-alive-interval=30s")
+            .run();
+    HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
+    try {
+      int port = ((WebServerApplicationContext) context).getWebServer().getPort();
+      HttpResponse<InputStream> response =
+          client.send(
+              HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/sse/order/o-1"))
+                  .header("Accept", "text/event-stream")
+                  // The status line and the headers must arrive within the bound.
+                  .timeout(OPENS_WITHIN)
+                  .build(),
+              HttpResponse.BodyHandlers.ofInputStream());
+      assertThat(response.statusCode()).isEqualTo(200);
+      List<List<String>> frames = new CopyOnWriteArrayList<>();
+      Thread.ofVirtual().start(() -> collectFrames(response.body(), frames));
+      await().atMost(OPENS_WITHIN).until(() -> !frames.isEmpty());
+      assertThat(frames.getFirst())
+          .as("the opening frame, the same bytes on the three integrations")
+          .containsExactly(": keepalive");
+
+      // No wait for the subscription: the frame the client has read is the proof of it.
+      context.getBean(CommandBus.class).execute(new OrderCommand.Place("o-1", "placed-after-it"));
+
+      await()
+          .atMost(Duration.ofSeconds(10))
+          .until(
+              () ->
+                  frames.stream()
+                      .flatMap(List::stream)
+                      .anyMatch(line -> line.contains("placed-after-it")));
+    } finally {
+      context.close();
+      client.shutdownNow();
+    }
+  }
+
+  /** Reads the stream as frames: the lines up to each blank line. */
+  private static void collectFrames(InputStream body, List<List<String>> frames) {
+    try (BufferedReader lines =
+        new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
+      List<String> frame = new ArrayList<>();
+      String line;
+      while ((line = lines.readLine()) != null) {
+        if (line.isEmpty()) {
+          frames.add(List.copyOf(frame));
+          frame.clear();
+        } else {
+          frame.add(line);
+        }
+      }
+    } catch (IOException _) {
+      // the stream was cut instead of completed; the test asserts on what was read
     }
   }
 

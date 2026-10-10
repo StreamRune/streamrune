@@ -21,6 +21,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +61,9 @@ class SseLiveFeedTest {
   private static final String SPEC = "SseLiveFeedTest";
   private static final AggregateType ORDER = AggregateType.of("order");
   private static final ObjectMapper JSON = new ObjectMapper();
+
+  /** How soon a client sees the stream open: far below the keepalive interval of the test. */
+  private static final Duration OPENS_WITHIN = Duration.ofSeconds(5);
 
   /** Per call of the fixture's authorizer: whether it ran on a virtual thread. */
   private static final List<Boolean> AUTHORIZER_ON_VIRTUAL_THREAD = new CopyOnWriteArrayList<>();
@@ -104,8 +108,6 @@ class SseLiveFeedTest {
     props.put("micronaut.security.enabled", "false");
     props.put("streamrune.sse.enabled", "true");
     props.put("streamrune.sse.polling-interval", "50ms");
-    // The response headers reach the client with the first frame; a short keepalive makes that
-    // frame arrive at once.
     props.put("streamrune.sse.keep-alive-interval", "100ms");
 
     EmbeddedServer server = ApplicationContext.run(EmbeddedServer.class, props);
@@ -168,6 +170,62 @@ class SseLiveFeedTest {
     }
   }
 
+  /**
+   * The response is committed when the client is subscribed, not with the first event or the first
+   * periodic keepalive: the endpoint writes one comment frame right after it registered the client
+   * with the publisher. A client that has read that frame is therefore subscribed, and an event
+   * stored from then on reaches it.
+   */
+  @Test
+  void theStreamOpensWithACommentFrameAtOnce_andAnEventStoredAfterItIsDelivered() throws Exception {
+    Map<String, Object> props = new HashMap<>();
+    props.put("spec.name", SPEC);
+    props.put("micronaut.server.port", "-1");
+    props.put("micronaut.security.enabled", "false");
+    props.put("streamrune.sse.enabled", "true");
+    props.put("streamrune.sse.polling-interval", "50ms");
+    // The periodic keepalive is far beyond every bound below: it is not what opens the stream.
+    props.put("streamrune.sse.keep-alive-interval", "30s");
+
+    EmbeddedServer server = ApplicationContext.run(EmbeddedServer.class, props);
+    HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
+    try {
+      HttpResponse<InputStream> response =
+          client.send(
+              HttpRequest.newBuilder(
+                      URI.create("http://localhost:" + server.getPort() + "/api/sse/order/o-1"))
+                  .header("Accept", "text/event-stream")
+                  // The status line and the headers must arrive within the bound.
+                  .timeout(OPENS_WITHIN)
+                  .build(),
+              HttpResponse.BodyHandlers.ofInputStream());
+      assertThat(response.statusCode()).isEqualTo(200);
+      List<List<String>> frames = new CopyOnWriteArrayList<>();
+      Thread.ofVirtual().start(() -> collectFrames(response.body(), frames));
+      await().atMost(OPENS_WITHIN).until(() -> !frames.isEmpty());
+      assertThat(frames.getFirst())
+          .as("the opening frame, the same bytes on the three integrations")
+          .containsExactly(": keepalive");
+
+      // No wait for the subscription: the frame the client has read is the proof of it.
+      server
+          .getApplicationContext()
+          .getBean(CommandBus.class)
+          .execute(new OrderCommand.Place("o-1", "placed-after-it"));
+
+      await()
+          .atMost(Duration.ofSeconds(10))
+          .until(
+              () ->
+                  frames.stream()
+                      .flatMap(List::stream)
+                      .anyMatch(line -> line.contains("placed-after-it")));
+    } finally {
+      server.stop();
+      client.shutdownNow();
+    }
+  }
+
   @Test
   void theFeedIsNotPartOfAnApplicationWithoutTheEndpoint() {
     Map<String, Object> props = new HashMap<>();
@@ -179,6 +237,25 @@ class SseLiveFeedTest {
       assertThat(context.containsBean(SseEventFeedLifecycle.class))
           .as("no endpoint, so nothing reads the global stream for it")
           .isFalse();
+    }
+  }
+
+  /** Reads the stream as frames: the lines up to each blank line. */
+  private static void collectFrames(InputStream body, List<List<String>> frames) {
+    try (BufferedReader lines =
+        new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
+      List<String> frame = new ArrayList<>();
+      String line;
+      while ((line = lines.readLine()) != null) {
+        if (line.isEmpty()) {
+          frames.add(List.copyOf(frame));
+          frame.clear();
+        } else {
+          frame.add(line);
+        }
+      }
+    } catch (IOException _) {
+      // the stream was cut instead of completed; the test asserts on what was read
     }
   }
 

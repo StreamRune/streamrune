@@ -112,9 +112,14 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
 
 - **What it emits** — one frame per domain event of that stream: `id` is the global offset, `data`
   the decrypted event as JSON (the event types must be serializable by the application's JSON
-  mapper — with Micronaut Serialization, `@Serdeable`). `:keepalive` comment frames are written
+  mapper — with Micronaut Serialization, `@Serdeable`). `: keepalive` comment frames are written
   every `streamrune.sse.keep-alive-interval` (default `30s`), and the server completes a stream
   after `streamrune.sse.timeout` (default `5m`); an `EventSource` reconnects on its own.
+- **Opening frame** — as soon as the client is subscribed the endpoint writes one `: keepalive`
+  comment frame, whatever the keepalive interval, and with it the status line and the headers: the
+  stream is open at once (an `EventSource` fires `onopen`), not with the first event. Nothing of
+  the response is written before the client is subscribed, so a client that has received the first
+  bytes receives every event of the stream stored from then on, while it stays connected.
 - **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
   polling subscription that starts at the head of the global stream when the application starts
   and publishes every event stored from then on to the clients of the event's own stream, every

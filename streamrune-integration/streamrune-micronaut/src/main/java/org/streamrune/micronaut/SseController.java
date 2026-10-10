@@ -65,6 +65,14 @@ import reactor.core.scheduler.Schedulers;
  * bound). Worst case a slow client holds this buffer's items PLUS the publisher's queue — decrypted
  * domain events in both — before either bound fires.
  *
+ * <p><b>Opening frame.</b> The last step of a subscription writes one {@code : keepalive} comment
+ * frame, the same frame on the wire as the Spring and Quarkus integrations write. It commits the
+ * response: the client sees the status line, the headers and this frame as soon as it is
+ * subscribed, not with the first event or the first periodic keepalive. It is emitted after the
+ * client is registered with the {@link SseEventPublisher}, and nothing of the response is written
+ * before the first frame: a client that has received the first bytes of the response receives every
+ * event of the stream published from then on, for as long as it stays connected.
+ *
  * <p><b>Dead-client reaping (ported by).</b> Every stream gets a <em>finite</em> lifetime ({@code
  * streamrune.sse.timeout}, default 5m) and a periodic keepalive comment frame ({@code
  * streamrune.sse.keep-alive-interval}, default 30s). A half-open TCP client (a mobile/NAT drop with
@@ -115,11 +123,12 @@ public class SseController {
   static final int SLOW_CLIENT_BUFFER = 256;
 
   /**
-   * The single keepalive frame instance. Comment-only: the data payload is the EMPTY string, which
-   * {@code TextStreamCodec} writes verbatim as a {@code CharSequence} — zero bytes, so no {@code
-   * data:} line is emitted at all and the wire form is a bare {@code :keepalive} comment, ignored
-   * by every SSE client. It carries no id, so it never disturbs a client's {@code Last-Event-ID}
-   * resume position.
+   * The single keepalive frame instance, written once when a stream opens ({@link
+   * #emitOpeningFrame}) and then every keepalive interval. Comment-only: the data payload is the
+   * EMPTY string, which {@code TextStreamCodec} writes verbatim as a {@code CharSequence} — zero
+   * bytes, so no {@code data:} line is emitted at all and the wire form is a bare {@code :
+   * keepalive} comment, ignored by every SSE client. It carries no id, so it never disturbs a
+   * client's {@code Last-Event-ID} resume position.
    */
   static final Event<?> KEEP_ALIVE = Event.of("").comment("keepalive");
 
@@ -283,6 +292,9 @@ public class SseController {
                   // may both call next() without extra locking.
                   resources.add(scheduleKeepAlive(sink, terminate));
                   sink.onDispose(resources);
+                  // Last, when the client is registered with the publisher and the teardown is in
+                  // place: the frame that commits the response.
+                  emitOpeningFrame(sink, terminate);
                 },
                 FluxSink.OverflowStrategy.ERROR)
             .onBackpressureBuffer(SLOW_CLIENT_BUFFER);
@@ -337,6 +349,37 @@ public class SseController {
   }
 
   /**
+   * Writes the comment frame that opens a stream: the {@link #KEEP_ALIVE} frame, once, as the last
+   * step of the subscription.
+   *
+   * <p><b>What it guarantees.</b> The server writes the status line and the headers of the response
+   * with the first frame of the stream, and every frame comes out of this sink. This one is emitted
+   * after {@link SseEventPublisher#subscribe} returned, so the first bytes of the response cannot
+   * reach the client before the client is registered: a client that has received them receives
+   * every event of the stream published from then on, for as long as it stays connected. Without
+   * this frame the response would be committed by the first event or the first periodic keepalive,
+   * up to a whole {@code streamrune.sse.keep-alive-interval} later.
+   *
+   * <p>An event published between the registration and this call is emitted by the delivery worker
+   * first and is the frame before this one; none is lost, and events keep their order because one
+   * worker delivers them. The sink is serialized, so the two emissions need no lock.
+   *
+   * <p>A failed emission ends the stream like a failed keepalive tick, through {@code terminate}. A
+   * write the socket refuses is reported by the server as a cancellation, which disposes the
+   * stream's resources and with them the publisher subscription.
+   */
+  private static void emitOpeningFrame(FluxSink<Event<?>> sink, Consumer<Throwable> terminate) {
+    try {
+      sink.next(KEEP_ALIVE);
+    } catch (Throwable t) {
+      // Only a JVM-fatal error escapes the serialized sink's next(), and it leaves the sink
+      // poisoned: terminate() therefore tears the stream down itself.
+      log.warn("Evicting an SSE subscriber after a failed opening frame: {}", t.toString());
+      terminate.accept(t);
+    }
+  }
+
+  /**
    * Starts this stream's keepalive ticks, or returns a no-op {@link Disposable} when the keepalive
    * is disabled. Each subscriber gets its OWN periodic task, so a throwing tick can only stop that
    * stream's keepalive — never every other subscriber's (the failure mode the Spring integration
@@ -348,7 +391,7 @@ public class SseController {
       return () -> {}; // nothing scheduled, nothing to cancel
     }
     long intervalMillis = keepAliveInterval.toMillis();
-    // Initial delay = interval so a keepalive never fires before the client has had a full window.
+    // Initial delay = interval: the opening frame is this stream's write at time zero.
     return Schedulers.parallel()
         .schedulePeriodically(
             () -> {

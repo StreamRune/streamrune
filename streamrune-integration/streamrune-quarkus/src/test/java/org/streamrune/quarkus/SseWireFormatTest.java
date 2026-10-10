@@ -62,6 +62,9 @@ class SseWireFormatTest {
       StreamId.of(AggregateType.of("order"), AggregateId.of("o-1"));
   private static final ObjectMapper JSON = new ObjectMapper();
 
+  /** How soon a client sees the stream open: far below the keepalive interval of the test. */
+  private static final Duration OPENS_WITHIN = Duration.ofSeconds(5);
+
   record OrderPlaced(String orderId, int quantity) implements DomainEvent {}
 
   /**
@@ -96,8 +99,6 @@ class SseWireFormatTest {
   void aDomainEventIsWrittenAsAJsonObjectUnderItsGlobalOffset_andAKeepAliveAsAComment()
       throws Exception {
     var publisher = new SseEventPublisher();
-    // The response headers reach the client with the first frame; a short keepalive makes that
-    // frame arrive at once.
     var controller =
         new SseController(
             publisher, ALLOW_ALL, ANONYMOUS, Duration.ofMinutes(5), Duration.ofMillis(100));
@@ -131,7 +132,7 @@ class SseWireFormatTest {
       assertThat(payload.size()).as("the event's own fields and nothing else").isEqualTo(2);
 
       // A keepalive is a comment-only frame.
-      await().atMost(Duration.ofSeconds(5)).until(() -> frames.contains(List.of(":keepalive")));
+      await().atMost(Duration.ofSeconds(5)).until(() -> frames.contains(List.of(": keepalive")));
 
       controller.completeOpenStreams(mock(ShutdownEvent.class));
       reader.join(Duration.ofSeconds(5));
@@ -143,11 +144,57 @@ class SseWireFormatTest {
     }
   }
 
+  /**
+   * The response is committed when the client is subscribed, not with the first event or the first
+   * periodic keepalive: the endpoint writes one comment frame right after it registered the client
+   * with the publisher. A client that has read that frame is therefore subscribed, and an event
+   * published from then on reaches it.
+   */
+  @Test
+  void theStreamOpensWithACommentFrameAtOnce_andAnEventPublishedAfterItIsDelivered()
+      throws Exception {
+    var publisher = new SseEventPublisher();
+    // The periodic keepalive is far beyond every bound below: it is not what opens the stream.
+    var controller =
+        new SseController(
+            publisher, ALLOW_ALL, ANONYMOUS, Duration.ofMinutes(5), Duration.ofSeconds(30));
+    HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
+    try (var server = QuarkusRestTestServer.start(controller, JacksonJsonWriter.class)) {
+      HttpResponse<InputStream> response = open(client, server, "/api/sse/order/o-1", OPENS_WITHIN);
+      assertThat(response.statusCode()).isEqualTo(200);
+      List<List<String>> frames = new CopyOnWriteArrayList<>();
+      Thread.ofVirtual().start(() -> collectFrames(response.body(), frames));
+      await().atMost(OPENS_WITHIN).until(() -> !frames.isEmpty());
+      assertThat(frames.getFirst()).containsExactly(": keepalive");
+
+      // No wait for the subscription: the frame the client has read is the proof of it.
+      publisher.publish(envelope(42, new OrderPlaced("o-1", 3)));
+
+      await()
+          .atMost(Duration.ofSeconds(10))
+          .until(() -> frames.stream().anyMatch(SseWireFormatTest::carriesData));
+      assertThat(frames.stream().filter(SseWireFormatTest::carriesData).findFirst().orElseThrow())
+          .contains("id:42");
+    } finally {
+      client.shutdownNow();
+      controller.shutdown();
+      publisher.close();
+    }
+  }
+
   static HttpResponse<InputStream> open(
       HttpClient client, QuarkusRestTestServer server, String path) throws Exception {
+    return open(client, server, path, Duration.ofSeconds(60));
+  }
+
+  /** Opens the stream; fails unless the status line and the headers arrive within the bound. */
+  static HttpResponse<InputStream> open(
+      HttpClient client, QuarkusRestTestServer server, String path, Duration headersWithin)
+      throws Exception {
     return client.send(
         HttpRequest.newBuilder(URI.create("http://localhost:" + server.port() + path))
             .header("Accept", "text/event-stream")
+            .timeout(headersWithin)
             .build(),
         HttpResponse.BodyHandlers.ofInputStream());
   }

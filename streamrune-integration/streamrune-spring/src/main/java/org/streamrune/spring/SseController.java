@@ -59,6 +59,14 @@ import org.streamrune.runtime.SseEventPublisher;
  * the header through {@link ScopedValueFilter#userIdHeaderValues}, every value as received, so a
  * repeated {@code X-User-Id} cannot resolve to one caller here and another there.
  *
+ * <p><b>Opening frame.</b> The last step of a subscription sends one {@code : keepalive} comment
+ * frame, the same frame on the wire as the Quarkus and Micronaut integrations write. It commits the
+ * response: the client sees the status line, the headers and this frame as soon as it is
+ * subscribed, not with the first event or the first periodic keepalive. It is sent after the client
+ * is registered with the {@link SseEventPublisher}, and nothing of the response is written before
+ * it: a client that has received the first bytes of the response receives every event of the stream
+ * published from then on, for as long as it stays connected.
+ *
  * <p><b>Dead-client reaping.</b> Each emitter is given a <em>finite</em> timeout ({@code
  * streamrune.sse.timeout}) and a periodic keepalive comment frame is written to every subscriber
  * ({@code streamrune.sse.keep-alive-interval}). A half-open TCP client (mobile/NAT drop with no
@@ -102,6 +110,14 @@ public class SseController implements SmartLifecycle, AutoCloseable {
   public static final int PHASE = SmartLifecycle.DEFAULT_PHASE - 512;
 
   private static final Logger log = LoggerFactory.getLogger(SseController.class);
+
+  /**
+   * The text of the keepalive comment; the line on the wire is {@code : keepalive}. The leading
+   * space is there for the three integrations to write the same bytes: Micronaut's Server-Sent
+   * Events codec puts one space after the colon of every line it writes, a comment included. A
+   * client ignores a comment line whatever it holds.
+   */
+  static final String KEEP_ALIVE_COMMENT = " keepalive";
 
   private static final Duration DEFAULT_TIMEOUT = Duration.ofMinutes(5);
   private static final Duration DEFAULT_KEEP_ALIVE_INTERVAL = Duration.ofSeconds(30);
@@ -176,8 +192,7 @@ public class SseController implements SmartLifecycle, AutoCloseable {
                 t.setDaemon(true);
                 return t;
               });
-      // Initial delay = interval so a keepalive never fires before the client has had a full
-      // window.
+      // Initial delay = interval: a stream's opening frame is its own write at time zero.
       this.keepAlive.scheduleAtFixedRate(
           this::sendKeepAlives, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
     } else {
@@ -334,8 +349,50 @@ public class SseController implements SmartLifecycle, AutoCloseable {
     emitter.onCompletion(cleanup);
     emitter.onTimeout(cleanup);
     emitter.onError(t -> cleanup.run());
+    // Last, when the client is registered with the publisher and the cleanup is in place: the
+    // frame that commits the response.
+    sendOpeningFrame(registration, sid);
 
     return emitter;
+  }
+
+  /**
+   * Hands the emitter the comment frame that opens a stream: one {@code : keepalive} comment, the
+   * frame {@link #sendKeepAlives()} writes.
+   *
+   * <p><b>What it guarantees.</b> Spring MVC writes nothing for an {@link SseEmitter} until the
+   * handler method has returned; a frame sent before that is held by the emitter and written, with
+   * the status line and the headers, when Spring MVC takes the emitter over. This call comes after
+   * {@link SseEventPublisher#subscribe} returned, so the first bytes of the response cannot reach
+   * the client before the client is registered: a client that has received them receives every
+   * event of the stream published from then on, for as long as it stays connected. Without this
+   * frame the response would be committed by the first event or the first periodic keepalive, up to
+   * a whole {@code streamrune.sse.keep-alive-interval} later.
+   *
+   * <p>An event published between the registration and this call is held by the emitter ahead of
+   * this frame and written before it; none is lost, and events keep their order because one worker
+   * delivers them. The send lock serializes this call with that worker's.
+   *
+   * <p>The only failure possible here is an emitter that is already complete: the controller was
+   * stopped, or the publisher evicted the client, between the registration and this call. Whoever
+   * completed it has unsubscribed the client, so there is nothing to write and nothing to clean up.
+   * A failure to write the held frames to the socket surfaces in Spring MVC, which reports it to
+   * the emitter's error callback: the cleanup a failed keepalive runs.
+   */
+  private static void sendOpeningFrame(ActiveEmitter registration, StreamId sid) {
+    registration.sendLock.lock();
+    try {
+      registration.emitter.send(SseEmitter.event().comment(KEEP_ALIVE_COMMENT));
+    } catch (IOException | IllegalStateException alreadyCompleted) {
+      // Both parts arrive percent-decoded from the request path; every id in a log line is rendered
+      // through the sanitizer so no value can forge a line (CWE-117).
+      log.debug(
+          "SSE stream {} was completed before its opening frame was sent",
+          LogSanitizer.sanitizeForLog(sid.value()),
+          alreadyCompleted);
+    } finally {
+      registration.sendLock.unlock();
+    }
   }
 
   /** The two path segments through their ingress doors; an invalid part is the caller's error. */
@@ -359,7 +416,7 @@ public class SseController implements SmartLifecycle, AutoCloseable {
   }
 
   /**
-   * Writes a keepalive comment to every live emitter. A comment frame ({@code :keepalive}) is
+   * Writes a keepalive comment to every live emitter. A comment frame ({@code : keepalive}) is
    * ignored by SSE clients but forces a socket write, so a half-open/dead connection surfaces as a
    * failed send here and is evicted immediately instead of lingering until the timeout. Package
    * private so a test can drive one tick deterministically.
@@ -384,7 +441,7 @@ public class SseController implements SmartLifecycle, AutoCloseable {
       }
       try {
         try {
-          registration.emitter.send(SseEmitter.event().comment("keepalive"));
+          registration.emitter.send(SseEmitter.event().comment(KEEP_ALIVE_COMMENT));
         } finally {
           registration.sendLock.unlock();
         }

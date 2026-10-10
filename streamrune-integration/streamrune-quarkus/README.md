@@ -68,9 +68,14 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   the decrypted event as a JSON object, written by your application's JSON extension
   (`quarkus-rest-jackson` or `quarkus-rest-jsonb`). The integration does not bring one: without a
   JSON extension Quarkus REST has only its text writer and `data` carries the event's `toString()`.
-  `:keepalive` comment frames are written every `streamrune.sse.keep-alive-interval` (default
+  `: keepalive` comment frames are written every `streamrune.sse.keep-alive-interval` (default
   `30s`), and the server completes a stream after `streamrune.sse.timeout` (default `5m`); an
   `EventSource` reconnects on its own.
+- **Opening frame** — as soon as the client is subscribed the endpoint writes one `: keepalive`
+  comment frame, whatever the keepalive interval. A client that has read it receives every event
+  of the stream stored from then on, while it stays connected. Quarkus REST sends the status line
+  and the headers just before it subscribes the client, so on Quarkus this frame, not the response
+  head (an `EventSource`'s `onopen`), is the signal that the client is subscribed.
 - **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
   polling subscription that starts at the head of the global stream when the application starts
   and publishes every event stored from then on to the clients of the event's own stream, every

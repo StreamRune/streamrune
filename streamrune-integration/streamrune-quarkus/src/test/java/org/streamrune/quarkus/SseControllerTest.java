@@ -161,10 +161,14 @@ class SseControllerTest {
         envelope(StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-3")), 42L, event));
 
     // Delivery is asynchronous (per-subscriber queue drained by a worker thread), so await it.
-    testSubscriber.awaitItems(1, java.time.Duration.ofSeconds(5));
+    testSubscriber.awaitItems(2, java.time.Duration.ofSeconds(5));
     testSubscriber.assertNotTerminated();
-    assertEquals(1, testSubscriber.getItems().size());
-    OutboundSseEvent item = testSubscriber.getItems().get(0);
+    assertEquals(2, testSubscriber.getItems().size());
+    assertSame(
+        SseController.KEEP_ALIVE,
+        testSubscriber.getItems().get(0),
+        "the stream opens with the comment frame, emitted once the client is registered");
+    OutboundSseEvent item = testSubscriber.getItems().get(1);
     // Framework-serialized event: id = global offset, data = full domain event as JSON.
     // No hand-rolled "id:...\ndata:..." framing — Quarkus REST writes the wire format.
     assertEquals("42", item.getId());
@@ -263,12 +267,13 @@ class SseControllerTest {
     var testSubscriber = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
     multi.subscribe(testSubscriber);
 
-    // No domain event is ever published — every item below is a keepalive.
-    testSubscriber.awaitItems(2, java.time.Duration.ofSeconds(5));
+    // No domain event is ever published — every item below is a keepalive: the opening frame and
+    // two ticks.
+    testSubscriber.awaitItems(3, java.time.Duration.ofSeconds(5));
     testSubscriber.assertNotTerminated();
 
     for (OutboundSseEvent frame : testSubscriber.getItems()) {
-      assertEquals("keepalive", frame.getComment(), "a keepalive must be a comment frame");
+      assertEquals(" keepalive", frame.getComment(), "a keepalive must be a comment frame");
       assertNull(frame.getData(), "a keepalive must carry no data — clients must ignore it");
       assertNull(frame.getId(), "a keepalive must not disturb the client's Last-Event-ID");
       assertNull(frame.getName());
@@ -307,10 +312,11 @@ class SseControllerTest {
   }
 
   @Test
-  void keepAliveDisabledByZeroInterval_streamStaysSilentUntilAnEventArrives()
+  void keepAliveDisabledByZeroInterval_theOpeningFrameIsTheOnlyComment()
       throws InterruptedException {
     // Zero/negative disables the keepalive, leaving the timeout as the sole reaper (the documented
-    // knob semantics, shared with Spring and Micronaut).
+    // knob semantics, shared with Spring and Micronaut). The opening frame is not a keepalive tick:
+    // it is written whatever the interval.
     var publisher = mock(SseEventPublisher.class);
     var controller =
         new SseController(
@@ -326,7 +332,7 @@ class SseControllerTest {
 
     // Long enough that a 50ms-style keepalive would have fired many times had one been scheduled.
     Thread.sleep(300);
-    testSubscriber.assertHasNotReceivedAnyItem();
+    assertEquals(List.of(SseController.KEEP_ALIVE), testSubscriber.getItems());
     testSubscriber.assertNotTerminated();
     testSubscriber.cancel();
     controller.shutdown();
@@ -586,11 +592,45 @@ class SseControllerTest {
 
     try (var warnings = new CapturedSseControllerLog()) {
       controller.stream("cart", "cart-dead-tick", List.of())
-          .subscribe(new ThrowingSubscriber(Callback.ITEM, cause));
+          .subscribe(new ThrowingSubscriber(Callback.TICK, cause));
 
       assertEquals(
           List.of("Evicting an SSE subscriber after a failed keepalive tick: " + cause),
           warnings.awaitMessages(1));
+      // The downstream threw from onNext, so the emitter cannot terminate: the eviction itself
+      // releases the stream.
+      verify(publisher, timeout(1000))
+          .unsubscribe(
+              eq(StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-dead-tick"))), any());
+      assertEquals(0, controller.openStreamCount());
+    } finally {
+      controller.shutdown();
+    }
+  }
+
+  @Test
+  void aFailedOpeningFrameEvictsTheSubscriberLikeAFailedKeepAliveTick()
+      throws InterruptedException {
+    // The opening frame is the first write to the client. When it fails the client is already
+    // registered with the publisher, so the stream must be torn down the way a failed tick tears
+    // it down: failed, removed from the open streams, unsubscribed.
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    var cause = new IllegalStateException("client gone");
+
+    try (var warnings = new CapturedSseControllerLog()) {
+      controller.stream("cart", "cart-dead-opening", List.of())
+          .subscribe(new ThrowingSubscriber(Callback.ITEM, cause));
+
+      assertEquals(
+          List.of("Evicting an SSE subscriber after a failed opening frame: " + cause),
+          warnings.awaitMessages(1));
+      var registered = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
+      var stream = StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-dead-opening"));
+      var order = inOrder(publisher);
+      order.verify(publisher).subscribe(eq(stream), registered.capture(), any());
+      order.verify(publisher).unsubscribe(stream, registered.getValue());
+      assertEquals(0, controller.openStreamCount());
     } finally {
       controller.shutdown();
     }
@@ -637,6 +677,11 @@ class SseControllerTest {
       assertEquals(
           List.of("Failed to fail an evicted SSE stream for cart:cart-dead-evict: " + cause),
           warnings.awaitMessages(1));
+      // The emitter could not be failed, so its termination hook is not what releases the stream.
+      verify(publisher)
+          .unsubscribe(
+              eq(StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-dead-evict"))), any());
+      assertEquals(0, controller.openStreamCount());
     } finally {
       controller.shutdown();
     }
@@ -644,6 +689,7 @@ class SseControllerTest {
 
   private enum Callback {
     ITEM,
+    TICK,
     FAILURE,
     COMPLETION
   }
@@ -651,12 +697,15 @@ class SseControllerTest {
   /**
    * A downstream that throws from one callback, so the controller's emitter call driving it ({@code
    * emit}, {@code fail} or {@code complete}) throws in turn: the failure each WARN reports. ITEM
-   * throws for keepalive frames only.
+   * throws for every keepalive frame, so for the opening frame; TICK lets the opening frame pass
+   * and throws for the keepalive frames after it, the periodic ticks.
    */
   private static final class ThrowingSubscriber
       implements io.smallrye.mutiny.subscription.MultiSubscriber<OutboundSseEvent> {
     private final Callback callback;
     private final RuntimeException cause;
+    private final java.util.concurrent.atomic.AtomicInteger keepAlives =
+        new java.util.concurrent.atomic.AtomicInteger();
 
     ThrowingSubscriber(Callback callback, RuntimeException cause) {
       this.callback = callback;
@@ -670,7 +719,11 @@ class SseControllerTest {
 
     @Override
     public void onItem(OutboundSseEvent item) {
-      if (callback == Callback.ITEM && item == SseController.KEEP_ALIVE) {
+      if (item != SseController.KEEP_ALIVE) {
+        return;
+      }
+      int seen = keepAlives.incrementAndGet();
+      if (callback == Callback.ITEM || (callback == Callback.TICK && seen > 1)) {
         throw cause;
       }
     }

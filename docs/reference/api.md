@@ -475,7 +475,7 @@ public final class SseEventFeed implements AutoCloseable {
 
 | | |
 |---|---|
-| Frame | `id` = global offset, `data` = the decrypted domain event as JSON; `:keepalive` comments in between |
+| Frame | `id` = global offset, `data` = the decrypted domain event as JSON; a `: keepalive` comment as soon as the client is subscribed and every keepalive interval |
 | Authorization | the `SseAuthorizer` bean decides per caller and `StreamId` before a stream is opened; without one every stream answers `403` |
 | Delivery | live, best-effort, at-most-once: only to clients connected at that moment, nothing is redelivered, `Last-Event-ID` is not honoured |
 | Order | version order within a stream |

@@ -78,9 +78,11 @@ class SseLiveFeedTest {
       bus.execute(new OrderCommand.Place("o-2", "placed-on-o-2"));
       bus.execute(new OrderCommand.Place("o-1", "placed-on-o-1"));
 
-      client.awaitItems(1, Duration.ofSeconds(10));
+      // The opening comment frame, then the event.
+      client.awaitItems(2, Duration.ofSeconds(10));
       assertThat(client.getItems())
           .as("only the events of order/o-1 stored after the start are emitted to its subscriber")
+          .filteredOn(frame -> frame.getData() != null)
           .extracting(OutboundSseEvent::getData)
           .containsExactly(new OrderEvent.Placed("placed-on-o-1"));
 

@@ -83,12 +83,17 @@ streamrune:
     enabled: true            # default false
     polling-interval: 1s     # how often the feed reads the global stream; must be positive
     timeout: 5m              # the server completes a stream after this; 0 disables
-    keep-alive-interval: 30s # ":keepalive" comment frames; 0 disables
+    keep-alive-interval: 30s # ": keepalive" comment frames; 0 disables
 ```
 
 - **What it emits** — one frame per domain event of that stream: `id` is the global offset, `data`
   the decrypted event as JSON (written by the application's `HttpMessageConverter`s). An
   `EventSource` reconnects on its own when the server completes the stream.
+- **Opening frame** — as soon as the client is subscribed the endpoint writes one `: keepalive`
+  comment frame, whatever the keepalive interval, and with it the status line and the headers: the
+  stream is open at once (an `EventSource` fires `onopen`), not with the first event. Nothing of
+  the response is written before the client is subscribed, so a client that has received the first
+  bytes receives every event of the stream stored from then on, while it stays connected.
 - **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
   polling subscription that starts at the head of the global stream when the application starts
   and publishes every event stored from then on to the clients of the event's own stream, every

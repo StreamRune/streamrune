@@ -626,7 +626,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `SseEventFeed` per application instance, a polling subscription (`streamrune.sse.polling-interval`,
   default `1s`) that starts at the head of the global stream with the application, keeps no stored
   offset, never replays history, and stops with the application; open streams are completed on
-  shutdown. Each frame carries the global offset as `id` and the decrypted event as JSON. Delivery is
+  shutdown. Each frame carries the global offset as `id` and the decrypted event as JSON. A stream
+  opens with one `: keepalive` comment frame, written as soon as the client is subscribed, so the
+  response is committed at once and a client that has read the frame receives every event of the
+  stream stored from then on while it stays connected; the same comment is written every
+  `streamrune.sse.keep-alive-interval`. Delivery is
   live, best-effort and at-most-once: only clients connected at that moment receive a frame, nothing
   is redelivered and `Last-Event-ID` is not honoured. `SseEventPublisher.publish(EventEnvelope)`
   routes an event by its own `streamId()`, so it cannot reach the subscribers of another stream.
