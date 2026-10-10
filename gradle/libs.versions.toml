@@ -46,8 +46,13 @@ aws-sdk = "2.30.0"
 
 # Observability
 opentelemetry = "1.47.0"
-# Managed by the Spring Boot 4.1.x BOM — keep aligned when bumping spring-boot
-micrometer = "1.17.1"
+# The lowest Micrometer among the supported framework lines: Quarkus 3.32 manages 1.16.3, Spring
+# Boot 4.1 manages 1.17.x. An application gets the version its framework manages, because Maven
+# applies the application's BOM and Gradle takes the highest version requested. Declaring more than
+# the Quarkus-managed version would raise Micrometer in a Gradle-built Quarkus application above
+# the one the Quarkus Micrometer extension is written for, and its native image then fails to build
+# (verifyMicrometerVersion in streamrune-quarkus checks this).
+micrometer = "1.16.3"
 
 # Security
 # Managed by the Spring Boot 4.1.x BOM — keep aligned when bumping spring-boot
