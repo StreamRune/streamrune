@@ -7,7 +7,7 @@ import org.streamrune.core.OptimisticLockException;
  * rejected by one of the framework's own commit-boundary guards — the epoch fence (a newer leader
  * took over the lease), the first-offset overlap guard, or the monotonic offset guard —
  * <em>before</em> any read-model row was written. It is a leadership/CAS signal, never a
- * projection-logic failure.
+ * projection-logic failure; {@link #guard()} says which guard rejected the commit.
  *
  * <p><b>Why a dedicated subtype.</b> A projection may legitimately use the versioned read-model
  * save API ({@code findById(..., LockMode.OPTIMISTIC)} + {@code save(name, id, model,
@@ -27,12 +27,50 @@ import org.streamrune.core.OptimisticLockException;
  */
 public class ProjectionCommitFencedException extends OptimisticLockException {
 
+  /** The commit-boundary guard that rejected the commit. */
+  public enum Guard {
+    /**
+     * The caller's epoch is below the epoch stored on the checkpoint: a newer leader holds the
+     * lease. Standing by is the answer.
+     */
+    EPOCH_FENCE,
+    /**
+     * The batch starts at or before the committed checkpoint: the checkpoint the processor holds is
+     * ahead of the one the caller read its batch from.
+     */
+    OVERLAP,
+    /** The offset advance does not move the committed checkpoint forward. */
+    MONOTONIC
+  }
+
+  private final Guard guard;
+
   /**
    * Creates a fence-rejection exception with a pre-formatted message.
    *
-   * @param message the detail message describing which guard rejected the commit
+   * @param guard the guard that rejected the commit
+   * @param message the detail message describing the rejection
+   * @throws IllegalArgumentException if {@code guard} is {@code null}
    */
-  public ProjectionCommitFencedException(String message) {
+  public ProjectionCommitFencedException(Guard guard, String message) {
     super(message);
+    if (guard == null) {
+      throw new IllegalArgumentException("guard is required");
+    }
+    this.guard = guard;
+  }
+
+  /**
+   * The guard that rejected the commit. The runners stand by on {@link Guard#EPOCH_FENCE}, which
+   * names a newer leader. {@link Guard#OVERLAP} and {@link Guard#MONOTONIC} name a checkpoint that
+   * is ahead of the one the caller read: once, that is a commit whose acknowledgement was lost and
+   * the re-read resolves it; again at the same checkpoint, the caller's {@link OffsetStore} is not
+   * reading the checkpoint this processor advances, and the runners stop with a configuration
+   * error.
+   *
+   * @return the guard that rejected the commit
+   */
+  public Guard guard() {
+    return guard;
   }
 }

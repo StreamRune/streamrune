@@ -2,8 +2,7 @@ name: Build
 
 # Full framework build on every push to main, every pull request, and every v* tag push:
 # compiles all modules, runs the test suite (Testcontainers — PostgreSQL, Kafka, RabbitMQ) and
-# enforces the per-module JaCoCo 0.80 instruction + branch coverage gates. The slow Fray
-# concurrency probes are NOT run here — they have their own scheduled workflow (fray-test.yml).
+# enforces the per-module JaCoCo 0.80 instruction + branch coverage gates.
 #
 # StreamRune declares PostgreSQL 17 or newer, and says so only because both ends of that range
 # are tested. The `build` job below runs everything against the newest supported server (18, the
@@ -29,11 +28,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A run in progress is cancelled only for a pull request, where a newer push supersedes it. A run
+# for a push to main or for a tag always finishes: the snapshot publication (publish-snapshot.yml)
+# waits for this workflow's result on exactly that commit, and a tag push is a release cut. Runs of
+# one ref still share a group, so pushes to main are built one after another, in push order; when
+# they arrive faster than a build takes, GitHub keeps only the newest waiting run, so the tip of
+# main is always built and the snapshot never moves back to an older commit.
 concurrency:
   group: build-${{ github.ref }}
-  # A tag push is a release cut; matches the broker-e2e-test.yml sibling's reasoning for the
-  # same trigger — never auto-cancel a release-critical run.
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

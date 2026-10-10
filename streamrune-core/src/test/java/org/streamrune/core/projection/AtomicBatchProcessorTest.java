@@ -211,4 +211,95 @@ class AtomicBatchProcessorTest {
         IllegalArgumentException.class,
         () -> AtomicBatchProcessor.nonAtomicAtLeastOnce().writesTo(null));
   }
+
+  /**
+   * A processor that has not implemented a per-projection lock does not claim one, and refuses to
+   * replay a dead-lettered range beside a live runner: run unlocked, the replay and a live batch
+   * can both read a row before either saves it. The refusal names the processor and the way out.
+   */
+  @Test
+  void replayDefaults_claimNoLock_andRefuseTheReplay() {
+    AtomicBatchProcessor custom = (pn, batch, newOffset, epoch, updater, offsetStore) -> {};
+    var name = ProjectionName.of("orders\r\nforged");
+    var updaterRan = new AtomicBoolean();
+
+    for (AtomicBatchProcessor processor :
+        List.of(AtomicBatchProcessor.nonAtomicAtLeastOnce(), custom)) {
+      assertFalse(processor.serializesReplay());
+      var refusal =
+          assertThrows(
+              UnsupportedOperationException.class,
+              () -> processor.executeReplay(name, List.of(), repo -> updaterRan.set(true)));
+      assertTrue(refusal.getMessage().contains("replayWithRunnerStopped"), refusal.getMessage());
+      assertTrue(refusal.getMessage().contains("serializesReplay()"), refusal.getMessage());
+      assertFalse(refusal.getMessage().contains("\r"), "the name is sanitized in the message");
+    }
+    assertFalse(updaterRan.get(), "a refused replay never runs the updater");
+    assertTrue(
+        assertThrows(
+                UnsupportedOperationException.class,
+                () ->
+                    AtomicBatchProcessor.nonAtomicAtLeastOnce()
+                        .executeReplay(name, List.of(), repo -> {}))
+            .getMessage()
+            .contains("nonAtomicAtLeastOnce()"));
+    assertTrue(
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> custom.executeReplay(null, List.of(), repo -> {}))
+            .getMessage()
+            .contains("'null'"));
+  }
+
+  /** A processor without a structure per projection has nothing to prepare. */
+  @Test
+  void defaultPrepareReadModel_doesNothing() {
+    AtomicBatchProcessor custom = (pn, batch, newOffset, epoch, updater, offsetStore) -> {};
+    assertDoesNotThrow(() -> custom.prepareReadModel(ProjectionName.of("orders")));
+    assertDoesNotThrow(() -> AtomicBatchProcessor.nonAtomicAtLeastOnce().prepareReadModel(null));
+  }
+
+  @Test
+  void commitFencedException_carriesTheGuardThatRejected() {
+    for (var guard : ProjectionCommitFencedException.Guard.values()) {
+      var rejection = new ProjectionCommitFencedException(guard, "rejected");
+      assertSame(guard, rejection.guard());
+      assertEquals("rejected", rejection.getMessage());
+    }
+    assertThrows(
+        IllegalArgumentException.class, () -> new ProjectionCommitFencedException(null, "x"));
+  }
+
+  /**
+   * The default replay hook feeds the batch to the two-argument {@code process} with the repository
+   * it was handed, and reports that it applied.
+   */
+  @Test
+  void projectionReplayHook_default_processesThroughTheHandedRepository_andReportsApplied() {
+    var handed = new ArrayList<ProjectionRepository>();
+    var batches = new AtomicInteger();
+    Projection projection =
+        new Projection() {
+          @Override
+          public void process(List<org.streamrune.core.EventEnvelope> batch) {
+            batches.incrementAndGet();
+          }
+
+          @Override
+          public void process(
+              List<org.streamrune.core.EventEnvelope> batch, ProjectionRepository repository) {
+            handed.add(repository);
+            process(batch);
+          }
+        };
+    var repository = repositoryWithIdentity("store-A");
+
+    assertTrue(projection.processDeadLetterReplay(List.of(), repository));
+    assertTrue(projection.processDeadLetterReplay(List.of(), null));
+
+    assertEquals(2, batches.get());
+    assertEquals(2, handed.size());
+    assertSame(repository, handed.get(0));
+    assertNull(handed.get(1));
+  }
 }

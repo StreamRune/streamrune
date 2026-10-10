@@ -28,7 +28,9 @@ Add a `Signed-off-by` trailer to every commit:
     git commit --signoff
 
 This appends `Signed-off-by: Your Name <your-email@example.com>` using
-the name and email from `git config user.name` / `user.email`.
+the name and email from `git config user.name` / `user.email`. The `DCO`
+check on a pull request requires that trailer to carry the name and
+e-mail of the commit's author, so sign off as the author of the commit.
 
 To retroactively sign off the most recent commit:
 
