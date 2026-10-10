@@ -66,13 +66,12 @@ import org.streamrune.core.types.SubjectId;
  * registries and no test flagged them. A self-seeded expectation can only ever prove the registry
  * is closed under reachability, never that it is complete.
  *
- * <p>There is deliberately <b>no opt-out list</b>. The auditor proposed one ("an explicit,
- * code-reviewed opt-out list for types the framework provably never JSON-serialises"), but an
- * opt-out list is a second registry to keep in sync and it re-admits silence: a type demoted into
- * it is never revisited when it later becomes a DTO. Scoping the exhaustive source to TOP-LEVEL
- * core records/enums achieves the same noise reduction structurally — the SPI result holders an
- * opt-out list would have listed are all nested — and leaves omission as the thing that requires an
- * affirmative decision.
+ * <p>There is deliberately <b>no opt-out list</b> (an explicit, code-reviewed list of types the
+ * framework provably never JSON-serialises): an opt-out list is a second registry to keep in sync
+ * and it re-admits silence: a type demoted into it is never revisited when it later becomes a DTO.
+ * Scoping the exhaustive source to TOP-LEVEL core records/enums achieves the same noise reduction
+ * structurally — the SPI result holders an opt-out list would have listed are all nested — and
+ * leaves omission as the thing that requires an affirmative decision.
  */
 public final class NativeReflectionTypes {
 

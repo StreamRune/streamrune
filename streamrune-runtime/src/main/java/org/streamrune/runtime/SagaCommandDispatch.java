@@ -111,7 +111,7 @@ final class SagaCommandDispatch {
             .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
             .call(() -> commandBus.execute(command, key));
     // Null-tolerant like DeadLetterRetryRunner.processEntry: a third-party bus returning null is
-    // treated as an executed command (the pre-fix behavior), never as a veto.
+    // treated as an executed command, never as a veto.
     if (result != null && result.vetoed()) {
       throw new SagaCommandVetoedException(
           result.shortCircuitedBy(), command.getClass().getSimpleName());
@@ -305,11 +305,11 @@ final class SagaCommandDispatch {
      * bus, or an interceptor veto — so nothing was attempted and nothing can be learned about the
      * compensation itself. Semantically {@link #RETRY} (the episode stays {@code COMPENSATING} for
      * the resume paths), but callers that COUNT attempts toward a give-up bound ({@code
-     * SagaCompensationRetrySweeper}) must not count this one: the pre-fix sweeper recorded a
-     * refused re-drive as a real attempt and, one cycle past {@code giveUpAfter}, FAULTED the saga
-     * with ZERO actual dispatches — the same class the dead-letter retry runner already guards
-     * against in {@code DeadLetterRetryRunner}. A mix of refusals and genuine transient failures
-     * stays {@link #RETRY}: a real attempt happened.
+     * SagaCompensationRetrySweeper}) must not count this one: a sweeper that recorded a refused
+     * re-drive as a real attempt would, one cycle past {@code giveUpAfter}, FAULT the saga with
+     * ZERO actual dispatches — the same class the dead-letter retry runner guards against in {@code
+     * DeadLetterRetryRunner}. A mix of refusals and genuine transient failures stays {@link
+     * #RETRY}: a real attempt happened.
      */
     RETRY_REFUSED(null);
 

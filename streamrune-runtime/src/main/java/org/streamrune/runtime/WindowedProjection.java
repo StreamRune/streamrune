@@ -168,8 +168,8 @@ public final class WindowedProjection<W> implements Projection {
    * <p>Reports {@code false} when the offset fence excluded the WHOLE batch. A dead-lettered range
    * is a hole the live runner skipped past; once later batches have advanced the fence beyond it,
    * the fence — a high-water mark, not a per-offset record — reads the never- accumulated hole as
-   * "already counted" and the replay applies nothing. Pre-fix the replayer discarded the entry on
-   * that silent no-op, destroying the range's only record. The fence semantics are deliberately NOT
+   * "already counted" and the replay applies nothing. A replayer that discarded the entry on that
+   * silent no-op would destroy the range's only record. The fence semantics are deliberately NOT
    * weakened here (a genuinely re-delivered range must still dedup); the replayer keeps the entry
    * instead, and the operator replays from a fresh process (see the class doc's rebuild contract).
    * A PARTIALLY fenced batch reports {@code true}: the fence advances per applied event, so a fence
@@ -212,8 +212,8 @@ public final class WindowedProjection<W> implements Projection {
       // attempt: that attempt had committed every event, advanced the fence AND the
       // watermark, and aborted the scan with windows still open past end+grace. On a quiescent
       // stream no later event will ever re-run the scan, so those isFinal emissions would be
-      // stranded forever — the pre-fix "complete no-op, including the sink" early return was
-      // falsified by its own crashed run. Re-run the close scan and the eviction against the
+      // stranded forever if this branch returned early as a complete no-op, sink included.
+      // Re-run the close scan and the eviction against the
       // current watermark: both are idempotent per window (a closed window leaves openWindows; a
       // window whose emission threw before it.remove() is re-emitted with the SAME correct value —
       // the duplicate-never-wrong discipline). No accumulation, no fence move, no

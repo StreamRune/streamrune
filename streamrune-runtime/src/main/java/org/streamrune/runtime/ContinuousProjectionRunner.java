@@ -1985,9 +1985,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * HybridEventSubscription.builder().listener(listener)}) so that {@code processLiveBatch} — the
    * configured error strategy (SKIP/DLQ/HALT), the atomic offset checkpoint, the leadership
    * pre-commit gate, and health/error tracking — applies to factory-built subscriptions exactly as
-   * it does to the default polling subscription. Passing the raw projection (the pre-fix contract)
-   * silently downgraded the recommended-for-production Hybrid path in LIVE mode: a poison batch
-   * spun forever, a crash double-applied, and a split-brain leader had no pre-commit re-check.
+   * it does to the default polling subscription. Passing the raw projection would silently
+   * downgrade the recommended-for-production Hybrid path in LIVE mode: a poison batch would spin
+   * forever, a crash would double-apply, and a split-brain leader would have no pre-commit
+   * re-check.
    *
    * <p>{@code readPoisonBound} is the owning runner's configured max consecutive deterministic
    * read-poison retries. A factory building a poison-bounded subscription — {@code

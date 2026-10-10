@@ -29,12 +29,12 @@ import org.streamrune.core.types.SagaType;
  *
  * <p><b>Claim-first ownership:</b> for each timed-out saga the runner first claims exclusive
  * ownership of the compensation episode by CAS-writing the saga to {@link SagaStatus#COMPENSATING}
- * <em>before</em> dispatching any compensation command. This is the fix for a critical bug: if
- * compensation were dispatched first and the event path won a subsequent race on the terminal
- * write, the already-dispatched compensation would be orphaned (executed against live aggregates
- * but never reconciled in the saga record). With claim-first, losing the claim CAS means no
- * compensation commands were ever dispatched for this attempt — there are no orphaned side effects.
- * Only after the claim succeeds does the runner:
+ * <em>before</em> dispatching any compensation command. The order matters: if compensation were
+ * dispatched first and the event path won a subsequent race on the terminal write, the
+ * already-dispatched compensation would be orphaned (executed against live aggregates but never
+ * reconciled in the saga record). With claim-first, losing the claim CAS means no compensation
+ * commands were ever dispatched for this attempt — there are no orphaned side effects. Only after
+ * the claim succeeds does the runner:
  *
  * <ol>
  *   <li>Pass a {@link org.streamrune.core.saga.SagaTimeoutException} to {@link

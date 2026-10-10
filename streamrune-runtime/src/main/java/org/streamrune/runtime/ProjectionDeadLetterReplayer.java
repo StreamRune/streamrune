@@ -54,12 +54,12 @@ import org.streamrune.core.types.ProjectionName;
  * discard happens only on a non-exceptional feed that DID apply. A self-fencing projection — {@link
  * WindowedProjection}, which dedups on the highest offset it ever accumulated — fences a
  * dead-lettered range out wholesale once the live runner has advanced its fence past the hole the
- * entry records, so its {@code process} returns normally having changed nothing. Pre-fix that
- * silent no-op discarded the entry: the recovery path destroyed the only record of a range that was
- * never accumulated. Such entries are now counted as {@link ReplayResult#fenced()} and kept, with
- * the remedy logged: replay from a fresh process (the fence and the windows are per-JVM — see
- * {@code WindowedProjection}'s rebuild contract), before the live runner advances again. The fence
- * itself is deliberately not weakened — a genuinely re-delivered range must still dedup.
+ * entry records, so its {@code process} returns normally having changed nothing. Discarding the
+ * entry on that silent no-op would destroy the only record of a range that was never accumulated.
+ * Such entries are counted as {@link ReplayResult#fenced()} and kept, with the remedy logged:
+ * replay from a fresh process (the fence and the windows are per-JVM — see {@code
+ * WindowedProjection}'s rebuild contract), before the live runner advances again. The fence itself
+ * is deliberately not weakened — a genuinely re-delivered range must still dedup.
  */
 public final class ProjectionDeadLetterReplayer {
 
