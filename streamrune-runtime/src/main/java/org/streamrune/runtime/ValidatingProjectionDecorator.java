@@ -64,11 +64,11 @@ public final class ValidatingProjectionDecorator implements Projection {
 
   /**
    * Validates, then forwards the valid events to the delegate's OWN {@link
-   * Projection#processDeadLetterReplay} and reports the delegate's answer. The inherited default
-   * would call THIS decorator's {@link #process(List)} — reaching the delegate's {@code process},
-   * never its override — and report {@code true}, so a decorated self-fencing projection ({@code
-   * WindowedProjection}) read as "applied" on a wholly fenced replay and the replayer discarded the
-   * range's only record (back for every validated projection).
+   * Projection#processDeadLetterReplay} with the repository it was handed, and reports the
+   * delegate's answer. The inherited default would call THIS decorator's {@code process} — reaching
+   * the delegate's {@code process}, never its override — and report {@code true}, so a decorated
+   * self-fencing projection ({@code WindowedProjection}) would read as "applied" on a wholly fenced
+   * replay and the replayer would discard the range's only record.
    *
    * <p>A batch with NO valid event reports {@code true}: every event was rejected by validation
    * (each one logged, exactly as on the live path), which is the handled outcome for invalid
@@ -76,12 +76,13 @@ public final class ValidatingProjectionDecorator implements Projection {
    * a fresh process" warning that can never come true.
    */
   @Override
-  public boolean processDeadLetterReplay(List<EventEnvelope> batch) {
+  public boolean processDeadLetterReplay(
+      List<EventEnvelope> batch, ProjectionRepository repository) {
     List<EventEnvelope> valid = batch.stream().filter(this::isValid).toList();
     if (valid.isEmpty()) {
       return true;
     }
-    return delegate.processDeadLetterReplay(valid);
+    return delegate.processDeadLetterReplay(valid, repository);
   }
 
   /**

@@ -161,15 +161,11 @@ public final class PollingProjectionRunner implements ProjectionRunner {
         }
       }
 
-      // Do NOT treat a short page as end-of-stream. readGlobalStream's contiguity guard
-      // returns only the contiguous prefix when a permanent hole (an offset no committed event
-      // holds — the store does not promise contiguity) falls inside a page, so `events.size() <
-      // fetchSize` may just mean a hole truncated this page, not that the tail was reached.
-      // Returning here would leave the read model silently incomplete past the first hole,
-      // breaking this method's catch-up-in-a-single-call contract. The offset advanced past this
-      // page, so we loop and re-read from beyond the hole; the loop returns only when a read
-      // genuinely yields nothing (the isEmpty() check above), which correctly excludes the single
-      // uncommitted in-flight tail.
+      // A short page is not the end of the stream: a store may return fewer events than asked
+      // for while more are committed, and readGlobalStream withholds everything from the append
+      // still in flight at the tail onwards. The offset advanced past this page, so the loop reads
+      // again from there and returns only when a read yields nothing (the isEmpty() check above),
+      // which keeps this method's catch-up-in-a-single-call contract.
     }
   }
 
@@ -181,6 +177,11 @@ public final class PollingProjectionRunner implements ProjectionRunner {
     GlobalOffset newOffset = batch.getLast().globalOffset();
     long start = System.nanoTime();
     try {
+      // Only a registration that writes through the handed repository has a read model in the
+      // processor's store to prepare.
+      if (mode.writesInCheckpointTransaction()) {
+        atomicProcessor.prepareReadModel(projectionName);
+      }
       atomicProcessor.executeAtomically(
           projectionName,
           batch,

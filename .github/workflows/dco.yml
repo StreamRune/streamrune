@@ -1,8 +1,15 @@
 name: DCO
 
-# Every commit of a pull request must carry a Signed-off-by trailer (Developer Certificate of
-# Origin, see CONTRIBUTING.md). Commits authored by bots (Dependabot) are exempt: a bot cannot
-# certify the DCO, and its changes are reviewed by the maintainer who merges them.
+# Every commit of a pull request must be signed off by its author (Developer Certificate of
+# Origin, see CONTRIBUTING.md): the commit message carries a `Signed-off-by:` trailer whose name
+# and e-mail are the commit author's.
+#
+# The one exemption is Dependabot, and it is decided by WHO OPENED THE PULL REQUEST — the login
+# GitHub records for it — never by anything written in a commit, because the author name and
+# e-mail of a commit are whatever the committer typed. In a pull request opened by Dependabot the
+# commits Dependabot authored are exempt (a bot cannot certify the DCO, and its changes are
+# reviewed by the maintainer who merges them); a commit anybody else adds to that pull request is
+# checked like any other.
 on:
   pull_request:
 
@@ -16,19 +23,25 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Check Signed-off-by on every commit
+      - name: Check that every commit is signed off by its author
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
-          missing=0
+          dependabot='dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>'
+          failed=0
           for sha in $(git rev-list --no-merges "$BASE..$HEAD"); do
-            if git log -1 --format=%ae "$sha" | grep -qE '\[bot\]@users\.noreply\.github\.com$'; then
-              echo "skip bot commit $sha"; continue
+            author=$(git log -1 --format='%an <%ae>' "$sha")
+            if [ "$PR_AUTHOR" = 'dependabot[bot]' ] && [ "$author" = "$dependabot" ]; then
+              echo "skip Dependabot commit $sha"
+              continue
             fi
-            if ! git log -1 --format=%B "$sha" | grep -qE '^Signed-off-by: .+ <.+>$'; then
-              echo "::error::commit $sha has no Signed-off-by trailer (use git commit --signoff)"
-              missing=1
+            if ! git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$sha" \
+                | grep -qxF -- "$author"; then
+              echo "::error::commit $sha is not signed off by its author (use git commit --signoff)"
+              echo "  expected trailer: Signed-off-by: $author"
+              failed=1
             fi
           done
-          exit $missing
+          exit $failed

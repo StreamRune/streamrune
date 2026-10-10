@@ -222,24 +222,21 @@ subprojects {
     // `build` = `assemble` + `check`. `assemble` reaches only what the published artifacts need
     // and `check` only what `test` needs, so an AUXILIARY source set — one that no other task
     // consumes — is compiled by nothing in the default graph. Measured, not assumed: a dry run
-    // of `build spotlessCheck` scheduled 436 tasks and exactly zero of them were a jmh or a
-    // fray task; the only compile tasks in the entire graph were `compileJava` and
-    // `compileTestJava`, one pair per module.
+    // of `build spotlessCheck` scheduled 436 tasks and exactly zero of them were a jmh task; the
+    // only compile tasks in the entire graph were `compileJava` and `compileTestJava`, one pair
+    // per module.
     //
     // That is how :streamrune-runtime's `src/jmh` sat broken for months — five javac errors,
     // stale against the strict-typed Command/AggregateId API — underneath a build that was
     // green end to end. No CI run would ever have reported it, because `compileJmhJava` was
-    // never in the graph to fail. `src/fray` (the frayCheck concurrency probes) happens to
-    // compile today, but sits in exactly the same blind spot and could rot the same way
-    // tomorrow.
+    // never in the graph to fail.
     //
     // Depending on the LIVE `withType<JavaCompile>()` collection rather than a hand-listed set
     // of task names is the whole point: a source set added later is gated automatically, with
     // no second edit here to forget. This gates COMPILATION only — running the benchmarks
-    // (`jmh`) and the scheduling probes (`frayTest`) stays on demand, since neither asserts
-    // anything and both are slow. It also deliberately does not pull in `jmhJar`, the one JMH
-    // task that is incompatible with the configuration cache (see
-    // streamrune-runtime/build.gradle.kts): `compileJmhJava` and the JMH bytecode generator
+    // (`jmh`) stays on demand, since they assert nothing and are slow. It also deliberately does
+    // not pull in `jmhJar`, the one JMH task that is incompatible with the configuration cache
+    // (see streamrune-runtime/build.gradle.kts): `compileJmhJava` and the JMH bytecode generator
     // both store the configuration cache cleanly, so `check` keeps its cache.
     tasks.named("check") {
         dependsOn(tasks.withType<JavaCompile>())
@@ -932,8 +929,7 @@ subprojects {
                                 "version $versionUnderRelease to Maven Central with the licence " +
                                 "URL $licenseUrlUnderRelease. Central is immutable, so that URL " +
                                 "would 404 forever. Tag and push the release commit first: " +
-                                "git tag -a $tag -m '$tag' && git push origin $tag. " +
-                                "The repository must also be public for the URL to resolve.")
+                                "git tag -a $tag -m '$tag' && git push origin $tag.")
                     }
 
                     // Arm 2 — the tag names the commit these artifacts were built from. A tag on an
