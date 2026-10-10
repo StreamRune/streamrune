@@ -71,6 +71,40 @@ The event store borrows its connections from your `DataSource` bean as given —
 — and builds no pool of its own; size `spring.datasource.hikari.maximum-pool-size` for everything
 StreamRune runs.
 
+## Server-Sent Events
+
+With `streamrune.sse.enabled=true` on a servlet + Spring MVC application the integration serves
+`GET /api/sse/{aggregateType}/{aggregateId}` — the live events of one stream, the registered
+aggregate type plus its id as two path segments; an invalid part answers `400`.
+
+```yaml
+streamrune:
+  sse:
+    enabled: true            # default false
+    polling-interval: 1s     # how often the feed reads the global stream; must be positive
+    timeout: 5m              # the server completes a stream after this; 0 disables
+    keep-alive-interval: 30s # ":keepalive" comment frames; 0 disables
+```
+
+- **What it emits** — one frame per domain event of that stream: `id` is the global offset, `data`
+  the decrypted event as JSON (written by the application's `HttpMessageConverter`s). An
+  `EventSource` reconnects on its own when the server completes the stream.
+- **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
+  polling subscription that starts at the head of the global stream when the application starts
+  and publishes every event stored from then on to the clients of the event's own stream, every
+  `streamrune.sse.polling-interval`. No stored offset, no replay of history. Do not call
+  `SseEventPublisher.publish` yourself for this endpoint — every frame would be written twice.
+- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
+  receives the caller the request filter resolved and the requested `StreamId`.
+- **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
+  is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
+  client connected, while it was reconnecting, or while the instance was down are never sent to it.
+  Read the current state from a query after every (re)connect, and use a projection for anything
+  that must see every event.
+- **Lifecycle** — the feed is a `SmartLifecycle`-managed bean: started on context refresh before the
+  web server accepts requests, stopped on context close. A non-servlet application (a headless
+  worker sharing the same configuration) gets neither the endpoint nor the feed.
+
 ## Request identity
 
 `ScopedValueFilter` binds `RequestContext.userId` — the user every `CommandAuthorizationPolicy`,
@@ -115,6 +149,7 @@ or set the trusted-gateway flag. See
 | `StreamRuneProperties` | `@ConfigurationProperties` binding |
 | `ScopedValueFilter` | Propagates HTTP request metadata into `StreamRuneContext`; the user comes from `RequestIdentityPolicy` (see [Request identity](#request-identity)) |
 | `SseController` | `GET /api/sse/{aggregateType}/{aggregateId}` — live event stream of one aggregate; only with `streamrune.sse.enabled=true`, and every stream is denied until you provide an `SseAuthorizer` bean |
+| `SseEventFeed` | Publishes every event stored after the application started to the SSE endpoint's clients; registered with `SseController`, started and stopped with the application context |
 
 ## Projection runners
 
@@ -142,4 +177,4 @@ nothing. This contract is identical across the Spring, Quarkus, and Micronaut in
 
 - **`@StreamRuneComponent` is a `@Component` stereotype** — annotated classes must live in packages covered by the application's component scan; deciders still need an explicit `DeciderRegistration` bean to reach the command bus.
 - **Event appends bypass `@Transactional`** — the PostgreSQL event store manages its own connections; derive read models from events via projections instead of dual writes.
-- **SSE is opt-in and basic** — `streamrune.sse.enabled` defaults to `false`; a subscriber that cannot keep up is disconnected and must reconnect. On shutdown the controller completes every open stream before the web server's graceful-shutdown drain begins, so a connected client neither holds the shutdown for `spring.lifecycle.timeout-per-shutdown-phase` nor has its connection cut; clients must reconnect — an `EventSource` does so on its own — and a subscription that arrives while the application is stopping receives a stream that is already complete.
+- **SSE is opt-in, live and not durable** — `streamrune.sse.enabled` defaults to `false`; delivery is best-effort and at-most-once (see [Server-Sent Events](#server-sent-events)); a subscriber that cannot keep up is disconnected and must reconnect. On shutdown the controller completes every open stream before the web server's graceful-shutdown drain begins, so a connected client neither holds the shutdown for `spring.lifecycle.timeout-per-shutdown-phase` nor has its connection cut; clients must reconnect — an `EventSource` does so on its own — and a subscription that arrives while the application is stopping receives a stream that is already complete.

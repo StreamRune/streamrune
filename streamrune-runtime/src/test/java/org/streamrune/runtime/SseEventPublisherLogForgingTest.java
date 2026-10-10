@@ -88,7 +88,7 @@ class SseEventPublisherLogForgingTest {
           workerThreadName.set(Thread.currentThread().getName());
           delivered.countDown();
         });
-    publisher.publish(stream, envelope(stream, 1L));
+    publisher.publish(envelope(stream, 1L));
 
     assertTrue(delivered.await(5, TimeUnit.SECONDS), "the delivery worker must have run");
     assertNoForgedLine(workerThreadName.get(), "the SSE delivery worker's thread name");
@@ -125,10 +125,10 @@ class SseEventPublisherLogForgingTest {
           evicted.countDown();
         });
 
-    publisher.publish(stream, envelope(stream, 1L));
+    publisher.publish(envelope(stream, 1L));
     assertTrue(insideSend.await(5, TimeUnit.SECONDS), "the worker must be parked inside send()");
-    publisher.publish(stream, envelope(stream, 2L));
-    publisher.publish(stream, envelope(stream, 3L));
+    publisher.publish(envelope(stream, 2L));
+    publisher.publish(envelope(stream, 3L));
 
     assertTrue(evicted.await(5, TimeUnit.SECONDS), "the slow consumer must have been evicted");
     releaseSend.countDown();

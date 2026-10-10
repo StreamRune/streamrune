@@ -443,6 +443,49 @@ polling) and `HybridEventSubscription` (PostgreSQL LISTEN/NOTIFY + polling fallb
 `pause()` / `resume()` to temporarily halt event delivery during backpressure or maintenance
 windows without losing position — the next `resume()` continues from the last committed offset.
 
+### 4.7 Server-Sent Events: `SseEventPublisher` and `SseEventFeed`
+
+`GET /api/sse/{aggregateType}/{aggregateId}` (Spring, Quarkus, Micronaut; off unless
+`streamrune.sse.enabled=true`) streams the events of one aggregate. Two runtime classes sit behind
+it:
+
+```java
+public class SseEventPublisher implements AutoCloseable {
+    void subscribe(StreamId streamId, SseSubscriber subscriber, Consumer<Throwable> onDisconnect);
+    void unsubscribe(StreamId streamId, SseSubscriber subscriber);
+    void publish(EventEnvelope envelope);   // routed by envelope.streamId()
+}
+
+public final class SseEventFeed implements AutoCloseable {
+    SseEventFeed(EventStore eventStore, SseEventPublisher publisher, Duration pollingInterval);
+    void start();        // begins at EventStore.lastGlobalOffset()
+    boolean isRunning();
+    void close();
+}
+```
+
+- `SseEventPublisher` is the in-process fan-out: one bounded queue and one virtual-thread worker per
+  subscriber. `publish` takes only the envelope and routes it by the envelope's own `streamId()`, so
+  an event cannot reach the subscribers of another stream. A subscriber that cannot keep up is
+  disconnected rather than skipped.
+- `SseEventFeed` is what publishes. The integrations create one per application instance when the
+  endpoint is enabled, start it with the application and close it on shutdown. It is a
+  `PollingEventSubscription` on the global stream that starts at the head of the stream, keeps its
+  position in memory, and never replays history.
+
+| | |
+|---|---|
+| Frame | `id` = global offset, `data` = the decrypted domain event as JSON; `:keepalive` comments in between |
+| Authorization | the `SseAuthorizer` bean decides per caller and `StreamId` before a stream is opened; without one every stream answers `403` |
+| Delivery | live, best-effort, at-most-once: only to clients connected at that moment, nothing is redelivered, `Last-Event-ID` is not honoured |
+| Order | version order within a stream |
+| Latency | up to `streamrune.sse.polling-interval` (default `1s`) after the commit |
+| Properties | `streamrune.sse.enabled`, `.polling-interval`, `.timeout`, `.keep-alive-interval` |
+
+Use the endpoint to tell a connected client that an aggregate changed; a consumer that must see
+every event is a projection. Applications do not call `publish` for the shipped endpoint — the feed
+already does, and a second publisher would write every frame twice.
+
 ---
 
 ## Section 5: Configuration — StreamRune.builder()

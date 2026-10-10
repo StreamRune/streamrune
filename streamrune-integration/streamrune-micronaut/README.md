@@ -71,6 +71,7 @@ comes from — see [Request identity](#request-identity).
 | `StreamRuneAuthorizationValidator` | Startup listener: refuses startup when a command bus registers `@RequireRole`/`@RequirePermission` commands without an `AnnotationAuthorizationInterceptor` in its chain |
 | `StreamRuneContextHelper` | ThreadLocal mirror of the request context for threads `ScopedValue` bindings cannot reach (kept in sync via Micronaut's `PropagatedContext`) |
 | `StreamRuneLifecycle` | Starts `MultiProjectionRunner`, `ScheduledProjectionRunner`, `OutboxPoller`, the outbox, inbox, saga dead-letter and command dead-letter retention sweepers, and `DeadLetterRetryRunner` on context startup and closes them on shutdown |
+| `SseEventFeedLifecycle` | With `streamrune.sse.enabled=true`: starts the `SseEventFeed` that publishes stored events to the SSE endpoint on `StartupEvent` and stops it when the context closes; independent of `streamrune.runner-lifecycle-enabled` |
 
 ## Lifecycle
 
@@ -107,8 +108,27 @@ when no `OutboxStore` bean exists, or when neither an `OutboxPublisher` bean
 
 With `streamrune.sse.enabled=true` the integration serves
 `GET /api/sse/{aggregateType}/{aggregateId}` — the live events of one stream, the registered
-aggregate type plus its id as two path segments; an invalid part answers `400`. Every stream is
-denied until you provide an `SseAuthorizer` bean.
+aggregate type plus its id as two path segments; an invalid part answers `400`.
+
+- **What it emits** — one frame per domain event of that stream: `id` is the global offset, `data`
+  the decrypted event as JSON (the event types must be serializable by the application's JSON
+  mapper — with Micronaut Serialization, `@Serdeable`). `:keepalive` comment frames are written
+  every `streamrune.sse.keep-alive-interval` (default `30s`), and the server completes a stream
+  after `streamrune.sse.timeout` (default `5m`); an `EventSource` reconnects on its own.
+- **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
+  polling subscription that starts at the head of the global stream when the application starts
+  and publishes every event stored from then on to the clients of the event's own stream, every
+  `streamrune.sse.polling-interval` (default `1s`). No stored offset, no replay of history. Do not
+  call `SseEventPublisher.publish` yourself for this endpoint — every frame would be written twice.
+- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
+  receives the caller the request filter resolved and the requested `StreamId`.
+- **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
+  is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
+  client connected, while it was reconnecting, or while the instance was down are never sent to it.
+  Read the current state from a query after every (re)connect, and use a projection for anything
+  that must see every event.
+- **Lifecycle** — the feed starts on the startup event and stops when the application context
+  closes, which also completes every open stream.
 
 ## Request identity
 

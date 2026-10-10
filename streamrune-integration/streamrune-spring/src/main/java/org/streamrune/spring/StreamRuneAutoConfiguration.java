@@ -6,6 +6,7 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -64,6 +65,7 @@ import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.OutboxRetentionSweeper;
 import org.streamrune.runtime.SimpleQueryBus;
+import org.streamrune.runtime.SseEventFeed;
 import org.streamrune.runtime.SseEventPublisher;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.runtime.gdpr.ExportSubjectDataService;
@@ -657,8 +659,9 @@ public class StreamRuneAutoConfiguration {
 
   /**
    * Creates a default {@link SseEventPublisher} for Server-Sent Events, matching the Quarkus and
-   * Micronaut integrations. The publisher is fed by application code (e.g. an inline projection)
-   * and consumed by {@code streamRuneSseController(...)} on the nested SSE configuration.
+   * Micronaut integrations. When the endpoint is enabled, the nested SSE configuration feeds the
+   * publisher from the event store ({@code streamRuneSseEventFeed(...)}) and subscribes its clients
+   * to it ({@code streamRuneSseController(...)}).
    */
   @Bean
   @ConditionalOnMissingBean(SseEventPublisher.class)
@@ -686,7 +689,12 @@ public class StreamRuneAutoConfiguration {
    * <p>The class-name gate also keeps the ENCLOSING configuration free of the MVC-bound type: a
    * top-level {@code @Bean} signature returning {@link SseController} would be resolved by {@code
    * Class#getDeclaredMethods} on every classpath. {@link #sseEventPublisher()} stays outside — the
-   * publisher is fed by application code (e.g. an inline projection) and is stack-independent.
+   * publisher is stack-independent.
+   *
+   * <p><strong>The feed belongs to the endpoint.</strong> The {@link SseEventFeed} that publishes
+   * the stored events is registered here, under the same conditions as the controller: an
+   * application without the endpoint (a headless worker sharing the web application's
+   * configuration) does not read the global stream for it.
    */
   @Configuration(proxyBeanMethods = false)
   @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
@@ -732,6 +740,29 @@ public class StreamRuneAutoConfiguration {
           requestIdentityPolicy,
           properties.sse().timeout(),
           properties.sse().keepAliveInterval());
+    }
+
+    /**
+     * The feed of the endpoint: a polling subscription that starts at the head of the global stream
+     * and publishes every event stored from then on to the subscribers of the event's own stream,
+     * every {@code streamrune.sse.polling-interval}. Live, best-effort and at-most-once — see
+     * {@link SseEventFeed}. Started and stopped by {@link #streamRuneSseEventFeedLifecycle}.
+     */
+    @Bean(destroyMethod = "close")
+    public SseEventFeed streamRuneSseEventFeed(
+        EventStore eventStore, SseEventPublisher publisher, StreamRuneProperties properties) {
+      return new SseEventFeed(eventStore, publisher, properties.sse().pollingInterval());
+    }
+
+    /**
+     * Starts the {@link SseEventFeed} on context refresh, before the web server accepts requests,
+     * and stops it on context close, after the web server has drained and the controller has ended
+     * its open streams.
+     */
+    @Bean
+    public RunnerLifecycle streamRuneSseEventFeedLifecycle(
+        @Qualifier("streamRuneSseEventFeed") SseEventFeed feed) {
+      return new RunnerLifecycle("SseEventFeed", feed::start, feed::close);
     }
   }
 

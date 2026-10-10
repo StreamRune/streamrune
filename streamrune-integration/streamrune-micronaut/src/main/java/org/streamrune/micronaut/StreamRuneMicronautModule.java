@@ -425,7 +425,9 @@ public class StreamRuneMicronautModule {
   }
 
   /**
-   * Creates an {@link SseEventPublisher} for Server-Sent Events.
+   * Creates the {@link SseEventPublisher} the Server-Sent Events endpoint subscribes its clients
+   * to. When the endpoint is enabled, {@link SseEventFeedLifecycle} publishes the stored events to
+   * it.
    *
    * <p>{@code @Bean(preDestroy = "close")} is required — Micronaut does not auto-close a
    * {@code @Factory}-produced {@link AutoCloseable} singleton without it (see this class's other

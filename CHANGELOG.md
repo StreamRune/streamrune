@@ -589,7 +589,14 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   process-local and never persisted.
 - Server-Sent Events `GET /api/sse/{aggregateType}/{aggregateId}` (all three integrations) is off by
   default (`streamrune.sse.enabled`); when on, every stream is denied until an `SseAuthorizer` bean
-  checks the caller against the requested `StreamId`.
+  checks the caller against the requested `StreamId`. The integration feeds the endpoint itself: one
+  `SseEventFeed` per application instance, a polling subscription (`streamrune.sse.polling-interval`,
+  default `1s`) that starts at the head of the global stream with the application, keeps no stored
+  offset, never replays history, and stops with the application; open streams are completed on
+  shutdown. Each frame carries the global offset as `id` and the decrypted event as JSON. Delivery is
+  live, best-effort and at-most-once: only clients connected at that moment receive a frame, nothing
+  is redelivered and `Last-Event-ID` is not honoured. `SseEventPublisher.publish(EventEnvelope)`
+  routes an event by its own `streamId()`, so it cannot reach the subscribers of another stream.
 - Only allow-listed OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist`) reach event
   metadata. `LogSanitizer` strips control characters from every value the framework logs or persists
   as free text.
@@ -907,8 +914,8 @@ Each statement below is a property of the shipped code and holds under the state
 - **Metrics**: `stream.id` is never a metric tag; `subscriptions.listener.reconnects` cannot signal a
   dead push path — use the health detail.
 - **Integrations**: `@StreamRuneComponent` needs component scan; the `StreamRune` facade is a
-  programmatic bootstrap, not an injectable bean (inject `CommandBus`); SSE is basic — a slow
-  subscriber is disconnected; Quarkus needs Quarkus REST for the request filter and SSE and selects
+  programmatic bootstrap, not an injectable bean (inject `CommandBus`); SSE is live and not durable
+  — at-most-once to connected clients, no replay, and a slow subscriber is disconnected; Quarkus needs Quarkus REST for the request filter and SSE and selects
   crypto backends, SSE and the query cache at build time; a permanent takeover stamp failure keeps a
   leader in a WARN-and-retry standby loop rather than turning health `DOWN`.
 - **Native image**: sealed hierarchies must be registered at the sealed type in

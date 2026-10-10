@@ -173,7 +173,16 @@ public record StreamRuneMicronautProperties(
     @Bindable(defaultValue = "30s")
         @io.micronaut.core.annotation.Nullable
         @io.micronaut.context.annotation.Property(name = "streamrune.event-store.statement-timeout")
-        Duration eventStoreStatementTimeout) {
+        Duration eventStoreStatementTimeout,
+    // sse.polling-interval: matches Spring/Quarkus. How often the SSE endpoint's feed reads the
+    // global stream for new events — the upper bound on the delay between a commit and its frame.
+    // @Nullable with a "1s" default so binding fills it while the feed lifecycle keeps the default
+    // for an explicit null; a non-positive value fails the boot. Appended at the end so the
+    // positional withDefaults() stays aligned.
+    @Bindable(defaultValue = "1s")
+        @io.micronaut.core.annotation.Nullable
+        @io.micronaut.context.annotation.Property(name = "streamrune.sse.polling-interval")
+        Duration ssePollingInterval) {
 
   public StreamRuneMicronautProperties {
     metadataBaggageAllowlist =
@@ -233,6 +242,8 @@ public record StreamRuneMicronautProperties(
         Duration.ofMinutes(5),
         Duration.ofSeconds(30),
         // event-store.statement-timeout
-        Duration.ofSeconds(30));
+        Duration.ofSeconds(30),
+        // sse.polling-interval
+        Duration.ofSeconds(1));
   }
 }

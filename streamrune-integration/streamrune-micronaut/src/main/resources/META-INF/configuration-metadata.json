@@ -224,6 +224,12 @@
       "defaultValue": "30s"
     },
     {
+      "name": "streamrune.sse.polling-interval",
+      "type": "java.time.Duration",
+      "description": "How often the SSE endpoint's feed reads the global stream for new events: the upper bound on the delay between a commit and its frame. The feed starts at the head of the global stream when the application starts and delivers live, best-effort and at-most-once. Must be positive",
+      "defaultValue": "1s"
+    },
+    {
       "name": "streamrune.security.trust-user-id-header",
       "type": "java.lang.Boolean",
       "description": "Trusted-gateway mode: when true, the request filter and the SSE endpoint take the authorization identity (RequestContext.userId) from the X-User-Id header, even when Micronaut Security is present. Enable it only when a gateway in front of the service authenticates every caller, overwrites X-User-Id with the authenticated id and strips any client-supplied value, and the service is reachable only through that gateway; otherwise any client can act as any user. When false, the identity is the authenticated principal if an AuthenticatedUserResolver is available (Micronaut Security enabled), and otherwise every request is anonymous and the header is ignored; in that anonymous mode a configured CommandAuthorizationPolicy or UserRoleResolver refuses startup",

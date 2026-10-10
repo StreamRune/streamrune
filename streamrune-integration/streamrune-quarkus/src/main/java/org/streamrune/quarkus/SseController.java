@@ -1,11 +1,14 @@
 package org.streamrune.quarkus;
 
 import io.quarkus.arc.properties.IfBuildProperty;
+import io.quarkus.runtime.ShutdownEvent;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.subscription.BackPressureStrategy;
 import io.smallrye.mutiny.subscription.MultiEmitter;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.event.Reception;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import jakarta.ws.rs.BadRequestException;
@@ -22,6 +25,8 @@ import jakarta.ws.rs.sse.OutboundSseEvent;
 import java.lang.reflect.Type;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -47,6 +52,14 @@ import org.streamrune.runtime.SseEventPublisher;
  *
  * <p>Endpoint: {@code GET /api/sse/{aggregateType}/{aggregateId}} — the two parts of the typed
  * {@link StreamId}; an invalid part is answered with {@code 400 Bad Request}.
+ *
+ * <p><b>Where the frames come from.</b> {@link SseEventFeedLifecycle} runs an {@link
+ * org.streamrune.runtime.SseEventFeed} beside this resource. It starts at the head of the global
+ * stream when the application starts and publishes every event stored from then on to the
+ * subscribers of the event's own stream, every {@code streamrune.sse.polling-interval}. Delivery is
+ * live, best-effort and at-most-once: a frame reaches only the clients connected at that moment,
+ * nothing is redelivered after a reconnect, and {@code Last-Event-ID} is not honoured. On the
+ * Quarkus shutdown event every open stream is completed ({@link #completeOpenStreams}).
  *
  * <p>Each SSE event carries the full domain event as JSON in the {@code data} field and the global
  * offset in the {@code id} field, matching the Spring integration's {@code SseController}. JSON
@@ -139,6 +152,9 @@ public class SseController {
    */
   static final OutboundSseEvent KEEP_ALIVE = new KeepAliveSseFrame();
 
+  /** How long the shutdown waits for one stream's write in progress before completing it. */
+  static final long SHUTDOWN_LOCK_WAIT_MILLIS = 1_000L;
+
   private final SseEventPublisher publisher;
   private final SseAuthorizer authorizer;
   private final RequestIdentityPolicy identityPolicy;
@@ -158,6 +174,13 @@ public class SseController {
    * immediately instead of lingering there until it would have fired — see the constructor.
    */
   private final ScheduledThreadPoolExecutor keepAlive;
+
+  /** The open streams, tracked so the shutdown can complete them. */
+  private final Set<OpenStream> openStreams = ConcurrentHashMap.newKeySet();
+
+  /** One open stream and the lock that serializes the writes to it. */
+  private record OpenStream(
+      MultiEmitter<? super OutboundSseEvent> emitter, ReentrantLock sendLock) {}
 
   /**
    * The constructor Quarkus/Arc uses.
@@ -273,6 +296,45 @@ public class SseController {
     return (d == null || d.isZero() || d.isNegative()) ? null : d;
   }
 
+  /**
+   * Completes every open stream when the application shuts down, so each client sees its stream end
+   * normally (an {@code EventSource} reconnects, reaching another replica) while the HTTP server is
+   * still up. A stream's send lock is awaited for at most {@link #SHUTDOWN_LOCK_WAIT_MILLIS}: a
+   * write stalled on one client does not hold the shutdown, and that stream is completed anyway.
+   * Observed only by a resource that exists: the shutdown does not create one to find no stream.
+   *
+   * @param event the Quarkus shutdown event
+   */
+  public void completeOpenStreams(
+      @Observes(notifyObserver = Reception.IF_EXISTS) ShutdownEvent event) {
+    List<OpenStream> open = List.copyOf(openStreams);
+    if (open.isEmpty()) {
+      return;
+    }
+    log.info("Completing {} open SSE stream(s) before the application shuts down", open.size());
+    for (OpenStream stream : open) {
+      boolean locked = false;
+      try {
+        locked = stream.sendLock().tryLock(SHUTDOWN_LOCK_WAIT_MILLIS, TimeUnit.MILLISECONDS);
+        stream.emitter().complete();
+      } catch (InterruptedException _) {
+        Thread.currentThread().interrupt();
+        return;
+      } catch (RuntimeException e) {
+        log.warn("Failed to complete an SSE stream at shutdown: {}", e.toString());
+      } finally {
+        if (locked) {
+          stream.sendLock().unlock();
+        }
+      }
+    }
+  }
+
+  /** The number of streams currently open; for tests. */
+  int openStreamCount() {
+    return openStreams.size();
+  }
+
   /** Stops the keepalive scheduler when the bean is destroyed. */
   @PreDestroy
   void shutdown() {
@@ -385,10 +447,13 @@ public class SseController {
                           t.toString());
                     }
                   });
+              OpenStream open = new OpenStream(emitter, sendLock);
+              openStreams.add(open);
               Future<?> ticker = scheduleKeepAlive(emitter, sendLock);
               Future<?> deadline = scheduleTimeout(emitter, sendLock);
               emitter.onTermination(
                   () -> {
+                    openStreams.remove(open);
                     if (ticker != null) {
                       ticker.cancel(false);
                     }

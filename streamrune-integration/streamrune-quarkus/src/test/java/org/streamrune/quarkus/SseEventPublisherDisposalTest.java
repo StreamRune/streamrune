@@ -49,8 +49,9 @@ import org.streamrune.runtime.SseEventPublisher;
  */
 class SseEventPublisherDisposalTest {
 
-  private static EventEnvelope envelope() {
+  private static EventEnvelope envelope(StreamId stream) {
     var envelope = mock(EventEnvelope.class);
+    when(envelope.streamId()).thenReturn(stream);
     when(envelope.globalOffset()).thenReturn(GlobalOffset.of(1));
     return envelope;
   }
@@ -71,7 +72,7 @@ class SseEventPublisherDisposalTest {
       SseEventPublisher publisher = instance.get();
 
       publisher.subscribe(streamId, env -> delivered.countDown());
-      publisher.publish(streamId, envelope());
+      publisher.publish(envelope(streamId));
       assertTrue(
           delivered.await(5, TimeUnit.SECONDS),
           "the real Arc-produced SseEventPublisher must actually deliver published events");

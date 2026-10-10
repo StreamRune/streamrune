@@ -43,6 +43,13 @@ import org.streamrune.runtime.SseEventPublisher;
  * checked before any subscription is created; a denied request is rejected with {@code 403
  * Forbidden}. The endpoint is registered only when {@code streamrune.sse.enabled=true}.
  *
+ * <p><b>Where the frames come from.</b> The auto-configuration registers an {@link
+ * org.streamrune.runtime.SseEventFeed} beside this controller. It starts at the head of the global
+ * stream when the application starts and publishes every event stored from then on to the
+ * subscribers of the event's own stream, every {@code streamrune.sse.polling-interval}. Delivery is
+ * live, best-effort and at-most-once: a frame reaches only the clients connected at that moment,
+ * nothing is redelivered after a reconnect, and {@code Last-Event-ID} is not honoured.
+ *
  * <p><b>Caller identity.</b> The caller handed to the authorizer is resolved by the same {@link
  * RequestIdentityPolicy} the {@link ScopedValueFilter} binds {@code RequestContext.userId} with, so
  * a stream subscription and a command from the same request see the same user: the authenticated

@@ -51,14 +51,40 @@ streamrune.stripe-count=1024
 streamrune.event-store.statement-timeout=PT30S
 # build-time flag: decides whether the CachingQueryBus bean exists
 streamrune.query-cache.enabled=false
-# build-time flag: decides whether SseController exists (default false; deny-all SseAuthorizer
-# unless you produce your own)
+# build-time flag: decides whether SseController and its event feed exist (default false;
+# deny-all SseAuthorizer unless you produce your own)
 streamrune.sse.enabled=false
+# how often the SSE feed reads the global stream: the bound on commit-to-frame latency
+streamrune.sse.polling-interval=PT1S
 ```
 
-When enabled, `SseController` serves `GET /api/sse/{aggregateType}/{aggregateId}` — the live
-events of one stream, the registered aggregate type plus its id as two path segments; an invalid
-part answers `400`.
+### Server-Sent Events
+
+With `streamrune.sse.enabled=true` the integration serves
+`GET /api/sse/{aggregateType}/{aggregateId}` — the live events of one stream, the registered
+aggregate type plus its id as two path segments; an invalid part answers `400`.
+
+- **What it emits** — one frame per domain event of that stream: `id` is the global offset, `data`
+  the decrypted event as JSON (needs a JSON body writer such as `quarkus-rest-jackson`).
+  `:keepalive` comment frames are written every `streamrune.sse.keep-alive-interval` (default
+  `30s`), and the server completes a stream after `streamrune.sse.timeout` (default `5m`); an
+  `EventSource` reconnects on its own.
+- **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
+  polling subscription that starts at the head of the global stream when the application starts
+  and publishes every event stored from then on to the clients of the event's own stream, every
+  `streamrune.sse.polling-interval` (default `1s`). No stored offset, no replay of history. Do not
+  call `SseEventPublisher.publish` yourself for this endpoint — every frame would be written twice.
+- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
+  receives the caller the request filter resolved and the requested `StreamId`.
+- **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
+  is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
+  client connected, while it was reconnecting, or while the instance was down are never sent to it.
+  Read the current state from a query after every (re)connect, and use a projection for anything
+  that must see every event.
+- **Lifecycle** — `streamrune.sse.enabled` is read at build time (it decides whether the resource
+  and the feed exist) and again at runtime: switched off at runtime, the endpoint answers `404` and
+  the feed does not start. The feed starts on the startup event and stops on the shutdown event,
+  which also completes every open stream.
 
 Crypto engines bind through `StreamRuneQuarkusCryptoProperties`
 (`streamrune.crypto.*`). Engine selection is **fixed at build time** via
@@ -165,6 +191,7 @@ which keeps the bus producer itself even in an application that injects no `Comm
 | `StreamRuneProducers` | CDI producers for the buses, stores, and interceptors |
 | `ProjectionProducer` | Discovers `@ProjectionConfig` projections, builds runners |
 | `StreamRuneLifecycle` | Starts/stops projection runners, outbox poller, DLQ retry runner and the retention sweepers on `StartupEvent`/`ShutdownEvent` |
+| `SseEventFeedLifecycle` | With `streamrune.sse.enabled=true`: starts the `SseEventFeed` that publishes stored events to the SSE endpoint on `StartupEvent` and stops it on `ShutdownEvent` |
 | `StreamRuneQuarkusProperties` | `@ConfigMapping` for `streamrune.*` properties |
 | `StreamRuneRequestFilter` | JAX-RS `@Provider` that builds the `RequestContext`: `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)) |
 | `StreamRuneRequestIdentityValidator` | Startup observer: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |

@@ -48,6 +48,12 @@ class SseControllerTest {
     return envelope;
   }
 
+  private static EventEnvelope envelope(StreamId stream, long offset, DomainEvent event) {
+    var envelope = envelope(offset, event);
+    when(envelope.streamId()).thenReturn(stream);
+    return envelope;
+  }
+
   @Test
   void deniedStreamIsRejectedAndNeverSubscribes() {
     // An unauthorized caller must be rejected with 403 and never subscribed.
@@ -311,7 +317,7 @@ class SseControllerTest {
     var event = new ProductCreated("product-1");
 
     StepVerifier.create(controller.stream("cart", "cart-3", List.of()).take(1))
-        .then(() -> realPublisher.publish(cartStream("cart-3"), envelope(99L, event)))
+        .then(() -> realPublisher.publish(envelope(cartStream("cart-3"), 99L, event)))
         .assertNext(
             sse -> {
               // Framework-serialized event: id = global offset, data = full domain event.

@@ -398,7 +398,9 @@ public interface StreamRuneQuarkusProperties {
      * named in the path, so it must be enabled deliberately and guarded by an {@link
      * org.streamrune.integration.SseAuthorizer} bean (the framework installs a fail-closed deny-all
      * authorizer if none is provided). Read at build time ({@code @IfBuildProperty}) to decide
-     * whether the SSE resource is registered.
+     * whether the SSE resource and the feed that publishes the stored events to it are registered,
+     * and again at runtime: an endpoint switched off at runtime answers {@code 404} and its feed
+     * does not start.
      */
     @WithDefault("false")
     boolean enabled();
@@ -427,6 +429,16 @@ public interface StreamRuneQuarkusProperties {
      */
     @WithDefault("PT30S")
     Duration keepAliveInterval();
+
+    /**
+     * How often the endpoint's feed reads the global stream for new events: the upper bound on the
+     * delay between a commit and its frame. The feed starts at the head of the global stream when
+     * the application starts and delivers live, best-effort and at-most-once (see {@code
+     * org.streamrune.runtime.SseEventFeed}). Must be positive. Matches {@code
+     * streamrune.sse.polling-interval} on Spring and Micronaut.
+     */
+    @WithDefault("PT1S")
+    Duration pollingInterval();
   }
 
   /** Event-metadata section, {@code streamrune.metadata.*}. */

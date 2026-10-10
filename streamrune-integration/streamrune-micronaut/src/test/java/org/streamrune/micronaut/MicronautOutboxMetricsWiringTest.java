@@ -115,7 +115,9 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofMinutes(5),
         Duration.ofSeconds(30),
         // event-store.statement-timeout
-        java.time.Duration.ofSeconds(30));
+        java.time.Duration.ofSeconds(30),
+        // sse.polling-interval
+        Duration.ofSeconds(1));
   }
 
   @Test
@@ -189,7 +191,9 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofMinutes(5),
         Duration.ofSeconds(30),
         // event-store.statement-timeout
-        java.time.Duration.ofSeconds(30));
+        java.time.Duration.ofSeconds(30),
+        // sse.polling-interval
+        Duration.ofSeconds(1));
   }
 
   private static StreamRuneMetrics metricsOf(OutboxPoller poller) throws Exception {

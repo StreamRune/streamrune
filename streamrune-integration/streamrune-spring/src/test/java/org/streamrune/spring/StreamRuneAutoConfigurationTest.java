@@ -225,7 +225,24 @@ class StreamRuneAutoConfigurationTest {
           assertThat(ctx).hasSingleBean(org.streamrune.runtime.SseEventPublisher.class);
           assertThat(ctx).doesNotHaveBean(SseController.class);
           assertThat(ctx).doesNotHaveBean(org.streamrune.integration.SseAuthorizer.class);
+          assertThat(ctx).doesNotHaveBean(org.streamrune.runtime.SseEventFeed.class);
         });
+  }
+
+  /**
+   * The endpoint and its feed come and go together: the feed that publishes the stored events is
+   * registered, and running, exactly where the controller is.
+   */
+  @Test
+  void sseEventFeedRunsWhereTheEndpointIsEnabled() {
+    webContextRunner
+        .withPropertyValues("streamrune.sse.enabled=true")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasSingleBean(org.streamrune.runtime.SseEventFeed.class);
+              assertThat(ctx.getBean(org.streamrune.runtime.SseEventFeed.class).isRunning())
+                  .isTrue();
+            });
   }
 
   @Test
@@ -259,6 +276,8 @@ class StreamRuneAutoConfigurationTest {
               assertThat(ctx).doesNotHaveBean(SseController.class);
               assertThat(ctx).doesNotHaveBean(org.streamrune.integration.SseAuthorizer.class);
               assertThat(ctx).hasSingleBean(org.streamrune.runtime.SseEventPublisher.class);
+              // No endpoint, so nothing reads the global stream for it.
+              assertThat(ctx).doesNotHaveBean(org.streamrune.runtime.SseEventFeed.class);
             });
   }
 
@@ -727,7 +746,7 @@ class StreamRuneAutoConfigurationTest {
   static class StubEventStoreConfig {
     @Bean
     EventStoreFactory eventStoreFactory() {
-      return () -> mock(EventStore.class);
+      return SpringTestMocks::emptyEventStore;
     }
   }
 

@@ -244,7 +244,8 @@ public record StreamRuneProperties(
    *     Server-Sent Events endpoint is exposed. Disabled by default: the endpoint streams an
    *     aggregate's decrypted domain events by the stream named in the path, so it must be enabled
    *     deliberately and guarded by an {@link org.streamrune.integration.SseAuthorizer} bean (the
-   *     framework installs a fail-closed deny-all authorizer if none is provided).
+   *     framework installs a fail-closed deny-all authorizer if none is provided). Enabling it also
+   *     starts the feed that publishes the stored events to the endpoint.
    * @param timeout the SSE emitter timeout. Finite by default so a silently-dead client (half-open
    *     TCP, e.g. mobile/NAT drop with no FIN/RST) on an idle stream is reaped — {@code onTimeout}
    *     fires, the subscription/worker/socket are released, and the client reconnects. An unbounded
@@ -256,9 +257,14 @@ public record StreamRuneProperties(
    *     turning a dead connection into a failed send that promptly evicts it — detection well
    *     before the {@code timeout} backstop. {@link Duration#ZERO} (or negative) disables the
    *     keepalive, leaving the timeout as the sole reaper.
+   * @param pollingInterval how often the endpoint's feed reads the global stream for new events:
+   *     the upper bound on the delay between a commit and its frame. The feed starts at the head of
+   *     the global stream when the application starts and delivers live, best-effort and
+   *     at-most-once (see {@link org.streamrune.runtime.SseEventFeed}). Must be positive.
    */
   public record Sse(
       @DefaultValue("false") boolean enabled,
       @DefaultValue("5m") Duration timeout,
-      @DefaultValue("30s") Duration keepAliveInterval) {}
+      @DefaultValue("30s") Duration keepAliveInterval,
+      @DefaultValue("1s") Duration pollingInterval) {}
 }

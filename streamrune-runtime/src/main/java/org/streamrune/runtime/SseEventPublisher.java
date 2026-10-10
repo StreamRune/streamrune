@@ -17,6 +17,12 @@ import org.streamrune.core.types.StreamId;
 /**
  * Event publisher for Server-Sent Events.
  *
+ * <p><b>Who publishes.</b> When {@code streamrune.sse.enabled=true} the Spring, Quarkus and
+ * Micronaut integrations run an {@link SseEventFeed} that publishes every event stored from then
+ * on, so an application does not call {@link #publish} for the shipped endpoint — a second
+ * publisher would deliver every frame twice. An event is always routed by its own {@link
+ * EventEnvelope#streamId()}: a subscriber of one stream cannot be handed the event of another.
+ *
  * <p>Fan-out is asynchronous and isolated per subscriber. Each subscriber owns a bounded queue and
  * a dedicated virtual-thread delivery worker; {@link #publish} only enqueues (never blocks) and
  * then returns, so a slow or stuck subscriber can never stall delivery to other subscribers nor the
@@ -185,16 +191,18 @@ public class SseEventPublisher implements AutoCloseable {
   }
 
   /**
-   * Enqueues the envelope for every subscriber of the stream and returns immediately.
+   * Enqueues the envelope for every subscriber of the envelope's own stream ({@link
+   * EventEnvelope#streamId()}) and returns immediately. The stream is not a parameter, so an event
+   * cannot be routed to the subscribers of a stream it does not belong to.
    *
    * <p>Delivery happens asynchronously on each subscriber's own worker thread, so a slow or blocked
    * subscriber never delays any other subscriber or this caller. A subscriber whose bounded queue
    * is full is evicted per the {@linkplain SseEventPublisher class-level} slow-consumer policy.
    *
-   * @param streamId the stream the envelope belongs to
-   * @param envelope the event to deliver
+   * @param envelope the event to deliver to the subscribers of its stream
    */
-  public void publish(StreamId streamId, EventEnvelope envelope) {
+  public void publish(EventEnvelope envelope) {
+    StreamId streamId = envelope.streamId();
     var list = subscribers.get(streamId);
     if (list == null) {
       return;

@@ -36,7 +36,12 @@ class SseControllerTest {
   private static final SseAuthorizer ALLOW_ALL = (principal, streamId) -> true;
 
   private static EventEnvelope envelope(long offset, DomainEvent event) {
+    return envelope(null, offset, event);
+  }
+
+  private static EventEnvelope envelope(StreamId stream, long offset, DomainEvent event) {
     var envelope = mock(EventEnvelope.class);
+    when(envelope.streamId()).thenReturn(stream);
     when(envelope.globalOffset()).thenReturn(GlobalOffset.of(offset));
     when(envelope.event()).thenReturn(event);
     return envelope;
@@ -153,7 +158,7 @@ class SseControllerTest {
 
     var event = new OrderCreated("order-1");
     publisher.publish(
-        StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-3")), envelope(42L, event));
+        envelope(StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-3")), 42L, event));
 
     // Delivery is asynchronous (per-subscriber queue drained by a worker thread), so await it.
     testSubscriber.awaitItems(1, java.time.Duration.ofSeconds(5));
@@ -348,7 +353,7 @@ class SseControllerTest {
     var event = new OrderCreated("order-race");
     for (int i = 0; i < 50; i++) {
       publisher.publish(
-          StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-race")), envelope(i, event));
+          envelope(StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-race")), i, event));
     }
 
     long deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
@@ -453,8 +458,10 @@ class SseControllerTest {
 
     // Trigger the slow stream's blocking onItem.
     publisher.publish(
-        StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-slow")),
-        envelope(1L, new OrderCreated("order-slow")));
+        envelope(
+            StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-slow")),
+            1L,
+            new OrderCreated("order-slow")));
 
     // Observe for well past the block window, then inspect the largest inter-arrival gap on the
     // FAST stream. A shared-thread stall shows up as one gap close to blockMillis; a healthy
@@ -538,8 +545,10 @@ class SseControllerTest {
     fastMulti.subscribe(fastSubscriber);
 
     publisher.publish(
-        StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-slow-deadline")),
-        envelope(1L, new OrderCreated("order-slow")));
+        envelope(
+            StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-slow-deadline")),
+            1L,
+            new OrderCreated("order-slow")));
     assertTrue(
         insideBlockingSend.await(5, TimeUnit.SECONDS),
         "the slow stream's delivery worker must be inside its blocking send (holding its sendLock)"

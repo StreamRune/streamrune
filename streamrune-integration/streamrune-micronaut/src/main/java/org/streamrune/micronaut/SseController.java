@@ -10,9 +10,12 @@ import io.micronaut.http.annotation.PathVariable;
 import io.micronaut.http.annotation.Produces;
 import io.micronaut.http.exceptions.HttpStatusException;
 import io.micronaut.http.sse.Event;
+import jakarta.annotation.PreDestroy;
 import jakarta.inject.Inject;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
@@ -38,6 +41,14 @@ import reactor.core.scheduler.Schedulers;
  *
  * <p>Endpoint: {@code GET /api/sse/{aggregateType}/{aggregateId}} — the two parts of the typed
  * {@link StreamId}; an invalid part is answered with {@code 400 Bad Request}.
+ *
+ * <p><b>Where the frames come from.</b> {@link SseEventFeedLifecycle} runs an {@link
+ * org.streamrune.runtime.SseEventFeed} beside this controller. It starts at the head of the global
+ * stream when the application starts and publishes every event stored from then on to the
+ * subscribers of the event's own stream, every {@code streamrune.sse.polling-interval}. Delivery is
+ * live, best-effort and at-most-once: a frame reaches only the clients connected at that moment,
+ * nothing is redelivered after a reconnect, and {@code Last-Event-ID} is not honoured. When the
+ * application context closes, every open stream is completed.
  *
  * <p>Each SSE event carries the full domain event as JSON in the {@code data} field and the global
  * offset in the {@code id} field, matching the Spring integration's {@code SseController}.
@@ -118,6 +129,9 @@ public class SseController {
   private final Duration timeout;
   private final Duration keepAliveInterval;
 
+  /** The open streams, tracked so the shutdown can complete them. */
+  private final Set<FluxSink<Event<?>>> openStreams = ConcurrentHashMap.newKeySet();
+
   /**
    * Creates the SSE controller.
    *
@@ -167,6 +181,32 @@ public class SseController {
 
   private static Duration positiveOrNull(Duration d) {
     return (d == null || d.isZero() || d.isNegative()) ? null : d;
+  }
+
+  /**
+   * Completes every open stream when the application context closes, so each client's stream ends
+   * (an {@code EventSource} reconnects, reaching another replica) and its subscription, keepalive
+   * and buffered events are released with the context instead of with the connection.
+   */
+  @PreDestroy
+  void completeOpenStreams() {
+    List<FluxSink<Event<?>>> open = List.copyOf(openStreams);
+    if (open.isEmpty()) {
+      return;
+    }
+    log.info("Completing {} open SSE stream(s) as the application shuts down", open.size());
+    for (FluxSink<Event<?>> sink : open) {
+      try {
+        sink.complete();
+      } catch (RuntimeException e) {
+        log.warn("Failed to complete an SSE stream at shutdown: {}", e.toString());
+      }
+    }
+  }
+
+  /** The number of streams currently open; for tests. */
+  int openStreamCount() {
+    return openStreams.size();
   }
 
   /**
@@ -228,6 +268,8 @@ public class SseController {
                               Event.of(envelope.event())
                                   .id(String.valueOf(envelope.globalOffset().value())));
                   resources.add(() -> publisher.unsubscribe(sid, subscriber));
+                  openStreams.add(sink);
+                  resources.add(() -> openStreams.remove(sink));
                   // Without a disconnect hook the publisher's slow-consumer eviction
                   // unregisters the subscriber but never terminates the Flux, so the client keeps
                   // an open, apparently-healthy stream that receives zero further events while its
