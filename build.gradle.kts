@@ -929,8 +929,7 @@ subprojects {
                                 "version $versionUnderRelease to Maven Central with the licence " +
                                 "URL $licenseUrlUnderRelease. Central is immutable, so that URL " +
                                 "would 404 forever. Tag and push the release commit first: " +
-                                "git tag -a $tag -m '$tag' && git push origin $tag. " +
-                                "The repository must also be public for the URL to resolve.")
+                                "git tag -a $tag -m '$tag' && git push origin $tag.")
                     }
 
                     // Arm 2 — the tag names the commit these artifacts were built from. A tag on an

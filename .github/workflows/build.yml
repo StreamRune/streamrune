@@ -28,11 +28,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A run in progress is cancelled only for a pull request, where a newer push supersedes it. A run
+# for a push to main or for a tag always finishes: the snapshot publication (publish-snapshot.yml)
+# waits for this workflow's result on exactly that commit, and a tag push is a release cut. Runs of
+# one ref still share a group, so pushes to main are built one after another, in push order; when
+# they arrive faster than a build takes, GitHub keeps only the newest waiting run, so the tip of
+# main is always built and the snapshot never moves back to an older commit.
 concurrency:
   group: build-${{ github.ref }}
-  # A tag push is a release cut; matches the broker-e2e-test.yml sibling's reasoning for the
-  # same trigger — never auto-cancel a release-critical run.
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
