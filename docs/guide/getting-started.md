@@ -11,7 +11,7 @@ an in-memory event store, and a simple read model — all tested without a datab
 | Requirement | Minimum | Check |
 |---|---|---|
 | Java | 25 | `java -version` |
-| Gradle | 8 | `gradle --version` |
+| Gradle | 9.1 | `gradle --version`. 9.1 is the first Gradle release that runs on Java 25; StreamRune itself is built and tested with Gradle 9.3.1 (its wrapper) |
 | PostgreSQL | 17 | Only required for production; unit tests use `InMemoryEventStore`. Tested on 17 and 18; an older server is refused at startup |
 
 ---
@@ -195,8 +195,11 @@ public class OrderDecider implements Decider<OrderCommand, OrderState, OrderEven
   public List<OrderEvent> decide(OrderCommand cmd, OrderState state) {
     return switch (cmd) {
 
-      case OrderCommand.CreateOrder c ->
-          List.of(new OrderEvent.OrderCreated(c.orderId(), c.customerId()));
+      case OrderCommand.CreateOrder c -> {
+        if (state.orderId() != null)
+          throw new DomainException("Order " + c.orderId() + " already exists");
+        yield List.of(new OrderEvent.OrderCreated(c.orderId(), c.customerId()));
+      }
 
       case OrderCommand.ConfirmOrder c -> {
         if (state.status() != OrderStatus.NEW)
@@ -227,6 +230,11 @@ public class OrderDecider implements Decider<OrderCommand, OrderState, OrderEven
 
 `decide` and `evolve` have no dependencies — no constructor injection required. The
 business rules live here, and here alone.
+
+`CreateOrder` first checks that the order does not exist yet. The bus runs `decide` for any
+command whose id it can extract, whether or not that stream already has events, so without the
+check a second `CreateOrder` for the same id would append another `OrderCreated`, and `evolve`
+would reset a confirmed order to `NEW`.
 
 ---
 
@@ -310,8 +318,8 @@ CommandResult result = streamRune.execute(
 
 System.out.println(result.events());         // [OrderCreated[orderId=ord-1, ...]]
 System.out.println(result.streamId());       // order:ord-1
-System.out.println(result.finalVersion());   // Version[1]
-System.out.println(result.globalOffsets());  // [GlobalOffset[1]]
+System.out.println(result.finalVersion());   // Version[value=1]
+System.out.println(result.globalOffsets());  // [GlobalOffset{1}]
 
 // Confirm the same order
 streamRune.execute(new OrderCommand.ConfirmOrder("ord-1"));
@@ -381,10 +389,10 @@ public class OrderRegistry implements Projection {
 > helpers then work in the same transaction as the offset checkpoint. See
 > [Delivery modes](concepts.md#delivery-modes--what-a-projection-promises).
 
-Registering a projection is not enough on its own: `startProjections()` only does something
-when the builder was also given a **projection runner**. Without a runner,
-`registerProjection(...)` + `startProjections()` is a silent no-op — the projection never sees
-any events. Supply one with `projectionRunnerFactory(...)`, which receives the built event store
+Registering a projection is not enough on its own: the builder also needs a **projection
+runner**. `build()` throws `IllegalStateException` when a projection is registered and no runner
+is configured, because that projection would never see an event. Supply one with
+`projectionRunnerFactory(...)`, which receives the built event store
 and the subscription config and returns a runner such as `ContinuousProjectionRunner`. The factory
 is called once per registered projection, so each projection gets its own runner instance, and
 `startProjections()` runs each one on its own virtual thread.
@@ -412,7 +420,7 @@ var streamRune = StreamRune.builder()
     .eventStore(eventStore)
     .register(ORDER, OrderCommand.class, orderId, new OrderDecider())
     .registerProjection("order_registry", registry, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
-    // Without this factory, startProjections() below is a no-op.
+    // Required: build() refuses a registered projection that has no runner.
     .projectionRunnerFactory((store, config) ->
         ContinuousProjectionRunner.builder()
             .eventStore(store)

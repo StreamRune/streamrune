@@ -54,6 +54,11 @@ fails `create()` and `initializeSchema()` with an `IllegalStateException` that n
 anything is written. The module's `native-image.properties` enables the `https` URL protocol, which
 Flyway needs to construct itself in a native image.
 
+Flyway logs through SLF4J, the facade the framework itself logs through: the factory names the
+back end (`loggers("slf4j")`) instead of leaving Flyway to probe the class path for one. In a native
+image that probe sees only the classes registered for reflection, so its outcome would depend on
+the rest of the image.
+
 `create()` then validates the schema with `SchemaValidator` (`validateSchema(true)` by default):
 a missing required table or column, a missing `global_offset_sequence` row, or a
 `flyway_schema_history_streamrune` version behind the one this build ships fails with

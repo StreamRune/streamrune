@@ -417,7 +417,7 @@ class SseControllerTest {
     // Measures the MAXIMUM GAP between consecutive "fast" keepalive arrivals rather than a total
     // count in a fixed window: scheduleAtFixedRate self-heals from a stall by firing catch-up
     // executions once the thread frees up, so a raw count over a long-enough window converges
-    // regardless of the bug — the actual harm or the auditor is a LATENCY spike (a truly dead
+    // regardless of the bug — the actual harm is a LATENCY spike (a truly dead
     // client's failed keepalive write, and every other stream's dead-client detection, is delayed
     // by up to the full stalled duration), which only a gap/latency measurement exposes.
     var publisher = new SseEventPublisher();

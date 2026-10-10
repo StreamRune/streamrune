@@ -444,7 +444,8 @@ void process_buildsReadModel_fromOrderCreated() {
 ### Idempotency test
 
 Processing the same event twice must produce the same result (the `AT_LEAST_ONCE_IDEMPOTENT`
-contract, and what makes a dead-letter replay safe under every mode):
+contract, and what a dead-letter replay needs under every mode, because it applies a range at least
+once):
 
 ```java
 @Test

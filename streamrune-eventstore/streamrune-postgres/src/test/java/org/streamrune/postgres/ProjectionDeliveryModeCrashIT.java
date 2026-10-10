@@ -143,9 +143,8 @@ class ProjectionDeliveryModeCrashIT {
                 },
                 offsets));
 
-    // The processor creates the read-model table before the transaction opens (ensureTableExists
-    // runs in autocommit), so the table survives the crash: what rolls back is the row and the
-    // seeded checkpoint row.
+    // A direct executeAtomically call prepares no table, so the first write created it inside the
+    // transaction: the crash takes the table, the row and the seeded checkpoint row together.
     assertThat(repo.findById(name, "row", CountView.class))
         .as("the row was written inside the terminated transaction and is gone")
         .isEmpty();
@@ -314,18 +313,18 @@ class ProjectionDeliveryModeCrashIT {
                 offsets));
     assertThat(CrashItSupport.tableExists(killerDs, "b", "alo_schema_b_view")).isTrue();
     assertThat(CrashItSupport.rowCount(killerDs, "b", "alo_schema_b_view")).isEqualTo(1L);
-    // Processor A's table bookkeeping creates an EMPTY alo_schema_b_view in its own schema before
-    // its transaction (ensureTableExists); none of this projection's rows ever lands there.
-    assertThat(CrashItSupport.rowCount(killerDs, "public", "alo_schema_b_view"))
-        .as("none of this projection's rows lands in A's schema")
-        .isZero();
+    // Processor A commits the checkpoint only: it creates no table for a projection it hands no
+    // repository to.
+    assertThat(CrashItSupport.tableExists(killerDs, "public", "alo_schema_b_view"))
+        .as("processor A creates no read-model table for an at-least-once projection")
+        .isFalse();
     assertThat(offsets.getLastOffset(name)).isEqualTo(GlobalOffset.initial());
 
     processorA.executeAtomically(
         name, batch, GlobalOffset.of(1), 0L, tx -> projection.process(batch, null), offsets);
     assertThat(repoB.findById(name, "row", CountView.class).map(CountView::applied)).contains(2);
     assertThat(offsets.getLastOffset(name)).isEqualTo(GlobalOffset.of(1));
-    assertThat(CrashItSupport.rowCount(killerDs, "public", "alo_schema_b_view")).isZero();
+    assertThat(CrashItSupport.tableExists(killerDs, "public", "alo_schema_b_view")).isFalse();
   }
 
   @Test
@@ -343,9 +342,9 @@ class ProjectionDeliveryModeCrashIT {
     runner.run(name, projection, AT_LEAST_ONCE_IDEMPOTENT);
 
     assertThat(memory.findById(name, "row", CountView.class).map(CountView::applied)).contains(3);
-    assertThat(CrashItSupport.rowCount(killerDs, "public", "alo_mem_view"))
-        .as("the rows are in memory; processor A's schema holds none of them")
-        .isZero();
+    assertThat(CrashItSupport.tableExists(killerDs, "public", "alo_mem_view"))
+        .as("the rows are in memory; processor A creates no table for this projection")
+        .isFalse();
     assertThat(new PostgresOffsetStore(processorDs).getLastOffset(name))
         .isEqualTo(GlobalOffset.of(3));
   }

@@ -6,7 +6,7 @@
 
 - EventStoreDB / Kurrent is a purpose-built event store database; StreamRune is a Java framework that uses PostgreSQL as its event store. They operate at different layers of the stack.
 - EventStoreDB has a built-in server-side projection engine (JavaScript); StreamRune runs projections in-process using plain Java.
-- EventStoreDB provides competing consumers and persistent subscriptions natively; StreamRune Horizon 1 has polling-based subscriptions (`PollingEventSubscription`) and hybrid subscriptions, but no competing consumer protocol.
+- EventStoreDB provides competing consumers and persistent subscriptions natively; StreamRune has polling-based subscriptions (`PollingEventSubscription`) and hybrid subscriptions, but no competing consumer protocol.
 - EventStoreDB uses its own wire protocol (gRPC); StreamRune uses JDBC/SQL — any Java application that can reach PostgreSQL can use StreamRune without a new network protocol.
 - StreamRune adds aggregate locking, snapshotting, saga orchestration, and outbox — features that EventStoreDB does not provide, leaving them to application code.
 
@@ -16,7 +16,7 @@
 |---|---|---|
 | Stream (e.g. `order-1`) | `StreamId`-keyed event log in PostgreSQL (e.g. `order:order-1`) | Both key event history by a stream identifier; StreamRune's is the typed pair of aggregate type and aggregate id, stored as two columns |
 | Global `$all` stream | `EventStore.readGlobalStream(afterOffset, maxCount)` | StreamRune uses a monotonic `global_offset` column in PostgreSQL |
-| Persistent subscriptions | Not in Horizon 1 | Competing consumer semantics planned for future |
+| Persistent subscriptions | Not available | StreamRune has no competing-consumer subscriptions |
 | Catchup subscriptions | `PollingEventSubscription` | StreamRune polls `readGlobalStream()` on a virtual thread |
 | Push subscriptions | `HybridEventSubscription` | Hybrid uses PostgreSQL LISTEN/NOTIFY then falls back to polling |
 | Server-side projections (JavaScript) | `BaseProjection` (Java, in-process) | StreamRune projections run in the same JVM, not the database |
@@ -33,7 +33,7 @@ EventStoreDB is a database. You deploy it as a server process (or cluster), conn
 EventStoreDB's projection engine is built into the server and runs JavaScript. It can compute derived state across streams server-side without any client application. StreamRune projections (`BaseProjection`, `ProjectionRunner`) are Java classes that run in-process inside the application. This means StreamRune projections benefit from the full Java type system and your existing domain model classes — but they require the application to be running to process events.
 
 **3. Subscription models.**
-EventStoreDB supports competing consumers (persistent subscriptions): multiple consumer instances each claim a slot and process events in parallel, with acknowledgement and retry built into the server protocol. StreamRune Horizon 1 does not implement competing consumers. `PollingEventSubscription` runs a single consumer per projection. For horizontal scaling of event consumption, teams must partition by stream or use the outbox pattern to fan out to a message broker.
+EventStoreDB supports competing consumers (persistent subscriptions): multiple consumer instances each claim a slot and process events in parallel, with acknowledgement and retry built into the server protocol. StreamRune does not implement competing consumers. `PollingEventSubscription` runs a single consumer per projection. For horizontal scaling of event consumption, teams must partition by stream or use the outbox pattern to fan out to a message broker.
 
 **4. Operational dependency profile.**
 A StreamRune application depends on PostgreSQL — a well-understood, ubiquitous database with managed offerings on every major cloud (AWS RDS, Cloud SQL, Azure Database for PostgreSQL). Local development needs a single Docker container. EventStoreDB requires its own container or managed instance (EventStoreDB Cloud / Kurrent Cloud), its own backup strategy, its own monitoring dashboards, and familiarity with its administration UI.

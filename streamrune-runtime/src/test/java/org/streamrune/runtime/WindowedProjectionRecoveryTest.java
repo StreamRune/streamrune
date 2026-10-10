@@ -91,15 +91,15 @@ class WindowedProjectionRecoveryTest {
     var e3 = evt(T0.plusSeconds(30));
     windowed.process(List.of(e1, e2, e3)); // fence at e3
 
-    assertThat(windowed.processDeadLetterReplay(List.of(e1, e2)))
+    assertThat(windowed.processDeadLetterReplay(List.of(e1, e2), null))
         .as("wholly fenced: nothing applied — the replayer must keep the entry")
         .isFalse();
 
     var e4 = evt(T0.plusSeconds(40));
-    assertThat(windowed.processDeadLetterReplay(List.of(e3, e4)))
+    assertThat(windowed.processDeadLetterReplay(List.of(e3, e4), null))
         .as("partially fenced: e4 applied — the entry may be discarded")
         .isTrue();
-    assertThat(windowed.processDeadLetterReplay(List.of(e3, e4)))
+    assertThat(windowed.processDeadLetterReplay(List.of(e3, e4), null))
         .as("and the fence still dedups the re-delivery of the same range")
         .isFalse();
   }

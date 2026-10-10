@@ -23,16 +23,16 @@ Adopt BSL 1.1 with the following parameters (as specified in `LICENSE`):
 - **Change Date:** Four years from the date each version is first published under this license.
 - **Change License:** Apache License, Version 2.0.
 
-This means: StreamRune is free for open source projects, startups, and companies under the USD 5M revenue threshold. Companies above the threshold must obtain a commercial license from `licensing@streamrune.com`. Four years after each release, that release's source code automatically becomes Apache 2.0.
+This means: StreamRune is free for open source projects, startups, and companies whose revenue, combined with that of their affiliates, does not exceed the USD 5M threshold. Companies above the threshold must obtain a commercial license from `licensing@streamrune.com`. Four years after each release, that release's source code automatically becomes Apache 2.0.
 
-The source code is fully visible to all — users can read, audit, and contribute. This is not "closed source"; it is "source available."
+The source code is fully visible to all — users can read and audit it and report issues. Code contributions are not accepted yet: they open once a Contributor License Agreement is in place (see `CONTRIBUTING.md`). This is not "closed source"; it is "source available."
 
 ## Consequences
 
 **Positive:**
 
 - **Free for the vast majority of users.** Most open source projects and small businesses fall well under the USD 5M revenue threshold.
-- **Ecosystem trust through source availability.** Developers can read the implementation, file pull requests, and audit security properties — unlike a pure proprietary binary SDK.
+- **Ecosystem trust through source availability.** Developers can read the implementation, report issues, and audit security properties — unlike a pure proprietary binary SDK.
 - **Guaranteed open source future.** Every version converts to Apache 2.0 after four years, meaning the community can always fork and maintain any version that a commercial licensor abandons.
 - **Sustainable commercial model.** Large enterprises that derive significant revenue from StreamRune are expected to contribute via a commercial license, funding continued development.
 
@@ -40,4 +40,4 @@ The source code is fully visible to all — users can read, audit, and contribut
 
 - **Not OSI-approved open source.** Some enterprise legal teams and some open source foundations will refuse BSL dependencies on principle, regardless of the threshold.
 - **Revenue tracking ambiguity.** The USD 5M threshold requires good-faith self-assessment. "Affiliates" are defined in the license, but edge cases (subsidiaries, joint ventures) require legal judgment.
-- **Contributor license agreement complexity.** Contributions are effectively contributed under BSL 1.1 terms. Contributors should understand that their patches are not immediately Apache 2.0. A CLA may be needed for clarity.
+- **Contributor license agreement complexity.** A contribution is made under BSL 1.1 terms, so a patch is not immediately Apache 2.0, and dual licensing needs a Contributor License Agreement. Until one is in place, external code contributions are not accepted.

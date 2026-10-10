@@ -88,6 +88,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
   // gracefully without retrying every cycle — mirrors
   // DeadLetterRetryRunner.backlogSamplingSupported.
   private volatile boolean deadLetterBacklogSamplingSupported = true;
+  // Tells a commit rejection the re-read resolves from one that repeats at an unchanged checkpoint.
+  private final CommitRejectionTracker commitRejections = new CommitRejectionTracker();
 
   /** Where the runner stands in its run()/stop lifecycle. */
   private enum Phase {
@@ -610,6 +612,72 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     }
   }
 
+  /**
+   * Signals that a live commit was rejected by the processor's overlap or monotonic guard: the
+   * checkpoint is ahead of the one the batch was read from, and leadership is not in question. The
+   * subscription does not advance and reads again from the checkpoint. A second rejection at the
+   * same checkpoint halts the runner instead (see {@link #haltIfRejectionRepeats}).
+   */
+  private static final class CommitRejectedAtCheckpointException extends RuntimeException
+      implements ResilientPollLoop.BenignSignal {
+    CommitRejectedAtCheckpointException(String name) {
+      super(
+          "Commit for projection '"
+              + LogSanitizer.sanitizeForLog(name)
+              + "' was rejected at the checkpoint; reading again from it");
+    }
+  }
+
+  /**
+   * The benign signal for a rejected live commit: leadership lost when the epoch fence named a
+   * newer leader, a plain re-read otherwise.
+   */
+  private static RuntimeException rejectedLiveCommitSignal(
+      ProjectionName projectionName, ProjectionCommitFencedException fenced) {
+    return fenced.guard() == ProjectionCommitFencedException.Guard.EPOCH_FENCE
+        ? new LeadershipLostException(projectionName.value())
+        : new CommitRejectedAtCheckpointException(projectionName.value());
+  }
+
+  /**
+   * Decides whether a commit rejection is one the re-read resolves, or one that repeats for as long
+   * as the process runs. A rejection by the epoch fence names a newer leader and is never counted.
+   * An overlap or monotonic rejection means the processor's checkpoint is ahead of the one this
+   * runner read: tolerated once (a commit whose acknowledgement was lost is rejected on its retry,
+   * and the re-read starts after the moved checkpoint), and on a second consecutive one with the
+   * runner's checkpoint unchanged the runner halts — state {@code ERROR}, {@code lastError} set,
+   * the run told to stop, so {@code run()}'s finally marks the projection terminally DOWN.
+   *
+   * @return the halt signal to throw, or {@code null} when the rejection is tolerated
+   */
+  private ProjectionCheckpointDivergedException haltIfRejectionRepeats(
+      ProjectionName projectionName, ProjectionCommitFencedException fenced) {
+    if (fenced.guard() == ProjectionCommitFencedException.Guard.EPOCH_FENCE) {
+      commitRejections.reset();
+      return null;
+    }
+    long checkpoint;
+    try {
+      checkpoint = offsetStore.getLastOffset(projectionName).value();
+    } catch (RuntimeException readFailed) {
+      // Whether the checkpoint moved is unknown; the next rejection decides.
+      return null;
+    }
+    if (!commitRejections.repeatsAt(checkpoint)) {
+      return null;
+    }
+    var diverged =
+        new ProjectionCheckpointDivergedException(projectionName.value(), checkpoint, fenced);
+    logger.error(
+        "Projection '{}' halting on a configuration error: {}",
+        LogSanitizer.sanitizeForLog(projectionName.value()),
+        diverged.getMessage());
+    lastError.set(diverged.getMessage());
+    state.set(ProjectionState.ERROR);
+    stopCurrentRun();
+    return diverged;
+  }
+
   private void catchUp(
       ProjectionName projectionName, Projection projection, ProjectionDeliveryMode mode) {
     int consecutiveReadFailures = 0;
@@ -723,11 +791,18 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           // WITHOUT advancing and return, so the outer loop re-checks leadership and (if
           // still/again leader) re-reads from the fresh committed checkpoint. A genuine
           // monotonic/overlap rejection resolves the same way — reload the checkpoint, retry from
-          // fresh state.
+          // fresh state — unless it repeats at an unchanged checkpoint: the processor then holds a
+          // checkpoint this runner never reads, and the runner halts instead of looping.
+          ProjectionCheckpointDivergedException diverged =
+              haltIfRejectionRepeats(projectionName, fenced);
+          if (diverged != null) {
+            throw diverged;
+          }
           logger.info(
-              "Projection '{}' atomic commit rejected (epoch fence / CAS) — abandoning batch without"
-                  + " advancing, re-checking leadership: {}",
-              projectionName.value(),
+              "Projection '{}' atomic commit rejected ({} guard) — abandoning batch without"
+                  + " advancing, reading again from the checkpoint: {}",
+              LogSanitizer.sanitizeForLog(projectionName.value()),
+              fenced.guard(),
               fenced.getMessage());
           return;
         } catch (ProjectionCheckpointSaveException saveFailed) {
@@ -986,17 +1061,25 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
                 projectionName, List.of(), newOffset, fencingEpoch, NO_OP_UPDATER, offsetStore);
             return null;
           });
+      commitRejections.reset();
       return ErrorAction.CONTINUE_NEXT_BATCH;
     } catch (ProjectionCommitFencedException fenced) {
       // The fenced empty-batch advance was rejected — a newer leader took over the lease (epoch
       // fence) or the monotonic guard rejected a non-advancing save. A LEADERSHIP/CAS signal, not a
       // transient failure: abandon WITHOUT advancing and drop to STANDBY, exactly like the
-      // atomic-batch fenced-commit path. Never retry (that would re-enter the error strategy).
+      // atomic-batch fenced-commit path. Never retry (that would re-enter the error strategy). A
+      // monotonic rejection that repeats at an unchanged checkpoint halts the runner instead.
+      ProjectionCheckpointDivergedException diverged =
+          haltIfRejectionRepeats(projectionName, fenced);
+      if (diverged != null) {
+        throw diverged;
+      }
       logger.info(
-          "Projection '{}' SKIP/DLQ checkpoint advance to {} rejected (epoch fence / CAS) —"
-              + " abandoning without advancing and standing by: {}",
-          projectionName.value(),
+          "Projection '{}' SKIP/DLQ checkpoint advance to {} rejected ({} guard) — abandoning"
+              + " without advancing: {}",
+          LogSanitizer.sanitizeForLog(projectionName.value()),
           newOffset.value(),
+          fenced.guard(),
           fenced.getMessage());
       return ErrorAction.STOP;
     } catch (RuntimeException saveError) {
@@ -1120,6 +1203,12 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     GlobalOffset newOffset = batch.getLast().globalOffset();
     long start = System.nanoTime();
     try {
+      // Only a registration that writes through the handed repository has a read model in the
+      // processor's store to prepare; an at-least-once one keeps its read models wherever it
+      // writes them.
+      if (mode.writesInCheckpointTransaction()) {
+        atomicProcessor.prepareReadModel(projectionName);
+      }
       // Thread the held lease's fencing epoch into the atomic commit: a transactional processor
       // rejects a commit whose epoch is below the epoch already stamped for this projection,
       // fencing out a superseded (partitioned old) leader. NOOP's epoch 0 is unfenced.
@@ -1134,6 +1223,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           txRepository ->
               projection.process(batch, mode.writesInCheckpointTransaction() ? txRepository : null),
           offsetStore);
+      commitRejections.reset();
       recordProcessed(projectionName, batch.size());
     } catch (RuntimeException e) {
       recordFailed(projectionName);
@@ -1603,15 +1693,22 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       // guard) — a leadership/CAS signal, NOT a projection error. Do NOT route it to the error
       // strategy: SKIP would return normally and let PollingEventSubscription advance the
       // checkpoint past the un-applied events, and DLQ would dead-letter a benign fence rejection.
-      // Convert it to a LeadershipLostException (a BenignSignal) so the subscription does NOT
-      // advance and the outer loop stands by / re-checks leadership, re-reading from the fresh
-      // committed checkpoint — exactly the leadership-lost response.
+      // Convert it to a BenignSignal so the subscription does NOT advance and re-reads from the
+      // fresh committed checkpoint: leadership lost for an epoch-fence rejection, a plain re-read
+      // for an overlap or monotonic one. A rejection that repeats at an unchanged checkpoint is
+      // not benign: the runner halts, and the halt signal keeps the subscription from advancing.
+      ProjectionCheckpointDivergedException diverged =
+          haltIfRejectionRepeats(projectionName, fenced);
+      if (diverged != null) {
+        throw diverged;
+      }
       logger.info(
-          "Projection '{}' atomic commit rejected (epoch fence / CAS) in live mode — not advancing"
-              + " the subscription, standing by: {}",
-          projectionName.value(),
+          "Projection '{}' atomic commit rejected ({} guard) in live mode — not advancing the"
+              + " subscription, reading again from the checkpoint: {}",
+          LogSanitizer.sanitizeForLog(projectionName.value()),
+          fenced.guard(),
           fenced.getMessage());
-      throw new LeadershipLostException(projectionName.value());
+      throw rejectedLiveCommitSignal(projectionName, fenced);
     } catch (ProjectionCheckpointSaveException saveFailed) {
       // Live path: rethrow WITHOUT touching consecutiveErrors — the subscription does not save its
       // offset when the listener throws, and its resilient loop backs off and redelivers from the
@@ -1772,10 +1869,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * which a stale leader (still inside its local {@code leadership.current()}-staleness window)
    * could silently skip events a newer leader has not yet applied. On success the checkpoint is at
    * {@code toOffset}, so the subscription's subsequent {@code saveOffset} to the same offset is a
-   * monotonic no-op. On a fence rejection ({@link OptimisticLockException} — a newer leader took
-   * over the lease, or the monotonic guard rejected a non-advancing save) throws {@link
-   * LeadershipLostException} (a benign signal) so the subscription does NOT advance and the outer
-   * loop stands by; the next leader re-reads from the fresh committed checkpoint. A transient
+   * monotonic no-op. On a fence rejection ({@link ProjectionCommitFencedException} — a newer leader
+   * took over the lease, or the monotonic guard rejected a non-advancing save) throws a benign
+   * signal so the subscription does NOT advance and re-reads from the fresh committed checkpoint; a
+   * monotonic rejection that repeats at an unchanged checkpoint halts the runner. A transient
    * (non-fence) commit failure propagates so the resilient poll loop backs off and re-reads the
    * batch from the un-advanced checkpoint. NOOP's epoch 0 is unfenced, so single-node advances
    * always commit.
@@ -1785,14 +1882,21 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     try {
       atomicProcessor.executeAtomically(
           projectionName, List.of(), toOffset, fencingEpoch, NO_OP_UPDATER, offsetStore);
+      commitRejections.reset();
     } catch (ProjectionCommitFencedException fenced) {
+      ProjectionCheckpointDivergedException diverged =
+          haltIfRejectionRepeats(projectionName, fenced);
+      if (diverged != null) {
+        throw diverged;
+      }
       logger.info(
-          "Projection '{}' SKIP/DLQ checkpoint advance to {} rejected (epoch fence / CAS) in live"
-              + " mode — not advancing the subscription and standing by: {}",
-          projectionName.value(),
+          "Projection '{}' SKIP/DLQ checkpoint advance to {} rejected ({} guard) in live mode —"
+              + " not advancing the subscription: {}",
+          LogSanitizer.sanitizeForLog(projectionName.value()),
           toOffset.value(),
+          fenced.guard(),
           fenced.getMessage());
-      throw new LeadershipLostException(projectionName.value());
+      throw rejectedLiveCommitSignal(projectionName, fenced);
     }
   }
 
@@ -1985,9 +2089,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * HybridEventSubscription.builder().listener(listener)}) so that {@code processLiveBatch} — the
    * configured error strategy (SKIP/DLQ/HALT), the atomic offset checkpoint, the leadership
    * pre-commit gate, and health/error tracking — applies to factory-built subscriptions exactly as
-   * it does to the default polling subscription. Passing the raw projection (the pre-fix contract)
-   * silently downgraded the recommended-for-production Hybrid path in LIVE mode: a poison batch
-   * spun forever, a crash double-applied, and a split-brain leader had no pre-commit re-check.
+   * it does to the default polling subscription. Passing the raw projection would silently
+   * downgrade the recommended-for-production Hybrid path in LIVE mode: a poison batch would spin
+   * forever, a crash would double-apply, and a split-brain leader would have no pre-commit
+   * re-check.
    *
    * <p>{@code readPoisonBound} is the owning runner's configured max consecutive deterministic
    * read-poison retries. A factory building a poison-bounded subscription — {@code

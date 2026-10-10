@@ -21,12 +21,12 @@ import org.streamrune.core.saga.SagaStateSerializationException;
  * Both halves are needed:
  *
  * <ul>
- *   <li>Treating <em>every</em> conversion failure as infrastructure (the pre-fix behaviour, and
- *       what a store-only fix leaves behind) means a deterministic failure propagates out of {@code
- *       onEvents} forever: the subscription never advances its offset, {@code ResilientPollLoop}
- *       retries the identical batch with capped backoff, no event is quarantined, no saga is
- *       FAULTED, no dead-letter row is written, and the subscription still reports itself RUNNING.
- *       Every saga of every type on that subscription stops advancing.
+ *   <li>Treating <em>every</em> conversion failure as infrastructure (all that the store can do on
+ *       its own) means a deterministic failure propagates out of {@code onEvents} forever: the
+ *       subscription never advances its offset, {@code ResilientPollLoop} retries the identical
+ *       batch with capped backoff, no event is quarantined, no saga is FAULTED, no dead-letter row
+ *       is written, and the subscription still reports itself RUNNING. Every saga of every type on
+ *       that subscription stops advancing.
  *   <li>Treating every conversion failure as poison is <em>worse</em>: a Vault/AWS-KMS outage or a
  *       pool timeout would dead-letter every event it touched and FAULT every saga, permanently,
  *       for a condition that heals by itself in minutes. The crypto backends deliberately make the

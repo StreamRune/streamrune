@@ -1,48 +1,8 @@
 plugins {
     alias(libs.plugins.jmh)
-    // Fray (CMU-PASTA) controlled-scheduler concurrency tester. Drives a deterministic
-    // thread scheduler under a JVMTI agent to explore interleavings of the runtime's
-    // concurrency primitives (aggregate locker, polling subscription). See src/fray.
-    id("org.pastalab.fray.gradle") version "0.8.5"
 }
 
 description = "StreamRune runtime: virtual-thread command bus, projection runners, aggregate locker."
-
-// Dedicated source set for Fray controlled-scheduling probes. Kept OUT of the JaCoCo
-// 0.80 gate (they are scheduling explorations, not coverage) and out of the normal
-// `test` task. Run them via :streamrune-runtime:frayTest.
-//
-// The source set is named `frayCheck` so its generated configurations
-// (frayCheckImplementation / frayCheckCompileOnly) match what the Fray plugin derives
-// from FrayExtension.testTask below — that is how the plugin knows where to add
-// fray-core / fray-junit / fray-runtime and the platform-native JVMTI agent.
-val frayCheck: SourceSet by sourceSets.creating {
-    // The probes live in src/fray/java (not the src/frayCheck/java convention) so the
-    // directory name reads as the intent ("fray probes"). Override the srcDir so the
-    // frayCheck source set actually compiles them — without this, compileFrayCheckJava is
-    // NO-SOURCE and the probes never build or run.
-    java.setSrcDirs(listOf("src/fray/java"))
-    resources.setSrcDirs(listOf("src/fray/resources"))
-    compileClasspath += sourceSets.main.get().output + sourceSets.test.get().output
-    runtimeClasspath += sourceSets.main.get().output + sourceSets.test.get().output
-}
-
-// The fray source set reuses the in-memory test doubles, so inherit the test deps.
-configurations.named("frayCheckImplementation") {
-    extendsFrom(configurations.testImplementation.get())
-}
-configurations.named("frayCheckRuntimeOnly") {
-    extendsFrom(configurations.testRuntimeOnly.get())
-}
-
-// Point the Fray plugin at the dedicated `frayCheck` task/source set instead of `test`,
-// so the fray-junit engine + JVMTI agent never leak into the normal `test`/`check` run
-// and the probes never count toward JaCoCo coverage. The plugin then creates the
-// `frayTest` task that runs `frayCheck`'s @FrayTest classes under the controlled
-// scheduler (jlinked JDK + JVMTI agent).
-configure<org.pastalab.fray.gradle.FrayExtension> {
-    testTask = "frayCheck"
-}
 
 dependencies {
     api(project(":streamrune-core"))
@@ -96,13 +56,6 @@ dependencies {
     jmhImplementation("org.junit.jupiter:junit-jupiter")
     jmhImplementation(libs.assertj.core)
     jmhRuntimeOnly("org.junit.platform:junit-platform-launcher")
-
-    // JUnit platform for the fray source set. fray-core / fray-junit / fray-runtime and
-    // the platform-native JVMTI agent are added automatically by the Fray plugin onto the
-    // frayCheck* configurations (derived from FrayExtension.testTask = "frayCheck").
-    "frayCheckImplementation"(platform(libs.junit.bom))
-    "frayCheckImplementation"("org.junit.jupiter:junit-jupiter")
-    "frayCheckRuntimeOnly"("org.junit.platform:junit-platform-launcher")
 }
 
 // The JMH plugin's `jmhJar` captures the `Project` instance in a task action, so storing the
@@ -120,24 +73,12 @@ tasks.named("jmhJar") {
         "me.champeau.jmh's jmhJar holds a Project reference; benchmarks are an on-demand task")
 }
 
-// `frayCheck` runs the fray source set's @FrayTest classes. The Fray plugin's `frayTest`
-// task mirrors this task's classpath/test classes and re-runs them under the JVMTI agent
-// + controlled scheduler. Run Fray probes via `:streamrune-runtime:frayTest`.
-val frayCheckTask = tasks.register<Test>("frayCheck") {
-    description = "Compiles and lists the Fray concurrency probes (driven for real by frayTest)."
-    group = "verification"
-    testClassesDirs = frayCheck.output.classesDirs
-    classpath = frayCheck.runtimeClasspath
-    useJUnitPlatform()
-    // Not wired into `check`: scheduling probes, run on demand.
-}
-
 // Runs StreamRuneBenchmarkSmokeTest -- and only that class, since
 // nothing else under src/jmh carries JUnit annotations for JUnit Platform to discover; the actual
 // @State/@Benchmark classes in the same source set are simply skipped during discovery, not an
-// error. Unlike frayCheckTask above, THIS task is wired into `check`: a benchmark that throws (or
-// measures an unpopulated/degenerate state) on a real invocation must fail the build, not sit
-// invisible until someone runs `:streamrune-runtime:jmh` by hand.
+// error. This task is wired into `check`: a benchmark that throws (or measures an
+// unpopulated/degenerate state) on a real invocation must fail the build, not sit invisible until
+// someone runs `:streamrune-runtime:jmh` by hand.
 val jmhSmokeTestTask = tasks.register<Test>("jmhSmokeTest") {
     description =
         "Runs each JMH benchmark method twice outside the JMH harness (StreamRuneBenchmarkSmokeTest) " +

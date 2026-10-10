@@ -35,6 +35,9 @@ on:
   schedule:
     - cron: '0 3 * * *'  # nightly 03:00 UTC
 
+permissions:
+  contents: read
+
 concurrency:
   group: broker-e2e-${{ github.ref }}
   cancel-in-progress: false  # never cancel a tag/release run

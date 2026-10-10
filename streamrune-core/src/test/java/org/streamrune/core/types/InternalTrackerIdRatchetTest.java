@@ -35,6 +35,12 @@ import org.junit.jupiter.api.Test;
  * control-character sets keep both forms. So are references to the private review material: the
  * expressions in {@link #PRIVATE_MATERIAL}.
  *
+ * <p><b>History wording is rejected too.</b> Public text says what the code does and why, not how
+ * it got there: a reviewer named by role and a numbered roadmap stage are rejected everywhere
+ * ({@link #HISTORY}), and a reference to the state before or after a fix is rejected everywhere
+ * except in test sources ({@link #FIX_HISTORY}), where a regression test may say what it fails
+ * against.
+ *
  * <p><b>What is scanned.</b> Every {@code .java} (main and test), {@code .md} and build file
  * (Gradle scripts, version catalog, properties, workflows, SQL, shell, XML, JSON) under the
  * repository root, except build output, VCS and tool directories, and the internal working material
@@ -136,6 +142,20 @@ class InternalTrackerIdRatchetTest {
           "(?i)\\b(?:sonar[ ]triage|owner[ ]decision|external[ ]review)\\b"
               + "|\\bpre-A1[0-9]\\b|\\bP[0-9] #[0-9]+[a-z]?\\b");
 
+  /**
+   * History wording rejected in every scanned file: a reviewer named by role, in any letter case,
+   * and a numbered stage of the roadmap. The bracketed letter keeps this file from matching its own
+   * rule; an ordinary lower-case "horizon" followed by a number (a time bound) is left alone.
+   */
+  private static final Pattern HISTORY = Pattern.compile("(?i:\\baud[i]tors?\\b)|\\bHorizon [0-9]");
+
+  /**
+   * A reference to the state before or after a fix, in any letter case. Rejected outside test
+   * sources ({@link #isTestSource}): main code, build files and documentation describe the
+   * behaviour as it is.
+   */
+  private static final Pattern FIX_HISTORY = Pattern.compile("(?i:\\b(?:pre|post)-fix\\b)");
+
   /** Crash-point table labels: tolerated only in {@link #CRASH_POINT_TABLE_TESTS}. */
   private static final Pattern CRASH_POINT_LABEL =
       Pattern.compile("\\b(?:INV-[0-9]+|CP-H?[0-9]+)\\b");
@@ -179,12 +199,15 @@ class InternalTrackerIdRatchetTest {
     for (Path file : publicTextFiles()) {
       String relative = relative(file);
       boolean crashPointTableTest = CRASH_POINT_TABLE_TESTS.contains(relative);
+      boolean testSource = isTestSource(relative);
       List<String> lines = read(file);
       for (int i = 0; i < lines.size(); i++) {
         String line = lines.get(i);
         if (FORBIDDEN.matcher(line).find()
             || SHORT_LABEL.matcher(line).find()
             || PRIVATE_MATERIAL.matcher(line).find()
+            || HISTORY.matcher(line).find()
+            || (!testSource && FIX_HISTORY.matcher(line).find())
             || (!crashPointTableTest && CRASH_POINT_LABEL.matcher(line).find())) {
           violations.add(relative + ":" + (i + 1) + ": " + line.strip());
         }
@@ -194,10 +217,16 @@ class InternalTrackerIdRatchetTest {
       fail(
           violations.size()
               + " line(s) cite an internal tracker id (work item, review finding, audit round or"
-              + " spec label). Say what the thing is and why, in words, instead of citing its"
-              + " label; rename a test whose name carries one. Offenders:\n  "
+              + " spec label) or narrate history (a reviewer, the state before a fix, a roadmap"
+              + " stage). Say what the thing is and why, in words, instead of citing its label or"
+              + " its past; rename a test whose name carries one. Offenders:\n  "
               + String.join("\n  ", violations));
     }
+  }
+
+  /** Whether a repository-relative path is a test source file. */
+  private static boolean isTestSource(String relative) {
+    return relative.contains("/src/test/");
   }
 
   @Test
@@ -229,6 +258,26 @@ class InternalTrackerIdRatchetTest {
     }
     assertTrue(CRASH_POINT_LABEL.matcher("INV" + "-4 holds").find());
     assertTrue(CRASH_POINT_LABEL.matcher("crash at CP" + "-H2").find());
+    for (String history :
+        List.of(
+            "Rejected the aud" + "itor's proposal",
+            "The Aud" + "itor proposed one",
+            "what the aud" + "itors saw",
+            "out of scope for Horizon" + " 1",
+            "on the Horizon" + " 2 backlog")) {
+      assertTrue(HISTORY.matcher(history).find(), "the rule must reject: " + history);
+    }
+    for (String fixHistory :
+        List.of(
+            "the pre" + "-fix sweeper counted it",
+            "Pre" + "-fix this helper converted only throws",
+            "Post" + "-fix the value is returned")) {
+      assertTrue(FIX_HISTORY.matcher(fixHistory).find(), "the rule must reject: " + fixHistory);
+    }
+    assertTrue(isTestSource("streamrune-core/src/test/java/org/streamrune/core/SomeTest.java"));
+    assertFalse(isTestSource("streamrune-core/src/main/java/org/streamrune/core/Some.java"));
+    assertFalse(isTestSource("docs/guide/production.md"));
+    assertFalse(isTestSource("build.gradle.kts"));
   }
 
   @Test
@@ -245,11 +294,19 @@ class InternalTrackerIdRatchetTest {
             "an audit trail",
             "the audit log",
             "round trip",
-            "PRE-existing row")) {
+            "PRE-existing row",
+            "the give-up horizon 1 h",
+            "inFlightHorizon()",
+            "the in-flight horizon 60s",
+            "an audited command",
+            "a prefix of the batch",
+            "the pre-fixed key")) {
       assertFalse(FORBIDDEN.matcher(ordinary).find(), "must not flag: " + ordinary);
       assertFalse(CRASH_POINT_LABEL.matcher(ordinary).find(), "must not flag: " + ordinary);
       assertFalse(SHORT_LABEL.matcher(ordinary).find(), "must not flag: " + ordinary);
       assertFalse(PRIVATE_MATERIAL.matcher(ordinary).find(), "must not flag: " + ordinary);
+      assertFalse(HISTORY.matcher(ordinary).find(), "must not flag: " + ordinary);
+      assertFalse(FIX_HISTORY.matcher(ordinary).find(), "must not flag: " + ordinary);
     }
     for (String ordinary :
         List.of(

@@ -188,10 +188,10 @@ import org.streamrune.core.types.SagaType;
  * start listener, or another replica), that path dispatches ZERO compensation commands and abandons
  * — so exactly one path ever drives compensation for a given episode, and a crash between the claim
  * and the terminal write can never orphan an already-executed compensation against a saga that has
- * no durable row. This was the fix for a double-compensation bug (event path dispatched
- * compensation before its terminal CAS while a timeout claim won the CAS and compensated again
- * under a disjoint keyspace) and, on the start path, for an orphaned-compensation bug (compensation
- * executed, then a crash before the create let redelivery re-run the full forward path to
+ * no durable row. Claiming first rules out a double compensation (an event path that dispatches
+ * compensation before its terminal CAS while a timeout claim wins the CAS and compensates again
+ * under a disjoint keyspace) and, on the start path, an orphaned compensation (compensation
+ * executed, then a crash before the create lets redelivery re-run the full forward path to
  * completion behind an un-reconciled refund). Compensation commands on all paths are keyed with the
  * shared, episode-scoped {@link SagaCommandDispatch#episodeCompensationKey}, so a genuine
  * double-delivery across paths dedups in the command inbox rather than double-executing the side

@@ -10,7 +10,10 @@ import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.fasterxml.jackson.annotation.JsonValue;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.DoubleNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -19,7 +22,10 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -2708,6 +2714,152 @@ class CryptoShreddingModuleTest {
     Object restored = storeMapper.readValue(json, record.getClass());
 
     assertEquals(record, restored, label + ": read back from " + json);
+  }
+
+  // ---- An untyped number beside an @Encrypted component keeps the Java type of a direct read ----
+
+  record UntypedBeside(
+      String customerId,
+      @Encrypted(subjectId = "customerId") String pii,
+      Object value,
+      Map<String, Object> attributes,
+      List<Object> items,
+      JsonNode tree) {}
+
+  /** The same shape with no {@code @Encrypted} component: Jackson reads it directly. */
+  record UntypedDirect(
+      String customerId,
+      String pii,
+      Object value,
+      Map<String, Object> attributes,
+      List<Object> items,
+      JsonNode tree) {}
+
+  static Stream<Arguments> untypedNumberLiterals() {
+    return Stream.of(
+        Arguments.of("a float", "19.9"),
+        Arguments.of("a float with a trailing zero", "19.90"),
+        Arguments.of("a float that is not exact in binary", "0.1"),
+        Arguments.of("a float in exponent notation", "1.5E2"),
+        Arguments.of("a float beyond double precision", "123456789012345678901.123456789"),
+        Arguments.of("a float beyond double range", "1E400"),
+        Arguments.of("an int", "2"),
+        Arguments.of("a long", "9223372036854775807"),
+        Arguments.of("an integer beyond long", "123456789012345678901234567890"));
+  }
+
+  /**
+   * The stored JSON of an {@link UntypedBeside} whose four untyped components all hold {@code
+   * literal}, spelled exactly as given: alone, as a map value, nested one map deeper, as a list
+   * element, and in a JSON tree.
+   */
+  private String storedUntyped(ObjectMapper storeMapper, String literal) throws Exception {
+    String json =
+        storeMapper.writeValueAsString(
+            new UntypedBeside("c-1", "secret-plaintext", null, null, null, null));
+    assertFalse(json.contains("secret-plaintext"), "PII must be ciphertext: " + json);
+    String stored =
+        json.replace("\"value\":null", "\"value\":" + literal)
+            .replace(
+                "\"attributes\":null",
+                "\"attributes\":{\"score\":" + literal + ",\"nested\":{\"ratio\":" + literal + "}}")
+            .replace("\"items\":null", "\"items\":[" + literal + ",\"text\"]")
+            .replace(
+                "\"tree\":null",
+                "\"tree\":{\"price\":" + literal + ",\"lines\":[" + literal + "]}");
+    assertFalse(
+        stored.contains(":null"), "every untyped component must hold the literal: " + stored);
+    return stored;
+  }
+
+  /**
+   * Renders a value with the Java class of every leaf, so a type change is a visible difference.
+   */
+  private static String typed(Object value) {
+    return switch (value) {
+      case null -> "null";
+      case Map<?, ?> map ->
+          map.entrySet().stream()
+              .map(e -> e.getKey() + "=" + typed(e.getValue()))
+              .sorted()
+              .collect(Collectors.joining(", ", "{", "}"));
+      case List<?> list ->
+          list.stream().map(e -> typed(e)).collect(Collectors.joining(", ", "[", "]"));
+      case JsonNode node when node.isContainerNode() -> {
+        var parts = new java.util.ArrayList<String>();
+        if (node.isObject()) {
+          node.fields().forEachRemaining(e -> parts.add(e.getKey() + "=" + typed(e.getValue())));
+        } else {
+          node.forEach(e -> parts.add(typed(e)));
+        }
+        yield node.getClass().getSimpleName() + parts;
+      }
+      default -> value.getClass().getSimpleName() + "(" + value + ")";
+    };
+  }
+
+  @ParameterizedTest(name = "{0}: {1}")
+  @MethodSource("untypedNumberLiterals")
+  void untypedNumbersBesideAnEncryptedComponentKeepTheJavaTypeOfADirectRead(
+      String label, String literal) throws Exception {
+    // The decrypt-before-construct path buffers the stored object and replays it to the record's
+    // deserializer. An untyped component (Object, Map<String, Object>, List<Object>, JsonNode) has
+    // no declared number type, so its Java type is whatever the replayed token reports. It must be
+    // the type a direct read of the same JSON gives: a Double (DoubleNode) for a float, not a
+    // BigDecimal (DecimalNode). Domain code that compares or casts such a value would otherwise
+    // behave differently for a record with an @Encrypted component than for one without.
+    var storeMapper = storeMapper();
+    String stored = storedUntyped(storeMapper, literal);
+
+    UntypedDirect direct = storeMapper.readValue(stored, UntypedDirect.class);
+    UntypedBeside decrypted = storeMapper.readValue(stored, UntypedBeside.class);
+
+    assertEquals("secret-plaintext", decrypted.pii(), "the encrypted component is decrypted");
+    assertEquals(typed(direct.value()), typed(decrypted.value()), label + ": Object");
+    assertEquals(
+        typed(direct.attributes()), typed(decrypted.attributes()), label + ": Map<String, Object>");
+    assertEquals(typed(direct.items()), typed(decrypted.items()), label + ": List<Object>");
+    assertEquals(typed(direct.tree()), typed(decrypted.tree()), label + ": JsonNode");
+    assertEquals(direct.value(), decrypted.value(), label + ": Object");
+    assertEquals(direct.attributes(), decrypted.attributes(), label + ": Map<String, Object>");
+    assertEquals(direct.items(), decrypted.items(), label + ": List<Object>");
+    assertEquals(direct.tree(), decrypted.tree(), label + ": JsonNode");
+  }
+
+  @Test
+  void anUntypedFloatBesideAnEncryptedComponentIsADouble() throws Exception {
+    // The absolute form of the rule above for the mapper every StreamRune store builds, which
+    // leaves USE_BIG_DECIMAL_FOR_FLOATS off: Double and DoubleNode, as in a direct read.
+    var storeMapper = storeMapper();
+
+    UntypedBeside decrypted =
+        storeMapper.readValue(storedUntyped(storeMapper, "19.9"), UntypedBeside.class);
+
+    assertEquals(Double.valueOf(19.9), decrypted.value());
+    assertEquals(Double.valueOf(19.9), decrypted.attributes().get("score"));
+    assertEquals(Map.of("ratio", 19.9), decrypted.attributes().get("nested"));
+    assertEquals(List.of(19.9, "text"), decrypted.items());
+    assertInstanceOf(DoubleNode.class, decrypted.tree().get("price"));
+    assertInstanceOf(DoubleNode.class, decrypted.tree().get("lines").get(0));
+  }
+
+  @ParameterizedTest(name = "{0}: {1}")
+  @MethodSource("untypedNumberLiterals")
+  void untypedNumbersFollowTheMappersOwnFloatSettingOnBothPaths(String label, String literal)
+      throws Exception {
+    // A mapper that asks for BigDecimal floats gets them on both paths: the decrypt path adds no
+    // float handling of its own.
+    var bigDecimalMapper = storeMapper().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    String stored = storedUntyped(bigDecimalMapper, literal);
+
+    UntypedDirect direct = bigDecimalMapper.readValue(stored, UntypedDirect.class);
+    UntypedBeside decrypted = bigDecimalMapper.readValue(stored, UntypedBeside.class);
+
+    assertEquals(typed(direct.value()), typed(decrypted.value()), label + ": Object");
+    assertEquals(
+        typed(direct.attributes()), typed(decrypted.attributes()), label + ": Map<String, Object>");
+    assertEquals(typed(direct.items()), typed(decrypted.items()), label + ": List<Object>");
+    assertEquals(typed(direct.tree()), typed(decrypted.tree()), label + ": JsonNode");
   }
 
   @Test

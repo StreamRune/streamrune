@@ -18,12 +18,12 @@ The team evaluated reactive (Mutiny / Reactor) as an alternative. The primary ob
 
 ## Decision
 
-Adopt Java 21 virtual threads as the concurrency model for command execution.
+Adopt virtual threads as the concurrency model for command execution.
 
 - `VirtualThreadCommandBus.executeAsync()` wraps the synchronous `execute()` path in `Thread.ofVirtual().name("streamrune-cmd-" + ...).start(...)`.
 - The synchronous `execute()` path acquires an aggregate lock, loads event history from PostgreSQL (blocking JDBC), runs `Decider.decide()`, appends events, and optionally saves a snapshot — all in plain blocking style. Virtual thread scheduling ensures carrier threads are not blocked during JDBC waits.
 - `ScopedValue` (`StreamRuneContext.CURRENT`) is captured before spawning the virtual thread and re-bound inside it, because ScopedValues do not inherit across `Thread.start()`. This preserves correlation ID, trace ID, and user ID across the asynchronous boundary.
-- Reactive backpressure is explicitly out of scope for Horizon 1. The command bus is fire-and-forget-async; callers compose `CompletableFuture<CommandResult>`.
+- Reactive backpressure is explicitly out of scope. `execute()` is synchronous: it returns the `CommandResult` or throws. `executeAsync()` runs the same path on a virtual thread and returns a `CompletableFuture<CommandResult>` that completes with that result or that exception, for callers to compose.
 
 ## Consequences
 
@@ -36,6 +36,6 @@ Adopt Java 21 virtual threads as the concurrency model for command execution.
 
 **Negative:**
 
-- Java 21 is the minimum required version. Teams on Java 17 LTS cannot use StreamRune without upgrading.
-- No built-in backpressure. If command producers are faster than the aggregate lock allows, commands queue up in unbounded `CompletableFuture` chains. Callers are responsible for rate limiting upstream.
+- Java 25 is the minimum required version. Teams on an older LTS release (17 or 21) cannot use StreamRune without upgrading.
+- No backpressure towards the producer. `executeAsync()` bounds the commands in flight (`maxInFlightAsyncCommands`, 10,000 by default) and completes the future of a call past that bound with `CommandBusOverloadedException`; it does not slow a producer down. Callers are responsible for rate limiting upstream.
 - Pinning: virtual threads can be pinned to carrier threads inside `synchronized` blocks. StreamRune uses `java.util.concurrent` locks (not `synchronized`) in `LocalStripedLocker` to avoid this, but third-party JDBC drivers that use `synchronized` internally can cause pinning under high concurrency.

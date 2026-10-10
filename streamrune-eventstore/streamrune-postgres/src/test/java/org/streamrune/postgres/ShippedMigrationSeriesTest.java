@@ -1,5 +1,6 @@
 package org.streamrune.postgres;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -78,6 +79,22 @@ class ShippedMigrationSeriesTest {
     assertEquals(first.hashCode(), second.hashCode());
     assertNotEquals(first, crypto);
     assertNotEquals(first, (Object) EVENT_STORE_SCRIPT);
+  }
+
+  /**
+   * Flyway's default picks a logging back end by probing the class path, which in a native image
+   * depends on what the image registers for reflection; the series names SLF4J instead. {@code
+   * LogFactory} maps the name to the log creator the Quarkus and Micronaut integrations register.
+   */
+  @Test
+  void tellsFlywayToLogThroughSlf4j() throws Exception {
+    for (ShippedMigrationSeries series :
+        List.of(ShippedMigrationSeries.EVENT_STORE, ShippedMigrationSeries.CRYPTO)) {
+      assertArrayEquals(new String[] {"slf4j"}, series.configure(null).getLoggers());
+    }
+    assertTrue(
+        org.flywaydb.core.api.logging.LogCreator.class.isAssignableFrom(
+            Class.forName("org.flywaydb.core.internal.logging.slf4j.Slf4jLogCreator")));
   }
 
   @Test

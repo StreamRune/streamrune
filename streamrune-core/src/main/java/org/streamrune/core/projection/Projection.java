@@ -8,9 +8,12 @@ import org.streamrune.core.EventEnvelope;
  * Processes batches of events to build read models.
  *
  * <p>{@link #process(List)} must be idempotent (upsert, not insert): that is the {@link
- * ProjectionDeliveryMode#AT_LEAST_ONCE_IDEMPOTENT} contract, and it is also what makes a
- * dead-letter replay ({@code ProjectionDeadLetterReplayer}, at-least-once and possibly out of
- * order) safe under every mode.
+ * ProjectionDeliveryMode#AT_LEAST_ONCE_IDEMPOTENT} contract, and it is also what a dead-letter
+ * replay ({@code ProjectionDeadLetterReplayer}) needs under every mode, because a replay applies a
+ * range at least once and after later events were already applied. Idempotency covers that
+ * re-application and nothing else: what keeps a replay from interleaving with a live batch is the
+ * {@link AtomicBatchProcessor}'s per-projection lock, which the replayer takes through {@link
+ * AtomicBatchProcessor#executeReplay}.
  */
 public interface Projection {
 
@@ -54,12 +57,12 @@ public interface Projection {
    * <p>The default answers by reflection: {@code true} iff the 2-arg {@code process} is NOT the
    * inherited default on this object's concrete class ({@link java.lang.reflect.Method#isDefault()}
    * on the resolved method). <b>Decorators MUST override this and forward to their delegate's
-   * answer</b> — exactly like {@link #processDeadLetterReplay(List)} below — because a decorator
-   * that overrides {@code process(List, ProjectionRepository)} only to forward the call (as every
-   * shipped decorator does) makes the reflective check {@code true} on the DECORATOR's own class
-   * regardless of whether the WRAPPED projection actually writes through the repository. The
-   * shipped decorators ({@code TracingProjectionDecorator}, {@code ValidatingProjectionDecorator},
-   * {@code CacheAwareProjection}) forward it.
+   * answer</b> — exactly like {@link #processDeadLetterReplay(List, ProjectionRepository)} below —
+   * because a decorator that overrides {@code process(List, ProjectionRepository)} only to forward
+   * the call (as every shipped decorator does) makes the reflective check {@code true} on the
+   * DECORATOR's own class regardless of whether the WRAPPED projection actually writes through the
+   * repository. The shipped decorators ({@code TracingProjectionDecorator}, {@code
+   * ValidatingProjectionDecorator}, {@code CacheAwareProjection}) forward it.
    *
    * @return {@code true} if the 2-arg {@code process} is overridden by this class or, for a
    *     decorator, transitively by the innermost delegate
@@ -97,18 +100,22 @@ public interface Projection {
   /**
    * Processes a batch that a runner dead-lettered and an operator is now replaying through {@code
    * ProjectionDeadLetterReplayer}, and reports whether this projection <b>applied anything</b> from
-   * it.
+   * it. The replayer calls it inside {@link AtomicBatchProcessor#executeReplay}, under the lock a
+   * live batch of this projection takes, and hands it what a live batch is handed: the replay
+   * transaction's repository for a {@link ProjectionDeliveryMode#TRANSACTIONAL_LOCAL} or {@link
+   * ProjectionDeliveryMode#EXTERNAL_EFFECT} registration, {@code null} for an {@link
+   * ProjectionDeliveryMode#AT_LEAST_ONCE_IDEMPOTENT} one.
    *
-   * <p>The default processes the batch through {@link #process(List)} and reports {@code true}.
-   * That is the truthful answer for every projection honouring the idempotent-upsert contract: it
-   * applies each event, and re-applying an already-applied range is still an application. It is NOT
-   * a no-op default hiding a defect — only a <em>self-fencing</em> projection can process a batch
-   * without applying it, and such a projection must override this to say so: {@code
-   * WindowedProjection} fences on the highest offset it has ever accumulated, so a dead-lettered
-   * range that was never accumulated — the hole the dead-letter entry records — is fenced out
-   * wholesale once later batches have advanced the fence past it. Reporting {@code false} makes the
-   * replayer KEEP the entry (the range's only record) with a truthful outcome instead of discarding
-   * it on a feed that changed nothing.
+   * <p>The default processes the batch through {@link #process(List, ProjectionRepository)} and
+   * reports {@code true}. That is the truthful answer for every projection honouring the
+   * idempotent-upsert contract: it applies each event, and re-applying an already-applied range is
+   * still an application. Only a <em>self-fencing</em> projection can process a batch without
+   * applying it, and such a projection must override this to say so: {@code WindowedProjection}
+   * fences on the highest offset it has ever accumulated, so a dead-lettered range that was never
+   * accumulated — the hole the dead-letter entry records — is fenced out wholesale once later
+   * batches have advanced the fence past it. Reporting {@code false} makes the replayer KEEP the
+   * entry (the range's only record) with a truthful outcome instead of discarding it on a feed that
+   * changed nothing.
    *
    * <p><b>Decorators MUST override this and forward to the delegate's {@code
    * processDeadLetterReplay}</b>. A wrapper that overrides only the two {@code process} overloads
@@ -119,11 +126,14 @@ public interface Projection {
    * {@code ValidatingProjectionDecorator}, {@code CacheAwareProjection}) forward it.
    *
    * @param batch the re-read dead-lettered range, in stream order
+   * @param repository the replay transaction's repository to write through, or {@code null} for an
+   *     at-least-once registration
    * @return {@code true} when at least one event of the batch was applied; {@code false} when the
    *     projection fenced the whole batch out and applied nothing
    */
-  default boolean processDeadLetterReplay(List<EventEnvelope> batch) {
-    process(batch);
+  default boolean processDeadLetterReplay(
+      List<EventEnvelope> batch, ProjectionRepository repository) {
+    process(batch, repository);
     return true;
   }
 }

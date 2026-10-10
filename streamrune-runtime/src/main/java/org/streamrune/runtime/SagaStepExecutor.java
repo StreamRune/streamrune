@@ -499,11 +499,11 @@ final class SagaStepExecutor<S extends SagaState> {
    * FAULT a healthy saga, and while it stayed FAULTED every correlated event arriving behind it
    * would pile up as held entries. If the outage instead outlives the saga's configured {@code
    * timeout()}, the saga is picked up by {@code SagaTimeoutRunner} and compensated on the
-   * operator's own deadline — a bounded, configured escape, which is precisely the decision the
-   * pre-fix code took unilaterally on the very first blip. (On the start path that bound exists
-   * only BECAUSE the genesis-pending row precedes the first dispatch — {@code SELECT_TIMED_OUT}
-   * selects rows, and before that row existed there was none, so this paragraph's promise was false
-   * for exactly the deliveries whose earlier indices had already moved money.)
+   * operator's own deadline — a bounded, configured escape, instead of a compensation taken
+   * unilaterally on the very first blip. (On the start path that bound exists only BECAUSE the
+   * genesis-pending row precedes the first dispatch — {@code SELECT_TIMED_OUT} selects rows, so
+   * without that row the timeout runner would have nothing to select for exactly the deliveries
+   * whose earlier indices had already moved money.)
    *
    * <p><b>Batch-level cost, stated honestly.</b> {@code PollingEventSubscription} checkpoints per
    * BATCH, so redelivery re-delivers the events that preceded this one in the batch. That is the
@@ -856,16 +856,17 @@ final class SagaStepExecutor<S extends SagaState> {
    * into a {@link SagaPoisonException}: a thrown {@link RuntimeException} and a {@code null}
    * RETURN.
    *
-   * <p><b>The executor's own SPI calls.</b> Pre-fix this helper converted only THROWS and handed
-   * {@code step.get()} back unchecked. A {@code null} return — a deterministic user-logic contract
+   * <p><b>The executor's own SPI calls.</b> Converting only THROWS and handing {@code step.get()}
+   * back unchecked is not enough. A {@code null} return — a deterministic user-logic contract
    * violation exactly like a throw, e.g. a {@code switch} arm that forgot to {@code return
-   * List.of()} — therefore sailed PAST the quarantine and NPE'd in this executor's own frame
-   * ({@code state.status()} at the evolve site, {@code commands.size()} at the handle site, {@code
+   * List.of()} — would sail PAST the quarantine and NPE in this executor's own frame ({@code
+   * state.status()} at the evolve site, {@code commands.size()} at the handle site, {@code
    * compensations.isEmpty()} inside {@code compensateAndClassify} at the compensate site). That NPE
-   * is not a {@code SagaPoisonException}, so {@code SagaRunner.asEventListener}'s catch never saw
-   * it: it propagated out of {@code onEvents}, the subscription checkpoint never advanced, and
-   * {@code ResilientPollLoop} retried the identical batch forever — permanent head-of-line blocking
-   * for every listener on that subscription, with no dead-letter entry and no FAULTED saga.
+   * is not a {@code SagaPoisonException}, so {@code SagaRunner.asEventListener}'s catch would never
+   * see it: it would propagate out of {@code onEvents}, the subscription checkpoint would never
+   * advance, and {@code ResilientPollLoop} would retry the identical batch forever — permanent
+   * head-of-line blocking for every listener on that subscription, with no dead-letter entry and no
+   * FAULTED saga.
    *
    * <p>Rejecting the null HERE, at the single choke point every SPI call in this class already
    * routes through, closes the whole class in one place: the violation becomes a poison quarantine

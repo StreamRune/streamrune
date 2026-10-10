@@ -666,6 +666,40 @@ class JdbcProjectionRepositoryTest {
     assertNotNull(id.objectMapper());
   }
 
+  /** A checkpoint commit creates no read-model table; preparing the read model does. */
+  @Test
+  void checkpointOnlyCommit_createsNoTable_prepareReadModelDoes() throws Exception {
+    var name = ProjectionName.of("lazy_table");
+    var offsets = new PostgresOffsetStore(dataSource);
+
+    repo.executeAtomically(
+        name, List.of(), org.streamrune.core.types.GlobalOffset.of(7), 0L, tx -> {}, offsets);
+    repo.executeReplay(name, List.of(), tx -> {});
+
+    assertFalse(
+        tableExists("lazy_table_view"),
+        "a checkpoint advance and a replay that writes nothing leave no empty table behind");
+    assertEquals(org.streamrune.core.types.GlobalOffset.of(7), offsets.getLastOffset(name));
+
+    repo.prepareReadModel(name);
+    repo.prepareReadModel(name); // cheap to repeat
+
+    assertTrue(tableExists("lazy_table_view"));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> repo.prepareReadModel(ProjectionName.of("Not-A-Table-Name")));
+  }
+
+  /** A replay rejects a name outside the table-name rule before it opens a transaction. */
+  @Test
+  void executeReplay_rejectsANameOutsideTheTableNameRule() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> repo.executeReplay(ProjectionName.of("Not-A-Table-Name"), List.of(), tx -> {}));
+    assertThrows(
+        IllegalArgumentException.class, () -> repo.executeReplay(null, List.of(), tx -> {}));
+  }
+
   private static boolean tableExists(String table) throws Exception {
     try (var conn = dataSource.getConnection();
         var ps =

@@ -1424,14 +1424,18 @@ public final class CryptoShreddingModule extends SimpleModule {
    * {@link #REDACTED} tombstone when the subject's key is gone), then replays the buffer through
    * the delegate to construct the record exactly once.
    *
-   * <p>The buffer is lossless: every JSON number is kept as the {@code BigDecimal} of its literal
+   * <p>The buffer is lossless: every JSON number is replayed with the exact value of its literal
    * text (see {@link #bufferObject}), never narrowed to a double, so a {@code BigDecimal} component
    * keeps its scale and an {@code Instant}, {@code Duration} or {@code OffsetDateTime} written as
    * {@code seconds.nanos} keeps every nanosecond digit — the record reads back exactly as a record
-   * without an {@code @Encrypted} component would, whatever the mapper's float handling. A JSON
-   * tree would not do: Jackson builds a {@code DoubleNode} for every float unless the mapper
-   * enables {@code USE_BIG_DECIMAL_FOR_FLOATS}, and even then its default node factory strips a
-   * {@code BigDecimal}'s trailing zeros ({@code 19.90} becomes {@code 19.9}).
+   * without an {@code @Encrypted} component would, whatever the mapper's float handling. The replay
+   * does not choose a number type either: an untyped component ({@code Object}, {@code Map<String,
+   * Object>}, {@code List<Object>}, {@code JsonNode}) receives a float as the type the mapper gives
+   * it on a direct read — a {@code Double} or {@code DoubleNode}, or a {@code BigDecimal} or {@code
+   * DecimalNode} when the mapper enables {@code USE_BIG_DECIMAL_FOR_FLOATS}. A JSON tree would not
+   * do: Jackson builds a {@code DoubleNode} for every float unless the mapper enables {@code
+   * USE_BIG_DECIMAL_FOR_FLOATS}, and even then its default node factory strips a {@code
+   * BigDecimal}'s trailing zeros ({@code 19.90} becomes {@code 19.9}).
    *
    * <p>Because the compact constructor never sees ciphertext, a {@code @Encrypted} field may carry
    * ordinary format/parse validation (e.g. "email must contain '@'") that validates the real
@@ -1519,11 +1523,11 @@ public final class CryptoShreddingModule extends SimpleModule {
 
     /**
      * Copies the record's stored JSON object into a {@link TokenBuffer}, token for token. Every
-     * number is buffered as the {@code BigDecimal} of its literal text ({@link
-     * TokenBuffer#forceUseOfBigDecimal}), never narrowed to a double, so the replay hands the
-     * delegate the same numeric tokens a direct read would. The parser arrives on the opening brace
-     * or — after a type-id reader consumed the opening brace and the type property — on the next
-     * property name; it is left on the object's closing brace, where a direct read leaves it.
+     * number is buffered with the exact value of its literal text, never narrowed to a double, so
+     * the replay hands the delegate the same numeric tokens a direct read would, with no number
+     * type of its own. The parser arrives on the opening brace or — after a type-id reader consumed
+     * the opening brace and the type property — on the next property name; it is left on the
+     * object's closing brace, where a direct read leaves it.
      */
     private static TokenBuffer bufferObject(JsonParser p, DeserializationContext ctxt)
         throws IOException {
@@ -1616,9 +1620,9 @@ public final class CryptoShreddingModule extends SimpleModule {
 
     /**
      * Copies the stored object into a new buffer, writing each decrypted plaintext in place of its
-     * ciphertext string. Every other token — every number still a {@code BigDecimal} — is copied
-     * unchanged, so the delegate constructs the record from exactly what was stored, with only the
-     * {@code @Encrypted} values swapped for plaintext.
+     * ciphertext string. Every other token — every number still exact — is copied unchanged, so the
+     * delegate constructs the record from exactly what was stored, with only the {@code @Encrypted}
+     * values swapped for plaintext.
      */
     private static TokenBuffer withPlaintext(
         TokenBuffer stored, Map<String, String> plaintextByJsonName, DeserializationContext ctxt)

@@ -137,7 +137,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `SchemaValidationException` and the application does not start. A version ahead of this build or a
   missing history table only logs a warning. Missing-column messages carry the exact `ALTER TABLE`.
   Schema auto-initialization works in a GraalVM native image; a missing migration script fails
-  startup and names it.
+  startup and names it. Flyway logs through SLF4J: the factory names the back end instead of
+  leaving Flyway to probe the class path for one.
 - **PostgreSQL 17 or newer is enforced.** `PostgresEventStoreFactory.create()`, `initializeSchema()`
   and the static `PostgresEventStore.create(...)` read the server version first and throw
   `UnsupportedServerVersionException` on an older server, before anything is written;
@@ -306,28 +307,57 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   replay; `Mode.INLINE` runs on the command thread after the command's events commit, ordered per
   aggregate within one JVM, with no checkpoint and no recovery, and must declare
   `AT_LEAST_ONCE_IDEMPOTENT`.
-- Error strategies (`ProjectionErrorStrategy`): `HALT`, `SKIP`, `DLQ`. Under `DLQ`,
+- Error strategies (`ProjectionErrorStrategy`): `HALT` (retry from the checkpoint, stop the runner
+  after a bounded number of consecutive failures of one batch), `SKIP`, `DLQ`. A skipped batch is
+  recorded nowhere; under `AT_LEAST_ONCE_IDEMPOTENT` the writes made before the failure stand, so it
+  may be partially applied. Under `DLQ`,
   `ProjectionErrorClassifier` separates `TRANSIENT` (`SQLException`, bare `CryptoOperationException`,
   `EventStoreException`, I/O — retried with capped backoff) from `POISON` (deserialization, unknown
   event type, `CryptoMappingException`, `SubjectForgottenException`, everything else —
   dead-lettered); the failed `[fromOffset, toOffset]` range lands in `projection_dead_letters` as
   metadata only (never the payload) and the runner continues past it.
-  `ProjectionDeadLetterReplayer.replay(name, projection, max)` re-reads each range from the event
-  store oldest-first, reports `replayed` / `failed` / `fenced`, never moves the checkpoint, and
-  re-applies events at-least-once, outside the checkpoint transaction, for every mode.
+- `ProjectionDeadLetterReplayer(eventStore, deadLetterStore, processor)` takes the
+  `AtomicBatchProcessor` the projection's runner commits through.
+  `replay(name, projection, deliveryMode, max)` re-reads each range from the event store
+  oldest-first and applies it through `AtomicBatchProcessor.executeReplay`, under the lock a live
+  batch of that projection takes (on `JdbcProjectionRepository`, the `projection_offset` row
+  `FOR UPDATE`): a replay and a live batch never interleave, so a read-modify-write projection keeps
+  both writes, and a replay is safe while the runner is live. A `TRANSACTIONAL_LOCAL` /
+  `EXTERNAL_EFFECT` projection is handed the replay transaction's repository and its range is
+  applied all-or-nothing; an `AT_LEAST_ONCE_IDEMPOTENT` one is handed `null`. Replay reports
+  `replayed` / `failed` / `fenced`, never moves the checkpoint's offset or epoch, and is
+  at-least-once: it commits the range and then discards the entry, so a crash between the two
+  applies the range again on the next replay.
+- `AtomicBatchProcessor.serializesReplay()` says whether a processor has that lock.
+  `nonAtomicAtLeastOnce()` does not, and `replay` refuses it with an `IllegalStateException` before
+  reading an entry; `replayWithRunnerStopped(name, projection, max)` replays such a registration
+  with no lock, on the caller's guarantee that no runner is processing the projection.
+- `Projection.processDeadLetterReplay(List, ProjectionRepository)` is the replay hook; it receives
+  the repository a live batch of the registration would receive.
 - `JdbcProjectionRepository`: one table per projection name (`<name>_view`, names matching
   `[a-z_][a-z0-9_]{0,57}`, checked at startup, never rewritten); `executeAtomically` locks the
   checkpoint row `FOR UPDATE`, applies the epoch fence, the overlap guard (a batch starting at or
   before the committed checkpoint is rejected) and the monotonic guard, and commits read-model writes
   and the offset together. `afterCommit(...)` hooks run once the transaction committed and are dropped
-  on rollback.
+  on rollback. A `<name>_view` table is created by the first read or write of that name, or by
+  `AtomicBatchProcessor.prepareReadModel(name)`, which the runners call before each batch of a
+  `TRANSACTIONAL_LOCAL` / `EXTERNAL_EFFECT` registration; a checkpoint commit creates none, so an
+  at-least-once projection that keeps its read models elsewhere leaves no empty table.
+- `ProjectionCommitFencedException.guard()` names the guard that rejected a commit (`EPOCH_FENCE`,
+  `OVERLAP`, `MONOTONIC`). A runner stands by on `EPOCH_FENCE`. It tolerates one `OVERLAP` or
+  `MONOTONIC` rejection and re-reads; a second consecutive one while the checkpoint its
+  `OffsetStore` returns has not moved halts the projection with a
+  `ProjectionCheckpointDivergedException` (`ProjectionState.ERROR` /
+  `ScheduledProjectionState.ERROR`, health `DOWN`), whose message names the likely causes: the
+  processor and the offset store are not over the same `DataSource`, or two runners share the
+  projection name.
 - `PostgresOffsetStore` ignores a backward or sideways `saveOffset` (a monotonic no-op);
   `OffsetStore.reset(name)` is the deliberate rewind for a rebuild.
 - `WindowedProjection` — time-windowed aggregation over `Window(start, end)`, `WindowSink`,
   `LateDataPolicy` (`DROP`, `REOPEN`), self-fencing on the highest offset it has accumulated.
 - Decorators `TracingProjectionDecorator`, `ValidatingProjectionDecorator` and `CacheAwareProjection`
   forward `process(List, ProjectionRepository)`, `writesThroughRepository()`, `writeTarget()` and
-  `processDeadLetterReplay(List)` to their delegate.
+  `processDeadLetterReplay(List, ProjectionRepository)` to their delegate.
 - Projection names, subscription names and offsets share one `projection_offset` namespace; the modes
   use no extra table.
 
@@ -670,6 +700,12 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   nested value objects, and lists every sealed command/event root and nested sealed level as a
   `{"type": "…"}` entry in its own `reachability-metadata.json` (on Spring, `registerDomainPackages`
   covers it). A sealed type the image reports with no permitted subclasses is refused at startup.
+  Schema auto-initialization needs no native-image setting in the application: the Quarkus and
+  Micronaut integrations ship reachability metadata for what Flyway reaches by name at run time
+  (Quarkus: the plugin service file, every plugin it names, the copied configuration extensions'
+  fields, the SLF4J log creator, and run-time initialization of `InsertRowLock`; Micronaut: the
+  copied configuration extensions and the SLF4J log creator), and a Spring Boot build takes it from
+  the GraalVM reachability-metadata repository.
   Micronaut images need `-H:+SharedArenaSupport`. Every jar is compiled with `-parameters`.
 
 ### Observability
@@ -763,8 +799,8 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
 - **Jackson 2.19.2** (`jackson-databind` 2.19 or newer). `streamrune-core` depends on nothing else.
 - `streamrune-postgres` brings Flyway 13.9.0 (`flyway-core`, `flyway-database-postgresql`), HikariCP
   6.2.1 (for its dedicated LISTEN and lock pools), the PostgreSQL JDBC driver 42.7.10 and SLF4J 2.0.
-- Frameworks: Spring Boot 4.0.x (built and tested against 4.0.3, Spring Security 7.0.x), Quarkus
-  3.32.x, Micronaut 4.10.x (Micronaut Security 4.14, Validation 4.12, Serde 2.16). Micrometer 1.16,
+- Frameworks: Spring Boot 4.1.x (built and tested against 4.1.1, Spring Security 7.1.x), Quarkus
+  3.32.x, Micronaut 5.2.x (Micronaut Security 5.4, Validation 5.2, Serde 3.2). Micrometer 1.17,
   OpenTelemetry API 1.47 (optional).
 - Outbox brokers: Kafka clients 3.9 (`streamrune-kafka-outbox`), RabbitMQ `amqp-client` 5.25
   (`streamrune-rabbitmq-outbox`). Crypto backends: AWS SDK v2 KMS 2.30 (`streamrune-aws-kms-crypto`);
@@ -876,8 +912,10 @@ Each statement below is a property of the shipped code and holds under the state
 - **The circuit breaker is per-JVM, in-memory state**; each replica opens and closes independently.
 - **`SnapshotPolicy` is global per `VirtualThreadCommandBus`.**
 - **Subscriptions are at-least-once across `pause()`/`resume()`**; listeners must be idempotent.
-- **Projection dead-letter replay is an out-of-order patch** behind the checkpoint and requires an
-  idempotent `process`.
+- **Projection dead-letter replay is an at-least-once, out-of-order patch** behind the checkpoint
+  and requires an idempotent `process`. The replay's commit and the entry's discard are two steps.
+- **Nothing compares a projection processor's `DataSource` with the offset store's at startup.** The
+  mismatch surfaces on the second batch, as a halted projection and health `DOWN`.
 - **The plain `StreamRune` facade has no health surface**: a projection thread started by
   `startProjections()` that dies is reported only as an ERROR log.
 - **Outbox**: one channel per application in the shipped integrations, hence one ordering mode;
@@ -942,4 +980,5 @@ StreamRune is dual-licensed.
 
 Every published jar, sources jar and Javadoc jar bundles `LICENSE`, `NOTICE` and
 `LICENSE-COMMERCIAL.md` under `META-INF`, and the POM's single `<license>` entry names `Business
-Source License 1.1`. Contributions are accepted under BSL 1.1 with DCO sign-off (`CONTRIBUTING.md`).
+Source License 1.1`. External code contributions are not accepted until a Contributor License
+Agreement is in place; issues and bug reports are welcome (`CONTRIBUTING.md`).

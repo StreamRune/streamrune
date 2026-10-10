@@ -105,6 +105,10 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
   // projection HALTs.
   private final ConcurrentHashMap<ProjectionName, Integer> readPoisonFailures =
       new ConcurrentHashMap<>();
+  // Per projection: tells a commit rejection the next tick's re-read resolves from one that repeats
+  // at an unchanged checkpoint (see CommitRejectionTracker).
+  private final ConcurrentHashMap<ProjectionName, CommitRejectionTracker> commitRejections =
+      new ConcurrentHashMap<>();
   private final AtomicBoolean started = new AtomicBoolean(false);
   private final AtomicBoolean stopping = new AtomicBoolean(false);
   // Set false the first time countPending() throws UnsupportedOperationException, so the
@@ -653,6 +657,11 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
           runHeldFromStop(
               reg.name(),
               () -> {
+                // Only a registration that writes through the handed repository has a read model
+                // in the processor's store to prepare.
+                if (reg.deliveryMode().writesInCheckpointTransaction()) {
+                  atomicProcessor.prepareReadModel(reg.name());
+                }
                 atomicProcessor.executeAtomically(
                     reg.name(),
                     chunk,
@@ -668,6 +677,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
                     offsetStore);
                 return null;
               });
+          commitRejectionsFor(reg.name()).reset();
           recordProcessed(reg.name(), chunk.size());
           recordHealthSuccess(reg.name());
           batches++;
@@ -684,12 +694,17 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
           // permanently skipping the un-applied events. Mirror the leadership-lost handling above:
           // abandon this drain WITHOUT advancing and WITHOUT recording a processing failure; the
           // next tick re-reads from the fresh committed checkpoint (and a genuine monotonic/overlap
-          // rejection resolves the same way — reload the checkpoint, retry from fresh state).
-          logger.info(
-              "Projection '{}' atomic commit rejected (epoch fence / CAS) — abandoning drain without"
-                  + " advancing, will re-read from the checkpoint next tick: {}",
-              reg.name().value(),
-              fenced.getMessage());
+          // rejection resolves the same way — reload the checkpoint, retry from fresh state). A
+          // rejection that repeats at an unchanged checkpoint halts the projection instead:
+          // haltIfRejectionRepeats records the ERROR and runLoop breaks on it.
+          if (!haltIfRejectionRepeats(reg.name(), fenced)) {
+            logger.info(
+                "Projection '{}' atomic commit rejected ({} guard) — abandoning drain without"
+                    + " advancing, will re-read from the checkpoint next tick: {}",
+                LogSanitizer.sanitizeForLog(reg.name().value()),
+                fenced.guard(),
+                fenced.getMessage());
+          }
           return batches;
         } catch (ProjectionCheckpointSaveException saveFailed) {
           // Applied, not checkpointed, store unavailable. End this drain without advancing and
@@ -739,14 +754,11 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
         }
       }
 
-      // Do NOT treat a short page as end-of-stream. readGlobalStream's contiguity guard
-      // returns only the contiguous prefix when a permanent hole (an offset no committed event
-      // holds — the store does not promise contiguity) falls inside a page, so `events.size() <
-      // fetchSize` does NOT mean the tail was reached — it may just mean a hole truncated this
-      // page. Breaking here would stall catch-up one hole per tick. The offset advanced past this
-      // page, so the loop re-reads from beyond the hole and continues within THIS drain; it
-      // terminates only when a read genuinely returns nothing (the isEmpty() break above), which
-      // correctly excludes the single uncommitted in-flight tail append.
+      // A short page is not the end of the stream: a store may return fewer events than asked
+      // for while more are committed, and readGlobalStream withholds everything from the append
+      // still in flight at the tail onwards. The offset advanced past this page, so the loop reads
+      // again from there within THIS drain and ends only when a read returns nothing (the
+      // isEmpty() break above).
     }
     return batches;
   }
@@ -984,17 +996,61 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
                 name, List.of(), toOffset, fencingEpoch, NO_OP_UPDATER, offsetStore);
             return null;
           });
+      commitRejectionsFor(name).reset();
       return true;
     } catch (ProjectionCommitFencedException fenced) {
-      logger.info(
-          "Projection '{}' SKIP/DLQ checkpoint advance to {} rejected (epoch fence / CAS) —"
-              + " abandoning without advancing; the next leader re-reads from the fresh checkpoint:"
-              + " {}",
-          name.value(),
-          toOffset.value(),
-          fenced.getMessage());
+      if (!haltIfRejectionRepeats(name, fenced)) {
+        logger.info(
+            "Projection '{}' SKIP/DLQ checkpoint advance to {} rejected ({} guard) — abandoning"
+                + " without advancing; the next tick re-reads from the fresh checkpoint: {}",
+            LogSanitizer.sanitizeForLog(name.value()),
+            toOffset.value(),
+            fenced.guard(),
+            fenced.getMessage());
+      }
       return false;
     }
+  }
+
+  private CommitRejectionTracker commitRejectionsFor(ProjectionName name) {
+    return commitRejections.computeIfAbsent(name, n -> new CommitRejectionTracker());
+  }
+
+  /**
+   * Decides whether a commit rejection is one the next tick's re-read resolves, or one that repeats
+   * on every tick. A rejection by the epoch fence names a newer leader and is never counted. An
+   * overlap or monotonic rejection means the processor's checkpoint is ahead of the one this runner
+   * read: tolerated once (a commit whose acknowledgement was lost is rejected on its retry, and the
+   * re-read starts after the moved checkpoint), and on a second consecutive one with the runner's
+   * checkpoint unchanged the projection is put in {@code ERROR} with a {@link
+   * ProjectionCheckpointDivergedException} as its last error, so {@code runLoop} leaves the loop
+   * and marks it terminally DOWN.
+   *
+   * @return {@code true} when the projection was halted
+   */
+  private boolean haltIfRejectionRepeats(
+      ProjectionName name, ProjectionCommitFencedException fenced) {
+    if (fenced.guard() == ProjectionCommitFencedException.Guard.EPOCH_FENCE) {
+      commitRejectionsFor(name).reset();
+      return false;
+    }
+    long checkpoint;
+    try {
+      checkpoint = offsetStore.getLastOffset(name).value();
+    } catch (RuntimeException readFailed) {
+      // Whether the checkpoint moved is unknown; the next rejection decides.
+      return false;
+    }
+    if (!commitRejectionsFor(name).repeatsAt(checkpoint)) {
+      return false;
+    }
+    var diverged = new ProjectionCheckpointDivergedException(name.value(), checkpoint, fenced);
+    logger.error(
+        "Projection '{}' halting on a configuration error: {}",
+        LogSanitizer.sanitizeForLog(name.value()),
+        diverged.getMessage());
+    setError(name, diverged);
+    return true;
   }
 
   /**
@@ -1202,6 +1258,9 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     // Same rationale for the read-poison streak: a restart re-reads from the committed
     // offset, so a stale in-memory poison count must not carry into the fresh run.
     readPoisonFailures.clear();
+    // A restart re-reads from the committed offset, so a rejection seen by the previous run says
+    // nothing about this one.
+    commitRejections.clear();
     stopping.set(false);
     started.set(false);
   }

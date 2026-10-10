@@ -1,15 +1,15 @@
 [versions]
 # Frameworks
-spring-boot = "4.0.3"
+spring-boot = "4.1.1"
 quarkus = "3.32.0"
 # The Agroal connection pool Quarkus 3.32 pins; streamrune-quarkus compiles against its API only
 # (compileOnly) to open the crypto-forget LISTEN pool from the application's Agroal datasource.
 agroal = "3.0"
-micronaut = "4.10.15"
-micronaut-security = "4.14.0"
-micronaut-serde = "2.16.2"
-micronaut-validation = "4.12.0"
-micronaut-test = "4.10.2"
+micronaut = "5.2.12"
+micronaut-security = "5.4.0"
+micronaut-serde = "3.2.4"
+micronaut-validation = "5.2.1"
+micronaut-test = "5.2.0"
 micronaut-application = "4.2.1"
 
 # Core
@@ -46,12 +46,12 @@ aws-sdk = "2.30.0"
 
 # Observability
 opentelemetry = "1.47.0"
-# Managed by the Spring Boot 4.0.x BOM — keep aligned when bumping spring-boot
-micrometer = "1.16.3"
+# Managed by the Spring Boot 4.1.x BOM — keep aligned when bumping spring-boot
+micrometer = "1.17.1"
 
 # Security
-# Managed by the Spring Boot 4.0.x BOM — keep aligned when bumping spring-boot
-spring-security = "7.0.3"
+# Managed by the Spring Boot 4.1.x BOM — keep aligned when bumping spring-boot
+spring-security = "7.1.1"
 
 # Jakarta
 jakarta-annotation = "3.0.0"
@@ -59,15 +59,15 @@ jakarta-servlet = "6.0.0"
 
 # Other
 snakeyaml = "2.2"
-# Reactor 3.8.x per the Spring Boot 4.0.x BOM (reactor-bom 2025.0.x) — keep aligned
-reactor = "3.8.3"
+# Reactor 3.8.x per the Spring Boot 4.1.x BOM (reactor-bom 2025.0.x) — keep aligned
+reactor = "3.8.7"
 
 # Testing
 junit = "5.12.2"
 testcontainers = "1.21.4"
 mockito = "5.20.0"
-assertj = "3.27.3"
-archunit = "1.4.1"
+assertj = "3.27.7"
+archunit = "1.5.1"
 wiremock = "3.12.1"
 awaitility = "4.2.2"
 
@@ -76,7 +76,7 @@ jmh = "1.37"
 
 # Build plugins
 spotless = "7.1.0"
-jmh-plugin = "0.7.2"
+jmh-plugin = "0.7.3"
 graalvm = "0.10.6"
 versions-plugin = "0.54.0"
 version-catalog-update = "0.8.4"

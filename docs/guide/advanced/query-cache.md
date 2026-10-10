@@ -123,7 +123,7 @@ invalidator.onEventsProcessed(batch);   // List<EventEnvelope>
 
 A query that is still loading when an eviction runs does not keep its answer: it may have read the rows from before the batch, so `CachingQueryBus` removes that answer once it is stored, and the next dispatch loads again.
 
-If the wrapped projection throws, the invalidator is not called — nothing was written, so there is nothing to invalidate. `CacheAwareProjection` forwards `process(batch, repository)` and `processDeadLetterReplay(batch)` to its delegate (a dead-letter replay invalidates only when the delegate reports it applied something), so it is safe to wrap a transactional or self-fencing projection.
+If the wrapped projection throws, the invalidator is not called — nothing was written, so there is nothing to invalidate. `CacheAwareProjection` forwards `process(batch, repository)` and `processDeadLetterReplay(batch, repository)` to its delegate (a dead-letter replay invalidates only when the delegate reports it applied something, and after the replay transaction's commit when it is handed a repository), so it is safe to wrap a transactional or self-fencing projection.
 
 The returned invalidator inspects each event's type and evicts every per-query-type cache whose `@Cacheable.invalidateOn` includes that type (or a supertype). It swallows all runtime exceptions and logs a warning, so a runtime failure in invalidation never propagates back into event processing. An `Error` is not swallowed: it propagates, and the projection runner stops and reports it as it would an `Error` from the projection itself.
 

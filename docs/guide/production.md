@@ -197,8 +197,11 @@ Keep the StreamRune check out of the liveness probe: a database outage turns it 
 
 **What turns the check `DOWN`.** All three integrations build the same picture: the check is `DOWN`
 when the database does not accept a connection, when a subscription is stopped or terminally halted
-(a projection that exhausted its error strategy or stopped on an event it can never read, a live
-subscription that died), or when a started background relay's thread has died; otherwise it is `UP`.
+(a projection that exhausted its error strategy, stopped on an event it can never read, or had two
+commits in a row rejected at an unchanged checkpoint because its processor and its offset store do
+not share one checkpoint — see
+[a processor and an offset store that disagree](concepts.md#a-processor-and-an-offset-store-that-disagree);
+a live subscription that died), or when a started background relay's thread has died; otherwise it is `UP`.
 These are the conditions that do not clear on their own. Everything that is still running but
 behind or failing is `DEGRADED`: a subscription whose lag is at or above the lag threshold, one with
 a run of consecutive delivery errors, a paused one, one whose LISTEN/NOTIFY push path is dead, and a
@@ -398,7 +401,7 @@ confirming rise.
 
 ## Subscription resilience configuration
 
-A transient `RuntimeException` in the polling loop no longer terminates the subscription. The poll loop runs inside `ResilientPollLoop`, which logs the exception and retries with capped exponential backoff plus jitter; the loop exits only when its `keepRunning` condition becomes false or the thread is interrupted. There is no `STOPPED` state to watch for on a transient error, so a restart watchdog is no longer needed.
+A transient `RuntimeException` in the polling loop does not terminate the subscription. The poll loop runs inside `ResilientPollLoop`, which logs the exception and retries with capped exponential backoff plus jitter; the loop exits only when its `keepRunning` condition becomes false or the thread is interrupted. There is no `STOPPED` state to watch for on a transient error, so no restart watchdog is needed.
 
 Instead, treat a subscription that keeps failing as **degraded but still running**, and watch the **exposed** signals rather than the internal poll-loop counter (`ResilientPollLoop` and its `consecutiveFailures()` are package-private — not an operator API):
 
@@ -406,7 +409,7 @@ Instead, treat a subscription that keeps failing as **degraded but still running
 - **Metrics.** Alert on rising subscription lag (`streamrune.subscriptions.lag`) to catch a subscription that is retrying but not making progress — for example a poisoned event, an unavailable database, or a broken projection handler — and on `streamrune.subscriptions.listener.reconnects` to catch a flapping LISTEN/NOTIFY push path. A failed lag read no longer resets the gauge to `0` (the caught-up value): it holds its last known value and logs a `WARN`, so the alert stays firable during exactly the store trouble it exists to catch.
 - **A dead push path reports `DEGRADED`, not `UP`.** A `HybridEventSubscription` whose LISTEN/NOTIFY listener is not delivering — it failed at startup (its LISTEN data source could not be created), exhausted a finite reconnect cap, or has been without a LISTEN connection for longer than its 30-second reconnect grace (`max_connections` reached, credentials scoped to the main pool only, TLS handshake failure, a failed-over primary that is not reachable yet) — keeps delivering, because polling guarantees delivery. But it delivers at the *poll interval* instead of in milliseconds until the push path is back. That degradation is folded into subscription health as `DEGRADED` (never `DOWN` — data still flows) with a one-shot `WARN` naming the subscription, and it appears in the `subscription.<name>` health detail; it returns to `UP` once the listener has a LISTEN connection again. A routine reconnect that succeeds within the grace, and the first connect after start, do not degrade it. `streamrune.subscriptions.listener.reconnects` **cannot** tell you this (see the metrics table); the health status can. A `pollingOnly` subscription has no push path and is never degraded for it.
 
-> **Single-active-consumer, now enforced.** A given subscription/projection name must still be *processed* by exactly one instance at a time, but this is no longer just a documented requirement — it is enforced automatically. See [Multi-replica deployment](#multi-replica-deployment) below.
+> **Single-active-consumer is enforced.** A given subscription/projection name must be *processed* by exactly one instance at a time, and the framework enforces that automatically. See [Multi-replica deployment](#multi-replica-deployment) below.
 
 Polling interval: `pollingIntervalMs` default 5000ms. For near-real-time delivery, use `HybridEventSubscription` rather than reducing below 1000ms.
 
@@ -753,24 +756,33 @@ A dead-lettered batch failed deterministically (a projection bug or poison data)
 
 ### Replay
 
-Once a fix has shipped, drive recovery with `ProjectionDeadLetterReplayer` (no builder — a direct constructor takes the event store and the dead-letter store). Replay is explicit and operator-driven; there is no background loop.
+Once a fix has shipped, drive recovery with `ProjectionDeadLetterReplayer` (no builder — a direct constructor takes the event store, the dead-letter store and the `AtomicBatchProcessor` the projection's runner commits through). Replay is explicit and operator-driven; there is no background loop.
 
 ```java
 ProjectionDeadLetterReplayer replayer =
-    new ProjectionDeadLetterReplayer(eventStore, projectionDeadLetterStore);
+    new ProjectionDeadLetterReplayer(
+        eventStore, projectionDeadLetterStore, jdbcProjectionRepository); // the runner's processor
 
 // Replay up to maxEntries dead letters for one projection, oldest range first.
 ProjectionDeadLetterReplayer.ReplayResult result =
-    replayer.replay(ProjectionName.of("order_summary"), orderSummaryProjection, 50);
+    replayer.replay(
+        ProjectionName.of("order_summary"),
+        orderSummaryProjection,
+        ProjectionDeliveryMode.TRANSACTIONAL_LOCAL, // the mode it is registered with
+        50);
 
 int recovered = result.replayed();   // entries re-processed (or empty) and discarded
 int stillDead = result.failed();     // entries that failed again and were kept
 int fenced = result.fenced();        // entries the projection applied nothing from, kept
 ```
 
-Each entry is re-read from the global stream and fed to the projection through `Projection.processDeadLetterReplay`; on success the entry is discarded. A still-failing entry is kept and logged, and the remaining entries are still attempted, so one poisoned batch does not block recovery of the others. A feed that returns normally but reports it applied **nothing** keeps the entry too and counts it as `fenced`: a self-fencing projection such as `WindowedProjection`, whose offset fence has already moved past the hole, reads the never-accumulated range as done — replay such an entry from a fresh process before the live runner advances again, or discard it deliberately. A `Projection` decorator must forward `processDeadLetterReplay` to its delegate (the shipped decorators do), or a wrapped self-fencing projection reports "applied" and the replayer discards the range's only record. `Projection.process(List)` **must be idempotent** — replay is an out-of-order patch behind the projection's checkpoint (the checkpoint is never moved), and later offsets in the stream were already applied when the batch was skipped.
+Each entry is re-read from the global stream and fed to the projection through `Projection.processDeadLetterReplay`; on success the entry is discarded. A still-failing entry is kept and logged, and the remaining entries are still attempted, so one poisoned batch does not block recovery of the others. A feed that returns normally but reports it applied **nothing** keeps the entry too and counts it as `fenced`: a self-fencing projection such as `WindowedProjection`, whose offset fence has already moved past the hole, reads the never-accumulated range as done — replay such an entry from a fresh process before the live runner advances again, or discard it deliberately. A `Projection` decorator must forward `processDeadLetterReplay` to its delegate (the shipped decorators do), or a wrapped self-fencing projection reports "applied" and the replayer discards the range's only record.
 
-Replay is at-least-once and runs outside the checkpoint transaction for every delivery mode, possibly concurrently with the live runner and with an older event after a newer one — `process` must tolerate both. A `BaseProjection` writes the replayed range through the repository it was constructed with, autocommit, even when it is registered `TRANSACTIONAL_LOCAL`. Under `nonAtomicAtLeastOnce()` a dead-letter entry can only come from a projection failure, never from a checkpoint-save failure.
+**Replay is safe while the projection is live.** Each range runs through the processor under the lock a live batch takes — on `JdbcProjectionRepository` the projection's `projection_offset` row, `FOR UPDATE` — so a replay and a live batch of one projection never interleave, on one replica or across several, and a read-modify-write projection does not lose either side's update. A `TRANSACTIONAL_LOCAL` or `EXTERNAL_EFFECT` projection is handed the replay transaction's repository and its range is applied all-or-nothing; an `AT_LEAST_ONCE_IDEMPOTENT` projection is handed `null` and writes through its own repository while the replay holds the lock. A replay holds that lock for as long as the projection takes to apply the range, and the live runner waits for it: replay in batches (`maxEntries`) sized for the lag you accept.
+
+`Projection.process(List)` **must be idempotent** under every delivery mode — the lock covers concurrency, not re-application. Replay is at-least-once: it commits the range and then discards the entry, so a crash (or a failed discard) between the two leaves the range applied and the entry queued, and the next replay applies the range again. It is also an out-of-order patch behind the projection's checkpoint (the checkpoint is never moved): later offsets in the stream were already applied when the batch was skipped.
+
+A projection registered on `AtomicBatchProcessor.nonAtomicAtLeastOnce()` has no such lock, and `replay` refuses it with an `IllegalStateException`. Stop that projection's runner and call `replayWithRunnerStopped(name, projection, maxEntries)`; the caller guarantees nothing else is processing the projection, and nothing verifies it. Under `nonAtomicAtLeastOnce()` a dead-letter entry can only come from a projection failure, never from a checkpoint-save failure.
 
 Because a dead-lettered range no longer halts the projection, there is nothing to restart — the runner is already past the range and continuing live; replaying just clears the queued entry and backfills the hole sooner.
 

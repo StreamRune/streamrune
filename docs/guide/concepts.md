@@ -135,14 +135,17 @@ public class OrderDecider implements Decider<OrderCommand, OrderState, OrderEven
 
   @Override
   public OrderState initialState() {
-    return new OrderState();          // OrderStatus.NEW, no fields filled
+    return new OrderState(null, OrderStatus.NEW);   // no order yet: no id
   }
 
   @Override
   public List<OrderEvent> decide(OrderCommand cmd, OrderState state) {
     return switch (cmd) {
-      case OrderCommand.CreateOrder c ->
-          List.of(new OrderEvent.OrderCreated(c.orderId(), c.customerId(), c.itemCount()));
+      case OrderCommand.CreateOrder c -> {
+        if (state.orderId() != null)
+          throw new DomainException("Order " + c.orderId() + " already exists");
+        yield List.of(new OrderEvent.OrderCreated(c.orderId(), c.customerId(), c.itemCount()));
+      }
 
       case OrderCommand.ConfirmOrder c -> {
         if (state.status() != OrderStatus.NEW)
@@ -162,13 +165,17 @@ public class OrderDecider implements Decider<OrderCommand, OrderState, OrderEven
   @Override
   public OrderState evolve(OrderState state, OrderEvent evt) {
     return switch (evt) {
-      case OrderEvent.OrderCreated e  -> state.withStatus(OrderStatus.NEW);
+      case OrderEvent.OrderCreated e  -> new OrderState(e.orderId(), OrderStatus.NEW);
       case OrderEvent.OrderConfirmed e -> state.withStatus(OrderStatus.CONFIRMED);
       case OrderEvent.OrderCancelled e -> state.withStatus(OrderStatus.CANCELLED);
     };
   }
 }
 ```
+
+`CreateOrder` first checks that the order does not exist yet: the bus runs `decide` whether or not
+the stream already has events, so without the check a second `CreateOrder` for the same id would
+append another `OrderCreated` and reset the order.
 
 The optional `guard(command, state)` hook runs on the loaded state before `decide` — override it
 for ownership checks (see [Authorization](advanced/authorization.md#ownership-checks-in-deciderguard)).
@@ -207,6 +214,13 @@ projection is protected from applying a redelivered batch twice by its checkpoin
 range under every [delivery mode](#delivery-modes--what-a-projection-promises), so idempotency stays
 the baseline.
 
+Idempotency covers re-application, not concurrency. Two writers that each read a row, change it and
+save it lose one of the two changes even when neither applies anything twice. The framework keeps
+that from happening to a projection: every batch and every dead-letter replay of one projection
+name runs under that projection's checkpoint lock in the runner's `AtomicBatchProcessor`, so they
+never interleave. A projection therefore needs no locking of its own for its own rows, as long as
+nothing but its runner and the replayer writes them.
+
 **Two `process` overloads.** `Projection` also declares `process(List<EventEnvelope>,
 ProjectionRepository)`, whose default ignores the repository and calls the one-arg `process` above.
 A runner always calls the two-argument form: for a `TRANSACTIONAL_LOCAL` or `EXTERNAL_EFFECT`
@@ -221,7 +235,10 @@ there misses a row the same batch inserted and, on JDBC, can wait forever on a r
 holds.
 
 **Projection names under `JdbcProjectionRepository`.** Each name is stored in its own table,
-`<name>_view`, and must match `[a-z_][a-z0-9_]{0,57}`: lower-case ASCII letters, digits and
+`<name>_view`, created by the first read or write of that name through the repository, or by the
+runner before the first batch of a `TRANSACTIONAL_LOCAL` / `EXTERNAL_EFFECT` registration. An
+`AT_LEAST_ONCE_IDEMPOTENT` registration that keeps its read models elsewhere gets no table: the
+processor only commits its checkpoint. A name must match `[a-z_][a-z0-9_]{0,57}`: lower-case ASCII letters, digits and
 underscores, starting with a letter or an underscore, at most 58 characters. The name is used
 exactly as given, never rewritten, so no two projection names share a table — `order-summary` or
 `OrderSummary` is rejected with an `IllegalArgumentException`, not mapped onto `order_summary_view`.
@@ -241,7 +258,8 @@ table; a projection that saves under another name, or two runners in one JVM, ar
 
 **Wrapping a projection.** A decorator around another projection (tracing, validation, cache
 invalidation) must forward more than `process`: it must also override `writesThroughRepository()`,
-`writeTarget()` and `processDeadLetterReplay(List)` and return its delegate's answer. Inherited,
+`writeTarget()` and `processDeadLetterReplay(List, ProjectionRepository)` and return its delegate's
+answer. Inherited,
 each answers for the wrapper instead of the projection it wraps — the reflective
 `writesThroughRepository()` default inspects the wrapper's own class, so a wrapper that forwards the
 two-arg `process` reads as write-through even around a projection that is not; the default
@@ -293,17 +311,39 @@ MultiProjectionRunner.builder()
 The same `jdbcRepo` object in both places is what the startup check verifies; `auditProjection` is
 handed no repository and writes to its own store. (`OrderProjection` extends `BaseProjection` and
 saves under the name it is registered under. `offsetStore` is a `PostgresOffsetStore` over the same
-`DataSource` as `jdbcRepo`: the runner must read the checkpoint the processor advances, and nothing
-checks that for you.)
+`DataSource` as `jdbcRepo`: the runner must read the checkpoint the processor advances. Nothing
+checks that at startup; see [a processor and an offset store that disagree](#a-processor-and-an-offset-store-that-disagree).)
 
 **Integration recipe:** declare the `JdbcProjectionRepository` bean by its concrete type (or accept
 the framework default; any bean scope — identity survives proxies); annotate
 `@ProjectionConfig(name = "orders", deliveryMode = TRANSACTIONAL_LOCAL)`; construct the projection
 over that bean. Startup refuses anything else. The bean must use the `DataSource` whose
 `projection_offset` table the runner's `OffsetStore` bean reads — the integrations build the
-`PostgresOffsetStore` over the primary `DataSource`. A processor over a separate read-model
-`DataSource` advances a checkpoint the runner never reads: from the second batch on every batch is
-rejected as an overlap and the projection stalls, and nothing checks that for you.
+`PostgresOffsetStore` over the primary `DataSource`. Nothing checks that at startup.
+
+#### A processor and an offset store that disagree
+
+A processor over a separate read-model `DataSource` advances a checkpoint the runner never reads.
+The first batch commits there; the runner reads its own `OffsetStore`, still at the old checkpoint,
+reads the same batch again, and the processor rejects it as an overlap before any write. The runner
+tolerates one such rejection — a commit whose acknowledgement was lost is rejected when it is
+retried, and the re-read that follows starts after the moved checkpoint. A second consecutive
+overlap or monotonic rejection while the checkpoint the runner reads has not moved **halts the
+projection**: `ContinuousProjectionRunner` ends in `ProjectionState.ERROR`, `ScheduledProjectionRunner`
+puts the registration in `ERROR`, the health contributor reports the subscription `DOWN`, and
+`lastError` carries a `ProjectionCheckpointDivergedException` message naming the two likely causes:
+
+- the `AtomicBatchProcessor` and the `OffsetStore` are not over the same `DataSource` (or the same
+  `projection_offset` table);
+- two runners are registered under one projection name and commit through one processor while
+  reading their checkpoint from different offset stores.
+
+The read model is not written twice: every rejected batch rolls back before its first write. Give
+the runner an `OffsetStore` over the processor's `DataSource`, register the name once, and restart
+the projection; it resumes from the checkpoint.
+
+A rejection by the **epoch fence** is a different signal and never halts: it means a newer leader
+holds the lease, and the superseded runner stands by.
 
 An at-least-once projection is never handed the checkpoint transaction: the runner passes `null` to
 `process(batch, repository)` under every processor, so its writes go where it sends them. A
@@ -316,6 +356,17 @@ leadership. It runs `process(batch, null)` and then saves the checkpoint: two co
 save fails after `process` succeeded, the runner retries the batch from the unchanged checkpoint —
 with backoff, or on the next tick for `ScheduledProjectionRunner` — under every error strategy; the
 range is never skipped and never dead-lettered.
+
+**When a batch fails.** The runner's `ProjectionErrorStrategy` decides. `HALT` retries the batch
+from the checkpoint and stops the runner with an error once the same batch keeps failing. `DLQ`
+records the batch's offset range in the dead-letter store and moves the checkpoint past it; the
+[replayer](advanced/retry-and-resilience.md#projection-dead-letter-replay) applies the range later.
+`SKIP` moves the checkpoint past the batch and records nothing. What a skipped or dead-lettered
+batch leaves behind depends on the delivery mode: under `TRANSACTIONAL_LOCAL` and `EXTERNAL_EFFECT`
+the failed batch's writes roll back, so the whole batch is missing from the read model; under
+`AT_LEAST_ONCE_IDEMPOTENT` the writes the projection made before it threw stand, so the batch may be
+**partially applied**. Prefer `DLQ` to `SKIP` for an at-least-once projection: the entry records the
+range, and the replay applies all of it again, which an idempotent projection completes.
 
 **What startup refuses.** Every runner checks each registration before it reads an event — at
 `build()` (`MultiProjectionRunner`, `ScheduledProjectionRunner`) or when `run()` starts
