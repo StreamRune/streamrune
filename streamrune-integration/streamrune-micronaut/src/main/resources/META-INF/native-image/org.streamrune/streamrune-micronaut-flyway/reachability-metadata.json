@@ -1,0 +1,19 @@
+{
+  "comment": [
+    "What Flyway reaches by name at run time when StreamRune initializes the schema",
+    "(streamrune.event-store.schema.auto-initialize), beyond its ServiceLoader plugins, which",
+    "native-image registers on its own. FlywayNativeImageMetadataTest checks every entry against",
+    "the Flyway on the class path.",
+    "reflection, a type with allDeclaredFields: a configuration extension Flyway copies with",
+    "getDeclaredConstructor().newInstance() and a field-by-field copy (MergeUtils.copyModel).",
+    "reflection, Slf4jLogCreator: StreamRune tells Flyway to log through SLF4J, and Flyway",
+    "instantiates the log creator from its class name."
+  ],
+  "reflection": [
+    { "type": "org.flywaydb.core.api.migration.baseline.BaselineMigrationConfigurationExtension", "allDeclaredFields": true, "methods": [{ "name": "<init>", "parameterTypes": [] }] },
+    { "type": "org.flywaydb.core.internal.proprietaryStubs.CherryPickConfigurationExtensionStub", "allDeclaredFields": true, "methods": [{ "name": "<init>", "parameterTypes": [] }] },
+    { "type": "org.flywaydb.core.internal.proprietaryStubs.DryRunConfigurationExtensionStub", "allDeclaredFields": true, "methods": [{ "name": "<init>", "parameterTypes": [] }] },
+    { "type": "org.flywaydb.database.postgresql.PostgreSQLConfigurationExtension", "allDeclaredFields": true, "methods": [{ "name": "<init>", "parameterTypes": [] }] },
+    { "type": "org.flywaydb.core.internal.logging.slf4j.Slf4jLogCreator", "methods": [{ "name": "<init>", "parameterTypes": [] }] }
+  ]
+}

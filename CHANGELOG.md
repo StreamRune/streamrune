@@ -137,7 +137,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `SchemaValidationException` and the application does not start. A version ahead of this build or a
   missing history table only logs a warning. Missing-column messages carry the exact `ALTER TABLE`.
   Schema auto-initialization works in a GraalVM native image; a missing migration script fails
-  startup and names it.
+  startup and names it. Flyway logs through SLF4J: the factory names the back end instead of
+  leaving Flyway to probe the class path for one.
 - **PostgreSQL 17 or newer is enforced.** `PostgresEventStoreFactory.create()`, `initializeSchema()`
   and the static `PostgresEventStore.create(...)` read the server version first and throw
   `UnsupportedServerVersionException` on an older server, before anything is written;
@@ -692,6 +693,12 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   nested value objects, and lists every sealed command/event root and nested sealed level as a
   `{"type": "…"}` entry in its own `reachability-metadata.json` (on Spring, `registerDomainPackages`
   covers it). A sealed type the image reports with no permitted subclasses is refused at startup.
+  Schema auto-initialization needs no native-image setting in the application: the Quarkus and
+  Micronaut integrations ship reachability metadata for what Flyway reaches by name at run time
+  (Quarkus: the plugin service file, every plugin it names, the copied configuration extensions'
+  fields, the SLF4J log creator, and run-time initialization of `InsertRowLock`; Micronaut: the
+  copied configuration extensions and the SLF4J log creator), and a Spring Boot build takes it from
+  the GraalVM reachability-metadata repository.
   Micronaut images need `-H:+SharedArenaSupport`. Every jar is compiled with `-parameters`.
 
 ### Observability
