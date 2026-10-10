@@ -143,7 +143,7 @@ class SseWireFormatTest {
     }
   }
 
-  private static HttpResponse<InputStream> open(
+  static HttpResponse<InputStream> open(
       HttpClient client, QuarkusRestTestServer server, String path) throws Exception {
     return client.send(
         HttpRequest.newBuilder(URI.create("http://localhost:" + server.port() + path))
@@ -152,12 +152,12 @@ class SseWireFormatTest {
         HttpResponse.BodyHandlers.ofInputStream());
   }
 
-  private static boolean carriesData(List<String> frame) {
+  static boolean carriesData(List<String> frame) {
     return frame.stream().anyMatch(line -> line.startsWith("data:"));
   }
 
   /** Reads the stream as frames: the lines up to each blank line. */
-  private static void collectFrames(InputStream body, List<List<String>> frames) {
+  static void collectFrames(InputStream body, List<List<String>> frames) {
     try (BufferedReader lines =
         new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
       List<String> frame = new ArrayList<>();
@@ -175,7 +175,7 @@ class SseWireFormatTest {
     }
   }
 
-  private static EventEnvelope envelope(long globalOffset, DomainEvent event) {
+  static EventEnvelope envelope(long globalOffset, DomainEvent event) {
     return new EventEnvelope(
         GlobalOffset.of(globalOffset),
         ORDER_1,

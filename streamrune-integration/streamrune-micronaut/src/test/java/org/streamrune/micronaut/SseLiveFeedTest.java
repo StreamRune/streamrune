@@ -61,6 +61,9 @@ class SseLiveFeedTest {
   private static final AggregateType ORDER = AggregateType.of("order");
   private static final ObjectMapper JSON = new ObjectMapper();
 
+  /** Per call of the fixture's authorizer: whether it ran on a virtual thread. */
+  private static final List<Boolean> AUTHORIZER_ON_VIRTUAL_THREAD = new CopyOnWriteArrayList<>();
+
   sealed interface OrderCommand extends Command permits OrderCommand.Place {
     record Place(String orderId, String note) implements OrderCommand {}
   }
@@ -121,6 +124,12 @@ class SseLiveFeedTest {
                   .build(),
               HttpResponse.BodyHandlers.ofInputStream());
       assertThat(response.statusCode()).isEqualTo(200);
+      // StreamRuneContextFilter runs on the blocking executor and proceeds synchronously, so the
+      // controller, and with it the authorizer, runs there too: an authorizer may read a database.
+      assertThat(AUTHORIZER_ON_VIRTUAL_THREAD)
+          .as("the authorizer runs on a virtual thread of the blocking executor, not an event loop")
+          .isNotEmpty()
+          .containsOnly(true);
       List<String> dataLines = new CopyOnWriteArrayList<>();
       Thread reader = Thread.ofVirtual().start(() -> collectDataLines(response.body(), dataLines));
       SseController controller = context.getBean(SseController.class);
@@ -232,7 +241,10 @@ class SseLiveFeedTest {
 
     @Singleton
     SseAuthorizer sseAuthorizer() {
-      return (principal, streamId) -> true;
+      return (principal, streamId) -> {
+        AUTHORIZER_ON_VIRTUAL_THREAD.add(Thread.currentThread().isVirtual());
+        return true;
+      };
     }
   }
 }

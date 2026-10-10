@@ -2,6 +2,7 @@ package org.streamrune.quarkus;
 
 import io.quarkus.arc.properties.IfBuildProperty;
 import io.quarkus.runtime.ShutdownEvent;
+import io.smallrye.common.annotation.Blocking;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.subscription.BackPressureStrategy;
 import io.smallrye.mutiny.subscription.MultiEmitter;
@@ -106,7 +107,9 @@ import org.streamrune.runtime.SseEventPublisher;
  * <p><b>Security:</b> registered only when {@code streamrune.sse.enabled=true} (build-time gate).
  * Access is authorized by the {@link SseAuthorizer} bean using the caller and the requested {@link
  * StreamId}; a denied request is rejected with {@code 403 Forbidden}. When SSE is enabled but the
- * application provides no authorizer, the framework installs a fail-closed deny-all authorizer.
+ * application provides no authorizer, the framework installs a fail-closed deny-all authorizer. The
+ * authorizer runs on a worker thread with the CDI request scope active, never on a Vert.x event
+ * loop: the resource method is a blocking one (see {@link #stream(String, String, HttpHeaders)}).
  *
  * <p><b>Caller identity.</b> The caller handed to the authorizer is resolved by the same {@link
  * RequestIdentityPolicy} bean the {@link StreamRuneRequestFilter} binds {@code
@@ -366,6 +369,37 @@ public class SseController {
    * declared the payload is written as {@code text/plain}, which is the event's {@code toString()}.
    * Quarkus REST also names the element type in the {@code X-SSE-Content-Type} response header.
    *
+   * <p>{@code @Blocking} is what keeps the checks before the subscription off the Vert.x event
+   * loop. Quarkus REST treats a resource method that returns a {@link Multi} as non-blocking and
+   * calls it on the event-loop thread the request arrived on; the {@link SseAuthorizer} would run
+   * there, and an authorizer that decides by the ownership of a stream reads a database. With the
+   * annotation Quarkus REST dispatches the request to the worker pool before the request filters
+   * and the method run, as it does for every blocking endpoint. On that worker thread, in this
+   * order:
+   *
+   * <ol>
+   *   <li>{@link StreamRuneRequestFilter} resolves the caller and the caller's roles and stores the
+   *       request context in the request-scoped {@link StreamRuneRequestContextHolder};
+   *   <li>this method resolves the caller, asks the {@link SseAuthorizer} and throws for a refused
+   *       caller, so a refusal is the HTTP error response ({@code 403}, {@code 400}, {@code 404})
+   *       and never a stream that fails after a {@code 200}.
+   * </ol>
+   *
+   * <p>Quarkus REST activates the CDI request scope of the request on the worker thread, so an
+   * authorizer may read {@link StreamRuneRequestContextHolder} or any other request-scoped bean.
+   * The worker thread is held for these two steps only. With the returned {@link Multi} in hand
+   * Quarkus REST writes the response head and subscribes to the stream from the event loop that
+   * finished that write: the subscription registers the client with the {@link SseEventPublisher}
+   * there, and nothing in it blocks. Frames are written without blocking, by the thread that emits
+   * them or by the event loop that finished the previous write.
+   *
+   * <p>The annotation is preferred over moving the checks to a worker inside the method (a {@code
+   * Uni} with {@code runSubscriptionOn}, or Vert.x {@code executeBlocking}): that would leave the
+   * request filter, and with it the role resolution, on the event loop; a refusal would become a
+   * failure of the returned stream, which Quarkus REST's stream subscriber maps to a status only
+   * while no frame has been written; and the request scope would have to follow the checks to the
+   * other thread through context propagation.
+   *
    * @param aggregateType the aggregate type of the stream to subscribe to
    * @param aggregateId the aggregate id of the stream to subscribe to
    * @param headers the request headers; every {@code X-User-Id} value they carry is handed to the
@@ -379,6 +413,7 @@ public class SseController {
   @Path("/{aggregateType}/{aggregateId}")
   @Produces(MediaType.SERVER_SENT_EVENTS)
   @RestStreamElementType(MediaType.APPLICATION_JSON)
+  @Blocking
   public Multi<OutboundSseEvent> stream(
       @PathParam("aggregateType") String aggregateType,
       @PathParam("aggregateId") String aggregateId,

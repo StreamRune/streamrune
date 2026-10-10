@@ -1,17 +1,21 @@
 package org.streamrune.quarkus;
 
+import io.vertx.core.Context;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpServer;
 import io.vertx.ext.web.Router;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.OptionalLong;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.jboss.jandex.Index;
+import org.jboss.resteasy.reactive.server.core.BlockingOperationSupport;
 import org.jboss.resteasy.reactive.server.core.reflection.ReflectiveContextInjectedBeanFactory;
 import org.jboss.resteasy.reactive.server.processor.ResteasyReactiveDeploymentManager;
 import org.jboss.resteasy.reactive.server.processor.scanning.AsyncReturnTypeScanner;
@@ -33,9 +37,19 @@ import org.jboss.resteasy.reactive.spi.BeanFactory;
  *
  * <p>The resource is the instance handed in, so a test builds it with its own collaborators. The
  * message body readers and writers are the Quarkus REST built-ins plus the {@code @Provider}
- * classes named by the test — the stand-in for the JSON extension an application chooses.
+ * classes named by the test — the stand-in for the JSON extension an application chooses. A
+ * provider that needs collaborators (a request filter) is handed in as an instance.
+ *
+ * <p><b>Threads.</b> The HTTP server runs on Vert.x event-loop threads. A blocking resource method
+ * is dispatched to the worker executor, whose threads are named {@value #WORKER_THREAD_PREFIX}…,
+ * the stand-in for the worker pool of a Quarkus application. Quarkus REST decides whether a
+ * dispatch is needed by asking whether the current thread may block; the server answers the way a
+ * Quarkus application does: every thread but a Vert.x event-loop thread may.
  */
 final class QuarkusRestTestServer implements AutoCloseable {
+
+  /** The name prefix of the threads a blocking resource method runs on. */
+  static final String WORKER_THREAD_PREFIX = "quarkus-rest-test-worker-";
 
   private final Vertx vertx;
   private final ExecutorService workers;
@@ -63,8 +77,28 @@ final class QuarkusRestTestServer implements AutoCloseable {
    * @throws Exception if the resource cannot be scanned or the server cannot start
    */
   static QuarkusRestTestServer start(Object resource, Class<?>... providers) throws Exception {
+    return start(resource, List.of(), providers);
+  }
+
+  /**
+   * Deploys {@code resource} with providers that are already built and starts the HTTP server on a
+   * free port.
+   *
+   * @param resource the resource instance that serves the requests
+   * @param providerInstances the {@code @Provider} instances of the application, each serving every
+   *     request (a request filter built with its collaborators)
+   * @param providers the {@code @Provider} classes of the application (each with a no-argument
+   *     constructor)
+   * @return the running server
+   * @throws Exception if the resource cannot be scanned or the server cannot start
+   */
+  static QuarkusRestTestServer start(
+      Object resource, List<Object> providerInstances, Class<?>... providers) throws Exception {
+    Map<String, Object> instances = new HashMap<>();
+    instances.put(resource.getClass().getName(), resource);
+    providerInstances.forEach(provider -> instances.put(provider.getClass().getName(), provider));
     List<Class<?>> indexed = new ArrayList<>(List.of(providers));
-    indexed.add(resource.getClass());
+    instances.values().forEach(instance -> indexed.add(instance.getClass()));
     ResteasyReactiveDeploymentManager.ScanStep scan =
         ResteasyReactiveDeploymentManager.start(Index.of(indexed.toArray(Class<?>[]::new)));
     // The scanner Quarkus registers for reactive return types; it is what serves a Multi.
@@ -74,13 +108,18 @@ final class QuarkusRestTestServer implements AutoCloseable {
             .prepare(
                 QuarkusRestTestServer.class.getClassLoader(),
                 className ->
-                    className.equals(resource.getClass().getName())
-                        ? existingInstance(resource)
+                    instances.containsKey(className)
+                        ? existingInstance(instances.get(className))
                         : ReflectiveContextInjectedBeanFactory.STRING_FACTORY.apply(className));
     prepared.addScannedSerializers();
     prepared.addBuiltinSerializers();
 
-    ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
+    // What a Quarkus application installs at startup: a thread may block unless it is an event
+    // loop.
+    BlockingOperationSupport.setIoThreadDetector(() -> !Context.isOnEventLoopThread());
+    ExecutorService workers =
+        Executors.newThreadPerTaskExecutor(
+            Thread.ofVirtual().name(WORKER_THREAD_PREFIX, 0).factory());
     Vertx vertx = Vertx.vertx();
     try {
       ResteasyReactiveDeploymentManager.RunnableApplication application =
@@ -131,17 +170,17 @@ final class QuarkusRestTestServer implements AutoCloseable {
     }
   }
 
-  private static BeanFactory<Object> existingInstance(Object resource) {
+  private static BeanFactory<Object> existingInstance(Object instance) {
     return () ->
         new BeanFactory.BeanInstance<>() {
           @Override
           public Object getInstance() {
-            return resource;
+            return instance;
           }
 
           @Override
           public void close() {
-            // the test owns the resource
+            // the test owns the instance
           }
         };
   }

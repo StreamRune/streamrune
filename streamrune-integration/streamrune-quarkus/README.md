@@ -78,6 +78,12 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   call `SseEventPublisher.publish` yourself for this endpoint — every frame would be written twice.
 - **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
   receives the caller the request filter resolved and the requested `StreamId`.
+- **Threads** — the resource method is `@Blocking`: Quarkus REST runs the request filter and the
+  `SseAuthorizer` on a worker thread, never on a Vert.x event loop, so an authorizer may read a
+  database. The CDI request scope is active there: an authorizer can inject
+  `StreamRuneRequestContextHolder` and read the request context the filter stored. The worker is
+  held until the method has returned, not for the life of the stream; Quarkus REST then subscribes
+  the client from an event loop, and neither that subscription nor the writing of a frame blocks.
 - **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
   is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
   client connected, while it was reconnecting, or while the instance was down are never sent to it.

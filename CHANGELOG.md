@@ -619,7 +619,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   process-local and never persisted.
 - Server-Sent Events `GET /api/sse/{aggregateType}/{aggregateId}` (all three integrations) is off by
   default (`streamrune.sse.enabled`); when on, every stream is denied until an `SseAuthorizer` bean
-  checks the caller against the requested `StreamId`. The integration feeds the endpoint itself: one
+  checks the caller against the requested `StreamId`. The authorizer is called on a thread that may
+  block — the servlet request thread on Spring, a worker thread with the request scope active on
+  Quarkus, the blocking executor on Micronaut — so it can look ownership up in a database, and a
+  refusal is the `403` response. The integration feeds the endpoint itself: one
   `SseEventFeed` per application instance, a polling subscription (`streamrune.sse.polling-interval`,
   default `1s`) that starts at the head of the global stream with the application, keeps no stored
   offset, never replays history, and stops with the application; open streams are completed on

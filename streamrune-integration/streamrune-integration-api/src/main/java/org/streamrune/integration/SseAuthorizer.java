@@ -32,6 +32,10 @@ public interface SseAuthorizer {
    * };
    * }</pre>
    *
+   * <p>An implementation may block, for example to look the owner of the stream up in a database:
+   * every integration calls it on a thread that may block (the servlet request thread on Spring, a
+   * worker thread on Quarkus, the blocking executor on Micronaut), never on an event loop.
+   *
    * @param principal the authenticated caller, or {@code null} when the request is unauthenticated
    * @param streamId the requested aggregate stream
    * @return {@code true} to permit the subscription; {@code false} to deny it
