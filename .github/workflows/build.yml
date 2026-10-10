@@ -2,8 +2,7 @@ name: Build
 
 # Full framework build on every push to main, every pull request, and every v* tag push:
 # compiles all modules, runs the test suite (Testcontainers — PostgreSQL, Kafka, RabbitMQ) and
-# enforces the per-module JaCoCo 0.80 instruction + branch coverage gates. The slow Fray
-# concurrency probes are NOT run here — they have their own scheduled workflow (fray-test.yml).
+# enforces the per-module JaCoCo 0.80 instruction + branch coverage gates.
 #
 # StreamRune declares PostgreSQL 17 or newer, and says so only because both ends of that range
 # are tested. The `build` job below runs everything against the newest supported server (18, the
