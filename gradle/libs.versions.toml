@@ -139,6 +139,9 @@ quarkus-arc = { module = "io.quarkus:quarkus-arc", version.ref = "quarkus" }
 quarkus-vertx = { module = "io.quarkus:quarkus-vertx", version.ref = "quarkus" }
 quarkus-rest = { module = "io.quarkus:quarkus-rest", version.ref = "quarkus" }
 quarkus-rest-jackson = { module = "io.quarkus:quarkus-rest-jackson", version.ref = "quarkus" }
+# The Quarkus REST build-time scanner and its standalone deployment manager: lets a test serve a
+# resource through the real Quarkus REST request handlers without the Quarkus Gradle plugin.
+quarkus-rest-processor = { module = "io.quarkus.resteasy.reactive:resteasy-reactive-processor", version.ref = "quarkus" }
 quarkus-jdbc-postgresql = { module = "io.quarkus:quarkus-jdbc-postgresql", version.ref = "quarkus" }
 quarkus-smallrye-health = { module = "io.quarkus:quarkus-smallrye-health", version.ref = "quarkus" }
 quarkus-micrometer-prometheus = { module = "io.quarkus:quarkus-micrometer-registry-prometheus", version.ref = "quarkus" }

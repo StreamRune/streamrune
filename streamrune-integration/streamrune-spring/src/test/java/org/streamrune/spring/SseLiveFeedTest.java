@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -67,6 +68,7 @@ import org.streamrune.test.InMemoryEventStore;
 class SseLiveFeedTest {
 
   private static final AggregateType ORDER = AggregateType.of("order");
+  private static final ObjectMapper JSON = new ObjectMapper();
 
   sealed interface OrderCommand extends Command permits OrderCommand.Place {
     record Place(String orderId, String note) implements OrderCommand {}
@@ -143,6 +145,9 @@ class SseLiveFeedTest {
           .hasSize(1)
           .noneMatch(line -> line.contains("placed-on-o-2"))
           .noneMatch(line -> line.contains("stored-before-the-start"));
+      // The data field is the event as a JSON object, written by Spring's JSON message converter.
+      assertThat(JSON.readTree(dataLines.getFirst().substring("data:".length())))
+          .isEqualTo(JSON.readTree("{\"note\":\"placed-on-o-1\"}"));
 
       SseEventFeed feed = context.getBean(SseEventFeed.class);
       assertThat(feed.isRunning()).as("the feed runs while the application does").isTrue();

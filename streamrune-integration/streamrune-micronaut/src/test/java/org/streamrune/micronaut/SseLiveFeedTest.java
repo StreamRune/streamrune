@@ -3,6 +3,7 @@ package org.streamrune.micronaut;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Requires;
@@ -58,6 +59,7 @@ class SseLiveFeedTest {
 
   private static final String SPEC = "SseLiveFeedTest";
   private static final AggregateType ORDER = AggregateType.of("order");
+  private static final ObjectMapper JSON = new ObjectMapper();
 
   sealed interface OrderCommand extends Command permits OrderCommand.Place {
     record Place(String orderId, String note) implements OrderCommand {}
@@ -138,6 +140,10 @@ class SseLiveFeedTest {
           .hasSize(1)
           .noneMatch(line -> line.contains("placed-on-o-2"))
           .noneMatch(line -> line.contains("stored-before-the-start"));
+      // The data field is the event as a JSON object, written by the application's Micronaut
+      // serializer.
+      assertThat(JSON.readTree(dataLines.getFirst().substring("data:".length())))
+          .isEqualTo(JSON.readTree("{\"note\":\"placed-on-o-1\"}"));
 
       server.stop();
       stopped = true;

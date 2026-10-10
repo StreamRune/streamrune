@@ -65,7 +65,9 @@ With `streamrune.sse.enabled=true` the integration serves
 aggregate type plus its id as two path segments; an invalid part answers `400`.
 
 - **What it emits** — one frame per domain event of that stream: `id` is the global offset, `data`
-  the decrypted event as JSON (needs a JSON body writer such as `quarkus-rest-jackson`).
+  the decrypted event as a JSON object, written by your application's JSON extension
+  (`quarkus-rest-jackson` or `quarkus-rest-jsonb`). The integration does not bring one: without a
+  JSON extension Quarkus REST has only its text writer and `data` carries the event's `toString()`.
   `:keepalive` comment frames are written every `streamrune.sse.keep-alive-interval` (default
   `30s`), and the server completes a stream after `streamrune.sse.timeout` (default `5m`); an
   `EventSource` reconnects on its own.

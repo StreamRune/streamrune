@@ -33,6 +33,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.resteasy.reactive.RestStreamElementType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.DomainEvent;
@@ -62,9 +63,13 @@ import org.streamrune.runtime.SseEventPublisher;
  * Quarkus shutdown event every open stream is completed ({@link #completeOpenStreams}).
  *
  * <p>Each SSE event carries the full domain event as JSON in the {@code data} field and the global
- * offset in the {@code id} field, matching the Spring integration's {@code SseController}. JSON
- * serialization of the event payload requires a JSON message body writer on the application
- * classpath (e.g. {@code quarkus-rest-jackson}).
+ * offset in the {@code id} field, matching the Spring integration's {@code SseController}. The
+ * payload is written by the application's own JSON message body writer: {@link #stream(String,
+ * String, HttpHeaders)} declares {@code application/json} as the stream element type, the media
+ * type Quarkus REST looks a writer up for when it serializes the data of a frame. The application
+ * therefore needs a JSON extension (e.g. {@code quarkus-rest-jackson}). With none, the only writer
+ * Quarkus REST finds for an event is its built-in text one, and the {@code data} field carries the
+ * event's {@code toString()}.
  *
  * <p>Back-pressure: events for a slow client are buffered up to {@link #SLOW_CLIENT_BUFFER} items;
  * beyond that the stream fails and the client must reconnect, instead of growing heap without
@@ -353,6 +358,14 @@ public class SseController {
    * /api/sse/{aggregateType}/{aggregateId}} (for example {@code /api/sse/order/o-1}). Stays open
    * until the client disconnects.
    *
+   * <p>{@code @RestStreamElementType(APPLICATION_JSON)} is what makes the {@code data} field JSON.
+   * Quarkus REST serializes the payload of each frame of this stream with the message body writer
+   * registered for the stream element type, and it takes that type from this annotation: {@link
+   * OutboundSseEvent#getMediaType()} is honoured only on a frame built by Quarkus REST's own event
+   * builder, not on an {@link OutboundSseEvent} the application implements. With no element type
+   * declared the payload is written as {@code text/plain}, which is the event's {@code toString()}.
+   * Quarkus REST also names the element type in the {@code X-SSE-Content-Type} response header.
+   *
    * @param aggregateType the aggregate type of the stream to subscribe to
    * @param aggregateId the aggregate id of the stream to subscribe to
    * @param headers the request headers; every {@code X-User-Id} value they carry is handed to the
@@ -365,6 +378,7 @@ public class SseController {
   @GET
   @Path("/{aggregateType}/{aggregateId}")
   @Produces(MediaType.SERVER_SENT_EVENTS)
+  @RestStreamElementType(MediaType.APPLICATION_JSON)
   public Multi<OutboundSseEvent> stream(
       @PathParam("aggregateType") String aggregateType,
       @PathParam("aggregateId") String aggregateId,
@@ -677,8 +691,10 @@ public class SseController {
 
   /**
    * Explicit {@link OutboundSseEvent} for a published domain event: {@code id} is the global
-   * offset, {@code data} is the domain event serialized as JSON. No event name is set, so clients
-   * receive default {@code message} events — the same wire contract as the Spring integration.
+   * offset, {@code data} is the domain event, which Quarkus REST serializes as JSON because {@link
+   * SseController#stream(String, String, HttpHeaders)} declares that stream element type. No event
+   * name is set, so clients receive default {@code message} events — the same wire contract as the
+   * Spring integration.
    *
    * @param id the SSE event id (the event's global offset)
    * @param data the domain event payload
@@ -695,6 +711,8 @@ public class SseController {
       return data.getClass();
     }
 
+    // States the payload's media type for a reader of the frame. Quarkus REST does not read it
+    // from a frame the application implements: the endpoint's stream element type decides.
     @Override
     public MediaType getMediaType() {
       return MediaType.APPLICATION_JSON_TYPE;
