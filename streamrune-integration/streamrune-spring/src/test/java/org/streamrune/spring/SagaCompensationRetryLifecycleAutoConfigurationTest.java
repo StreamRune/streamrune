@@ -1,6 +1,7 @@
 package org.streamrune.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
 
 import java.time.Duration;
@@ -362,18 +363,23 @@ class SagaCompensationRetryLifecycleAutoConfigurationTest {
         .run(
             ctx -> {
               assertThat(ctx).hasNotFailed();
-              long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
-              while (metrics.compensating.get() == 0 && System.nanoTime() < deadline) {
-                Thread.sleep(20);
-              }
-              assertThat(metrics.compensating.get())
-                  .as(
-                      "streamrune.saga.compensating must be sampled with compensation retry OFF —"
-                          + " the knob stops the re-drive, not the observability")
-                  .isPositive();
-              assertThat(metrics.faultedRows.get())
-                  .as("streamrune.saga.faulted_rows likewise")
-                  .isPositive();
+              // The sweeper reports the two gauges with two separate recorder calls on its own
+              // thread, so the wait covers both: seeing the first sample says nothing about
+              // whether the second call has happened yet.
+              await()
+                  .atMost(Duration.ofSeconds(10))
+                  .untilAsserted(
+                      () -> {
+                        assertThat(metrics.compensating.get())
+                            .as(
+                                "streamrune.saga.compensating must be sampled with compensation"
+                                    + " retry OFF — the knob stops the re-drive, not the"
+                                    + " observability")
+                            .isPositive();
+                        assertThat(metrics.faultedRows.get())
+                            .as("streamrune.saga.faulted_rows likewise")
+                            .isPositive();
+                      });
               var sweepers = ctx.getBean(SagaCompensationRetryLifecycle.class).sweepers();
               assertThat(sweepers).hasSize(1);
               assertThat(sweepers.getFirst().isCompensationRetryEnabled()).isFalse();
