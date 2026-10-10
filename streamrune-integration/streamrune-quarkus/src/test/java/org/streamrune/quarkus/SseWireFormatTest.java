@@ -2,11 +2,10 @@ package org.streamrune.quarkus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.mockito.Mockito.mock;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.quarkus.runtime.ShutdownEvent;
+import io.quarkus.runtime.ShutdownDelayInitiatedEvent;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.MultivaluedMap;
@@ -137,9 +136,14 @@ class SseWireFormatTest {
       // A keepalive is a comment-only frame.
       await().atMost(Duration.ofSeconds(5)).until(() -> frames.contains(List.of(": keepalive")));
 
-      controller.completeOpenStreams(mock(ShutdownEvent.class));
+      // A stream the resource completes while the server is serving ends on the wire as a
+      // finished response. That is the state of an application at Quarkus's shutdown-delay event.
+      // This server is a Quarkus REST deployment without an application lifecycle, and the test
+      // calls the observer itself: when Quarkus fires the event, and that it stops its HTTP server
+      // before the shutdown event, is not what this shows.
+      controller.completeOpenStreams(new ShutdownDelayInitiatedEvent());
       assertThat(ending.get(5, TimeUnit.SECONDS))
-          .as("the server completed the client's stream; it did not cut the connection")
+          .as("a stream completed while the server is serving ends as a finished response")
           .isEqualTo(Ending.COMPLETED);
     } finally {
       client.shutdownNow();

@@ -1,6 +1,7 @@
 package org.streamrune.quarkus;
 
 import io.quarkus.arc.properties.IfBuildProperty;
+import io.quarkus.runtime.ShutdownDelayInitiatedEvent;
 import io.quarkus.runtime.ShutdownEvent;
 import io.smallrye.common.annotation.Blocking;
 import io.smallrye.mutiny.Multi;
@@ -61,8 +62,32 @@ import org.streamrune.runtime.SseEventPublisher;
  * stream when the application starts and publishes every event stored from then on to the
  * subscribers of the event's own stream, every {@code streamrune.sse.polling-interval}. Delivery is
  * live, best-effort and at-most-once: a frame reaches only the clients connected at that moment,
- * nothing is redelivered after a reconnect, and {@code Last-Event-ID} is not honoured. On the
- * Quarkus shutdown event every open stream is completed ({@link #completeOpenStreams}).
+ * nothing is redelivered after a reconnect, and {@code Last-Event-ID} is not honoured.
+ *
+ * <p><b>Shutdown.</b> An open stream is a request in flight that never finishes on its own, and
+ * Quarkus stops in this order: the shutdown-delay event and the delay ({@code
+ * quarkus.shutdown.delay}), the graceful phase that waits up to {@code quarkus.shutdown.timeout}
+ * for the requests in flight, the HTTP server, and only then {@link ShutdownEvent}. The
+ * shutdown-delay event is the one point ahead of the HTTP server a bean can observe, and Quarkus
+ * fires it only in an application built with {@code quarkus.shutdown.delay-enabled=true}:
+ *
+ * <ul>
+ *   <li><b>Built with {@code quarkus.shutdown.delay-enabled=true}.</b> The resource completes every
+ *       open stream on that event ({@link #completeOpenStreams(ShutdownDelayInitiatedEvent)}): each
+ *       client sees its stream end normally while the server is still serving (an {@code
+ *       EventSource} reconnects, reaching another replica), a stream opened from then on is
+ *       answered already complete, and the graceful phase has no stream to wait for.
+ *   <li><b>Built without it</b> (the Quarkus default). Nothing ends the streams ahead of the HTTP
+ *       server: the server closes the clients' connections as it stops, so a connected client sees
+ *       its connection cut, not a completed stream (an {@code EventSource} reconnects either way),
+ *       and Quarkus REST releases each stream as its connection closes. With {@code
+ *       quarkus.shutdown.timeout} set, every connected client is a request the graceful phase waits
+ *       for: one open stream holds the shutdown for that whole timeout.
+ * </ul>
+ *
+ * <p>On {@link ShutdownEvent} the resource completes whatever is still open ({@link
+ * #completeOpenStreams(ShutdownEvent)}); the HTTP server has stopped by then, so no client sees
+ * that completion.
  *
  * <p>Each SSE event carries the full domain event as JSON in the {@code data} field and the global
  * offset in the {@code id} field, matching the Spring integration's {@code SseController}. The
@@ -213,8 +238,20 @@ public class SseController {
   private final Set<OpenStream> openStreams = ConcurrentHashMap.newKeySet();
 
   /**
-   * Set once the application shuts down; a stream opened from then on is answered already complete.
-   * Written before the shutdown takes its snapshot of {@link #openStreams}, and read by a stream
+   * Set once the shutdown reaches this resource; a stream opened from then on is answered already
+   * complete. What that turns away depends on which signal sets it (see the class documentation):
+   *
+   * <ul>
+   *   <li>the shutdown-delay event, while the HTTP server is still serving: every stream a client
+   *       opens during the delay and the graceful phase, which would otherwise be one more request
+   *       that phase waits for;
+   *   <li>{@link ShutdownEvent} or the destruction of the bean, after the HTTP server has stopped:
+   *       only a stream whose request was still on a worker thread (in the request filter or the
+   *       {@link SseAuthorizer}) when the server stopped and is subscribed afterwards. It would
+   *       register with a publisher and a keepalive scheduler that are being closed.
+   * </ul>
+   *
+   * <p>Written before the shutdown takes its snapshot of {@link #openStreams}, and read by a stream
    * after it added itself to them, so a stream is either in the snapshot or sees the flag.
    */
   private volatile boolean shuttingDown;
@@ -338,24 +375,51 @@ public class SseController {
   }
 
   /**
-   * Completes every open stream when the application shuts down, so each client sees its stream end
-   * normally (an {@code EventSource} reconnects, reaching another replica) while the HTTP server is
-   * still up. A stream's send lock is awaited for at most {@link #SHUTDOWN_LOCK_WAIT_MILLIS}: a
-   * write stalled on one client does not hold the shutdown, and that stream is completed anyway. A
-   * stream opened from here on is answered already complete: the client reconnects, and nothing of
-   * it outlives the shutdown. Observed only by a resource that exists: the shutdown does not create
-   * one to find no stream.
+   * Completes every open stream at the start of the shutdown, ahead of the HTTP server: each client
+   * sees its stream end normally (an {@code EventSource} reconnects, reaching another replica), and
+   * the graceful phase that follows ({@code quarkus.shutdown.timeout}) has no stream to wait for. A
+   * stream opened from here on — the server keeps serving during the delay and the graceful phase —
+   * is answered already complete.
+   *
+   * <p>Quarkus fires this event only in an application built with {@code
+   * quarkus.shutdown.delay-enabled=true}; see the class documentation for an application built
+   * without it. Unlike {@link #completeOpenStreams(ShutdownEvent)} this observer is notified
+   * whether or not the resource exists yet: a resource no request has created so far has no stream
+   * to complete, but it must still turn away the streams opened after the event.
+   *
+   * @param event the Quarkus shutdown-delay event
+   */
+  public void completeOpenStreams(@Observes ShutdownDelayInitiatedEvent event) {
+    completeOpenStreams();
+  }
+
+  /**
+   * Completes every stream that is still open when the application's shutdown event is fired, and
+   * turns away every stream opened afterwards. Quarkus fires this event after it has stopped the
+   * HTTP server, so the clients' connections are closed by then and Quarkus REST has released the
+   * streams that were open: no client sees this completion. What it ends is a stream that is
+   * subscribed after the server stopped, because its request was still on a worker thread. Observed
+   * only by a resource that exists: the shutdown does not create one to find no stream.
    *
    * @param event the Quarkus shutdown event
    */
   public void completeOpenStreams(
       @Observes(notifyObserver = Reception.IF_EXISTS) ShutdownEvent event) {
+    completeOpenStreams();
+  }
+
+  /**
+   * Sets {@link #shuttingDown} and completes every open stream. A stream's send lock is awaited for
+   * at most {@link #SHUTDOWN_LOCK_WAIT_MILLIS}: a write stalled on one client does not hold the
+   * shutdown, and that stream is completed anyway.
+   */
+  private void completeOpenStreams() {
     shuttingDown = true;
     List<OpenStream> open = List.copyOf(openStreams);
     if (open.isEmpty()) {
       return;
     }
-    log.info("Completing {} open SSE stream(s) before the application shuts down", open.size());
+    log.info("Completing {} open SSE stream(s) as the application shuts down", open.size());
     for (OpenStream stream : open) {
       boolean locked = false;
       try {

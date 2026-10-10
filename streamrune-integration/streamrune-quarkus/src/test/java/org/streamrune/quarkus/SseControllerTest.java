@@ -316,6 +316,60 @@ class SseControllerTest {
   }
 
   @Test
+  void theShutdownDelayEventCompletesAnOpenStreamAndUnsubscribesIt() {
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
+    controller.stream("cart", "cart-open", List.of()).subscribe(client);
+    assertEquals(1, controller.openStreamCount());
+
+    controller.completeOpenStreams(new io.quarkus.runtime.ShutdownDelayInitiatedEvent());
+
+    client.awaitCompletion(java.time.Duration.ofSeconds(5));
+    verify(publisher).unsubscribe(any(), any());
+    assertEquals(0, controller.openStreamCount());
+    controller.shutdown();
+  }
+
+  @Test
+  void aStreamOpenedAfterTheShutdownDelayEventIsAnsweredCompletedAndNeverSubscribed() {
+    var publisher = mock(SseEventPublisher.class);
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+    controller.completeOpenStreams(new io.quarkus.runtime.ShutdownDelayInitiatedEvent());
+
+    var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
+    controller.stream("cart", "cart-during-the-delay", List.of()).subscribe(client);
+
+    client.awaitCompletion(java.time.Duration.ofSeconds(5));
+    assertTrue(client.getItems().isEmpty(), "no frame: the stream is complete, not open");
+    verify(publisher, never()).subscribe(any(), any(), any());
+    assertEquals(0, controller.openStreamCount());
+    controller.shutdown();
+  }
+
+  @Test
+  void theShutdownDelayEventReachesAResourceNoRequestHasCreatedYet() throws Exception {
+    // The server keeps serving after the shutdown-delay event, so a resource that does not exist
+    // yet must still learn of it and turn the later streams away; at the shutdown event the server
+    // has stopped and a resource is not created to find no stream. The resource cannot be a bean
+    // of this module's Arc test container (Quarkus adds the no-args constructor its client proxy
+    // needs at build time), so the two receptions are pinned structurally.
+    var atTheDelay =
+        SseController.class
+            .getMethod("completeOpenStreams", io.quarkus.runtime.ShutdownDelayInitiatedEvent.class)
+            .getParameters()[0]
+            .getAnnotation(jakarta.enterprise.event.Observes.class);
+    var atTheShutdownEvent =
+        SseController.class
+            .getMethod("completeOpenStreams", io.quarkus.runtime.ShutdownEvent.class)
+            .getParameters()[0]
+            .getAnnotation(jakarta.enterprise.event.Observes.class);
+
+    assertEquals(jakarta.enterprise.event.Reception.ALWAYS, atTheDelay.notifyObserver());
+    assertEquals(jakarta.enterprise.event.Reception.IF_EXISTS, atTheShutdownEvent.notifyObserver());
+  }
+
+  @Test
   void aStreamOpenedAfterTheControllerWasDestroyedIsAnsweredCompletedAndNeverSubscribed() {
     // The scheduler is stopped by then: scheduling this stream's keepalive would be rejected.
     var publisher = mock(SseEventPublisher.class);
