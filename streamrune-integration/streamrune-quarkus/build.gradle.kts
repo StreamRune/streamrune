@@ -116,3 +116,51 @@ tasks.named<Test>("test") {
         },
     )
 }
+
+// The Micrometer version this build declares must not exceed the one the Quarkus BOM manages.
+// Gradle resolves the highest version requested, so a higher declared version would replace the
+// Quarkus-managed one in a Gradle-built Quarkus application; the Quarkus Micrometer extension's
+// native-image configuration is written for the managed version, and the image fails to build.
+// The configuration below resolves micrometer-core with only the Quarkus BOM deciding the version.
+val quarkusManagedMicrometer: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
+dependencies {
+    quarkusManagedMicrometer(platform(libs.quarkus.bom))
+    quarkusManagedMicrometer("io.micrometer:micrometer-core")
+}
+
+val verifyMicrometerVersion = tasks.register("verifyMicrometerVersion") {
+    description = "Fails when the declared Micrometer version exceeds the one the Quarkus BOM manages."
+    group = "verification"
+    val declared = libs.versions.micrometer.get()
+    val managed = quarkusManagedMicrometer.incoming.resolutionResult.rootComponent.map { root ->
+        root.dependencies
+            .filterIsInstance<org.gradle.api.artifacts.result.ResolvedDependencyResult>()
+            .map { it.selected.moduleVersion!! }
+            .single { it.group == "io.micrometer" && it.name == "micrometer-core" }
+            .version
+    }
+    inputs.property("declared", declared)
+    inputs.property("managed", managed)
+    doLast {
+        val managedVersion = managed.get()
+        fun parts(version: String) = version.split('.', '-').mapNotNull { it.toIntOrNull() }
+        val exceeds = parts(declared).zip(parts(managedVersion))
+            .firstOrNull { (d, m) -> d != m }
+            ?.let { (d, m) -> d > m } ?: false
+        if (exceeds) {
+            throw GradleException(
+                "gradle/libs.versions.toml declares Micrometer $declared, but the Quarkus BOM manages " +
+                    "$managedVersion. Declare at most $managedVersion: a higher version replaces the " +
+                    "Quarkus-managed one in Gradle-built Quarkus applications and breaks their native image.",
+            )
+        }
+    }
+}
+
+tasks.named("check") {
+    dependsOn(verifyMicrometerVersion)
+}
