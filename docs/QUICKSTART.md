@@ -5,7 +5,7 @@ Step-by-step guide to building your first event-sourced application with StreamR
 ## Prerequisites
 
 - **Java 25** — StreamRune uses virtual threads and modern APIs
-- **Gradle 8+** — or a Gradle wrapper generated from this project
+- **Gradle 9.1 or newer** — the first Gradle release that runs on Java 25
 - **PostgreSQL 17 or newer** (only if using `streamrune-postgres`; the test module works without it) —
   tested on 17 and 18; an older server is refused at startup
 
@@ -192,13 +192,14 @@ InMemoryEventStore eventStore = new InMemoryEventStore();
 
 ## 6. Build and Execute Commands
 
-Register each command type under its **aggregate type** — the name the aggregate's streams carry
-(`[a-z][a-z0-9_]{0,31}`; the three order commands are one aggregate, so they share the type
-`order`) — together with a decider and an **id extractor**. The extractor returns a typed
-`AggregateId` (not a raw String), so its body calls `AggregateId.of(...)`, which refuses a blank id,
-one longer than 255 characters, or one containing a control character with
-`IllegalArgumentException` (map it to a `400`). One
-`OrderDecider` instance handles all three `OrderCommand` variants.
+Register the command type under its **aggregate type** — the name the aggregate's streams carry
+(`[a-z][a-z0-9_]{0,31}`; here `order`) — together with a decider and an **id extractor**. The
+command type is the sealed root, `OrderCommand.class`: one registration covers every command it
+permits, and one `OrderDecider` instance handles all three. `register(...)` takes the command class
+of the decider's own command type, so registering a permitted subtype (`PlaceOrder.class`) with an
+`OrderDecider` does not compile. The extractor returns a typed `AggregateId` (not a raw String), so
+its body calls `AggregateId.of(...)`, which refuses a blank id, one longer than 255 characters, or
+one containing a control character with `IllegalArgumentException` (map it to a `400`).
 
 ```java
 import org.streamrune.core.CommandBus;
@@ -212,9 +213,8 @@ static final AggregateType ORDER = AggregateType.of("order");
 
 StreamRune streamRune = StreamRune.builder()
     .eventStore(eventStore)
-    .register(ORDER, PlaceOrder.class,   cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
-    .register(ORDER, ConfirmOrder.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
-    .register(ORDER, CancelOrder.class,  cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
+    // One registration for the whole sealed OrderCommand hierarchy.
+    .register(ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
     .build();
 
 // Execute a command — execute(...) returns a CommandBus.CommandResult built by the runtime.
@@ -247,8 +247,8 @@ commits. For a read model whose writes must commit in one transaction with the c
 repository as the runner's `atomicProcessor(...)` — see
 [Delivery modes](guide/concepts.md#delivery-modes--what-a-projection-promises). Registering a
 projection alone is not enough: you must also configure a runner (`projectionRunner(...)` or
-`projectionRunnerFactory(...)`) and call `startProjections()` **on the built instance** — without a
-runner, `startProjections()` is a silent no-op.
+`projectionRunnerFactory(...)`) and call `startProjections()` **on the built instance**. `build()`
+throws `IllegalStateException` when a projection is registered and no runner is configured.
 
 ```java
 import java.util.List;
@@ -272,9 +272,7 @@ var offsetStore = new PostgresOffsetStore(dataSource);   // tracks each projecti
 
 StreamRune streamRune = StreamRune.builder()
     .eventStore(eventStore)
-    .register(ORDER, PlaceOrder.class,   cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
-    .register(ORDER, ConfirmOrder.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
-    .register(ORDER, CancelOrder.class,  cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
+    .register(ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
     .registerProjection("order_summary", orderSummary, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
     .projectionRunnerFactory((store, subscriptionConfig) ->
         ContinuousProjectionRunner.builder()
@@ -285,7 +283,7 @@ StreamRune streamRune = StreamRune.builder()
             .build())
     .build();
 
-streamRune.startProjections();   // starts the runner; no-op without a runner factory
+streamRune.startProjections();   // one runner per registered projection, each on its own thread
 // ... later, on shutdown:
 streamRune.stopProjections();
 ```
@@ -301,20 +299,82 @@ facade does not expose a generic projection accessor.
 // build.gradle
 dependencies {
     implementation("org.streamrune:streamrune-spring:1.0.0-alpha-SNAPSHOT")
+    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springframework.boot:spring-boot-starter-jdbc")   // the DataSource bean
 }
 ```
 
-> `streamrune-spring` pulls in the rest of the framework — core, runtime, the Postgres event store,
-> and the crypto backends — transitively from the same repositories, so this single coordinate is all a
-> Spring Boot app needs (see [Step 1](#1-add-the-streamrune-preview-build)).
+> `streamrune-spring` brings the rest of the framework with it from the same repositories (see
+> [Step 1](#1-add-the-streamrune-preview-build)): core, runtime and the crypto backends on the
+> compile classpath, and the PostgreSQL event store with its JDBC driver at **runtime** scope. That
+> is enough for the application below. Code that names a type of `org.streamrune.postgres` itself —
+> `PostgresOffsetStore`, `JdbcProjectionRepository`, `PostgresEventStoreFactory` — needs
+> `streamrune-postgres` on the compile classpath: declare it as in
+> [Step 2](#2-create-a-new-project), or depend on `streamrune-spring-boot-starter` instead of
+> `streamrune-spring`, which exposes all three (integration, PostgreSQL store, runtime).
 
 ```yaml
 # application.yml
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/orders
+    username: orders
+    password: ${DB_PASSWORD}
+
 streamrune:
   snapshot-every-n-events: 100
   retry-max-attempts: 3
   lock-timeout: 5s
   stripe-count: 1024
+```
+
+The auto-configuration builds the event store and the command bus from the beans it finds. The
+application supplies three things:
+
+- **A `DataSource` bean** — here Spring Boot's own, from `spring-boot-starter-jdbc` and
+  `spring.datasource.*`. The event store is built only when one exists; without it the application
+  context does not start, because nothing provides the `EventStore` the command bus needs. At
+  startup the store applies the StreamRune schema to that database (see
+  [Step 5](#5-set-up-the-event-store)).
+- **An `EventTypeRegistry` bean** naming every event type, and the aggregate's state type for
+  snapshots. The default is an empty registry: an `OrderPlaced` is written, but the next load of
+  that order fails on the unknown event type, and no snapshot can be saved.
+- **One `DeciderRegistration` bean per aggregate.** The command bus is built from these beans and
+  nothing else: no annotation or classpath scan finds a decider. Without the bean the first
+  `execute` throws `NoDeciderException`.
+
+```java
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.types.AggregateId;
+import org.streamrune.core.types.AggregateType;
+import org.streamrune.runtime.DeciderRegistration;
+
+@Configuration
+public class OrderConfiguration {
+
+    static final AggregateType ORDER = AggregateType.of("order");
+
+    @Bean
+    public EventTypeRegistry eventTypeRegistry() {
+        return SimpleEventTypeRegistry.builder()
+            .registerEvent("OrderPlaced", OrderPlaced.class)
+            .registerEvent("OrderConfirmed", OrderConfirmed.class)
+            .registerEvent("OrderCancelled", OrderCancelled.class)
+            // Snapshots (streamrune.snapshot-every-n-events) store the state under its simple name.
+            .registerState("OrderState", OrderState.class)
+            .build();
+    }
+
+    // The sealed root, as in step 6: one registration for every OrderCommand.
+    @Bean
+    public DeciderRegistration<OrderCommand, OrderState, OrderEvent> orderRegistration() {
+        return new DeciderRegistration<>(
+            ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider());
+    }
+}
 ```
 
 Inject the framework-agnostic `org.streamrune.core.CommandBus`. The Spring integration produces a
@@ -395,7 +455,7 @@ StreamRune streamRune = StreamRune.builder()
             .cryptoEngine(settings.cryptoEngine()))       // engine reaches the store here
     .cryptoEngine(crypto)                                 // collected into EventStoreSettings
     .registerEventType("OrderPlaced", OrderPlaced.class)
-    .register(ORDER, PlaceOrder.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
+    .register(ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
     .build();
 ```
 
@@ -528,7 +588,7 @@ domain events — as long as that path serializes with the `CryptoEngine`:
 - **Vault error mapping is precise.** Only Vault's actual "encryption key not found" 400 response
   maps to `KeyNotFoundException` (treated as forgotten); any other 400 (malformed request,
   misconfigured transit engine, etc.) maps to `CryptoOperationException` instead, so backend
-  corruption can no longer masquerade as a forgotten subject.
+  corruption cannot masquerade as a forgotten subject.
 
 #### Auto-Configuration
 

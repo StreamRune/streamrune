@@ -141,8 +141,11 @@ public class OrderDecider implements Decider<OrderCommand, OrderState, OrderEven
   @Override
   public List<OrderEvent> decide(OrderCommand cmd, OrderState state) {
     return switch (cmd) {
-      case OrderCommand.CreateOrder c ->
-          List.of(new OrderEvent.OrderCreated(c.orderId(), c.customerId(), c.itemCount()));
+      case OrderCommand.CreateOrder c -> {
+        if (state.orderId() != null)
+          throw new DomainException("Order " + c.orderId() + " already exists");
+        yield List.of(new OrderEvent.OrderCreated(c.orderId(), c.customerId(), c.itemCount()));
+      }
 
       case OrderCommand.ConfirmOrder c -> {
         if (state.status() != OrderStatus.NEW)
@@ -162,13 +165,17 @@ public class OrderDecider implements Decider<OrderCommand, OrderState, OrderEven
   @Override
   public OrderState evolve(OrderState state, OrderEvent evt) {
     return switch (evt) {
-      case OrderEvent.OrderCreated e  -> state.withStatus(OrderStatus.NEW);
+      case OrderEvent.OrderCreated e  -> new OrderState(e.orderId(), OrderStatus.NEW);
       case OrderEvent.OrderConfirmed e -> state.withStatus(OrderStatus.CONFIRMED);
       case OrderEvent.OrderCancelled e -> state.withStatus(OrderStatus.CANCELLED);
     };
   }
 }
 ```
+
+`CreateOrder` first checks that the order does not exist yet: the bus runs `decide` whether or not
+the stream already has events, so without the check a second `CreateOrder` for the same id would
+append another `OrderCreated` and reset the order.
 
 The optional `guard(command, state)` hook runs on the loaded state before `decide` — override it
 for ownership checks (see [Authorization](advanced/authorization.md#ownership-checks-in-deciderguard)).
