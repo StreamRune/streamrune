@@ -51,14 +51,75 @@ streamrune.stripe-count=1024
 streamrune.event-store.statement-timeout=PT30S
 # build-time flag: decides whether the CachingQueryBus bean exists
 streamrune.query-cache.enabled=false
-# build-time flag: decides whether SseController exists (default false; deny-all SseAuthorizer
-# unless you produce your own)
+# build-time flag: decides whether SseController and its event feed exist (default false;
+# deny-all SseAuthorizer unless you produce your own)
 streamrune.sse.enabled=false
+# how often the SSE feed reads the global stream: the usual commit-to-frame delay; at least
+# PT0.001S
+streamrune.sse.polling-interval=PT1S
 ```
 
-When enabled, `SseController` serves `GET /api/sse/{aggregateType}/{aggregateId}` — the live
-events of one stream, the registered aggregate type plus its id as two path segments; an invalid
-part answers `400`.
+### Server-Sent Events
+
+With `streamrune.sse.enabled=true` the integration serves
+`GET /api/sse/{aggregateType}/{aggregateId}` — the live events of one stream, the registered
+aggregate type plus its id as two path segments; an invalid part answers `400`.
+
+- **What it emits** — one frame per domain event of that stream: `id` is the global offset, `data`
+  the decrypted event as a JSON object, written by your application's JSON extension
+  (`quarkus-rest-jackson` or `quarkus-rest-jsonb`). The integration does not bring one: without a
+  JSON extension Quarkus REST has only its text writer and `data` carries the event's `toString()`.
+  `: keepalive` comment frames are written every `streamrune.sse.keep-alive-interval` (default
+  `30s`), and the server completes a stream after `streamrune.sse.timeout` (default `5m`); an
+  `EventSource` reconnects on its own.
+- **Opening frame** — as soon as the client is subscribed the endpoint writes one `: keepalive`
+  comment frame, whatever the keepalive interval. A client that has read it receives every event
+  of the stream stored from then on, while it stays connected. Quarkus REST sends the status line
+  and the headers just before it subscribes the client, so on Quarkus this frame, not the response
+  head (an `EventSource`'s `onopen`), is the signal that the client is subscribed.
+- **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
+  polling subscription that starts at the head of the global stream when the application starts
+  and publishes every event stored from then on to the clients of the event's own stream, every
+  `streamrune.sse.polling-interval` (default `1s`, at least `1ms`). No stored offset, no replay of
+  history. While the endpoint is enabled every instance reads and decrypts every event of the
+  global stream, whether or not a client is connected. Do not call `SseEventPublisher.publish`
+  yourself for this endpoint — every frame would be written twice. To run a feed of your own,
+  declare an `SseEventFeed` bean: it replaces the integration's, and you start and stop it.
+- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
+  receives the caller the request filter resolved and the requested `StreamId`. It is asked once,
+  when the stream opens: a caller whose access ends afterwards keeps reading until the stream ends,
+  so `streamrune.sse.timeout` (default `5m`) is also the bound on that. Keep it finite where access
+  can change.
+- **Threads** — the resource method is `@Blocking`: Quarkus REST runs the request filter and the
+  `SseAuthorizer` on a worker thread, never on a Vert.x event loop, so an authorizer may read a
+  database. The CDI request scope is active there: an authorizer can inject
+  `StreamRuneRequestContextHolder` and read the request context the filter stored. The worker is
+  held until the method has returned, not for the life of the stream; Quarkus REST then subscribes
+  the client from an event loop, and neither that subscription nor the writing of a frame blocks.
+- **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
+  is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
+  client connected, while it was reconnecting, or while the instance was down are never sent to it.
+  Read the current state from a query after every (re)connect, and use a projection for anything
+  that must see every event.
+- **Lifecycle** — `streamrune.sse.enabled` is read at build time (it decides whether the resource
+  and the feed exist) and again at runtime: switched off at runtime, the endpoint answers `404` and
+  the feed does not start. The feed starts on the startup event and stops on the shutdown event.
+- **Shutdown** — Quarkus stops its HTTP server before it fires the shutdown event, so what a
+  connected client sees depends on a build-time property of your application.
+  Built with `quarkus.shutdown.delay-enabled=true`, the application fires the shutdown-delay event
+  at the start of its shutdown: the resource completes every open stream then (an `EventSource`
+  sees a normal end and reconnects), answers a stream opened later in the shutdown already
+  complete, and the graceful phase has no stream to wait for.
+  Built without it (the Quarkus default), the server closes the connections as it stops: a
+  connected client sees its connection cut, not a completed stream (an `EventSource` reconnects
+  either way), and with `quarkus.shutdown.timeout` set a connected client holds the shutdown for
+  that whole timeout, because an open stream is a request the graceful phase waits for. Build
+  with `quarkus.shutdown.delay-enabled=true` wherever you set `quarkus.shutdown.timeout`.
+- **Health** — the feed is the `sse-event-feed` component of the readiness check: `DOWN` when its
+  polling thread has died, `DEGRADED` while its reads fail and are retried. A polling thread dies
+  only of a JVM `Error`, and nothing restarts it: the check stays `DOWN` until the application
+  restarts. The integration's feed is not a bean; to restart a feed without restarting the
+  application, declare your own `SseEventFeed` bean (see "Who feeds it") and call `start()` on it.
 
 Crypto engines bind through `StreamRuneQuarkusCryptoProperties`
 (`streamrune.crypto.*`). Engine selection is **fixed at build time** via
@@ -165,6 +226,7 @@ which keeps the bus producer itself even in an application that injects no `Comm
 | `StreamRuneProducers` | CDI producers for the buses, stores, and interceptors |
 | `ProjectionProducer` | Discovers `@ProjectionConfig` projections, builds runners |
 | `StreamRuneLifecycle` | Starts/stops projection runners, outbox poller, DLQ retry runner and the retention sweepers on `StartupEvent`/`ShutdownEvent` |
+| `SseEventFeedLifecycle` | With `streamrune.sse.enabled=true`: starts the `SseEventFeed` that publishes stored events to the SSE endpoint on `StartupEvent` and stops it on `ShutdownEvent` |
 | `StreamRuneQuarkusProperties` | `@ConfigMapping` for `streamrune.*` properties |
 | `StreamRuneRequestFilter` | JAX-RS `@Provider` that builds the `RequestContext`: `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)) |
 | `StreamRuneRequestIdentityValidator` | Startup observer: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |

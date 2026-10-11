@@ -431,7 +431,9 @@ class StreamRuneContextFilterTest {
         d.sseTimeout(),
         d.sseKeepAliveInterval(),
         // event-store.statement-timeout
-        java.time.Duration.ofSeconds(30));
+        java.time.Duration.ofSeconds(30),
+        // sse.polling-interval
+        java.time.Duration.ofSeconds(1));
   }
 
   @Test

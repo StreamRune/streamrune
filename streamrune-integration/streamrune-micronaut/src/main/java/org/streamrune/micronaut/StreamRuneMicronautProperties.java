@@ -152,8 +152,7 @@ public record StreamRuneMicronautProperties(
     // the same keys and defaults as Spring and Quarkus. Detecting a half-open peer requires a
     // WRITE, so an idle stream needs the periodic keepalive comment frame; the finite timeout is
     // the backstop that completes the stream (SSE clients auto-reconnect). Zero or negative
-    // disables either one — that timeout contract genuinely holds on all three
-    // frameworks (Spring used to map a non-positive timeout back to its 5-minute default).
+    // disables either one — the same contract on all three frameworks.
     // Disabling both knobs re-opens the dead-client FD leak. Appended at the end so the
     // positional withDefaults() stays aligned.
     @Bindable(defaultValue = "5m")
@@ -173,7 +172,16 @@ public record StreamRuneMicronautProperties(
     @Bindable(defaultValue = "30s")
         @io.micronaut.core.annotation.Nullable
         @io.micronaut.context.annotation.Property(name = "streamrune.event-store.statement-timeout")
-        Duration eventStoreStatementTimeout) {
+        Duration eventStoreStatementTimeout,
+    // sse.polling-interval: matches Spring/Quarkus. How often the SSE endpoint's feed reads the
+    // global stream for new events — the usual delay between a commit and its frame. @Nullable
+    // with a "1s" default so binding fills it while the feed's factory method keeps the default
+    // for an explicit null; a value below one millisecond fails the boot. Appended at the end so
+    // the positional withDefaults() stays aligned.
+    @Bindable(defaultValue = "1s")
+        @io.micronaut.core.annotation.Nullable
+        @io.micronaut.context.annotation.Property(name = "streamrune.sse.polling-interval")
+        Duration ssePollingInterval) {
 
   public StreamRuneMicronautProperties {
     metadataBaggageAllowlist =
@@ -233,6 +241,8 @@ public record StreamRuneMicronautProperties(
         Duration.ofMinutes(5),
         Duration.ofSeconds(30),
         // event-store.statement-timeout
-        Duration.ofSeconds(30));
+        Duration.ofSeconds(30),
+        // sse.polling-interval
+        Duration.ofSeconds(1));
   }
 }

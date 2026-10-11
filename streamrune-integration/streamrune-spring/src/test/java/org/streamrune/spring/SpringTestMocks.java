@@ -8,6 +8,7 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.types.GlobalOffset;
 
 /** Shared Mockito fixtures for the Spring auto-configuration tests. */
 final class SpringTestMocks {
@@ -20,10 +21,21 @@ final class SpringTestMocks {
    * the stubbing starts, never inside {@code thenReturn(...)}.
    */
   static EventStoreFactory eventStoreFactoryReturningMockStore() {
-    EventStore store = mock(EventStore.class);
+    EventStore store = emptyEventStore();
     EventStoreFactory factory = mock(EventStoreFactory.class);
     when(factory.create()).thenReturn(store);
     return factory;
+  }
+
+  /**
+   * An {@link EventStore} mock that reports an empty global stream. An un-stubbed mock returns
+   * {@code null} from {@code lastGlobalOffset()}, which the SSE event feed refuses to start from.
+   * Use it wherever a context enables the SSE endpoint over a mocked store.
+   */
+  static EventStore emptyEventStore() {
+    EventStore store = mock(EventStore.class);
+    when(store.lastGlobalOffset()).thenReturn(GlobalOffset.initial());
+    return store;
   }
 
   /**

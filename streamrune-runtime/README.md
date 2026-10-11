@@ -55,7 +55,8 @@ CommandBus.CommandResult result = streamRune.execute(new PlaceOrderCommand(order
 | `ContinuousProjectionRunner` | Runs projections continuously using event subscriptions |
 | `PollingProjectionRunner` | Runs projections by polling the global event stream |
 | `MultiProjectionRunner` / `ScheduledProjectionRunner` | Run several registrations on one processor, continuously or on a cron schedule |
-| `SseEventPublisher` | Server-Sent Events publisher for live projection delivery |
+| `SseEventPublisher` | In-process fan-out behind the Server-Sent Events endpoint: `publish(EventEnvelope)` routes an event to the subscribers of its own stream |
+| `SseEventFeed` | Publishes every event stored after its start to an `SseEventPublisher` — a polling subscription that begins at the head of the global stream; live, best-effort, at-most-once |
 
 ## Builder Options
 
@@ -121,4 +122,4 @@ implementation("org.streamrune:streamrune-runtime:1.0.0-alpha-SNAPSHOT")
 - The module is built with a Java 25 toolchain and requires a Java 25 runtime.
 - Projection runners run on every instance by default (`SubscriptionLeadership.NOOP`, always leader). For multiple replicas, pass `LeaseBasedLeadership` from `streamrune-postgres` — a database-clocked lease with a fencing epoch — to the runner builders' `leadership(...)`, together with a processor that fences (`JdbcProjectionRepository`; a runner refuses real leadership over one that does not), so at most one replica consumes each projection and a superseded leader's writes are rejected. The Spring, Quarkus and Micronaut integrations wire it automatically when a `DataSource` is present (`streamrune.subscription.single-active-consumer.enabled`, default on).
 - The plain facade has no health surface: a projection thread started by `startProjections()` that dies is reported only as an ERROR log.
-- `SseEventPublisher` requires a web framework integration (Spring, Quarkus, or Micronaut) to expose the SSE endpoint.
+- `SseEventPublisher` and `SseEventFeed` require a web framework integration (Spring, Quarkus, or Micronaut) to expose the SSE endpoint; the integration creates, starts and closes both when `streamrune.sse.enabled=true`. The feed is not durable: it keeps no stored offset and delivers only to clients connected at that moment.

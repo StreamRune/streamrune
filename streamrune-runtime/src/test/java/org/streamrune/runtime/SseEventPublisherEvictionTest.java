@@ -80,7 +80,7 @@ class SseEventPublisherEvictionTest {
           hookRan.countDown();
         });
 
-    publisher.publish(STREAM, envelope(1));
+    publisher.publish(envelope(1));
 
     assertTrue(
         hookRan.await(5, TimeUnit.SECONDS), "the disconnect hook must fire on a send failure");
@@ -122,7 +122,7 @@ class SseEventPublisherEvictionTest {
           hookRan.countDown();
         });
 
-    publisher.publish(STREAM, envelope(1));
+    publisher.publish(envelope(1));
 
     assertTrue(
         hookRan.await(5, TimeUnit.SECONDS),
@@ -136,7 +136,7 @@ class SseEventPublisherEvictionTest {
     // does not prove the removal: the failed subscription is stopped, and a stopped one accepts
     // and drops every envelope.)
     for (int i = 0; i < capacity + 2; i++) {
-      publisher.publish(STREAM, envelope(2 + i));
+      publisher.publish(envelope(2 + i));
     }
     assertEquals(1, sends.get(), "the evicted subscriber must receive nothing further");
     assertEquals(1, hookCalls.get(), "the disconnect hook fires exactly once");
@@ -170,20 +170,20 @@ class SseEventPublisherEvictionTest {
         });
 
     // First envelope parks the worker inside send(); the rest fill the bounded queue.
-    publisher.publish(STREAM, envelope(1));
+    publisher.publish(envelope(1));
     assertTrue(workerParked.await(5, TimeUnit.SECONDS), "the worker must be parked inside send()");
     for (int i = 0; i < capacity; i++) {
-      publisher.publish(STREAM, envelope(2 + i));
+      publisher.publish(envelope(2 + i));
     }
     // Overflow: the queue is full and the worker cannot drain.
-    publisher.publish(STREAM, envelope(100));
+    publisher.publish(envelope(100));
 
     assertTrue(hookRan.await(5, TimeUnit.SECONDS), "the slow consumer must be evicted");
     assertInstanceOf(SseEventPublisher.SlowConsumerException.class, seenCause.get());
     assertEquals(STREAM, ((SseEventPublisher.SlowConsumerException) seenCause.get()).streamId());
 
     // Further publishes on the evicted stream must be no-ops, not repeated evictions.
-    publisher.publish(STREAM, envelope(101));
+    publisher.publish(envelope(101));
     assertEquals(1, hookCalls.get(), "the disconnect hook fires exactly once per subscriber");
 
     releaseWorker.countDown();
@@ -241,10 +241,10 @@ class SseEventPublisherEvictionTest {
           }
         });
 
-    publisher.publish(STREAM, envelope(1));
+    publisher.publish(envelope(1));
     assertTrue(insideSend.await(5, TimeUnit.SECONDS), "the worker must be parked inside send()");
-    publisher.publish(STREAM, envelope(2));
-    publisher.publish(STREAM, envelope(3));
+    publisher.publish(envelope(2));
+    publisher.publish(envelope(3));
 
     assertTrue(hookCompleted.await(5, TimeUnit.SECONDS), "the disconnect hook must have run");
     releaseSend.countDown();

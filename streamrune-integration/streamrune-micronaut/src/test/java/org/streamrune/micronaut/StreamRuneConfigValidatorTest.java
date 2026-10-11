@@ -90,7 +90,9 @@ class StreamRuneConfigValidatorTest {
             Duration.ofMinutes(5),
             Duration.ofSeconds(30),
             // event-store.statement-timeout
-            java.time.Duration.ofSeconds(30));
+            java.time.Duration.ofSeconds(30),
+            // sse.polling-interval
+            Duration.ofSeconds(1));
     var ctx = mock(ApplicationContext.class);
     var validator = new StreamRuneConfigValidator(props, ctx);
     var ex =
@@ -145,7 +147,9 @@ class StreamRuneConfigValidatorTest {
         Duration.ofMinutes(5),
         Duration.ofSeconds(30),
         // event-store.statement-timeout
-        java.time.Duration.ofSeconds(30));
+        java.time.Duration.ofSeconds(30),
+        // sse.polling-interval
+        Duration.ofSeconds(1));
   }
 
   /**
@@ -249,7 +253,9 @@ class StreamRuneConfigValidatorTest {
             Duration.ofMinutes(5),
             Duration.ofSeconds(30),
             // event-store.statement-timeout
-            java.time.Duration.ofSeconds(30));
+            java.time.Duration.ofSeconds(30),
+            // sse.polling-interval
+            Duration.ofSeconds(1));
     var ctx = mock(ApplicationContext.class);
     when(ctx.containsBean(org.streamrune.core.outbox.OutboxStore.class)).thenReturn(false);
     var validator = new StreamRuneConfigValidator(props, ctx);
@@ -308,7 +314,9 @@ class StreamRuneConfigValidatorTest {
         Duration.ofMinutes(5),
         Duration.ofSeconds(30),
         // event-store.statement-timeout
-        java.time.Duration.ofSeconds(30));
+        java.time.Duration.ofSeconds(30),
+        // sse.polling-interval
+        Duration.ofSeconds(1));
   }
 
   @Test
@@ -477,6 +485,8 @@ class StreamRuneConfigValidatorTest {
         Duration.ofMinutes(5),
         Duration.ofSeconds(30),
         // event-store.statement-timeout
-        Duration.ofSeconds(30));
+        Duration.ofSeconds(30),
+        // sse.polling-interval
+        Duration.ofSeconds(1));
   }
 }

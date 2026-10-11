@@ -3,6 +3,7 @@ package org.streamrune.micronaut;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -37,6 +38,7 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.UserRoleResolver;
+import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.integration.AuthenticatedUserResolver;
@@ -586,7 +588,11 @@ class MicronautRequestIdentityFailClosedTest {
   static class EventStoreFixture {
     @Singleton
     EventStore eventStore() {
-      return mock(EventStore.class);
+      // The head of an empty global stream: the SSE event feed of the tests that enable the
+      // endpoint starts from it.
+      EventStore store = mock(EventStore.class);
+      when(store.lastGlobalOffset()).thenReturn(GlobalOffset.initial());
+      return store;
     }
   }
 

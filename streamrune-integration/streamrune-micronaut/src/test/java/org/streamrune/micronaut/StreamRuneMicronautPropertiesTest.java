@@ -112,7 +112,9 @@ class StreamRuneMicronautPropertiesTest {
             Duration.ofMinutes(5),
             Duration.ofSeconds(30),
             // event-store.statement-timeout
-            java.time.Duration.ofSeconds(30));
+            java.time.Duration.ofSeconds(30),
+            // sse.polling-interval
+            Duration.ofSeconds(1));
     assertEquals(10, p.snapshotEveryNEvents());
     assertEquals(1, p.retryMaxAttempts());
     assertEquals(1L, p.retryInitialDelayMs());

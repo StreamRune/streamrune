@@ -1,14 +1,27 @@
 package org.streamrune.spring;
 
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.AnnotationAwareOrderComparator;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.HandlerExceptionResolver;
+import org.springframework.web.servlet.ModelAndView;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.streamrune.core.types.AggregateId;
@@ -287,11 +300,92 @@ class SseControllerTest {
         .unsubscribe(
             StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-slow")),
             subscriberCaptor.getValue());
-    assertThrows(
-        IllegalStateException.class,
-        () -> emitter.send("anything"),
-        "the emitter must be completed so the client reconnects instead of holding a silent"
-            + " stream");
+    // The hook hands the completion to a thread of the stream's own and does not wait for it.
+    await()
+        .atMost(Duration.ofSeconds(5))
+        .untilAsserted(
+            () ->
+                assertThrows(
+                    IllegalStateException.class,
+                    () -> emitter.send("anything"),
+                    "the emitter must be completed so the client reconnects instead of holding a"
+                        + " silent stream"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void slowConsumerEviction_returnsWhileAWriteStillHoldsTheEmitter() throws Exception {
+    // Spring's emitter completes under the lock a send holds, and a send to a client that has
+    // stopped reading holds it until the container's write timeout. The hook runs on the
+    // publisher's thread, which serves every stream: it must return while that lock is held.
+    var publisher = mock(SseEventPublisher.class);
+    try (var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS)) {
+      var emitter = controller.stream("cart", "cart-stalled", List.of());
+      var hookCaptor = ArgumentCaptor.forClass(java.util.function.Consumer.class);
+      verify(publisher).subscribe(any(), any(), hookCaptor.capture());
+
+      // The test thread stands in for a delivery worker inside a blocked servlet write.
+      Lock emitterLock = emitterLockOf(emitter);
+      emitterLock.lock();
+      try {
+        var hookReturned = new CountDownLatch(1);
+        Thread.ofVirtual()
+            .name("publishing-thread")
+            .start(
+                () -> {
+                  hookCaptor.getValue().accept(new RuntimeException("queue of 256 full"));
+                  hookReturned.countDown();
+                });
+
+        assertTrue(
+            hookReturned.await(5, TimeUnit.SECONDS),
+            "the eviction hook must return while a write still holds the emitter");
+        assertEquals(
+            0, controller.activeCountForTest(), "the registration is dropped by the hook itself");
+      } finally {
+        emitterLock.unlock();
+      }
+
+      // With the write over, the stream's own thread completes the emitter.
+      await()
+          .atMost(Duration.ofSeconds(5))
+          .untilAsserted(
+              () -> assertThrows(IllegalStateException.class, () -> emitter.send("anything")));
+    }
+  }
+
+  @Test
+  void aClientEvictedBeforeItsOpeningFrameIsAnsweredWithACompletedStream() {
+    // The publisher may evict a client the moment it is registered. The opening frame then finds
+    // an emitter the eviction has completed and cleaned up after: nothing is written, nothing is
+    // cleaned up twice, and the request is answered with that completed emitter.
+    var unsubscribed = new java.util.concurrent.atomic.AtomicInteger();
+    var publisher =
+        new SseEventPublisher() {
+          @Override
+          public void subscribe(
+              StreamId streamId,
+              SseSubscriber subscriber,
+              java.util.function.Consumer<Throwable> onDisconnect) {
+            onDisconnect.accept(new IllegalStateException("queue of 256 full"));
+          }
+
+          @Override
+          public void unsubscribe(StreamId streamId, SseSubscriber subscriber) {
+            unsubscribed.incrementAndGet();
+          }
+        };
+    var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
+
+    var emitter =
+        assertDoesNotThrow(() -> controller.stream("cart", "cart-evicted-at-once", List.of()));
+
+    assertEquals(0, controller.activeCountForTest());
+    assertEquals(1, unsubscribed.get());
+    await()
+        .atMost(Duration.ofSeconds(5))
+        .untilAsserted(
+            () -> assertThrows(IllegalStateException.class, () -> emitter.send("anything")));
   }
 
   @Test
@@ -349,6 +443,105 @@ class SseControllerTest {
     controller.stream("customer", "c-1", List.of());
     assertEquals(AggregateType.of("customer"), seen.get().aggregateType());
     assertEquals(AggregateId.of("c-1"), seen.get().aggregateId());
+  }
+
+  @Test
+  void aFailureSpringMvcReportsForTheRequestReleasesItsStream() {
+    // Spring MVC writes the opening frame while it takes the emitter over, before it attaches the
+    // emitter's callbacks to the request. A failure of that write reaches no callback; it reaches
+    // Spring MVC's exception resolvers, and the resolver finds the stream on the request.
+    var publisher = mock(SseEventPublisher.class);
+    try (var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS)) {
+      var request = new MockHttpServletRequest("GET", "/api/sse/cart/cart-reset");
+      var emitter = controller.stream("cart", "cart-reset", request);
+      var subscriberCaptor = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
+      verify(publisher).subscribe(any(), subscriberCaptor.capture(), any());
+      assertEquals(1, controller.activeCountForTest());
+      var resolver = new SseHandoverFailureResolver();
+      var failure = new IOException("Broken pipe");
+
+      assertNull(
+          resolver.resolveException(request, new MockHttpServletResponse(), null, failure),
+          "the resolver releases the stream and resolves nothing");
+
+      assertEquals(0, controller.activeCountForTest());
+      verify(publisher)
+          .unsubscribe(
+              StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-reset")),
+              subscriberCaptor.getValue());
+      var completed = assertThrows(IllegalStateException.class, () -> emitter.send("anything"));
+      assertTrue(completed.getMessage().contains("Broken pipe"), completed.getMessage());
+
+      // A second report for the same request finds nothing left to release.
+      assertNull(resolver.resolveException(request, new MockHttpServletResponse(), null, failure));
+      verify(publisher, times(1)).unsubscribe(any(), any());
+    }
+  }
+
+  @Test
+  void aFailureOfARequestThatOpenedNoStreamIsLeftToTheOtherResolvers() {
+    var request = new MockHttpServletRequest("GET", "/api/orders/o-1");
+
+    assertNull(
+        new SseHandoverFailureResolver()
+            .resolveException(
+                request, new MockHttpServletResponse(), null, new IllegalStateException("other")));
+  }
+
+  @Test
+  void aStreamAnsweredAfterTheStopHasNothingToReleaseWhenItsRequestFails() {
+    var publisher = mock(SseEventPublisher.class);
+    try (var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS)) {
+      controller.stop();
+      var request = new MockHttpServletRequest("GET", "/api/sse/cart/cart-late");
+      controller.stream("cart", "cart-late", request);
+
+      assertNull(
+          new SseHandoverFailureResolver()
+              .resolveException(
+                  request, new MockHttpServletResponse(), null, new IOException("Broken pipe")));
+
+      verify(publisher, never()).subscribe(any(), any(), any());
+      verify(publisher, never()).unsubscribe(any(), any());
+    }
+  }
+
+  @Test
+  void theResolverSortsAheadOfAResolverThatClaimsTheHighestPrecedence() {
+    // The dispatcher servlet sorts the resolver beans of the context with this comparator.
+    class ClaimsTheHighestPrecedence implements HandlerExceptionResolver, Ordered {
+      @Override
+      public int getOrder() {
+        return Ordered.HIGHEST_PRECEDENCE;
+      }
+
+      @Override
+      public ModelAndView resolveException(
+          HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
+        return new ModelAndView();
+      }
+    }
+    var applications = new ClaimsTheHighestPrecedence();
+    var resolvers = new java.util.ArrayList<HandlerExceptionResolver>();
+    resolvers.add(applications);
+    resolvers.add(new SseHandoverFailureResolver());
+
+    AnnotationAwareOrderComparator.sort(resolvers);
+
+    assertInstanceOf(SseHandoverFailureResolver.class, resolvers.getFirst());
+    assertSame(applications, resolvers.getLast());
+  }
+
+  /** The lock Spring's emitter holds across a send and takes to complete. */
+  private static Lock emitterLockOf(SseEmitter emitter) {
+    try {
+      var field = ResponseBodyEmitter.class.getDeclaredField("writeLock");
+      field.setAccessible(true);
+      return (Lock) field.get(emitter);
+    } catch (ReflectiveOperationException e) {
+      throw new AssertionError(
+          "Spring ResponseBodyEmitter internals changed: no accessible 'writeLock' field", e);
+    }
   }
 
   private static void runEmitterCallback(SseEmitter emitter, String fieldName) {

@@ -29,7 +29,6 @@ import org.springframework.boot.webmvc.autoconfigure.WebMvcAutoConfiguration;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.integration.SseAuthorizer;
 
@@ -141,7 +140,7 @@ class SseGracefulShutdownTest {
 
     @Bean
     EventStoreFactory eventStoreFactory() {
-      return () -> mock(EventStore.class);
+      return SpringTestMocks::emptyEventStore;
     }
 
     @Bean

@@ -71,6 +71,7 @@ comes from — see [Request identity](#request-identity).
 | `StreamRuneAuthorizationValidator` | Startup listener: refuses startup when a command bus registers `@RequireRole`/`@RequirePermission` commands without an `AnnotationAuthorizationInterceptor` in its chain |
 | `StreamRuneContextHelper` | ThreadLocal mirror of the request context for threads `ScopedValue` bindings cannot reach (kept in sync via Micronaut's `PropagatedContext`) |
 | `StreamRuneLifecycle` | Starts `MultiProjectionRunner`, `ScheduledProjectionRunner`, `OutboxPoller`, the outbox, inbox, saga dead-letter and command dead-letter retention sweepers, and `DeadLetterRetryRunner` on context startup and closes them on shutdown |
+| `SseEventFeedLifecycle` | With `streamrune.sse.enabled=true`: starts the `SseEventFeed` that publishes stored events to the SSE endpoint on `StartupEvent` and stops it when the context closes; independent of `streamrune.runner-lifecycle-enabled` |
 
 ## Lifecycle
 
@@ -107,8 +108,54 @@ when no `OutboxStore` bean exists, or when neither an `OutboxPublisher` bean
 
 With `streamrune.sse.enabled=true` the integration serves
 `GET /api/sse/{aggregateType}/{aggregateId}` — the live events of one stream, the registered
-aggregate type plus its id as two path segments; an invalid part answers `400`. Every stream is
-denied until you provide an `SseAuthorizer` bean.
+aggregate type plus its id as two path segments; an invalid part answers `400`.
+
+- **What it emits** — one frame per domain event of that stream: `id` is the global offset, `data`
+  the decrypted event as JSON (the event types must be serializable by the application's JSON
+  mapper — with Micronaut Serialization, `@Serdeable`). `: keepalive` comment frames are written
+  every `streamrune.sse.keep-alive-interval` (default `30s`), and the server completes a stream
+  after `streamrune.sse.timeout` (default `5m`); an `EventSource` reconnects on its own.
+- **Opening frame** — as soon as the client is subscribed the endpoint writes one `: keepalive`
+  comment frame, whatever the keepalive interval, and with it the status line and the headers: the
+  stream is open at once (an `EventSource` fires `onopen`), not with the first event. Nothing of
+  the response is written before the client is subscribed, so a client that has received the first
+  bytes receives every event of the stream stored from then on, while it stays connected.
+- **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
+  polling subscription that starts at the head of the global stream when the application starts
+  and publishes every event stored from then on to the clients of the event's own stream, every
+  `streamrune.sse.polling-interval` (default `1s`, at least `1ms`). No stored offset, no replay of
+  history. While the endpoint is enabled every instance reads and decrypts every event of the
+  global stream, whether or not a client is connected. Do not call `SseEventPublisher.publish`
+  yourself for this endpoint — every frame would be written twice. To run a feed of your own,
+  declare an `SseEventFeed` bean: it replaces the integration's, and you start and stop it.
+- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
+  receives the caller the request filter resolved and the requested `StreamId`. It is asked once,
+  when the stream opens: a caller whose access ends afterwards keeps reading until the stream ends,
+  so `streamrune.sse.timeout` (default `5m`) is also the bound on that. Keep it finite where access
+  can change.
+- **Threads** — the controller declares no executor: it calls the `SseAuthorizer` on the thread the
+  request filter chain leaves the request on. `StreamRuneContextFilter` runs on the blocking
+  executor and proceeds synchronously, so with it the authorizer runs there, inside the filter's
+  request context, and may read a database. If you replace that filter, run yours on the blocking
+  executor too (`@ExecuteOn(TaskExecutors.BLOCKING)`), or the authorizer runs on a Netty event
+  loop. A filter you add behind it that runs on another executor (its own `@ExecuteOn`) can take
+  the controller and the authorizer to that executor's thread, where `StreamRuneContext.CURRENT`
+  is not bound; whether a given request goes on there or on the framework filter's thread depends
+  on timing inside Micronaut, so an authorizer behind such a filter must not rely on either.
+- **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
+  is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
+  client connected, while it was reconnecting, or while the instance was down are never sent to it.
+  Read the current state from a query after every (re)connect, and use a projection for anything
+  that must see every event.
+- **Lifecycle** — the feed starts on the startup event and stops when the application context
+  closes, which also completes every open stream and releases what it holds. The embedded server
+  stops before that, so a connected client sees the server close its connection, not a completed
+  stream; an `EventSource` reconnects either way.
+- **Health** — the feed is the `sse-event-feed` component of the health indicator: `DOWN` when its
+  polling thread has died, `DEGRADED` while its reads fail and are retried. A polling thread dies
+  only of a JVM `Error`, and nothing restarts it: the indicator stays `DOWN` until the application
+  restarts or calls `start()` on the `SseEventFeed` bean, which begins again at the head of the
+  stream.
 
 ## Request identity
 

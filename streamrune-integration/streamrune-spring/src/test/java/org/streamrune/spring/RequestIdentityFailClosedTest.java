@@ -470,7 +470,7 @@ class RequestIdentityFailClosedTest {
 
     @Bean
     EventStoreFactory eventStoreFactory() {
-      return () -> mock(EventStore.class);
+      return SpringTestMocks::emptyEventStore;
     }
   }
 
