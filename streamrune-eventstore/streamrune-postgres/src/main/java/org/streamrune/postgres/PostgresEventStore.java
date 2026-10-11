@@ -1928,6 +1928,16 @@ public final class PostgresEventStore implements EventStore {
   private static final String LAST_GLOBAL_OFFSET =
       "SELECT COALESCE(MAX(global_offset), 0) FROM event_stream";
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>The highest committed offset. An append reserves its offsets from the single-row {@code
+   * global_offset_sequence} counter inside its own transaction and holds that row's lock until it
+   * commits, and a rolled-back append returns its reservation, so offsets are committed in the
+   * order they are assigned: a committed offset implies every lower one is committed, and the next
+   * append reserves only after its predecessor is visible. No event at or below the returned offset
+   * becomes readable later.
+   */
   @Override
   public GlobalOffset lastGlobalOffset() {
     try (var conn = dataSource.getConnection();

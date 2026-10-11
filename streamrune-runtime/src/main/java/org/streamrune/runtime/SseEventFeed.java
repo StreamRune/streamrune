@@ -62,10 +62,11 @@ import org.streamrune.core.types.Version;
  * except by reading and publishing it. The order matters: checking first and capturing second loses
  * E when the client registers and E is stored between the two.
  *
- * <p>What the argument needs from the event store: an event that becomes readable after {@link
- * EventStore#lastGlobalOffset()} returned has a greater offset than the one returned. The
- * PostgreSQL store reports the highest committed offset of a counter that assigns offsets in commit
- * order; the in-memory store reports the head of the completed appends.
+ * <p>What the argument needs from the event store is the contract of {@link
+ * EventStore#lastGlobalOffset()}: an event that becomes readable after that method returned has a
+ * greater offset than the one returned. The PostgreSQL store reports the highest committed offset
+ * of a counter that assigns offsets in commit order; the in-memory store reports the head of the
+ * completed appends.
  *
  * <p><b>Every interleaving.</b> With L the look for subscribers that opens a poll, C the capture, K
  * the check and M the move of an idle poll:
@@ -98,19 +99,21 @@ import org.streamrune.core.types.Version;
  * </ul>
  *
  * <p><b>Delivery guarantee: best-effort, at-most-once.</b> A frame reaches a client only while the
- * client is connected and the feed is running. Nothing is redelivered: an event appended while the
- * application is down or restarting, while a client is reconnecting, or before the client connected
- * is never sent to that client, and a client evicted as a slow consumer loses the frames queued for
- * it. Within one stream, frames arrive in version order. A client that needs every event reads the
- * state it missed from a query or a projection after each (re)connect and treats the frames as a
- * notification; durable processing belongs in a projection.
+ * client is connected and the feed is running. Nothing is redelivered, and a client evicted as a
+ * slow consumer loses the frames queued for it. An event appended while the application is down or
+ * restarting, while a client is reconnecting, or before the client connected is not sent to that
+ * client, with one exception: an event of its stream stored shortly before the client registered,
+ * which the feed had not passed yet, can still arrive (next paragraph). Within one stream, frames
+ * arrive in version order. A client that needs every event reads the state it missed from a query
+ * or a projection after each (re)connect and treats the frames as a notification; durable
+ * processing belongs in a projection.
  *
- * <p><b>Events from just before a registration.</b> A client can also receive events of its stream
- * that were stored shortly before it registered: the ones beyond the feed's position at that
- * moment. With other clients subscribed those are the events the feed has not read yet, about one
- * polling interval's worth. With the feed idle they are the events stored since the last capture of
- * the head, again about one polling interval's worth. Both windows grow to the time since the last
- * read that succeeded while reads fail. A client never receives an event behind the position.
+ * <p><b>Events from just before a registration.</b> A client can receive events of its stream that
+ * were stored shortly before it registered: the ones beyond the feed's position at that moment.
+ * With other clients subscribed those are the events the feed has not read yet, about one polling
+ * interval's worth. With the feed idle they are the events stored since the last capture of the
+ * head, again about one polling interval's worth. Both windows grow to the time since the last read
+ * that succeeded while reads fail. A client never receives an event behind the position.
  *
  * <p><b>Latency.</b> A frame is normally written within one polling interval of the commit, for the
  * first client of an idle feed as for any other. That is the usual delay, not a bound: a failed
@@ -168,8 +171,8 @@ public final class SseEventFeed implements AutoCloseable {
    * Creates a stopped feed.
    *
    * @param eventStore the store whose global stream is read (required); it must implement {@link
-   *     EventStore#lastGlobalOffset()}, and an event that becomes readable after that method
-   *     returned must have a greater offset than the one it returned
+   *     EventStore#lastGlobalOffset()} under the contract stated there: an event that becomes
+   *     readable after that method returned has a greater offset than the one it returned
    * @param publisher the fan-out the events are published to (required)
    * @param pollingInterval how often the global stream is read for new events (required, at least
    *     one millisecond: the polling thread sleeps whole milliseconds, so a shorter interval would

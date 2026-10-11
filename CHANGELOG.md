@@ -644,6 +644,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   live, best-effort and at-most-once: only clients connected at that moment receive a frame, nothing
   is redelivered and `Last-Event-ID` is not honoured. `SseEventPublisher.publish(EventEnvelope)`
   routes an event by its own `streamId()`, so it cannot reach the subscribers of another stream.
+  `SseEventPublisher.hasSubscribers()` is what the feed asks before it reads, and it never answers
+  `false` while a subscriber is registered; a publisher subclass that keeps subscribers of its own
+  overrides it under that contract. The feed relies on `EventStore.lastGlobalOffset()` naming a
+  head below which no event becomes readable later.
 - Only allow-listed OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist`) reach event
   metadata. `LogSanitizer` strips control characters from every value the framework logs or persists
   as free text.

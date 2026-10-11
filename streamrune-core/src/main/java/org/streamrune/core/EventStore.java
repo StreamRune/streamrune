@@ -174,17 +174,35 @@ public interface EventStore {
   }
 
   /**
-   * Returns the highest global offset assigned in this event store, or {@link GlobalOffset#initial}
-   * if no events have been appended yet.
+   * Returns the head of the global stream: the highest global offset assigned in this event store
+   * to an event that is readable, or {@link GlobalOffset#initial} if no events have been appended
+   * yet.
    *
-   * <p>Used for subscription lag computation: health checks compare a subscription's checkpoint
-   * against this value to detect consumers falling behind the head of the stream.
+   * <p><b>Contract: nothing appears at or below the head.</b> No event at or below the returned
+   * offset becomes readable later: an event that becomes readable after this method returned has a
+   * greater offset than the one returned. An offset that is assigned and not readable yet (an
+   * append in progress, a transaction that has not committed) is therefore not the head, and a
+   * store whose offsets can become readable out of order reports the highest offset below which
+   * nothing is still to come. A decorator that tracks the head itself keeps the same contract.
+   *
+   * <p>Two consumers read it:
+   *
+   * <ul>
+   *   <li>subscription lag computation: health checks compare a subscription's checkpoint against
+   *       this value to detect consumers falling behind the head of the stream;
+   *   <li>the feed of the Server-Sent Events endpoint ({@code SseEventFeed} in {@code
+   *       streamrune-runtime}): while no client is subscribed it moves its position to this value
+   *       without reading the events up to it. It relies on the contract above: an event that
+   *       turned readable at or below a head the feed had moved to would never be delivered, to a
+   *       client that subscribed before it was stored either.
+   * </ul>
    *
    * <p>The default implementation throws {@link UnsupportedOperationException}. Implementations
-   * backed by a real store should override it (e.g. {@code SELECT max(global_offset)}).
+   * backed by a real store should override it (e.g. {@code SELECT max(global_offset)} over
+   * committed rows, where offsets are committed in the order they are assigned).
    *
-   * @return the highest assigned global offset, or {@link GlobalOffset#initial()} when the store is
-   *     empty
+   * @return the highest global offset of a readable event, below which no event becomes readable
+   *     later, or {@link GlobalOffset#initial()} when the store is empty
    * @throws UnsupportedOperationException if the implementation does not track the global head
    */
   default GlobalOffset lastGlobalOffset() {

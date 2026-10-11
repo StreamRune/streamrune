@@ -454,6 +454,7 @@ public class SseEventPublisher implements AutoCloseable {
     void subscribe(StreamId streamId, SseSubscriber subscriber, Consumer<Throwable> onDisconnect);
     void unsubscribe(StreamId streamId, SseSubscriber subscriber);
     void publish(EventEnvelope envelope);   // routed by envelope.streamId()
+    boolean hasSubscribers();               // what the feed asks before it reads: true while a subscriber is registered
 }
 
 public final class SseEventFeed implements AutoCloseable {
@@ -473,14 +474,18 @@ public class BackgroundRelayHealthContributor {
 - `SseEventPublisher` is the in-process fan-out: one bounded queue and one virtual-thread worker per
   subscriber. `publish` takes only the envelope and routes it by the envelope's own `streamId()`, so
   an event cannot reach the subscribers of another stream. A subscriber that cannot keep up is
-  disconnected rather than skipped.
+  disconnected rather than skipped. `hasSubscribers()` is the publisher's contract with the feed:
+  it never answers `false` while a subscriber is registered. An application that replaces the
+  publisher bean with a subclass registers its subscribers through `super.subscribe`, or overrides
+  `hasSubscribers()` under the same contract; otherwise the feed finds nobody and reads nothing.
 - `SseEventFeed` is what publishes. The integrations create one per application instance when the
   endpoint is enabled, start it with the application and close it on shutdown. It is a
   `PollingEventSubscription` on the global stream that starts at the head of the stream, keeps its
   position in memory, and never replays history. It reads events only while the publisher has a
   subscriber: a poll with none reads `EventStore.lastGlobalOffset()` and moves the position there,
   without reading an event. It captures that head before it checks for subscribers, so an event
-  stored after a client subscribed is never skipped. An application's own `SseEventFeed` bean replaces
+  stored after a client subscribed is never skipped; that rests on the contract of
+  `EventStore.lastGlobalOffset()`, the head below which no event becomes readable later. An application's own `SseEventFeed` bean replaces
   the integration's; the application then starts and stops it, and registers it with
   `BackgroundRelayHealthContributor.registerSseEventFeed` to have it reported by the health
   indicator. A feed that is started and not running has lost its polling thread to a JVM `Error`;
