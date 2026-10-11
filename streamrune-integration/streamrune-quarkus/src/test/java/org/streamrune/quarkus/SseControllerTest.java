@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.GlobalOffset;
@@ -33,7 +34,7 @@ class SseControllerTest {
 
   record OrderCreated(String orderId) implements DomainEvent {}
 
-  private static final SseAuthorizer ALLOW_ALL = (principal, streamId) -> true;
+  private static final SseAuthorizer ALLOW_ALL = (caller, streamId) -> true;
 
   private static EventEnvelope envelope(long offset, DomainEvent event) {
     return envelope(null, offset, event);
@@ -60,7 +61,9 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS, () -> Boolean.FALSE);
 
-    assertThrows(NotFoundException.class, () -> controller.stream("order", "order-1", List.of()));
+    assertThrows(
+        NotFoundException.class,
+        () -> controller.stream("order", "order-1", List.of(), SseCallers.anonymous()));
     verifyNoInteractions(publisher);
   }
 
@@ -70,7 +73,7 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS, () -> Boolean.TRUE);
 
-    assertNotNull(controller.stream("order", "order-1", List.of()));
+    assertNotNull(controller.stream("order", "order-1", List.of(), SseCallers.anonymous()));
   }
 
   @Test
@@ -80,7 +83,8 @@ class SseControllerTest {
     var controller = new SseController(publisher, SseAuthorizer.DENY_ALL, ANONYMOUS);
 
     assertThrows(
-        ForbiddenException.class, () -> controller.stream("order", "order-victim", List.of()));
+        ForbiddenException.class,
+        () -> controller.stream("order", "order-victim", List.of(), SseCallers.anonymous()));
     verifyNoInteractions(publisher);
   }
 
@@ -91,15 +95,15 @@ class SseControllerTest {
     var seenPrincipal = new AtomicReference<UserId>();
     var seenStream = new AtomicReference<StreamId>();
     SseAuthorizer authorizer =
-        (principal, streamId) -> {
-          seenPrincipal.set(principal);
+        (caller, streamId) -> {
+          seenPrincipal.set(caller.userId());
           seenStream.set(streamId);
           return true;
         };
     var controller =
         new SseController(publisher, authorizer, RequestIdentityPolicy.of(resolver, false));
 
-    controller.stream("order", "order-1", List.of());
+    controller.stream("order", "order-1", List.of(), SseCallers.of("bob"));
 
     assertEquals("bob", seenPrincipal.get().value());
     assertEquals("order:order-1", seenStream.get().value());
@@ -110,7 +114,7 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
-    var multi = controller.stream("cart", "cart-1", List.of());
+    var multi = controller.stream("cart", "cart-1", List.of(), SseCallers.anonymous());
     assertNotNull(multi);
 
     // Subscribe to drive the Multi (emitter-based Multis require a subscriber to activate)
@@ -127,7 +131,7 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
-    var multi = controller.stream("cart", "cart-2", List.of());
+    var multi = controller.stream("cart", "cart-2", List.of(), SseCallers.anonymous());
     var subscriber = AssertSubscriber.create(Long.MAX_VALUE);
     multi.subscribe(subscriber);
 
@@ -152,7 +156,7 @@ class SseControllerTest {
     var publisher = new SseEventPublisher();
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
-    var multi = controller.stream("cart", "cart-3", List.of());
+    var multi = controller.stream("cart", "cart-3", List.of(), SseCallers.anonymous());
     var testSubscriber = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
     multi.subscribe(testSubscriber);
 
@@ -188,7 +192,7 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
-    var multi = controller.stream("cart", "cart-4", List.of());
+    var multi = controller.stream("cart", "cart-4", List.of(), SseCallers.anonymous());
     // Subscriber that never requests — every published event lands in the bounded buffer
     var testSubscriber = AssertSubscriber.<OutboundSseEvent>create(0);
     multi.subscribe(testSubscriber);
@@ -224,7 +228,7 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
-    var multi = controller.stream("cart", "cart-evicted", List.of());
+    var multi = controller.stream("cart", "cart-evicted", List.of(), SseCallers.anonymous());
     var testSubscriber = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
     multi.subscribe(testSubscriber);
 
@@ -283,7 +287,7 @@ class SseControllerTest {
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
     try {
       var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
-      controller.stream("cart", "cart-early", List.of()).subscribe(client);
+      controller.stream("cart", "cart-early", List.of(), SseCallers.anonymous()).subscribe(client);
 
       client.awaitItems(2, java.time.Duration.ofSeconds(5));
       worker.get().join(5_000);
@@ -306,7 +310,7 @@ class SseControllerTest {
     controller.completeOpenStreams(mock(io.quarkus.runtime.ShutdownEvent.class));
 
     var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
-    controller.stream("cart", "cart-late", List.of()).subscribe(client);
+    controller.stream("cart", "cart-late", List.of(), SseCallers.anonymous()).subscribe(client);
 
     client.awaitCompletion(java.time.Duration.ofSeconds(5));
     assertTrue(client.getItems().isEmpty(), "no frame: the stream is complete, not open");
@@ -320,7 +324,7 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
     var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
-    controller.stream("cart", "cart-open", List.of()).subscribe(client);
+    controller.stream("cart", "cart-open", List.of(), SseCallers.anonymous()).subscribe(client);
     assertEquals(1, controller.openStreamCount());
 
     controller.completeOpenStreams(new io.quarkus.runtime.ShutdownDelayInitiatedEvent());
@@ -338,7 +342,8 @@ class SseControllerTest {
     controller.completeOpenStreams(new io.quarkus.runtime.ShutdownDelayInitiatedEvent());
 
     var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
-    controller.stream("cart", "cart-during-the-delay", List.of()).subscribe(client);
+    controller.stream("cart", "cart-during-the-delay", List.of(), SseCallers.anonymous())
+        .subscribe(client);
 
     client.awaitCompletion(java.time.Duration.ofSeconds(5));
     assertTrue(client.getItems().isEmpty(), "no frame: the stream is complete, not open");
@@ -377,7 +382,8 @@ class SseControllerTest {
     controller.shutdown();
 
     var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
-    controller.stream("cart", "cart-after-destroy", List.of()).subscribe(client);
+    controller.stream("cart", "cart-after-destroy", List.of(), SseCallers.anonymous())
+        .subscribe(client);
 
     client.awaitCompletion(java.time.Duration.ofSeconds(5));
     verify(publisher, never()).subscribe(any(), any(), any());
@@ -411,7 +417,7 @@ class SseControllerTest {
     controllerRef.set(controller);
 
     var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
-    controller.stream("cart", "cart-racing", List.of()).subscribe(client);
+    controller.stream("cart", "cart-racing", List.of(), SseCallers.anonymous()).subscribe(client);
 
     client.awaitCompletion(java.time.Duration.ofSeconds(5));
     assertNotNull(subscribed.get());
@@ -448,7 +454,7 @@ class SseControllerTest {
     controllerRef.set(controller);
 
     var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
-    controller.stream("cart", "cart-rejected", List.of()).subscribe(client);
+    controller.stream("cart", "cart-rejected", List.of(), SseCallers.anonymous()).subscribe(client);
 
     client.awaitFailure(java.time.Duration.ofSeconds(5));
     client.assertFailedWith(java.util.concurrent.RejectedExecutionException.class);
@@ -474,7 +480,7 @@ class SseControllerTest {
             java.time.Duration.ofMinutes(5),
             java.time.Duration.ofMillis(50));
 
-    var multi = controller.stream("cart", "cart-keepalive", List.of());
+    var multi = controller.stream("cart", "cart-keepalive", List.of(), SseCallers.anonymous());
     var testSubscriber = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
     multi.subscribe(testSubscriber);
 
@@ -501,7 +507,7 @@ class SseControllerTest {
     var controller =
         new SseController(publisher, ALLOW_ALL, ANONYMOUS, java.time.Duration.ofMillis(100), null);
 
-    var multi = controller.stream("cart", "cart-timeout", List.of());
+    var multi = controller.stream("cart", "cart-timeout", List.of(), SseCallers.anonymous());
     var testSubscriber = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
     multi.subscribe(testSubscriber);
 
@@ -537,7 +543,7 @@ class SseControllerTest {
             java.time.Duration.ofMinutes(5),
             java.time.Duration.ZERO);
 
-    var multi = controller.stream("cart", "cart-no-keepalive", List.of());
+    var multi = controller.stream("cart", "cart-no-keepalive", List.of(), SseCallers.anonymous());
     var testSubscriber = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
     multi.subscribe(testSubscriber);
 
@@ -563,7 +569,7 @@ class SseControllerTest {
             java.time.Duration.ofMinutes(5),
             java.time.Duration.ofMillis(1));
 
-    var multi = controller.stream("cart", "cart-race", List.of());
+    var multi = controller.stream("cart", "cart-race", List.of(), SseCallers.anonymous());
     var testSubscriber = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
     multi.subscribe(testSubscriber);
 
@@ -606,7 +612,7 @@ class SseControllerTest {
 
     int streams = 200;
     for (int i = 0; i < streams; i++) {
-      var multi = controller.stream("cart", "cart-cancel-" + i, List.of());
+      var multi = controller.stream("cart", "cart-cancel-" + i, List.of(), SseCallers.anonymous());
       var testSubscriber = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
       multi.subscribe(testSubscriber);
       testSubscriber.cancel();
@@ -652,7 +658,7 @@ class SseControllerTest {
     // one of "slow"'s OWN keepalive ticks (interval 15ms) is virtually certain to fire while the
     // lock is held and contend for it.
     long blockMillis = 500;
-    var slowMulti = controller.stream("cart", "cart-slow", List.of());
+    var slowMulti = controller.stream("cart", "cart-slow", List.of(), SseCallers.anonymous());
     slowMulti
         .subscribe()
         .with(
@@ -669,7 +675,7 @@ class SseControllerTest {
 
     // "fast" stream: timestamps every keepalive arrival so the gap between consecutive arrivals
     // can be measured.
-    var fastMulti = controller.stream("cart", "cart-fast", List.of());
+    var fastMulti = controller.stream("cart", "cart-fast", List.of(), SseCallers.anonymous());
     var fastArrivalNanos = java.util.Collections.synchronizedList(new java.util.ArrayList<Long>());
     fastMulti.subscribe().with(item -> fastArrivalNanos.add(System.nanoTime()), failure -> {});
 
@@ -740,7 +746,8 @@ class SseControllerTest {
     // Slow stream: its downstream parks inside the domain-event delivery, so the delivery worker
     // holds this stream's sendLock for the whole window — a stalled emitter.emit(), the
     // premise of the keepalive fix.
-    var slowMulti = controller.stream("cart", "cart-slow-deadline", List.of());
+    var slowMulti =
+        controller.stream("cart", "cart-slow-deadline", List.of(), SseCallers.anonymous());
     slowMulti
         .subscribe()
         .with(
@@ -757,7 +764,8 @@ class SseControllerTest {
             },
             failure -> {});
 
-    var fastMulti = controller.stream("cart", "cart-fast-deadline", List.of());
+    var fastMulti =
+        controller.stream("cart", "cart-fast-deadline", List.of(), SseCallers.anonymous());
     var fastSubscriber = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
     fastMulti.subscribe(fastSubscriber);
 
@@ -804,7 +812,7 @@ class SseControllerTest {
     try (var warnings = new CapturedSseControllerLog()) {
       // The downstream throws for the tick and again when it is told of the failure, so the
       // exception reaches the emitter: the emission itself fails.
-      controller.stream("cart", "cart-dead-tick", List.of())
+      controller.stream("cart", "cart-dead-tick", List.of(), SseCallers.anonymous())
           .subscribe(new ThrowingSubscriber(Callback.TICK_AND_FAILURE, cause));
 
       assertEquals(
@@ -834,7 +842,7 @@ class SseControllerTest {
     try (var warnings = new CapturedSseControllerLog()) {
       // The downstream throws for the frame and again when it is told of the failure, so the
       // exception reaches the emitter: the emission itself fails.
-      controller.stream("cart", "cart-dead-opening", List.of())
+      controller.stream("cart", "cart-dead-opening", List.of(), SseCallers.anonymous())
           .subscribe(new ThrowingSubscriber(Callback.ITEM_AND_FAILURE, cause));
 
       assertEquals(
@@ -859,7 +867,7 @@ class SseControllerTest {
     var cause = new IllegalStateException("client gone");
 
     try (var warnings = new CapturedSseControllerLog()) {
-      controller.stream("cart", "cart-dead-deadline", List.of())
+      controller.stream("cart", "cart-dead-deadline", List.of(), SseCallers.anonymous())
           .subscribe(new ThrowingSubscriber(Callback.COMPLETION, cause));
 
       assertEquals(
@@ -878,7 +886,7 @@ class SseControllerTest {
     var cause = new IllegalStateException("client gone");
 
     try (var warnings = new CapturedSseControllerLog()) {
-      controller.stream("cart", "cart-dead-evict", List.of())
+      controller.stream("cart", "cart-dead-evict", List.of(), SseCallers.anonymous())
           .subscribe(new ThrowingSubscriber(Callback.FAILURE, cause));
       var hookCaptor = ArgumentCaptor.forClass(java.util.function.Consumer.class);
       verify(publisher)
@@ -912,7 +920,8 @@ class SseControllerTest {
     var cause = new IllegalStateException("this frame cannot be written");
     var downstream = new ThrowingSubscriber(Callback.ITEM, cause);
     try {
-      controller.stream("cart", "cart-unwritable", List.of()).subscribe(downstream);
+      controller.stream("cart", "cart-unwritable", List.of(), SseCallers.anonymous())
+          .subscribe(downstream);
 
       assertEquals(List.of(cause), downstream.failures);
       var registered = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
@@ -933,7 +942,8 @@ class SseControllerTest {
     var cause = new IllegalStateException("this event cannot be serialized");
     var downstream = new ThrowingSubscriber(Callback.EVENT, cause);
     try {
-      controller.stream("cart", "cart-unserializable", List.of()).subscribe(downstream);
+      controller.stream("cart", "cart-unserializable", List.of(), SseCallers.anonymous())
+          .subscribe(downstream);
       var registered = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
       var stream = StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-unserializable"));
       verify(publisher).subscribe(eq(stream), registered.capture(), any());
@@ -1075,7 +1085,7 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var authorizerCalls = new java.util.concurrent.atomic.AtomicInteger();
     SseAuthorizer counting =
-        (principal, streamId) -> {
+        (caller, streamId) -> {
           authorizerCalls.incrementAndGet();
           return true;
         };
@@ -1086,7 +1096,7 @@ class SseControllerTest {
       var ex =
           assertThrows(
               BadRequestException.class,
-              () -> controller.stream(bad.get(0), bad.get(1), List.of()));
+              () -> controller.stream(bad.get(0), bad.get(1), List.of(), SseCallers.anonymous()));
       assertEquals(400, ex.getResponse().getStatus());
       assertEquals("Invalid aggregate type or aggregate id", ex.getMessage());
     }
@@ -1100,7 +1110,9 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS, () -> Boolean.FALSE);
 
-    assertThrows(NotFoundException.class, () -> controller.stream("Order", "o-1", List.of()));
+    assertThrows(
+        NotFoundException.class,
+        () -> controller.stream("Order", "o-1", List.of(), SseCallers.anonymous()));
     verifyNoInteractions(publisher);
   }
 
@@ -1110,12 +1122,12 @@ class SseControllerTest {
     var controller =
         new SseController(
             mock(SseEventPublisher.class),
-            (principal, streamId) -> {
+            (caller, streamId) -> {
               seen.set(streamId);
               return true;
             },
             ANONYMOUS);
-    controller.stream("customer", "c-1", List.of());
+    controller.stream("customer", "c-1", List.of(), SseCallers.anonymous());
     assertEquals(AggregateType.of("customer"), seen.get().aggregateType());
     assertEquals(AggregateId.of("c-1"), seen.get().aggregateId());
   }
@@ -1137,18 +1149,133 @@ class SseControllerTest {
   @Test
   void theHttpEndpointHandsBothSegmentsAndTheHeadersOn() {
     var seen = new AtomicReference<StreamId>();
+    var seenCaller = new AtomicReference<StreamRuneContext.RequestContext>();
+    var holder = new StreamRuneRequestContextHolder();
     var controller =
         new SseController(
             mock(SseEventPublisher.class),
-            (principal, streamId) -> {
+            (caller, streamId) -> {
               seen.set(streamId);
+              seenCaller.set(caller);
               return true;
             },
-            ANONYMOUS);
+            ANONYMOUS,
+            holder,
+            java.time.Duration.ofMinutes(5),
+            java.time.Duration.ofSeconds(30));
     var headers = mock(jakarta.ws.rs.core.HttpHeaders.class);
     when(headers.getRequestHeader(RequestIdentityPolicy.USER_ID_HEADER)).thenReturn(List.of());
+    var stored = SseCallers.anonymous();
+    holder.set(stored);
 
     assertNotNull(controller.stream("order", "o-1", headers));
     assertEquals("order:o-1", seen.get().value());
+    assertSame(stored, seenCaller.get(), "the context the request filter stored in the holder");
+  }
+
+  @Test
+  void theHttpEndpointRefusesARequestTheHolderHasNoContextFor() {
+    var authorizerCalls = new java.util.concurrent.atomic.AtomicInteger();
+    var controller =
+        new SseController(
+            mock(SseEventPublisher.class),
+            (caller, streamId) -> {
+              authorizerCalls.incrementAndGet();
+              return true;
+            },
+            ANONYMOUS,
+            new StreamRuneRequestContextHolder(),
+            java.time.Duration.ofMinutes(5),
+            java.time.Duration.ofSeconds(30));
+    var headers = mock(jakarta.ws.rs.core.HttpHeaders.class);
+    when(headers.getRequestHeader(RequestIdentityPolicy.USER_ID_HEADER)).thenReturn(List.of());
+
+    assertThrows(ForbiddenException.class, () -> controller.stream("order", "o-1", headers));
+    assertEquals(0, authorizerCalls.get());
+  }
+
+  @Test
+  void aControllerWithoutARequestContextHolderIsRejected() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new SseController(
+                mock(SseEventPublisher.class),
+                ALLOW_ALL,
+                ANONYMOUS,
+                null,
+                java.time.Duration.ofMinutes(5),
+                java.time.Duration.ofSeconds(30)));
+  }
+
+  @Test
+  void theAuthorizerIsHandedTheRequestContextStoredForTheRequest() {
+    var seen = new AtomicReference<StreamRuneContext.RequestContext>();
+    var controller =
+        new SseController(
+            mock(SseEventPublisher.class),
+            (caller, streamId) -> {
+              seen.set(caller);
+              return true;
+            },
+            RequestIdentityPolicy.of(null, true));
+    var stored =
+        SseCallers.of("alice")
+            .withAuthority(
+                new org.streamrune.core.UserAuthority(
+                    java.util.Set.of("SUPPORT"), java.util.Set.of()));
+
+    controller.stream("order", "order-1", List.of("alice"), stored);
+
+    assertSame(stored, seen.get());
+  }
+
+  @Test
+  void aRequestWithNoRequestContextIsRefusedAndTheAuthorizerIsNotAsked() {
+    var publisher = mock(SseEventPublisher.class);
+    var authorizerCalls = new java.util.concurrent.atomic.AtomicInteger();
+    var controller =
+        new SseController(
+            publisher,
+            (caller, streamId) -> {
+              authorizerCalls.incrementAndGet();
+              return true;
+            },
+            RequestIdentityPolicy.of(null, true));
+
+    assertThrows(
+        ForbiddenException.class,
+        () -> controller.stream("order", "order-1", List.of("alice"), null));
+
+    assertEquals(0, authorizerCalls.get());
+    verifyNoInteractions(publisher);
+  }
+
+  @Test
+  void aRequestContextOfAnotherUserThanTheResolvedCallerIsRefusedAndTheAuthorizerIsNotAsked() {
+    var publisher = mock(SseEventPublisher.class);
+    var authorizerCalls = new java.util.concurrent.atomic.AtomicInteger();
+    var controller =
+        new SseController(
+            publisher,
+            (caller, streamId) -> {
+              authorizerCalls.incrementAndGet();
+              return true;
+            },
+            RequestIdentityPolicy.of(null, true));
+
+    // The endpoint resolves alice; the stored context names bob, nobody, and the reverse.
+    assertThrows(
+        ForbiddenException.class,
+        () -> controller.stream("order", "order-1", List.of("alice"), SseCallers.of("bob")));
+    assertThrows(
+        ForbiddenException.class,
+        () -> controller.stream("order", "order-1", List.of("alice"), SseCallers.anonymous()));
+    assertThrows(
+        ForbiddenException.class,
+        () -> controller.stream("order", "order-1", List.of(), SseCallers.of("bob")));
+
+    assertEquals(0, authorizerCalls.get());
+    verifyNoInteractions(publisher);
   }
 }

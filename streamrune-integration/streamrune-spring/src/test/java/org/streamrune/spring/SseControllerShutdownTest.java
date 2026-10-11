@@ -38,7 +38,7 @@ import org.streamrune.runtime.SseEventPublisher;
  */
 class SseControllerShutdownTest {
 
-  private static final SseAuthorizer ALLOW_ALL = (principal, streamId) -> true;
+  private static final SseAuthorizer ALLOW_ALL = (caller, streamId) -> true;
   private static final RequestIdentityPolicy ANONYMOUS = RequestIdentityPolicy.of(null, false);
 
   private static SseController controller(SseEventPublisher publisher) {
@@ -61,8 +61,8 @@ class SseControllerShutdownTest {
   void stoppingEndsEveryOpenStreamAndUnsubscribesIt() throws Exception {
     var publisher = mock(SseEventPublisher.class);
     var controller = controller(publisher);
-    var first = controller.stream("cart", "cart-1", List.of());
-    var second = controller.stream("cart", "cart-2", List.of());
+    var first = controller.stream("cart", "cart-1", List.of(), SseCallers.anonymous());
+    var second = controller.stream("cart", "cart-2", List.of(), SseCallers.anonymous());
     var subscribers = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
     verify(publisher, times(2)).subscribe(any(), subscribers.capture(), any());
 
@@ -98,7 +98,7 @@ class SseControllerShutdownTest {
     var controller = controller(publisher);
     controller.stop();
 
-    var emitter = controller.stream("cart", "cart-late", List.of());
+    var emitter = controller.stream("cart", "cart-late", List.of(), SseCallers.anonymous());
 
     assertCompleted(emitter);
     assertEquals(0, controller.activeCountForTest());
@@ -118,7 +118,7 @@ class SseControllerShutdownTest {
     var denied =
         assertThrows(
             org.springframework.web.server.ResponseStatusException.class,
-            () -> controller.stream("order", "order-victim", List.of()));
+            () -> controller.stream("order", "order-victim", List.of(), SseCallers.anonymous()));
     assertEquals(403, denied.getStatusCode().value());
   }
 
@@ -130,7 +130,7 @@ class SseControllerShutdownTest {
     controller.start();
 
     assertTrue(controller.isRunning());
-    controller.stream("cart", "cart-again", List.of());
+    controller.stream("cart", "cart-again", List.of(), SseCallers.anonymous());
     verify(publisher)
         .subscribe(
             eq(StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-again"))), any(), any());
@@ -206,7 +206,7 @@ class SseControllerShutdownTest {
   void closeEndsStreamsNoLifecycleStopped() throws Exception {
     var publisher = mock(SseEventPublisher.class);
     var controller = controller(publisher);
-    var emitter = controller.stream("cart", "cart-close", List.of());
+    var emitter = controller.stream("cart", "cart-close", List.of(), SseCallers.anonymous());
     controller.close();
     // A destroy method must not block, so close() leaves the completion to a virtual thread.
     verify(publisher, timeout(5_000))
@@ -235,7 +235,9 @@ class SseControllerShutdownTest {
                   () -> {
                     await(barrier);
                     for (int i = 0; i < 4; i++) {
-                      emitters.add(controller.stream("cart", "cart-" + i, List.of()));
+                      emitters.add(
+                          controller.stream(
+                              "cart", "cart-" + i, List.of(), SseCallers.anonymous()));
                     }
                   });
       Thread stopperThread =

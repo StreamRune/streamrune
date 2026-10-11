@@ -48,8 +48,8 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.springframework.web.servlet.ModelAndView;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.StreamId;
-import org.streamrune.core.types.UserId;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.runtime.SseEventPublisher;
 
@@ -196,7 +196,7 @@ class SseEarlyClientResetTest {
     final CountDownLatch decided = new CountDownLatch(1);
 
     @Override
-    public boolean isAuthorized(UserId principal, StreamId streamId) {
+    public boolean isAuthorized(StreamRuneContext.RequestContext caller, StreamId streamId) {
       deciding.countDown();
       try {
         return decided.await(10, TimeUnit.SECONDS);

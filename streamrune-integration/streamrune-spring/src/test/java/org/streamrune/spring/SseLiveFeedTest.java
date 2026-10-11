@@ -460,7 +460,7 @@ class SseLiveFeedTest {
 
     @Bean
     SseAuthorizer sseAuthorizer() {
-      return (principal, streamId) -> true;
+      return (caller, streamId) -> true;
     }
   }
 }

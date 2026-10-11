@@ -55,7 +55,7 @@ class SseEndpointThreadTest {
   void theAuthorizerRunsOnAWorkerThread_andAnAllowedCallerReceivesTheFrames() throws Exception {
     List<CalledOn> authorizerCalls = new CopyOnWriteArrayList<>();
     SseAuthorizer allowing =
-        (principal, streamId) -> {
+        (caller, streamId) -> {
           authorizerCalls.add(CalledOn.currentThread());
           return true;
         };
@@ -69,12 +69,16 @@ class SseEndpointThreadTest {
             super.subscribe(streamId, subscriber, onDisconnect);
           }
         };
+    var holder = new StreamRuneRequestContextHolder();
     var controller =
         new SseController(
-            publisher, allowing, ANONYMOUS, Duration.ofMinutes(5), Duration.ofMillis(100));
+            publisher, allowing, ANONYMOUS, holder, Duration.ofMinutes(5), Duration.ofMillis(100));
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
     try (var server =
-        QuarkusRestTestServer.start(controller, SseWireFormatTest.JacksonJsonWriter.class)) {
+        QuarkusRestTestServer.start(
+            controller,
+            List.of(new StreamRuneRequestFilter(holder)),
+            SseWireFormatTest.JacksonJsonWriter.class)) {
       HttpResponse<InputStream> response =
           SseWireFormatTest.open(client, server, "/api/sse/order/o-1");
 
@@ -104,14 +108,18 @@ class SseEndpointThreadTest {
   void aRefusedCallerIsAnswered403_andTheAuthorizerRanOnAWorkerThread() throws Exception {
     List<CalledOn> authorizerCalls = new CopyOnWriteArrayList<>();
     SseAuthorizer refusing =
-        (principal, streamId) -> {
+        (caller, streamId) -> {
           authorizerCalls.add(CalledOn.currentThread());
           return false;
         };
     var publisher = new SseEventPublisher();
-    var controller = new SseController(publisher, refusing, ANONYMOUS);
+    var holder = new StreamRuneRequestContextHolder();
+    var controller =
+        new SseController(
+            publisher, refusing, ANONYMOUS, holder, Duration.ofMinutes(5), Duration.ofSeconds(30));
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
-    try (var server = QuarkusRestTestServer.start(controller)) {
+    try (var server =
+        QuarkusRestTestServer.start(controller, List.of(new StreamRuneRequestFilter(holder)))) {
       HttpResponse<String> response = get(client, server, "/api/sse/order/o-1");
 
       assertThat(response.statusCode()).isEqualTo(403);
@@ -131,7 +139,7 @@ class SseEndpointThreadTest {
   void anInvalidPathIsAnswered400_andTheAuthorizerIsNotConsulted() throws Exception {
     List<CalledOn> authorizerCalls = new CopyOnWriteArrayList<>();
     SseAuthorizer allowing =
-        (principal, streamId) -> {
+        (caller, streamId) -> {
           authorizerCalls.add(CalledOn.currentThread());
           return true;
         };
@@ -153,12 +161,13 @@ class SseEndpointThreadTest {
 
   /**
    * The request filter resolves the caller and the caller's roles before the resource method runs;
-   * both are application code that may read a database. The authorizer then reads what the filter
-   * stored. The holder here is one plain instance, not the request-scoped bean of an application:
-   * this test shows the order and the threads, not the propagation of the CDI request scope.
+   * both are application code that may read a database. The authorizer is then handed what the
+   * filter stored. The holder here is one plain instance, not the request-scoped bean of an
+   * application: this test shows the order and the threads, not the propagation of the CDI request
+   * scope.
    */
   @Test
-  void theRequestFilterRunsOnAWorkerThread_andTheAuthorizerReadsTheContextItStored()
+  void theRequestFilterRunsOnAWorkerThread_andTheAuthorizerIsHandedTheContextItStored()
       throws Exception {
     List<CalledOn> principalCalls = new CopyOnWriteArrayList<>();
     List<CalledOn> roleCalls = new CopyOnWriteArrayList<>();
@@ -184,13 +193,20 @@ class SseEndpointThreadTest {
     var holder = new StreamRuneRequestContextHolder();
     var filter = new StreamRuneRequestFilter(holder, Set.of(), identityPolicy, roles);
     AtomicReference<StreamRuneContext.RequestContext> seenByTheAuthorizer = new AtomicReference<>();
-    SseAuthorizer readingTheHolder =
+    SseAuthorizer recordingTheCaller =
         (caller, streamId) -> {
-          seenByTheAuthorizer.set(holder.context());
+          seenByTheAuthorizer.set(caller);
           return false;
         };
     var publisher = new SseEventPublisher();
-    var controller = new SseController(publisher, readingTheHolder, identityPolicy);
+    var controller =
+        new SseController(
+            publisher,
+            recordingTheCaller,
+            identityPolicy,
+            holder,
+            Duration.ofMinutes(5),
+            Duration.ofSeconds(30));
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
     try (var server = QuarkusRestTestServer.start(controller, List.of(filter))) {
       HttpResponse<String> response = get(client, server, "/api/sse/order/o-1");
@@ -200,7 +216,10 @@ class SseEndpointThreadTest {
       assertThat(principalCalls).hasSize(2);
       assertOffTheEventLoop(principalCalls, "the identity resolution");
       assertOffTheEventLoop(roleCalls, "the role resolution");
-      assertThat(seenByTheAuthorizer.get()).as("the context the filter stored").isNotNull();
+      assertThat(seenByTheAuthorizer.get())
+          .as("the context the filter stored")
+          .isNotNull()
+          .isSameAs(holder.context());
       assertThat(seenByTheAuthorizer.get().userId()).isEqualTo(UserId.of("alice"));
       assertThat(seenByTheAuthorizer.get().authority().hasRole("support")).isTrue();
     } finally {

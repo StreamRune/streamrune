@@ -14,12 +14,14 @@ import jakarta.annotation.PreDestroy;
 import jakarta.inject.Inject;
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.LogSanitizer;
@@ -113,18 +115,31 @@ import reactor.core.scheduler.Schedulers;
  * ({@code @ExecuteOn(TaskExecutors.BLOCKING)}) or keeps its authorizer from blocking. An
  * application that keeps the framework's filter and adds one behind it that runs on another
  * executor gives up the guarantee too: the controller and the authorizer can run on that executor's
- * thread, outside the framework filter's binding of the request context, and which thread a given
- * request goes on from depends on timing inside Micronaut.
+ * thread, outside the framework filter's binding of {@link StreamRuneContext#CURRENT}, and which
+ * thread a given request goes on from depends on timing inside Micronaut.
  *
- * <p><b>Caller identity.</b> The caller handed to the authorizer is resolved by the same {@link
- * RequestIdentityPolicy} bean the {@link StreamRuneContextFilter} binds {@code
- * RequestContext.userId} with, so a stream subscription and a command from the same request see the
- * same user: the authenticated principal when an {@link AuthenticatedUserResolver} is available
- * (the {@code X-User-Id} header ignored), the {@code X-User-Id} header only in the explicit
- * trusted-gateway mode ({@code streamrune.security.trust-user-id-header=true}), and otherwise
- * nobody ({@code null}). Both read the header through {@link
- * StreamRuneContextFilter#userIdHeaderValues}, every value as received, so a repeated {@code
- * X-User-Id} cannot resolve to one caller here and another there.
+ * <p><b>Caller identity.</b> The authorizer receives the request context the {@link
+ * StreamRuneContextFilter} built for the request: the user id and the captured authority a command
+ * from the same request authorizes against. The endpoint reads it from the request itself, the
+ * attribute {@link StreamRuneContextFilter#CONTEXT_ATTRIBUTE} the filter sets, so it finds it on
+ * whatever thread the filter chain leaves the request on, including one {@link
+ * StreamRuneContext#CURRENT} is not bound on. The endpoint resolves the caller itself as well, by
+ * the same {@link RequestIdentityPolicy} bean the filter builds {@code RequestContext.userId} with:
+ * the authenticated principal when an {@link AuthenticatedUserResolver} is available (the {@code
+ * X-User-Id} header ignored), the {@code X-User-Id} header only in the explicit trusted-gateway
+ * mode ({@code streamrune.security.trust-user-id-header=true}), and otherwise nobody ({@code
+ * null}). Both read the header through {@link StreamRuneContextFilter#userIdHeaderValues}, every
+ * value as received, so a repeated {@code X-User-Id} cannot resolve to one caller here and another
+ * there.
+ *
+ * <p><b>No request context, no subscription.</b> The request's context is handed to the authorizer
+ * only when its user id is the caller the endpoint resolved. A request that carries none (the
+ * filter is replaced by one that stores none) and a request whose context names another user (the
+ * replacing filter resolves the caller by another rule) are refused with {@code 403 Forbidden}, the
+ * authorizer is not called and the reason is logged: see {@link #callerContext}. An application
+ * that replaces the filter stores the request context itself under {@link
+ * StreamRuneContextFilter#CONTEXT_ATTRIBUTE}, with the user id the {@link RequestIdentityPolicy}
+ * bean resolves.
  */
 @Controller("/api/sse")
 @Requires(property = "streamrune.sse.enabled", value = "true")
@@ -254,7 +269,7 @@ public class SseController {
    * @return reactive Flux that emits one SSE event per published domain event
    * @throws HttpStatusException with {@code 400 Bad Request} if the aggregate type or the aggregate
    *     id is invalid, {@code 403 Forbidden} if the {@link SseAuthorizer} denies access to the
-   *     stream
+   *     stream or the request has no request context of its caller (see the class documentation)
    */
   @Get("/{aggregateType}/{aggregateId}")
   @Produces(MediaType.TEXT_EVENT_STREAM)
@@ -262,27 +277,46 @@ public class SseController {
       @PathVariable("aggregateType") String aggregateType,
       @PathVariable("aggregateId") String aggregateId,
       HttpRequest<?> request) {
-    return stream(aggregateType, aggregateId, StreamRuneContextFilter.userIdHeaderValues(request));
+    return stream(
+        aggregateType,
+        aggregateId,
+        StreamRuneContextFilter.userIdHeaderValues(request),
+        StreamRuneContextFilter.requestContextOf(request));
   }
 
   /**
-   * Opens an SSE stream of one aggregate's events for a caller whose {@code X-User-Id} values were
-   * already read off the request.
+   * Opens an SSE stream of one aggregate's events for a caller whose {@code X-User-Id} values and
+   * request context were already read off the request.
+   *
+   * <p>Of {@code requestContext} the endpoint verifies one thing: that its {@code userId()} is the
+   * caller the {@link RequestIdentityPolicy} resolves, which in the trusted-gateway mode is the
+   * value in {@code userIdHeaderValues}. Its {@code authority()} and its {@code baggage()} reach
+   * the {@link SseAuthorizer} as supplied. Code that calls this method with anything but the
+   * context and the header values of the request it serves vouches for them: for the authority and
+   * the baggage in every identity mode, and for the identity itself in the trusted-gateway mode.
    *
    * @param aggregateType the aggregate type of the stream to subscribe to
    * @param aggregateId the aggregate id of the stream to subscribe to
    * @param userIdHeaderValues every {@code X-User-Id} value the request carried, as received;
    *     {@code null} or empty when absent
+   * @param requestContext the request context the request filter stored for the request, or {@code
+   *     null} when it stored none
    * @return reactive Flux that emits one SSE event per published domain event
    * @throws HttpStatusException with {@code 400 Bad Request} if the aggregate type or the aggregate
-   *     id is invalid (the {@link SseAuthorizer} is never consulted), {@code 403 Forbidden} if the
-   *     {@link SseAuthorizer} denies access to the stream
+   *     id is invalid (the {@link SseAuthorizer} is never consulted), {@code 403 Forbidden} if
+   *     {@code requestContext} is {@code null} or names another user than the caller resolved from
+   *     the request (the {@link SseAuthorizer} is never consulted) and if the {@link SseAuthorizer}
+   *     denies access to the stream
    */
   public Flux<Event<?>> stream(
-      String aggregateType, String aggregateId, List<String> userIdHeaderValues) {
+      String aggregateType,
+      String aggregateId,
+      List<String> userIdHeaderValues,
+      StreamRuneContext.RequestContext requestContext) {
     StreamId sid = streamIdOf(aggregateType, aggregateId);
     UserId principal = identityPolicy.resolve(userIdHeaderValues, SseController::logMismatch);
-    if (!authorizer.isAuthorized(principal, sid)) {
+    StreamRuneContext.RequestContext caller = callerContext(principal, requestContext, sid);
+    if (!authorizer.isAuthorized(caller, sid)) {
       throw new HttpStatusException(HttpStatus.FORBIDDEN, "Not authorized for this stream");
     }
     Flux<Event<?>> stream =
@@ -354,6 +388,54 @@ public class SseController {
       throw new HttpStatusException(
           HttpStatus.BAD_REQUEST, "Invalid aggregate type or aggregate id");
     }
+  }
+
+  /**
+   * The request context the authorizer is asked with: the one the request filter stored for the
+   * request, and only when it carries the caller this endpoint resolved itself.
+   *
+   * <p>With {@link StreamRuneContextFilter} the two always agree: the filter resolved the context's
+   * user id through the same {@link RequestIdentityPolicy} bean, from the same request, and
+   * captured the authority for that user id. They can differ only where the application replaced
+   * the filter, and then the endpoint refuses instead of choosing between two identities. The
+   * authorizer therefore never sees an identity this endpoint did not establish, and never an
+   * anonymous caller made up for a request that has no context.
+   *
+   * @param principal the caller the endpoint resolved, or {@code null} when unauthenticated
+   * @param requestContext the request context stored for the request, or {@code null} when none is
+   * @param sid the requested stream, for the log line of a refusal
+   * @return {@code requestContext}
+   * @throws HttpStatusException with {@code 403 Forbidden} when there is no request context or its
+   *     user id is not {@code principal}
+   */
+  private static StreamRuneContext.RequestContext callerContext(
+      UserId principal, StreamRuneContext.RequestContext requestContext, StreamId sid) {
+    if (requestContext == null) {
+      log.warn(
+          "Refused the SSE subscription to {}: the request carries no request context, so it did"
+              + " not pass StreamRuneContextFilter. The SseAuthorizer was not asked. A filter that"
+              + " replaces StreamRuneContextFilter stores the request context itself, under"
+              + " StreamRuneContextFilter.CONTEXT_ATTRIBUTE.",
+          LogSanitizer.sanitizeForLog(sid.value()));
+      throw new HttpStatusException(HttpStatus.FORBIDDEN, "Not authorized for this stream");
+    }
+    if (!Objects.equals(requestContext.userId(), principal)) {
+      log.warn(
+          "Refused the SSE subscription to {}: the request context stored for the request names"
+              + " '{}' and the RequestIdentityPolicy resolves '{}'. The SseAuthorizer was not"
+              + " asked. A filter that replaces StreamRuneContextFilter stores the user id the"
+              + " RequestIdentityPolicy bean resolves.",
+          LogSanitizer.sanitizeForLog(sid.value()),
+          LogSanitizer.sanitizeForLog(valueOf(requestContext.userId())),
+          LogSanitizer.sanitizeForLog(valueOf(principal)));
+      throw new HttpStatusException(HttpStatus.FORBIDDEN, "Not authorized for this stream");
+    }
+    return requestContext;
+  }
+
+  /** The value of a user id that may be absent, for a log line that sanitizes it. */
+  private static String valueOf(UserId userId) {
+    return userId == null ? null : userId.value();
   }
 
   private static void logMismatch(UserId headerUserId, UserId principal) {

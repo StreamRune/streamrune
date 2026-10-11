@@ -393,12 +393,13 @@ class StreamRuneAutoConfigurationTest {
   void sseTimeoutZeroDisablesTheDeadline() {
     webContextRunner
         .withPropertyValues("streamrune.sse.enabled=true", "streamrune.sse.timeout=0")
-        .withBean(
-            org.streamrune.integration.SseAuthorizer.class, () -> (principal, streamId) -> true)
+        .withBean(org.streamrune.integration.SseAuthorizer.class, () -> (caller, streamId) -> true)
         .run(
             ctx -> {
               assertThat(ctx).hasSingleBean(SseController.class);
-              var emitter = ctx.getBean(SseController.class).stream("cart", "cart-1", List.of());
+              var emitter =
+                  ctx.getBean(SseController.class).stream(
+                      "cart", "cart-1", List.of(), SseCallers.anonymous());
               assertThat(emitter.getTimeout())
                   .as(
                       "non-positive streamrune.sse.timeout must disable the deadline, not fall"
@@ -413,12 +414,12 @@ class StreamRuneAutoConfigurationTest {
     // backstop.
     webContextRunner
         .withPropertyValues("streamrune.sse.enabled=true")
-        .withBean(
-            org.streamrune.integration.SseAuthorizer.class, () -> (principal, streamId) -> true)
+        .withBean(org.streamrune.integration.SseAuthorizer.class, () -> (caller, streamId) -> true)
         .run(
             ctx ->
                 assertThat(
-                        ctx.getBean(SseController.class).stream("cart", "cart-2", List.of())
+                        ctx.getBean(SseController.class).stream(
+                                "cart", "cart-2", List.of(), SseCallers.anonymous())
                             .getTimeout())
                     .isEqualTo(java.time.Duration.ofMinutes(5).toMillis()));
   }
