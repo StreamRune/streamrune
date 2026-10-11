@@ -107,6 +107,124 @@ class SseEventPublisherTest {
     }
   }
 
+  // ---- hasSubscribers: what the feed asks before it reads the global stream --------------------
+
+  @Test
+  void hasSubscribersFollowsEverySubscribeAndUnsubscribe() {
+    try (var publisher = new SseEventPublisher()) {
+      var one = StreamId.of(TYPE, AggregateId.of("one"));
+      var two = StreamId.of(TYPE, AggregateId.of("two"));
+      SseEventPublisher.SseSubscriber first = envelope -> {};
+      SseEventPublisher.SseSubscriber second = envelope -> {};
+      assertFalse(publisher.hasSubscribers(), "a new publisher has none");
+
+      publisher.subscribe(one, first);
+      publisher.subscribe(two, second);
+      assertTrue(publisher.hasSubscribers());
+
+      publisher.unsubscribe(one, first);
+      assertTrue(publisher.hasSubscribers(), "the subscriber of the other stream is left");
+      publisher.unsubscribe(one, first);
+      assertTrue(publisher.hasSubscribers(), "a second unsubscribe of the same one removes nobody");
+      publisher.unsubscribe(two, first);
+      assertTrue(publisher.hasSubscribers(), "an unsubscribe that matches nobody removes nobody");
+
+      publisher.unsubscribe(two, second);
+      assertFalse(publisher.hasSubscribers());
+    }
+  }
+
+  @Test
+  void hasSubscribersCountsASubscriberRegisteredTwiceTwice() {
+    try (var publisher = new SseEventPublisher()) {
+      var streamId = StreamId.of(TYPE, AggregateId.of("twice"));
+      SseEventPublisher.SseSubscriber subscriber = envelope -> {};
+      publisher.subscribe(streamId, subscriber);
+      publisher.subscribe(streamId, subscriber);
+
+      // One unsubscribe removes every registration of that subscriber on the stream.
+      publisher.unsubscribe(streamId, subscriber);
+
+      assertFalse(publisher.hasSubscribers());
+      assertEquals(0, publisher.subscriberCount(streamId));
+    }
+  }
+
+  @Test
+  void hasSubscribersIsFalseOnceTheOnlySubscriberWasEvicted() {
+    try (var publisher = new SseEventPublisher()) {
+      var streamId = StreamId.of(TYPE, AggregateId.of("evicted"));
+      var evicted = new CountDownLatch(1);
+      publisher.subscribe(
+          streamId,
+          envelope -> {
+            throw new IllegalStateException("the client is gone");
+          },
+          cause -> evicted.countDown());
+      assertTrue(publisher.hasSubscribers());
+
+      publisher.publish(createEnvelope(streamId));
+
+      Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> evicted.getCount() == 0);
+      assertFalse(publisher.hasSubscribers());
+    }
+  }
+
+  @Test
+  void hasSubscribersIsFalseAfterClose() {
+    var publisher = new SseEventPublisher();
+    publisher.subscribe(StreamId.of(TYPE, AggregateId.of("one")), envelope -> {});
+    publisher.subscribe(StreamId.of(TYPE, AggregateId.of("two")), envelope -> {});
+    publisher.subscribe(StreamId.of(TYPE, AggregateId.of("two")), envelope -> {});
+
+    publisher.close();
+
+    assertFalse(publisher.hasSubscribers());
+    publisher.subscribe(StreamId.of(TYPE, AggregateId.of("three")), envelope -> {});
+    assertTrue(publisher.hasSubscribers(), "a closed publisher still counts a later subscriber");
+    publisher.close();
+    assertFalse(publisher.hasSubscribers());
+  }
+
+  /**
+   * One client stays subscribed while others come and go on other streams: the answer never reads
+   * {@code false}, which the size of a concurrent map can.
+   */
+  @Test
+  void hasSubscribersNeverMissesAClientThatStaysWhileOthersComeAndGo() throws Exception {
+    try (var publisher = new SseEventPublisher()) {
+      publisher.subscribe(StreamId.of(TYPE, AggregateId.of("stays")), envelope -> {});
+      var stop = new java.util.concurrent.atomic.AtomicBoolean();
+      var churners = new java.util.ArrayList<Thread>();
+      for (int t = 0; t < 4; t++) {
+        int id = t;
+        churners.add(
+            Thread.ofPlatform()
+                .start(
+                    () -> {
+                      var streamId = StreamId.of(TYPE, AggregateId.of("churn-" + id));
+                      SseEventPublisher.SseSubscriber subscriber = envelope -> {};
+                      while (!stop.get()) {
+                        publisher.subscribe(streamId, subscriber);
+                        publisher.unsubscribe(streamId, subscriber);
+                      }
+                    }));
+      }
+      try {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(300);
+        while (System.nanoTime() < deadline) {
+          assertTrue(publisher.hasSubscribers(), "one client is subscribed throughout");
+        }
+      } finally {
+        stop.set(true);
+        for (Thread churner : churners) {
+          churner.join(5_000);
+        }
+      }
+      assertTrue(publisher.hasSubscribers());
+    }
+  }
+
   @Test
   void unsubscribeCleansUpEmptyStream() {
     try (var publisher = new SseEventPublisher()) {

@@ -849,9 +849,22 @@ public final class InMemoryEventStore implements EventStore {
     return false;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>The head of the completed appends: read under the append lock, so it never names an offset
+   * an append in progress has assigned and not stored yet. An event that becomes readable after
+   * this method returned has a greater offset, as with {@code PostgresEventStore}, whose head is
+   * the highest committed offset.
+   */
   @Override
   public GlobalOffset lastGlobalOffset() {
-    return GlobalOffset.of(globalOffset.get());
+    appendLock.lock();
+    try {
+      return GlobalOffset.of(globalOffset.get());
+    } finally {
+      appendLock.unlock();
+    }
   }
 
   @Override

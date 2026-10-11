@@ -181,6 +181,12 @@ class BackgroundRelayHealthContributorTest {
 
     try (var publisher = new SseEventPublisher();
         var feed = new SseEventFeed(reads, publisher, java.time.Duration.ofMillis(20))) {
+      // A client is subscribed, so the feed reads events: the reads this test fails.
+      publisher.subscribe(
+          org.streamrune.core.types.StreamId.of(
+              org.streamrune.core.types.AggregateType.of("order"),
+              org.streamrune.core.types.AggregateId.of("o-1")),
+          envelope -> {});
       contributor.registerSseEventFeed(feed);
       var notStarted = contributor.components().getFirst();
       assertEquals("sse-event-feed", notStarted.name());

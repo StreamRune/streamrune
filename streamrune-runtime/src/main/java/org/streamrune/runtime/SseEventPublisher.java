@@ -7,6 +7,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,6 +76,16 @@ public class SseEventPublisher implements AutoCloseable {
   private final int queueCapacity;
 
   private final Map<StreamId, List<Subscription>> subscribers = new ConcurrentHashMap<>();
+
+  /**
+   * The number of registered subscriptions, for {@link #hasSubscribers()}. Counted up before a
+   * subscription joins its stream's list and down after it has left it, so it is never below the
+   * number of subscriptions registered at that moment. {@code subscribers.isEmpty()} cannot answer
+   * the question: {@link ConcurrentHashMap} sums its size from several counters without a lock, and
+   * a subscribe and an unsubscribe of two other clients running beside that sum can make it read
+   * zero while a third client stays registered throughout.
+   */
+  private final AtomicInteger subscriptionCount = new AtomicInteger();
 
   /** Creates a publisher with the {@link #DEFAULT_QUEUE_CAPACITY default per-subscriber queue}. */
   public SseEventPublisher() {
@@ -156,10 +167,27 @@ public class SseEventPublisher implements AutoCloseable {
           if (list == null) {
             list = new CopyOnWriteArrayList<>();
           }
+          subscriptionCount.incrementAndGet();
           list.add(subscription);
           return list;
         });
     subscription.start();
+  }
+
+  /**
+   * Whether any subscriber is registered, on any stream. The {@link SseEventFeed} asks before it
+   * reads the global stream: with no subscriber there is nobody to publish an event to.
+   *
+   * <p>The answer is exact in the one direction the feed's delivery guarantee needs: from the
+   * moment {@link #subscribe(StreamId, SseSubscriber, Consumer) subscribe} has returned until the
+   * subscriber is unsubscribed or evicted, this method returns {@code true}, whatever other
+   * subscribers come and go meanwhile. It may still return {@code true} for an instant after the
+   * last subscriber has left.
+   *
+   * @return {@code true} while at least one subscriber is registered
+   */
+  boolean hasSubscribers() {
+    return subscriptionCount.get() > 0;
   }
 
   /**
@@ -178,6 +206,7 @@ public class SseEventPublisher implements AutoCloseable {
           if (list == null) {
             return null;
           }
+          int before = list.size();
           list.removeIf(
               sub -> {
                 if (sub.subscriber == subscriber) {
@@ -187,6 +216,7 @@ public class SseEventPublisher implements AutoCloseable {
                 }
                 return false;
               });
+          subscriptionCount.addAndGet(list.size() - before);
           return list.isEmpty() ? null : list;
         });
   }
@@ -239,7 +269,9 @@ public class SseEventPublisher implements AutoCloseable {
     subscribers.computeIfPresent(
         subscription.streamId,
         (k, list) -> {
-          list.remove(subscription);
+          if (list.remove(subscription)) {
+            subscriptionCount.decrementAndGet();
+          }
           return list.isEmpty() ? null : list;
         });
     subscription.fail(cause);
@@ -254,8 +286,17 @@ public class SseEventPublisher implements AutoCloseable {
   /** Stops every subscriber's delivery worker. The disconnect hooks are not invoked. */
   @Override
   public void close() {
-    subscribers.values().forEach(list -> list.forEach(Subscription::stop));
-    subscribers.clear();
+    // One stream at a time, each under its own lock of the map: a subscription is stopped, counted
+    // out and removed together, so the count stays right beside a subscribe that runs meanwhile.
+    for (StreamId streamId : subscribers.keySet()) {
+      subscribers.computeIfPresent(
+          streamId,
+          (k, list) -> {
+            list.forEach(Subscription::stop);
+            subscriptionCount.addAndGet(-list.size());
+            return null;
+          });
+    }
   }
 
   /**

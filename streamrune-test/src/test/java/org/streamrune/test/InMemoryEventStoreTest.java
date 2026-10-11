@@ -276,6 +276,43 @@ class InMemoryEventStoreTest {
     }
   }
 
+  /**
+   * The head is the offset of a completed append, as the PostgreSQL store's is the highest
+   * committed offset: an event that becomes readable after {@code lastGlobalOffset()} returned has
+   * a greater offset. A reader that moves its position to the head without reading (the Server-Sent
+   * Events feed while nobody is subscribed) relies on it.
+   */
+  @Test
+  void theHeadNeverNamesAnOffsetWhoseEventIsNotReadableYet() throws Exception {
+    var store = new InMemoryEventStore();
+    StreamId stream = StreamId.of(TYPE, AggregateId.of("cart-head"));
+    var stop = new java.util.concurrent.atomic.AtomicBoolean();
+    Thread writer =
+        Thread.ofPlatform()
+            .start(
+                () -> {
+                  for (int i = 0; !stop.get(); i++) {
+                    store.append(stream, List.of(envelope(stream, i + 1, "X")), new Version(i));
+                  }
+                });
+    try {
+      long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500);
+      while (System.nanoTime() < deadline) {
+        long head = store.lastGlobalOffset().value();
+        if (head > 0) {
+          List<EventEnvelope> atHead = store.readGlobalStream(GlobalOffset.of(head - 1), 1);
+          assertEquals(
+              List.of(head),
+              atHead.stream().map(e -> e.globalOffset().value()).toList(),
+              "the event at the reported head is readable");
+        }
+      }
+    } finally {
+      stop.set(true);
+      writer.join(10_000);
+    }
+  }
+
   @Test
   void readGlobalStreamRespectsMaxCount() {
     var store = new InMemoryEventStore();
