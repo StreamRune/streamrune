@@ -91,6 +91,12 @@ class SseIdleFeedTest {
       SseController controller = context.getBean(SseController.class);
 
       for (int round = 1; round <= ROUNDS; round++) {
+        // The client of the round before is gone from the controller's bookkeeping; the publisher
+        // may still hold it for an instant, and a poll that found it there reads one more page. A
+        // read of the head that returns from here on belongs to a poll that found nobody
+        // subscribed: the publisher is empty, and the polling thread is past any read for that
+        // client. Only then is the counter sampled.
+        awaitIdlePolls(store, 1);
         // Stored for nobody: no client is connected.
         bus.execute(new OrderCommand.Place("o-1", "for-nobody-" + round));
         int payloadReadsBefore = store.payloadReads();
