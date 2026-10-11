@@ -619,7 +619,15 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   process-local and never persisted.
 - Server-Sent Events `GET /api/sse/{aggregateType}/{aggregateId}` (all three integrations) is off by
   default (`streamrune.sse.enabled`); when on, every stream is denied until an `SseAuthorizer` bean
-  checks the caller against the requested `StreamId`. The authorizer is called on a thread that may
+  checks the caller against the requested `StreamId`:
+  `isAuthorized(StreamRuneContext.RequestContext caller, StreamId streamId)`. `caller` is the
+  request context the integration's request filter built for the request — `caller.userId()` the
+  caller (`null` when unauthenticated), `caller.authority()` the roles and permissions the
+  `UserRoleResolver` resolved for that user at the request edge (`null` when none was captured) —
+  so a rule by role reads no request-scoped state of the web framework. The endpoint hands the
+  context over only when it carries the caller the `RequestIdentityPolicy` resolves; a request
+  without a request context, or with one that names another user, is answered `403` and the
+  authorizer is not called. The authorizer is called on a thread that may
   block — the servlet request thread on Spring, a worker thread with the request scope active on
   Quarkus, the blocking executor on Micronaut with the framework's request filter — so it can look
   ownership up in a database, and a refusal is the `403` response. It decides once, when the stream

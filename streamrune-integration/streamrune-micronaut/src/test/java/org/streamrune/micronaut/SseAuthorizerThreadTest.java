@@ -16,6 +16,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.StreamRuneContext;
+import org.streamrune.core.types.CorrelationId;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.test.InMemoryEventStore;
 
@@ -34,7 +36,8 @@ import org.streamrune.test.InMemoryEventStore;
  * the request. {@link StreamRuneContextFilter} runs on the blocking executor and proceeds
  * synchronously, so with the framework's filter the authorizer runs on a virtual thread of that
  * executor, inside the filter's binding of the request context, and may read a database. An
- * application that replaces the filter decides the thread itself.
+ * application that replaces the filter decides the thread itself, and stores the request context
+ * itself: the endpoint asks the authorizer only for a request that carries one.
  *
  * <p>Each test boots the embedded server, opens {@code /api/sse/order/o-1} over HTTP and reads from
  * the fixture's authorizer the thread it was called on.
@@ -128,7 +131,7 @@ class SseAuthorizerThreadTest {
 
     @Singleton
     SseAuthorizer sseAuthorizer() {
-      return (principal, streamId) -> {
+      return (caller, streamId) -> {
         Thread thread = Thread.currentThread();
         CALLS.add(
             new Call(thread.getName(), thread.isVirtual(), StreamRuneContext.CURRENT.isBound()));
@@ -139,7 +142,8 @@ class SseAuthorizerThreadTest {
 
   /**
    * What an application's own request filter can look like: no {@code @ExecuteOn}, so Micronaut
-   * runs it, and the route after it, on the event loop the request arrived on.
+   * runs it, and the route after it, on the event loop the request arrived on. It stores the
+   * request context for the endpoint; security is disabled in this test, so the caller is nobody.
    */
   @ServerFilter("/**")
   @Replaces(StreamRuneContextFilter.class)
@@ -149,7 +153,10 @@ class SseAuthorizerThreadTest {
 
     @RequestFilter
     void filter(HttpRequest<?> request) {
-      // nothing: the request goes on where it is
+      request.setAttribute(
+          StreamRuneContextFilter.CONTEXT_ATTRIBUTE,
+          new StreamRuneContext.RequestContext(
+              null, null, CorrelationId.of("event-loop-filter"), Instant.now(), Map.of()));
     }
   }
 }

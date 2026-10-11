@@ -105,11 +105,50 @@ streamrune:
   event stored after its opening frame reaches it. Do not call `SseEventPublisher.publish`
   yourself for this endpoint — every frame would be written twice. To run a feed of your own,
   declare an `SseEventFeed` bean: it replaces the integration's, and you start and stop it.
-- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
-  receives the caller the request filter resolved and the requested `StreamId`. It is asked once,
-  when the stream opens: a caller whose access ends afterwards keeps reading until the stream ends,
-  so `streamrune.sse.timeout` (default `5m`) is also the bound on that. Keep it finite where access
-  can change.
+- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean:
+  `boolean isAuthorized(StreamRuneContext.RequestContext caller, StreamId streamId)`. `caller` is
+  the request context `ScopedValueFilter` built for the request, the one a command from that
+  request authorizes against: `caller.userId()` is the caller (`null` when unauthenticated) and
+  `caller.authority()` the roles and permissions your `UserRoleResolver` resolved for that user at
+  the request edge, so a rule by role needs no request-scoped state of the web framework.
+  `caller.authority()` is `null` when nothing was captured — an unauthenticated caller, no
+  `UserRoleResolver`, a resolver that does not declare `requiresRequestContext()` (a lookup by
+  user id: ask it yourself, `resolver.resolve(caller.userId())`), or a resolver that threw at the
+  request edge (asked again it throws again, and the request ends without a stream). `null` means
+  the roles are unknown, never "no roles": a rule that reads a role refuses on `null` first,
+  whether the role would admit or refuse. Decide by `caller.userId()` and `caller.authority()`
+  only: both are established at the request edge. In `caller.baggage()` the `role` entry is the
+  forwarded `X-User-Role` header in trusted-gateway mode and absent in every other mode; every
+  other entry is the client's own W3C `baggage` header in every identity mode and must not carry
+  an access decision. A request with no request context
+  bound (the filter registered with URL patterns that leave `/api/sse` out) or with one that names
+  another user than the `RequestIdentityPolicy` resolves (the filter registered ahead of the
+  Spring Security filter chain) is answered `403` and the authorizer is not called; the log says
+  which.
+  The authorizer is asked once, when the stream opens: a caller whose access ends afterwards keeps
+  reading until the stream ends, so `streamrune.sse.timeout` (default `5m`) is also the bound on
+  that. Keep it finite where access can change.
+
+  ```java
+  @Bean
+  SseAuthorizer sseAuthorizer() {
+    return (caller, streamId) -> {
+      UserId user = caller.userId();
+      if (user == null) {
+        return false;
+      }
+      UserAuthority authority = caller.authority();
+      if (authority == null) {
+        return false; // roles unknown: refuse before any role is read
+      }
+      if (authority.hasRole("SUPPORT")) {
+        return true;
+      }
+      return streamId.aggregateType().value().equals("customer")
+          && streamId.aggregateId().value().equals(user.value());
+    };
+  }
+  ```
 - **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
   is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
   client connected, while it was reconnecting, or while the instance was down are not sent to it.
@@ -134,8 +173,8 @@ streamrune:
 
 `ScopedValueFilter` binds `RequestContext.userId` — the user every `CommandAuthorizationPolicy`,
 `@RequireRole`/`@RequirePermission` and `Authorization.requireOwner(...)` check trusts, and the
-user the audit records — and the SSE endpoint hands the same user to your `SseAuthorizer`. Both
-resolve it through one `RequestIdentityPolicy` bean, which fails closed:
+user the audit records — and the SSE endpoint hands that request context to your `SseAuthorizer`.
+Both resolve the user through one `RequestIdentityPolicy` bean, which fails closed:
 
 | Your setup | Identity | `X-User-Id` header | `X-User-Role` header |
 |---|---|---|---|
@@ -195,7 +234,7 @@ nothing. This contract is identical across the Spring, Quarkus, and Micronaut in
 - **Consider virtual request threads** — `CommandBus.execute(...)` runs synchronously on the calling thread and blocks it on aggregate locks and JDBC; with `spring.threads.virtual.enabled=true` that blocking is cheap. `executeAsync(...)` always runs the command on its own virtual thread.
 - **Keep deciders stateless** — the command bus holds the one decider instance from each `DeciderRegistration` and uses it for every command; bean scope does not give each command a fresh instance.
 - **Let the integration own shutdown** — the runners are `SmartLifecycle` beans stopped when the application context closes, and the command bus is closed with it; do not build or close a `StreamRune` facade next to the auto-configuration.
-- **Authorize SSE streams** — provide an `SseAuthorizer` bean that checks per-stream access before enabling the endpoint.
+- **Authorize SSE streams** — provide an `SseAuthorizer` bean that checks per-stream access, by the caller's user id and roles, before enabling the endpoint.
 - **Keep `trust-user-id-header` off unless a gateway owns `X-User-Id` and `X-User-Role`** — without Spring Security and without the flag every request is anonymous; with the flag, both headers are believed as-is.
 
 ## Known Limitations

@@ -351,6 +351,28 @@ class QuarkusRequestIdentityFailClosedTest {
   }
 
   @Test
+  void theSseAuthorizerIsHandedTheRequestContextTheFilterStoredInTheRequestScopedHolder()
+      throws Exception {
+    // The shipped QuarkusSecurityUserRoleResolver is produced: the filter captures the roles of the
+    // SecurityIdentity into the request context, and that context is what the authorizer is handed.
+    try (var arc = bootWeb(NoTrustFlag.class, AuthenticatedAsBob.class)) {
+      StreamRuneContext.RequestContext caller = sseCallerContext(arc, true, "alice");
+
+      assertThat(caller.userId()).isEqualTo(UserId.of("bob"));
+      assertThat(caller.authority()).isNotNull();
+      assertThat(caller.authority().roles()).containsExactly("ADMIN");
+    }
+  }
+
+  @Test
+  void theSseEndpointRefusesARequestTheFilterStoredNoContextFor() throws Exception {
+    // The request scope is active and the holder is empty: no request filter ran for the request.
+    try (var arc = bootWeb(TrustFlag.class)) {
+      assertThat(sseCallerContext(arc, false, "alice")).isNull();
+    }
+  }
+
+  @Test
   void theSseEndpointTreatsARepeatedUserIdHeaderAsAnonymousBehindATrustedGateway()
       throws Exception {
     // Before, the endpoint's single-valued @HeaderParam took the first value ("victim") while the
@@ -375,7 +397,7 @@ class QuarkusRequestIdentityFailClosedTest {
     // stream endpoint's third parameter IS the injected HttpHeaders (every X-User-Id value, the
     // same multivalued view the filter reads), not a single-valued @HeaderParam, and the injecting
     // constructor takes the RequestIdentityPolicy bean the filter takes (not an
-    // AuthenticatedUserResolver).
+    // AuthenticatedUserResolver) and the request-scoped holder the filter writes.
     Method stream =
         SseController.class.getMethod("stream", String.class, String.class, HttpHeaders.class);
     assertThat(stream.isAnnotationPresent(jakarta.ws.rs.GET.class)).isTrue();
@@ -387,6 +409,7 @@ class QuarkusRequestIdentityFailClosedTest {
             SseEventPublisher.class,
             SseAuthorizer.class,
             RequestIdentityPolicy.class,
+            StreamRuneRequestContextHolder.class,
             jakarta.inject.Provider.class,
             StreamRuneQuarkusProperties.class);
     assertThat(injecting.isAnnotationPresent(jakarta.inject.Inject.class)).isTrue();
@@ -432,20 +455,7 @@ class QuarkusRequestIdentityFailClosedTest {
       List<String> roles,
       Map<String, String> w3cBaggage) {
     StreamRuneRequestFilter filter = arc.container().instance(StreamRuneRequestFilter.class).get();
-    ContainerRequestContext request = mock(ContainerRequestContext.class);
-    // Stubbed exactly as Quarkus REST answers: getHeaderString joins repeated values with ",",
-    // getHeaders() keeps every value as received.
-    when(request.getHeaderString("X-User-Id")).thenReturn(String.join(",", userIds));
-    when(request.getHeaderString("X-User-Role"))
-        .thenReturn(roles.isEmpty() ? null : String.join(",", roles));
-    MultivaluedMap<String, String> all = new MultivaluedHashMap<>();
-    if (!userIds.isEmpty()) {
-      all.put("X-User-Id", List.copyOf(userIds));
-    }
-    if (!roles.isEmpty()) {
-      all.put("X-User-Role", List.copyOf(roles));
-    }
-    when(request.getHeaders()).thenReturn(all);
+    ContainerRequestContext request = requestCarrying(userIds, roles);
     var baggage = io.opentelemetry.api.baggage.Baggage.builder();
     w3cBaggage.forEach(baggage::put);
     var requestScope = arc.container().requestContext();
@@ -463,13 +473,47 @@ class QuarkusRequestIdentityFailClosedTest {
     }
   }
 
+  /** A request as Quarkus REST hands it to a request filter, carrying the given header values. */
+  private static ContainerRequestContext requestCarrying(List<String> userIds, List<String> roles) {
+    ContainerRequestContext request = mock(ContainerRequestContext.class);
+    // Stubbed exactly as Quarkus REST answers: getHeaderString joins repeated values with ",",
+    // getHeaders() keeps every value as received.
+    when(request.getHeaderString("X-User-Id")).thenReturn(String.join(",", userIds));
+    when(request.getHeaderString("X-User-Role"))
+        .thenReturn(roles.isEmpty() ? null : String.join(",", roles));
+    MultivaluedMap<String, String> all = new MultivaluedHashMap<>();
+    if (!userIds.isEmpty()) {
+      all.put("X-User-Id", List.copyOf(userIds));
+    }
+    if (!roles.isEmpty()) {
+      all.put("X-User-Role", List.copyOf(roles));
+    }
+    when(request.getHeaders()).thenReturn(all);
+    return request;
+  }
+
   /**
-   * Opens {@code /api/sse/stream-1} with one {@code X-User-Id} value per element of {@code headers}
-   * on an {@link SseController} built through its injecting constructor from the container's own
-   * policy bean (the capturing authorizer denies, so no subscription is opened) and returns the
-   * caller the {@link SseAuthorizer} was asked about.
+   * Opens {@code /api/sse/order/order-1} with one {@code X-User-Id} value per element of {@code
+   * headers} and returns the caller the {@link SseAuthorizer} was asked about (the capturing
+   * authorizer denies, so no subscription is opened).
+   *
+   * <p>One request as Quarkus REST serves it, inside one CDI request scope: the Arc-built request
+   * filter stores the request context in the request-scoped holder, then the {@link SseController},
+   * built through its injecting constructor from the container's own policy bean and the client
+   * proxy of that holder, reads it there.
    */
   private static Optional<UserId> sseCaller(RealArcTestContainer arc, String... headers) {
+    return Optional.ofNullable(sseCallerContext(arc, true, headers).userId());
+  }
+
+  /**
+   * As {@link #sseCaller}, returning the whole request context the authorizer was handed; {@code
+   * null} when the endpoint refused the request without asking it.
+   *
+   * @param throughTheFilter whether the request filter runs for the request before the endpoint
+   */
+  private static StreamRuneContext.RequestContext sseCallerContext(
+      RealArcTestContainer arc, boolean throughTheFilter, String... headers) {
     RequestIdentityPolicy policy = arc.container().instance(RequestIdentityPolicy.class).get();
     assertSame(
         policy,
@@ -481,15 +525,29 @@ class QuarkusRequestIdentityFailClosedTest {
             mock(SseEventPublisher.class),
             authorizer,
             policy,
+            arc.container().instance(StreamRuneRequestContextHolder.class).get(),
             () -> Boolean.TRUE,
             TestProperties.defaults());
     HttpHeaders requestHeaders = mock(HttpHeaders.class);
     when(requestHeaders.getRequestHeader("X-User-Id")).thenReturn(List.of(headers));
+    var requestScope = arc.container().requestContext();
+    requestScope.activate();
     try {
+      if (throughTheFilter) {
+        arc.container()
+            .instance(StreamRuneRequestFilter.class)
+            .get()
+            .filter(requestCarrying(List.of(headers), List.of()));
+      }
       assertThrows(
           ForbiddenException.class, () -> controller.stream("order", "order-1", requestHeaders));
     } finally {
+      requestScope.terminate();
       controller.shutdown();
+    }
+    if (!throughTheFilter) {
+      assertThat(authorizer.asked).as("the SSE authorizer must not be consulted").isEmpty();
+      return null;
     }
     assertThat(authorizer.asked).as("the SSE authorizer must be consulted").hasSize(1);
     return authorizer.asked.getFirst();
@@ -497,11 +555,11 @@ class QuarkusRequestIdentityFailClosedTest {
 
   /** Records every caller it is asked about, and denies. */
   static final class CapturingSseAuthorizer implements SseAuthorizer {
-    final List<Optional<UserId>> asked = new CopyOnWriteArrayList<>();
+    final List<StreamRuneContext.RequestContext> asked = new CopyOnWriteArrayList<>();
 
     @Override
-    public boolean isAuthorized(UserId principal, StreamId streamId) {
-      asked.add(Optional.ofNullable(principal));
+    public boolean isAuthorized(StreamRuneContext.RequestContext caller, StreamId streamId) {
+      asked.add(caller);
       return false;
     }
   }

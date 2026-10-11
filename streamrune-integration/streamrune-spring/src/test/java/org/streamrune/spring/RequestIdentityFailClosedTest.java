@@ -358,6 +358,26 @@ class RequestIdentityFailClosedTest {
   }
 
   @Test
+  void theSseAuthorizerSeesTheRolesSpringSecurityHoldsForTheAuthenticatedPrincipal() {
+    // The shipped SpringSecurityUserRoleResolver is wired: the filter captures the principal's
+    // roles into the request context, and that context is what the authorizer is handed.
+    web.withUserConfiguration(CapturingSseAuthorizerConfig.class)
+        .withPropertyValues("streamrune.sse.enabled=true")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              SecurityContextHolder.getContext()
+                  .setAuthentication(
+                      UsernamePasswordAuthenticationToken.authenticated(
+                          "bob", "n/a", List.of(new SimpleGrantedAuthority("ROLE_SUPPORT"))));
+              assertThat(sseCaller(ctx, "alice")).contains(UserId.of("bob"));
+              var authority = ctx.getBean(CapturingSseAuthorizer.class).authorities.getFirst();
+              assertThat(authority).isPresent();
+              assertThat(authority.get().roles()).containsExactly("SUPPORT");
+            });
+  }
+
+  @Test
   void theSseEndpointTreatsARepeatedUserIdHeaderAsAnonymousBehindATrustedGateway() {
     // The filter and the SSE endpoint must read a repeated header the same way: before, the
     // endpoint's @RequestHeader String bound the comma-joined "victim,real" as the caller.
@@ -410,10 +430,12 @@ class RequestIdentityFailClosedTest {
   /** Records every caller it is asked about, and denies. */
   static final class CapturingSseAuthorizer implements SseAuthorizer {
     final List<Optional<UserId>> asked = new CopyOnWriteArrayList<>();
+    final List<Optional<UserAuthority>> authorities = new CopyOnWriteArrayList<>();
 
     @Override
-    public boolean isAuthorized(UserId principal, StreamId streamId) {
-      asked.add(Optional.ofNullable(principal));
+    public boolean isAuthorized(StreamRuneContext.RequestContext caller, StreamId streamId) {
+      asked.add(Optional.ofNullable(caller.userId()));
+      authorities.add(Optional.ofNullable(caller.authority()));
       return false;
     }
   }

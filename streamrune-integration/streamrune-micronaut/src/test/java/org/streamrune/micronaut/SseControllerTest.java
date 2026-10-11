@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.GlobalOffset;
@@ -31,7 +32,7 @@ class SseControllerTest {
 
   record ProductCreated(String productId) implements DomainEvent {}
 
-  private static final SseAuthorizer ALLOW_ALL = (principal, streamId) -> true;
+  private static final SseAuthorizer ALLOW_ALL = (caller, streamId) -> true;
 
   /** No resolver, no trust flag: every caller is anonymous. */
   private static final RequestIdentityPolicy ANONYMOUS = RequestIdentityPolicy.of(null, false);
@@ -62,7 +63,8 @@ class SseControllerTest {
 
     var ex =
         assertThrows(
-            HttpStatusException.class, () -> controller.stream("order", "order-victim", List.of()));
+            HttpStatusException.class,
+            () -> controller.stream("order", "order-victim", List.of(), SseCallers.anonymous()));
     assertEquals(403, ex.getStatus().getCode());
     verifyNoInteractions(publisher);
   }
@@ -74,15 +76,15 @@ class SseControllerTest {
     var seenPrincipal = new AtomicReference<UserId>();
     var seenStream = new AtomicReference<StreamId>();
     SseAuthorizer authorizer =
-        (principal, streamId) -> {
-          seenPrincipal.set(principal);
+        (caller, streamId) -> {
+          seenPrincipal.set(caller.userId());
           seenStream.set(streamId);
           return true;
         };
     var controller =
         new SseController(publisher, authorizer, RequestIdentityPolicy.of(resolver, false));
 
-    controller.stream("order", "order-1", List.of());
+    controller.stream("order", "order-1", List.of(), SseCallers.of("bob"));
 
     assertEquals("bob", seenPrincipal.get().value());
     assertEquals("order:order-1", seenStream.get().value());
@@ -97,15 +99,15 @@ class SseControllerTest {
   void theTrustedGatewayHandsTheHeaderCallerToTheAuthorizer() {
     var seenPrincipal = new AtomicReference<UserId>();
     SseAuthorizer authorizer =
-        (principal, streamId) -> {
-          seenPrincipal.set(principal);
+        (caller, streamId) -> {
+          seenPrincipal.set(caller.userId());
           return true;
         };
     var controller =
         new SseController(
             mock(SseEventPublisher.class), authorizer, RequestIdentityPolicy.of(null, true));
 
-    controller.stream("order", "order-1", List.of("alice"));
+    controller.stream("order", "order-1", List.of("alice"), SseCallers.of("alice"));
 
     assertEquals(UserId.of("alice"), seenPrincipal.get());
   }
@@ -115,14 +117,15 @@ class SseControllerTest {
   void withoutAResolverOrTheTrustFlagTheHeaderIsNotTheCaller() {
     var seenPrincipal = new AtomicReference<UserId>(UserId.of("sentinel"));
     SseAuthorizer authorizer =
-        (principal, streamId) -> {
-          seenPrincipal.set(principal);
+        (caller, streamId) -> {
+          seenPrincipal.set(caller.userId());
           return false;
         };
     var controller = new SseController(mock(SseEventPublisher.class), authorizer, ANONYMOUS);
 
     assertThrows(
-        HttpStatusException.class, () -> controller.stream("order", "order-1", List.of("alice")));
+        HttpStatusException.class,
+        () -> controller.stream("order", "order-1", List.of("alice"), SseCallers.anonymous()));
 
     assertNull(seenPrincipal.get());
   }
@@ -135,8 +138,8 @@ class SseControllerTest {
   void aMismatchingHeaderIsIgnoredAndLoggedSanitized() {
     var seenPrincipal = new AtomicReference<UserId>();
     SseAuthorizer authorizer =
-        (principal, streamId) -> {
-          seenPrincipal.set(principal);
+        (caller, streamId) -> {
+          seenPrincipal.set(caller.userId());
           return true;
         };
     AuthenticatedUserResolver resolver = () -> Optional.of(UserId.of("bob"));
@@ -148,7 +151,7 @@ class SseControllerTest {
     try (var mocked =
         mockStatic(
             org.streamrune.core.types.LogSanitizer.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
-      controller.stream("order", "order-1", List.of(forged));
+      controller.stream("order", "order-1", List.of(forged), SseCallers.of("bob"));
       mocked.verify(() -> org.streamrune.core.types.LogSanitizer.sanitizeForLog(eq(forged)));
       mocked.verify(() -> org.streamrune.core.types.LogSanitizer.sanitizeForLog(eq("bob")));
     }
@@ -160,7 +163,7 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var authorizerCalls = new AtomicInteger();
     SseAuthorizer counting =
-        (principal, streamId) -> {
+        (caller, streamId) -> {
           authorizerCalls.incrementAndGet();
           return true;
         };
@@ -176,7 +179,7 @@ class SseControllerTest {
       var ex =
           assertThrows(
               HttpStatusException.class,
-              () -> controller.stream(bad.get(0), bad.get(1), List.of()),
+              () -> controller.stream(bad.get(0), bad.get(1), List.of(), SseCallers.anonymous()),
               bad.toString());
       assertEquals(400, ex.getStatus().getCode(), bad.toString());
       assertEquals("Invalid aggregate type or aggregate id", ex.getMessage());
@@ -191,13 +194,13 @@ class SseControllerTest {
     var controller =
         new SseController(
             mock(SseEventPublisher.class),
-            (principal, streamId) -> {
+            (caller, streamId) -> {
               seen.set(streamId);
               return true;
             },
             ANONYMOUS);
 
-    controller.stream("customer", "c-1", List.of());
+    controller.stream("customer", "c-1", List.of(), SseCallers.anonymous());
 
     assertEquals(AggregateType.of("customer"), seen.get().aggregateType());
     assertEquals(AggregateId.of("c-1"), seen.get().aggregateId());
@@ -208,8 +211,10 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
-    var product = controller.stream("product", "p-1", List.of()).subscribe();
-    var inventory = controller.stream("inventory", "p-1", List.of()).subscribe();
+    var product =
+        controller.stream("product", "p-1", List.of(), SseCallers.anonymous()).subscribe();
+    var inventory =
+        controller.stream("inventory", "p-1", List.of(), SseCallers.anonymous()).subscribe();
 
     verify(publisher)
         .subscribe(
@@ -258,8 +263,8 @@ class SseControllerTest {
 
     var seenPrincipal = new AtomicReference<UserId>(UserId.of("sentinel"));
     SseAuthorizer authorizer =
-        (principal, streamId) -> {
-          seenPrincipal.set(principal);
+        (caller, streamId) -> {
+          seenPrincipal.set(caller.userId());
           return false;
         };
     var controller =
@@ -270,9 +275,133 @@ class SseControllerTest {
     repeated.getHeaders().add(RequestIdentityPolicy.USER_ID_HEADER, "victim");
     repeated.getHeaders().add(RequestIdentityPolicy.USER_ID_HEADER, "real");
 
+    // What the request filter stores for a repeated header behind a trusted gateway: nobody.
+    repeated.setAttribute(StreamRuneContextFilter.CONTEXT_ATTRIBUTE, SseCallers.anonymous());
+
     assertThrows(HttpStatusException.class, () -> controller.stream("order", "order-1", repeated));
 
     assertNull(seenPrincipal.get());
+  }
+
+  @Test
+  void theEndpointReadsTheRequestContextFromTheRequestWhereTheScopedValueIsNotBound() {
+    // The thread of a filter behind the framework's that runs on another executor:
+    // StreamRuneContext.CURRENT is not bound there, and the request still carries its context.
+    var seen = new AtomicReference<StreamRuneContext.RequestContext>();
+    var controller =
+        new SseController(
+            mock(SseEventPublisher.class),
+            (caller, streamId) -> {
+              seen.set(caller);
+              return true;
+            },
+            ANONYMOUS);
+    var stored = SseCallers.anonymous();
+    io.micronaut.http.MutableHttpRequest<?> request =
+        io.micronaut.http.HttpRequest.GET("/api/sse/order/order-1");
+    request.setAttribute(StreamRuneContextFilter.CONTEXT_ATTRIBUTE, stored);
+
+    controller.stream("order", "order-1", request);
+
+    assertSame(stored, seen.get());
+  }
+
+  @Test
+  void theEndpointRefusesARequestThatCarriesNoRequestContext() {
+    var authorizerCalls = new java.util.concurrent.atomic.AtomicInteger();
+    var controller =
+        new SseController(
+            mock(SseEventPublisher.class),
+            (caller, streamId) -> {
+              authorizerCalls.incrementAndGet();
+              return true;
+            },
+            ANONYMOUS);
+
+    var ex =
+        assertThrows(
+            HttpStatusException.class,
+            () ->
+                controller.stream(
+                    "order",
+                    "order-1",
+                    io.micronaut.http.HttpRequest.GET("/api/sse/order/order-1")));
+
+    assertEquals(403, ex.getStatus().getCode());
+    assertEquals(0, authorizerCalls.get());
+  }
+
+  @Test
+  void theAuthorizerIsHandedTheRequestContextBoundForTheRequest() {
+    var seen = new AtomicReference<StreamRuneContext.RequestContext>();
+    var controller =
+        new SseController(
+            mock(SseEventPublisher.class),
+            (caller, streamId) -> {
+              seen.set(caller);
+              return true;
+            },
+            RequestIdentityPolicy.of(null, true));
+    var bound =
+        SseCallers.of("alice")
+            .withAuthority(
+                new org.streamrune.core.UserAuthority(
+                    java.util.Set.of("SUPPORT"), java.util.Set.of()));
+
+    controller.stream("order", "order-1", List.of("alice"), bound);
+
+    assertSame(bound, seen.get());
+  }
+
+  @Test
+  void aRequestWithNoRequestContextIsRefusedAndTheAuthorizerIsNotAsked() {
+    var publisher = mock(SseEventPublisher.class);
+    var authorizerCalls = new java.util.concurrent.atomic.AtomicInteger();
+    var controller =
+        new SseController(
+            publisher,
+            (caller, streamId) -> {
+              authorizerCalls.incrementAndGet();
+              return true;
+            },
+            RequestIdentityPolicy.of(null, true));
+
+    var ex =
+        assertThrows(
+            HttpStatusException.class,
+            () -> controller.stream("order", "order-1", List.of("alice"), null));
+
+    assertEquals(403, ex.getStatus().getCode());
+    assertEquals(0, authorizerCalls.get());
+    verifyNoInteractions(publisher);
+  }
+
+  @Test
+  void aRequestContextOfAnotherUserThanTheResolvedCallerIsRefusedAndTheAuthorizerIsNotAsked() {
+    var publisher = mock(SseEventPublisher.class);
+    var authorizerCalls = new java.util.concurrent.atomic.AtomicInteger();
+    var controller =
+        new SseController(
+            publisher,
+            (caller, streamId) -> {
+              authorizerCalls.incrementAndGet();
+              return true;
+            },
+            RequestIdentityPolicy.of(null, true));
+
+    // The endpoint resolves alice; the bound context names bob, nobody, and the reverse.
+    assertThrows(
+        HttpStatusException.class,
+        () -> controller.stream("order", "order-1", List.of("alice"), SseCallers.of("bob")));
+    assertThrows(
+        HttpStatusException.class,
+        () -> controller.stream("order", "order-1", List.of("alice"), SseCallers.anonymous()));
+    assertThrows(
+        HttpStatusException.class,
+        () -> controller.stream("order", "order-1", List.of(), SseCallers.of("bob")));
+
+    assertEquals(0, authorizerCalls.get());
+    verifyNoInteractions(publisher);
   }
 
   @Test
@@ -280,7 +409,7 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
-    Flux<Event<?>> flux = controller.stream("cart", "cart-1", List.of());
+    Flux<Event<?>> flux = controller.stream("cart", "cart-1", List.of(), SseCallers.anonymous());
     assertNotNull(flux);
 
     // Subscribe to activate
@@ -313,7 +442,7 @@ class SseControllerTest {
         };
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
-    StepVerifier.create(controller.stream("cart", "cart-early", List.of()))
+    StepVerifier.create(controller.stream("cart", "cart-early", List.of(), SseCallers.anonymous()))
         .assertNext(frame -> assertEquals("1", frame.getId()))
         .assertNext(frame -> assertSame(SseController.KEEP_ALIVE, frame))
         .thenCancel()
@@ -326,7 +455,7 @@ class SseControllerTest {
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
     controller.completeOpenStreams();
 
-    StepVerifier.create(controller.stream("cart", "cart-late", List.of()))
+    StepVerifier.create(controller.stream("cart", "cart-late", List.of(), SseCallers.anonymous()))
         .expectComplete()
         .verify(java.time.Duration.ofSeconds(5));
 
@@ -368,7 +497,7 @@ class SseControllerTest {
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
     controllerRef.set(controller);
 
-    StepVerifier.create(controller.stream("cart", "cart-racing", List.of()))
+    StepVerifier.create(controller.stream("cart", "cart-racing", List.of(), SseCallers.anonymous()))
         .expectComplete()
         .verify(java.time.Duration.ofSeconds(5));
 
@@ -382,7 +511,7 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
-    Flux<Event<?>> flux = controller.stream("cart", "cart-2", List.of());
+    Flux<Event<?>> flux = controller.stream("cart", "cart-2", List.of(), SseCallers.anonymous());
     var subscription = flux.subscribe();
 
     var captor = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
@@ -400,7 +529,8 @@ class SseControllerTest {
 
     var event = new ProductCreated("product-1");
 
-    StepVerifier.create(controller.stream("cart", "cart-3", List.of()).take(2))
+    StepVerifier.create(
+            controller.stream("cart", "cart-3", List.of(), SseCallers.anonymous()).take(2))
         // The stream opens with the comment frame, emitted once the client is registered.
         .assertNext(sse -> assertSame(SseController.KEEP_ALIVE, sse))
         .then(() -> realPublisher.publish(envelope(cartStream("cart-3"), 99L, event)))
@@ -425,7 +555,7 @@ class SseControllerTest {
     // Subscriber that requests nothing at first — every published event lands in the bounded
     // buffer. Publishing one event more than the buffer capacity overflows it; Reactor's
     // onBackpressureBuffer delivers the overflow error after the buffered items are drained.
-    StepVerifier.create(controller.stream("cart", "cart-4", List.of()), 0)
+    StepVerifier.create(controller.stream("cart", "cart-4", List.of(), SseCallers.anonymous()), 0)
         .then(
             () -> {
               var captor = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
@@ -455,7 +585,8 @@ class SseControllerTest {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
 
-    StepVerifier.create(controller.stream("cart", "cart-evicted", List.of()))
+    StepVerifier.create(
+            controller.stream("cart", "cart-evicted", List.of(), SseCallers.anonymous()))
         .assertNext(SseControllerTest::assertKeepAliveFrame)
         .then(
             () -> {
@@ -491,7 +622,8 @@ class SseControllerTest {
 
     // No domain event is ever published — every frame below is a keepalive: the opening frame and
     // two ticks.
-    StepVerifier.create(controller.stream("cart", "cart-keepalive", List.of()).take(3))
+    StepVerifier.create(
+            controller.stream("cart", "cart-keepalive", List.of(), SseCallers.anonymous()).take(3))
         .assertNext(SseControllerTest::assertKeepAliveFrame)
         .assertNext(SseControllerTest::assertKeepAliveFrame)
         .assertNext(SseControllerTest::assertKeepAliveFrame)
@@ -528,7 +660,8 @@ class SseControllerTest {
     // inserting a 20ms pause after expectSubscription). Both halves of the assertion survive, now
     // exactly rather than probabilistically: nothing but the opening frame is emitted through
     // 99ms, and the completion lands the moment the clock crosses the configured 100ms.
-    StepVerifier.withVirtualTime(() -> controller.stream("cart", "cart-timeout", List.of()))
+    StepVerifier.withVirtualTime(
+            () -> controller.stream("cart", "cart-timeout", List.of(), SseCallers.anonymous()))
         .expectSubscription()
         .assertNext(SseControllerTest::assertKeepAliveFrame)
         .expectNoEvent(java.time.Duration.ofMillis(99))
@@ -555,7 +688,8 @@ class SseControllerTest {
 
     // Long enough that a 50ms-style keepalive would have fired several times had one been
     // scheduled.
-    StepVerifier.create(controller.stream("cart", "cart-no-keepalive", List.of()))
+    StepVerifier.create(
+            controller.stream("cart", "cart-no-keepalive", List.of(), SseCallers.anonymous()))
         .expectSubscription()
         .assertNext(SseControllerTest::assertKeepAliveFrame)
         .expectNoEvent(java.time.Duration.ofMillis(300))
@@ -581,7 +715,8 @@ class SseControllerTest {
 
     var subscriber = new ThrowingSubscriber(Callback.TICK, cause);
     try (var warnings = new CapturedSseControllerLog()) {
-      controller.stream("cart", "cart-dead-tick", List.of()).subscribe(subscriber);
+      controller.stream("cart", "cart-dead-tick", List.of(), SseCallers.anonymous())
+          .subscribe(subscriber);
 
       assertEquals(
           List.of("Evicting an SSE subscriber after a failed keepalive tick: " + cause),
@@ -601,7 +736,7 @@ class SseControllerTest {
     var cause = new IllegalStateException("client gone");
 
     try (var warnings = new CapturedSseControllerLog()) {
-      controller.stream("cart", "cart-dead-evict", List.of())
+      controller.stream("cart", "cart-dead-evict", List.of(), SseCallers.anonymous())
           .subscribe(new ThrowingSubscriber(Callback.ERROR, cause));
       var hookCaptor = ArgumentCaptor.forClass(java.util.function.Consumer.class);
       verify(publisher).subscribe(eq(cartStream("cart-dead-evict")), any(), hookCaptor.capture());
@@ -635,7 +770,8 @@ class SseControllerTest {
     var subscriber = new ThrowingSubscriber(Callback.TICK, new LinkageError("client gone"));
     var droppedKeepAlives = countDroppedKeepAlives();
     try (var warnings = new CapturedSseControllerLog()) {
-      controller.stream("cart", "cart-fatal-tick", List.of()).subscribe(subscriber);
+      controller.stream("cart", "cart-fatal-tick", List.of(), SseCallers.anonymous())
+          .subscribe(subscriber);
       assertEquals(1, warnings.awaitMessages(1).size(), "the first keepalive tick must fail");
 
       assertStreamReleased(publisher, "cart-fatal-tick", droppedKeepAlives);
@@ -658,7 +794,8 @@ class SseControllerTest {
     var subscriber = new ThrowingSubscriber(Callback.NEXT, cause);
     var droppedKeepAlives = countDroppedKeepAlives();
     try (var warnings = new CapturedSseControllerLog()) {
-      controller.stream("cart", "cart-fatal-opening", List.of()).subscribe(subscriber);
+      controller.stream("cart", "cart-fatal-opening", List.of(), SseCallers.anonymous())
+          .subscribe(subscriber);
 
       assertEquals(
           List.of("Evicting an SSE subscriber after a failed opening frame: " + cause),
@@ -684,7 +821,8 @@ class SseControllerTest {
     var subscriber = new ThrowingSubscriber(Callback.EVENT, cause);
     var droppedKeepAlives = countDroppedKeepAlives();
     try {
-      controller.stream("cart", "cart-fatal-send", List.of()).subscribe(subscriber);
+      controller.stream("cart", "cart-fatal-send", List.of(), SseCallers.anonymous())
+          .subscribe(subscriber);
       var sseCaptor = ArgumentCaptor.forClass(SseEventPublisher.SseSubscriber.class);
       var hookCaptor = ArgumentCaptor.forClass(java.util.function.Consumer.class);
       verify(publisher)

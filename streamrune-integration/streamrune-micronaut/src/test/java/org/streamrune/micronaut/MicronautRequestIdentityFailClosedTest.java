@@ -629,8 +629,8 @@ class MicronautRequestIdentityFailClosedTest {
 
     @Singleton
     SseAuthorizer recordingSseAuthorizer() {
-      return (UserId principal, StreamId streamId) -> {
-        CALLERS.add(Optional.ofNullable(principal));
+      return (StreamRuneContext.RequestContext caller, StreamId streamId) -> {
+        CALLERS.add(Optional.ofNullable(caller.userId()));
         return false;
       };
     }

@@ -427,7 +427,7 @@ class SseLiveFeedTest {
 
     @Singleton
     SseAuthorizer sseAuthorizer() {
-      return (principal, streamId) -> {
+      return (caller, streamId) -> {
         AUTHORIZER_ON_VIRTUAL_THREAD.add(Thread.currentThread().isVirtual());
         return true;
       };

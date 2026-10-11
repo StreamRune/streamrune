@@ -49,7 +49,7 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * entry never reaches the key, in any mode and whatever the baggage allowlist says. The rule is
  * {@link RequestIdentityPolicy#applyRole(Map, List)}, identical on the three integrations.
  *
- * <p>Propagation is two-fold:
+ * <p>Propagation is three-fold:
  *
  * <ul>
  *   <li>{@link StreamRuneContext#CURRENT} ({@code ScopedValue}) is bound around the downstream
@@ -60,6 +60,10 @@ import org.streamrune.integration.RequestIdentityPolicy;
  *       StreamRuneContextHelper}'s ThreadLocal on every thread Micronaut propagates the request
  *       context to (e.g., {@code @ExecuteOn} executors or reactive pipelines), where {@code
  *       ScopedValue} bindings cannot follow.
+ *   <li>The context is the request attribute {@link #CONTEXT_ATTRIBUTE}, which goes wherever the
+ *       request goes: a filter behind this one that runs on another executor can take the route to
+ *       a thread neither of the two above reaches. The {@link SseController} reads the caller of a
+ *       subscription there ({@link #requestContextOf(HttpRequest)}).
  * </ul>
  *
  * <p><b>Authorization identity (security):</b> the request-context {@code userId} is the identity
@@ -103,6 +107,14 @@ import org.streamrune.integration.RequestIdentityPolicy;
  */
 @ServerFilter("/**")
 public class StreamRuneContextFilter implements Ordered {
+
+  /**
+   * The request attribute that holds the {@link StreamRuneContext.RequestContext} this filter built
+   * for the request. A filter that replaces this one sets it too, with the user id the {@link
+   * RequestIdentityPolicy} bean resolves: the {@link SseController} refuses a request that has
+   * none.
+   */
+  public static final String CONTEXT_ATTRIBUTE = "org.streamrune.micronaut.requestContext";
 
   private static final Logger logger = LoggerFactory.getLogger(StreamRuneContextFilter.class);
 
@@ -186,6 +198,7 @@ public class StreamRuneContextFilter implements Ordered {
   public MutableHttpResponse<?> filter(
       HttpRequest<?> request, FilterContinuation<MutableHttpResponse<?>> continuation) {
     var ctx = buildContext(request);
+    request.setAttribute(CONTEXT_ATTRIBUTE, ctx);
     try (var _ = PropagatedContext.getOrEmpty().plus(new RequestContextElement(ctx)).propagate()) {
       return ScopedValue.where(StreamRuneContext.CURRENT, ctx).call(continuation::proceed);
     }
@@ -262,6 +275,19 @@ public class StreamRuneContextFilter implements Ordered {
    */
   static List<String> userIdHeaderValues(HttpRequest<?> request) {
     return request.getHeaders().getAll(RequestIdentityPolicy.USER_ID_HEADER);
+  }
+
+  /**
+   * The request context stored for the request under {@link #CONTEXT_ATTRIBUTE}.
+   *
+   * @param request the HTTP request
+   * @return the request context, or {@code null} when the request carries none (no filter stored
+   *     one for it)
+   */
+  static StreamRuneContext.RequestContext requestContextOf(HttpRequest<?> request) {
+    return request
+        .getAttribute(CONTEXT_ATTRIBUTE, StreamRuneContext.RequestContext.class)
+        .orElse(null);
   }
 
   private static void logMismatch(UserId headerUserId, UserId principal) {

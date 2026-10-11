@@ -28,6 +28,7 @@ import java.lang.reflect.Type;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
@@ -40,6 +41,7 @@ import org.jboss.resteasy.reactive.RestStreamElementType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.LogSanitizer;
@@ -162,16 +164,24 @@ import org.streamrune.runtime.SseEventPublisher;
  * authorizer runs on a worker thread with the CDI request scope active, never on a Vert.x event
  * loop: the resource method is a blocking one (see {@link #stream(String, String, HttpHeaders)}).
  *
- * <p><b>Caller identity.</b> The caller handed to the authorizer is resolved by the same {@link
- * RequestIdentityPolicy} bean the {@link StreamRuneRequestFilter} binds {@code
- * RequestContext.userId} with, so a stream subscription and a command from the same request see the
- * same user: the authenticated principal when an {@link AuthenticatedUserResolver} is available
- * (the {@code X-User-Id} header ignored), the {@code X-User-Id} header only in the explicit
- * trusted-gateway mode ({@code streamrune.security.trust-user-id-header=true}), and otherwise
- * nobody ({@code null}). Both read every {@code X-User-Id} value as received ({@link
- * HttpHeaders#getRequestHeader} here, the same multivalued view as the filter's {@code
- * getHeaders()}), never a single-valued {@code @HeaderParam} that takes the first value, so a
- * repeated header cannot resolve to one caller here and another there.
+ * <p><b>Caller identity.</b> The authorizer receives the request context the {@link
+ * StreamRuneRequestFilter} stored for the request in the request-scoped {@link
+ * StreamRuneRequestContextHolder}: the user id and the captured authority a command from the same
+ * request authorizes against. The endpoint resolves the caller itself as well, by the same {@link
+ * RequestIdentityPolicy} bean the filter builds {@code RequestContext.userId} with: the
+ * authenticated principal when an {@link AuthenticatedUserResolver} is available (the {@code
+ * X-User-Id} header ignored), the {@code X-User-Id} header only in the explicit trusted-gateway
+ * mode ({@code streamrune.security.trust-user-id-header=true}), and otherwise nobody ({@code
+ * null}). Both read every {@code X-User-Id} value as received ({@link HttpHeaders#getRequestHeader}
+ * here, the same multivalued view as the filter's {@code getHeaders()}), never a single-valued
+ * {@code @HeaderParam} that takes the first value, so a repeated header cannot resolve to one
+ * caller here and another there.
+ *
+ * <p><b>No request context, no subscription.</b> The stored context is handed to the authorizer
+ * only when its user id is the caller the endpoint resolved. A request the holder has no context
+ * for (the filter is excluded from the application) and a request whose stored context names
+ * another user (application code replaced what the filter stored) are refused with {@code 403
+ * Forbidden}, the authorizer is not called and the reason is logged: see {@link #callerContext}.
  *
  * <p><b>Runtime kill switch.</b> {@code @IfBuildProperty} only decides whether this resource is
  * <em>registered</em> at build/augmentation time — it cannot be flipped on a running or redeployed
@@ -217,6 +227,8 @@ public class SseController {
   private final SseEventPublisher publisher;
   private final SseAuthorizer authorizer;
   private final RequestIdentityPolicy identityPolicy;
+  // Request scoped: Arc injects a client proxy, so each request reads its own context.
+  private final StreamRuneRequestContextHolder requestContextHolder;
   // A Provider so each request re-reads the current runtime value rather than a value frozen at
   // bean creation — the runtime kill switch.
   private final Provider<Boolean> sseEnabled;
@@ -266,33 +278,44 @@ public class SseController {
    * @param publisher the event fan-out the subscriptions attach to
    * @param authorizer decides whether the caller may subscribe to a stream
    * @param identityPolicy resolves the caller — the same policy bean the request filter uses
+   * @param requestContextHolder the request-scoped holder the request filter stores the request
+   *     context in; what it holds for the request is what the authorizer is handed
    * @param sseEnabled the runtime value of {@code streamrune.sse.enabled} (runtime kill switch)
    * @param properties the bound StreamRune Quarkus properties (dead-client reaping windows)
-   * @throws IllegalArgumentException if {@code identityPolicy} is {@code null}
+   * @throws IllegalArgumentException if {@code identityPolicy} or {@code requestContextHolder} is
+   *     {@code null}
    */
   @Inject
   public SseController(
       SseEventPublisher publisher,
       SseAuthorizer authorizer,
       RequestIdentityPolicy identityPolicy,
+      StreamRuneRequestContextHolder requestContextHolder,
       @ConfigProperty(name = "streamrune.sse.enabled", defaultValue = "true")
           Provider<Boolean> sseEnabled,
       StreamRuneQuarkusProperties properties) {
     this(
         publisher,
         identityPolicy,
+        requestContextHolder,
         authorizer,
         sseEnabled,
         properties.sse().timeout(),
         properties.sse().keepAliveInterval());
   }
 
-  /** Test convenience: SSE always enabled at runtime, production reaping defaults. */
+  /**
+   * Test convenience: SSE always enabled at runtime, production reaping defaults. Its holder is
+   * never filled, as for the two constructors below: the HTTP endpoint refuses every request, and a
+   * test opens a stream through {@link #stream(String, String, List,
+   * StreamRuneContext.RequestContext)}.
+   */
   SseController(
       SseEventPublisher publisher, SseAuthorizer authorizer, RequestIdentityPolicy identityPolicy) {
     this(
         publisher,
         identityPolicy,
+        new StreamRuneRequestContextHolder(),
         authorizer,
         () -> Boolean.TRUE,
         Duration.ofMinutes(5),
@@ -308,6 +331,7 @@ public class SseController {
     this(
         publisher,
         identityPolicy,
+        new StreamRuneRequestContextHolder(),
         authorizer,
         sseEnabled,
         Duration.ofMinutes(5),
@@ -321,7 +345,36 @@ public class SseController {
       RequestIdentityPolicy identityPolicy,
       Duration timeout,
       Duration keepAliveInterval) {
-    this(publisher, identityPolicy, authorizer, () -> Boolean.TRUE, timeout, keepAliveInterval);
+    this(
+        publisher,
+        identityPolicy,
+        new StreamRuneRequestContextHolder(),
+        authorizer,
+        () -> Boolean.TRUE,
+        timeout,
+        keepAliveInterval);
+  }
+
+  /**
+   * Test convenience for a test that serves the endpoint over HTTP: SSE always enabled at runtime,
+   * the holder its request filter stores the request context in, explicit dead-client reaping
+   * windows.
+   */
+  SseController(
+      SseEventPublisher publisher,
+      SseAuthorizer authorizer,
+      RequestIdentityPolicy identityPolicy,
+      StreamRuneRequestContextHolder requestContextHolder,
+      Duration timeout,
+      Duration keepAliveInterval) {
+    this(
+        publisher,
+        identityPolicy,
+        requestContextHolder,
+        authorizer,
+        () -> Boolean.TRUE,
+        timeout,
+        keepAliveInterval);
   }
 
   // Canonical constructor. The parameter order differs from the public one only to keep the
@@ -329,6 +382,7 @@ public class SseController {
   private SseController(
       SseEventPublisher publisher,
       RequestIdentityPolicy identityPolicy,
+      StreamRuneRequestContextHolder requestContextHolder,
       SseAuthorizer authorizer,
       Provider<Boolean> sseEnabled,
       Duration timeout,
@@ -336,9 +390,13 @@ public class SseController {
     if (identityPolicy == null) {
       throw new IllegalArgumentException("identityPolicy is required");
     }
+    if (requestContextHolder == null) {
+      throw new IllegalArgumentException("requestContextHolder is required");
+    }
     this.publisher = publisher;
     this.authorizer = authorizer;
     this.identityPolicy = identityPolicy;
+    this.requestContextHolder = requestContextHolder;
     this.sseEnabled = sseEnabled;
     this.timeout = positiveOrNull(timeout);
     this.keepAliveInterval = positiveOrNull(keepAliveInterval);
@@ -485,18 +543,19 @@ public class SseController {
    * <ol>
    *   <li>{@link StreamRuneRequestFilter} resolves the caller and the caller's roles and stores the
    *       request context in the request-scoped {@link StreamRuneRequestContextHolder};
-   *   <li>this method resolves the caller, asks the {@link SseAuthorizer} and throws for a refused
-   *       caller, so a refusal is the HTTP error response ({@code 403}, {@code 400}, {@code 404})
-   *       and never a stream that fails after a {@code 200}.
+   *   <li>this method resolves the caller, reads that request context from the holder, asks the
+   *       {@link SseAuthorizer} with it and throws for a refused caller, so a refusal is the HTTP
+   *       error response ({@code 403}, {@code 400}, {@code 404}) and never a stream that fails
+   *       after a {@code 200}.
    * </ol>
    *
-   * <p>Quarkus REST activates the CDI request scope of the request on the worker thread, so an
-   * authorizer may read {@link StreamRuneRequestContextHolder} or any other request-scoped bean.
-   * The worker thread is held for these two steps only. With the returned {@link Multi} in hand
-   * Quarkus REST writes the response head and subscribes to the stream from the event loop that
-   * finished that write: the subscription registers the client with the {@link SseEventPublisher}
-   * there, and nothing in it blocks. Frames are written without blocking, by the thread that emits
-   * them or by the event loop that finished the previous write.
+   * <p>Quarkus REST activates the CDI request scope of the request on the worker thread, so the
+   * holder this method reads is the one the filter wrote, and an authorizer may read any other
+   * request-scoped bean. The worker thread is held for these two steps only. With the returned
+   * {@link Multi} in hand Quarkus REST writes the response head and subscribes to the stream from
+   * the event loop that finished that write: the subscription registers the client with the {@link
+   * SseEventPublisher} there, and nothing in it blocks. Frames are written without blocking, by the
+   * thread that emits them or by the event loop that finished the previous write.
    *
    * <p>The annotation is preferred over moving the checks to a worker inside the method (a {@code
    * Uni} with {@code runSubscriptionOn}, or Vert.x {@code executeBlocking}): that would leave the
@@ -512,7 +571,8 @@ public class SseController {
    *     documentation)
    * @return reactive Multi that emits one SSE event per published domain event
    * @throws BadRequestException if the aggregate type or the aggregate id is invalid
-   * @throws ForbiddenException if the {@link SseAuthorizer} denies access to the stream
+   * @throws ForbiddenException if the {@link SseAuthorizer} denies access to the stream, or the
+   *     request has no request context of its caller (see the class documentation)
    */
   @GET
   @Path("/{aggregateType}/{aggregateId}")
@@ -524,24 +584,41 @@ public class SseController {
       @PathParam("aggregateId") String aggregateId,
       @Context HttpHeaders headers) {
     return stream(
-        aggregateType, aggregateId, headers.getRequestHeader(RequestIdentityPolicy.USER_ID_HEADER));
+        aggregateType,
+        aggregateId,
+        headers.getRequestHeader(RequestIdentityPolicy.USER_ID_HEADER),
+        requestContextHolder.context());
   }
 
   /**
-   * Opens an SSE stream of one aggregate's events for a caller whose {@code X-User-Id} values were
-   * already read off the request.
+   * Opens an SSE stream of one aggregate's events for a caller whose {@code X-User-Id} values and
+   * request context were already read off the request.
+   *
+   * <p>Of {@code requestContext} the endpoint verifies one thing: that its {@code userId()} is the
+   * caller the {@link RequestIdentityPolicy} resolves, which in the trusted-gateway mode is the
+   * value in {@code userIdHeaderValues}. Its {@code authority()} and its {@code baggage()} reach
+   * the {@link SseAuthorizer} as supplied. Code that calls this method with anything but the
+   * context and the header values of the request it serves vouches for them: for the authority and
+   * the baggage in every identity mode, and for the identity itself in the trusted-gateway mode.
    *
    * @param aggregateType the aggregate type of the stream to subscribe to
    * @param aggregateId the aggregate id of the stream to subscribe to
    * @param userIdHeaderValues every {@code X-User-Id} value the request carried, as received;
    *     {@code null} or empty when absent
+   * @param requestContext the request context the request filter stored for the request, or {@code
+   *     null} when it stored none
    * @return reactive Multi that emits one SSE event per published domain event
    * @throws BadRequestException if the aggregate type or the aggregate id is invalid (the {@link
    *     SseAuthorizer} is never consulted)
-   * @throws ForbiddenException if the {@link SseAuthorizer} denies access to the stream
+   * @throws ForbiddenException if {@code requestContext} is {@code null} or names another user than
+   *     the caller resolved from the request (the {@link SseAuthorizer} is never consulted), and if
+   *     the {@link SseAuthorizer} denies access to the stream
    */
   public Multi<OutboundSseEvent> stream(
-      String aggregateType, String aggregateId, List<String> userIdHeaderValues) {
+      String aggregateType,
+      String aggregateId,
+      List<String> userIdHeaderValues,
+      StreamRuneContext.RequestContext requestContext) {
     // Runtime kill switch. The @IfBuildProperty class gate is fixed at build time, so
     // without this re-check flipping streamrune.sse.enabled to false on a running/redeployed
     // instance would silently keep streaming decrypted domain events. Return 404 (matching
@@ -551,7 +628,8 @@ public class SseController {
     }
     StreamId sid = streamIdOf(aggregateType, aggregateId);
     UserId principal = identityPolicy.resolve(userIdHeaderValues, SseController::logMismatch);
-    if (!authorizer.isAuthorized(principal, sid)) {
+    StreamRuneContext.RequestContext caller = callerContext(principal, requestContext, sid);
+    if (!authorizer.isAuthorized(caller, sid)) {
       throw new ForbiddenException("Not authorized for this stream");
     }
     return Multi.createFrom()
@@ -660,6 +738,53 @@ public class SseController {
     } catch (IllegalArgumentException _) {
       throw new BadRequestException("Invalid aggregate type or aggregate id");
     }
+  }
+
+  /**
+   * The request context the authorizer is asked with: the one the request filter stored for the
+   * request, and only when it carries the caller this endpoint resolved itself.
+   *
+   * <p>With {@link StreamRuneRequestFilter} the two always agree: the filter resolved the context's
+   * user id through the same {@link RequestIdentityPolicy} bean, from the same request, on this
+   * worker thread, and captured the authority for that user id. They can differ only where the
+   * application changed what the holder holds, and then the endpoint refuses instead of choosing
+   * between two identities. The authorizer therefore never sees an identity this endpoint did not
+   * establish, and never an anonymous caller made up for a request that has no context.
+   *
+   * @param principal the caller the endpoint resolved, or {@code null} when unauthenticated
+   * @param requestContext the request context stored for the request, or {@code null} when none is
+   * @param sid the requested stream, for the log line of a refusal
+   * @return {@code requestContext}
+   * @throws ForbiddenException when there is no request context or its user id is not {@code
+   *     principal}
+   */
+  private static StreamRuneContext.RequestContext callerContext(
+      UserId principal, StreamRuneContext.RequestContext requestContext, StreamId sid) {
+    if (requestContext == null) {
+      log.warn(
+          "Refused the SSE subscription to {}: the request-scoped StreamRuneRequestContextHolder"
+              + " holds no request context, so StreamRuneRequestFilter did not run for the"
+              + " request. The SseAuthorizer was not asked.",
+          LogSanitizer.sanitizeForLog(sid.value()));
+      throw new ForbiddenException("Not authorized for this stream");
+    }
+    if (!Objects.equals(requestContext.userId(), principal)) {
+      log.warn(
+          "Refused the SSE subscription to {}: the request context stored for the request names"
+              + " '{}' and the RequestIdentityPolicy resolves '{}'. The SseAuthorizer was not"
+              + " asked. Only StreamRuneRequestFilter may fill the StreamRuneRequestContextHolder"
+              + " of a request for this endpoint.",
+          LogSanitizer.sanitizeForLog(sid.value()),
+          LogSanitizer.sanitizeForLog(valueOf(requestContext.userId())),
+          LogSanitizer.sanitizeForLog(valueOf(principal)));
+      throw new ForbiddenException("Not authorized for this stream");
+    }
+    return requestContext;
+  }
+
+  /** The value of a user id that may be absent, for a log line that sanitizes it. */
+  private static String valueOf(UserId userId) {
+    return userId == null ? null : userId.value();
   }
 
   private static void logMismatch(UserId headerUserId, UserId principal) {

@@ -57,7 +57,7 @@ import org.streamrune.test.InMemoryEventStore;
 class SseLiveFeedTest {
 
   private static final AggregateType ORDER = AggregateType.of("order");
-  private static final SseAuthorizer ALLOW_ALL = (principal, streamId) -> true;
+  private static final SseAuthorizer ALLOW_ALL = (caller, streamId) -> true;
   private static final Map<String, String> SSE_BUILT_IN = Map.of("streamrune.sse.enabled", "true");
 
   @Test
@@ -72,7 +72,7 @@ class SseLiveFeedTest {
       RequestIdentityPolicy identity = arc.container().instance(RequestIdentityPolicy.class).get();
       var controller = new SseController(publisher, ALLOW_ALL, identity);
       var client = AssertSubscriber.<OutboundSseEvent>create(Long.MAX_VALUE);
-      controller.stream("order", "o-1", List.of()).subscribe(client);
+      controller.stream("order", "o-1", List.of(), SseCallers.anonymous()).subscribe(client);
       assertThat(controller.openStreamCount()).isEqualTo(1);
 
       CommandBus bus = arc.container().instance(VirtualThreadCommandBus.class).get();

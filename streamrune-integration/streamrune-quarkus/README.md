@@ -88,15 +88,54 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   event stored after its opening frame reaches it. Do not call `SseEventPublisher.publish`
   yourself for this endpoint — every frame would be written twice. To run a feed of your own,
   declare an `SseEventFeed` bean: it replaces the integration's, and you start and stop it.
-- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
-  receives the caller the request filter resolved and the requested `StreamId`. It is asked once,
-  when the stream opens: a caller whose access ends afterwards keeps reading until the stream ends,
-  so `streamrune.sse.timeout` (default `5m`) is also the bound on that. Keep it finite where access
-  can change.
+- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean:
+  `boolean isAuthorized(StreamRuneContext.RequestContext caller, StreamId streamId)`. `caller` is
+  the request context `StreamRuneRequestFilter` built for the request, the one a command from that
+  request authorizes against: `caller.userId()` is the caller (`null` when unauthenticated) and
+  `caller.authority()` the roles and permissions your `UserRoleResolver` resolved for that user at
+  the request edge, so a rule by role needs no request-scoped state of the web framework.
+  `caller.authority()` is `null` when nothing was captured — an unauthenticated caller, no
+  `UserRoleResolver`, a resolver that does not declare `requiresRequestContext()` (a lookup by
+  user id: ask it yourself, `resolver.resolve(caller.userId())`), or a resolver that threw at the
+  request edge (asked again it throws again, and the request ends without a stream). `null` means
+  the roles are unknown, never "no roles": a rule that reads a role refuses on `null` first,
+  whether the role would admit or refuse. Decide by `caller.userId()` and `caller.authority()`
+  only: both are established at the request edge. In `caller.baggage()` the `role` entry is the
+  forwarded `X-User-Role` header in trusted-gateway mode and absent in every other mode; every
+  other entry is the client's own W3C `baggage` header in every identity mode and must not carry
+  an access decision. A request the
+  request-scoped `StreamRuneRequestContextHolder` holds no context for (the filter excluded from
+  the application) or one whose context names another user than the `RequestIdentityPolicy`
+  resolves is answered `403` and the authorizer is not called; the log says which.
+  The authorizer is asked once, when the stream opens: a caller whose access ends afterwards keeps
+  reading until the stream ends, so `streamrune.sse.timeout` (default `5m`) is also the bound on
+  that. Keep it finite where access can change.
+
+  ```java
+  @Produces
+  @Singleton
+  SseAuthorizer sseAuthorizer() {
+    return (caller, streamId) -> {
+      UserId user = caller.userId();
+      if (user == null) {
+        return false;
+      }
+      UserAuthority authority = caller.authority();
+      if (authority == null) {
+        return false; // roles unknown: refuse before any role is read
+      }
+      if (authority.hasRole("SUPPORT")) {
+        return true;
+      }
+      return streamId.aggregateType().value().equals("customer")
+          && streamId.aggregateId().value().equals(user.value());
+    };
+  }
+  ```
 - **Threads** — the resource method is `@Blocking`: Quarkus REST runs the request filter and the
   `SseAuthorizer` on a worker thread, never on a Vert.x event loop, so an authorizer may read a
-  database. The CDI request scope is active there: an authorizer can inject
-  `StreamRuneRequestContextHolder` and read the request context the filter stored. The worker is
+  database. The CDI request scope is active there: the endpoint reads the request context the
+  filter stored in `StreamRuneRequestContextHolder` and hands it to the authorizer. The worker is
   held until the method has returned, not for the life of the stream; Quarkus REST then subscribes
   the client from an event loop, and neither that subscription nor the writing of a frame blocks.
 - **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
@@ -162,7 +201,7 @@ Agroal goes through the generic `PostgresCryptoForgetSignal` derivation (see the
 `StreamRuneRequestFilter` binds `RequestContext.userId` — the user every
 `CommandAuthorizationPolicy`, `@RequireRole`/`@RequirePermission` and
 `Authorization.requireOwner(...)` check trusts, and the user the audit records — and the SSE
-endpoint hands the same user to your `SseAuthorizer`. Both resolve it through one
+endpoint hands that request context to your `SseAuthorizer`. Both resolve the user through one
 `RequestIdentityPolicy` bean (the same rule as the Spring integration), which fails closed:
 
 | Your setup | Identity | `X-User-Id` header | `X-User-Role` header |

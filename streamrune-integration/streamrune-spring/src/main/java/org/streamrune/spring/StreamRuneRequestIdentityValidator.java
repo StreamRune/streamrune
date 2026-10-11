@@ -29,8 +29,8 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  * denied. An interceptor bean that no bus runs gates nothing and is not a signal.
  *
  * <p>A headless worker (no servlet stack) does not derive identities from HTTP requests and is not
- * checked. The SSE endpoint is not a signal: its {@code SseAuthorizer} receives {@code null} for an
- * anonymous caller, which an ownership check already denies.
+ * checked. The SSE endpoint is not a signal: its {@code SseAuthorizer} receives a request context
+ * with no user id for an anonymous caller, which an ownership check already denies.
  *
  * <p>Runs after all singletons are instantiated.
  */
