@@ -7,6 +7,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,6 +59,14 @@ import org.streamrune.core.types.StreamId;
  * buffered items — decrypted domain events in both — before either bound fires. Spring has no
  * second buffer, so this queue is its only bound.
  *
+ * <p><b>Subclasses and the feed.</b> The integrations register this class as a bean an application
+ * can replace with a subclass. The {@link SseEventFeed} reads the event store only while {@link
+ * #hasSubscribers()} answers {@code true}, and that answer comes from the subscriptions this class
+ * registers itself. A subclass whose {@code subscribe} calls {@code super.subscribe} needs nothing
+ * more. A subclass that keeps subscribers elsewhere overrides {@code hasSubscribers()} too, under
+ * the contract stated there: with the inherited answer the feed finds nobody, reads nothing and
+ * delivers nothing to those subscribers, while it reports itself healthy.
+ *
  * <p>This class is {@link AutoCloseable}: {@link #close()} stops every worker. The integrations
  * construct it with no arguments; workers are created lazily per subscription.
  */
@@ -76,6 +85,36 @@ public class SseEventPublisher implements AutoCloseable {
 
   private final Map<StreamId, List<Subscription>> subscribers = new ConcurrentHashMap<>();
 
+  /**
+   * The number of registered subscriptions, for {@link #hasSubscribers()}. Counted up before a
+   * subscription joins its stream's list and down after it has left it ({@link RegistrySteps} is
+   * where a test stands between the two), so it is never below the number of subscriptions
+   * registered at that moment. {@code subscribers.isEmpty()} cannot answer the question: {@link
+   * ConcurrentHashMap} sums its size from several counters without a lock, and a subscribe and an
+   * unsubscribe of two other clients running beside that sum can make it read zero while a third
+   * client stays registered throughout.
+   */
+  private final AtomicInteger subscriptionCount = new AtomicInteger();
+
+  /**
+   * Where a test stands between the two steps of a registration and of a removal, to see the order
+   * {@link #subscriptionCount} documents. Each method is called on the thread that registers or
+   * removes, while that thread holds the map's lock of the stream: an implementation reads the
+   * publisher and returns, and changes nothing.
+   */
+  interface RegistrySteps {
+
+    /** A subscription of {@code streamId} is counted and has not joined the stream's list yet. */
+    default void countedAndNotListedYet(StreamId streamId) {}
+
+    /** A subscription of {@code streamId} has left the stream's list and is still counted. */
+    default void unlistedAndStillCounted(StreamId streamId) {}
+  }
+
+  private static final RegistrySteps UNOBSERVED = new RegistrySteps() {};
+
+  private final RegistrySteps registrySteps;
+
   /** Creates a publisher with the {@link #DEFAULT_QUEUE_CAPACITY default per-subscriber queue}. */
   public SseEventPublisher() {
     this(DEFAULT_QUEUE_CAPACITY);
@@ -88,10 +127,22 @@ public class SseEventPublisher implements AutoCloseable {
    *     evicts it; must be {@code >= 1}
    */
   public SseEventPublisher(int queueCapacity) {
+    this(queueCapacity, UNOBSERVED);
+  }
+
+  /**
+   * Creates a publisher whose registrations and removals a test can observe between their two
+   * steps.
+   *
+   * @param queueCapacity maximum events buffered per subscriber; must be {@code >= 1}
+   * @param registrySteps what runs between the steps
+   */
+  SseEventPublisher(int queueCapacity, RegistrySteps registrySteps) {
     if (queueCapacity < 1) {
       throw new IllegalArgumentException("queueCapacity must be >= 1, was " + queueCapacity);
     }
     this.queueCapacity = queueCapacity;
+    this.registrySteps = registrySteps;
   }
 
   /**
@@ -156,10 +207,35 @@ public class SseEventPublisher implements AutoCloseable {
           if (list == null) {
             list = new CopyOnWriteArrayList<>();
           }
+          subscriptionCount.incrementAndGet();
+          registrySteps.countedAndNotListedYet(streamId);
           list.add(subscription);
           return list;
         });
     subscription.start();
+  }
+
+  /**
+   * Whether any subscriber is registered, on any stream. The {@link SseEventFeed} asks before it
+   * reads the global stream: with no subscriber there is nobody to publish an event to.
+   *
+   * <p>The answer is exact in the one direction the feed's delivery guarantee needs: from the
+   * moment {@link #subscribe(StreamId, SseSubscriber, Consumer) subscribe} has returned until the
+   * subscriber is unsubscribed or evicted, this method returns {@code true}, whatever other
+   * subscribers come and go meanwhile. It may still return {@code true} for an instant after the
+   * last subscriber has left.
+   *
+   * <p><b>The contract with the feed.</b> That direction is what an override keeps: never {@code
+   * false} while a subscriber it would deliver to is registered. An answer of {@code false} lets
+   * the feed move its position past the events stored meanwhile without reading them, so a
+   * registered subscriber the answer missed never receives them. A {@code true} for nobody costs
+   * one read. The feed calls the method on its polling thread in every poll, so it returns without
+   * blocking.
+   *
+   * @return {@code true} while at least one subscriber is registered
+   */
+  public boolean hasSubscribers() {
+    return subscriptionCount.get() > 0;
   }
 
   /**
@@ -178,6 +254,7 @@ public class SseEventPublisher implements AutoCloseable {
           if (list == null) {
             return null;
           }
+          int before = list.size();
           list.removeIf(
               sub -> {
                 if (sub.subscriber == subscriber) {
@@ -187,6 +264,11 @@ public class SseEventPublisher implements AutoCloseable {
                 }
                 return false;
               });
+          int left = before - list.size();
+          if (left > 0) {
+            registrySteps.unlistedAndStillCounted(streamId);
+          }
+          subscriptionCount.addAndGet(-left);
           return list.isEmpty() ? null : list;
         });
   }
@@ -239,7 +321,10 @@ public class SseEventPublisher implements AutoCloseable {
     subscribers.computeIfPresent(
         subscription.streamId,
         (k, list) -> {
-          list.remove(subscription);
+          if (list.remove(subscription)) {
+            registrySteps.unlistedAndStillCounted(subscription.streamId);
+            subscriptionCount.decrementAndGet();
+          }
           return list.isEmpty() ? null : list;
         });
     subscription.fail(cause);
@@ -254,8 +339,17 @@ public class SseEventPublisher implements AutoCloseable {
   /** Stops every subscriber's delivery worker. The disconnect hooks are not invoked. */
   @Override
   public void close() {
-    subscribers.values().forEach(list -> list.forEach(Subscription::stop));
-    subscribers.clear();
+    // One stream at a time, each under its own lock of the map: a subscription is stopped, counted
+    // out and removed together, so the count stays right beside a subscribe that runs meanwhile.
+    for (StreamId streamId : subscribers.keySet()) {
+      subscribers.computeIfPresent(
+          streamId,
+          (k, list) -> {
+            list.forEach(Subscription::stop);
+            subscriptionCount.addAndGet(-list.size());
+            return null;
+          });
+    }
   }
 
   /**

@@ -124,8 +124,11 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   polling subscription that starts at the head of the global stream when the application starts
   and publishes every event stored from then on to the clients of the event's own stream, every
   `streamrune.sse.polling-interval` (default `1s`, at least `1ms`). No stored offset, no replay of
-  history. While the endpoint is enabled every instance reads and decrypts every event of the
-  global stream, whether or not a client is connected. Do not call `SseEventPublisher.publish`
+  history. The feed reads events only while a client is subscribed to this instance. With none, a
+  poll is one read of the head of the global stream (`SELECT max(global_offset)` on PostgreSQL):
+  no event is read or decrypted. With at least one, on any stream, the instance reads and decrypts
+  every event of the global stream. A client that connects to an idle feed misses nothing: every
+  event stored after its opening frame reaches it. Do not call `SseEventPublisher.publish`
   yourself for this endpoint — every frame would be written twice. To run a feed of your own,
   declare an `SseEventFeed` bean: it replaces the integration's, and you start and stop it.
 - **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean:
@@ -187,7 +190,9 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   `StreamRuneContext.CURRENT` itself.
 - **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
   is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
-  client connected, while it was reconnecting, or while the instance was down are never sent to it.
+  client connected, while it was reconnecting, or while the instance was down are not sent to it.
+  One exception: an event of its stream stored in the polling interval or so before the client
+  subscribed, which the feed had not passed yet, can still arrive.
   Read the current state from a query after every (re)connect, and use a projection for anything
   that must see every event.
 - **Lifecycle** — the feed starts on the startup event and stops when the application context

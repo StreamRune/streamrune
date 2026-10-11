@@ -639,8 +639,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   completed before the web server stops on Spring, and on Quarkus in an application built with
   `quarkus.shutdown.delay-enabled=true`; closed with the server on Micronaut and in a Quarkus
   application built without that property, where a connected client also holds a graceful
-  shutdown for the whole `quarkus.shutdown.timeout`. While the endpoint is enabled every instance reads and decrypts every event of the
-  global stream. The feed is the `sse-event-feed` component of the health indicators (`DOWN` when
+  shutdown for the whole `quarkus.shutdown.timeout`. The feed reads events only while a client is subscribed to its instance: an instance with no
+  client connected reads the head of the global stream once per polling interval and reads and
+  decrypts no event, and an instance with at least one client, on any stream, reads and decrypts
+  every event of the global stream. A client that connects to an idle instance receives every event
+  of its stream stored after its opening frame. The feed is the `sse-event-feed` component of the health indicators (`DOWN` when
   its polling thread has died, until the application restarts or calls `start()` on the feed), and an application's own `SseEventFeed` bean replaces it. Each frame carries the global offset as `id` and the decrypted event as JSON. A stream
   opens with one `: keepalive` comment frame, written as soon as the client is subscribed, so the
   response is committed at once and a client that has read the frame receives every event of the
@@ -649,6 +652,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   live, best-effort and at-most-once: only clients connected at that moment receive a frame, nothing
   is redelivered and `Last-Event-ID` is not honoured. `SseEventPublisher.publish(EventEnvelope)`
   routes an event by its own `streamId()`, so it cannot reach the subscribers of another stream.
+  `SseEventPublisher.hasSubscribers()` is what the feed asks before it reads, and it never answers
+  `false` while a subscriber is registered; a publisher subclass that keeps subscribers of its own
+  overrides it under that contract. The feed relies on `EventStore.lastGlobalOffset()` naming a
+  head below which no event becomes readable later.
 - Only allow-listed OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist`) reach event
   metadata. `LogSanitizer` strips control characters from every value the framework logs or persists
   as free text.

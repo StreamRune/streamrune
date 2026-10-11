@@ -454,6 +454,7 @@ public class SseEventPublisher implements AutoCloseable {
     void subscribe(StreamId streamId, SseSubscriber subscriber, Consumer<Throwable> onDisconnect);
     void unsubscribe(StreamId streamId, SseSubscriber subscriber);
     void publish(EventEnvelope envelope);   // routed by envelope.streamId()
+    boolean hasSubscribers();               // what the feed asks before it reads: true while a subscriber is registered
 }
 
 public final class SseEventFeed implements AutoCloseable {
@@ -461,7 +462,7 @@ public final class SseEventFeed implements AutoCloseable {
     void start();              // begins at EventStore.lastGlobalOffset(); replaces a subscription whose thread has died
     boolean isRunning();       // started, and the polling thread is alive
     boolean isStarted();       // between start() and close(), whatever became of the thread
-    int consecutiveFailures(); // failed reads in a row; the feed retries with backoff
+    int consecutiveFailures(); // failed polls in a row (a read of events, or of the head while idle); the feed retries with backoff
     void close();
 }
 
@@ -473,11 +474,18 @@ public class BackgroundRelayHealthContributor {
 - `SseEventPublisher` is the in-process fan-out: one bounded queue and one virtual-thread worker per
   subscriber. `publish` takes only the envelope and routes it by the envelope's own `streamId()`, so
   an event cannot reach the subscribers of another stream. A subscriber that cannot keep up is
-  disconnected rather than skipped.
+  disconnected rather than skipped. `hasSubscribers()` is the publisher's contract with the feed:
+  it never answers `false` while a subscriber is registered. An application that replaces the
+  publisher bean with a subclass registers its subscribers through `super.subscribe`, or overrides
+  `hasSubscribers()` under the same contract; otherwise the feed finds nobody and reads nothing.
 - `SseEventFeed` is what publishes. The integrations create one per application instance when the
   endpoint is enabled, start it with the application and close it on shutdown. It is a
   `PollingEventSubscription` on the global stream that starts at the head of the stream, keeps its
-  position in memory, and never replays history. An application's own `SseEventFeed` bean replaces
+  position in memory, and never replays history. It reads events only while the publisher has a
+  subscriber: a poll with none reads `EventStore.lastGlobalOffset()` and moves the position there,
+  without reading an event. It captures that head before it checks for subscribers, so an event
+  stored after a client subscribed is never skipped; that rests on the contract of
+  `EventStore.lastGlobalOffset()`, the head below which no event becomes readable later. An application's own `SseEventFeed` bean replaces
   the integration's; the application then starts and stops it, and registers it with
   `BackgroundRelayHealthContributor.registerSseEventFeed` to have it reported by the health
   indicator. A feed that is started and not running has lost its polling thread to a JVM `Error`;
@@ -491,7 +499,7 @@ public class BackgroundRelayHealthContributor {
 | Delivery | live, best-effort, at-most-once: only to clients connected at that moment, nothing is redelivered, `Last-Event-ID` is not honoured |
 | Order | version order within a stream |
 | Latency | normally within `streamrune.sse.polling-interval` (default `1s`, at least `1ms`) of the commit; longer while a failed read is retried with backoff |
-| Cost | while the endpoint is enabled every instance reads and decrypts every event of the global stream, whether or not a client is connected |
+| Cost | an instance with no client connected reads the head of the global stream once per polling interval and no event; an instance with at least one client, on any stream, reads and decrypts every event of the global stream |
 | Health | the feed is the `sse-event-feed` component of the health indicator: `DOWN` when its polling thread has died, `DEGRADED` while its reads fail |
 | Properties | `streamrune.sse.enabled`, `.polling-interval`, `.timeout`, `.keep-alive-interval` |
 
