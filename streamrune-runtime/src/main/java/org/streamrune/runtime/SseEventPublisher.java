@@ -59,6 +59,14 @@ import org.streamrune.core.types.StreamId;
  * buffered items — decrypted domain events in both — before either bound fires. Spring has no
  * second buffer, so this queue is its only bound.
  *
+ * <p><b>Subclasses and the feed.</b> The integrations register this class as a bean an application
+ * can replace with a subclass. The {@link SseEventFeed} reads the event store only while {@link
+ * #hasSubscribers()} answers {@code true}, and that answer comes from the subscriptions this class
+ * registers itself. A subclass whose {@code subscribe} calls {@code super.subscribe} needs nothing
+ * more. A subclass that keeps subscribers elsewhere overrides {@code hasSubscribers()} too, under
+ * the contract stated there: with the inherited answer the feed finds nobody, reads nothing and
+ * delivers nothing to those subscribers, while it reports itself healthy.
+ *
  * <p>This class is {@link AutoCloseable}: {@link #close()} stops every worker. The integrations
  * construct it with no arguments; workers are created lazily per subscription.
  */
@@ -79,13 +87,33 @@ public class SseEventPublisher implements AutoCloseable {
 
   /**
    * The number of registered subscriptions, for {@link #hasSubscribers()}. Counted up before a
-   * subscription joins its stream's list and down after it has left it, so it is never below the
-   * number of subscriptions registered at that moment. {@code subscribers.isEmpty()} cannot answer
-   * the question: {@link ConcurrentHashMap} sums its size from several counters without a lock, and
-   * a subscribe and an unsubscribe of two other clients running beside that sum can make it read
-   * zero while a third client stays registered throughout.
+   * subscription joins its stream's list and down after it has left it ({@link RegistrySteps} is
+   * where a test stands between the two), so it is never below the number of subscriptions
+   * registered at that moment. {@code subscribers.isEmpty()} cannot answer the question: {@link
+   * ConcurrentHashMap} sums its size from several counters without a lock, and a subscribe and an
+   * unsubscribe of two other clients running beside that sum can make it read zero while a third
+   * client stays registered throughout.
    */
   private final AtomicInteger subscriptionCount = new AtomicInteger();
+
+  /**
+   * Where a test stands between the two steps of a registration and of a removal, to see the order
+   * {@link #subscriptionCount} documents. Each method is called on the thread that registers or
+   * removes, while that thread holds the map's lock of the stream: an implementation reads the
+   * publisher and returns, and changes nothing.
+   */
+  interface RegistrySteps {
+
+    /** A subscription of {@code streamId} is counted and has not joined the stream's list yet. */
+    default void countedAndNotListedYet(StreamId streamId) {}
+
+    /** A subscription of {@code streamId} has left the stream's list and is still counted. */
+    default void unlistedAndStillCounted(StreamId streamId) {}
+  }
+
+  private static final RegistrySteps UNOBSERVED = new RegistrySteps() {};
+
+  private final RegistrySteps registrySteps;
 
   /** Creates a publisher with the {@link #DEFAULT_QUEUE_CAPACITY default per-subscriber queue}. */
   public SseEventPublisher() {
@@ -99,10 +127,22 @@ public class SseEventPublisher implements AutoCloseable {
    *     evicts it; must be {@code >= 1}
    */
   public SseEventPublisher(int queueCapacity) {
+    this(queueCapacity, UNOBSERVED);
+  }
+
+  /**
+   * Creates a publisher whose registrations and removals a test can observe between their two
+   * steps.
+   *
+   * @param queueCapacity maximum events buffered per subscriber; must be {@code >= 1}
+   * @param registrySteps what runs between the steps
+   */
+  SseEventPublisher(int queueCapacity, RegistrySteps registrySteps) {
     if (queueCapacity < 1) {
       throw new IllegalArgumentException("queueCapacity must be >= 1, was " + queueCapacity);
     }
     this.queueCapacity = queueCapacity;
+    this.registrySteps = registrySteps;
   }
 
   /**
@@ -168,6 +208,7 @@ public class SseEventPublisher implements AutoCloseable {
             list = new CopyOnWriteArrayList<>();
           }
           subscriptionCount.incrementAndGet();
+          registrySteps.countedAndNotListedYet(streamId);
           list.add(subscription);
           return list;
         });
@@ -184,9 +225,16 @@ public class SseEventPublisher implements AutoCloseable {
    * subscribers come and go meanwhile. It may still return {@code true} for an instant after the
    * last subscriber has left.
    *
+   * <p><b>The contract with the feed.</b> That direction is what an override keeps: never {@code
+   * false} while a subscriber it would deliver to is registered. An answer of {@code false} lets
+   * the feed move its position past the events stored meanwhile without reading them, so a
+   * registered subscriber the answer missed never receives them. A {@code true} for nobody costs
+   * one read. The feed calls the method on its polling thread in every poll, so it returns without
+   * blocking.
+   *
    * @return {@code true} while at least one subscriber is registered
    */
-  boolean hasSubscribers() {
+  public boolean hasSubscribers() {
     return subscriptionCount.get() > 0;
   }
 
@@ -216,7 +264,11 @@ public class SseEventPublisher implements AutoCloseable {
                 }
                 return false;
               });
-          subscriptionCount.addAndGet(list.size() - before);
+          int left = before - list.size();
+          if (left > 0) {
+            registrySteps.unlistedAndStillCounted(streamId);
+          }
+          subscriptionCount.addAndGet(-left);
           return list.isEmpty() ? null : list;
         });
   }
@@ -270,6 +322,7 @@ public class SseEventPublisher implements AutoCloseable {
         subscription.streamId,
         (k, list) -> {
           if (list.remove(subscription)) {
+            registrySteps.unlistedAndStillCounted(subscription.streamId);
             subscriptionCount.decrementAndGet();
           }
           return list.isEmpty() ? null : list;

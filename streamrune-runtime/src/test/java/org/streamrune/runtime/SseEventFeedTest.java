@@ -678,7 +678,7 @@ class SseEventFeedTest {
     }
 
     @Override
-    boolean hasSubscribers() {
+    public boolean hasSubscribers() {
       boolean any = super.hasSubscribers();
       if (!any) {
         Runnable armed = afterNextEmptyAnswer.getAndSet(null);

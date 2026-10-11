@@ -187,11 +187,14 @@ class SseEventPublisherTest {
   }
 
   /**
-   * One client stays subscribed while others come and go on other streams: the answer never reads
-   * {@code false}, which the size of a concurrent map can.
+   * A smoke test of the count under concurrent registrations and removals: one client stays
+   * subscribed while four threads subscribe and unsubscribe on other streams, and the answer is
+   * read in a loop for 300 ms. It shows that the bookkeeping holds under that load and nothing
+   * about what another way of answering would return under it. The order the answer rests on is
+   * pinned, without threads, in {@link SseEventPublisherRegistryOrderTest}.
    */
   @Test
-  void hasSubscribersNeverMissesAClientThatStaysWhileOthersComeAndGo() throws Exception {
+  void smokeTestHasSubscribersStaysTrueForAClientThatStaysWhileOthersComeAndGo() throws Exception {
     try (var publisher = new SseEventPublisher()) {
       publisher.subscribe(StreamId.of(TYPE, AggregateId.of("stays")), envelope -> {});
       var stop = new java.util.concurrent.atomic.AtomicBoolean();
