@@ -23,7 +23,10 @@ import org.streamrune.core.types.StreamId;
  * is the identity the {@link RequestIdentityPolicy} resolved, and {@code caller.authority()} holds
  * the roles and permissions the configured {@link org.streamrune.core.UserRoleResolver} returned
  * for that user at the request edge. An authorizer needs no framework-specific request state (a
- * {@code ScopedValue}, a request-scoped bean, a thread-local) to decide by a role.
+ * {@code ScopedValue}, a request-scoped bean, a thread-local) to decide by a role. Those two are
+ * what a decision rests on. {@code caller.baggage()} travels in the same object and is not
+ * established by the request edge: apart from the {@code role} entry behind a trusted gateway it is
+ * the client's own {@code baggage} header (see {@link #isAuthorized}).
  *
  * <p><b>A request without a request context is refused.</b> The endpoint resolves the caller
  * itself, through the {@link RequestIdentityPolicy}, and takes the request context the request
@@ -56,7 +59,10 @@ public interface SseAuthorizer {
    *   return false; // unauthenticated
    * }
    * UserAuthority authority = caller.authority();
-   * if (authority != null && authority.hasRole("SUPPORT")) {
+   * if (authority == null) {
+   *   return false; // the caller's roles are unknown: refuse before any role is read
+   * }
+   * if (authority.hasRole("SUPPORT")) {
    *   return true;
    * }
    * return switch (streamId.aggregateType().value()) {
@@ -64,6 +70,13 @@ public interface SseAuthorizer {
    *   default -> false;
    * };
    * }</pre>
+   *
+   * <p>The rule refuses an unknown authority before it reads a role, so it stays closed whichever
+   * way a role is used: a line added to it that <em>refuses</em> by role ({@code if
+   * (authority.hasRole("SUSPENDED")) return false;}) cannot admit a caller whose roles nobody
+   * captured, which {@code authority != null && authority.hasRole("SUSPENDED")} would. A rule that
+   * reads no role at all (ownership by {@code caller.userId()} alone) does not read the authority
+   * and needs neither line.
    *
    * <p><b>What {@code caller} holds.</b>
    *
@@ -76,16 +89,29 @@ public interface SseAuthorizer {
    *       request filter ran. The request filter captures it only from a resolver that declares
    *       {@link org.streamrune.core.UserRoleResolver#requiresRequestContext()}, which the
    *       resolvers the three integrations ship for their security module do. It is {@code null}
-   *       when nothing was captured: the caller is unauthenticated, the application has no {@code
-   *       UserRoleResolver}, the resolver is a function of the user id alone (it does not declare
-   *       {@code requiresRequestContext()}), or the resolver threw at the request edge. {@code
-   *       null} is not "no roles": an authorizer whose resolver is a function of the user id asks
-   *       that resolver itself, {@code userRoleResolver.resolve(caller.userId())}. A captured
-   *       authority with no roles is {@link org.streamrune.core.UserAuthority#EMPTY}.
-   *   <li>{@code caller.baggage()} holds the {@code role} entry only behind a trusted gateway: the
-   *       {@code X-User-Role} header the gateway forwarded. The roles of an authenticated principal
-   *       are never there.
+   *       when nothing was captured, which has four causes: the caller is unauthenticated; the
+   *       application has no {@code UserRoleResolver}; the resolver is a function of the user id
+   *       alone (it does not declare {@code requiresRequestContext()}); or the resolver threw at
+   *       the request edge. {@code null} means the roles are unknown, never "no roles" (a captured
+   *       authority with no roles is {@link org.streamrune.core.UserAuthority#EMPTY}), so a rule
+   *       that reads a role refuses on {@code null}, whether the role would admit or refuse. An
+   *       authorizer whose resolver is a function of the user id resolves instead of refusing,
+   *       {@code userRoleResolver.resolve(caller.userId())}; a resolver that threw at the request
+   *       edge throws there again, and the exception ends the request without a stream.
+   *   <li>{@code caller.baggage()} carries no access decision, with one exception that depends on
+   *       the identity mode. The {@code role} entry is the {@code X-User-Role} header the gateway
+   *       forwarded in trusted-gateway mode, as trustworthy as the gateway's handling of that
+   *       header, and absent in every other mode: the roles of an authenticated principal are never
+   *       there. Every other entry (the keys the application allow-lists in {@code
+   *       streamrune.metadata.baggage-allowlist} and the causation id) is copied from the client's
+   *       own W3C {@code baggage} header in every identity mode. Any caller sets those to any
+   *       value, so a rule that compares one of them (a tenant, an owner, a flag) admits whoever
+   *       names the value it looks for.
    * </ul>
+   *
+   * <p>In short: {@code userId()} and {@code authority()} are established at the request edge, in
+   * every identity mode; the {@code role} baggage entry is the forwarded role in trusted-gateway
+   * mode only; nothing else in the baggage is.
    *
    * <p>An implementation may block, for example to look the owner of the stream up in a database:
    * the integrations call it on a thread that may block, not on an event loop. On Spring that is

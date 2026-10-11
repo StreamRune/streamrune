@@ -92,8 +92,15 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   `caller.authority()` the roles and permissions your `UserRoleResolver` resolved for that user at
   the request edge, so a rule by role needs no request-scoped state of the web framework.
   `caller.authority()` is `null` when nothing was captured — an unauthenticated caller, no
-  `UserRoleResolver`, or a resolver that does not declare `requiresRequestContext()` (a lookup by
-  user id: ask it yourself, `resolver.resolve(caller.userId())`). A request the
+  `UserRoleResolver`, a resolver that does not declare `requiresRequestContext()` (a lookup by
+  user id: ask it yourself, `resolver.resolve(caller.userId())`), or a resolver that threw at the
+  request edge (asked again it throws again, and the request ends without a stream). `null` means
+  the roles are unknown, never "no roles": a rule that reads a role refuses on `null` first,
+  whether the role would admit or refuse. Decide by `caller.userId()` and `caller.authority()`
+  only: both are established at the request edge. In `caller.baggage()` the `role` entry is the
+  forwarded `X-User-Role` header in trusted-gateway mode and absent in every other mode; every
+  other entry is the client's own W3C `baggage` header in every identity mode and must not carry
+  an access decision. A request the
   request-scoped `StreamRuneRequestContextHolder` holds no context for (the filter excluded from
   the application) or one whose context names another user than the `RequestIdentityPolicy`
   resolves is answered `403` and the authorizer is not called; the log says which.
@@ -111,7 +118,10 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
         return false;
       }
       UserAuthority authority = caller.authority();
-      if (authority != null && authority.hasRole("SUPPORT")) {
+      if (authority == null) {
+        return false; // roles unknown: refuse before any role is read
+      }
+      if (authority.hasRole("SUPPORT")) {
         return true;
       }
       return streamId.aggregateType().value().equals("customer")

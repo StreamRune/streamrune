@@ -594,6 +594,13 @@ public class SseController {
    * Opens an SSE stream of one aggregate's events for a caller whose {@code X-User-Id} values and
    * request context were already read off the request.
    *
+   * <p>Of {@code requestContext} the endpoint verifies one thing: that its {@code userId()} is the
+   * caller the {@link RequestIdentityPolicy} resolves, which in the trusted-gateway mode is the
+   * value in {@code userIdHeaderValues}. Its {@code authority()} and its {@code baggage()} reach
+   * the {@link SseAuthorizer} as supplied. Code that calls this method with anything but the
+   * context and the header values of the request it serves vouches for them: for the authority and
+   * the baggage in every identity mode, and for the identity itself in the trusted-gateway mode.
+   *
    * @param aggregateType the aggregate type of the stream to subscribe to
    * @param aggregateId the aggregate id of the stream to subscribe to
    * @param userIdHeaderValues every {@code X-User-Id} value the request carried, as received;
