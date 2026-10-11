@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -24,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.LogSanitizer;
@@ -50,14 +52,23 @@ import org.streamrune.runtime.SseEventPublisher;
  * live, best-effort and at-most-once: a frame reaches only the clients connected at that moment,
  * nothing is redelivered after a reconnect, and {@code Last-Event-ID} is not honoured.
  *
- * <p><b>Caller identity.</b> The caller handed to the authorizer is resolved by the same {@link
- * RequestIdentityPolicy} the {@link ScopedValueFilter} binds {@code RequestContext.userId} with, so
- * a stream subscription and a command from the same request see the same user: the authenticated
- * principal when an {@link AuthenticatedUserResolver} is available (the {@code X-User-Id} header
- * ignored), the {@code X-User-Id} header only in the explicit trusted-gateway mode ({@code
+ * <p><b>Caller identity.</b> The authorizer receives the request context the {@link
+ * ScopedValueFilter} bound for the request ({@link StreamRuneContext#CURRENT}): the user id and the
+ * captured authority a command from the same request authorizes against. The endpoint resolves the
+ * caller itself as well, by the same {@link RequestIdentityPolicy} the filter binds {@code
+ * RequestContext.userId} with: the authenticated principal when an {@link
+ * AuthenticatedUserResolver} is available (the {@code X-User-Id} header ignored), the {@code
+ * X-User-Id} header only in the explicit trusted-gateway mode ({@code
  * streamrune.security.trust-user-id-header=true}), and otherwise nobody ({@code null}). Both read
  * the header through {@link ScopedValueFilter#userIdHeaderValues}, every value as received, so a
  * repeated {@code X-User-Id} cannot resolve to one caller here and another there.
+ *
+ * <p><b>No request context, no subscription.</b> The bound context is handed to the authorizer only
+ * when its user id is the caller the endpoint resolved. A request with no context bound (the filter
+ * is registered with URL patterns that leave {@code /api/sse} out, or replaced by a filter that
+ * binds none) and a request whose bound context names another user (the filter is registered ahead
+ * of the Spring Security filter chain, or built with another policy) are refused with {@code 403
+ * Forbidden}, the authorizer is not called and the reason is logged: see {@link #callerContext}.
  *
  * <p><b>Opening frame.</b> The last step of a subscription sends one {@code : keepalive} comment
  * frame, the same frame on the wire as the Quarkus and Micronaut integrations write. It commits the
@@ -254,7 +265,8 @@ public class SseController implements SmartLifecycle, AutoCloseable {
    *     documentation)
    * @return the open emitter; once the controller is stopped, an emitter that is already complete
    * @throws ResponseStatusException with {@code 400 Bad Request} when the aggregate type or the
-   *     aggregate id is invalid, {@code 403 Forbidden} when the authorizer denies the caller
+   *     aggregate id is invalid, {@code 403 Forbidden} when the authorizer denies the caller or the
+   *     request has no request context of that caller (see the class documentation)
    */
   @GetMapping(
       value = "/{aggregateType}/{aggregateId}",
@@ -264,7 +276,11 @@ public class SseController implements SmartLifecycle, AutoCloseable {
       @PathVariable("aggregateId") String aggregateId,
       HttpServletRequest request) {
     RequestStream stream =
-        open(aggregateType, aggregateId, ScopedValueFilter.userIdHeaderValues(request));
+        open(
+            aggregateType,
+            aggregateId,
+            ScopedValueFilter.userIdHeaderValues(request),
+            StreamRuneContext.capture());
     // From here Spring MVC takes the emitter over. Should that fail, the stream is found on the
     // request and released: see releaseStreamOf.
     request.setAttribute(STREAM_ATTRIBUTE, stream);
@@ -273,28 +289,37 @@ public class SseController implements SmartLifecycle, AutoCloseable {
 
   /**
    * Opens an SSE stream of the given aggregate's events for a caller whose {@code X-User-Id} values
-   * were already read off the request.
+   * and request context were already read off the request.
    *
    * @param aggregateType the aggregate type of the stream to subscribe to
    * @param aggregateId the aggregate id of the stream to subscribe to
    * @param userIdHeaderValues every {@code X-User-Id} value the request carried, as received;
    *     {@code null} or empty when absent
+   * @param requestContext the request context bound for the request, or {@code null} when none is
    * @return the open emitter; once the controller is stopped, an emitter that is already complete
    * @throws ResponseStatusException with {@code 400 Bad Request} when the aggregate type or the
-   *     aggregate id is invalid (the authorizer is never consulted), {@code 403 Forbidden} when the
-   *     authorizer denies the caller
+   *     aggregate id is invalid (the authorizer is never consulted), {@code 403 Forbidden} when
+   *     {@code requestContext} is {@code null} or names another user than the caller resolved from
+   *     the request (the authorizer is never consulted) and when the authorizer denies the caller
    */
   public SseEmitter stream(
-      String aggregateType, String aggregateId, List<String> userIdHeaderValues) {
-    return open(aggregateType, aggregateId, userIdHeaderValues).emitter();
+      String aggregateType,
+      String aggregateId,
+      List<String> userIdHeaderValues,
+      StreamRuneContext.RequestContext requestContext) {
+    return open(aggregateType, aggregateId, userIdHeaderValues, requestContext).emitter();
   }
 
   /** Authorizes the caller and opens the stream: its emitter and the cleanup that releases it. */
   private RequestStream open(
-      String aggregateType, String aggregateId, List<String> userIdHeaderValues) {
+      String aggregateType,
+      String aggregateId,
+      List<String> userIdHeaderValues,
+      StreamRuneContext.RequestContext requestContext) {
     StreamId sid = streamIdOf(aggregateType, aggregateId);
     UserId principal = identityPolicy.resolve(userIdHeaderValues, SseController::logMismatch);
-    if (!authorizer.isAuthorized(principal, sid)) {
+    StreamRuneContext.RequestContext caller = callerContext(principal, requestContext, sid);
+    if (!authorizer.isAuthorized(caller, sid)) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized for this stream");
     }
 
@@ -486,6 +511,53 @@ public class SseController implements SmartLifecycle, AutoCloseable {
       throw new ResponseStatusException(
           HttpStatus.BAD_REQUEST, "Invalid aggregate type or aggregate id");
     }
+  }
+
+  /**
+   * The request context the authorizer is asked with: the one bound for the request, and only when
+   * it carries the caller this endpoint resolved itself.
+   *
+   * <p>With the auto-configured {@link ScopedValueFilter} the two always agree: the filter resolved
+   * the context's user id through the same {@link RequestIdentityPolicy}, from the same request, on
+   * this thread, and captured the authority for that user id. They can differ only where the
+   * application changed how the context is bound, and then the endpoint refuses instead of choosing
+   * between two identities. The authorizer therefore never sees an identity this endpoint did not
+   * establish, and never an anonymous caller made up for a request that has no context.
+   *
+   * @param principal the caller the endpoint resolved, or {@code null} when unauthenticated
+   * @param requestContext the request context bound for the request, or {@code null} when none is
+   * @param sid the requested stream, for the log line of a refusal
+   * @return {@code requestContext}
+   * @throws ResponseStatusException with {@code 403 Forbidden} when there is no request context or
+   *     its user id is not {@code principal}
+   */
+  private static StreamRuneContext.RequestContext callerContext(
+      UserId principal, StreamRuneContext.RequestContext requestContext, StreamId sid) {
+    if (requestContext == null) {
+      log.warn(
+          "Refused the SSE subscription to {}: no request context is bound for the request, so it"
+              + " did not pass ScopedValueFilter. The SseAuthorizer was not asked. Register the"
+              + " filter for /api/sse as well.",
+          LogSanitizer.sanitizeForLog(sid.value()));
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized for this stream");
+    }
+    if (!Objects.equals(requestContext.userId(), principal)) {
+      log.warn(
+          "Refused the SSE subscription to {}: the request context bound for the request names"
+              + " '{}' and the RequestIdentityPolicy resolves '{}'. The SseAuthorizer was not"
+              + " asked. ScopedValueFilter must run behind the authentication and use the"
+              + " RequestIdentityPolicy bean.",
+          LogSanitizer.sanitizeForLog(sid.value()),
+          LogSanitizer.sanitizeForLog(valueOf(requestContext.userId())),
+          LogSanitizer.sanitizeForLog(valueOf(principal)));
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized for this stream");
+    }
+    return requestContext;
+  }
+
+  /** The value of a user id that may be absent, for a log line that sanitizes it. */
+  private static String valueOf(UserId userId) {
+    return userId == null ? null : userId.value();
   }
 
   private static void logMismatch(UserId headerUserId, UserId principal) {

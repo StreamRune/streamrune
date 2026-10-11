@@ -128,20 +128,53 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   global stream, whether or not a client is connected. Do not call `SseEventPublisher.publish`
   yourself for this endpoint — every frame would be written twice. To run a feed of your own,
   declare an `SseEventFeed` bean: it replaces the integration's, and you start and stop it.
-- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean; it
-  receives the caller the request filter resolved and the requested `StreamId`. It is asked once,
-  when the stream opens: a caller whose access ends afterwards keeps reading until the stream ends,
-  so `streamrune.sse.timeout` (default `5m`) is also the bound on that. Keep it finite where access
-  can change.
+- **Authorization** — every stream is denied (`403`) until you provide an `SseAuthorizer` bean:
+  `boolean isAuthorized(StreamRuneContext.RequestContext caller, StreamId streamId)`. `caller` is
+  the request context `StreamRuneContextFilter` built for the request, the one a command from that
+  request authorizes against: `caller.userId()` is the caller (`null` when unauthenticated) and
+  `caller.authority()` the roles and permissions your `UserRoleResolver` resolved for that user at
+  the request edge, so a rule by role needs no request-scoped state of the web framework.
+  `caller.authority()` is `null` when nothing was captured — an unauthenticated caller, no
+  `UserRoleResolver`, or a resolver that does not declare `requiresRequestContext()` (a lookup by
+  user id: ask it yourself, `resolver.resolve(caller.userId())`). A request that
+  carries no request context (the filter replaced by one that stores none) or one that names
+  another user than the `RequestIdentityPolicy` resolves is answered `403` and the authorizer is
+  not called; the log says which.
+  The authorizer is asked once, when the stream opens: a caller whose access ends afterwards keeps
+  reading until the stream ends, so `streamrune.sse.timeout` (default `5m`) is also the bound on
+  that. Keep it finite where access can change.
+
+  ```java
+  @Singleton
+  SseAuthorizer sseAuthorizer() {
+    return (caller, streamId) -> {
+      UserId user = caller.userId();
+      if (user == null) {
+        return false;
+      }
+      UserAuthority authority = caller.authority();
+      if (authority != null && authority.hasRole("SUPPORT")) {
+        return true;
+      }
+      return streamId.aggregateType().value().equals("customer")
+          && streamId.aggregateId().value().equals(user.value());
+    };
+  }
+  ```
 - **Threads** — the controller declares no executor: it calls the `SseAuthorizer` on the thread the
   request filter chain leaves the request on. `StreamRuneContextFilter` runs on the blocking
   executor and proceeds synchronously, so with it the authorizer runs there, inside the filter's
   request context, and may read a database. If you replace that filter, run yours on the blocking
   executor too (`@ExecuteOn(TaskExecutors.BLOCKING)`), or the authorizer runs on a Netty event
-  loop. A filter you add behind it that runs on another executor (its own `@ExecuteOn`) can take
-  the controller and the authorizer to that executor's thread, where `StreamRuneContext.CURRENT`
-  is not bound; whether a given request goes on there or on the framework filter's thread depends
-  on timing inside Micronaut, so an authorizer behind such a filter must not rely on either.
+  loop — and store the request context yourself, as the request attribute
+  `StreamRuneContextFilter.CONTEXT_ATTRIBUTE`, with the user id the `RequestIdentityPolicy` bean
+  resolves: that attribute is where the endpoint reads the caller it hands to the authorizer. A
+  filter you add behind the framework's that runs on another executor (its own `@ExecuteOn`) can
+  take the controller and the authorizer to that executor's thread, where
+  `StreamRuneContext.CURRENT` is not bound; whether a given request goes on there or on the
+  framework filter's thread depends on timing inside Micronaut. The `caller` the authorizer is
+  handed is the same on either thread; an authorizer behind such a filter must not read
+  `StreamRuneContext.CURRENT` itself.
 - **Delivery guarantee** — live, best-effort, at-most-once. A frame reaches a client only while it
   is connected; nothing is redelivered, and `Last-Event-ID` is not honoured. Events stored before a
   client connected, while it was reconnecting, or while the instance was down are never sent to it.
@@ -162,7 +195,7 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
 `StreamRuneContextFilter` binds `RequestContext.userId` — the user every
 `CommandAuthorizationPolicy`, `@RequireRole`/`@RequirePermission` and
 `Authorization.requireOwner(...)` check trusts, and the user the audit records — and the SSE
-endpoint hands the same user to your `SseAuthorizer`. Both resolve it through one
+endpoint hands that request context to your `SseAuthorizer`. Both resolve the user through one
 `RequestIdentityPolicy` bean (the same rule as the Spring and Quarkus integrations), which fails
 closed:
 

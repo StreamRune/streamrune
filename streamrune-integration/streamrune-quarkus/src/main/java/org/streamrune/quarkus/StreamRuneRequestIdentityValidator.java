@@ -38,7 +38,8 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  *
  * <p>An application without Quarkus REST (a headless worker) does not derive identities from HTTP
  * requests and is not checked. The SSE endpoint is not a signal: its {@code SseAuthorizer} receives
- * {@code null} for an anonymous caller, which an ownership check already denies.
+ * a request context with no user id for an anonymous caller, which an ownership check already
+ * denies.
  *
  * <p>Runs at {@link Interceptor.Priority#LIBRARY_BEFORE}, with the other startup validators and
  * strictly before {@link StreamRuneLifecycle} starts any runner.

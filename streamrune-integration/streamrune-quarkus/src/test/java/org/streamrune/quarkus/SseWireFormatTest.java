@@ -57,7 +57,7 @@ import org.streamrune.runtime.SseEventPublisher;
  */
 class SseWireFormatTest {
 
-  private static final SseAuthorizer ALLOW_ALL = (principal, streamId) -> true;
+  private static final SseAuthorizer ALLOW_ALL = (caller, streamId) -> true;
   private static final RequestIdentityPolicy ANONYMOUS = RequestIdentityPolicy.of(null, false);
   private static final StreamId ORDER_1 =
       StreamId.of(AggregateType.of("order"), AggregateId.of("o-1"));
@@ -100,11 +100,14 @@ class SseWireFormatTest {
   void aDomainEventIsWrittenAsAJsonObjectUnderItsGlobalOffset_andAKeepAliveAsAComment()
       throws Exception {
     var publisher = new SseEventPublisher();
+    var holder = new StreamRuneRequestContextHolder();
     var controller =
         new SseController(
-            publisher, ALLOW_ALL, ANONYMOUS, Duration.ofMinutes(5), Duration.ofMillis(100));
+            publisher, ALLOW_ALL, ANONYMOUS, holder, Duration.ofMinutes(5), Duration.ofMillis(100));
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
-    try (var server = QuarkusRestTestServer.start(controller, JacksonJsonWriter.class)) {
+    try (var server =
+        QuarkusRestTestServer.start(
+            controller, List.of(new StreamRuneRequestFilter(holder)), JacksonJsonWriter.class)) {
       HttpResponse<InputStream> response = open(client, server, "/api/sse/order/o-1");
       assertThat(response.statusCode()).isEqualTo(200);
       assertThat(response.headers().firstValue("Content-Type"))
@@ -163,11 +166,14 @@ class SseWireFormatTest {
       throws Exception {
     var publisher = new SseEventPublisher();
     // The periodic keepalive is far beyond every bound below: it is not what opens the stream.
+    var holder = new StreamRuneRequestContextHolder();
     var controller =
         new SseController(
-            publisher, ALLOW_ALL, ANONYMOUS, Duration.ofMinutes(5), Duration.ofSeconds(30));
+            publisher, ALLOW_ALL, ANONYMOUS, holder, Duration.ofMinutes(5), Duration.ofSeconds(30));
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
-    try (var server = QuarkusRestTestServer.start(controller, JacksonJsonWriter.class)) {
+    try (var server =
+        QuarkusRestTestServer.start(
+            controller, List.of(new StreamRuneRequestFilter(holder)), JacksonJsonWriter.class)) {
       HttpResponse<InputStream> response = open(client, server, "/api/sse/order/o-1", OPENS_WITHIN);
       assertThat(response.statusCode()).isEqualTo(200);
       List<List<String>> frames = new CopyOnWriteArrayList<>();
@@ -227,11 +233,14 @@ class SseWireFormatTest {
   @Test
   void aFrameTheBodyWriterCannotSerializeEndsTheResponse() throws Exception {
     var publisher = new SseEventPublisher();
+    var holder = new StreamRuneRequestContextHolder();
     var controller =
         new SseController(
-            publisher, ALLOW_ALL, ANONYMOUS, Duration.ofMinutes(5), Duration.ofSeconds(30));
+            publisher, ALLOW_ALL, ANONYMOUS, holder, Duration.ofMinutes(5), Duration.ofSeconds(30));
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
-    try (var server = QuarkusRestTestServer.start(controller, FailingJsonWriter.class)) {
+    try (var server =
+        QuarkusRestTestServer.start(
+            controller, List.of(new StreamRuneRequestFilter(holder)), FailingJsonWriter.class)) {
       HttpResponse<InputStream> response = open(client, server, "/api/sse/order/o-1", OPENS_WITHIN);
       assertThat(response.statusCode()).isEqualTo(200);
       List<List<String>> frames = new CopyOnWriteArrayList<>();

@@ -34,8 +34,8 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  * streamrune.security.trust-user-id-header=false}. In that state every gated command would be
  * denied. An interceptor bean that no bus runs gates nothing and is not a signal.
  *
- * <p>The SSE endpoint is not a signal: its {@code SseAuthorizer} receives {@code null} for an
- * anonymous caller, which an ownership check already denies.
+ * <p>The SSE endpoint is not a signal: its {@code SseAuthorizer} receives a request context with no
+ * user id for an anonymous caller, which an ownership check already denies.
  *
  * <p>Listens on the context-level {@link StartupEvent} with the other startup validators, at an
  * order strictly below {@link StreamRuneLifecycle}'s, so the check runs before any runner starts.
