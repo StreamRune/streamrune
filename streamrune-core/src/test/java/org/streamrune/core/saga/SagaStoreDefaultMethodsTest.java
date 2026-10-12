@@ -1,22 +1,29 @@
 package org.streamrune.core.saga;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.SagaType;
 
 /**
- * The two optional {@link SagaStore} defaults: a {@code null} argument (the saga type, the status
- * filter, the age bound) is rejected as the caller bug it is ({@link IllegalArgumentException}),
- * ahead of the default's loud {@link UnsupportedOperationException} for a store that does not
- * support the capability.
+ * The {@link SagaStore} defaults. The two optional ones: a {@code null} argument (the saga type,
+ * the status filter, the age bound) is rejected as the caller bug it is ({@link
+ * IllegalArgumentException}), ahead of the default's loud {@link UnsupportedOperationException} for
+ * a store that does not support the capability. The two short forms of the episode-opening writes:
+ * each delegates to the abstract long form with no cause.
  */
 class SagaStoreDefaultMethodsTest {
 
   private static final SagaType TYPE = SagaType.of("TestType");
+
+  /** The {@code episodeCause} each long-form call received, in call order. */
+  private static final List<Optional<EventId>> RECEIVED_CAUSES = new ArrayList<>();
 
   /** Implements every abstract method benignly, so only the inherited defaults are under test. */
   private static final SagaStore STORE =
@@ -43,7 +50,10 @@ class SagaStoreDefaultMethodsTest {
             SagaType sagaType,
             SagaState state,
             SagaStatus status,
-            boolean deadLetterPending) {}
+            boolean deadLetterPending,
+            EventId episodeCause) {
+          RECEIVED_CAUSES.add(Optional.ofNullable(episodeCause));
+        }
 
         @Override
         public void createFaulted(SagaId sagaId, SagaType sagaType, SagaState initialState) {}
@@ -67,7 +77,13 @@ class SagaStoreDefaultMethodsTest {
 
         @Override
         public void claimCompensating(
-            SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {}
+            SagaId sagaId,
+            SagaType sagaType,
+            SagaState state,
+            long expectedVersion,
+            EventId episodeCause) {
+          RECEIVED_CAUSES.add(Optional.ofNullable(episodeCause));
+        }
 
         @Override
         public <S extends SagaState> Optional<LoadedSaga<S>> load(
@@ -88,6 +104,28 @@ class SagaStoreDefaultMethodsTest {
           return List.of();
         }
       };
+
+  private record State(SagaStatus status) implements SagaState {}
+
+  @Test
+  void theShortFormsOfTheEpisodeOpeningWrites_delegateWithNoCause() {
+    RECEIVED_CAUSES.clear();
+    SagaId id = SagaId.of("saga-1");
+    State state = new State(SagaStatus.COMPENSATING);
+
+    STORE.createGenesisPending(id, TYPE, state, SagaStatus.COMPENSATING, false);
+    STORE.claimCompensating(id, TYPE, state, 1L);
+    assertThat(RECEIVED_CAUSES).containsExactly(Optional.empty(), Optional.empty());
+
+    STORE.createGenesisPending(id, TYPE, state, SagaStatus.COMPENSATING, false, EventId.of("e-1"));
+    STORE.claimCompensating(id, TYPE, state, 1L, EventId.of("e-2"));
+    assertThat(RECEIVED_CAUSES)
+        .containsExactly(
+            Optional.empty(),
+            Optional.empty(),
+            Optional.of(EventId.of("e-1")),
+            Optional.of(EventId.of("e-2")));
+  }
 
   @Test
   void countByStatus_default_rejectsANullSagaType_beforeReportingTheMissingCapability() {

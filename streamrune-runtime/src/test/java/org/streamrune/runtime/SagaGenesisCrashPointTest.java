@@ -21,6 +21,7 @@ import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore.AppliedEvent;
 import org.streamrune.core.types.CausationId;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.runtime.SagaStartFixtures.ScriptedBus;
 import org.streamrune.runtime.SagaStartFixtures.StartOrchestrator;
@@ -221,7 +222,12 @@ class SagaGenesisCrashPointTest {
         new ForwardingSagaStore(new InMemorySagaStore()) {
           @Override
           public void createGenesisPending(
-              SagaId id, SagaType t, SagaState s, SagaStatus st, boolean deadLetterPending) {
+              SagaId id,
+              SagaType t,
+              SagaState s,
+              SagaStatus st,
+              boolean deadLetterPending,
+              EventId episodeCause) {
             throw new OptimisticLockException("simulated concurrent create, then delete");
           }
         };

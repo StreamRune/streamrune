@@ -20,6 +20,7 @@ class SagaUnstampedCompensationEpisodeExceptionTest {
             Instant.parse("2026-10-02T10:00:00Z"),
             /* episodeVersion= */ 3L,
             /* episodeClaimedAt= */ null,
+            /* episodeCauseEventId= */ null,
             true,
             null,
             false,

@@ -267,8 +267,10 @@ class SagaStartEventClaimFirstCrashTest {
         SagaType sagaType,
         SagaState state,
         SagaStatus status,
-        boolean deadLetterPending) {
-      delegate.createGenesisPending(sagaId, sagaType, state, status, deadLetterPending);
+        boolean deadLetterPending,
+        EventId episodeCause) {
+      delegate.createGenesisPending(
+          sagaId, sagaType, state, status, deadLetterPending, episodeCause);
     }
 
     @Override
@@ -320,8 +322,14 @@ class SagaStartEventClaimFirstCrashTest {
 
     @Override
     public void claimCompensating(
-        SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
-      update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
+        SagaId sagaId,
+        SagaType sagaType,
+        SagaState state,
+        long expectedVersion,
+        EventId episodeCause) {
+      // Never a terminal write, so the crash seam does not apply: the claim and its cause reach the
+      // backing store.
+      delegate.claimCompensating(sagaId, sagaType, state, expectedVersion, episodeCause);
     }
   }
 
@@ -432,19 +440,22 @@ class SagaStartEventClaimFirstCrashTest {
         .isZero();
     assertThat(bus.execCount("undo-1")).as("the refund must not double-execute").isEqualTo(1);
 
-    // The cause saga dispatch binds is a function of the saga type, the saga id and the triggering
-    // event, so the crashed attempt and the resume bind equal values: whichever attempt commits a
-    // command stores the same saga origin and causation id.
+    // The cause saga dispatch binds is a function of the saga type, the saga id and one stored
+    // event: the triggering event for a forward command, and for a compensation command the event
+    // that opened the episode — here the start event, whose second forward command was rejected.
+    // The claim records that event's id on the saga row, and the resume reads it from the row, so
+    // the crashed attempt and the resume bind equal values: whichever attempt commits a command
+    // stores the same saga origin and causation id.
     var origin = new SagaOrigin(SagaType.fromClass(FakeSagaState.class), sagaId, 0);
-    var forwardCause =
+    var causedByTheStartEvent =
         new StreamRuneContext.DispatchCause(
             CausationId.of(start.metadata().eventId().value()), origin);
-    var compensationCause = new StreamRuneContext.DispatchCause(null, origin);
-    assertThat(bus.causes("do-1")).containsExactly(forwardCause);
-    assertThat(bus.causes("do-2")).as("the failed dispatch").containsExactly(forwardCause);
+    assertThat(afterRedelivery.episodeCauseEventId()).isEqualTo(start.metadata().eventId());
+    assertThat(bus.causes("do-1")).containsExactly(causedByTheStartEvent);
+    assertThat(bus.causes("do-2")).as("the failed dispatch").containsExactly(causedByTheStartEvent);
     assertThat(bus.causes("undo-1"))
         .as("the crashed attempt and the resume bind the same cause")
-        .containsExactly(compensationCause, compensationCause);
+        .containsExactly(causedByTheStartEvent, causedByTheStartEvent);
 
     // 3) A later correlated event is now a no-op — the saga already reached terminal COMPENSATED
     // via

@@ -49,7 +49,9 @@ import org.streamrune.test.MutableClock;
  * Every path on which a saga dispatches a command stores the saga's origin in the metadata of the
  * events that command produces: the same origin on the event path, the timeout runner, the
  * compensation-retry sweeper and the dead-letter replayer. Forward events name the triggering event
- * as their causation id; compensation events name none.
+ * as their causation id. Compensation events name the event that opened the compensation episode,
+ * whichever path commits the command, and none when the episode was opened with no event in hand (a
+ * timeout claim, an operator's compensation of a faulted forward step).
  *
  * <p>The commands run on the real {@link VirtualThreadCommandBus} over an in-memory event store and
  * command inbox, so what is asserted is what the bus stored.
@@ -295,7 +297,16 @@ class SagaDispatchProvenanceTest {
         .isEqualTo(CausationId.of(trigger.metadata().eventId().value()));
   }
 
-  private static void assertCompensationEvent(EventEnvelope produced) {
+  /** A compensation event of an episode that {@code opening} opened. */
+  private static void assertCompensationEvent(EventEnvelope produced, EventEnvelope opening) {
+    assertThat(produced.metadata().sagaOrigin()).isEqualTo(ORIGIN);
+    assertThat(produced.metadata().correlationId()).isEqualTo(CorrelationId.of(SAGA.value()));
+    assertThat(produced.metadata().causationId())
+        .isEqualTo(CausationId.of(opening.metadata().eventId().value()));
+  }
+
+  /** A compensation event of an episode opened with no event in hand. */
+  private static void assertCompensationEventWithoutACause(EventEnvelope produced) {
     assertThat(produced.metadata().sagaOrigin()).isEqualTo(ORIGIN);
     assertThat(produced.metadata().correlationId()).isEqualTo(CorrelationId.of(SAGA.value()));
     assertThat(produced.metadata().causationId()).isNull();
@@ -332,14 +343,15 @@ class SagaDispatchProvenanceTest {
     try (var h = new Harness()) {
       h.open();
       h.ship.failure = () -> new IllegalArgumentException("address rejected");
+      EventEnvelope advanced = h.append(new Advanced(ORDER));
 
-      h.deliver(h.append(new Advanced(ORDER)));
+      h.deliver(advanced);
 
       assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
       assertThat(h.stored(Shipped.class)).isEmpty();
       assertThat(h.stored(Released.class))
           .singleElement()
-          .satisfies(SagaDispatchProvenanceTest::assertCompensationEvent);
+          .satisfies(released -> assertCompensationEvent(released, advanced));
     }
   }
 
@@ -362,14 +374,14 @@ class SagaDispatchProvenanceTest {
       assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
       assertThat(h.stored(Released.class))
           .singleElement()
-          .satisfies(SagaDispatchProvenanceTest::assertCompensationEvent);
+          .satisfies(SagaDispatchProvenanceTest::assertCompensationEventWithoutACause);
     }
   }
 
   @Test
   void sweeperResume() {
     try (var h = new Harness()) {
-      leftCompensating(h);
+      EventEnvelope advanced = leftCompensating(h);
       SagaCompensationRetrySweeper<State> sweeper =
           SagaCompensationRetrySweeper.<State>builder()
               .sagaRunner(h.runner)
@@ -386,7 +398,7 @@ class SagaDispatchProvenanceTest {
       assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
       assertThat(h.stored(Released.class))
           .singleElement()
-          .satisfies(SagaDispatchProvenanceTest::assertCompensationEvent);
+          .satisfies(released -> assertCompensationEvent(released, advanced));
     }
   }
 
@@ -414,7 +426,7 @@ class SagaDispatchProvenanceTest {
   @Test
   void resumeFaulted() {
     try (var h = new Harness()) {
-      leftCompensating(h);
+      EventEnvelope advanced = leftCompensating(h);
       assertThat(h.runner.sweepCompensation(SAGA, true)).isEqualTo(StepOutcome.FAULTED);
       assertThat(h.row().preFaultStatus()).isEqualTo(SagaStatus.COMPENSATING);
 
@@ -423,7 +435,7 @@ class SagaDispatchProvenanceTest {
       assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
       assertThat(h.stored(Released.class))
           .singleElement()
-          .satisfies(SagaDispatchProvenanceTest::assertCompensationEvent);
+          .satisfies(released -> assertCompensationEvent(released, advanced));
     }
   }
 
@@ -442,21 +454,24 @@ class SagaDispatchProvenanceTest {
       assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
       assertThat(h.stored(Released.class))
           .singleElement()
-          .satisfies(SagaDispatchProvenanceTest::assertCompensationEvent);
+          .satisfies(SagaDispatchProvenanceTest::assertCompensationEventWithoutACause);
     }
   }
 
   /**
    * The shipment is rejected, so the event path claims the compensation episode; the release then
-   * fails once on infrastructure and the saga is left COMPENSATING with nothing released.
+   * fails once on infrastructure and the saga is left COMPENSATING with nothing released. Returns
+   * the event that opened the episode.
    */
-  private static void leftCompensating(Harness h) {
+  private static EventEnvelope leftCompensating(Harness h) {
     h.open();
     h.ship.failure = () -> new IllegalArgumentException("address rejected");
     h.release.failure = () -> new IllegalStateException("connection reset");
-    h.deliver(h.append(new Advanced(ORDER)));
+    EventEnvelope advanced = h.append(new Advanced(ORDER));
+    h.deliver(advanced);
     assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATING);
     assertThat(h.stored(Released.class)).isEmpty();
     h.release.failure = null;
+    return advanced;
   }
 }

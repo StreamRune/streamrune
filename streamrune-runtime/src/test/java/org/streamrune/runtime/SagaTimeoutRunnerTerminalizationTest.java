@@ -23,6 +23,7 @@ import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaTimeoutException;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
@@ -445,7 +446,11 @@ class SagaTimeoutRunnerTerminalizationTest {
 
           @Override
           public void claimCompensating(
-              SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
+              SagaId sagaId,
+              SagaType sagaType,
+              SagaState state,
+              long expectedVersion,
+              EventId episodeCause) {
             update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
           }
 
@@ -455,7 +460,8 @@ class SagaTimeoutRunnerTerminalizationTest {
               SagaType sagaType,
               SagaState state,
               SagaStatus status,
-              boolean deadLetterPending) {
+              boolean deadLetterPending,
+              EventId episodeCause) {
             throw new UnsupportedOperationException("createGenesisPending");
           }
 

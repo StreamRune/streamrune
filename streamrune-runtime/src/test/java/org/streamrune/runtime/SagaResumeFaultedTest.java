@@ -842,6 +842,7 @@ class SagaResumeFaultedTest {
                             r.updatedAt(),
                             /* episodeVersion= */ null,
                             /* episodeClaimedAt= */ null,
+                            /* episodeCauseEventId= */ null,
                             r.genesisApplied(),
                             r.preFaultStatus(),
                             r.deadLetterPending(),

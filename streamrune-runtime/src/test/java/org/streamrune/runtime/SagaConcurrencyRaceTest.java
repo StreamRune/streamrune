@@ -253,8 +253,10 @@ class SagaConcurrencyRaceTest {
         SagaType sagaType,
         SagaState state,
         SagaStatus status,
-        boolean deadLetterPending) {
-      underlying.createGenesisPending(sagaId, sagaType, state, status, deadLetterPending);
+        boolean deadLetterPending,
+        EventId episodeCause) {
+      underlying.createGenesisPending(
+          sagaId, sagaType, state, status, deadLetterPending, episodeCause);
     }
 
     @Override
@@ -322,7 +324,11 @@ class SagaConcurrencyRaceTest {
 
     @Override
     public void claimCompensating(
-        SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
+        SagaId sagaId,
+        SagaType sagaType,
+        SagaState state,
+        long expectedVersion,
+        EventId episodeCause) {
       update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
     }
   }

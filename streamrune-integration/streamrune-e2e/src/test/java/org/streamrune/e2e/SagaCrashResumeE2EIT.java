@@ -31,6 +31,7 @@ import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
@@ -249,8 +250,10 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
         .build();
   }
 
-  private void appendOrderPlaced(String orderId) {
+  /** Appends the start event and returns its id. */
+  private EventId appendOrderPlaced(String orderId) {
     StreamId streamId = StreamId.of(AggregateType.of("order"), AggregateId.of(orderId));
+    EventId eventId = EventId.of("evt-" + UUID.randomUUID());
     EventEnvelope envelope =
         new EventEnvelope(
             GlobalOffset.initial(),
@@ -259,7 +262,7 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
             EventType.fromClass(OrderPlaced.class),
             new OrderPlaced(orderId),
             new EventMetadata(
-                EventId.of("evt-" + UUID.randomUUID()),
+                eventId,
                 CommandId.of("cmd-" + UUID.randomUUID()),
                 null,
                 null,
@@ -268,6 +271,7 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
                 null,
                 Instant.now()));
     store.append(streamId, List.of(envelope), Version.initial());
+    return eventId;
   }
 
   private long count(String sql, String param) throws Exception {
@@ -277,6 +281,18 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
       try (var rs = ps.executeQuery()) {
         rs.next();
         return rs.getLong(1);
+      }
+    }
+  }
+
+  /** The first column of the single row {@code sql} selects for {@code param}, as text. */
+  private String scalar(String sql, String param) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var ps = conn.prepareStatement(sql)) {
+      ps.setString(1, param);
+      try (var rs = ps.executeQuery()) {
+        assertThat(rs.next()).as("one row for %s", param).isTrue();
+        return rs.getString(1);
       }
     }
   }
@@ -320,7 +336,7 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
 
     // Publish the start event. The subscription picks it up → the saga starts → ReserveStock fails
     // → claim-first COMPENSATING → CancelOrder succeeds → COMPENSATED.
-    appendOrderPlaced(orderId);
+    EventId orderPlaced = appendOrderPlaced(orderId);
     subscription.start();
     try {
       await()
@@ -368,8 +384,9 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
         .isEqualTo(1L);
 
     // The compensating event, read back from event_stream.metadata, names the saga that
-    // dispatched its command: the saga's type, its id, hop 0. A compensation command reacts to no
-    // event, so the event carries no causation id.
+    // dispatched its command: the saga's type, its id, hop 0. Its causation id is the event that
+    // opened the compensation episode: the start event, whose forward command was rejected. The
+    // claim stores that id in saga_state.episode_cause_event_id with the episode stamp.
     EventMetadata compensation =
         store
             .load(StreamId.of(AggregateType.of("cancel"), AggregateId.of("cancel-" + orderId)))
@@ -379,7 +396,10 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
     assertThat(compensation.sagaOrigin())
         .isEqualTo(new SagaOrigin(SagaType.fromClass(OrderSagaState.class), SagaId.of(sagaId), 0));
     assertThat(compensation.correlationId()).isEqualTo(CorrelationId.of(sagaId));
-    assertThat(compensation.causationId()).isNull();
+    assertThat(compensation.causationId()).isEqualTo(CausationId.of(orderPlaced.value()));
+    assertThat(scalar("SELECT episode_cause_event_id FROM saga_state WHERE saga_id = ?", sagaId))
+        .as("the cause is recorded on the saga row, where every resume path reads it")
+        .isEqualTo(orderPlaced.value());
     assertThat(
             count(
                 "SELECT COUNT(*) FROM event_stream WHERE metadata -> 'sagaOrigin' ->> 'sagaId' = ?",

@@ -289,6 +289,13 @@ CREATE TABLE saga_state (
     -- measure from the same instant. NULL = never entered a compensation episode.
     episode_version      BIGINT,
     episode_claimed_at   TIMESTAMPTZ,
+    -- The id of the event that opened the compensation episode, written by the statement that
+    -- stamps the two columns above and by no other. NULL when the episode was opened with no
+    -- event in hand (a timeout claim, an operator's compensation) and on a row that never entered
+    -- one. Every compensation command of the episode carries it as its causation id, whichever
+    -- path dispatches it. TEXT like event_audit_log.event_id: an event id is a non-blank string
+    -- of any shape.
+    episode_cause_event_id TEXT,
     -- TRUE once the start event's forward step (evolve -> handle -> dispatch loop) committed;
     -- FALSE from the create-first write until then.
     genesis_applied      BOOLEAN      NOT NULL DEFAULT FALSE,
@@ -304,11 +311,13 @@ CREATE TABLE saga_state (
     -- all, and a row in a compensation episode — COMPENSATING, or FAULTED out of COMPENSATING —
     -- carries them. The saga runtime derives the compensation idempotency keys and the key-age
     -- anchors from these two columns with no fallback and refuses a row that lacks them; this
-    -- constraint makes such a row impossible to write in the first place.
+    -- constraint makes such a row impossible to write in the first place. The cause belongs to the
+    -- stamp: a row names one only where it carries a stamp.
     CONSTRAINT saga_state_episode_stamped CHECK (
         (episode_version IS NULL) = (episode_claimed_at IS NULL)
         AND (episode_version IS NOT NULL
              OR (status <> 'COMPENSATING' AND pre_fault_status IS DISTINCT FROM 'COMPENSATING'))
+        AND (episode_cause_event_id IS NULL OR episode_version IS NOT NULL)
     )
 );
 

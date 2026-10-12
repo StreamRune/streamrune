@@ -18,6 +18,7 @@ import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaTypeCollisionException;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
 
@@ -38,6 +39,8 @@ import org.streamrune.core.types.SagaType;
  * shared create and CAS paths: a write that lands an entry at {@code COMPENSATING} stamps {@code
  * episodeVersion} (the version it lands at) and {@code episodeClaimedAt} (the clock's instant)
  * unless the entry already carries a stamp; {@link #claimCompensating} is the CAS with that status.
+ * The write that stamps the episode also records the cause it is given ({@code
+ * episodeCauseEventId}); every other write copies the recorded cause unchanged.
  */
 public final class InMemorySagaStore implements SagaStore {
 
@@ -50,6 +53,7 @@ public final class InMemorySagaStore implements SagaStore {
       long version,
       Long episodeVersion,
       Instant episodeClaimedAt,
+      EventId episodeCauseEventId,
       boolean genesisApplied,
       SagaStatus preFaultStatus,
       boolean deadLetterPending,
@@ -64,6 +68,7 @@ public final class InMemorySagaStore implements SagaStore {
           updatedAt,
           episodeVersion,
           episodeClaimedAt,
+          episodeCauseEventId,
           genesisApplied,
           preFaultStatus,
           deadLetterPending,
@@ -92,7 +97,7 @@ public final class InMemorySagaStore implements SagaStore {
       SagaState state,
       SagaStatus status,
       boolean deadLetterPending) {
-    doCreate(sagaId, sagaType, state, status, true, deadLetterPending);
+    doCreate(sagaId, sagaType, state, status, true, deadLetterPending, null);
   }
 
   @Override
@@ -101,13 +106,14 @@ public final class InMemorySagaStore implements SagaStore {
       SagaType sagaType,
       SagaState state,
       SagaStatus status,
-      boolean deadLetterPending) {
-    doCreate(sagaId, sagaType, state, status, false, deadLetterPending);
+      boolean deadLetterPending,
+      EventId episodeCause) {
+    doCreate(sagaId, sagaType, state, status, false, deadLetterPending, episodeCause);
   }
 
   @Override
   public void createFaulted(SagaId sagaId, SagaType sagaType, SagaState initialState) {
-    doCreate(sagaId, sagaType, initialState, SagaStatus.FAULTED, false, true);
+    doCreate(sagaId, sagaType, initialState, SagaStatus.FAULTED, false, true, null);
   }
 
   private void doCreate(
@@ -116,15 +122,18 @@ public final class InMemorySagaStore implements SagaStore {
       SagaState state,
       SagaStatus status,
       boolean genesisApplied,
-      boolean deadLetterPending) {
+      boolean deadLetterPending,
+      EventId episodeCause) {
     requireArgs(sagaId, sagaType, state, status);
     Instant now = clock.instant();
     // The episode stamp rule: a row born COMPENSATING is born stamped (episode 1, claimed now), in
     // the same insert — the start event's evolve yielded COMPENSATING (createGenesisPending), or a
-    // tooling create did. Any other status enters no episode.
+    // tooling create did. Any other status enters no episode. The cause given to the insert is
+    // recorded with the stamp and only with it.
     boolean entersEpisode = status == SagaStatus.COMPENSATING;
     Long episodeVersion = entersEpisode ? 1L : null;
     Instant episodeClaimedAt = entersEpisode ? now : null;
+    EventId episodeCauseEventId = entersEpisode ? episodeCause : null;
     SagaEntry prior =
         store.putIfAbsent(
             sagaId,
@@ -137,6 +146,7 @@ public final class InMemorySagaStore implements SagaStore {
                 1L,
                 episodeVersion,
                 episodeClaimedAt,
+                episodeCauseEventId,
                 genesisApplied,
                 null,
                 deadLetterPending,
@@ -154,7 +164,7 @@ public final class InMemorySagaStore implements SagaStore {
   @Override
   public void update(
       SagaId sagaId, SagaType sagaType, SagaState state, SagaStatus status, long expectedVersion) {
-    casUpdate(sagaId, sagaType, state, status, expectedVersion, null);
+    casUpdate(sagaId, sagaType, state, status, expectedVersion, null, null);
   }
 
   @Override
@@ -167,13 +177,18 @@ public final class InMemorySagaStore implements SagaStore {
       AppliedEvent applied) {
     requireArgs(sagaId, sagaType, state, status);
     if (applied == null) throw new IllegalArgumentException("applied must not be null");
-    casUpdate(sagaId, sagaType, state, status, expectedVersion, applied);
+    casUpdate(sagaId, sagaType, state, status, expectedVersion, applied, applied.eventId());
   }
 
   @Override
   public void claimCompensating(
-      SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
-    casUpdate(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion, null);
+      SagaId sagaId,
+      SagaType sagaType,
+      SagaState state,
+      long expectedVersion,
+      EventId episodeCause) {
+    casUpdate(
+        sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion, null, episodeCause);
   }
 
   /**
@@ -181,7 +196,9 @@ public final class InMemorySagaStore implements SagaStore {
    * #claimCompensating}, which leave the recorded offsets and the genesis flag untouched. The
    * episode stamp rule lives here: landing at {@code COMPENSATING} stamps the episode identity
    * unless the entry already carries one — a claim and an evolved {@code COMPENSATING} alike — and
-   * no write re-stamps or clears it.
+   * no write re-stamps or clears it. {@code episodeCause} is recorded by the write that stamps the
+   * episode and ignored by every other: the claim's cause, the applied event's id, {@code null} for
+   * {@link #update}.
    */
   private void casUpdate(
       SagaId sagaId,
@@ -189,7 +206,8 @@ public final class InMemorySagaStore implements SagaStore {
       SagaState state,
       SagaStatus status,
       long expectedVersion,
-      AppliedEvent applied) {
+      AppliedEvent applied,
+      EventId episodeCause) {
     requireArgs(sagaId, sagaType, state, status);
     store.compute(
         sagaId,
@@ -205,6 +223,7 @@ public final class InMemorySagaStore implements SagaStore {
               status == SagaStatus.COMPENSATING && entry.episodeVersion() == null;
           Long episodeVersion = entersEpisode ? Long.valueOf(newVersion) : entry.episodeVersion();
           Instant episodeClaimedAt = entersEpisode ? clock.instant() : entry.episodeClaimedAt();
+          EventId episodeCauseEventId = entersEpisode ? episodeCause : entry.episodeCauseEventId();
           Long lastApplied = entry.lastAppliedOffset();
           Long lastReplayed = entry.lastReplayedOffset();
           boolean genesisApplied = entry.genesisApplied();
@@ -225,6 +244,7 @@ public final class InMemorySagaStore implements SagaStore {
               newVersion,
               episodeVersion,
               episodeClaimedAt,
+              episodeCauseEventId,
               genesisApplied,
               null,
               entry.deadLetterPending(),
@@ -269,6 +289,7 @@ public final class InMemorySagaStore implements SagaStore {
               entry.version() + 1,
               entry.episodeVersion(),
               entry.episodeClaimedAt(),
+              entry.episodeCauseEventId(),
               entry.genesisApplied(),
               preFault,
               entry.deadLetterPending(),
@@ -294,6 +315,7 @@ public final class InMemorySagaStore implements SagaStore {
                     entry.version(),
                     entry.episodeVersion(),
                     entry.episodeClaimedAt(),
+                    entry.episodeCauseEventId(),
                     entry.genesisApplied(),
                     entry.preFaultStatus(),
                     pending,

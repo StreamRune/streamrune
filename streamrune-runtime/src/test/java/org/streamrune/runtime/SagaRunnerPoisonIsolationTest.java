@@ -375,7 +375,8 @@ class SagaRunnerPoisonIsolationTest {
               SagaType sagaType,
               SagaState state,
               SagaStatus status,
-              boolean deadLetterPending) {
+              boolean deadLetterPending,
+              EventId episodeCause) {
             throw new RuntimeException("simulated infra failure");
           }
 
@@ -412,7 +413,11 @@ class SagaRunnerPoisonIsolationTest {
 
           @Override
           public void claimCompensating(
-              SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
+              SagaId sagaId,
+              SagaType sagaType,
+              SagaState state,
+              long expectedVersion,
+              EventId episodeCause) {
             update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
           }
 

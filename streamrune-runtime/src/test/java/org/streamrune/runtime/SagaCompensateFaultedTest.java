@@ -13,6 +13,7 @@ import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.runtime.SagaDeadLetterReplayer.CompensateOutcome;
 import org.streamrune.runtime.SagaDeadLetterReplayer.ReplayOutcome;
@@ -534,13 +535,14 @@ class SagaCompensateFaultedTest {
     }
 
     @Override
-    public void claimCompensating(SagaId id, SagaType t, SagaState s, long v) {
+    public void claimCompensating(
+        SagaId id, SagaType t, SagaState s, long v, EventId episodeCause) {
       if (pending != null) {
         Runnable once = pending;
         pending = null;
         once.run();
       }
-      super.claimCompensating(id, t, s, v);
+      super.claimCompensating(id, t, s, v, episodeCause);
     }
   }
 }

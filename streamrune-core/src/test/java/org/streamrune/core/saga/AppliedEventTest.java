@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.saga.SagaStore.AppliedEvent;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.GlobalOffset;
 
 class AppliedEventTest {
@@ -41,6 +42,33 @@ class AppliedEventTest {
     assertThat(applied.eventOffset()).isEqualTo(OFFSET);
     assertThat(applied.startPath()).isTrue();
     assertThat(applied.replayRedrive()).isTrue();
+  }
+
+  @Test
+  void theFactoriesCarryNoEventId() {
+    assertThat(AppliedEvent.live(OFFSET).eventId()).isNull();
+    assertThat(AppliedEvent.liveStart(OFFSET).eventId()).isNull();
+    assertThat(AppliedEvent.replayed(OFFSET).eventId()).isNull();
+    assertThat(AppliedEvent.replayedStart(OFFSET).eventId()).isNull();
+  }
+
+  @Test
+  void withEventId_keepsOffsetAndPath() {
+    EventId id = EventId.of("evt-7");
+    assertThat(AppliedEvent.live(OFFSET).withEventId(id))
+        .isEqualTo(new AppliedEvent(OFFSET, false, false, id));
+    assertThat(AppliedEvent.liveStart(OFFSET).withEventId(id))
+        .isEqualTo(new AppliedEvent(OFFSET, true, false, id));
+    assertThat(AppliedEvent.replayed(OFFSET).withEventId(id))
+        .isEqualTo(new AppliedEvent(OFFSET, false, true, id));
+    assertThat(AppliedEvent.replayedStart(OFFSET).withEventId(id))
+        .isEqualTo(new AppliedEvent(OFFSET, true, true, id));
+  }
+
+  @Test
+  void withEventId_ofNull_removesTheEventId() {
+    var applied = AppliedEvent.replayed(OFFSET).withEventId(EventId.of("evt-7")).withEventId(null);
+    assertThat(applied).isEqualTo(AppliedEvent.replayed(OFFSET));
   }
 
   @Test

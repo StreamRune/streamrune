@@ -687,7 +687,8 @@ class SagaRunnerTest {
               SagaType sagaType,
               SagaState state,
               SagaStatus status,
-              boolean deadLetterPending) {
+              boolean deadLetterPending,
+              EventId episodeCause) {
             throw new OptimisticLockException("simulated concurrent create");
           }
 
@@ -727,7 +728,11 @@ class SagaRunnerTest {
 
           @Override
           public void claimCompensating(
-              SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
+              SagaId sagaId,
+              SagaType sagaType,
+              SagaState state,
+              long expectedVersion,
+              EventId episodeCause) {
             update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
           }
 
@@ -850,7 +855,11 @@ class SagaRunnerTest {
 
           @Override
           public void claimCompensating(
-              SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
+              SagaId sagaId,
+              SagaType sagaType,
+              SagaState state,
+              long expectedVersion,
+              EventId episodeCause) {
             update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
           }
 
@@ -860,7 +869,8 @@ class SagaRunnerTest {
               SagaType sagaType,
               SagaState state,
               SagaStatus status,
-              boolean deadLetterPending) {
+              boolean deadLetterPending,
+              EventId episodeCause) {
             throw new UnsupportedOperationException("createGenesisPending");
           }
 

@@ -477,8 +477,10 @@ class SagaMetricsEmissionTest {
         SagaType sagaType,
         SagaState state,
         SagaStatus status,
-        boolean deadLetterPending) {
-      delegate.createGenesisPending(sagaId, sagaType, state, status, deadLetterPending);
+        boolean deadLetterPending,
+        EventId episodeCause) {
+      delegate.createGenesisPending(
+          sagaId, sagaType, state, status, deadLetterPending, episodeCause);
     }
 
     @Override
@@ -541,7 +543,11 @@ class SagaMetricsEmissionTest {
 
     @Override
     public void claimCompensating(
-        SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
+        SagaId sagaId,
+        SagaType sagaType,
+        SagaState state,
+        long expectedVersion,
+        EventId episodeCause) {
       update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
     }
   }
@@ -680,8 +686,10 @@ class SagaMetricsEmissionTest {
         SagaType sagaType,
         SagaState state,
         SagaStatus status,
-        boolean deadLetterPending) {
-      delegate.createGenesisPending(sagaId, sagaType, state, status, deadLetterPending);
+        boolean deadLetterPending,
+        EventId episodeCause) {
+      delegate.createGenesisPending(
+          sagaId, sagaType, state, status, deadLetterPending, episodeCause);
     }
 
     @Override
@@ -744,7 +752,11 @@ class SagaMetricsEmissionTest {
 
     @Override
     public void claimCompensating(
-        SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
+        SagaId sagaId,
+        SagaType sagaType,
+        SagaState state,
+        long expectedVersion,
+        EventId episodeCause) {
       update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
     }
   }
