@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Callable;
+import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.IdConstraints;
 import org.streamrune.core.types.TraceId;
@@ -43,8 +45,54 @@ public final class StreamRuneContext {
    * saga instead of publishing it to the dead letter queue, {@link
    * Authorization#requireOwnerOrSaga} admits it and {@link Authorization#requireOwner} denies it.
    * Domain code reads it through {@link #isSagaDispatch()}; only the saga dispatch path binds it.
+   *
+   * <p>It states authority and dead-letter suppression, nothing else. Which saga caused a dispatch
+   * is stated by {@link #CAUSE}.
    */
   public static final ScopedValue<Boolean> SAGA_OWNED = ScopedValue.newInstance();
+
+  /**
+   * What caused the command dispatch in progress: the causing event, the saga origin, or both.
+   *
+   * <p>The command bus copies both parts into the metadata of every event the command produces:
+   * {@link EventMetadata#causationId()} and {@link EventMetadata#sagaOrigin()}. A request context
+   * has no saga origin component, so nothing a request carries reaches {@link
+   * EventMetadata#sagaOrigin()}.
+   *
+   * @param causationId the id of the event the dispatch reacts to, or {@code null} when it reacts
+   *     to none
+   * @param sagaOrigin the saga that caused the dispatch, or {@code null} when no saga did
+   */
+  public record DispatchCause(CausationId causationId, SagaOrigin sagaOrigin) {
+
+    public DispatchCause {
+      if (causationId == null && sagaOrigin == null) {
+        throw new IllegalArgumentException(
+            "a dispatch cause names a causing event, a saga origin, or both");
+      }
+    }
+  }
+
+  /**
+   * The cause of the command dispatch in progress on this thread. Saga dispatch binds it around
+   * every command a saga sends ({@code SagaCommandDispatch}); {@code
+   * VirtualThreadCommandBus.executeAsync} and {@link #wrap(Runnable)} / {@link #wrap(Callable)}
+   * carry it onto another thread. Unbound for a command a request, a background job or a
+   * dead-letter replay dispatches: the events of such a command carry no saga origin.
+   *
+   * <p>Application code reads it through {@link #cause()} and does not bind it.
+   */
+  public static final ScopedValue<DispatchCause> CAUSE = ScopedValue.newInstance();
+
+  /**
+   * Returns the {@link DispatchCause} bound to the current thread, or {@code null} when none is
+   * bound.
+   *
+   * @return the cause of the dispatch in progress, or {@code null}
+   */
+  public static DispatchCause cause() {
+    return CAUSE.isBound() ? CAUSE.get() : null;
+  }
 
   /**
    * Whether the command executing on this thread was dispatched by a saga ({@link #SAGA_OWNED} is
@@ -69,44 +117,63 @@ public final class StreamRuneContext {
   }
 
   /**
-   * Returns a {@link Runnable} that runs {@code task} with the {@link RequestContext} bound at the
-   * time this method was called. Use this when handing work to another thread ({@code
+   * Returns a {@link Runnable} that runs {@code task} with the {@link RequestContext} ({@link
+   * #CURRENT}) and the {@link DispatchCause} ({@link #CAUSE}) bound at the time this method was
+   * called, each when it was bound. Use this when handing work to another thread ({@code
    * Thread.start()}, executors, {@code CompletableFuture.supplyAsync}), where {@link ScopedValue}
    * bindings are otherwise lost.
    *
-   * <p>If no context is bound when this method is called, {@code task} is returned unchanged and
-   * runs without a binding.
+   * <p>If neither is bound when this method is called, {@code task} is returned unchanged and runs
+   * without a binding.
    *
    * @param task the task to wrap (required)
-   * @return a runnable that re-binds the captured context around {@code task}
+   * @return a runnable that re-binds the captured context and cause around {@code task}
    */
   public static Runnable wrap(Runnable task) {
     Objects.requireNonNull(task, "task is required");
-    if (!CURRENT.isBound()) {
+    ScopedValue.Carrier bindings = capturedBindings();
+    if (bindings == null) {
       return task;
     }
-    RequestContext captured = CURRENT.get();
-    return () -> ScopedValue.where(CURRENT, captured).run(task);
+    return () -> bindings.run(task);
   }
 
   /**
-   * Returns a {@link Callable} that calls {@code task} with the {@link RequestContext} bound at the
-   * time this method was called. The {@link Callable} counterpart of {@link #wrap(Runnable)}.
+   * Returns a {@link Callable} that calls {@code task} with the {@link RequestContext} ({@link
+   * #CURRENT}) and the {@link DispatchCause} ({@link #CAUSE}) bound at the time this method was
+   * called, each when it was bound. The {@link Callable} counterpart of {@link #wrap(Runnable)}.
    *
-   * <p>If no context is bound when this method is called, {@code task} is returned unchanged and
-   * runs without a binding.
+   * <p>If neither is bound when this method is called, {@code task} is returned unchanged and runs
+   * without a binding.
    *
    * @param task the task to wrap (required)
    * @param <T> the task's result type
-   * @return a callable that re-binds the captured context around {@code task}
+   * @return a callable that re-binds the captured context and cause around {@code task}
    */
   public static <T> Callable<T> wrap(Callable<T> task) {
     Objects.requireNonNull(task, "task is required");
-    if (!CURRENT.isBound()) {
+    ScopedValue.Carrier bindings = capturedBindings();
+    if (bindings == null) {
       return task;
     }
-    RequestContext captured = CURRENT.get();
-    return () -> ScopedValue.where(CURRENT, captured).call(task::call);
+    return () -> bindings.call(task::call);
+  }
+
+  /**
+   * The bindings {@link #wrap(Runnable)} and {@link #wrap(Callable)} carry to another thread:
+   * {@link #CURRENT} and {@link #CAUSE}, each when bound on the calling thread; {@code null} when
+   * neither is.
+   */
+  private static ScopedValue.Carrier capturedBindings() {
+    ScopedValue.Carrier bindings = null;
+    if (CURRENT.isBound()) {
+      bindings = ScopedValue.where(CURRENT, CURRENT.get());
+    }
+    if (CAUSE.isBound()) {
+      DispatchCause cause = CAUSE.get();
+      bindings = bindings == null ? ScopedValue.where(CAUSE, cause) : bindings.where(CAUSE, cause);
+    }
+    return bindings;
   }
 
   /**

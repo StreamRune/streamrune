@@ -13,6 +13,7 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
@@ -202,6 +203,16 @@ final class SagaStartFixtures {
     private final Map<String, Supplier<RuntimeException>> always = new ConcurrentHashMap<>();
     private final Map<String, Supplier<RuntimeException>> once = new ConcurrentHashMap<>();
     private final java.util.Set<String> crashAfterCommit = ConcurrentHashMap.newKeySet();
+    private final Map<String, List<StreamRuneContext.DispatchCause>> causes =
+        new ConcurrentHashMap<>();
+
+    /**
+     * The cause bound around every dispatch of {@code cmdId} this bus received, in order —
+     * executed, deduplicated and failed dispatches alike.
+     */
+    List<StreamRuneContext.DispatchCause> causes(String cmdId) {
+      return List.copyOf(causes.getOrDefault(cmdId, List.of()));
+    }
 
     /**
      * Models {@code InboxRetentionSweeper} pruning every dedup key recorded so far — what an outage
@@ -244,15 +255,18 @@ final class SagaStartFixtures {
 
     @Override
     public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
-      if (committed.contains(key)) {
-        return ok();
-      }
       String id =
           switch (command) {
             case Step s -> s.stepId();
             case Undo u -> u.stepId();
             default -> command.getClass().getSimpleName();
           };
+      causes
+          .computeIfAbsent(id, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+          .add(StreamRuneContext.cause());
+      if (committed.contains(key)) {
+        return ok();
+      }
       Supplier<RuntimeException> single = once.remove(id);
       if (single != null) {
         throw single.get();

@@ -818,12 +818,11 @@ class SagaConcurrencyRaceTest {
     var shipped = makeEnvelope(new OrderShipped("race-order-1"), 77L, "fulfill-race-order-1");
     runner.asEventListener().onEvents(List.of(shipped));
 
-    var corr = CorrelationId.of(sagaId.value());
     assertThat(bus.compensationKeys)
         .as(
             "event-path compensation must use the shared episode-scoped key (episodeVersion=2) that"
                 + " the timeout path also uses — not the disjoint offset-based key")
-        .containsExactly(SagaCommandDispatch.episodeCompensationKey(corr, 2L, 0));
+        .containsExactly(SagaCommandDispatch.episodeCompensationKey(sagaId, 2L, 0));
 
     var after =
         underlying
@@ -949,7 +948,6 @@ class SagaConcurrencyRaceTest {
     // ---- Redelivery: the event path must RESUME and complete compensation. ----
     runner.asEventListener().onEvents(List.of(shipped));
 
-    var corr = CorrelationId.of(sagaId.value());
     assertThat(bus.compensationsDispatched)
         .as("compensation must be dispatched exactly once across crash + resume")
         .hasSize(1);
@@ -958,7 +956,7 @@ class SagaConcurrencyRaceTest {
         .as(
             "resume must re-drive compensation under the SHARED episode-scoped key at the existing"
                 + " version (episodeVersion=2) — the same key a timeout resume would use")
-        .containsExactly(SagaCommandDispatch.episodeCompensationKey(corr, 2L, 0));
+        .containsExactly(SagaCommandDispatch.episodeCompensationKey(sagaId, 2L, 0));
 
     var resumed =
         underlying

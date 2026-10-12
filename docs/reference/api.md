@@ -245,7 +245,7 @@ and is used as the sentinel value before append. You encounter `GlobalOffset` in
 
 ### EventMetadata
 
-`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, SpanId spanId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage)`
+`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, SpanId spanId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin)`
 
 Causal metadata attached to every persisted event. Built automatically by
 `VirtualThreadCommandBus`; propagates OpenTelemetry trace/span IDs and user ID from
@@ -254,9 +254,31 @@ Causal metadata attached to every persisted event. Built automatically by
 
 The PostgreSQL event store keeps it as JSON in the `event_stream.metadata` column and binds it back
 to this record on every read. `eventId`, `commandId`, `correlationId` and `timestamp` are required, the other components
-are optional (`baggage` defaults to an empty map), and a key the record does not define is refused.
+are optional (`baggage` defaults to an empty map, a missing `sagaOrigin` key reads as `null`), and a
+key the record does not define is refused.
 A row written outside the framework — a hand-written `INSERT`, a data migration — with metadata
 that does not bind fails every read of its stream and of the global stream.
+
+`sagaOrigin` is the saga whose dispatch caused the event (see `SagaOrigin` below) and `null` for
+every other event. The command bus writes it; the two shorter constructors (without `sagaOrigin`,
+and without `baggage` and `sagaOrigin`) build metadata with no origin.
+
+### SagaOrigin
+
+`record SagaOrigin(SagaType sagaType, SagaId sagaId, int hop)` in `org.streamrune.core.saga`
+
+The saga whose dispatch caused an event. Every command a saga dispatches — forward and
+compensation, on the event path, the timeout runner, the compensation-retry sweeper and the
+dead-letter replayer — runs with the saga's origin bound as the dispatch cause
+(`StreamRuneContext.CAUSE`), and the command bus copies it into `EventMetadata.sagaOrigin` of each
+event the command stores. `sagaType` is the saga state's fully-qualified class name, `sagaId` the
+saga instance, and `hop` is `0` for an event produced by a command the saga dispatched itself.
+
+The origin a saga binds depends only on its type and its id, so a redelivery, a replay or a resume
+of the same step stores the same origin as the first attempt would have. No request header, baggage
+entry or dead-letter row sets it. An origin states who caused an event; it grants no authority.
+In a test, `SagaEnvelopes.causedBy(stateType, sagaId, streamId, event)` from `streamrune-test`
+builds an envelope that carries one.
 
 ### AggregateState
 

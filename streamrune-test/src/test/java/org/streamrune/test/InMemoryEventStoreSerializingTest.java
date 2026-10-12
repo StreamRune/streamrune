@@ -17,6 +17,10 @@ import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.Encrypted;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.saga.SagaState;
+import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -24,6 +28,7 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
@@ -92,6 +97,37 @@ class InMemoryEventStoreSerializingTest {
     assertEquals(original, loaded.event(), "round-trip must preserve the event's value");
     assertNotSame(original, loaded.event(), "serializing mode must not store by reference");
     assertEquals(metadata(1), loaded.metadata());
+  }
+
+  record OrderSagaState(SagaStatus status) implements SagaState {}
+
+  @Test
+  void roundTripsTheSagaOrigin() {
+    var store = InMemoryEventStore.serializing(registry, null);
+    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
+    SagaId sagaId = SagaId.of("order-saga-42");
+    var original = new Added("A", Instant.parse("2026-02-03T04:05:06Z"));
+    // The store resolves the payload class by its registered name, as PostgreSQL does.
+    EventMetadata sagaCaused = SagaEnvelopes.metadataCausedBy(OrderSagaState.class, sagaId);
+    store.append(
+        s,
+        List.of(
+            new EventEnvelope(
+                GlobalOffset.initial(),
+                s,
+                Version.initial().next(),
+                new EventType("Added"),
+                original,
+                sagaCaused)),
+        Version.initial());
+
+    var loaded = store.load(s).events().getFirst();
+
+    assertEquals(
+        new SagaOrigin(SagaType.fromClass(OrderSagaState.class), sagaId, 0),
+        loaded.metadata().sagaOrigin());
+    assertNotSame(sagaCaused.sagaOrigin(), loaded.metadata().sagaOrigin(), "read back from JSON");
+    assertEquals(sagaCaused, loaded.metadata());
   }
 
   @Test

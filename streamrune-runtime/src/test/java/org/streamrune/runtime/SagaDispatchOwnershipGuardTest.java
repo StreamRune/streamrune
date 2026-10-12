@@ -30,7 +30,7 @@ import org.streamrune.test.InMemoryEventStore;
  * An ownership check in {@link Decider#guard} against commands a saga dispatches. A saga runs as
  * the system, with no end user bound, so {@link Authorization#requireOwner} can never pass for it;
  * {@link Authorization#requireOwnerOrSaga} admits it. The saga-dispatch marker is bound by {@link
- * SagaCommandDispatch#executeCorrelated} and read in domain code through {@link
+ * SagaCommandDispatch#dispatch} and read in domain code through {@link
  * StreamRuneContext#isSagaDispatch()}, so a domain module depending only on {@code streamrune-core}
  * can make the choice.
  */
@@ -134,9 +134,10 @@ class SagaDispatchOwnershipGuardTest {
     // No user is bound: exactly how a subscription poll, timeout or sweeper thread dispatches.
     assertDoesNotThrow(
         () ->
-            SagaCommandDispatch.executeCorrelated(
+            SagaCommandDispatch.dispatch(
                 bus,
-                CorrelationId.of("saga-order-1"),
+                SagaOrigins.of("saga-order-1"),
+                null,
                 new OrderCommand.ConfirmOrder("order-1"),
                 IdempotencyKey.of("saga:saga-order-1:0:0")));
 
@@ -153,9 +154,10 @@ class SagaDispatchOwnershipGuardTest {
         assertThrows(
             AuthorizationException.class,
             () ->
-                SagaCommandDispatch.executeCorrelated(
+                SagaCommandDispatch.dispatch(
                     bus,
-                    CorrelationId.of("saga-order-2"),
+                    SagaOrigins.of("saga-order-2"),
+                    null,
                     new OrderCommand.ChangeAddress("order-2"),
                     IdempotencyKey.of("saga:saga-order-2:0:0")));
 

@@ -19,8 +19,12 @@ import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.saga.SagaCommand;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.IdempotencyKey;
 
 /**
@@ -35,10 +39,19 @@ final class SagaCommandDispatch {
   private SagaCommandDispatch() {}
 
   /**
-   * Executes a saga-issued command with {@code correlationId} bound as the request correlation id
-   * (so events the command produces carry it for {@code correlate}); ambient trace/user/baggage is
-   * preserved. The {@code key} is recorded atomically with the append so redelivered correlated
-   * events short-circuit without re-running the handler.
+   * Executes a saga-issued command with the dispatching saga stated as its cause: {@code origin}
+   * and, for a forward command, the id of the triggering event are bound as {@link
+   * StreamRuneContext#CAUSE}, and the command bus copies them into {@link
+   * org.streamrune.core.EventMetadata#sagaOrigin()} and {@link
+   * org.streamrune.core.EventMetadata#causationId()} of every event the command produces. The saga
+   * id is bound as the request correlation id; ambient trace/user/baggage is preserved. The {@code
+   * key} is recorded atomically with the append so redelivered correlated events short-circuit
+   * without re-running the handler.
+   *
+   * <p><b>The bound cause is the same on every attempt.</b> {@code origin} is a function of the
+   * saga type and the saga id, and {@code causingEvent} is the id of a stored event, so a first
+   * attempt, a redelivery, a replay feed, a timeout claim and a sweeper resume of the same step
+   * bind equal values: whichever attempt commits the command stores the same metadata.
    *
    * <p><b>A VETO is never a silent success.</b> A user {@link
    * org.streamrune.core.CommandInterceptor} whose {@code before()} returns {@code false}
@@ -64,12 +77,12 @@ final class SagaCommandDispatch {
    * episode {@code COMPENSATING} for the resume paths — never {@code COMPENSATED} (that protection
    * is intact) and never terminal {@code FAILED}.
    *
-   * <p><b>The context built here is a RECONSTRUCTION, not an ingress.</b> {@code correlationId} is
-   * {@code CorrelationId.of(sagaId.value())}, and every background entry point (timeout runner,
-   * compensation sweeper, dead-letter replayer) got that {@code SagaId} out of {@code saga_state} /
-   * {@code saga_dead_letters} via {@code PostgresSagaStore}; the trace/user fields are copied from
-   * an ambient context that may itself be a reconstruction. So this uses the plain {@code
-   * RequestContext} constructor and NOT {@code RequestContext.fromRequest} — the {@code
+   * <p><b>The context built here is a RECONSTRUCTION, not an ingress.</b> The correlation id is
+   * {@code CorrelationId.of(origin.sagaId().value())}, and every background entry point (timeout
+   * runner, compensation sweeper, dead-letter replayer) got that {@code SagaId} out of {@code
+   * saga_state} / {@code saga_dead_letters} via {@code PostgresSagaStore}; the trace/user fields
+   * are copied from an ambient context that may itself be a reconstruction. So this uses the plain
+   * {@code RequestContext} constructor and NOT {@code RequestContext.fromRequest} — the {@code
    * IdConstraints} bound belongs only where an unauthenticated header first enters the system.
    * Enforcing it here threw before the bus was ever called, which the forward classifier reads as
    * permanent evidence ({@link #isRetryLater} is {@code false} for {@code
@@ -80,22 +93,32 @@ final class SagaCommandDispatch {
    * that path.
    *
    * <p>Note also why "sanitize instead of reject" would have been the worse answer here: {@link
-   * #forwardKey} and {@link #episodeCompensationKey} both embed {@code sagaCorrelation.value()}
-   * directly, so rewriting the id would change every idempotency key derived from it. During a
-   * rolling upgrade the two node versions would derive DIFFERENT keys for the same logical command,
-   * the command inbox would not dedup them, and the side effect — a refund — would execute twice.
+   * #forwardKey} and {@link #episodeCompensationKey} both embed {@code sagaId.value()} directly, so
+   * rewriting the id would change every idempotency key derived from it. During a rolling upgrade
+   * the two node versions would derive DIFFERENT keys for the same logical command, the command
+   * inbox would not dedup them, and the side effect — a refund — would execute twice.
    * Reconstruction must be verbatim.
    *
+   * @param commandBus the bus the command is executed on
+   * @param origin the dispatching saga (required)
+   * @param causingEvent the id of the event the command reacts to, or {@code null} for a command
+   *     that reacts to none (a compensation command)
+   * @param command the saga-issued command
+   * @param key the command's idempotency key
    * @throws SagaCommandVetoedException when an interceptor vetoed the command (it never executed)
    */
-  static void executeCorrelated(
-      CommandBus commandBus, CorrelationId correlationId, Command command, IdempotencyKey key) {
+  static void dispatch(
+      CommandBus commandBus,
+      SagaOrigin origin,
+      EventId causingEvent,
+      Command command,
+      IdempotencyKey key) {
     StreamRuneContext.RequestContext ambient = StreamRuneContext.capture();
     StreamRuneContext.RequestContext ctx =
         new StreamRuneContext.RequestContext(
             ambient != null ? ambient.traceId() : null,
             ambient != null ? ambient.userId() : null,
-            correlationId,
+            CorrelationId.of(origin.sagaId().value()),
             Instant.now(),
             ambient != null ? ambient.baggage() : Map.of(),
             // Carry the request edge's captured authority when a
@@ -109,6 +132,10 @@ final class SagaCommandDispatch {
     CommandBus.CommandResult result =
         ScopedValue.where(StreamRuneContext.CURRENT, ctx)
             .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
+            .where(
+                StreamRuneContext.CAUSE,
+                new StreamRuneContext.DispatchCause(
+                    causingEvent == null ? null : CausationId.of(causingEvent.value()), origin))
             .call(() -> commandBus.execute(command, key));
     // Null-tolerant like DeadLetterRetryRunner.processEntry: a third-party bus returning null is
     // treated as an executed command, never as a veto.
@@ -119,18 +146,18 @@ final class SagaCommandDispatch {
   }
 
   /**
-   * Forward command key: deterministic per (saga, triggering event offset, command index).
+   * Forward command key: deterministic per (saga, triggering event offset, command index), with the
+   * text {@code saga:<sagaId>:<triggerOffset>:<index>}.
    *
    * <p>Built through {@link IdempotencyKey}'s canonical constructor — its DECODE door — never
    * {@link IdempotencyKey#of}, the ingress factory that refuses control characters. The key is
-   * derived from a stored saga correlation, and a {@code SagaId} is bounded in length, not in
-   * charset: through {@code of}, a saga whose id carries a control character could never dispatch
-   * again, and the derivation must stay byte-identical so a rerun presents the key an earlier run
-   * recorded. The same holds for {@link #episodeCompensationKey}.
+   * derived from a stored saga id, and a {@code SagaId} is bounded in length, not in charset:
+   * through {@code of}, a saga whose id carries a control character could never dispatch again, and
+   * the derivation must stay byte-identical so a rerun presents the key an earlier run recorded.
+   * The same holds for {@link #episodeCompensationKey}.
    */
-  static IdempotencyKey forwardKey(CorrelationId sagaCorrelation, long triggerOffset, int index) {
-    return new IdempotencyKey(
-        "saga:" + sagaCorrelation.value() + ":" + triggerOffset + ":" + index);
+  static IdempotencyKey forwardKey(SagaId sagaId, long triggerOffset, int index) {
+    return new IdempotencyKey("saga:" + sagaId.value() + ":" + triggerOffset + ":" + index);
   }
 
   /**
@@ -149,12 +176,13 @@ final class SagaCommandDispatch {
    * both paths feed the same {@code episodeVersion} into this method, a genuine double-delivery of
    * the same logical compensation dedups in the command inbox instead of double-executing the side
    * effect. A genuinely new episode claims a new version, producing fresh keys.
+   *
+   * <p>The key text is {@code saga:<sagaId>:episode:<episodeVersion>:comp:<index>}.
    */
-  static IdempotencyKey episodeCompensationKey(
-      CorrelationId sagaCorrelation, long episodeVersion, int index) {
+  static IdempotencyKey episodeCompensationKey(SagaId sagaId, long episodeVersion, int index) {
     // The decode door, as forwardKey explains.
     return new IdempotencyKey(
-        "saga:" + sagaCorrelation.value() + ":episode:" + episodeVersion + ":comp:" + index);
+        "saga:" + sagaId.value() + ":episode:" + episodeVersion + ":comp:" + index);
   }
 
   /**
@@ -337,13 +365,13 @@ final class SagaCommandDispatch {
   }
 
   /**
-   * Dispatches each compensation command (correlated), swallowing+classifying individual failures
-   * into a {@link CompensationOutcome}: COMPENSATED if there was at least one command and all
-   * dispatched successfully; FAILED if a command failed <em>deterministically</em> (a business
-   * rejection) or the list was empty; RETRY if the only failures were transient/infra (so the undo
-   * must not be abandoned — the saga stays {@code COMPENSATING} for the resume path). A permanent
-   * failure dominates a transient one: retrying a deterministic failure forever is worse than
-   * terminalizing.
+   * Dispatches each compensation command through {@link #dispatch} under {@code origin} and {@code
+   * causingEvent}, swallowing+classifying individual failures into a {@link CompensationOutcome}:
+   * COMPENSATED if there was at least one command and all dispatched successfully; FAILED if a
+   * command failed <em>deterministically</em> (a business rejection) or the list was empty; RETRY
+   * if the only failures were transient/infra (so the undo must not be abandoned — the saga stays
+   * {@code COMPENSATING} for the resume path). A permanent failure dominates a transient one:
+   * retrying a deterministic failure forever is worse than terminalizing.
    *
    * <p>Caller-supplied key scheme: every path — {@link SagaRunner}'s start-event path, its
    * correlated-event path, and {@link SagaTimeoutRunner} (timeout path) — supplies the shared,
@@ -355,7 +383,8 @@ final class SagaCommandDispatch {
   static CompensationOutcome compensateAndClassify(
       List<SagaCommand> compensations,
       CommandBus commandBus,
-      CorrelationId correlationId,
+      SagaOrigin origin,
+      EventId causingEvent,
       IntFunction<IdempotencyKey> keyForIndex,
       Logger log) {
     if (compensations.isEmpty()) {
@@ -366,8 +395,8 @@ final class SagaCommandDispatch {
     boolean hadAttemptedTransientFailure = false;
     for (int i = 0; i < compensations.size(); i++) {
       try {
-        executeCorrelated(
-            commandBus, correlationId, compensations.get(i).command(), keyForIndex.apply(i));
+        dispatch(
+            commandBus, origin, causingEvent, compensations.get(i).command(), keyForIndex.apply(i));
       } catch (Exception e) {
         // Reuse the bus's DLQ-eligibility split: a business rejection
         // (DomainException/IllegalArgumentException) is deterministic and can never succeed on

@@ -44,9 +44,9 @@ import org.streamrune.test.InMemorySagaStore;
  * its compensations under the OFFSET-scoped {@code compensationKey}, while the resume paths ({@link
  * SagaStepExecutor}'s {@code ResumeCompensation} trigger and its {@code ForwardStep}
  * COMPENSATING-resume branch, and {@code SagaTimeoutRunner}) re-drive under the EPISODE-scoped
- * {@code episodeCompensationKey(corr, version=1, i)}. Those keyspaces are disjoint, so the command
- * inbox does NOT dedup: an already-succeeded start-event compensation (e.g. a refund) would EXECUTE
- * AGAIN on resume → double refund / double stock release.
+ * {@code episodeCompensationKey(sagaId, version=1, i)}. Those keyspaces are disjoint, so the
+ * command inbox does NOT dedup: an already-succeeded start-event compensation (e.g. a refund) would
+ * EXECUTE AGAIN on resume → double refund / double stock release.
  *
  * <p>The fix dispatches start-event compensations under the same episode-scoped key ({@code
  * createdVersion}), so a later resume reuses the SAME key and the inbox dedups.

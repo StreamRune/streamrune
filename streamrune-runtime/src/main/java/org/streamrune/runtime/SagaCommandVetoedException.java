@@ -7,7 +7,7 @@ package org.streamrune.runtime;
  * CommandResult} without throwing, meaning the command never executed and no events were produced
  * or persisted.
  *
- * <p><b>Why it exists.</b> {@link SagaCommandDispatch#executeCorrelated} used to discard the {@code
+ * <p><b>Why it exists.</b> {@link SagaCommandDispatch#dispatch} used to discard the {@code
  * CommandResult}, so a veto returned "normally" and was indistinguishable from success: a vetoed
  * compensation counted zero failures and terminal-wrote {@code COMPENSATED} with the refund never
  * run (silent money loss — no inbox row, no DLQ entry, terminal-guarded against re-drive), and a

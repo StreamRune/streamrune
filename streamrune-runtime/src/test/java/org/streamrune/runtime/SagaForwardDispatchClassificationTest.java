@@ -456,7 +456,8 @@ class SagaForwardDispatchClassificationTest {
         SagaCommandDispatch.compensateAndClassify(
             List.of(SagaCommand.of(new ReleaseStock("undo-1"), AggregateId.of("a"))),
             bus,
-            CorrelationId.of("saga-1"),
+            SagaOrigins.of("saga-1"),
+            null,
             i -> IdempotencyKey.of("k:" + i),
             org.slf4j.LoggerFactory.getLogger("test"));
     // An open breaker REFUSED ADMISSION — RETRY-class (the episode stays COMPENSATING),
@@ -483,7 +484,8 @@ class SagaForwardDispatchClassificationTest {
         SagaCommandDispatch.compensateAndClassify(
             List.of(SagaCommand.of(new ReleaseStock("undo-1"), AggregateId.of("a"))),
             bus,
-            CorrelationId.of("saga-1"),
+            SagaOrigins.of("saga-1"),
+            null,
             i -> IdempotencyKey.of("k:" + i),
             org.slf4j.LoggerFactory.getLogger("test"));
     // A closing bus REFUSED ADMISSION — RETRY-class, surfaced distinctly (see above).

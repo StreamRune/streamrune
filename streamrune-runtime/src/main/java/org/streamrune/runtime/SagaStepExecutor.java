@@ -16,13 +16,13 @@ import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStateSerializationException;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaStore.AppliedEvent;
 import org.streamrune.core.saga.SagaUnstampedCompensationEpisodeException;
-import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
@@ -437,17 +437,18 @@ final class SagaStepExecutor<S extends SagaState> {
       long rowVersion,
       SagaTrigger.ForwardStep fs,
       List<SagaCommand> commands) {
-    CorrelationId correlationId = CorrelationId.of(sagaId.value());
+    SagaOrigin origin = origin(sagaId);
     long triggerOffset = fs.event().globalOffset().value();
     for (int i = 0; i < commands.size(); i++) {
       final int index = i;
       SagaCommand sagaCommand = commands.get(i);
       try {
-        SagaCommandDispatch.executeCorrelated(
+        SagaCommandDispatch.dispatch(
             commandBus,
-            correlationId,
+            origin,
+            fs.event().metadata().eventId(),
             sagaCommand.command(),
-            SagaCommandDispatch.forwardKey(correlationId, triggerOffset, index));
+            SagaCommandDispatch.forwardKey(sagaId, triggerOffset, index));
       } catch (Exception primary) {
         if (SagaCommandDispatch.isRetryLater(primary)) {
           throw forwardRetryLater(sagaId, index, sagaCommand, primary);
@@ -774,7 +775,7 @@ final class SagaStepExecutor<S extends SagaState> {
       SagaCommand failedCommand,
       boolean catchPoison) {
     SagaType type = SagaType.fromClass(orchestrator.stateType());
-    CorrelationId correlationId = CorrelationId.of(sagaId.value());
+    SagaOrigin origin = origin(sagaId);
     List<SagaCommand> compensations;
     try {
       compensations =
@@ -790,8 +791,9 @@ final class SagaStepExecutor<S extends SagaState> {
         SagaCommandDispatch.compensateAndClassify(
             compensations,
             commandBus,
-            correlationId,
-            i -> SagaCommandDispatch.episodeCompensationKey(correlationId, episodeVersion, i),
+            origin,
+            null,
+            i -> SagaCommandDispatch.episodeCompensationKey(sagaId, episodeVersion, i),
             LOG);
     recordCompensation(outcome.name());
     if (!outcome.isTerminal()) {
@@ -932,6 +934,16 @@ final class SagaStepExecutor<S extends SagaState> {
       }
     }
     return commands;
+  }
+
+  /**
+   * The origin every command of saga {@code sagaId} is dispatched under: this executor's saga type
+   * and the saga id, at hop 0. A function of those two alone, so every path that dispatches for the
+   * saga (event delivery, redelivery, replay feed, timeout claim, sweeper resume) binds an equal
+   * origin.
+   */
+  private SagaOrigin origin(SagaId sagaId) {
+    return SagaOrigin.dispatchedBy(SagaType.fromClass(orchestrator.stateType()), sagaId);
   }
 
   /**

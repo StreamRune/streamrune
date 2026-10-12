@@ -2,12 +2,18 @@ package org.streamrune.core;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.time.Instant;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
+import org.streamrune.core.types.SagaType;
 
 class EventMetadataTest {
 
@@ -154,5 +160,102 @@ class EventMetadataTest {
 
     assertNotNull(md.baggage());
     assertTrue(md.baggage().isEmpty());
+  }
+
+  /** The mapper the PostgreSQL event store reads and writes {@code event_stream.metadata} with. */
+  private static ObjectMapper storeMapper() {
+    return new ObjectMapper().registerModule(new JavaTimeModule());
+  }
+
+  private static final SagaOrigin ORIGIN =
+      SagaOrigin.dispatchedBy(SagaType.of("com.shop.OrderSaga$State"), SagaId.of("order-saga-42"));
+
+  @Test
+  void theShorterConstructorsCarryNoSagaOrigin() {
+    var withoutBaggage =
+        new EventMetadata(
+            EventId.of("evt_1"),
+            CommandId.of("cmd_1"),
+            null,
+            null,
+            CorrelationId.of("corr_1"),
+            null,
+            null,
+            Instant.now());
+    var withBaggage =
+        new EventMetadata(
+            EventId.of("evt_1"),
+            CommandId.of("cmd_1"),
+            null,
+            null,
+            CorrelationId.of("corr_1"),
+            null,
+            null,
+            Instant.now(),
+            Map.of("tenant", "acme"));
+
+    assertNull(withoutBaggage.sagaOrigin());
+    assertNull(withBaggage.sagaOrigin());
+    assertEquals(Map.of("tenant", "acme"), withBaggage.baggage());
+  }
+
+  @Test
+  void sagaOriginRoundTripsThroughJson() throws Exception {
+    ObjectMapper mapper = storeMapper();
+    var md =
+        new EventMetadata(
+            EventId.of("evt_1"),
+            CommandId.of("cmd_1"),
+            null,
+            null,
+            CorrelationId.of("order-saga-42"),
+            null,
+            null,
+            Instant.parse("2026-01-01T00:00:00Z"),
+            Map.of(),
+            ORIGIN);
+
+    String json = mapper.writeValueAsString(md);
+
+    assertTrue(
+        json.endsWith(
+            ",\"baggage\":{},\"sagaOrigin\":{\"sagaType\":\"com.shop.OrderSaga$State\","
+                + "\"sagaId\":\"order-saga-42\",\"hop\":0}}"),
+        json);
+    assertEquals(md, mapper.readValue(json, EventMetadata.class));
+
+    var noOrigin =
+        new EventMetadata(
+            EventId.of("evt_1"),
+            CommandId.of("cmd_1"),
+            null,
+            null,
+            CorrelationId.of("corr_1"),
+            null,
+            null,
+            Instant.parse("2026-01-01T00:00:00Z"));
+    String noOriginJson = mapper.writeValueAsString(noOrigin);
+    assertTrue(noOriginJson.endsWith(",\"baggage\":{},\"sagaOrigin\":null}"), noOriginJson);
+    assertEquals(noOrigin, mapper.readValue(noOriginJson, EventMetadata.class));
+  }
+
+  @Test
+  void jsonWithoutTheSagaOriginKeyReadsAsNoOrigin() throws Exception {
+    ObjectMapper mapper = storeMapper();
+    String stored =
+        "{\"eventId\":\"evt_1\",\"commandId\":\"cmd_1\",\"traceId\":null,\"spanId\":null,"
+            + "\"correlationId\":\"corr_1\",\"causationId\":null,\"userId\":null,"
+            + "\"timestamp\":\"2026-01-01T00:00:00Z\",\"baggage\":{}}";
+
+    EventMetadata md = mapper.readValue(stored, EventMetadata.class);
+
+    assertNull(md.sagaOrigin());
+    assertEquals(EventId.of("evt_1"), md.eventId());
+
+    // An unknown key is still refused: the store reads metadata strictly.
+    String withUnknownKey = stored.substring(0, stored.length() - 1) + ",\"sagaOrigins\":null}";
+    assertThrows(
+        UnrecognizedPropertyException.class,
+        () -> mapper.readValue(withUnknownKey, EventMetadata.class));
   }
 }

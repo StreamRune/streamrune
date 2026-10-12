@@ -1091,7 +1091,7 @@ public final class SagaRunner<S extends SagaState> {
       if (sagaStore == null) throw new IllegalStateException("sagaStore is required");
       if (commandBus == null) throw new IllegalStateException("commandBus is required");
       // Every saga command dispatch (forward AND compensation) goes through the keyed
-      // execute(command, key) with no unkeyed fallback (SagaCommandDispatch.executeCorrelated). A
+      // execute(command, key) with no unkeyed fallback (SagaCommandDispatch.dispatch). A
       // bus without a CommandInbox throws IllegalStateException on the first dispatch: the forward
       // classifier cannot prove that retriable, so the saga claims a compensation episode whose own
       // dispatch fails the same way and is classified TRANSIENT there — the saga wedges

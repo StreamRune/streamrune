@@ -49,13 +49,12 @@ import org.streamrune.test.InMemorySagaStore;
  * built with the plain {@code RequestContext} constructor or application-built {@code
  * EventMetadata} carries without ever crossing the ingress door.
  *
- * <p>So if the ingress bound runs inside the {@code RequestContext} constructor, {@code
- * executeCorrelated} throws {@link IllegalArgumentException} <b>before the bus is ever called</b>.
- * On the forward path that is permanent evidence ({@code isRetryLater == false}) → claim-first
- * compensation; every compensation dispatch then throws the identical exception at the identical
- * point → {@code hadPermanentFailure} → terminal {@code FAILED} with the undo never dispatched. An
- * in-flight saga whose id the bound refuses is terminally failed, on data the read path handles
- * fine.
+ * <p>So if the ingress bound runs inside the {@code RequestContext} constructor, {@code dispatch}
+ * throws {@link IllegalArgumentException} <b>before the bus is ever called</b>. On the forward path
+ * that is permanent evidence ({@code isRetryLater == false}) → claim-first compensation; every
+ * compensation dispatch then throws the identical exception at the identical point → {@code
+ * hadPermanentFailure} → terminal {@code FAILED} with the undo never dispatched. An in-flight saga
+ * whose id the bound refuses is terminally failed, on data the read path handles fine.
  */
 class SagaStoredControlCharacterCorrelationIdTest {
 
@@ -141,7 +140,7 @@ class SagaStoredControlCharacterCorrelationIdTest {
   // =========================================================================
 
   @Test
-  void executeCorrelatedAcceptsAControlCharacterCorrelationIdAndBindsItVerbatim() {
+  void dispatchAcceptsAControlCharacterSagaIdAndBindsItVerbatim() {
     var captured = new java.util.concurrent.atomic.AtomicReference<CorrelationId>();
     CommandBus bus =
         new CommandBus() {
@@ -160,9 +159,10 @@ class SagaStoredControlCharacterCorrelationIdTest {
 
     assertThatCode(
             () ->
-                SagaCommandDispatch.executeCorrelated(
+                SagaCommandDispatch.dispatch(
                     bus,
-                    CorrelationId.of(CONTROL_CHAR_SAGA_ID),
+                    SagaOrigins.of(CONTROL_CHAR_SAGA_ID),
+                    null,
                     new ReserveStock("step-1"),
                     IdempotencyKey.of("saga:control-char:1:0")))
         .doesNotThrowAnyException();
@@ -172,13 +172,14 @@ class SagaStoredControlCharacterCorrelationIdTest {
   }
 
   @Test
-  void compensateAndClassifyRunsTheUndoForAControlCharacterCorrelationId() {
+  void compensateAndClassifyRunsTheUndoForAControlCharacterSagaId() {
     var bus = new ScriptedBus();
     var outcome =
         SagaCommandDispatch.compensateAndClassify(
             List.of(SagaCommand.of(new ReleaseStock("undo-1"), AggregateId.of("a"))),
             bus,
-            CorrelationId.of(CONTROL_CHAR_SAGA_ID),
+            SagaOrigins.of(CONTROL_CHAR_SAGA_ID),
+            null,
             i -> IdempotencyKey.of("k:" + i),
             org.slf4j.LoggerFactory.getLogger("test"));
 
@@ -206,9 +207,10 @@ class SagaStoredControlCharacterCorrelationIdTest {
                 ScopedValue.where(StreamRuneContext.CURRENT, ambient)
                     .run(
                         () ->
-                            SagaCommandDispatch.executeCorrelated(
+                            SagaCommandDispatch.dispatch(
                                 bus,
-                                CorrelationId.of(CONTROL_CHAR_SAGA_ID),
+                                SagaOrigins.of(CONTROL_CHAR_SAGA_ID),
+                                null,
                                 new ReserveStock("step-1"),
                                 IdempotencyKey.of("saga:control-char:1:0"))))
         .doesNotThrowAnyException();

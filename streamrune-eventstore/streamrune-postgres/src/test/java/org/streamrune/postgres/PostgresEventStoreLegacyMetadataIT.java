@@ -2,6 +2,8 @@ package org.streamrune.postgres;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -144,6 +146,21 @@ class PostgresEventStoreLegacyMetadataIT {
         OVERSIZED_CORRELATION_ID,
         history.events().get(0).metadata().correlationId().value(),
         "the stored value is returned verbatim — reconstruction must never rewrite history");
+  }
+
+  @Test
+  void load_readsARowStoredWithoutASagaOriginKey() throws Exception {
+    // The metadata of this row has no "sagaOrigin" key at all: it reads as an event no saga caused.
+    StreamId streamId = TestStreams.stream("legacy-no-saga-origin");
+    String metadata = metadataWith("legacy-corr-1", null);
+    assertFalse(metadata.contains("sagaOrigin"));
+    insertLegacyRow(streamId, 1L, metadata);
+
+    var history = assertDoesNotThrow(() -> store.load(streamId));
+
+    assertEquals(1, history.events().size());
+    assertNull(history.events().get(0).metadata().sagaOrigin());
+    assertEquals("legacy-corr-1", history.events().get(0).metadata().correlationId().value());
   }
 
   @Test

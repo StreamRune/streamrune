@@ -50,8 +50,8 @@ import org.streamrune.test.InMemorySagaStore;
  * End-to-end: an interceptor-vetoed saga command must NOT be indistinguishable from success. A
  * veto-style {@link CommandInterceptor} whose {@code before()} returns {@code false} (maintenance
  * mode / kill switch / rate limiter — a documented first-class bus feature) makes the bus RETURN a
- * {@code VETOED} {@code CommandResult} without throwing. {@code
- * SagaCommandDispatch.executeCorrelated} used to discard that result, so:
+ * {@code VETOED} {@code CommandResult} without throwing. {@code SagaCommandDispatch.dispatch} used
+ * to discard that result, so:
  *
  * <ul>
  *   <li><b>compensation path</b> — a vetoed refund returned "normally", {@code
@@ -62,8 +62,8 @@ import org.streamrune.test.InMemorySagaStore;
  *       and the saga persisted {@code FORWARD_PROGRESSED} with the side effect never executed.
  * </ul>
  *
- * <p>The fix (mirroring the dead-letter replay path): {@code executeCorrelated} inspects the result
- * and throws {@link SagaCommandVetoedException}. A veto is deliberately NOT poison: the triggering
+ * <p>The fix (mirroring the dead-letter replay path): {@code dispatch} inspects the result and
+ * throws {@link SagaCommandVetoedException}. A veto is deliberately NOT poison: the triggering
  * event is fine — the COMMAND was refused — so nothing is quarantined.
  *
  * <p><b>What the veto then MEANS.</b> it was originally binned as a permanent business rejection (a

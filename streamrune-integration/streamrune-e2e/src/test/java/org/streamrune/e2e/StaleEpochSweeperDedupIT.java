@@ -312,7 +312,7 @@ class StaleEpochSweeperDedupIT extends E2ETestBase {
     }
 
     // The shared, episode-scoped compensation key BOTH replicas derive for this episode — identical
-    // to SagaCommandDispatch.episodeCompensationKey(CorrelationId.of(sagaId), V=1, index=0). It is
+    // to SagaCommandDispatch.episodeCompensationKey(SagaId.of(sagaId), V=1, index=0). It is
     // the seam B.5 relies on: same episode key ⇒ command-inbox dedup.
     IdempotencyKey episodeKey = IdempotencyKey.of("saga:" + sagaId + ":episode:1:comp:0");
 

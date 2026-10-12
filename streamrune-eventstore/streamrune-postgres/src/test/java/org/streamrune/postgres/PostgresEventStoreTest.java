@@ -31,15 +31,21 @@ import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
 import org.streamrune.core.OptimisticLockException;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.saga.SagaState;
+import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdConstraints;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.EventUpcaster;
+import org.streamrune.test.SagaEnvelopes;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -156,6 +162,51 @@ class PostgresEventStoreTest {
     assertEquals("TestEvent", loaded.eventType().name());
     assertInstanceOf(TestEvent.class, loaded.event());
     assertEquals("hello", ((TestEvent) loaded.event()).value());
+  }
+
+  record OrderSagaState(SagaStatus status) implements SagaState {}
+
+  @Test
+  void append_roundTripsTheSagaOrigin() throws Exception {
+    StreamId streamId = TestStreams.stream("saga-caused");
+    SagaId sagaId = SagaId.of("order-saga-42");
+    EventEnvelope appended =
+        SagaEnvelopes.causedBy(OrderSagaState.class, sagaId, streamId, new TestEvent("reserved"));
+    store.append(streamId, List.of(appended), Version.initial());
+    StreamId plainStream = TestStreams.stream("request-caused");
+    store.append(
+        plainStream, List.of(envelope(plainStream, 1, new TestEvent("hello"))), Version.initial());
+
+    EventMetadata loaded = store.load(streamId).events().getFirst().metadata();
+
+    assertEquals(
+        new SagaOrigin(SagaType.fromClass(OrderSagaState.class), sagaId, 0), loaded.sagaOrigin());
+    assertEquals(appended.metadata().eventId(), loaded.eventId());
+    assertEquals(appended.metadata().correlationId(), loaded.correlationId());
+    assertEquals(
+        loaded.sagaOrigin(),
+        store.readGlobalStream(GlobalOffset.initial(), 10).getFirst().metadata().sagaOrigin(),
+        "the global stream reads the same origin");
+    assertNull(store.load(plainStream).events().getFirst().metadata().sagaOrigin());
+
+    // The stored JSON carries the key on every row: an object for the saga-caused event, null
+    // for the other one.
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement();
+        var rs =
+            stmt.executeQuery(
+                "SELECT metadata -> 'sagaOrigin' ->> 'sagaType', metadata -> 'sagaOrigin' ->>"
+                    + " 'sagaId', metadata -> 'sagaOrigin' ->> 'hop', metadata ? 'sagaOrigin'"
+                    + " FROM event_stream ORDER BY global_offset")) {
+      assertTrue(rs.next());
+      assertEquals(OrderSagaState.class.getName(), rs.getString(1));
+      assertEquals("order-saga-42", rs.getString(2));
+      assertEquals("0", rs.getString(3));
+      assertTrue(rs.getBoolean(4));
+      assertTrue(rs.next());
+      assertNull(rs.getString(1));
+      assertTrue(rs.getBoolean(4), "the key is written as JSON null, not left out");
+    }
   }
 
   /**

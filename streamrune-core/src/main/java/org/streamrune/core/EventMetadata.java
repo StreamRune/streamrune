@@ -2,6 +2,7 @@ package org.streamrune.core;
 
 import java.time.Instant;
 import java.util.Map;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
@@ -22,6 +23,8 @@ import org.streamrune.core.types.UserId;
  * @param userId who triggered the action (nullable)
  * @param timestamp when the event was created (required)
  * @param baggage OTel Baggage key-value pairs (nullable — normalized to empty map)
+ * @param sagaOrigin the saga whose dispatch caused the event, {@code null} for every other event;
+ *     written by the command bus
  */
 public record EventMetadata(
     EventId eventId,
@@ -32,7 +35,8 @@ public record EventMetadata(
     CausationId causationId,
     UserId userId,
     Instant timestamp,
-    Map<String, String> baggage) {
+    Map<String, String> baggage,
+    SagaOrigin sagaOrigin) {
 
   public EventMetadata {
     if (eventId == null) {
@@ -50,7 +54,34 @@ public record EventMetadata(
     baggage = (baggage == null) ? Map.of() : Map.copyOf(baggage);
   }
 
-  /** Convenience constructor for metadata without baggage (baggage is an empty map). */
+  /** Convenience constructor for metadata of an event no saga dispatch caused. */
+  public EventMetadata(
+      EventId eventId,
+      CommandId commandId,
+      TraceId traceId,
+      SpanId spanId,
+      CorrelationId correlationId,
+      CausationId causationId,
+      UserId userId,
+      Instant timestamp,
+      Map<String, String> baggage) {
+    this(
+        eventId,
+        commandId,
+        traceId,
+        spanId,
+        correlationId,
+        causationId,
+        userId,
+        timestamp,
+        baggage,
+        null);
+  }
+
+  /**
+   * Convenience constructor for metadata without baggage (baggage is an empty map) of an event no
+   * saga dispatch caused.
+   */
   public EventMetadata(
       EventId eventId,
       CommandId commandId,
@@ -60,6 +91,16 @@ public record EventMetadata(
       CausationId causationId,
       UserId userId,
       Instant timestamp) {
-    this(eventId, commandId, traceId, spanId, correlationId, causationId, userId, timestamp, null);
+    this(
+        eventId,
+        commandId,
+        traceId,
+        spanId,
+        correlationId,
+        causationId,
+        userId,
+        timestamp,
+        null,
+        null);
   }
 }

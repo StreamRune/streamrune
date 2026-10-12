@@ -53,6 +53,8 @@ assertEquals(1, history.events().size());
 | `InMemoryProjectionRepository` | A `ProjectionRepository`, a fencing-capable `AtomicBatchProcessor` and the `OffsetStore` of its own checkpoint in one object: pass the same instance as the projection's repository and the runner's `offsetStore(...)`/`atomicProcessor(...)` to run a `TRANSACTIONAL_LOCAL` projection, rollback included, without PostgreSQL |
 | `InMemoryOffsetStore` | `OffsetStore` for a runner on `AtomicBatchProcessor.nonAtomicAtLeastOnce()` (`AT_LEAST_ONCE_IDEMPOTENT` projections); mirrors the monotonic guard |
 | `AtomicBatchProcessorContract` | Abstract JUnit contract suite of what `AtomicBatchProcessor.supportsFencing()` promises; `InMemoryProjectionRepository` and `JdbcProjectionRepository` pass it — extend it to prove a custom transactional processor |
+| `SagaEnvelopes` | `metadataCausedBy(stateType, sagaId)` and `causedBy(stateType, sagaId, streamId, event)` build the metadata and the envelope of an event a saga's own command produced (`EventMetadata.sagaOrigin` at hop 0), to feed a saga, a projection or a listener under test |
+| `CommandBusProvenanceContract` | Abstract JUnit contract suite of where a `CommandBus` takes `EventMetadata.sagaOrigin` and `causationId` from (the bound `StreamRuneContext.CAUSE`, nothing a caller controls); `InMemoryCommandBus` and `VirtualThreadCommandBus` pass it — extend it and implement `newBus(eventStore)` for a custom bus |
 | `SagaStoreContract`, `SagaDeadLetterStoreContract` | Abstract JUnit contract suites the shipped saga stores pass; extend one and implement its `newStore(...)` factory method(s) to run it against a custom `SagaStore` / `SagaDeadLetterStore` |
 
 ## DeciderFixture example
