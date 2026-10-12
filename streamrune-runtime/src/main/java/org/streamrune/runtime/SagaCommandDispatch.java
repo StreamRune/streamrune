@@ -177,17 +177,19 @@ final class SagaCommandDispatch {
    * ({@link SagaRunner}) and the timeout path ({@link SagaTimeoutRunner}) once a saga has claimed a
    * compensation episode (transitioned to {@code COMPENSATING}). Separate keyspace from both
    * forward commands and start-event compensation keys, scoped by {@code episodeVersion} — the
-   * saga-store version at which ownership of the compensation episode was claimed.
+   * episode version stamped on the saga row by the write that entered the episode ({@code
+   * LoadedSaga.episodeVersion()}). {@code SagaStepExecutor} reads it from the row on every dispatch
+   * and never computes it.
    *
    * <p><b>Why both paths must share this key:</b> the correlated-event path and the timeout runner
-   * can each drive compensation for the same saga. Whichever path claims the episode does so by
-   * CAS-writing the saga to {@code COMPENSATING} at its loaded version; the resulting version is
-   * the episode id. If that path then crashes (or loses the terminal write) before finishing, the
-   * saga stays {@code COMPENSATING} at that same version, and the other path resumes the
-   * <em>same</em> episode without re-claiming (no version bump), deriving identical keys. Because
-   * both paths feed the same {@code episodeVersion} into this method, a genuine double-delivery of
-   * the same logical compensation dedups in the command inbox instead of double-executing the side
-   * effect. A genuinely new episode claims a new version, producing fresh keys.
+   * can each drive compensation for the same saga. The write that enters the episode — a claim, or
+   * a forward write that persists an evolved {@code COMPENSATING} status — stamps the episode
+   * version on the row, and no later write changes it. The path that opens the episode reads the
+   * stamp back before it dispatches; if it then crashes (or loses the terminal write) before
+   * finishing, or while it is still dispatching, another path resumes the <em>same</em> episode
+   * without re-claiming and reads the same stamp. Because every path feeds the row's {@code
+   * episodeVersion} into this method, a genuine double-delivery of the same logical compensation
+   * dedups in the command inbox instead of double-executing the side effect.
    *
    * <p>The key text is {@code saga:<sagaId>:episode:<episodeVersion>:comp:<index>}.
    */
