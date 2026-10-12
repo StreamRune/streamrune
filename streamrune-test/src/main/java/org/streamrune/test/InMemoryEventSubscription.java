@@ -1,10 +1,14 @@
 package org.streamrune.test;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.IdGenerator;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.EventSubscription;
 import org.streamrune.core.types.GlobalOffset;
@@ -38,6 +42,37 @@ import org.streamrune.core.types.GlobalOffset;
  * {@link #start()} mirrors the production poll-after-LISTEN: events appended before the
  * subscription started are delivered immediately.
  *
+ * <p><b>An append from inside the listener starts no nested delivery.</b> When the listener appends
+ * (it executes a command, as a saga runner or a process manager does) or calls {@link #poll()}, the
+ * delivery in progress on that thread picks the new events up after the batch in hand is
+ * acknowledged, and delivers them before the outermost {@code append} returns. Every event is
+ * delivered once, in offset order. An append made by another thread waits for the delivery in
+ * progress, so a listener must not block on work it handed to another thread that appends.
+ *
+ * <p><b>What the listener finds bound.</b> A production subscription calls its listener on a thread
+ * of its own, where no request context, saga flag or dispatch cause is bound. This subscription
+ * calls the listener on the appending thread, so it takes those three away for the call: {@link
+ * StreamRuneContext#isSagaDispatch()} is {@code false} and {@link StreamRuneContext#cause()} is
+ * {@code null}, even when the event was appended by a saga's dispatch. A command the listener
+ * executes is therefore not a saga dispatch and its events carry no saga origin, exactly as when
+ * the same event reaches the listener through {@link #poll()}. When the appending thread has
+ * nothing bound, nothing is bound for the listener either.
+ *
+ * <p>Two differences from a production subscription remain, both because the listener shares the
+ * appender's thread:
+ *
+ * <ul>
+ *   <li>When the appending thread has a request context bound, the listener runs under an empty one
+ *       (a generated correlation id; no trace id, user, baggage or captured authority) instead of
+ *       none: {@link StreamRuneContext#capture()} is not {@code null}, and commands the listener
+ *       executes directly while handling one batch share that correlation id, where each gets its
+ *       own in production.
+ *   <li>Everything else the appending thread holds stays visible to the listener: scoped values
+ *       other than the three above, thread-locals, and locks. A command the listener executes on
+ *       the stream of the command that appended the event re-enters the stream lock that command
+ *       still holds, where in production it waits for the lock to be released.
+ * </ul>
+ *
  * <p>Thread-safe; concurrent appends deliver batches in strict offset order (delivery is serialized
  * on an internal lock).
  */
@@ -58,6 +93,7 @@ public final class InMemoryEventSubscription implements EventSubscription {
 
   private final Object deliveryLock = new Object();
   private long lastDeliveredOffset; // guarded by deliveryLock
+  private volatile Thread deliveringThread; // written under deliveryLock
 
   /** Creates a subscription delivering batches of at most 100 events. */
   public InMemoryEventSubscription(InMemoryEventStore eventStore, EventListener listener) {
@@ -160,23 +196,68 @@ public final class InMemoryEventSubscription implements EventSubscription {
   }
 
   private void deliverPending() {
+    if (Thread.currentThread() == deliveringThread) {
+      // Called from inside the listener (its own append, or a poll): the loop below is already
+      // running on this thread and reads the new events once the batch in hand is acknowledged.
+      return;
+    }
     synchronized (deliveryLock) {
-      while (true) {
-        List<EventEnvelope> batch =
-            eventStore.readGlobalStream(GlobalOffset.of(lastDeliveredOffset), batchSize);
-        if (batch.isEmpty()) {
-          return;
+      deliveringThread = Thread.currentThread();
+      try {
+        while (true) {
+          List<EventEnvelope> batch =
+              eventStore.readGlobalStream(GlobalOffset.of(lastDeliveredOffset), batchSize);
+          if (batch.isEmpty()) {
+            return;
+          }
+          try {
+            deliver(batch);
+          } catch (RuntimeException _) {
+            // EventListener contract: checkpoint NOT advanced; the same batch is redelivered on
+            // the next notification or poll().
+            deliveryFailures.incrementAndGet();
+            return;
+          }
+          lastDeliveredOffset = batch.getLast().globalOffset().value();
         }
-        try {
-          listener.onEvents(batch);
-        } catch (RuntimeException _) {
-          // EventListener contract: checkpoint NOT advanced; the same batch is redelivered on
-          // the next notification or poll().
-          deliveryFailures.incrementAndGet();
-          return;
-        }
-        lastDeliveredOffset = batch.getLast().globalOffset().value();
+      } finally {
+        deliveringThread = null;
       }
     }
+  }
+
+  /**
+   * Calls the listener outside the request context, the saga flag and the dispatch cause of the
+   * thread that appended or polled. A {@link ScopedValue} cannot be unbound, so each of the three
+   * that is bound on this thread is bound again around the call, to a value that reads as absent.
+   */
+  private void deliver(List<EventEnvelope> batch) {
+    ScopedValue.Carrier detached = null;
+    if (StreamRuneContext.CURRENT.isBound()) {
+      detached = ScopedValue.where(StreamRuneContext.CURRENT, emptyContext());
+    }
+    if (StreamRuneContext.SAGA_OWNED.isBound()) {
+      detached =
+          detached == null
+              ? ScopedValue.where(StreamRuneContext.SAGA_OWNED, Boolean.FALSE)
+              : detached.where(StreamRuneContext.SAGA_OWNED, Boolean.FALSE);
+    }
+    if (StreamRuneContext.CAUSE.isBound()) {
+      detached =
+          detached == null
+              ? ScopedValue.where(StreamRuneContext.CAUSE, null)
+              : detached.where(StreamRuneContext.CAUSE, null);
+    }
+    if (detached == null) {
+      listener.onEvents(batch);
+    } else {
+      detached.run(() -> listener.onEvents(batch));
+    }
+  }
+
+  /** A context that carries nothing of a caller: a correlation id of its own and no more. */
+  private static StreamRuneContext.RequestContext emptyContext() {
+    return new StreamRuneContext.RequestContext(
+        null, null, IdGenerator.generateCorrelationId(), Instant.now(), Map.of());
   }
 }

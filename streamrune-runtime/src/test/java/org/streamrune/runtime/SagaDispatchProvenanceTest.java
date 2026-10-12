@@ -72,6 +72,16 @@ class SagaDispatchProvenanceTest {
 
   record Released(String orderId) implements DomainEvent {}
 
+  /** A command no saga of this test dispatches: what a listener of its own sends. */
+  record Audit(String orderId) implements Command {}
+
+  record Audited(String orderId) implements DomainEvent {}
+
+  /** A second command on the stream {@link Audit} writes to. */
+  record Recheck(String orderId) implements Command {}
+
+  record Rechecked(String orderId) implements DomainEvent {}
+
   record Untouched() implements AggregateState {}
 
   record State(SagaStatus status, String orderId) implements SagaState {}
@@ -167,6 +177,8 @@ class SagaDispatchProvenanceTest {
     final OneEventDecider<Reserve> reserve = new OneEventDecider<>(c -> new Reserved(c.orderId()));
     final OneEventDecider<Ship> ship = new OneEventDecider<>(c -> new Shipped(c.orderId()));
     final OneEventDecider<Release> release = new OneEventDecider<>(c -> new Released(c.orderId()));
+    final OneEventDecider<Audit> audit = new OneEventDecider<>(c -> new Audited(c.orderId()));
+    final OneEventDecider<Recheck> recheck = new OneEventDecider<>(c -> new Rechecked(c.orderId()));
     final OrderSagaDecider saga = new OrderSagaDecider();
     final VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
@@ -187,6 +199,10 @@ class SagaDispatchProvenanceTest {
                 Release.class,
                 c -> AggregateId.of(c.orderId()),
                 release)
+            .register(
+                AggregateType.of("audit"), Audit.class, c -> AggregateId.of(c.orderId()), audit)
+            .register(
+                AggregateType.of("audit"), Recheck.class, c -> AggregateId.of(c.orderId()), recheck)
             .build();
     final SagaRunner<State> runner =
         SagaRunner.<State>builder()

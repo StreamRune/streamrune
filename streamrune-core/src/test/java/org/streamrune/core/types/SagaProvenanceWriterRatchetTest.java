@@ -64,6 +64,8 @@ class SagaProvenanceWriterRatchetTest {
       "streamrune-test/src/main/java/org/streamrune/test/CommandBusProvenanceContract.java";
   private static final String SAGA_ENVELOPES =
       "streamrune-test/src/main/java/org/streamrune/test/SagaEnvelopes.java";
+  private static final String IN_MEMORY_SUBSCRIPTION =
+      "streamrune-test/src/main/java/org/streamrune/test/InMemoryEventSubscription.java";
 
   /**
    * One forbidden shape and the files that may hold it.
@@ -81,8 +83,9 @@ class SagaProvenanceWriterRatchetTest {
   /**
    * A reference to the cause's scoped value: qualified, or through a wildcard static import that
    * would hide every later use. Allowed where it is declared, where saga dispatch binds it, where
-   * the bus carries it onto its asynchronous thread, and in the bus contract of the test module,
-   * which binds a cause to prove that a bus copies it.
+   * the bus carries it onto its asynchronous thread, and in two places of the test module: the bus
+   * contract, which binds a cause to prove that a bus copies it, and the in-memory subscription,
+   * which binds it to no cause around a listener that runs on the appending thread.
    */
   private static final Rule CAUSE_REFERENCE =
       new Rule(
@@ -98,6 +101,8 @@ class SagaProvenanceWriterRatchetTest {
               BUS,
               QUALIFIED_CAUSE,
               BUS_CONTRACT,
+              QUALIFIED_CAUSE,
+              IN_MEMORY_SUBSCRIPTION,
               QUALIFIED_CAUSE));
 
   private static final Pattern CAUSE_CONSTRUCTOR_CALL =
