@@ -434,7 +434,7 @@ class SagaStartEventClaimFirstCrashTest {
 
     // The cause saga dispatch binds is a function of the saga type, the saga id and the triggering
     // event, so the crashed attempt and the resume bind equal values: whichever attempt commits a
-    // command stores the same metadata.
+    // command stores the same saga origin and causation id.
     var origin = new SagaOrigin(SagaType.fromClass(FakeSagaState.class), sagaId, 0);
     var forwardCause =
         new StreamRuneContext.DispatchCause(

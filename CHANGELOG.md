@@ -429,7 +429,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `causationId`. Saga dispatch binds both as `StreamRuneContext.CAUSE` (read with
   `StreamRuneContext.cause()`), `executeAsync` and `StreamRuneContext.wrap` carry the binding across
   threads, and the origin a saga binds depends only on its type and id, so a rerun stores the same
-  metadata.
+  saga origin and causation id.
 - Lifecycle: `STARTED`, `RUNNING`, `COMPLETED`, `COMPENSATING`, `COMPENSATED`, `FAILED`, `FAULTED`.
   The `saga_state` row's `status` is authoritative. Recovery facts live on the row and are written only
   by the code that establishes them: `genesis_applied`, `pre_fault_status`, `dead_letter_pending`,
@@ -821,13 +821,16 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   of saga-caused events for unit tests).
 - In-memory doubles: `InMemoryCommandBus` (registers with an aggregate type, runs `guard` before
   `decide`), `InMemoryQueryBus`, `InMemoryCommandInbox`, `InMemoryDeadLetterQueue`,
-  `InMemoryCryptoEngine` (tests only), `InMemoryEventSubscription`, `InMemoryOutboxStore`,
+  `InMemoryCryptoEngine` (tests only), `InMemoryEventSubscription` (delivers on the appending
+  thread, outside that thread's request context, saga flag and dispatch cause, so a listener's
+  command is never taken for a saga dispatch), `InMemoryOutboxStore`,
   `InMemoryOffsetStore`, `InMemoryProjectionRepository` (a fencing-capable processor and its own offset
   store, for `TRANSACTIONAL_LOCAL` unit tests without Docker), `InMemoryProjectionDeadLetterStore`,
   `InMemorySagaStore`, `InMemorySagaDeadLetterStore`.
 - Contract suites a custom store can extend: `SagaStoreContract`, `SagaDeadLetterStoreContract`,
   `OutboxStoreContract`, `AtomicBatchProcessorContract`; and `CommandBusProvenanceContract` for a
-  custom `CommandBus` (saga origin and causation id come from the bound dispatch cause only).
+  custom `CommandBus` (the saga origin comes from the bound dispatch cause only, and a bound cause
+  decides the causation id).
 - Every PostgreSQL-backed suite of the framework runs on PostgreSQL 18 in the default build and on 17
   in a second CI job (Testcontainers).
 

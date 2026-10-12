@@ -50,21 +50,22 @@ import org.streamrune.test.InMemorySagaStore;
  * End-to-end: an interceptor-vetoed saga command must NOT be indistinguishable from success. A
  * veto-style {@link CommandInterceptor} whose {@code before()} returns {@code false} (maintenance
  * mode / kill switch / rate limiter — a documented first-class bus feature) makes the bus RETURN a
- * {@code VETOED} {@code CommandResult} without throwing. {@code SagaCommandDispatch.dispatch} used
- * to discard that result, so:
+ * {@code VETOED} {@code CommandResult} without throwing. Were {@code SagaCommandDispatch.dispatch}
+ * to discard that result:
  *
  * <ul>
- *   <li><b>compensation path</b> — a vetoed refund returned "normally", {@code
- *       compensateAndClassify} saw zero failures, and the saga terminal-wrote {@code COMPENSATED}
- *       while the refund handler NEVER RAN: no inbox row, no DLQ entry, and the terminal guard
- *       forever prevents a re-drive — silent money loss;
- *   <li><b>forward path</b> — a vetoed forward command returned from the dispatch loop as success
- *       and the saga persisted {@code FORWARD_PROGRESSED} with the side effect never executed.
+ *   <li><b>compensation path</b> — a vetoed refund would return "normally", {@code
+ *       compensateAndClassify} would see zero failures, and the saga would terminal-write {@code
+ *       COMPENSATED} while the refund handler NEVER RAN: no inbox row, no DLQ entry, and the
+ *       terminal guard forever prevents a re-drive — silent money loss;
+ *   <li><b>forward path</b> — a vetoed forward command would return from the dispatch loop as
+ *       success and the saga would persist {@code FORWARD_PROGRESSED} with the side effect never
+ *       executed.
  * </ul>
  *
- * <p>The fix (mirroring the dead-letter replay path): {@code dispatch} inspects the result and
- * throws {@link SagaCommandVetoedException}. A veto is deliberately NOT poison: the triggering
- * event is fine — the COMMAND was refused — so nothing is quarantined.
+ * <p>{@code dispatch} inspects the result, as the dead-letter replay path does, and throws {@link
+ * SagaCommandVetoedException}. A veto is deliberately NOT poison: the triggering event is fine —
+ * the COMMAND was refused — so nothing is quarantined.
  *
  * <p><b>What the veto then MEANS.</b> it was originally binned as a permanent business rejection (a
  * {@code DomainException}), which contradicted the circuit breaker's ruling that a VETOED callback

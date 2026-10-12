@@ -35,9 +35,21 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 
 /**
- * The provenance contract every {@link CommandBus} must honour: the saga origin and the causation
- * id of a produced event come from the bound {@link StreamRuneContext#CAUSE} and from nothing else
- * a caller controls. Run by {@code InMemoryCommandBusProvenanceTest} and {@code
+ * The provenance contract every {@link CommandBus} must honour:
+ *
+ * <ul>
+ *   <li>The saga origin of a produced event comes from the bound {@link StreamRuneContext#CAUSE}
+ *       and from nothing else. With no cause bound no event carries an origin, whatever the
+ *       correlation id, the baggage, the user, the captured authority or the saga flag.
+ *   <li>A bound cause decides the causation id of every produced event, a {@code null} one
+ *       included, whatever the baggage holds.
+ * </ul>
+ *
+ * <p>The contract says nothing about the causation id of an event produced with no cause bound:
+ * both shipped buses read it from the {@code streamrune.causation-id} baggage entry of the bound
+ * request context.
+ *
+ * <p>Run by {@code InMemoryCommandBusProvenanceTest} and {@code
  * VirtualThreadCommandBusProvenanceTest}, so the test bus and the production bus cannot diverge
  * unnoticed.
  *
@@ -56,7 +68,7 @@ public abstract class CommandBusProvenanceContract {
   public record Marks(int count) implements AggregateState {}
 
   /** The state type the contract's saga origin names. */
-  public record ContractSagaState(SagaStatus status) implements SagaState {}
+  private record ContractSagaState(SagaStatus status) implements SagaState {}
 
   /** The aggregate type the contract's decider is registered under. */
   public static final AggregateType AGGREGATE_TYPE = AggregateType.of("provenance_contract");

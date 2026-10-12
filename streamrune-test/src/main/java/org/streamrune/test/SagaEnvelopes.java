@@ -56,6 +56,11 @@ public final class SagaEnvelopes {
    * An envelope for {@code event} as the first event of {@code streamId}, not yet stored (initial
    * global offset and version), carrying {@link #metadataCausedBy(Class, SagaId)}.
    *
+   * <p>The envelope sits at global offset 0. A {@code SagaRunner} skips an event at or below the
+   * offset its saga applied last, as a redelivery, so hand this envelope to a runner only after
+   * appending it to an event store (the store assigns the offset; read it back), or build an
+   * envelope of your own at a later offset around {@link #metadataCausedBy(Class, SagaId)}.
+   *
    * @param stateType the saga's state class
    * @param sagaId the dispatching saga instance
    * @param streamId the stream the event belongs to

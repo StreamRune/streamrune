@@ -101,6 +101,23 @@ class SagaCommandDispatchTest {
   }
 
   @Test
+  void dispatch_refusesAMissingOrigin_beforeTheBusIsCalled() {
+    var bound = new AtomicReference<Bound>();
+
+    assertThatThrownBy(
+            () ->
+                SagaCommandDispatch.dispatch(
+                    capturing(bound),
+                    null,
+                    EventId.of("evt-7"),
+                    new Cmd("c"),
+                    IdempotencyKey.of("saga:x:1:0")))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("origin is required");
+    assertThat(bound.get()).as("the command never reached the bus").isNull();
+  }
+
+  @Test
   void compensateAndClassify_bindsTheOriginAndTheCausingEventOnEveryCommand() {
     var causes = new java.util.ArrayList<StreamRuneContext.DispatchCause>();
     CommandBus bus =

@@ -80,7 +80,8 @@ class SagaGenesisCrashPointTest {
   /**
    * The process dies after the first command and its key committed and before the saga row
    * advances. The rerun dispatches under the same keys with the same cause bound, so the committed
-   * command is deduplicated and whichever attempt commits a command stores the same metadata.
+   * command is deduplicated and whichever attempt commits a command stores the same saga origin and
+   * causation id.
    */
   @Test
   void crashAfterTheFirstCommandCommits_rerunBindsTheSameCause_andCommitsNothingTwice() {

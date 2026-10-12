@@ -4,6 +4,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.IntFunction;
 import org.slf4j.Logger;
 import org.streamrune.core.CircuitBreakerOpenException;
@@ -51,7 +52,10 @@ final class SagaCommandDispatch {
    * <p><b>The bound cause is the same on every attempt.</b> {@code origin} is a function of the
    * saga type and the saga id, and {@code causingEvent} is the id of a stored event, so a first
    * attempt, a redelivery, a replay feed, a timeout claim and a sweeper resume of the same step
-   * bind equal values: whichever attempt commits the command stores the same metadata.
+   * bind equal values: whichever attempt commits the command stores the same saga origin and the
+   * same causation id. The trace id, the user id and the baggage of the stored events are those of
+   * the ambient context of the thread that commits the command (none on a subscription thread, an
+   * operator's on a replay run from a request).
    *
    * <p><b>A VETO is never a silent success.</b> A user {@link
    * org.streamrune.core.CommandInterceptor} whose {@code before()} returns {@code false}
@@ -105,6 +109,7 @@ final class SagaCommandDispatch {
    *     that reacts to none (a compensation command)
    * @param command the saga-issued command
    * @param key the command's idempotency key
+   * @throws NullPointerException when {@code origin} is {@code null}; the bus is not called
    * @throws SagaCommandVetoedException when an interceptor vetoed the command (it never executed)
    */
   static void dispatch(
@@ -113,6 +118,7 @@ final class SagaCommandDispatch {
       EventId causingEvent,
       Command command,
       IdempotencyKey key) {
+    Objects.requireNonNull(origin, "origin is required");
     StreamRuneContext.RequestContext ambient = StreamRuneContext.capture();
     StreamRuneContext.RequestContext ctx =
         new StreamRuneContext.RequestContext(

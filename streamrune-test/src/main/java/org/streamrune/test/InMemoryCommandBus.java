@@ -53,7 +53,8 @@ import org.streamrune.core.types.Version;
 public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
 
   /**
-   * Baggage key carrying the id of the message that caused the current command. Mirrors {@code
+   * Baggage key carrying the id of the message that caused the current command; read only when no
+   * {@link StreamRuneContext#CAUSE} is bound. Mirrors {@code
    * VirtualThreadCommandBus.CAUSATION_ID_BAGGAGE_KEY} (streamrune-runtime, which this module does
    * not depend on) — the two values must stay identical.
    */

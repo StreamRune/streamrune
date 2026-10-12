@@ -83,11 +83,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
   /**
    * Baggage key naming the id of the message (typically an event) that caused the current command.
-   * Reaction dispatchers (sagas, subscriptions) put the triggering message id under this key in
-   * {@link StreamRuneContext} baggage; the bus then writes it into {@link
-   * EventMetadata#causationId()} of every event the command produces, keeping causation chains
-   * traversable. When absent, produced events have a {@code null} causationId (chain root). The
-   * command's own id is always recorded separately in {@link EventMetadata#commandId()}.
+   * With no {@link StreamRuneContext#CAUSE} bound, the bus writes the entry of the bound request
+   * context's baggage into {@link EventMetadata#causationId()} of every event the command produces;
+   * when the entry is absent too, the events have a {@code null} causationId (chain root). Under a
+   * bound cause the entry is ignored and the cause decides the causation id: saga dispatch names
+   * the triggering event through the cause, not through this key. The command's own id is always
+   * recorded separately in {@link EventMetadata#commandId()}.
    */
   public static final String CAUSATION_ID_BAGGAGE_KEY = "streamrune.causation-id";
 
@@ -630,10 +631,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * runnable throws before running the command, the future fails with that throwable.
    *
    * <p>Caller context that does not cross {@code Thread.start()} is captured at submission: {@link
-   * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, and {@link StreamRuneContext#SAGA_OWNED} are
-   * re-bound on the new thread, and the configured {@link Builder#asyncTaskWrapper(UnaryOperator)
-   * asyncTaskWrapper} can capture other thread-bound state such as the current OpenTelemetry
-   * context.
+   * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED} and
+   * {@link StreamRuneContext#CAUSE} are re-bound on the new thread, and the configured {@link
+   * Builder#asyncTaskWrapper(UnaryOperator) asyncTaskWrapper} can capture other thread-bound state
+   * such as the current OpenTelemetry context.
    */
   @Override
   public <C extends Command> CompletableFuture<CommandResult> executeAsync(C command) {
