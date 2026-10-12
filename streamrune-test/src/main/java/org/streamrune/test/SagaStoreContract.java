@@ -698,6 +698,12 @@ public abstract class SagaStoreContract {
     assertEquals(2L, claimed.episodeVersion());
     Instant claimedAt = claimed.episodeClaimedAt();
     assertNotNull(claimedAt);
+    store.setDeadLetterPending(ID, TYPE, true); // the shield write: no version bump, no stamp
+    assertEquals(2L, row().episodeVersion(), "the shield write keeps the stamp");
+    assertEquals(claimedAt, row().episodeClaimedAt());
+    store.setDeadLetterPending(ID, TYPE, false);
+    assertEquals(2L, row().episodeVersion());
+    assertEquals(claimedAt, row().episodeClaimedAt());
     assertTrue(store.markFaulted(ID, TYPE, 2L)); // v3: a fault keeps the stamp
     var faulted = row();
     assertEquals(SagaStatus.COMPENSATING, faulted.effectiveStatus());
@@ -731,19 +737,20 @@ public abstract class SagaStoreContract {
     assertEquals(5L, row.version());
     assertNull(row.episodeVersion(), "no write entered a compensation episode");
     assertNull(row.episodeClaimedAt());
+    assertNull(row.episodeCauseEventId());
     store.createFaulted(SagaId.of("faulted-at-genesis"), TYPE, INITIAL);
     var faulted =
         store.load(SagaId.of("faulted-at-genesis"), TYPE, ContractState.class).orElseThrow();
     assertNull(faulted.episodeVersion(), "the evolve-poison create enters no episode");
     assertNull(faulted.episodeClaimedAt());
+    assertNull(faulted.episodeCauseEventId(), "and names no cause");
   }
 
   // ===== The cause of an episode. The write that stamps the episode also records the id of the
   // event that opened it: the cause given to claimCompensating and createGenesisPending, the
-  // applied
-  // event's id for applyEvent, none for create and update. A stamped row keeps its cause through
-  // every later write, exactly as it keeps the stamp, and a row without a stamp has no cause. The
-  // runtime sets it as the causation id of every compensation command of the episode.
+  // applied event's id for applyEvent, none for create and update. A stamped row keeps its cause
+  // through every later write, exactly as it keeps the stamp, and a row without a stamp has no
+  // cause. The runtime sets it as the causation id of every compensation command of the episode.
 
   private static final EventId OPENING_EVENT = EventId.of("evt-7");
 
@@ -865,6 +872,10 @@ public abstract class SagaStoreContract {
     store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
     store.claimCompensating(ID, TYPE, EVOLVED, 1L, OPENING_EVENT); // v2: the episode opens here
     assertEquals(OPENING_EVENT, row().episodeCauseEventId());
+    store.setDeadLetterPending(ID, TYPE, true); // the shield write: no version bump
+    assertEquals(OPENING_EVENT, row().episodeCauseEventId(), "the shield write keeps the cause");
+    store.setDeadLetterPending(ID, TYPE, false);
+    assertEquals(OPENING_EVENT, row().episodeCauseEventId(), "set or cleared");
     store.claimCompensating(ID, TYPE, EVOLVED, 2L, EventId.of("evt-8")); // v3: a second claim
     assertEquals(OPENING_EVENT, row().episodeCauseEventId(), "a second claim names no new cause");
     store.applyEvent(
@@ -893,6 +904,23 @@ public abstract class SagaStoreContract {
     assertEquals(SagaStatus.COMPENSATED, row.status());
     assertEquals(2L, row.episodeVersion());
     assertEquals(OPENING_EVENT, row.episodeCauseEventId(), "a terminal write keeps the cause");
+  }
+
+  @Test
+  public void aStampedEpisode_keepsItsCauseThroughATerminalApplyEvent() {
+    store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+    store.claimCompensating(ID, TYPE, EVOLVED, 1L, OPENING_EVENT); // v2: the episode opens here
+    store.applyEvent(
+        ID,
+        TYPE,
+        EVOLVED,
+        SagaStatus.COMPENSATED,
+        2L,
+        AppliedEvent.live(GlobalOffset.of(5L)).withEventId(EventId.of("evt-9"))); // v3: terminal
+    var row = row();
+    assertEquals(SagaStatus.COMPENSATED, row.status());
+    assertEquals(2L, row.episodeVersion());
+    assertEquals(OPENING_EVENT, row.episodeCauseEventId(), "the applied event is not the cause");
   }
 
   @Test

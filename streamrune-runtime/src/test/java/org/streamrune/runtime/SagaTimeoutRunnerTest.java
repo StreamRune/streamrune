@@ -891,6 +891,7 @@ class SagaTimeoutRunnerTest {
               SagaState state,
               long expectedVersion,
               EventId episodeCause) {
+            // Routed through this double's update hook; episodeCause is not recorded.
             update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
           }
 
@@ -1034,6 +1035,7 @@ class SagaTimeoutRunnerTest {
               SagaState state,
               long expectedVersion,
               EventId episodeCause) {
+            // Routed through this double's update hook; episodeCause is not recorded.
             update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
           }
 
@@ -1152,6 +1154,7 @@ class SagaTimeoutRunnerTest {
               SagaState state,
               long expectedVersion,
               EventId episodeCause) {
+            // Routed through this double's update hook; episodeCause is not recorded.
             update(sagaId, sagaType, state, SagaStatus.COMPENSATING, expectedVersion);
           }
 
