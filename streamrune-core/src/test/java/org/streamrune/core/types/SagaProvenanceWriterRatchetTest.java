@@ -15,6 +15,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,20 +26,23 @@ import org.junit.jupiter.api.Test;
  * sources of every module may bind the dispatch cause, build one, or create a saga origin only in
  * the files listed here.
  *
- * <p><b>Why.</b> {@code SagaRunner} routes an event to the saga its {@code sagaOrigin} names, so
- * whoever can write an origin can address a saga. The command bus copies the origin from {@code
- * StreamRuneContext.CAUSE}, and saga dispatch is what binds it; a request filter, a dead-letter
- * replay or an integration that bound the cause, or built an origin, from a value it read off the
- * wire would hand that power to a client. The compiler cannot stop that — the cause is a public
- * constant and the origin a public record — so this scan does.
+ * <p><b>Why.</b> {@code EventMetadata.sagaOrigin} is the framework's statement of which saga's
+ * dispatch caused an event, and it is worth only as much as its writer is single. The command bus
+ * copies the origin from {@code StreamRuneContext.CAUSE}, and saga dispatch is what binds it; a
+ * request filter, a dead-letter replay or an integration that bound the cause, or built an origin,
+ * from a value it read off the wire would let a client make that statement. The compiler cannot
+ * stop that — the cause is a public constant and the origin a public record — so this scan does.
  *
  * <p><b>What is scanned.</b> Every {@code .java} file under any module's {@code src/main/java}.
  * Test sources bind causes and build origins freely. A file is matched as a whole, so a shape that
- * the formatter wrapped over two lines is still found.
+ * the formatter wrapped over two lines is still found. Each shape is refused as a call and as a
+ * method reference ({@code SagaOrigin::dispatchedBy}, {@code SagaOrigin::new}, {@code
+ * DispatchCause::new}, {@code EventMetadata::new}).
  *
- * <p><b>The allow-lists.</b> One per forbidden shape ({@link #RULES}). {@link
- * #theAllowListsHoldNoStaleEntries()} fails an entry whose file is gone or holds the shape no more,
- * so a list only shrinks on its own; adding a writer is a reviewed edit of this file.
+ * <p><b>The allow-lists.</b> One per forbidden shape ({@link #RULES}), each entry with the text
+ * that keeps it listed. {@link #theAllowListsHoldNoStaleEntries()} fails an entry whose file is
+ * gone or holds that text no more, so a list only shrinks on its own; adding a writer is a reviewed
+ * edit of this file.
  *
  * <p>The scanned tree is declared as an input of {@code :streamrune-core:test} in {@code
  * streamrune-core/build.gradle.kts}, so Gradle re-runs this test when a main source of another
@@ -66,10 +70,13 @@ class SagaProvenanceWriterRatchetTest {
    *
    * @param what the shape in words, for the failure message
    * @param forbidden the shape, rejected in every main source outside {@code allowed}
-   * @param evidence what an allow-listed file must still contain to stay listed
-   * @param allowed repository-relative main sources that may hold the shape
+   * @param allowed repository-relative main sources that may hold the shape, each with the text it
+   *     must still contain to stay listed
    */
-  private record Rule(String what, Pattern forbidden, Pattern evidence, Set<String> allowed) {}
+  private record Rule(String what, Pattern forbidden, Map<String, Pattern> allowed) {}
+
+  private static final Pattern QUALIFIED_CAUSE =
+      Pattern.compile("StreamRuneContext\\s*\\.\\s*CAUSE\\b");
 
   /**
    * A reference to the cause's scoped value: qualified, or through a wildcard static import that
@@ -81,43 +88,81 @@ class SagaProvenanceWriterRatchetTest {
       new Rule(
           "references StreamRuneContext.CAUSE",
           Pattern.compile(
-              "StreamRuneContext\\s*\\.\\s*CAUSE\\b"
+              QUALIFIED_CAUSE.pattern()
                   + "|import\\s+static\\s+org\\.streamrune\\.core\\.StreamRuneContext\\s*\\.\\s*\\*"),
-          Pattern.compile("\\bCAUSE\\b"),
-          Set.of(CONTEXT, SAGA_DISPATCH, BUS, BUS_CONTRACT));
+          Map.of(
+              CONTEXT,
+              Pattern.compile("ScopedValue<DispatchCause>\\s+CAUSE\\s*="),
+              SAGA_DISPATCH,
+              QUALIFIED_CAUSE,
+              BUS,
+              QUALIFIED_CAUSE,
+              BUS_CONTRACT,
+              QUALIFIED_CAUSE));
 
-  /** The dispatch cause's record header or a construction of it. */
+  private static final Pattern CAUSE_CONSTRUCTOR_CALL =
+      Pattern.compile("\\bnew\\s+(?:StreamRuneContext\\s*\\.\\s*)?DispatchCause\\s*\\(");
+
+  /**
+   * The dispatch cause's record header, a construction of it, or a reference to its constructor.
+   */
   private static final Rule CAUSE_CONSTRUCTION =
       new Rule(
           "declares or constructs a DispatchCause",
-          Pattern.compile("\\bDispatchCause\\s*\\("),
-          Pattern.compile("\\bDispatchCause\\s*\\("),
-          Set.of(CONTEXT, SAGA_DISPATCH, BUS_CONTRACT));
-
-  /** A call of the origin's constructor: the record itself is the one caller. */
-  private static final Rule ORIGIN_CONSTRUCTION =
-      new Rule(
-          "calls the SagaOrigin constructor",
-          Pattern.compile("\\bnew\\s+(?:[\\w.]+\\.)?SagaOrigin\\s*\\("),
-          Pattern.compile("\\bnew\\s+(?:[\\w.]+\\.)?SagaOrigin\\s*\\("),
-          Set.of(ORIGIN));
+          Pattern.compile("\\bDispatchCause\\s*(?:\\(|::\\s*new\\b)"),
+          Map.of(
+              CONTEXT,
+              Pattern.compile("\\brecord\\s+DispatchCause\\s*\\("),
+              SAGA_DISPATCH,
+              CAUSE_CONSTRUCTOR_CALL,
+              BUS_CONTRACT,
+              CAUSE_CONSTRUCTOR_CALL));
 
   /**
-   * A call of the origin's factory, or a wildcard static import that would hide one. Allowed in the
-   * saga step executor, which names the dispatching saga, and in the test module's helper for
-   * hand-built saga-caused envelopes.
+   * A call of the origin's constructor or a reference to it: the record itself is the one caller.
+   */
+  private static final Rule ORIGIN_CONSTRUCTION =
+      new Rule(
+          "calls or references the SagaOrigin constructor",
+          Pattern.compile(
+              "\\bnew\\s+(?:[\\w.]+\\.)?SagaOrigin\\s*\\(|\\bSagaOrigin\\s*::\\s*new\\b"),
+          Map.of(ORIGIN, Pattern.compile("\\bnew\\s+SagaOrigin\\s*\\(")));
+
+  private static final Pattern ORIGIN_FACTORY_CALL =
+      Pattern.compile("SagaOrigin\\s*\\.\\s*dispatchedBy\\s*\\(");
+
+  /**
+   * A call of the origin's factory, a reference to it, or a wildcard static import that would hide
+   * one. Allowed in the saga step executor, which names the dispatching saga, and in the test
+   * module's helper for hand-built saga-caused envelopes.
    */
   private static final Rule ORIGIN_FACTORY =
       new Rule(
-          "calls SagaOrigin.dispatchedBy",
+          "calls or references SagaOrigin.dispatchedBy",
           Pattern.compile(
-              "SagaOrigin\\s*\\.\\s*dispatchedBy\\b"
+              "SagaOrigin\\s*(?:\\.|::)\\s*dispatchedBy\\b"
                   + "|import\\s+static\\s+org\\.streamrune\\.core\\.saga\\.SagaOrigin\\s*\\.\\s*\\*"),
-          Pattern.compile("SagaOrigin\\s*\\.\\s*dispatchedBy\\b"),
-          Set.of(STEP_EXECUTOR, SAGA_ENVELOPES));
+          Map.of(STEP_EXECUTOR, ORIGIN_FACTORY_CALL, SAGA_ENVELOPES, ORIGIN_FACTORY_CALL));
+
+  /**
+   * A reference to a constructor of the event metadata. The text of a reference does not say which
+   * constructor it resolves to, so every one is refused: a reference to the ten-argument
+   * constructor would build metadata with an origin without a call the other checks see. No main
+   * source holds one.
+   */
+  private static final Rule METADATA_CONSTRUCTOR_REFERENCE =
+      new Rule(
+          "references an EventMetadata constructor",
+          Pattern.compile("\\bEventMetadata\\s*::\\s*new\\b"),
+          Map.of());
 
   private static final List<Rule> RULES =
-      List.of(CAUSE_REFERENCE, CAUSE_CONSTRUCTION, ORIGIN_CONSTRUCTION, ORIGIN_FACTORY);
+      List.of(
+          CAUSE_REFERENCE,
+          CAUSE_CONSTRUCTION,
+          ORIGIN_CONSTRUCTION,
+          ORIGIN_FACTORY,
+          METADATA_CONSTRUCTOR_REFERENCE);
 
   @Test
   void theCauseIsBoundOnlyByItsWriters() {
@@ -126,7 +171,8 @@ class SagaProvenanceWriterRatchetTest {
 
   @Test
   void originsAreCreatedOnlyByTheirWriters() {
-    assertNoViolations(List.of(ORIGIN_CONSTRUCTION, ORIGIN_FACTORY));
+    assertNoViolations(
+        List.of(ORIGIN_CONSTRUCTION, ORIGIN_FACTORY, METADATA_CONSTRUCTOR_REFERENCE));
   }
 
   @Test
@@ -146,14 +192,18 @@ class SagaProvenanceWriterRatchetTest {
             "new StreamRuneContext.DispatchCause(null, origin)",
             "new DispatchCause(causationId, origin)",
             "new StreamRuneContext.DispatchCause\n    (causationId, null)",
-            "public record DispatchCause(CausationId causationId, SagaOrigin sagaOrigin) {")) {
+            "public record DispatchCause(CausationId causationId, SagaOrigin sagaOrigin) {",
+            "BiFunction<CausationId, SagaOrigin, Object> make = DispatchCause::new;",
+            "make = StreamRuneContext.DispatchCause :: new;")) {
       assertTrue(CAUSE_CONSTRUCTION.forbidden().matcher(shape).find(), "must reject: " + shape);
     }
     for (String shape :
         List.of(
             "new SagaOrigin(type, id, 0)",
             "return new  SagaOrigin\n      (type, id, 3);",
-            "new org.streamrune.core.saga.SagaOrigin(type, id, 1)")) {
+            "new org.streamrune.core.saga.SagaOrigin(type, id, 1)",
+            "Maker make = SagaOrigin::new;",
+            "make = org.streamrune.core.saga.SagaOrigin\n        ::new;")) {
       assertTrue(ORIGIN_CONSTRUCTION.forbidden().matcher(shape).find(), "must reject: " + shape);
     }
     for (String shape :
@@ -162,8 +212,18 @@ class SagaProvenanceWriterRatchetTest {
             "SagaOrigin\n        .dispatchedBy(type, id)",
             "org.streamrune.core.saga.SagaOrigin.dispatchedBy(type, id)",
             "import static org.streamrune.core.saga.SagaOrigin.dispatchedBy;",
-            "import static org.streamrune.core.saga.SagaOrigin.*;")) {
+            "import static org.streamrune.core.saga.SagaOrigin.*;",
+            "BiFunction<SagaType, SagaId, SagaOrigin> name = SagaOrigin::dispatchedBy;",
+            "name = SagaOrigin :: dispatchedBy;")) {
       assertTrue(ORIGIN_FACTORY.forbidden().matcher(shape).find(), "must reject: " + shape);
+    }
+    for (String shape :
+        List.of(
+            "TenArguments make = EventMetadata::new;",
+            "make = org.streamrune.core.EventMetadata :: new;")) {
+      assertTrue(
+          METADATA_CONSTRUCTOR_REFERENCE.forbidden().matcher(shape).find(),
+          "must reject: " + shape);
     }
     for (String ordinary :
         List.of(
@@ -176,6 +236,10 @@ class SagaProvenanceWriterRatchetTest {
             "public static SagaOrigin dispatchedBy(SagaType sagaType, SagaId sagaId) {",
             "metadata.sagaOrigin()",
             "new SagaOriginReader(type)",
+            "SagaOrigin::sagaId",
+            "DispatchCause::causationId",
+            "EventMetadata::eventId",
+            "new EventMetadata(eventId, commandId, null, null, correlationId, null, null, now)",
             "StreamRuneContext.CAUSES")) {
       for (Rule rule : RULES) {
         assertFalse(rule.forbidden().matcher(ordinary).find(), "must not flag: " + ordinary);
@@ -187,16 +251,28 @@ class SagaProvenanceWriterRatchetTest {
   void theAllowListsHoldNoStaleEntries() {
     Path root = repositoryRoot();
     for (Rule rule : RULES) {
-      for (String entry : rule.allowed()) {
+      for (Map.Entry<String, Pattern> allowed : rule.allowed().entrySet()) {
+        String entry = allowed.getKey();
         assertTrue(
             entry.contains("/src/main/java/") && entry.endsWith(".java"),
             "the scan covers main sources only: " + entry);
         Path file = root.resolve(entry);
         assertTrue(Files.isRegularFile(file), "allow-list entry is gone: " + entry);
         assertTrue(
-            rule.evidence().matcher(read(file)).find(),
+            allowed.getValue().matcher(read(file)).find(),
             "allow-list entry holds the shape no more (" + rule.what() + "); remove it: " + entry);
       }
+    }
+  }
+
+  @Test
+  void aMentionInJavadocKeepsNoEntryListed() {
+    for (Pattern evidence : CAUSE_REFERENCE.allowed().values()) {
+      assertFalse(evidence.matcher(" * carries {@link StreamRuneContext#CAUSE} across").find());
+      assertFalse(evidence.matcher(" * the bound {@link #CAUSE} and nothing else").find());
+    }
+    for (Pattern evidence : ORIGIN_FACTORY.allowed().values()) {
+      assertFalse(evidence.matcher(" * see {@link SagaOrigin#dispatchedBy}").find());
     }
   }
 
@@ -209,7 +285,7 @@ class SagaProvenanceWriterRatchetTest {
     assertTrue(
         scanned.size() > 300, "expected every module's main sources, found " + scanned.size());
     for (Rule rule : RULES) {
-      for (String entry : rule.allowed()) {
+      for (String entry : rule.allowed().keySet()) {
         assertTrue(scanned.contains(entry), "the scan must reach " + entry);
       }
     }
@@ -225,7 +301,7 @@ class SagaProvenanceWriterRatchetTest {
       String relative = relative(file);
       String source = read(file);
       for (Rule rule : rules) {
-        if (rule.allowed().contains(relative)) {
+        if (rule.allowed().containsKey(relative)) {
           continue;
         }
         Matcher matcher = rule.forbidden().matcher(source);
