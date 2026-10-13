@@ -31,6 +31,7 @@ import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.SagaEnvelopes;
 
 /**
  * Start-path saga fixtures shared by the executor's genesis / idempotency / durability tests a
@@ -81,11 +82,6 @@ final class SagaStartFixtures {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
-    }
-
-    @Override
     public StartState evolve(StartState state, EventEnvelope event) {
       return new StartState(SagaStatus.RUNNING, "order-1");
     }
@@ -105,13 +101,21 @@ final class SagaStartFixtures {
   }
 
   /**
-   * {@link StartOrchestrator} that additionally correlates {@link Advance} events (no forward
-   * commands) and records the offsets of the correlated events it genuinely consumed.
+   * {@link StartOrchestrator} that additionally consumes {@link Advance} events (no forward
+   * commands) and records the offsets of the ones it genuinely consumed. An {@link Advance} that
+   * carries the saga's origin reaches the saga by that origin; one that carries none is routed by
+   * {@link #correlateByEventData}.
    */
   static final class CorrelatingStartOrchestrator implements SagaOrchestrator<StartState> {
     final List<Long> consumedCorrelatedOffsets =
         java.util.Collections.synchronizedList(new java.util.ArrayList<>());
     private final StartOrchestrator start = new StartOrchestrator();
+
+    /**
+     * Whether {@link #correlateByEventData} routes an {@link Advance}. Cleared, an {@link Advance}
+     * reaches the saga only by the origin it carries.
+     */
+    volatile boolean routesAdvanceByEventData = true;
 
     /** {@code evolve} throws for {@link Advance} events while set. */
     volatile boolean poisonCorrelated;
@@ -146,8 +150,10 @@ final class SagaStartFixtures {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return event.event() instanceof Advance ? Optional.of(SagaId.of("saga-1")) : Optional.empty();
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+      return routesAdvanceByEventData && event instanceof Advance
+          ? Optional.of(SagaId.of("saga-1"))
+          : Optional.empty();
     }
 
     @Override
@@ -347,8 +353,12 @@ final class SagaStartFixtures {
             Instant.now()));
   }
 
-  /** A correlated {@link Advance} event at {@code globalOffset}. */
-  static EventEnvelope correlatedEvent(long globalOffset) {
+  /**
+   * An {@link Advance} event at {@code globalOffset} that no saga caused: it carries no saga origin
+   * (and, as its correlation id, the saga's id), so a runner routes it through {@code
+   * correlateByEventData}.
+   */
+  static EventEnvelope advanceOfAnotherCause(long globalOffset) {
     var event = new Advance("order-1");
     return new EventEnvelope(
         GlobalOffset.of(globalOffset),
@@ -365,5 +375,20 @@ final class SagaStartFixtures {
             null,
             null,
             Instant.now()));
+  }
+
+  /**
+   * A correlated {@link Advance} event at {@code globalOffset}: the reply to a command the saga
+   * dispatched, carrying that saga's origin, which is what a runner routes it by.
+   */
+  static EventEnvelope correlatedEvent(long globalOffset) {
+    var event = new Advance("order-1");
+    return new EventEnvelope(
+        GlobalOffset.of(globalOffset),
+        StreamId.of(STREAM_TYPE, AggregateId.of("advance-stream")),
+        Version.initial(),
+        new EventType("Advance"),
+        event,
+        SagaEnvelopes.metadataCausedBy(StartState.class, SagaId.of("saga-1")));
   }
 }

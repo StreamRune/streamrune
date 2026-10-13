@@ -432,11 +432,29 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 ### Sagas
 
 - `SagaOrchestrator<S extends SagaState>` (routing + logic) or `SagaDecider<S>` (logic only, routing
-  configured on the builder with `startWhen`, `extractSagaId`, `correlateBy`), driven by `SagaRunner`
-  as an `EventListener` on any subscription. `SagaCommand.of(command, aggregateId)` names each
-  dispatch's target; correlation rides on `EventMetadata.correlationId`, set to the saga id on every
-  saga-issued command. Domain code recognises a saga dispatch through
-  `StreamRuneContext.isSagaDispatch()` (`StreamRuneContext.SAGA_OWNED`).
+  configured on the builder with `startWhen`, `extractSagaId` and the optional
+  `correlateByEventData`), driven by `SagaRunner` as an `EventListener` on any subscription.
+  `SagaCommand.of(command, aggregateId)` names each dispatch's target. Domain code recognises a saga
+  dispatch through `StreamRuneContext.isSagaDispatch()` (`StreamRuneContext.SAGA_OWNED`).
+- Saga routing: a start event names its saga through `extractSagaId`. The reply to a command a saga
+  dispatched reaches that saga by the saga origin the command bus wrote into the event
+  (`EventMetadata.sagaOrigin`), with no routing code in the application; the runner compares the
+  origin's saga type with its own exactly. An event of any other cause — a user's own action, a
+  webhook, a saga of another type — is routed by `correlateByEventData(streamId, event)`, which
+  receives the stream id and the payload and none of the metadata; its default is "no saga of this
+  type". When both could apply the origin decides, so the reply to a saga's command reaches the
+  dispatching saga even where another saga of the same type watches that aggregate. A listener that
+  reacts to a saga's event with a command of its own keeps the origin with
+  `StreamRuneContext.continuing`. A correlation id is tracing data a client chooses with
+  `X-Correlation-Id`; it routes nothing. A saga state class belongs to one saga: the three
+  integrations refuse, at startup, two `SagaRunner` beans that drive the same state class over the
+  same `SagaStore` (`SagaTypeOwnership.requireOneRunnerPerSagaType`), in their default wiring and
+  with a store of the application's own. One store is one instance, or two instances with equal
+  `SagaStore.storageIdentity()` — the store itself by default, the `DataSource` for
+  `PostgresSagaStore`; a custom store that shares rows between instances overrides it, and
+  `SagaStoreContract` requires the answer to be stable and non-null. An orchestrator method that
+  the interface does not declare is never called by the runner: mark the routing methods
+  `@Override`.
 - Saga origin: every event a saga-issued command produces carries `EventMetadata.sagaOrigin` — the
   saga's type and id at hop 0 — on the event path, the timeout runner, the compensation-retry sweeper
   and the dead-letter replayer alike; events of forward commands carry the triggering event's id as
@@ -498,8 +516,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   write) as two populations interleaved in each batch, retries a failing poll with capped exponential
   backoff (up to one minute, jittered), and refuses at `build()` a decider without a `timeout()`, a
   non-positive `pollInterval` and a non-positive `batchSize`.
-- Failure model: an exception (or a `null` router result) from `isStartEvent`, `correlate`,
-  `extractSagaId`, `initialState`, `evolve`, `handle` or `compensate` is poison — the event is
+- Failure model: an exception (or a `null` router result) from `isStartEvent`,
+  `correlateByEventData`, `extractSagaId`, `initialState`, `evolve`, `handle` or `compensate` is poison — the event is
   quarantined in the `SagaDeadLetterStore` as metadata only (never the payload), the saga is marked
   `FAULTED` with its `pre_fault_status`, and the batch continues. Store and dead-letter-store
   infrastructure failures propagate and the batch is retried.

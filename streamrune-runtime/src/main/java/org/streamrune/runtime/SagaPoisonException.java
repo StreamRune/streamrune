@@ -9,10 +9,11 @@ import org.streamrune.core.saga.SagaId;
  * {@link org.streamrune.core.saga.SagaStatus#FAULTED}, and continues processing the next event in
  * the batch — eliminating head-of-line blocking.
  *
- * <p>Exceptions from orchestrator pure-logic methods ({@code isStartEvent}, {@code correlate},
- * {@code extractSagaId}, {@code evolve}, {@code compensate}, {@code handle}) are wrapped in this
- * exception. Infrastructure failures ({@code SagaStore} {@code load}/{@code create}/{@code update})
- * are NOT wrapped — they propagate out of {@code onEvents} so the subscription can retry.
+ * <p>Exceptions from orchestrator pure-logic methods ({@code isStartEvent}, {@code
+ * correlateByEventData}, {@code extractSagaId}, {@code evolve}, {@code compensate}, {@code handle})
+ * are wrapped in this exception. Infrastructure failures ({@code SagaStore} {@code load}/{@code
+ * create}/{@code update}) are NOT wrapped — they propagate out of {@code onEvents} so the
+ * subscription can retry.
  *
  * <p>The one non-orchestrator source is a <em>deterministic</em> {@link
  * org.streamrune.core.saga.SagaStateSerializationException}, wrapped by {@link
@@ -30,7 +31,8 @@ final class SagaPoisonException extends RuntimeException {
 
   /**
    * @param sagaId the saga that faulted, or {@code null} when the saga could not be identified
-   *     before the exception occurred (e.g. {@code correlate} or {@code extractSagaId} threw)
+   *     before the exception occurred (e.g. {@code correlateByEventData} or {@code extractSagaId}
+   *     threw)
    * @param cause the underlying orchestrator exception (required)
    */
   SagaPoisonException(SagaId sagaId, Throwable cause) {

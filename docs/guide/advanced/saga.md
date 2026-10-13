@@ -14,7 +14,7 @@ Do **not** use sagas as a replacement for projections — sagas emit commands, n
 
 A saga is driven by `SagaRunner` (in `streamrune-runtime`), which adapts a `SagaOrchestrator` into an `EventListener` you register with an `EventSubscription`.
 
-For each incoming `EventEnvelope`, `SagaRunner` calls `SagaOrchestrator.isStartEvent(event)` to decide whether to create a new saga, or `SagaOrchestrator.correlate(event)` to route the event to an already-running one.
+For each incoming `EventEnvelope`, `SagaRunner` routes in three steps, in this order: a start event (`SagaOrchestrator.isStartEvent(event)`) belongs to the saga `extractSagaId(event)` names; any other event that carries a saga origin of this saga type belongs to the saga that origin names; every other event belongs to the saga `correlateByEventData(streamId, event)` returns, or to no saga of this type (see **Correlation** below).
 
 - **Start event:** the runner calls `extractSagaId`, `initialState` and `evolve`, then — **before** any command is dispatched — inserts the saga's row with `SagaStore.createGenesisPending` (version 1, `genesis_applied = FALSE`, holding the evolved state and the evolved status — `STARTED` in place of an evolved `COMPENSATING`, which the commit lands), calls `handle`, dispatches the commands, and commits the genesis with `SagaStore.applyEvent`, which sets `genesis_applied = TRUE`. A redelivered start event is routed on what the row records — an applied genesis is a no-op, a genesis-pending row is re-driven from `initialState`, and commands that already ran dedup in the command inbox. If the insert itself loses a race to a concurrent delivery of the same start event, it throws `OptimisticLockException`, and the runner reloads the row and routes the same way. A start event whose `evolve` already yields a terminal status has nothing to dispatch and is written complete with `SagaStore.create`.
 - **Correlated event:** the runner loads the saga via `SagaStore.load` and either applies the event — `evolve`, then `handle`, then the dispatch, persisted via `SagaStore.applyEvent`, a compare-and-swap keyed on the saga's `version` — or, when the saga cannot consume it yet, **holds** it (see [Held events](#held-events)). A stale view (lost the race to another writer) makes `applyEvent` throw `OptimisticLockException`, which propagates out of the listener so the subscription retries the batch against fresh state.
@@ -23,7 +23,23 @@ Terminal sagas — `COMPLETED`, `COMPENSATED`, `FAILED` — silently ignore furt
 
 Each saga-issued command is dispatched via `CommandBus.execute(command, key)` with a deterministic idempotency key derived from the triggering event's global offset and the command's position in the dispatch list. If a correlated event is redelivered (at-least-once broker/subscription semantics) after its write committed, the runner skips it outright — the row records the highest offset applied to the saga (`last_applied_offset`). If it is redelivered before its write committed (a retried batch, a crash), the command bus finds each already-dispatched key recorded in the command inbox and returns the prior result without re-running the handler or re-persisting events — see [Effectively-once dispatch](#effectively-once-dispatch).
 
-**Correlation:** non-start events are routed to the correct saga by reading `event.metadata().correlationId().value()` — `SagaRunner` sets the command's correlation ID to the saga ID automatically when dispatching, so events produced by that command carry it back.
+**Correlation.** A non-start event reaches a saga in one of two ways.
+
+*Events the saga caused.* Every command a saga dispatches runs with the saga's origin bound, and the command bus writes it into the metadata of each event the command produces: `EventMetadata.sagaOrigin`, holding the saga type, the saga id and a hop count. `SagaRunner` routes an event whose origin names its saga type to the saga the origin names. You write nothing for this. Only saga dispatch and `StreamRuneContext.continuing(event)` set an origin; no request header, baggage entry or dead-letter row can.
+
+*Events somebody else caused* — a customer cancelling by hand, a payment provider's webhook, a saga of another type. They carry no origin of this saga type, and the runner asks `correlateByEventData(streamId, event)`. Return the saga id from the event's own data, or `Optional.empty()` (the default) when the event is not this saga's business. The payload is its writer's data: answer `Optional.empty()` for data that cannot name a saga — an id too long to be part of a `SagaId`, a blank one — and do not throw. A throw is a poison event, so every such event a caller writes would become a null-saga dead-letter entry (the quick example's `sagaOf` shows the check; `extractSagaId` has the same duty, discharged in `isStartEvent`).
+
+The runner calls the methods `SagaOrchestrator` declares and no other, so mark each implementation `@Override`. A method `correlate(EventEnvelope)` declared without the annotation compiles, and the runner never calls it: that saga receives the replies to its own commands, which the origin routes, and none of the events somebody else caused — for those the runner asks `correlateByEventData`, whose default answers that the event is no saga's business. With `@Override` the compiler refuses a method the interface does not declare.
+
+Whoever may write that event may address the saga it names, so the event's own access rule is what protects the saga. Put that rule where it holds for every writer: a command another saga dispatches runs as the system principal, which `@RequireRole`, `@RequirePermission` and a `CommandAuthorizationPolicy` admit by default (see [Authorization and saga-dispatched commands](#authorization-and-saga-dispatched-commands)), so where a saga of another type can write the event, a role on the command does not protect the saga this method names — the decider's `guard` on the command's data does. Guard `evolve` and `handle` by state as well: an outside event can arrive at any step.
+
+When both could apply, the origin decides and `correlateByEventData` is not called. **Every event a saga's command produces — and every event of a continuation of such an event — is routed to the dispatching saga and to no other saga of its type**, whatever the event says: also an event about another saga's entity (a `ReleaseStock` that allocates the freed stock to a waiting order and reports it in an event naming that order). The waiting saga's `correlateByEventData` is not asked about it. An event routed by origin is therefore one this saga's command *caused*, not necessarily one *about* its entity: `evolve` and `handle` take ids from the saga's state, or compare the event's ids with it. To hand a fact to another saga of the same type, let a listener dispatch a command of its own for it **outside** `StreamRuneContext.continuing` — a plain `commandBus.execute(command, key)`: the event of that command carries no origin, and `correlateByEventData` routes it by its data. An event caused by a saga of a *different* type carries no origin of this type and goes to `correlateByEventData` as well. The saga types are compared exactly (the saga state's fully-qualified class name), so renaming a saga state class stops the replies of its in-flight sagas from reaching them.
+
+A correlation id is tracing data. A client sets it with `X-Correlation-Id` in every identity mode, so never route, authorise or deduplicate by it. The method that routes the events of others does not receive the event's metadata, and the method that names the saga of a start event derives the id from that event's own data.
+
+If a listener of yours reacts to one of the saga's events by dispatching a command for the same flow (a process manager), dispatch it inside `StreamRuneContext.continuing(event).run(...)`: the events of that command carry the saga's origin one hop further, and the saga receives them without a line of routing — see [Reacting to a saga's events from a listener](#reacting-to-a-sagas-events-from-a-listener). A command executed on the same thread inside a saga's dispatch — from a command interceptor, for instance — inherits the saga's origin too.
+
+The origin is the framework's statement only as long as application code never builds it from request data: `EventMetadata`, `SagaOrigin` and `StreamRuneContext.DispatchCause` have public constructors, and `EventStore.append` stores the metadata it is handed. Never bind request input to one of them, and never append an event whose metadata came from a request.
 
 ```mermaid
 sequenceDiagram
@@ -58,12 +74,11 @@ sequenceDiagram
 ## Quick example
 
 ```java
-// Minimal saga: on OrderPlaced, dispatch ReserveInventory
+// On OrderPlaced reserve the stock; StockReserved (the reply to the saga's own command)
+// completes the saga; an OrderCancelled written by the customer ends it.
 public class OrderSaga implements SagaOrchestrator<OrderSaga.State> {
 
-    public record State(SagaStatus status, String orderId) implements SagaState {
-        @Override public SagaStatus status() { return status; }
-    }
+    public record State(SagaStatus status, String orderId) implements SagaState {}
 
     @Override public Class<State> stateType() { return State.class; }
 
@@ -74,35 +89,50 @@ public class OrderSaga implements SagaOrchestrator<OrderSaga.State> {
 
     @Override
     public boolean isStartEvent(EventEnvelope event) {
-        return event.event() instanceof OrderPlaced;
+        // An order whose id cannot be part of a saga id starts no saga
+        return event.event() instanceof OrderPlaced e && sagaOf(e.orderId()).isPresent();
     }
 
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
-        OrderPlaced e = (OrderPlaced) event.event();
-        return SagaId.of("order-saga-" + e.orderId());
+        // From the event's own data, never from its metadata
+        return sagaOf(((OrderPlaced) event.event()).orderId()).orElseThrow();
     }
 
+    // StockReserved needs no routing: the saga's ReserveStock command caused it, so it carries
+    // this saga's origin. OrderCancelled is written by the customer's request: route it by its data.
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-        String corrId = event.metadata().correlationId().value();
-        return corrId.startsWith("order-saga-")
-            ? Optional.of(SagaId.of(corrId))
-            : Optional.empty();
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+        return event instanceof OrderCancelled e ? sagaOf(e.orderId()) : Optional.empty();
+    }
+
+    // The order id is its writer's data. An id that no saga id can hold names no saga: answer
+    // "no saga" for it. A throw here would quarantine every such event a caller writes.
+    static Optional<SagaId> sagaOf(String orderId) {
+        if (orderId == null || orderId.isBlank()) {
+            return Optional.empty();
+        }
+        String id = "order-saga-" + orderId;
+        return id.length() > SagaId.MAX_LENGTH ? Optional.empty() : Optional.of(SagaId.of(id));
     }
 
     @Override
     public State evolve(State state, EventEnvelope event) {
-        if (event.event() instanceof OrderPlaced e)
-            return new State(SagaStatus.RUNNING, e.orderId());
-        return state;
+        return switch (event.event()) {
+            case OrderPlaced e -> new State(SagaStatus.RUNNING, e.orderId());
+            // The order id comes from the saga's state: this event is the reply to its command
+            case StockReserved e -> new State(SagaStatus.COMPLETED, state.orderId());
+            case OrderCancelled e when e.orderId().equals(state.orderId()) ->
+                new State(SagaStatus.FAILED, state.orderId());
+            default -> state;
+        };
     }
 
     @Override
     public List<SagaCommand> handle(State state, EventEnvelope event) {
         if (event.event() instanceof OrderPlaced e)
             // An id derived from a stored event or saga state: the constructor, not the ingress factory of()
-            return List.of(SagaCommand.of(new ReserveInventory(e.orderId()), new AggregateId(e.orderId())));
+            return List.of(SagaCommand.of(new ReserveStock(e.orderId()), new AggregateId(e.orderId())));
         return List.of();
     }
 
@@ -170,10 +200,14 @@ If your saga only needs the functional core (state evolution, command decisions,
 ```java
 SagaRunner<OrderSaga.State> runner = SagaRunner.<OrderSaga.State>builder()
     .decider(new OrderSagaDecider())
-    .startWhen(event -> event.event() instanceof OrderPlaced)
-    .extractSagaId(event -> SagaId.of("order-saga-" + ((OrderPlaced) event.event()).orderId()))
-    .correlateBy(event -> Optional.of(SagaId.of(event.metadata().correlationId().value()))
-        .filter(id -> id.value().startsWith("order-saga-")))
+    // OrderSaga.sagaOf is the quick example's helper: the saga id of an order, or nothing for an
+    // order id no saga id can hold. None of the three functions throws on the event's data.
+    .startWhen(event ->
+        event.event() instanceof OrderPlaced e && OrderSaga.sagaOf(e.orderId()).isPresent())
+    .extractSagaId(event -> OrderSaga.sagaOf(((OrderPlaced) event.event()).orderId()).orElseThrow())
+    // Optional. Events the saga caused are routed by their origin; this is only for the others.
+    .correlateByEventData((streamId, event) ->
+        event instanceof OrderCancelled e ? OrderSaga.sagaOf(e.orderId()) : Optional.empty())
     .sagaStore(sagaStore)
     .commandBus(commandBus)
     .sagaDeadLetterStore(sagaDeadLetterStore)
@@ -181,6 +215,33 @@ SagaRunner<OrderSaga.State> runner = SagaRunner.<OrderSaga.State>builder()
 ```
 
 `SagaDecider` also carries the optional `timeout()` used by `SagaTimeoutRunner` (below); `SagaOrchestrator` has no timeout concept of its own.
+
+### Reacting to a saga's events from a listener
+
+A listener of your own that reacts to one of the saga's events by sending a command — a process manager that captures a payment once the saga's `InitiatePayment` produced `PaymentInitiated`, say — dispatches that command inside `StreamRuneContext.continuing(event)`:
+
+```java
+EventListener paymentProcessManager = events -> {
+    for (EventEnvelope event : events) {
+        if (event.event() instanceof PaymentInitiated initiated) {
+            StreamRuneContext.continuing(event).run(() ->
+                commandBus.execute(
+                    new CapturePayment(initiated.paymentId()),
+                    IdempotencyKey.of("capture:" + event.metadata().eventId().value())));
+        }
+    }
+};
+```
+
+Every event that command produces carries, written by the command bus: the causing event's saga origin one hop further (`hop + 1`), the causing event's id as its `causationId`, and the causing event's correlation id and trace id. The origin is still the saga's, so the saga receives `PaymentCaptured` as it receives the reply to a command it dispatched itself, with no routing code. A causing event without a saga origin gives none: the command is then an ordinary one, and a saga sees its events only through `correlateByEventData`.
+
+Five rules come with it:
+
+- **A continuation has no authority.** It runs with no user, no captured authority and empty baggage, and `StreamRuneContext.isSagaDispatch()` is `false` inside it, whatever the causing event's metadata and the calling thread hold. The origin states who caused an event; it grants nothing. A command behind an authorization gate is decided by your own policy, which can read `StreamRuneContext.cause()` — and reads the cause's saga origin, not the mere presence of a cause.
+- **Let a failure that a retry can cure leave the listener.** A failed command that carries a saga origin is published to no dead-letter queue, so the subscription's redelivery of the causing event is its only second attempt: let an unreachable store or a lock timeout propagate, and the subscription keeps its checkpoint and delivers the event again. A listener that catches such a failure and returns loses the command. A rejection by the domain (`DomainException` and its validation and authorization subtypes, `IllegalArgumentException`) is the command's answer, and a redelivery only repeats it: catch it and decide — give the command up, or dispatch the command that records the refusal. With `executeAsync`, or a task handed to another thread through `StreamRuneContext.wrap`, wait for the outcome before the listener returns.
+- **Give the command an idempotency key derived from the causing event.** A redelivery binds the same saga origin and causation id, so with a key a redelivery after the command committed is answered from the command inbox and stores no second event. A failed continuation of an event *without* a saga origin is published to the dead-letter queue like any other command, once for every failed delivery; the key is what makes the redelivery and the replays of those entries end in one stored event.
+- **Use it for a command of the same flow.** Every event of a continuation reaches the saga that caused the continued event, and no other saga of its type. A command that acts for *another* saga's entity — the order that was waiting for the stock this saga released — is dispatched without `continuing`, as a plain `commandBus.execute(command, key)`: its event carries no origin, no causation id and a correlation id of its own, and the other saga receives it through `correlateByEventData`.
+- **Hand `continuing` the envelope the subscription delivered.** It copies the event id, the correlation id, the trace id and the saga origin out of the envelope and checks none of them. Never build that envelope from request data.
 
 ## Lifecycle statuses
 
@@ -192,7 +253,7 @@ SagaRunner<OrderSaga.State> runner = SagaRunner.<OrderSaga.State>builder()
 | `COMPENSATING` | No | **No** (but the event path never re-runs `evolve`/`handle` on it) | Framework-set to claim ownership of a compensation episode *before* dispatching any compensation command — by whichever path drives compensation: the correlated-event path and the start-event path in `SagaRunner`, or `SagaTimeoutRunner`. An orchestrator whose `evolve` yields a state with `status() == COMPENSATING` enters the episode the same way: the event write that follows that step's forward loop persists the status and stamps the episode (`episode_version`, `episode_claimed_at`, the event as `episode_cause_event_id`) exactly as a claim does, so every `COMPENSATING` row carries its claim. Until that write the row is not `COMPENSATING` unless a claim makes it so (a rejected forward command, a timeout) — on a start event it is the genesis-pending row, inserted as `STARTED` — so the commands `handle` returns for that event are dispatched, and dispatched again after a retry-later failure or a crash, before a second delivery, a correlated event or the compensation-retry sweeper can compensate. The timeout runner is not held back by this: it claims such a start at its deadline as it claims any start whose dispatch has not completed (see [Timeout-driven compensation](#timeout-driven-compensation-and-compensating)). That step dispatches no compensation command itself: the episode it enters is driven afterwards by the sweeper's re-drive, by the timeout runner's re-pick or by the saga's next event, and where the re-drive is switched off and the saga has no timeout runner it stays `COMPENSATING` until its next event arrives. Not one of the `SagaStore.update` terminal statuses, so it can still be written to — this is what allows a crashed or transiently-failing episode to be re-driven. Still returned by `SagaStore.findTimedOut` and by `SagaStore.findCompensating` (recovery). The event path never re-runs forward `evolve`/`handle` on a `COMPENSATING` saga, but a redelivered correlated event *resumes* its compensation episode (see below); a `SagaCompensationRetrySweeper` re-drives it automatically even with no timeout runner and no redelivered event. |
 | `COMPENSATED` | Yes | Yes | Framework-set after `compensate()` returned a non-empty list and every compensation command dispatched successfully. |
 | `FAILED` | Yes | Yes | Framework-set when `compensate()` returned an **empty** list, or when at least one compensation command threw. An empty compensate result is not "nothing went wrong" — it is classified `FAILED`, not `COMPENSATED`, because there was an unrecovered primary failure with no undo. |
-| `FAULTED` | No | Yes | Framework-set when an orchestrator pure-logic method (`isStartEvent`, `correlate`, `extractSagaId`, `initialState`, `evolve`, `handle`, `compensate`) throws, and by the automatic give-up paths (see [Operations notes](#operations-notes)). On the event path the triggering event is quarantined in the `SagaDeadLetterStore`; the saga stops processing events and timeout sweeps, and the row records the status the fault replaced (`pre_fault_status`). Unlike the three terminal statuses, `FAULTED` is *not* protected by the store's terminal guard, so a replayed step's own successful write — or the terminal write of an operator's [`resumeFaulted`](#resuming-a-give-up-fault-resumefaulted), or the claim of an operator's [`compensateFaulted`](#compensating-a-stranded-forward-fault-compensatefaulted) — can still move it — see [Operations notes](#operations-notes). |
+| `FAULTED` | No | Yes | Framework-set when an orchestrator pure-logic method (`isStartEvent`, `correlateByEventData`, `extractSagaId`, `initialState`, `evolve`, `handle`, `compensate`) throws, and by the automatic give-up paths (see [Operations notes](#operations-notes)). On the event path the triggering event is quarantined in the `SagaDeadLetterStore`; the saga stops processing events and timeout sweeps, and the row records the status the fault replaced (`pre_fault_status`). Unlike the three terminal statuses, `FAULTED` is *not* protected by the store's terminal guard, so a replayed step's own successful write — or the terminal write of an operator's [`resumeFaulted`](#resuming-a-give-up-fault-resumefaulted), or the claim of an operator's [`compensateFaulted`](#compensating-a-stranded-forward-fault-compensatefaulted) — can still move it — see [Operations notes](#operations-notes). |
 
 The saga-store row's `status` column — not `state.status()` as the orchestrator last saw it — is authoritative. The framework may persist a status the domain state's own `evolve` never observed (e.g. `COMPENSATED` after a compensation the orchestrator only found out about via `compensate`'s return value).
 
@@ -243,13 +304,13 @@ On the event path a poison writes its dead-letter entry first and only then faul
 
 ## Failure model: poison events and FAULTED
 
-Exceptions thrown by `isStartEvent`, `correlate`, `extractSagaId`, `initialState`, `evolve`, `handle`, or `compensate` are treated as **poison events**, not transient failures:
+Exceptions thrown by `isStartEvent`, `correlateByEventData`, `extractSagaId`, `initialState`, `evolve`, `handle`, or `compensate` are treated as **poison events**, not transient failures:
 
 1. The triggering event is quarantined into `SagaDeadLetterStore` — **metadata only** (saga id/type, event offset/type, exception class name and message, fault timestamp). The event payload is never copied there; `event_stream` stays the framework's single crypto-governed, shreddable source of truth for GDPR purposes. To inspect the offending event, read the event store at the entry's `eventOffset`.
 2. The saga is marked `FAULTED` — the row records the status the fault replaced (`pre_fault_status`) — and stops processing: it leaves the timeout sweeps, and its later correlated events are held behind the fault (recorded, not processed — see [Held events](#held-events)).
 3. The runner moves on to the next event in the batch — a poison event does not block the subscription (no head-of-line blocking) and does not retry.
 
-A **`null` return** from `extractSagaId` or `correlate` is classified exactly the same way. Both are contract violations — `extractSagaId` has no "ignore" signal (`isStartEvent` already claimed the event), and `correlate`'s one and only "not mine" signal is `Optional.empty()`, never a bare `null` — and both are ordinary user bugs (a metadata lookup that comes back `null` on a malformed producer event). The runner null-checks the router outputs inside the poison classification, so the violation is quarantined as a *null-saga* entry and the batch continues; without that check the `null` flowed downstream and the resulting failure (an NPE laundered into an infrastructure-classified store exception, or thrown outside the poison wrapper entirely) was retried forever — a permanently wedged saga subscription.
+A **`null` return** from `extractSagaId` or `correlateByEventData` is classified exactly the same way. Both are contract violations — `extractSagaId` has no "ignore" signal (`isStartEvent` already claimed the event), and `correlateByEventData`'s one and only "not mine" signal is `Optional.empty()`, never a bare `null` — and both are ordinary user bugs (a metadata lookup that comes back `null` on a malformed producer event). The runner null-checks the router outputs inside the poison classification, so the violation is quarantined as a *null-saga* entry and the batch continues; without that check the `null` flowed downstream and the resulting failure (an NPE laundered into an infrastructure-classified store exception, or thrown outside the poison wrapper entirely) was retried forever — a permanently wedged saga subscription.
 
 Because there is no retry, **orchestrator authors are responsible for treating transient errors (network blips, timeouts calling out to another service inside `evolve`/`handle`) as retryable inside their own logic**, or designing them out entirely (e.g. only touching in-memory state and letting `CommandBus` — which does have its own retry policy — own the I/O). A transient exception that escapes an orchestrator method permanently faults the saga.
 
@@ -456,6 +517,7 @@ The framework deliberately does **not** bypass user interceptors for saga comman
 - **Discarding a forward fault's entry leaves nothing to drain.** A forward fault owns the dead-letter entry of the event that faulted it; once you `discard` that entry (its event can no longer be read, or the business process was cancelled out-of-band), the row stays `FAULTED` with nothing left for `replayAll`, and no automatic driver selects a `FAULTED` row. The discard logs a `WARNING` naming the remedy; `SagaDeadLetterReplayer.compensateFaulted(sagaId)` compensates the saga — see [Compensating a stranded forward fault](#compensating-a-stranded-forward-fault-compensatefaulted).
 - **Terminal sagas are never deleted automatically.** `COMPLETED`/`COMPENSATED`/`FAILED` rows accumulate in `saga_state`; clean up stale rows periodically according to your own retention policy if row count matters. **Remove a saga's dead-letter entries before you delete its row** — deleting the row does not release them. Over a terminal row, `replayAll(sagaId)` discards every entry as moot — except one whose event can no longer be read (`EVENT_NOT_FOUND`; the remedy is `discard`) or whose router still throws (`STILL_POISON`; fix the router or `discard` it); either stops the drain. A named entry left behind a deleted row is kept by retention until you discard it (it looks exactly like the [row-less residual](#the-row-less-residual)), is counted in `streamrune.saga.faulted_backlog`, and makes the runner hold that saga id's later correlated events as `BEFORE_START`. A drain treats such entries differently by kind: a correlated entry is deferred as `SAGA_ROW_PENDING` on every drain, but a **start entry is not deferred** — the drain feeds it (unless the key-age guard refuses it as `STALE_REDRIVE_BLOCKED`), and because the row is absent, the step executor's create-first genesis re-evolves the start event from `initialState`, creates a fresh row and restarts the saga, dispatching its start commands. The same applies to rows your application removes with `SagaStore.delete`.
 - **`SagaId` must be deterministic**, derived from the start event's business identifiers (e.g. `"order-saga-" + orderId`). Random IDs break start-event idempotency — a redelivered start event would create a second saga instead of being recognized as a duplicate.
+- **A saga state class belongs to one saga.** The state class is the saga type: rows are stored under it, and the reply to a saga's command names its saga by it. Two `SagaRunner`s built over the same state class and the same `SagaStore` — one orchestrator and one decider, or two orchestrators — load and write the same rows, and each takes the replies to the other's commands for its own; whichever subscription is ahead applies its `evolve`, and the other skips the event as a redelivery. No routing method separates them, because a reply does not reach one. The Spring, Quarkus and Micronaut integrations refuse such a pair of `SagaRunner` beans at startup, naming the state class and both sagas (`SagaTypeOwnership.requireOneRunnerPerSagaType`), in their default wiring — every runner built from the integration's own `SagaStore` bean — and in any other wiring that hands the runners one store. *The same store* is one instance, or two instances that say they keep the same rows: `SagaStore.storageIdentity()` is the store itself by default and the `DataSource` for `PostgresSagaStore`, so two `PostgresSagaStore`s over one `DataSource` are one store. Two runners of one type over stores with different identities are accepted. The identity is what a store answers without I/O, which sets its limit: two `DataSource` objects configured for one database, and a store wrapper that does not forward the identity of the store it wraps, pass the check although their runners share rows. A custom `SagaStore` that shares rows between instances overrides `storageIdentity()`. The refusal runs with the startup validators, ahead of the runners, sweepers and subscriptions the integration starts; a subscription the application starts itself while its beans are created is already polling when the startup stops. A hand-wired application calls that method with its runners, or keeps the rule by construction.
 - **Two different saga types must not derive the same `SagaId`.** `saga_state` is keyed by `saga_id` alone, so if an `OrderFulfillmentSaga` and an `OrderRefundSaga` both used `SagaId.of(orderId)` they would collide. This is now detected loudly: the second type's row insert throws `SagaTypeCollisionException` naming both types (its `load`/`update` are also `saga_type`-scoped, so it can never read or overwrite the first type's state). Give each type a distinct id prefix — e.g. `"fulfillment-" + orderId` vs `"refund-" + orderId`.
 - **Saga state (`S extends SagaState`) must be Jackson-serializable** — annotate constructors with `@JsonCreator` and parameters with `@JsonProperty`. Missing annotations surface as deserialization failures at runtime, not at compile time.
 - **`evolve` re-runs whenever a delivery's write did not commit.** The runner dedups a committed event — a redelivered correlated event at or below the row's `last_applied_offset` is skipped before `evolve` runs — but a delivery whose write never landed (a proven retry-later forward failure, a CAS conflict, a crash before the write) is evaluated again from the stored state, and a genesis-pending start is re-driven from `initialState`. Keep `evolve` a pure function of the state and the event, and tolerant of a late event older than one it has already applied (see [Replaying quarantined events](#replaying-quarantined-events)).
@@ -495,7 +557,7 @@ Deferred entries still pending at the end — no start entry landed in this drai
 
 **Null-saga entries** — the router could not name a saga when the event arrived — are replayed with `replay(null, eventOffset)`. The replayer routes the event through the runner's (fixed) routers. If it now routes to no saga, the entry is discarded (`REPLAYED`). Otherwise the resolved target is stamped on the entry (`target_saga_id`) and the target's shield is set **before** any refusal or feed, so a refused or interrupted entry keeps its retention protection. A target that is `FAULTED`, genesis-pending, row-less with a dead-letter record of its own, or has an older entry pending answers `TARGET_PENDING`; `replayAll(targetSagaId)` then folds the entry in at its causal position.
 
-**A named entry is always fed to the saga it records.** If the fixed router routes the event elsewhere (or nowhere), the replayer logs a `WARNING` and still feeds the recorded saga — the router only decides start event versus correlated event.
+**A named entry is always fed to the saga it records.** If, at the time of the replay, the routing sends the event elsewhere (or nowhere), the replayer logs a `WARNING` and still feeds the recorded saga — the routing only decides start event versus correlated event.
 
 | Outcome | Meaning | Entry afterwards | What to do |
 |---|---|---|---|
@@ -575,7 +637,7 @@ Every outcome is logged (ids sanitized) and counted by `streamrune.saga.compensa
 
 `SagaDeadLetterReplayer.discard(sagaId, eventOffset)` abandons a single quarantined entry — the remedy for `EVENT_NOT_FOUND`, or for an entry whose business process was cancelled out-of-band — and, when the saga (for a null-saga entry: its resolved target) owns no entry afterwards, clears its shield so its live correlated events are applied again. `sagaId` nullness is significant: `null` matches only entries whose stored `saga_id` is also `null` (SQL `IS NOT DISTINCT FROM`), never a row with a non-null saga id at the same offset. The removal is scoped to the replayer's saga type: the replayer discards through the store's type-scoped `SagaDeadLetterStore.discard(sagaId, sagaType, eventOffset)`, which removes the entry only when its stored type matches, so a cross-type `SagaId` collision can never let one type's tooling delete another type's quarantine record. Calling that store method directly removes the entry but leaves the shield set; after discarding that way, run `replayAll(sagaId)`, which ends with the same conditional clear. A discard that leaves a `FAULTED` saga with no entry left logs a `WARNING` naming the remedy for its shape — [`compensateFaulted`](#compensating-a-stranded-forward-fault-compensatefaulted) for a forward fault, [`resumeFaulted`](#resuming-a-give-up-fault-resumefaulted) for a fault inside a compensation episode — because nothing else will ever advance it.
 
-**Null-saga entries can accumulate duplicate rows on PostgreSQL.** When `sagaId` could never be identified (e.g. `correlate`/`extractSagaId` itself threw), the entry's `saga_id` column is `NULL`. SQL's standard NULL-distinct semantics mean the idempotent-upsert-on-publish does *not* dedupe across repeated failed replays at the same offset — each re-quarantine can insert an additional row instead of updating one. `discard(null, eventOffset)` removes *all* matching null-saga rows at once; the duplicates of an entry nobody has resolved also age out through retention (below). This divergence from the in-memory test double is deliberate and accepted — see `PostgresSagaDeadLetterStoreTest`.
+**Null-saga entries can accumulate duplicate rows on PostgreSQL.** When `sagaId` could never be identified (e.g. `correlateByEventData`/`extractSagaId` itself threw), the entry's `saga_id` column is `NULL`. SQL's standard NULL-distinct semantics mean the idempotent-upsert-on-publish does *not* dedupe across repeated failed replays at the same offset — each re-quarantine can insert an additional row instead of updating one. `discard(null, eventOffset)` removes *all* matching null-saga rows at once; the duplicates of an entry nobody has resolved also age out through retention (below). This divergence from the in-memory test double is deliberate and accepted — see `PostgresSagaDeadLetterStoreTest`.
 
 A background `SagaDeadLetterRetentionSweeper` prunes `saga_dead_letters` rows **first** faulted before `streamrune.saga.dead-letter-retention-max-age` (default **7 days**), auto-configured across Spring, Quarkus, and Micronaut alongside the inbox/outbox sweepers whenever the framework's own PostgreSQL-backed store (`PostgresSagaDeadLetterStore`) is auto-configured — sagas enabled and a `DataSource` bean present. The cutoff compares `first_faulted_at`, which every re-quarantine keeps, not the `faulted_at` a failed replay refreshes — so a still-poison replay cannot extend an entry's life by another window.
 

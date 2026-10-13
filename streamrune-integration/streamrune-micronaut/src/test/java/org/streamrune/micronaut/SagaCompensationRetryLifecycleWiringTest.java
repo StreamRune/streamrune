@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.micronaut.context.ApplicationContext;
 import java.util.List;
-import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
@@ -51,11 +50,6 @@ class SagaCompensationRetryLifecycleWiringTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("x");
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
     }
 
     @Override

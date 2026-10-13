@@ -167,11 +167,6 @@ class PostgresNullSagaDeadLetterReplayTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
-    }
-
-    @Override
     public FulfillState evolve(FulfillState state, EventEnvelope event) {
       return new FulfillState(SagaStatus.RUNNING, ((Trigger) event.event()).orderId());
     }

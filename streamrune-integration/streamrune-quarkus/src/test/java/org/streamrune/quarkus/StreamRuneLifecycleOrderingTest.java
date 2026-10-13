@@ -31,7 +31,6 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.AggregateState;
@@ -471,11 +470,6 @@ class StreamRuneLifecycleOrderingTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("x");
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
     }
 
     @Override

@@ -13,7 +13,6 @@ import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
@@ -63,11 +62,6 @@ class SagaEventPathRetentionContainerWiringTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("x");
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
     }
 
     @Override

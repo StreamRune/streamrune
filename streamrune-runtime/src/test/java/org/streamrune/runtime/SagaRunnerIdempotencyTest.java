@@ -111,8 +111,8 @@ class SagaRunnerIdempotencyTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      if (event.event() instanceof OrderConfirmed oc) {
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+      if (event instanceof OrderConfirmed oc) {
         return Optional.of(SagaId.of("fulfill-" + oc.orderId()));
       }
       return Optional.empty();
@@ -166,8 +166,8 @@ class SagaRunnerIdempotencyTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      if (event.event() instanceof OrderConfirmed oc) {
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+      if (event instanceof OrderConfirmed oc) {
         return Optional.of(SagaId.of("fulfill2-" + oc.orderId()));
       }
       return Optional.empty();

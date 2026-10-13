@@ -596,7 +596,7 @@ class PostgresSagaDeadLetterStoreTest {
         GlobalOffset.of(offset),
         EventType.of("PaymentCompleted"),
         "java.lang.RuntimeException",
-        "correlate poison",
+        "routing poison",
         faultedAt);
   }
 
@@ -959,7 +959,7 @@ class PostgresSagaDeadLetterStoreTest {
             offset,
             EventType.of("E"),
             "java.lang.RuntimeException",
-            "A's correlate poison",
+            "A's routing poison",
             Instant.now()));
     store.publish(
         new SagaDeadLetterStore.SagaDeadLetterEntry(
@@ -968,7 +968,7 @@ class PostgresSagaDeadLetterStoreTest {
             offset,
             EventType.of("E"),
             "java.lang.RuntimeException",
-            "B's correlate poison",
+            "B's routing poison",
             Instant.now()));
     assertEquals(2, store.findAll(10).size(), "NULL-distinct semantics keep both typed rows");
 

@@ -8,14 +8,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
-import org.streamrune.core.EventMetadata;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
@@ -26,9 +24,6 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaUnstampedCompensationEpisodeException;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
-import org.streamrune.core.types.CommandId;
-import org.streamrune.core.types.CorrelationId;
-import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
@@ -39,6 +34,7 @@ import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
 import org.streamrune.test.MutableClock;
+import org.streamrune.test.SagaEnvelopes;
 
 /**
  * The event-path COMPENSATING resume was the ONLY re-drive path with no command-inbox key-age
@@ -98,12 +94,6 @@ class SagaEventPathStaleEpisodeTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SAGA;
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corrId = event.metadata().correlationId().value();
-      return corrId.startsWith("saga-") ? Optional.of(SagaId.of(corrId)) : Optional.empty();
     }
 
     @Override
@@ -195,15 +185,7 @@ class SagaEventPathStaleEpisodeTest {
         Version.initial(),
         new EventType(payload.getClass().getSimpleName()),
         payload,
-        new EventMetadata(
-            EventId.of("evt-" + UUID.randomUUID()),
-            CommandId.of("cmd-1"),
-            null,
-            null,
-            CorrelationId.of(SAGA.value()),
-            null,
-            null,
-            Instant.now()));
+        SagaEnvelopes.metadataCausedBy(OrderState.class, SAGA));
   }
 
   // ========== Tests ==========

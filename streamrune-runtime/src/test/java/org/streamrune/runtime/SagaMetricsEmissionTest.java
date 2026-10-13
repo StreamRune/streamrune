@@ -168,11 +168,6 @@ class SagaMetricsEmissionTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
-    }
-
-    @Override
     public FakeState evolve(FakeState state, EventEnvelope event) {
       if (event.event() instanceof Start s) {
         return new FakeState(SagaStatus.RUNNING, s.id());
@@ -582,7 +577,7 @@ class SagaMetricsEmissionTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
       return Optional.of(fixedSagaId);
     }
 
@@ -623,7 +618,8 @@ class SagaMetricsEmissionTest {
             .metrics(metrics)
             .build();
 
-    var event = startEnvelope("whatever"); // correlate() ignores content, always matches sagaId
+    var event =
+        startEnvelope("whatever"); // correlateByEventData() ignores content, always matches sagaId
 
     assertThatThrownBy(() -> runner.asEventListener().onEvents(List.of(event)))
         .isInstanceOf(OptimisticLockException.class);
@@ -652,7 +648,8 @@ class SagaMetricsEmissionTest {
             .metrics(new ThrowingMetrics())
             .build();
 
-    var event = startEnvelope("whatever"); // correlate() ignores content, always matches sagaId
+    var event =
+        startEnvelope("whatever"); // correlateByEventData() ignores content, always matches sagaId
 
     // A throwing metrics backend must NOT replace the OptimisticLockException that the batch-retry
     // contract depends on — the CAS conflict must still be the exception observed by the caller.

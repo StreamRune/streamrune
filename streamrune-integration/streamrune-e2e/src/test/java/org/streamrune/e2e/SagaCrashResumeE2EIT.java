@@ -159,12 +159,6 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corr = event.metadata().correlationId().value();
-      return corr.startsWith("saga-") ? Optional.of(SagaId.of(corr)) : Optional.empty();
-    }
-
-    @Override
     public OrderSagaState evolve(OrderSagaState state, EventEnvelope event) {
       if (event.event() instanceof OrderPlaced p) {
         return new OrderSagaState(SagaStatus.RUNNING, p.orderId());

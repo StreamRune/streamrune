@@ -3,7 +3,10 @@ package org.streamrune.runtime;
 import static com.tngtech.archunit.base.DescribedPredicate.not;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noCodeUnits;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.AccessTarget;
@@ -11,7 +14,11 @@ import com.tngtech.archunit.core.domain.JavaAccess;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaCodeUnit;
+import com.tngtech.archunit.core.domain.JavaMethod;
+import com.tngtech.archunit.core.domain.JavaModifier;
+import com.tngtech.archunit.core.domain.JavaType;
 import com.tngtech.archunit.core.domain.ReferencedClassObject;
+import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
@@ -23,12 +30,16 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Function;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.StreamRuneContext;
+import org.streamrune.core.saga.SagaDecider;
 import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrchestrator;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CommandId;
@@ -37,6 +48,7 @@ import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.SpanId;
+import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
 
@@ -63,6 +75,18 @@ import org.streamrune.core.types.UserId;
  * <p>A rule matches a call of the guarded method or constructor and a method reference to it
  * ({@code SagaOrigin::dispatchedBy}, {@code SagaOrigin::new}, {@code SagaOrigin::nextHop}, {@code
  * EventMetadata::new}) alike.
+ *
+ * <p>The reader of that statement is confined too. {@link SagaRunner} routes a non-start event by
+ * the origin in its metadata, and asks the application only about an event no saga of its type
+ * caused — through a method that receives the stream id and the payload. No method of the saga
+ * interfaces or of the runner's builder that routes such an event is handed the envelope or its
+ * metadata ({@link #noRoutingHookForNonStartEventsSeesTheEnvelopeOrItsMetadata}), so an application
+ * cannot route such an event by a correlation id, a trace id, a user id or baggage: values a
+ * request chooses. (An implementation that still declares the removed envelope-taking method either
+ * does not compile — with {@code @Override}, or as the builder call — or declares a method the
+ * runner never calls: the saga then receives no event of another cause.) The start-event methods
+ * still receive the envelope; their javadoc and the documentation ratchet keep the metadata out of
+ * them.
  *
  * <p>Compiled classes of both modules are analysed; the source scan {@code
  * SagaProvenanceWriterRatchetTest} in {@code streamrune-core} covers the main sources of every
@@ -254,6 +278,198 @@ class SagaProvenanceArchitectureTest {
                   Instant.class,
                   Map.class,
                   SagaOrigin.class));
+
+  /** The types an application implements or calls to say which saga an event belongs to. */
+  private static final List<Class<?>> SAGA_ROUTING_TYPES =
+      List.of(
+          SagaOrchestrator.class,
+          SagaDecider.class,
+          SagaDeciderAdapter.class,
+          SagaRunner.Builder.class);
+
+  /**
+   * A parameter through which a method sees an event's metadata:
+   *
+   * <ul>
+   *   <li>the envelope or the metadata itself, directly or as a type argument ({@code
+   *       Function<EventEnvelope, …>});
+   *   <li>a type outside the JDK one of whose methods takes the envelope or the metadata in one of
+   *       those two ways — a functional interface of the framework's own, {@code EnvelopeRouter}
+   *       with {@code route(EventEnvelope)}, hands the envelope over exactly as a {@code Function}
+   *       does.
+   * </ul>
+   *
+   * <p>One level deep: a parameter type whose method takes a third type that in turn carries the
+   * envelope is not seen. Such a type would have to be added to the framework's API first, where
+   * the first bullet finds its method.
+   */
+  private static boolean seesTheEnvelopeOrItsMetadata(JavaMethod method) {
+    for (JavaType parameter : method.getParameterTypes()) {
+      for (JavaClass involved : parameter.getAllInvolvedRawTypes()) {
+        if (isTheEnvelopeOrItsMetadata(involved)) {
+          return true;
+        }
+        if (involved.getPackageName().startsWith("java.")) {
+          continue;
+        }
+        for (JavaMethod handedOver : involved.getAllMethods()) {
+          for (JavaType itsParameter : handedOver.getParameterTypes()) {
+            if (itsParameter.getAllInvolvedRawTypes().stream()
+                .anyMatch(SagaProvenanceArchitectureTest::isTheEnvelopeOrItsMetadata)) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  private static boolean isTheEnvelopeOrItsMetadata(JavaClass type) {
+    return type.isEquivalentTo(EventEnvelope.class) || type.isEquivalentTo(EventMetadata.class);
+  }
+
+  private static final ArchCondition<JavaMethod> SEE_THE_ENVELOPE_OR_ITS_METADATA =
+      new ArchCondition<>("have a parameter that involves EventEnvelope or EventMetadata") {
+        @Override
+        public void check(JavaMethod method, ConditionEvents events) {
+          boolean sees = seesTheEnvelopeOrItsMetadata(method);
+          events.add(
+              new SimpleConditionEvent(
+                  method,
+                  sees,
+                  method.getFullName()
+                      + (sees ? " receives" : " does not receive")
+                      + " the envelope or its metadata"));
+        }
+      };
+
+  /**
+   * No method named {@code correlate…} of the given types receives the envelope or its metadata.
+   */
+  private static ArchRule noCorrelatingMethodSeesTheEnvelopeIn(List<Class<?>> types) {
+    return noMethods()
+        .that()
+        .areDeclaredInClassesThat(
+            DescribedPredicate.describe(
+                "are one of " + types.stream().map(Class::getSimpleName).toList(),
+                javaClass -> types.stream().anyMatch(javaClass::isEquivalentTo)))
+        .and()
+        .haveNameStartingWith("correlate")
+        .should(SEE_THE_ENVELOPE_OR_ITS_METADATA);
+  }
+
+  /**
+   * The application's routing method for an event that is not a start event receives the stream id
+   * and the payload. A variant that took the envelope, the metadata, or a function of either would
+   * hand the correlation id back to the application as a routing key.
+   */
+  @ArchTest
+  static final ArchRule noRoutingHookForNonStartEventsSeesTheEnvelopeOrItsMetadata =
+      noCorrelatingMethodSeesTheEnvelopeIn(SAGA_ROUTING_TYPES);
+
+  /**
+   * The rule above goes by name. This one goes by shape: the methods of the routing types that are
+   * handed an envelope are exactly the start-event methods, the saga's own logic, and the three
+   * methods that take a whole saga ({@code SagaOrchestrator} or {@code SagaDecider}, whose {@code
+   * evolve} and {@code handle} receive the envelope). A routing method added under another name —
+   * with an envelope, a function of one, or a functional interface of its own — is not in the list.
+   */
+  @ArchTest
+  static void theMethodsOfTheRoutingTypesThatReceiveAnEnvelopeAreTheListedOnes(
+      JavaClasses classes) {
+    List<String> receiving =
+        classes.stream()
+            .filter(c -> SAGA_ROUTING_TYPES.stream().anyMatch(c::isEquivalentTo))
+            .flatMap(c -> c.getMethods().stream())
+            .filter(method -> !method.getModifiers().contains(JavaModifier.SYNTHETIC))
+            .filter(SagaProvenanceArchitectureTest::seesTheEnvelopeOrItsMetadata)
+            .map(method -> method.getOwner().getSimpleName() + "." + method.getName())
+            .sorted()
+            .toList();
+    assertEquals(
+        List.of(
+            "Builder.decider",
+            "Builder.extractSagaId",
+            "Builder.orchestrator",
+            "Builder.startWhen",
+            "SagaDecider.evolve",
+            "SagaDecider.handle",
+            "SagaDeciderAdapter.compensationOnly",
+            "SagaDeciderAdapter.evolve",
+            "SagaDeciderAdapter.extractSagaId",
+            "SagaDeciderAdapter.handle",
+            "SagaDeciderAdapter.isStartEvent",
+            "SagaOrchestrator.evolve",
+            "SagaOrchestrator.extractSagaId",
+            "SagaOrchestrator.handle",
+            "SagaOrchestrator.isStartEvent"),
+        receiving);
+  }
+
+  /** Routing methods of the shapes the rule refuses, and one of the shape it admits. */
+  interface PlantedRoutingMethods {
+    Optional<SagaId> correlateByEnvelope(EventEnvelope event);
+
+    Optional<SagaId> correlateByMetadata(StreamId streamId, EventMetadata metadata);
+
+    void correlateByFunctionOfTheEnvelope(Function<EventEnvelope, Optional<SagaId>> router);
+
+    void correlateByRouterOfTheEnvelope(EnvelopeRouter router);
+
+    void correlateByRouterOfTheMetadata(MetadataRouter router);
+  }
+
+  /** A functional interface of its own that hands the envelope to the application. */
+  interface EnvelopeRouter {
+    Optional<SagaId> route(EventEnvelope event);
+  }
+
+  /** The same, with the metadata behind a type argument of its method. */
+  interface MetadataRouter {
+    Optional<SagaId> route(StreamId streamId, Optional<EventMetadata> metadata);
+  }
+
+  /** The admitted shape: the stream id and the payload. */
+  interface AdmittedRoutingMethod {
+    Optional<SagaId> correlateByEventData(StreamId streamId, org.streamrune.core.DomainEvent event);
+  }
+
+  /**
+   * The rule fails on each planted shape — the envelope, the metadata, a function of the envelope,
+   * and a functional interface of its own that takes either — and passes on the admitted one.
+   */
+  @ArchTest
+  static void theRoutingHookRuleRejectsEachPlantedShape(JavaClasses unused) {
+    JavaClasses planted =
+        new ClassFileImporter()
+            .importClasses(
+                PlantedRoutingMethods.class,
+                AdmittedRoutingMethod.class,
+                EnvelopeRouter.class,
+                MetadataRouter.class);
+
+    var refused =
+        noCorrelatingMethodSeesTheEnvelopeIn(List.of(PlantedRoutingMethods.class))
+            .evaluate(planted);
+    assertTrue(refused.hasViolation(), "the planted routing methods must violate the rule");
+    String report = String.join("\n", refused.getFailureReport().getDetails());
+    for (String method :
+        List.of(
+            "correlateByEnvelope",
+            "correlateByMetadata",
+            "correlateByFunctionOfTheEnvelope",
+            "correlateByRouterOfTheEnvelope",
+            "correlateByRouterOfTheMetadata")) {
+      assertTrue(report.contains(method), "must reject " + method + ": " + report);
+    }
+
+    assertFalse(
+        noCorrelatingMethodSeesTheEnvelopeIn(List.of(AdmittedRoutingMethod.class))
+            .evaluate(planted)
+            .hasViolation(),
+        "a routing method of the stream id and the payload must pass");
+  }
 
   private static boolean isCodeUnit(
       JavaCodeUnit unit, Class<?> owner, String name, Class<?>... parameterTypes) {

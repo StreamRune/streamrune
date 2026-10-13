@@ -3,14 +3,17 @@ package org.streamrune.runtime;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
 import org.streamrune.core.saga.SagaState;
+import org.streamrune.core.types.StreamId;
 
 /**
  * Adapts a {@link SagaDecider} with externally-configured routing into a {@link SagaOrchestrator}.
@@ -21,17 +24,22 @@ final class SagaDeciderAdapter<S extends SagaState> implements SagaOrchestrator<
   private final SagaDecider<S> decider;
   private final Predicate<EventEnvelope> startPredicate;
   private final Function<EventEnvelope, SagaId> idExtractor;
-  private final Function<EventEnvelope, Optional<SagaId>> correlator;
+  private final BiFunction<StreamId, DomainEvent, Optional<SagaId>> eventDataRouter;
 
+  /**
+   * @param eventDataRouter routes a non-start event this saga type did not cause by its stream id
+   *     and payload; the builder passes a function that returns {@code Optional.empty()} when the
+   *     application configured none
+   */
   SagaDeciderAdapter(
       SagaDecider<S> decider,
       Predicate<EventEnvelope> startPredicate,
       Function<EventEnvelope, SagaId> idExtractor,
-      Function<EventEnvelope, Optional<SagaId>> correlator) {
+      BiFunction<StreamId, DomainEvent, Optional<SagaId>> eventDataRouter) {
     this.decider = Objects.requireNonNull(decider, "decider");
     this.startPredicate = Objects.requireNonNull(startPredicate, "startPredicate");
     this.idExtractor = Objects.requireNonNull(idExtractor, "idExtractor");
-    this.correlator = Objects.requireNonNull(correlator, "correlator");
+    this.eventDataRouter = Objects.requireNonNull(eventDataRouter, "eventDataRouter");
   }
 
   /**
@@ -40,8 +48,9 @@ final class SagaDeciderAdapter<S extends SagaState> implements SagaOrchestrator<
    * SagaStepExecutor} without an SPI change (discrepancy: the executor needs a {@link
    * SagaOrchestrator}; the timeout runner holds a {@link SagaDecider}). Only {@link #stateType},
    * {@link #initialState}, {@link #evolve}, {@link #handle} and {@link #compensate} are reachable
-   * on the timeout path — {@link #isStartEvent}, {@link #extractSagaId} and {@link #correlate}
-   * throw {@link UnsupportedOperationException} because that path never routes a triggering event.
+   * on the timeout path — {@link #isStartEvent}, {@link #extractSagaId} and {@link
+   * #correlateByEventData} throw {@link UnsupportedOperationException} because that path never
+   * routes a triggering event.
    */
   static <S extends SagaState> SagaOrchestrator<S> compensationOnly(SagaDecider<S> decider) {
     return new SagaDeciderAdapter<>(
@@ -52,9 +61,14 @@ final class SagaDeciderAdapter<S extends SagaState> implements SagaOrchestrator<
         e -> {
           throw new UnsupportedOperationException("timeout-path executor: no id extraction");
         },
-        e -> {
-          throw new UnsupportedOperationException("timeout-path executor: no correlation");
+        (streamId, event) -> {
+          throw new UnsupportedOperationException("timeout-path executor: no event-data routing");
         });
+  }
+
+  /** The class of the adapted decider, for messages that name the saga's logic. */
+  Class<?> deciderType() {
+    return decider.getClass();
   }
 
   @Override
@@ -78,8 +92,8 @@ final class SagaDeciderAdapter<S extends SagaState> implements SagaOrchestrator<
   }
 
   @Override
-  public Optional<SagaId> correlate(EventEnvelope event) {
-    return correlator.apply(event);
+  public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+    return eventDataRouter.apply(streamId, event);
   }
 
   @Override

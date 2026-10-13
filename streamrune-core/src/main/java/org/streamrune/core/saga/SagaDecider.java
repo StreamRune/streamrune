@@ -7,12 +7,13 @@ import org.streamrune.core.EventEnvelope;
 
 /**
  * Pure domain logic for saga orchestration, separated from event routing concerns. Unlike {@link
- * SagaOrchestrator}, which combines domain logic with routing (start/correlate), {@code
- * SagaDecider} contains only the functional core: state evolution, command decisions, and
- * compensation.
+ * SagaOrchestrator}, which combines domain logic with routing, {@code SagaDecider} contains only
+ * the functional core: state evolution, command decisions, and compensation.
  *
- * <p>Routing is configured via {@code SagaRunner.Builder} methods ({@code startWhen}, {@code
- * extractSagaId}, {@code correlateBy}).
+ * <p>Routing is configured via {@code SagaRunner.Builder} methods: {@code startWhen} and {@code
+ * extractSagaId} for the start event, and the optional {@code correlateByEventData} for events this
+ * saga type did not cause. The replies to the saga's own commands need no routing: the runner
+ * routes them by the saga origin the command bus writes into their metadata.
  *
  * <h2>Failure contract: poison events, not retries</h2>
  *

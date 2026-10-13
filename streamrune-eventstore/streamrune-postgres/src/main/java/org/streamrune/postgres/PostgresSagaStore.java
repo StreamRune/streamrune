@@ -326,6 +326,18 @@ public final class PostgresSagaStore implements SagaStore {
   }
 
   /**
+   * The {@code DataSource} this store reaches its {@code saga_state} rows through. Two stores built
+   * over one {@code DataSource} keep the same rows, whatever mapper each serializes with, and are
+   * one store to the startup check that refuses two saga runners of one saga type over one store.
+   * Two {@code DataSource} objects configured for the same database are two identities: the store
+   * does not compare connection settings.
+   */
+  @Override
+  public Object storageIdentity() {
+    return dataSource;
+  }
+
+  /**
    * Builds an {@link ObjectMapper} configured the same way {@code PostgresEventStore} configures
    * its own mapper: {@link JavaTimeModule} always registered, plus {@link CryptoShreddingModule}
    * when {@code cryptoEngine} is non-null so {@code @Encrypted} saga-state fields are encrypted at

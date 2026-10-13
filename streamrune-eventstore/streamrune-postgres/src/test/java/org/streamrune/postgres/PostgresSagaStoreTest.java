@@ -136,6 +136,28 @@ class PostgresSagaStoreTest {
 
   // --- CAS tests (7 cases, mirrors InMemorySagaStoreTest) ---
 
+  /**
+   * Two stores over one {@code DataSource} keep the same {@code saga_state} rows, whatever mapper
+   * each serializes with, and say so: their storage identity is that {@code DataSource}. Stores
+   * over two {@code DataSource} objects answer differently, also when both reach one database — the
+   * store does not compare connection settings.
+   */
+  @Test
+  void storageIdentity_isTheDataSource() {
+    var first = new PostgresSagaStore(dataSource, PostgresSagaStore.createObjectMapper(null));
+    var second =
+        new PostgresSagaStore(dataSource, new com.fasterxml.jackson.databind.ObjectMapper());
+    var sameDatabase = new PGSimpleDataSource();
+    sameDatabase.setUrl(PG.getJdbcUrl());
+    sameDatabase.setUser(PG.getUsername());
+    sameDatabase.setPassword(PG.getPassword());
+    var third = new PostgresSagaStore(sameDatabase, PostgresSagaStore.createObjectMapper(null));
+
+    assertSame(dataSource, first.storageIdentity());
+    assertEquals(first.storageIdentity(), second.storageIdentity());
+    assertNotEquals(first.storageIdentity(), third.storageIdentity());
+  }
+
   @Test
   void create_thenLoad_returnsVersion1() {
     sagaStore.create(casId, casType, casState, SagaStatus.RUNNING);

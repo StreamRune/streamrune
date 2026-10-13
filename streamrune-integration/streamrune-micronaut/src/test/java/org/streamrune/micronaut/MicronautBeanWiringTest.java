@@ -2105,7 +2105,6 @@ class MicronautBeanWiringTest {
           .decider(decider)
           .startWhen(event -> true)
           .extractSagaId(event -> org.streamrune.core.saga.SagaId.of("saga-1"))
-          .correlateBy(event -> java.util.Optional.empty())
           .sagaStore(mock(org.streamrune.core.saga.SagaStore.class))
           .commandBus(commandBus)
           .sagaDeadLetterStore(mock(SagaDeadLetterStore.class))

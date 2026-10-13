@@ -2,6 +2,7 @@ package org.streamrune.micronaut;
 
 import io.micronaut.context.event.ApplicationEventListener;
 import io.micronaut.context.event.StartupEvent;
+import io.micronaut.core.order.Ordered;
 import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.util.List;
@@ -9,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.SagaTypeOwnership;
 
 /**
  * Supplies {@code streamrune.inbox.retention-max-age} to every application {@link SagaRunner}
@@ -23,12 +25,22 @@ import org.streamrune.runtime.SagaRunner;
  * <p>An application that named {@code SagaRunner.Builder.inboxRetentionMaxAge} itself keeps its
  * value — including a deliberate zero/negative "leave the guard off".
  *
+ * <p><b>One runner per saga type.</b> The same startup hook first refuses two {@link SagaRunner}
+ * beans that drive one saga type — one saga state class — over the same {@code SagaStore} ({@link
+ * SagaTypeOwnership#requireOneRunnerPerSagaType}): the application does not start, and the message
+ * names the state class and what each runner is built from. Two such runners load and write the
+ * same rows, and each takes the replies to the other's commands for its own. One store is one
+ * instance, or two instances that keep the same rows ({@code SagaStore.storageIdentity()}: two
+ * {@code PostgresSagaStore}s over one {@code DataSource}).
+ *
  * <p>Deliberately not gated on {@code streamrune.saga.compensation-retry-enabled}: the event path
  * has no enable knob of its own, so the guard must not disappear with the sweeper. Mirrors the
- * {@link SagaStateCryptoValidator} startup-hook pattern.
+ * {@link SagaStateCryptoValidator} startup-hook pattern, its order included: the hook runs with the
+ * startup validators, ahead of the listeners that start the integration's runners and sweepers.
  */
 @Singleton
-public class SagaEventPathRetentionConfigurer implements ApplicationEventListener<StartupEvent> {
+public class SagaEventPathRetentionConfigurer
+    implements ApplicationEventListener<StartupEvent>, Ordered {
 
   private static final Logger LOG = LoggerFactory.getLogger(SagaEventPathRetentionConfigurer.class);
 
@@ -41,13 +53,25 @@ public class SagaEventPathRetentionConfigurer implements ApplicationEventListene
     this.properties = properties;
   }
 
+  // The validators' tier: a lower value than the listeners that start the integration's runners
+  // and sweepers (1100), so an application this hook refuses has started none of them, and a
+  // sweeper never runs before its runner has the configured window.
+  @Override
+  public int getOrder() {
+    return 1000;
+  }
+
   @Override
   public void onApplicationEvent(StartupEvent event) {
     apply(sagaRunners);
   }
 
-  /** Package-private seam: applies the configured window to {@code runners}. */
+  /**
+   * Package-private seam: refuses two of {@code runners} that share a saga type and a store, then
+   * applies the configured window to them.
+   */
   void apply(List<SagaRunner<?>> runners) {
+    SagaTypeOwnership.requireOneRunnerPerSagaType(runners);
     Duration window = properties.inboxRetentionMaxAge();
     int applied = SagaEventPathRetention.applyDefault(runners, window);
     if (applied > 0) {

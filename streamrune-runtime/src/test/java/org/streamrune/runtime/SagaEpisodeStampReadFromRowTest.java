@@ -479,11 +479,9 @@ class SagaEpisodeStampReadFromRowTest {
           .decider(saga)
           .startWhen(e -> e.event() instanceof Opened)
           .extractSagaId(e -> SAGA)
-          .correlateBy(
-              e ->
-                  e.event() instanceof Advanced
-                          || e.event() instanceof Cancelled
-                          || e.event() instanceof Nudged
+          .correlateByEventData(
+              (streamId, e) ->
+                  e instanceof Advanced || e instanceof Cancelled || e instanceof Nudged
                       ? Optional.of(SAGA)
                       : Optional.empty())
           .sagaStore(sagaStore)

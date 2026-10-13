@@ -3,7 +3,7 @@ package org.streamrune.runtime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.streamrune.runtime.SagaStartFixtures.TYPE;
-import static org.streamrune.runtime.SagaStartFixtures.correlatedEvent;
+import static org.streamrune.runtime.SagaStartFixtures.advanceOfAnotherCause;
 import static org.streamrune.runtime.SagaStartFixtures.startEvent;
 
 import java.io.IOException;
@@ -45,8 +45,42 @@ import org.streamrune.runtime.SagaStartFixtures.StartState;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
 
-/** Live routing and the single poison handler. */
-class SagaRunnerHoldTest {
+/**
+ * Live routing and the single poison handler.
+ *
+ * <p>Every case runs twice, once for each way a correlated event reaches its saga, because what the
+ * runner does with a routed event must not depend on how it was routed:
+ *
+ * <ul>
+ *   <li>{@link SagaRunnerHoldByOriginTest}: the event carries the saga's origin, as the reply to a
+ *       command the saga dispatched does, and the orchestrator routes nothing by event data;
+ *   <li>{@link SagaRunnerHoldByEventDataTest}: the event carries no origin, as an event somebody
+ *       else wrote does, and the orchestrator's {@code correlateByEventData} names the saga.
+ * </ul>
+ */
+abstract class SagaRunnerHoldTest {
+
+  /** How the correlated events of a run reach their saga. */
+  enum Route {
+    /** By the saga origin in the event's metadata; the orchestrator routes nothing by data. */
+    ORIGIN,
+    /** By {@code correlateByEventData}; the event carries no origin. */
+    EVENT_DATA
+  }
+
+  private final Route route;
+
+  SagaRunnerHoldTest(Route route) {
+    this.route = route;
+    orchestrator.routesAdvanceByEventData = route == Route.EVENT_DATA;
+  }
+
+  /** A correlated event at {@code globalOffset}, built for the route under test. */
+  private EventEnvelope correlatedEvent(long globalOffset) {
+    return route == Route.ORIGIN
+        ? SagaStartFixtures.correlatedEvent(globalOffset)
+        : advanceOfAnotherCause(globalOffset);
+  }
 
   private static final AggregateType STREAM_TYPE = AggregateType.of("other");
   private final SagaId sagaId = SagaId.of("saga-1");
@@ -1129,30 +1163,42 @@ class SagaRunnerHoldTest {
     assertThat(entries()).as("the runner never discards; that is the replayer's write").hasSize(1);
   }
 
-  /** The router contract: live routing, and a throwing router is null-saga poison. */
+  /**
+   * The router contract: live routing, and a throwing router is null-saga poison. An event that
+   * carries the saga's origin is routed by it and the application's router is not asked, so a
+   * broken router leaves such an event alone; it is poison only for an event it is asked about.
+   * This case names both routes itself, whatever the route of the run.
+   */
   @Test
   void resolveTarget_routesLikeLiveDelivery_andAThrowingRouterIsNullSagaPoison() {
+    orchestrator.routesAdvanceByEventData = true;
     var runner = runner();
 
     assertThat(runner.resolveTarget(startEvent(3L)))
         .contains(new SagaRunner.ReplayTarget(sagaId, true));
-    assertThat(runner.resolveTarget(correlatedEvent(5L)))
+    assertThat(runner.resolveTarget(SagaStartFixtures.correlatedEvent(5L)))
+        .contains(new SagaRunner.ReplayTarget(sagaId, false));
+    assertThat(runner.resolveTarget(advanceOfAnotherCause(5L)))
         .contains(new SagaRunner.ReplayTarget(sagaId, false));
     assertThat(runner.resolveTarget(unrelatedEvent(8L))).isEmpty();
 
     var brokenRouter =
         new DelegatingOrchestrator(orchestrator) {
           @Override
-          public Optional<SagaId> correlate(EventEnvelope event) {
+          public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
             throw new IllegalStateException("router broken");
           }
         };
     var broken = runner(store, brokenRouter);
-    Throwable poison = catchThrowable(() -> broken.resolveTarget(correlatedEvent(5L)));
+    assertThat(broken.resolveTarget(SagaStartFixtures.correlatedEvent(5L)))
+        .as("an event with the saga's origin does not reach the router")
+        .contains(new SagaRunner.ReplayTarget(sagaId, false));
+    Throwable poison = catchThrowable(() -> broken.resolveTarget(advanceOfAnotherCause(5L)));
     assertThat(poison).isInstanceOf(SagaPoisonException.class);
     assertThat(((SagaPoisonException) poison).sagaId()).isNull();
 
-    deliver(broken, correlatedEvent(5L)); // through the listener: a null-saga entry, nothing else
+    // through the listener: a null-saga entry, nothing else
+    deliver(broken, advanceOfAnotherCause(5L));
     assertThat(dlq.findAll(10))
         .singleElement()
         .satisfies(
@@ -1211,8 +1257,8 @@ class SagaRunnerHoldTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return inner.correlate(event);
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+      return inner.correlateByEventData(streamId, event);
     }
 
     @Override

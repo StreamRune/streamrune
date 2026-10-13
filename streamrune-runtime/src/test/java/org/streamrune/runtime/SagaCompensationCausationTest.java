@@ -289,9 +289,9 @@ class SagaCompensationCausationTest {
             .decider(saga)
             .startWhen(e -> e.event() instanceof Opened)
             .extractSagaId(e -> SagaId.of("order-saga-" + ((Opened) e.event()).orderId()))
-            .correlateBy(
-                e ->
-                    switch (e.event()) {
+            .correlateByEventData(
+                (streamId, e) ->
+                    switch (e) {
                       case Advanced advanced ->
                           Optional.of(SagaId.of("order-saga-" + advanced.orderId()));
                       case Nudged nudged ->

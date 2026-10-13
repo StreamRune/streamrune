@@ -2,21 +2,52 @@ package org.streamrune.core.saga;
 
 import java.util.List;
 import java.util.Optional;
+import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.types.StreamId;
 
 /**
  * Orchestration-based saga coordinator.
  *
  * <p>Implement this interface to define a saga that reacts to domain events by dispatching
- * commands. The {@code SagaRunner} drives execution: it calls {@link #isStartEvent}/{@link
- * #correlate} to route events, then {@link #evolve} + {@link #handle} to advance the saga, and
- * {@link #compensate} on command failure.
+ * commands. The {@code SagaRunner} drives execution: it routes each event to a saga (see
+ * Correlation below), then calls {@link #evolve} + {@link #handle} to advance the saga, and {@link
+ * #compensate} on command failure.
  *
  * <h2>Correlation</h2>
  *
- * <p>When a saga dispatches a command, the resulting events carry the {@code correlationId} set on
- * the dispatching context. Implement {@link #correlate} to extract the saga ID from non-start
- * events — typically by reading {@code event.metadata().correlationId().value()}.
+ * <p>A start event ({@link #isStartEvent}) names its saga through {@link #extractSagaId}. Any other
+ * event reaches a saga in one of two ways.
+ *
+ * <p><b>Events the saga caused.</b> Every command a saga dispatches runs with the saga's origin
+ * bound, and the command bus writes it into the metadata of each event the command produces: {@code
+ * EventMetadata.sagaOrigin()}, holding the saga type, the saga id and a hop count. {@code
+ * SagaRunner} routes an event whose origin names its saga type to the saga the origin names. An
+ * implementation writes nothing for this. Only saga dispatch and {@code
+ * StreamRuneContext.continuing(event)} set an origin; no request header, baggage entry or
+ * dead-letter row can.
+ *
+ * <p><b>Events somebody else caused</b> — a user's own action, a webhook, a saga of another type.
+ * They carry no origin of this saga type, and the runner asks {@link #correlateByEventData}, which
+ * receives the stream id and the payload and nothing of the metadata.
+ *
+ * <p>The runner calls the methods this interface declares and no other. Mark each implementation
+ * {@code @Override}: a method {@code correlate(EventEnvelope)} declared without the annotation
+ * compiles, and the runner never calls it. A saga with such a method receives the replies to its
+ * own commands, which the origin routes, and none of the events somebody else caused — for those
+ * the runner asks {@link #correlateByEventData}, whose default answers that the event is no saga's
+ * business.
+ *
+ * <p>When both could apply, the origin decides and {@link #correlateByEventData} is not called.
+ * Every event a saga's command produces, and every event of a continuation of such an event, is
+ * routed to the dispatching saga and to no other saga of its type — also an event about another
+ * saga's entity. Such an event is one this saga's command caused, not necessarily one about its
+ * entity, so {@link #evolve} and {@link #handle} take ids from the saga's state. A fact meant for
+ * another saga of the same type is written by a command a listener dispatches outside {@code
+ * StreamRuneContext.continuing}: its event carries no origin and is routed by its data.
+ *
+ * <p>A correlation id is tracing data: a client sets it with {@code X-Correlation-Id} in every
+ * identity mode. Nothing routes by it, and no routing method may derive a saga id from it.
  *
  * <h2>Serialization</h2>
  *
@@ -26,22 +57,23 @@ import org.streamrune.core.EventEnvelope;
  * <h2>Failure contract: poison events, not retries</h2>
  *
  * <p>{@code SagaRunner} treats any exception thrown by {@link #initialState}, {@link
- * #isStartEvent}, {@link #correlate}, {@link #extractSagaId}, {@link #evolve}, {@link #handle}, or
- * {@link #compensate} as a <b>poison event</b>: the triggering event is quarantined (metadata only
- * — saga id/type, event offset/type, error details, fault time; the payload is never copied out of
- * the event store) and the saga is permanently marked {@code FAULTED}. A <b>{@code null} return</b>
- * from {@link #extractSagaId} or {@link #correlate} — both contract violations; see their method
- * docs — is classified identically (quarantined as a null-saga entry, since no saga could be
- * identified), never allowed to wedge the subscription. There is no automatic retry or replay of a
- * poison event — a faulted saga stops processing events and is excluded from timeout sweeps until
- * an operator drains it with {@code SagaDeadLetterReplayer.replayAll}. (A compensation episode the
- * compensation-retry sweeper or the timeout runner gives up on is faulted too, with no dead-letter
- * entry; {@code SagaDeadLetterReplayer.resumeFaulted} resumes it. A forward fault whose entry an
- * operator discarded has nothing left to drain; {@code SagaDeadLetterReplayer.compensateFaulted}
- * compensates it.) Consequently, implementations must treat transient errors (a flaky downstream
- * call made from inside {@code evolve}/{@code handle}, for instance) as retryable <em>inside</em>
- * the method — or design them out entirely — because letting a transient exception escape faults
- * the saga irrecoverably rather than triggering a retry.
+ * #isStartEvent}, {@link #correlateByEventData}, {@link #extractSagaId}, {@link #evolve}, {@link
+ * #handle}, or {@link #compensate} as a <b>poison event</b>: the triggering event is quarantined
+ * (metadata only — saga id/type, event offset/type, error details, fault time; the payload is never
+ * copied out of the event store) and the saga is permanently marked {@code FAULTED}. A <b>{@code
+ * null} return</b> from {@link #extractSagaId} or {@link #correlateByEventData} — both contract
+ * violations; see their method docs — is classified identically (quarantined as a null-saga entry,
+ * since no saga could be identified), never allowed to wedge the subscription. There is no
+ * automatic retry or replay of a poison event — a faulted saga stops processing events and is
+ * excluded from timeout sweeps until an operator drains it with {@code
+ * SagaDeadLetterReplayer.replayAll}. (A compensation episode the compensation-retry sweeper or the
+ * timeout runner gives up on is faulted too, with no dead-letter entry; {@code
+ * SagaDeadLetterReplayer.resumeFaulted} resumes it. A forward fault whose entry an operator
+ * discarded has nothing left to drain; {@code SagaDeadLetterReplayer.compensateFaulted} compensates
+ * it.) Consequently, implementations must treat transient errors (a flaky downstream call made from
+ * inside {@code evolve}/{@code handle}, for instance) as retryable <em>inside</em> the method — or
+ * design them out entirely — because letting a transient exception escape faults the saga
+ * irrecoverably rather than triggering a retry.
  *
  * <p>This is distinct from infrastructure failures ({@code SagaStore} I/O), which are not poison:
  * those propagate out of the runner so the subscription can retry the batch.
@@ -68,6 +100,17 @@ public interface SagaOrchestrator<S extends SagaState> {
    * Extracts the saga ID from a start event. Only called when {@link #isStartEvent} returns {@code
    * true}.
    *
+   * <p>Derive the saga id from the event's own data — the id of the order, the payment, the stream
+   * — never from its correlation id or any other metadata a request can choose. Whoever may write
+   * the start event names the saga it starts, so the access rule of that event is what protects the
+   * saga.
+   *
+   * <p><b>Do not throw on the event's data.</b> A {@link SagaId} is at most {@link
+   * SagaId#MAX_LENGTH} characters and not blank, and the event's data is its writer's: an id that
+   * cannot be part of a saga id must not reach {@code SagaId.of} here, where the throw is poison
+   * and each such event becomes a null-saga dead-letter entry. Decline the event in {@link
+   * #isStartEvent} instead, which is where "this event starts no saga" is said.
+   *
    * <p><b>Must not return {@code null}.</b> There is no "ignore this start event" signal here —
    * {@link #isStartEvent} already claimed the event for this saga type. A {@code null} return (e.g.
    * a metadata lookup missing on a malformed producer event) is treated exactly like a thrown
@@ -78,16 +121,54 @@ public interface SagaOrchestrator<S extends SagaState> {
   SagaId extractSagaId(EventEnvelope event);
 
   /**
-   * Correlates a non-start event to a running saga. Return {@link Optional#empty()} to ignore the
-   * event. Typical implementation: read {@code event.metadata().correlationId().value()} and return
-   * a {@link SagaId} if it matches a known prefix or pattern.
+   * Routes an event this saga type did not cause — a user's own action, a webhook, a saga of
+   * another type — by the event's own data. Called only for a non-start event that carries no
+   * origin of this saga type. Whoever may write that event may address the saga it names.
+   *
+   * <p>Return the saga id derived from {@code streamId} or from the payload, or {@link
+   * Optional#empty()} — the default — when the event belongs to no saga of this type: nothing is
+   * loaded and nothing is written for it. The method does not receive the event's metadata, so it
+   * cannot route by a correlation id, a trace id, a user id or baggage.
+   *
+   * <p><b>Do not throw on the event's data.</b> The payload is its writer's data. For data that
+   * cannot name a saga — an id too long to be part of a {@link SagaId} ({@link SagaId#MAX_LENGTH}
+   * characters), a blank one — return {@link Optional#empty()}: a throw is poison (see the
+   * class-level failure contract), so every such event a caller writes becomes a null-saga
+   * dead-letter entry, a WARNING and a quarantine count, and a replay of the entry throws again.
+   * Check before {@code SagaId.of}:
+   *
+   * <pre>{@code
+   * static Optional<SagaId> sagaOf(String orderId) {
+   *   if (orderId == null || orderId.isBlank()) {
+   *     return Optional.empty();
+   *   }
+   *   String id = "order-saga-" + orderId;
+   *   return id.length() > SagaId.MAX_LENGTH ? Optional.empty() : Optional.of(SagaId.of(id));
+   * }
+   * }</pre>
+   *
+   * <p>The event's own access rule is what protects the saga this method names, and it must hold
+   * for every writer of the event. A command a saga of another type dispatches runs as the system
+   * principal, which the authorization interceptors admit by default, so a role requirement on the
+   * writing command does not hold for it; a decider guard on the command's data does. An event of
+   * another cause can arrive at any step, so {@link #evolve} and {@link #handle} decide by the
+   * saga's state what it means.
+   *
+   * <p>Not called for the reply to a command this saga type dispatched: such an event carries the
+   * dispatching saga's origin and reaches that saga (see the class-level Correlation section).
    *
    * <p><b>Must not return a bare {@code null}</b> — {@link Optional#empty()} is the one and only
    * "not mine" signal. A {@code null} return is treated exactly like a thrown exception per the
    * class-level failure contract: the event is quarantined as a <em>null-saga</em> dead-letter
    * entry and processing continues with the next event.
+   *
+   * @param streamId the stream the event belongs to
+   * @param event the event payload
+   * @return the saga the event belongs to, or empty when it belongs to no saga of this type
    */
-  Optional<SagaId> correlate(EventEnvelope event);
+  default Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+    return Optional.empty();
+  }
 
   /**
    * Updates saga state based on the incoming event. Return the new (immutable) state.

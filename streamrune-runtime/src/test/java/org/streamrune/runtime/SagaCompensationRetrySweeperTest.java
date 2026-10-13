@@ -107,11 +107,6 @@ class SagaCompensationRetrySweeperTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
-    }
-
-    @Override
     public FakeSagaState evolve(FakeSagaState state, EventEnvelope event) {
       if (event.event() instanceof Start s) {
         return new FakeSagaState(SagaStatus.RUNNING, "saga-" + s.id());

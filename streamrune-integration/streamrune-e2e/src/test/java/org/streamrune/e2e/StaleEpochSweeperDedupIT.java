@@ -166,11 +166,6 @@ class StaleEpochSweeperDedupIT extends E2ETestBase {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
-    }
-
-    @Override
     public OrderSagaState evolve(OrderSagaState state, EventEnvelope event) {
       return state;
     }

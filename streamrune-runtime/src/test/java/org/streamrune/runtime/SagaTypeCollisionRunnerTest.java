@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -62,11 +61,6 @@ class SagaTypeCollisionRunnerTest {
     public SagaId extractSagaId(EventEnvelope event) {
       // Both types derive the SAME id from the business key — the collision.
       return SagaId.of("shared-" + ((Start) event.event()).id());
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
     }
 
     @Override

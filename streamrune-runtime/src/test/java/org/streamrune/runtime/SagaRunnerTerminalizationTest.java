@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +32,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
+import org.streamrune.test.SagaEnvelopes;
 
 /**
  * Tests that SagaRunner persists a terminal status (COMPENSATED/FAILED) after the compensation path
@@ -98,13 +98,6 @@ class SagaRunnerTerminalizationTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("saga-" + ((Start) event.event()).id());
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corrId = event.metadata().correlationId().value();
-      if (corrId.startsWith("saga-")) return Optional.of(SagaId.of(corrId));
-      return Optional.empty();
     }
 
     @Override
@@ -292,7 +285,7 @@ class SagaRunnerTerminalizationTest {
     // Reset handle count
     orchestrator.handleCallCount.set(0);
 
-    // Deliver a correlated event (simulate a late event with the saga's correlation id)
+    // Deliver a late reply to one of the saga's own commands: it carries the saga's origin
     var correlatedEnvelope =
         new EventEnvelope(
             GlobalOffset.initial(),
@@ -300,15 +293,7 @@ class SagaRunnerTerminalizationTest {
             Version.initial(),
             new EventType("SomeOtherEvent"),
             new SomeOtherEvent("test"),
-            new EventMetadata(
-                EventId.of("evt-" + UUID.randomUUID()),
-                CommandId.of("cmd-2"),
-                null,
-                null,
-                CorrelationId.of("saga-test"), // correlates to our saga
-                null,
-                null,
-                Instant.now()));
+            SagaEnvelopes.metadataCausedBy(FakeSagaState.class, SagaId.of("saga-test")));
 
     bus.executed.clear();
     runner.asEventListener().onEvents(List.of(correlatedEnvelope));

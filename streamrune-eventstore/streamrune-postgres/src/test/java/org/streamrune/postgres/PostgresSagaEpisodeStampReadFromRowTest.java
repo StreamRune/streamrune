@@ -258,7 +258,6 @@ class PostgresSagaEpisodeStampReadFromRowTest {
               .decider(new BornCompensatingSaga())
               .startWhen(e -> e.event() instanceof Opened)
               .extractSagaId(e -> sagaId)
-              .correlateBy(e -> Optional.empty())
               .sagaStore(sagaStore)
               .commandBus(bus)
               .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))

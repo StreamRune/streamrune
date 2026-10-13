@@ -526,7 +526,7 @@ and `MultiProjectionRunner.Builder.stopTimeout`) throw `IllegalArgumentException
 
 ## Operations runbook: faulted sagas
 
-A saga is marked `FAULTED` when an orchestrator pure-logic method (`isStartEvent`, `correlate`, `extractSagaId`, `evolve`, `handle`, `compensate`) throws — see [Failure model](advanced/saga.md#failure-model-poison-events-and-faulted). This is a deterministic bug, not a transient failure: it does not resolve itself on retry, so it needs an operator to detect, inspect, fix, and replay (or discard). The same drain also releases correlated events the runner **held** for a saga that could not consume them yet (see `streamrune.saga.event_held`).
+A saga is marked `FAULTED` when an orchestrator pure-logic method (`isStartEvent`, `correlateByEventData`, `extractSagaId`, `evolve`, `handle`, `compensate`) throws — see [Failure model](advanced/saga.md#failure-model-poison-events-and-faulted). This is a deterministic bug, not a transient failure: it does not resolve itself on retry, so it needs an operator to detect, inspect, fix, and replay (or discard). The same drain also releases correlated events the runner **held** for a saga that could not consume them yet (see `streamrune.saga.event_held`).
 
 ### Detect
 
@@ -555,7 +555,7 @@ A saga is marked `FAULTED` when an orchestrator pure-logic method (`isStartEvent
 
 ### Fix and deploy
 
-Faults are deterministic orchestrator bugs — diagnose the root cause in `evolve`/`handle`/`compensate`/`correlate`/`extractSagaId`, fix it, and deploy before attempting replay (or, for a give-up fault, before resuming it). A give-up fault caused by a downstream outage rather than a bug needs no deploy — only the outage resolved. Replaying against the same buggy code just re-quarantines the same entry.
+Faults are deterministic orchestrator bugs — diagnose the root cause in `evolve`/`handle`/`compensate`/`correlateByEventData`/`extractSagaId`, fix it, and deploy before attempting replay (or, for a give-up fault, before resuming it). A give-up fault caused by a downstream outage rather than a bug needs no deploy — only the outage resolved. Replaying against the same buggy code just re-quarantines the same entry.
 
 ### Replay
 
@@ -603,7 +603,7 @@ Lookup, `replayAll` and discard are **saga-type-scoped**: an entry owned by a di
 
 **Quiescence assumption.** A drain is an operator action and assumes it is the only recovery actor on that saga while it runs: nothing coordinates two drains of the same saga, or a `replay`/`discard` of one of its entries running alongside a drain — run one at a time per saga. (Live delivery is kept out of the way by the shield, which holds live correlated events for a saga that owns entries; a `COMPENSATING` saga's live events resume its episode instead.) Each step classifies its outcome by re-reading the saga row after the feed, so an interleaved writer can make one call mis-report its outcome; it cannot lose an event — an entry is discarded only once its feed committed or proved moot — and rerunning `replayAll` afterwards converges.
 
-**Null-saga entries can accumulate duplicate rows.** When `sagaId` could never be identified (e.g. `correlate`/`extractSagaId` itself threw), the PostgreSQL store's `saga_id` column is `NULL`, and SQL's standard `NULL`-distinct semantics mean the idempotent-upsert-on-publish behavior does **not** apply across repeated failed replay attempts at the same offset — each failed re-quarantine can insert an additional row rather than updating one (see `PostgresSagaDeadLetterStoreTest.publish_nullSagaEntry_sameOffsetTwice_insertsTwoRows_discardRemovesBoth`, which pins this as an accepted, documented divergence from the in-memory test double). Each new row is born carrying the set's oldest first-fault and first-replay instants and its newest resolved target, so a re-quarantine does not reset the evidence the key-age guards and retention read. `discard(null, eventOffset)` removes **all** matching null-saga rows at once (`IS NOT DISTINCT FROM` semantics); the retention sweeper (below) independently clears stray duplicates of an entry that was never resolved to a target.
+**Null-saga entries can accumulate duplicate rows.** When `sagaId` could never be identified (e.g. `correlateByEventData`/`extractSagaId` itself threw), the PostgreSQL store's `saga_id` column is `NULL`, and SQL's standard `NULL`-distinct semantics mean the idempotent-upsert-on-publish behavior does **not** apply across repeated failed replay attempts at the same offset — each failed re-quarantine can insert an additional row rather than updating one (see `PostgresSagaDeadLetterStoreTest.publish_nullSagaEntry_sameOffsetTwice_insertsTwoRows_discardRemovesBoth`, which pins this as an accepted, documented divergence from the in-memory test double). Each new row is born carrying the set's oldest first-fault and first-replay instants and its newest resolved target, so a re-quarantine does not reset the evidence the key-age guards and retention read. `discard(null, eventOffset)` removes **all** matching null-saga rows at once (`IS NOT DISTINCT FROM` semantics); the retention sweeper (below) independently clears stray duplicates of an entry that was never resolved to a target.
 
 ### Resume a give-up fault
 
@@ -844,7 +844,7 @@ throughput than one lane delivers, that is an architectural constraint of the ga
 tuning knob: split the workload by bounded context or tenant across separate event stores — separate
 databases, or separate schemas selected by the DataSource's `currentSchema` (the baseline creates
 every object unqualified in the connection's current schema, counter included), each with its own
-lane. There is no global order across partitions; correlate cross-partition flows through the
+lane. There is no global order across partitions; follow a cross-partition flow through the
 events' correlation and causation ids rather than a merged offset.
 
 ### Async command admission control

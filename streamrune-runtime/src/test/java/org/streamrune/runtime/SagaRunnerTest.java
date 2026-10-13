@@ -46,6 +46,7 @@ import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
+import org.streamrune.test.SagaEnvelopes;
 
 class SagaRunnerTest {
 
@@ -85,13 +86,6 @@ class SagaRunnerTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("saga-" + ((OrderCreated) event.event()).orderId());
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corrId = event.metadata().correlationId().value();
-      if (corrId.startsWith("saga-")) return Optional.of(SagaId.of(corrId));
-      return Optional.empty();
     }
 
     @Override
@@ -204,6 +198,18 @@ class SagaRunnerTest {
 
   // ========== Helpers ==========
 
+  /** The reply to a command the saga dispatched itself: it carries that saga's origin. */
+  private EventEnvelope causedBySaga(DomainEvent event, String sagaId) {
+    EventEnvelope plain = envelope(event, sagaId);
+    return new EventEnvelope(
+        plain.globalOffset(),
+        plain.streamId(),
+        plain.version(),
+        plain.eventType(),
+        plain.event(),
+        SagaEnvelopes.metadataCausedBy(OrderState.class, SagaId.of(sagaId)));
+  }
+
   private EventEnvelope envelope(DomainEvent event, String correlationId) {
     return new EventEnvelope(
         GlobalOffset.initial(),
@@ -262,14 +268,14 @@ class SagaRunnerTest {
   }
 
   @Test
-  void correlate_event_advances_existing_saga() {
+  void correlated_event_advances_existing_saga() {
     sagaStore.create(
         SagaId.of("saga-order-1"),
         SagaType.fromClass(OrderState.class),
         new OrderState(SagaStatus.RUNNING, "order-1"),
         SagaStatus.RUNNING);
 
-    var event = envelope(new OrderPaid("order-1"), "saga-order-1");
+    var event = causedBySaga(new OrderPaid("order-1"), "saga-order-1");
     runner.asEventListener().onEvents(List.of(event));
 
     assertEquals(0, commandBus.dispatched.size());
@@ -300,7 +306,7 @@ class SagaRunnerTest {
         new OrderState(SagaStatus.RUNNING, "order-wired"),
         SagaStatus.RUNNING);
 
-    var event = envelope(new OrderPaid("order-wired"), "saga-order-wired");
+    var event = causedBySaga(new OrderPaid("order-wired"), "saga-order-wired");
     runner.asEventListener().onEvents(List.of(event));
 
     var loaded =
@@ -335,7 +341,7 @@ class SagaRunnerTest {
         new OrderState(SagaStatus.COMPLETED, "order-3"),
         SagaStatus.COMPLETED);
 
-    var event = envelope(new OrderPaid("order-3"), "saga-order-3");
+    var event = causedBySaga(new OrderPaid("order-3"), "saga-order-3");
     runner.asEventListener().onEvents(List.of(event));
 
     assertEquals(0, commandBus.dispatched.size());
@@ -369,7 +375,7 @@ class SagaRunnerTest {
         new OrderState(SagaStatus.RUNNING, "order-faulted"),
         SagaStatus.FAULTED);
 
-    var event = envelope(new OrderPaid("order-faulted"), "saga-order-faulted");
+    var event = causedBySaga(new OrderPaid("order-faulted"), "saga-order-faulted");
     runner.asEventListener().onEvents(List.of(event));
 
     // FAULTED is halted — no commands dispatched, status unchanged (the runner must NOT re-write
@@ -420,7 +426,7 @@ class SagaRunnerTest {
     assertEquals(SagaStatus.COMPENSATING, claimed.status());
     assertEquals(2L, claimed.version());
 
-    var event = envelope(new OrderPaid("order-compensating"), "saga-order-compensating");
+    var event = causedBySaga(new OrderPaid("order-compensating"), "saga-order-compensating");
     runner.asEventListener().onEvents(List.of(event));
 
     // Compensation was resumed: exactly the compensation command (RefundOrder) was dispatched —
@@ -525,7 +531,7 @@ class SagaRunnerTest {
    */
   static class NullReturningRouterSaga extends OrderFulfillmentSaga {
     volatile boolean extractReturnsNull = false;
-    volatile boolean correlateReturnsNull = false;
+    volatile boolean hookReturnsNull = false;
 
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
@@ -536,11 +542,11 @@ class SagaRunnerTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      if (correlateReturnsNull) {
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+      if (hookReturnsNull) {
         return null; // contract violation: must be Optional.empty(), never a bare null
       }
-      return super.correlate(event);
+      return super.correlateByEventData(streamId, event);
     }
   }
 
@@ -589,16 +595,16 @@ class SagaRunnerTest {
   }
 
   /**
-   * A bare {@code null} returned from {@code correlate} (instead of {@code Optional.empty()}) must
-   * likewise be quarantined as a null-saga poison event. Pre-fix the NPE fired at {@code
-   * corr.ifPresent(...)} — OUTSIDE the poison wrapper — and escaped {@code asEventListener}
-   * entirely, wedging the subscription on the batch forever.
+   * A bare {@code null} returned from {@code correlateByEventData} (instead of {@code
+   * Optional.empty()}) must likewise be quarantined as a null-saga poison event. Pre-fix the NPE
+   * fired at {@code corr.ifPresent(...)} — OUTSIDE the poison wrapper — and escaped {@code
+   * asEventListener} entirely, wedging the subscription on the batch forever.
    */
   @Test
-  void correlatedEvent_correlateReturnsNull_isQuarantinedAsNullSagaPoison_batchContinues() {
+  void eventOfAnotherCause_correlateByEventDataReturnsNull_isQuarantinedAsNullSagaPoison() {
     var sagaDlq = new InMemorySagaDeadLetterStore(sagaStore);
     var nullSaga = new NullReturningRouterSaga();
-    nullSaga.correlateReturnsNull = true;
+    nullSaga.hookReturnsNull = true;
     var nullRunner =
         SagaRunner.<OrderState>builder()
             .orchestrator(nullSaga)
@@ -607,12 +613,14 @@ class SagaRunnerTest {
             .sagaDeadLetterStore(sagaDlq)
             .build();
 
-    // OrderPaid is not a start event, so it routes through correlate().
+    // OrderPaid is not a start event and this envelope carries no saga origin, so it routes
+    // through correlateByEventData().
     var poisonEvent = envelope(new OrderPaid("order-null-corr"), "saga-order-null-corr");
 
     assertDoesNotThrow(
         () -> nullRunner.asEventListener().onEvents(List.of(poisonEvent)),
-        "a null correlate return must be quarantined like a throw, not wedge the subscription");
+        "a null correlateByEventData return must be quarantined like a throw, not wedge the"
+            + " subscription");
 
     var entries = sagaDlq.findAll(10);
     assertEquals(1, entries.size(), "the null-return event must be quarantined");
@@ -622,12 +630,12 @@ class SagaRunnerTest {
   }
 
   /**
-   * Contract-conforming null-signal pin: {@code correlate} returning {@code Optional.empty()} is
-   * the documented "not mine" signal — ignored, never quarantined. The fix must only catch the
-   * contract VIOLATION (a bare null), not the legitimate empty.
+   * Contract-conforming null-signal pin: {@code correlateByEventData} returning {@code
+   * Optional.empty()} is the documented "not mine" signal — ignored, never quarantined. The fix
+   * must only catch the contract VIOLATION (a bare null), not the legitimate empty.
    */
   @Test
-  void correlatedEvent_correlateReturnsEmptyOptional_isIgnored_neverQuarantined() {
+  void eventOfAnotherCause_correlateByEventDataReturnsEmpty_isIgnored_neverQuarantined() {
     var sagaDlq = new InMemorySagaDeadLetterStore(sagaStore);
     var conformingRunner =
         SagaRunner.<OrderState>builder()
@@ -902,7 +910,7 @@ class SagaRunnerTest {
             .build();
 
     // Correlated event for the existing running saga
-    var event = envelope(new OrderPaid("order-stale"), "saga-order-stale");
+    var event = causedBySaga(new OrderPaid("order-stale"), "saga-order-stale");
 
     // Must propagate — subscription retries on fresh state
     assertThatThrownBy(() -> staleRunner.asEventListener().onEvents(List.of(event)))

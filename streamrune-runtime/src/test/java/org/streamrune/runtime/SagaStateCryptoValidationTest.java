@@ -7,7 +7,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
-import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventEnvelope;
@@ -75,7 +74,6 @@ class SagaStateCryptoValidationTest {
         .decider(decider)
         .startWhen(event -> true)
         .extractSagaId(event -> SagaId.of("saga-1"))
-        .correlateBy(event -> Optional.empty())
         .sagaStore(mock(SagaStore.class))
         .commandBus(commandBus)
         .sagaDeadLetterStore(mock(SagaDeadLetterStore.class))

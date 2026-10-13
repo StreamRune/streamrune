@@ -1,12 +1,14 @@
 package org.streamrune.spring;
 
 import java.time.Duration;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.SagaTypeOwnership;
 
 /**
  * Supplies {@code streamrune.inbox.retention-max-age} to every application {@link SagaRunner}
@@ -20,6 +22,14 @@ import org.streamrune.runtime.SagaRunner;
  *
  * <p>An application that named {@code SagaRunner.Builder.inboxRetentionMaxAge} itself keeps its
  * value — including a deliberate zero/negative "leave the guard off".
+ *
+ * <p><b>One runner per saga type.</b> The same hook first refuses two {@link SagaRunner} beans that
+ * drive one saga type — one saga state class — over the same {@code SagaStore} ({@link
+ * SagaTypeOwnership#requireOneRunnerPerSagaType}): the context does not start, and the message
+ * names the state class and what each runner is built from. Two such runners load and write the
+ * same rows, and each takes the replies to the other's commands for its own. One store is one
+ * instance, or two instances that keep the same rows ({@code SagaStore.storageIdentity()}: two
+ * {@code PostgresSagaStore}s over one {@code DataSource}).
  *
  * <p>Runs after all singletons are instantiated so every {@link SagaRunner} bean is visible, and
  * before {@code SmartLifecycle} starts any subscription — the same hook, for the same reason, as
@@ -41,9 +51,10 @@ public class SagaEventPathRetentionConfigurer implements SmartInitializingSingle
 
   @Override
   public void afterSingletonsInstantiated() {
+    List<SagaRunner<?>> sagaRunners = sagaRunnerProvider.orderedStream().toList();
+    SagaTypeOwnership.requireOneRunnerPerSagaType(sagaRunners);
     Duration window = properties.inbox().retentionMaxAge();
-    int applied =
-        SagaEventPathRetention.applyDefault(sagaRunnerProvider.orderedStream().toList(), window);
+    int applied = SagaEventPathRetention.applyDefault(sagaRunners, window);
     if (applied > 0) {
       logger.debug(
           "StreamRune: applied streamrune.inbox.retention-max-age={} as the event-path"

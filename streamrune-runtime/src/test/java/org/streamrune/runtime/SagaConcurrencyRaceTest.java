@@ -142,8 +142,8 @@ class SagaConcurrencyRaceTest {
   }
 
   /**
-   * Start+correlate orchestrator: {@link OrderCreated} starts a saga; {@link OrderShipped}
-   * correlates by orderId prefix in correlationId. {@link AdvanceOrder} is dispatched on start.
+   * Start-and-route orchestrator: {@link OrderCreated} starts a saga; {@link OrderShipped} is
+   * routed by the order id in its payload. {@link AdvanceOrder} is dispatched on start.
    */
   static class FulfillOrchestrator implements SagaOrchestrator<FulfillState> {
     @Override
@@ -168,8 +168,8 @@ class SagaConcurrencyRaceTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      if (event.event() instanceof OrderShipped os) {
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+      if (event instanceof OrderShipped os) {
         return Optional.of(SagaId.of("fulfill-" + os.orderId()));
       }
       return Optional.empty();
@@ -675,8 +675,8 @@ class SagaConcurrencyRaceTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      if (event.event() instanceof OrderShipped os) {
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+      if (event instanceof OrderShipped os) {
         return Optional.of(SagaId.of("fulfill-" + os.orderId()));
       }
       return Optional.empty();
