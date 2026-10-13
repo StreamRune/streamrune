@@ -359,7 +359,7 @@ operator-triggered, with no polling loop.
   saga row stays quarantined until you discard it.
 - `replay(SagaId, GlobalOffset)` replays one entry and is refused with `OLDER_ENTRY_PENDING` while an
   older entry of the same saga is still pending. Pass a `null` `SagaId` for a null-saga
-  (correlate-poison) entry — one whose saga could not be identified when it was quarantined. The
+  (routing-poison) entry — one whose saga could not be identified when it was quarantined. The
   replayer resolves its target through the runner's routers and answers `TARGET_PENDING` when that
   target is FAULTED, genesis-pending or has an older entry pending; drain the target with
   `replayAll`, and the entry is applied at its offset position.

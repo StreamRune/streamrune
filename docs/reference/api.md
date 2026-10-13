@@ -284,6 +284,10 @@ called by `StreamRuneContext.continuing` alone).
 The origin a saga binds depends only on its type and its id, so a redelivery, a replay or a resume
 of the same step stores the same origin as the first attempt would have. No request header, baggage
 entry or dead-letter row sets it. An origin states who caused an event; it grants no authority.
+`SagaRunner` reads it: a non-start event whose origin names the runner's saga type (compared
+exactly) belongs to the saga the origin names, and the application is not asked; the hop count takes
+no part in that. Every other event is handed to `correlateByEventData(streamId, event)` — see
+[Saga › How it works](../guide/advanced/saga.md#how-it-works).
 In a test, `SagaEnvelopes.causedBy(stateType, sagaId, streamId, event)` from `streamrune-test`
 builds an envelope that carries one.
 
