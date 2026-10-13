@@ -98,15 +98,15 @@ import org.streamrune.core.types.SagaType;
  * #requireStampedEpisode} and nowhere else: a resume takes them from the row its adapter loaded,
  * and a call that opens an episode with a claim of its own reads the row back after the claim
  * ({@link #readClaimedEpisode}) before it dispatches anything. The executor computes one version
- * only, {@code rowVersion + 1}: the version its own claim landed the row at, used as the
- * optimistic-lock token of its terminal or fault write and for nothing else. That number is the
- * episode version only when the claim was the stamping write; a claim over a row that already
- * carries a stamp (a start event whose evolve yielded {@code COMPENSATING}, whose forward command
- * is then rejected) keeps the stamp it found, which is why the stamp is read and not derived. The
- * call that opens an episode and every path that resumes it — a redelivery, a later event, a second
- * replica's delivery, the timeout runner, the compensation-retry sweeper, an operator — therefore
- * present the same keys to the command inbox, sequentially or concurrently, and each compensation
- * command is stored once.
+ * only, {@code rowVersion + 1}: the version its own claim landed the row at. It is the
+ * optimistic-lock token of the terminal or fault write and the mark by which the read recognises
+ * the claimed row; it is never a stamp value. That number is the episode version only when the
+ * claim was the stamping write; a claim over a row that already carries a stamp (a start event
+ * whose evolve yielded {@code COMPENSATING}, whose forward command is then rejected) keeps the
+ * stamp it found, which is why the stamp is read and not derived. The call that opens an episode
+ * and every path that resumes it — a redelivery, a later event, a second replica's delivery, the
+ * timeout runner, the compensation-retry sweeper, an operator — therefore present the same keys to
+ * the command inbox, sequentially or concurrently, and each compensation command is stored once.
  *
  * <p><b>Why the read after the claim needs no transaction.</b> A stamp is immutable: no statement
  * of a {@link SagaStore} re-stamps or clears one (the episode stamp rule). Whatever happens to the
@@ -124,13 +124,32 @@ import org.streamrune.core.types.SagaType;
  *       the row, the commands are dispatched under it, and the terminal write loses its
  *       compare-and-swap, so the row stays {@code FAULTED} for the operator, whose resume finds the
  *       committed commands in the inbox;
- *   <li>no row — it was deleted: there is no stamp, so nothing is dispatched. A delivery reports a
- *       stale view ({@link OptimisticLockException}) and the redelivered event routes on what the
- *       store holds; a claim with no event in hand ends as {@code CLAIM_LOST};
+ *   <li>no row — the application deleted it: there is no stamp, so nothing is dispatched. A claim
+ *       with no event in hand ends as {@code CLAIM_LOST}. A delivery or a replay feed reports a
+ *       stale view ({@link OptimisticLockException}); what follows is what a deleted saga gets on
+ *       any path: a redelivered start event finds no row and starts the saga again (its forward
+ *       keys dedup), a redelivered correlated event finds no row and is dropped (or held when the
+ *       saga id still owns a dead-letter record), and a replay leaves the drain with its entry
+ *       kept;
+ *   <li>another row — the application deleted the row and a start event inserted one for the same
+ *       saga id again, all between the claim and the read: the argument above holds for one row,
+ *       and this is not that row. A row's version only grows and an inserted row starts at 1, below
+ *       every claim (a claim lands at 2 or higher), so the read refuses a row whose version is
+ *       below the claim's and takes the "no row" exit: nothing is dispatched for the deleted row
+ *       and the other row is neither read for a stamp nor written. The check cannot tell the
+ *       claimed row from a new one that was itself written up to the claim's version inside that
+ *       window; only a claim that returns its stamp could;
  *   <li>the read fails, or the process dies before it: nothing is dispatched and the failure
  *       propagates. The row is a claimed episode with no command dispatched, which every resume
- *       path picks up from its stamp.
+ *       path picks up from its stamp. This includes a state the store wrote and cannot read back: a
+ *       deterministic conversion failure stops the opening call before any compensation command (a
+ *       delivery's event is recorded as a dead letter, a claim with no event reports the failure to
+ *       its caller), and the episode is completed by a resume, or by the replay of that entry, once
+ *       the state reads again.
  * </ul>
+ *
+ * <p>The read relies on one property of the store: a {@code load} that follows a returned {@code
+ * claimCompensating} sees the claimed row ({@link SagaStore#claimCompensating}).
  *
  * <p><b>Every compensation command names the event that opened its episode.</b> The write that
  * stamps an episode records the id of the event in hand: the event whose forward command was
@@ -327,8 +346,9 @@ final class SagaStepExecutor<S extends SagaState> {
           LogSanitizer.sanitizeForLog(sagaId.value()));
       return StepOutcome.CLAIM_LOST;
     }
+    long claimVersion = baseVersion + 1;
     Optional<EpisodeStamp> episode =
-        readClaimedEpisode(sagaId, type, /* hasTriggeringEvent= */ false);
+        readClaimedEpisode(sagaId, type, claimVersion, /* hasTriggeringEvent= */ false);
     if (episode.isEmpty()) {
       recordCasConflict();
       LOG.debug(
@@ -337,25 +357,29 @@ final class SagaStepExecutor<S extends SagaState> {
       return StepOutcome.CLAIM_LOST;
     }
     return compensateEpisode(
-        sagaId, state, episode.get(), baseVersion + 1, cause, null, /* catchPoison= */ true);
+        sagaId, state, episode.get(), claimVersion, cause, null, /* catchPoison= */ true);
   }
 
   /**
    * The stamp of the episode a claim of this executor has just committed, read from the row the
-   * store holds; empty when the row is gone. This read is why no claim path computes a stamp value:
-   * the claim keeps a stamp the row already carries, so the version the claim landed at is the
-   * episode version only when the claim was the stamping write. The stamp is immutable once
-   * written, so a plain read after the claim returns it whatever else happened to the row in
-   * between; the row's status and version are not taken from this read (the caller keeps the
-   * version of its own claim as the optimistic-lock token).
+   * store holds; empty when the claimed row is gone — no row, or a row whose version is below
+   * {@code claimVersion}, which is another row inserted for the saga id after the claimed one was
+   * deleted (a row's version only grows, and an insert starts at 1). This read is why no claim path
+   * computes a stamp value: the claim keeps a stamp the row already carries, so the version the
+   * claim landed at is the episode version only when the claim was the stamping write. The stamp is
+   * immutable once written, so a plain read after the claim returns it whatever else happened to
+   * the row in between; the row's status and version are not taken from this read (the caller keeps
+   * the version of its own claim as the optimistic-lock token).
    *
    * <p>A read that fails propagates before anything is dispatched: a deterministic state-conversion
    * failure as poison, anything else as the infrastructure failure it is. The row is then a claimed
    * episode with no command dispatched, and every resume path reads its stamp.
    */
   private Optional<EpisodeStamp> readClaimedEpisode(
-      SagaId sagaId, SagaType type, boolean hasTriggeringEvent) {
-    return reload(sagaId, type).map(row -> requireStampedEpisode(sagaId, row, hasTriggeringEvent));
+      SagaId sagaId, SagaType type, long claimVersion, boolean hasTriggeringEvent) {
+    return reload(sagaId, type)
+        .filter(row -> row.version() >= claimVersion)
+        .map(row -> requireStampedEpisode(sagaId, row, hasTriggeringEvent));
   }
 
   private StepOutcome forwardStep(
@@ -700,8 +724,9 @@ final class SagaStepExecutor<S extends SagaState> {
    * row that already carries one — the row of a start event whose evolve yielded {@code
    * COMPENSATING}, inserted and stamped earlier in this same call — the claim keeps it, and the
    * commands are keyed with the stamp the insert wrote. A row deleted since the claim has no stamp:
-   * nothing is dispatched and the stale view propagates on both paths, so the redelivered event
-   * routes on what the store holds.
+   * nothing is dispatched and the stale view propagates on both paths. The redelivered start event
+   * then finds no row and starts the saga again; a redelivered correlated event finds no row and is
+   * dropped.
    *
    * <p>{@code episodeCause} is the id of the event whose forward command failed, handed to the
    * claim to be recorded with a stamp the claim writes.
@@ -732,8 +757,9 @@ final class SagaStepExecutor<S extends SagaState> {
       }
       throw claimLost; // correlated: PROPAGATE (batch retry)
     }
+    long claimVersion = rowVersion + 1;
     EpisodeStamp episode =
-        readClaimedEpisode(sagaId, type, /* hasTriggeringEvent= */ true)
+        readClaimedEpisode(sagaId, type, claimVersion, /* hasTriggeringEvent= */ true)
             .orElseThrow(
                 () -> {
                   recordCasConflict();
@@ -743,7 +769,7 @@ final class SagaStepExecutor<S extends SagaState> {
                           + " was removed after its compensation claim; nothing dispatched");
                 });
     return compensateEpisode(
-        sagaId, state, episode, rowVersion + 1, primary, failedCommand, /* catchPoison= */ false);
+        sagaId, state, episode, claimVersion, primary, failedCommand, /* catchPoison= */ false);
   }
 
   /**

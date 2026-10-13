@@ -400,6 +400,15 @@ public interface SagaStore {
    * (which also refuses an unstamped episode at the schema, a CHECK constraint on {@code
    * saga_state}) and {@code InMemorySagaStore} follow it.
    *
+   * <p><b>Read your writes.</b> Once this method has returned, a {@link #load} of the saga by the
+   * same caller returns the claimed row: status {@code COMPENSATING} or whatever a later write made
+   * of it, a version of at least {@code expectedVersion + 1}, and the episode stamp. The saga
+   * runtime reads the stamp back right after its claim and dispatches no compensation command
+   * before it has it; a store that answers that {@code load} from a cache or a lagging replica
+   * hands it the row from before the claim, which carries no stamp, and the runtime refuses the
+   * episode. {@code PostgresSagaStore} commits the claim before it returns and reads from the same
+   * data source; {@code InMemorySagaStore} is one map.
+   *
    * @param sagaId the saga identifier
    * @param sagaType the saga type (must match the type set at {@link #create} time)
    * @param state the saga state to persist

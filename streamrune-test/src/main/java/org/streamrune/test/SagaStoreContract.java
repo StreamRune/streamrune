@@ -765,6 +765,26 @@ public abstract class SagaStoreContract {
     assertEquals(OPENING_EVENT, row.episodeCauseEventId());
   }
 
+  /**
+   * Read your writes: the load that follows a returned claim returns the claimed row. The saga
+   * runtime reads the episode stamp back right after its claim and dispatches nothing before.
+   */
+  @Test
+  public void load_afterAClaimReturned_returnsTheClaimedRowWithItsStamp() {
+    for (int i = 0; i < 25; i++) {
+      SagaId id = SagaId.of("contract-saga-claimed-" + i);
+      EventId cause = EventId.of("evt-claim-" + i);
+      store.create(id, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+      store.claimCompensating(id, TYPE, EVOLVED, 1L, cause); // v2
+      var claimed = store.load(id, TYPE, ContractState.class).orElseThrow();
+      assertEquals(SagaStatus.COMPENSATING, claimed.status());
+      assertEquals(2L, claimed.version(), "the load sees the claim's version");
+      assertEquals(2L, claimed.episodeVersion(), "and the stamp the claim wrote");
+      assertNotNull(claimed.episodeClaimedAt());
+      assertEquals(cause, claimed.episodeCauseEventId());
+    }
+  }
+
   @Test
   public void claimCompensating_withoutAnEvent_recordsNoCause() {
     store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1

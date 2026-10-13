@@ -3,6 +3,7 @@ package org.streamrune.runtime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
@@ -12,7 +13,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -34,6 +38,7 @@ import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
+import org.streamrune.core.saga.SagaStateSerializationException;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
@@ -249,9 +254,11 @@ class SagaEpisodeStampReadFromRowTest {
 
   /**
    * A forwarding store with seams around the claim and the terminal write, and with stamps the
-   * executor cannot compute: every loaded row reports its episode version shifted by {@code
-   * stampOffset}. The shift is the same on every load, so the stamp is still one immutable value
-   * per episode — only not "the version the claim landed at".
+   * executor cannot compute. With a non-zero {@code stampOffset} every loaded row that carries a
+   * stamp reports its episode version shifted by the offset and its cause rewritten ({@code
+   * row:<stored id>}, or {@code row:none} for an episode opened with no event). Both mappings are
+   * the same on every load, so the stamp is still one immutable value per episode — only not "the
+   * version the claim landed at" and not "the event the claim was given".
    */
   static final class SeamedSagaStore extends ForwardingSagaStore {
     private final long stampOffset;
@@ -259,6 +266,8 @@ class SagaEpisodeStampReadFromRowTest {
     private Runnable afterClaim;
     private Runnable beforeTerminalWrite;
     private boolean failNextLoad;
+    private boolean loadsUnstamped;
+    private RuntimeException loadFailure;
 
     SeamedSagaStore(InMemorySagaStore delegate, long stampOffset) {
       super(delegate);
@@ -307,24 +316,33 @@ class SagaEpisodeStampReadFromRowTest {
         failNextLoad = false;
         throw new SimulatedCrash("the claim: the row could not be read back");
       }
+      if (loadFailure != null) {
+        throw loadFailure;
+      }
       return super.load(id, type, stateType)
           .map(
-              row ->
-                  row.episodeVersion() == null
-                      ? row
-                      : new LoadedSaga<>(
-                          row.state(),
-                          row.status(),
-                          row.version(),
-                          row.updatedAt(),
-                          row.episodeVersion() + stampOffset,
-                          row.episodeClaimedAt(),
-                          row.episodeCauseEventId(),
-                          row.genesisApplied(),
-                          row.preFaultStatus(),
-                          row.deadLetterPending(),
-                          row.lastAppliedOffset(),
-                          row.lastReplayedOffset()));
+              row -> {
+                if (row.episodeVersion() == null || (stampOffset == 0 && !loadsUnstamped)) {
+                  return row;
+                }
+                return new LoadedSaga<>(
+                    row.state(),
+                    row.status(),
+                    row.version(),
+                    row.updatedAt(),
+                    loadsUnstamped ? null : Long.valueOf(row.episodeVersion() + stampOffset),
+                    loadsUnstamped ? null : row.episodeClaimedAt(),
+                    loadsUnstamped ? null : rewritten(row.episodeCauseEventId()),
+                    row.genesisApplied(),
+                    row.preFaultStatus(),
+                    row.deadLetterPending(),
+                    row.lastAppliedOffset(),
+                    row.lastReplayedOffset());
+              });
+    }
+
+    private static EventId rewritten(EventId stored) {
+      return EventId.of("row:" + (stored == null ? "none" : stored.value()));
     }
   }
 
@@ -376,7 +394,8 @@ class SagaEpisodeStampReadFromRowTest {
     /**
      * @param bornCompensating whether the start event's evolve yields COMPENSATING
      * @param stampOffset what every loaded row adds to its stored episode version: 0 for the
-     *     in-memory store as it is, another value for stamps that are not "row version plus one"
+     *     in-memory store as it is, another value for stamps the executor cannot work out (the
+     *     cause is rewritten too)
      */
     Harness(boolean bornCompensating, long stampOffset) {
       saga = new OrderSaga(bornCompensating);
@@ -657,6 +676,9 @@ class SagaEpisodeStampReadFromRowTest {
         "aSecondDeliveryOfTheStartEvent",
         h -> h.secondReplica.asEventListener().onEvents(List.of(opened[0])));
     paths.put(
+        "aLaterCorrelatedEventOnAnotherReplica",
+        h -> h.secondReplica.asEventListener().onEvents(List.of(h.append(new Nudged(ORDER)))));
+    paths.put(
         "theSweeper",
         h -> {
           h.clock.advance(RETRY_INTERVAL.plusSeconds(1));
@@ -713,6 +735,96 @@ class SagaEpisodeStampReadFromRowTest {
                                     h.assertEachCompensationStoredOnce();
                                   }
                                 })));
+  }
+
+  /**
+   * A second path completes the episode before the opening delivery's forward command is rejected:
+   * the opening delivery's claim loses its compare-and-swap and dispatches nothing.
+   */
+  @Test
+  void bornCompensating_aSecondPathCompletesTheEpisodeBeforeTheClaim_theClaimIsLost() {
+    try (var h = new Harness(true, 0)) {
+      h.reserve.failure = () -> new IllegalArgumentException("out of stock");
+      EventEnvelope opened = h.append(new Opened(ORDER));
+      h.bus.runOnceBefore(
+          Reserve.class, () -> h.secondReplica.asEventListener().onEvents(List.of(opened)));
+
+      h.deliver(opened);
+
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(h.bus.compensationKeys())
+          .as("only the second path dispatched")
+          .isEqualTo(h.keysOfTheRowsEpisode());
+      h.assertEachCompensationStoredOnce();
+    }
+  }
+
+  /**
+   * A second path straddles the claim: another replica loads the row before the opening delivery
+   * claims it and dispatches its first compensation command only after the opening delivery has
+   * claimed, read the row back, dispatched both commands and written the terminal status. Two
+   * threads, sequenced by latches at fixed points, so the interleaving is the same on every run.
+   */
+  @Test
+  void bornCompensating_aSecondPathStraddlesTheClaim_bothPresentTheRowsKeys() throws Exception {
+    try (var h = new Harness(true, 0)) {
+      h.reserve.failure = () -> new IllegalArgumentException("out of stock");
+      EventEnvelope opened = h.append(new Opened(ORDER));
+      CountDownLatch secondAtItsFirstCompensation = new CountDownLatch(1);
+      CountDownLatch openingDone = new CountDownLatch(1);
+      CountDownLatch secondDone = new CountDownLatch(1);
+      AtomicReference<Throwable> secondFailure = new AtomicReference<>();
+      h.bus.runOnceBefore(
+          Reserve.class,
+          () -> {
+            // The second replica resumes the row the insert stamped and parks right before its
+            // first compensation command; the opening delivery then continues with its own claim.
+            h.bus.runOnceBefore(
+                Release.class,
+                () -> {
+                  secondAtItsFirstCompensation.countDown();
+                  await(openingDone);
+                });
+            Thread.ofPlatform()
+                .start(
+                    () -> {
+                      try {
+                        h.secondReplica.asEventListener().onEvents(List.of(opened));
+                      } catch (Throwable t) {
+                        secondFailure.set(t);
+                      } finally {
+                        secondDone.countDown();
+                      }
+                    });
+            await(secondAtItsFirstCompensation);
+          });
+
+      h.deliver(opened);
+
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
+      List<String> openingKeys = List.copyOf(h.bus.compensationKeys());
+      assertThat(openingKeys).isEqualTo(h.keysOfTheRowsEpisode());
+      openingDone.countDown();
+      await(secondDone);
+
+      assertThat(secondFailure.get()).isNull();
+      assertThat(h.bus.compensationKeys())
+          .as("both paths present the keys of the row's stamp")
+          .hasSize(4)
+          .containsOnlyElementsOf(h.keysOfTheRowsEpisode());
+      h.assertEachCompensationStoredOnce();
+    }
+  }
+
+  private static void await(CountDownLatch latch) {
+    try {
+      if (!latch.await(20, TimeUnit.SECONDS)) {
+        throw new IllegalStateException("the other thread did not reach its point");
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(e);
+    }
   }
 
   /**
@@ -842,6 +954,181 @@ class SagaEpisodeStampReadFromRowTest {
 
       assertThat(h.bus.compensationKeys()).isEmpty();
       assertThat(h.rows.load(SAGA, TYPE, State.class)).isEmpty();
+    }
+  }
+
+  /**
+   * The same on a correlated event. The redelivered event finds no row and is dropped: nothing
+   * re-creates a deleted saga for a correlated event, so the forward effects the deleted saga had
+   * committed stay as they are — what deleting a live saga's row means on any path.
+   */
+  @Test
+  void theRowIsGoneAfterTheClaim_onACorrelatedEvent_theRedeliveryFindsNoRow() {
+    try (var h = new Harness(false, 0)) {
+      h.deliver(h.append(new Opened(ORDER)));
+      h.ship.failure = () -> new IllegalArgumentException("address rejected");
+      h.sagaStore.runOnceAfterTheClaim(() -> h.rows.delete(SAGA, TYPE));
+      EventEnvelope advanced = h.append(new Advanced(ORDER));
+
+      assertThatThrownBy(() -> h.deliver(advanced)).isInstanceOf(OptimisticLockException.class);
+      h.deliver(advanced);
+
+      assertThat(h.bus.compensationKeys()).isEmpty();
+      assertThat(h.rows.load(SAGA, TYPE, State.class)).isEmpty();
+      assertThat(h.stored(Reserved.class)).hasSize(1);
+    }
+  }
+
+  /** The same on a dead-letter replay feed: the stale view leaves the drain and the entry stays. */
+  @Test
+  void theRowIsGoneAfterTheClaim_onAReplayFeed_theEntryStays() {
+    try (var h = new Harness(false, 0)) {
+      h.deliver(h.append(new Opened(ORDER)));
+      h.saga.poisonAdvanced = true;
+      h.deliver(h.append(new Advanced(ORDER)));
+      assertThat(h.deadLetters.findBySaga(SAGA)).hasSize(1);
+      h.saga.poisonAdvanced = false;
+      h.ship.failure = () -> new IllegalArgumentException("address rejected");
+      h.sagaStore.runOnceAfterTheClaim(() -> h.rows.delete(SAGA, TYPE));
+
+      assertThatThrownBy(() -> h.replayer.replayAll(SAGA))
+          .isInstanceOf(OptimisticLockException.class);
+
+      assertThat(h.bus.compensationKeys()).isEmpty();
+      assertThat(h.deadLetters.findBySaga(SAGA)).hasSize(1);
+    }
+  }
+
+  /**
+   * The row is deleted and a start event inserts a row for the same saga id again, between the
+   * claim and the read. The row the read finds is not the row the claim wrote: it is below the
+   * claim's version. The executor treats it as it treats no row — nothing is dispatched, the new
+   * row is not touched, and the stale view propagates.
+   */
+  @TestFactory
+  Stream<DynamicTest> theRowIsReplacedByAnotherRowAfterTheClaim_nothingIsDispatched() {
+    Map<String, Consumer<Harness>> replacements = new LinkedHashMap<>();
+    replacements.put(
+        "aRunningRow",
+        h ->
+            h.rows.createGenesisPending(
+                SAGA, TYPE, new State(SagaStatus.RUNNING, ORDER), SagaStatus.RUNNING, false, null));
+    replacements.put(
+        "aRowBornCompensating",
+        h ->
+            h.rows.createGenesisPending(
+                SAGA,
+                TYPE,
+                new State(SagaStatus.COMPENSATING, ORDER),
+                SagaStatus.COMPENSATING,
+                false,
+                EventId.of("evt-of-the-other-row")));
+    return replacements.entrySet().stream()
+        .map(
+            replacement ->
+                DynamicTest.dynamicTest(
+                    replacement.getKey(),
+                    () -> {
+                      try (var h = new Harness(false, 0)) {
+                        h.deliver(h.append(new Opened(ORDER)));
+                        h.ship.failure = () -> new IllegalArgumentException("address rejected");
+                        h.sagaStore.runOnceAfterTheClaim(
+                            () -> {
+                              h.rows.delete(SAGA, TYPE);
+                              replacement.getValue().accept(h);
+                            });
+                        LoadedSaga<State> replaced;
+                        EventEnvelope advanced = h.append(new Advanced(ORDER));
+
+                        assertThatThrownBy(() -> h.deliver(advanced))
+                            .isInstanceOf(OptimisticLockException.class);
+
+                        replaced = h.row();
+                        assertThat(h.bus.compensationKeys()).isEmpty();
+                        assertThat(replaced.version())
+                            .as("the other row is untouched")
+                            .isEqualTo(1L);
+                        assertThat(replaced.status()).isNotEqualTo(SagaStatus.FAULTED);
+                        assertThat(h.deadLetters.findBySaga(SAGA)).isEmpty();
+                      }
+                    }));
+  }
+
+  /**
+   * A store whose row carries no stamp after a claim breaks the stamp rule. The read after the
+   * claim refuses it as every resume does: a delivery quarantines its event and the saga is
+   * FAULTED, and no compensation command is dispatched under a value the executor made up.
+   */
+  @Test
+  void theRowCarriesNoStampAfterTheClaim_theDeliveryIsQuarantined_nothingIsDispatched() {
+    try (var h = new Harness(false, 0)) {
+      h.deliver(h.append(new Opened(ORDER)));
+      h.ship.failure = () -> new IllegalArgumentException("address rejected");
+      h.sagaStore.runOnceAfterTheClaim(() -> h.sagaStore.loadsUnstamped = true);
+
+      h.deliver(h.append(new Advanced(ORDER)));
+      h.sagaStore.loadsUnstamped = false;
+
+      assertThat(h.bus.compensationKeys()).isEmpty();
+      assertThat(h.row().status()).isEqualTo(SagaStatus.FAULTED);
+      assertThat(h.deadLetters.findBySaga(SAGA))
+          .singleElement()
+          .satisfies(
+              entry ->
+                  assertThat(entry.errorType())
+                      .contains("SagaUnstampedCompensationEpisodeException"));
+    }
+  }
+
+  /** The same on a claim with no event in hand: the pass ends with nothing dispatched. */
+  @Test
+  void theRowCarriesNoStampAfterTheClaim_onATimeoutClaim_nothingIsDispatched() {
+    try (var h = new Harness(false, 0)) {
+      h.deliver(h.append(new Opened(ORDER)));
+      h.sagaStore.runOnceAfterTheClaim(() -> h.sagaStore.loadsUnstamped = true);
+      h.clock.advance(TIMEOUT.plusSeconds(1));
+
+      h.timeoutRunner.pollOnce();
+      h.sagaStore.loadsUnstamped = false;
+
+      assertThat(h.bus.compensationKeys()).isEmpty();
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATING);
+    }
+  }
+
+  /**
+   * The state the claim wrote cannot be read back (a deterministic conversion failure). The opening
+   * call stops before any compensation command: the delivery's event is quarantined, and the row
+   * stays a claimed episode with nothing dispatched. Once the state reads again, a resume completes
+   * the episode under the row's keys.
+   */
+  @Test
+  void theStateCannotBeReadBackAfterTheClaim_theCallStops_aLaterResumeCompletesTheEpisode() {
+    try (var h = new Harness(false, 0)) {
+      h.deliver(h.append(new Opened(ORDER)));
+      h.ship.failure = () -> new IllegalArgumentException("address rejected");
+      h.sagaStore.runOnceAfterTheClaim(
+          () ->
+              h.sagaStore.loadFailure =
+                  new SagaStateSerializationException(
+                      "Failed to deserialize saga state",
+                      SAGA,
+                      JsonMappingException.from(
+                          (com.fasterxml.jackson.core.JsonParser) null, "unknown property")));
+
+      h.deliver(h.append(new Advanced(ORDER)));
+
+      assertThat(h.bus.compensationKeys()).isEmpty();
+      h.sagaStore.loadFailure = null;
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATING);
+      assertThat(h.deadLetters.findBySaga(SAGA)).hasSize(1);
+
+      h.clock.advance(RETRY_INTERVAL.plusSeconds(1));
+      h.sweeper.sweepOnce();
+
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(h.bus.compensationKeys()).isEqualTo(h.keysOfTheRowsEpisode());
+      h.assertEachCompensationStoredOnce();
     }
   }
 

@@ -262,13 +262,17 @@ public final class SagaDeadLetterReplayer {
     /**
      * {@code compensate()} threw on the fresh episode, so the row was faulted inside it ({@code
      * pre_fault_status = COMPENSATING}, the new stamp kept, no dead-letter entry): fix the
-     * orchestrator, then {@link SagaDeadLetterReplayer#resumeFaulted(SagaId)}. Or the claim could
-     * not convert the saga state: nothing was written; fix the conversion and call again.
+     * orchestrator, then {@link SagaDeadLetterReplayer#resumeFaulted(SagaId)}. Or the saga state
+     * cannot be converted: the claim could not write it (nothing was written, the row stays {@code
+     * FAULTED}; fix the conversion and call again), or the claim committed and the state it wrote
+     * cannot be read back (the row is {@code COMPENSATING} with nothing dispatched; fix the
+     * conversion and the episode's automatic re-drivers complete it).
      */
     POISON,
     /**
-     * A concurrent writer moved the row between the load and the claim's compare-and-swap; nothing
-     * was dispatched. Read the row again before deciding again.
+     * Nothing was dispatched: a concurrent writer moved the row between the load and the claim's
+     * compare-and-swap, or the claim committed and the row was deleted before its episode stamp
+     * could be read. Read the row again before deciding again.
      */
     CLAIM_LOST,
     /** No saga row of this replayer's type exists for the id; nothing to compensate. */
@@ -707,11 +711,19 @@ public final class SagaDeadLetterReplayer {
    * race on the claim's compare-and-swap: one wins, the other dispatches nothing ({@link
    * CompensateOutcome#CLAIM_LOST}).
    *
+   * <p>After the claim commits, the episode's stamp is read back from the row before any
+   * compensation command is dispatched. A row deleted in between answers {@link
+   * CompensateOutcome#CLAIM_LOST}; a state that cannot be read back answers {@link
+   * CompensateOutcome#POISON} with the row left {@code COMPENSATING} and nothing dispatched.
+   *
    * <p>Every outcome is logged (ids sanitized) and recorded under {@code
    * streamrune.saga.compensate_faulted{saga.type, outcome}}.
    *
    * @param sagaId the faulted saga (required)
    * @return the outcome; see {@link CompensateOutcome}
+   * @throws org.streamrune.core.saga.SagaUnstampedCompensationEpisodeException when the store's row
+   *     carries no episode stamp after the claim (a store that breaks the episode stamp rule);
+   *     nothing is dispatched
    */
   public CompensateOutcome compensateFaulted(SagaId sagaId) {
     Objects.requireNonNull(sagaId, SAGA_ID_REQUIRED);
@@ -729,8 +741,12 @@ public final class SagaDeadLetterReplayer {
       LOG.warn(
           "compensateFaulted for saga "
               + LogSanitizer.sanitizeForLog(sagaId.value())
-              + ": the saga state cannot be converted for the compensation claim, so nothing was"
-              + " written and the row stays FAULTED. Fix the state conversion, then call again.",
+              + ": the saga state cannot be converted. Either the claim could not write it —"
+              + " nothing was written and the row stays FAULTED — or the claim committed and the"
+              + " state it wrote cannot be read back — the row is then COMPENSATING with no"
+              + " compensation command dispatched. Fix the state conversion and read the row: a"
+              + " FAULTED row takes this call again; a COMPENSATING row is completed by the"
+              + " compensation-retry sweeper, the timeout runner or the saga's next event.",
           unwritable.getCause());
       return recordCompensate(CompensateOutcome.POISON);
     }
@@ -793,9 +809,10 @@ public final class SagaDeadLetterReplayer {
     switch (compensated) {
       case CLAIM_LOST -> {
         LOG.warn(
-            "compensateFaulted: saga {} was written concurrently between the load and the claim;"
-                + " the claim lost its compare-and-swap and nothing was dispatched. Read the row"
-                + " again before deciding again.",
+            "compensateFaulted: nothing was dispatched for saga {}. Either the row was written"
+                + " concurrently between the load and the claim and the claim lost its"
+                + " compare-and-swap, or the claim committed and the row was deleted before its"
+                + " episode stamp could be read. Read the row again before deciding again.",
             id);
         return CompensateOutcome.CLAIM_LOST;
       }
