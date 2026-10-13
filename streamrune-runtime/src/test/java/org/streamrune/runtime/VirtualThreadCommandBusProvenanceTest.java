@@ -1,7 +1,10 @@
 package org.streamrune.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -29,6 +32,7 @@ import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.IdConstraints;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.test.CommandBusProvenanceContract;
@@ -341,7 +345,166 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
     assertEquals(List.of(), eventStore.readGlobalStream(GlobalOffset.initial(), 10));
     assertEquals(1, audit.size());
     assertEquals(AuditOutcome.FAILURE, audit.getFirst().outcome());
-    assertEquals(null, audit.getFirst().correlationId());
+    // A context bound to null names no correlation id, so the bus generated the row's.
+    assertNotNull(audit.getFirst().correlationId());
+    assertFalse(IdConstraints.isReserved(audit.getFirst().correlationId().value()));
+  }
+
+  // ==== A command with nothing bound: the bus chooses the id before the interceptors run ====
+
+  /** A bus that audits, and nests {@code Mark(nested-1)} in {@code after()} of {@code outer-1}. */
+  private record UnboundRun(InMemoryEventStore eventStore, List<AuditEntry> audit) {
+
+    static UnboundRun of(java.util.function.Consumer<VirtualThreadCommandBus> dispatch) {
+      return of(dispatch, new CommandInterceptor() {});
+    }
+
+    static UnboundRun of(
+        java.util.function.Consumer<VirtualThreadCommandBus> dispatch, CommandInterceptor last) {
+      List<AuditEntry> audit = new java.util.concurrent.CopyOnWriteArrayList<>();
+      InMemoryCommandInbox inbox = new InMemoryCommandInbox();
+      InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+      VirtualThreadCommandBus[] holder = new VirtualThreadCommandBus[1];
+      NestingInterceptor nesting =
+          new NestingInterceptor(() -> holder[0], "outer-1", "nested-1", nested -> nested);
+      holder[0] =
+          VirtualThreadCommandBus.builder()
+              .eventStore(eventStore)
+              .locker(new LocalStripedLocker(16))
+              .retryPolicy(new RetryPolicy(1, Duration.ofMillis(1), 1.0))
+              .objectMapper(new ObjectMapper())
+              .commandInbox(inbox)
+              .interceptors(new AuditCommandInterceptor(audit::add), nesting, last)
+              .register(
+                  AGGREGATE_TYPE, Mark.class, CommandBusProvenanceContract::aggregateIdOf, DECIDER)
+              .build();
+      try (VirtualThreadCommandBus bus = holder[0]) {
+        dispatch.accept(bus);
+      }
+      assertEquals(null, nesting.thrown);
+      return new UnboundRun(eventStore, List.copyOf(audit));
+    }
+
+    /** The one correlation id the events of {@code aggregateId} carry. */
+    CorrelationId correlationIdOfTheEventsOf(String aggregateId) {
+      List<EventEnvelope> events =
+          eventStore.load(StreamId.of(AGGREGATE_TYPE, AggregateId.of(aggregateId))).events();
+      assertFalse(events.isEmpty(), "events of " + aggregateId);
+      List<CorrelationId> ids =
+          events.stream().map(event -> event.metadata().correlationId()).distinct().toList();
+      assertEquals(1, ids.size(), "one correlation id for the events of one command: " + ids);
+      return ids.getFirst();
+    }
+
+    AuditEntry auditOf(String aggregateId) {
+      List<AuditEntry> rows =
+          audit.stream().filter(entry -> entry.aggregateId().value().equals(aggregateId)).toList();
+      assertEquals(1, rows.size(), "audit rows of " + aggregateId);
+      return rows.getFirst();
+    }
+  }
+
+  @Test
+  void aCommandWithNothingBound_itsAuditRowNamesTheCorrelationIdOfItsEvents() {
+    // A startup task, a scheduler, a listener's plain commandBus.execute: no request context and
+    // no saga origin. The bus generates the correlation id of the events; the audit row of the
+    // command names that id and not none.
+    UnboundRun run = UnboundRun.of(bus -> bus.execute(new Mark("alone-1")));
+
+    CorrelationId ofTheEvents = run.correlationIdOfTheEventsOf("alone-1");
+    assertNotNull(ofTheEvents);
+    assertFalse(IdConstraints.isReserved(ofTheEvents.value()));
+    assertEquals(AuditOutcome.SUCCESS, run.auditOf("alone-1").outcome());
+    assertEquals(ofTheEvents, run.auditOf("alone-1").correlationId());
+  }
+
+  @Test
+  void aKeyedCommandWithNothingBound_itsAuditRowNamesTheCorrelationIdOfItsEvents() {
+    UnboundRun run =
+        UnboundRun.of(bus -> bus.execute(new Mark("keyed-1"), new IdempotencyKey("unbound:1")));
+
+    assertEquals(run.correlationIdOfTheEventsOf("keyed-1"), run.auditOf("keyed-1").correlationId());
+  }
+
+  @Test
+  void executeAsync_withNothingBound_itsAuditRowNamesTheCorrelationIdOfItsEvents() {
+    UnboundRun run = UnboundRun.of(bus -> bus.executeAsync(new Mark("async-1")).join());
+
+    assertNotNull(run.auditOf("async-1").correlationId());
+    assertEquals(run.correlationIdOfTheEventsOf("async-1"), run.auditOf("async-1").correlationId());
+  }
+
+  @Test
+  void aNestedCommandWithNothingBound_hasACorrelationIdOfItsOwn_andEachRowNamesItsOwnEvents() {
+    // The generated id belongs to one dispatch. A command an interceptor executes inside it is a
+    // dispatch of its own, with nothing bound either: it gets its own id, as it does without an
+    // audit, and the outer command's row still names the outer command's events.
+    UnboundRun run = UnboundRun.of(bus -> bus.execute(new Mark("outer-1")));
+
+    CorrelationId outer = run.correlationIdOfTheEventsOf("outer-1");
+    CorrelationId nested = run.correlationIdOfTheEventsOf("nested-1");
+    assertNotEquals(outer, nested);
+    assertEquals(outer, run.auditOf("outer-1").correlationId());
+    assertEquals(nested, run.auditOf("nested-1").correlationId());
+  }
+
+  @Test
+  void aFailedCommandWithNothingBound_isAuditedUnderAGeneratedCorrelationId() {
+    // Nothing is stored for it, so no event can disagree; the row still names a flow.
+    CommandInterceptor refusing =
+        new CommandInterceptor() {
+          @Override
+          public boolean before(CommandContext context) {
+            throw new IllegalStateException("refused by the test");
+          }
+        };
+
+    UnboundRun run =
+        UnboundRun.of(
+            bus ->
+                assertThrows(IllegalStateException.class, () -> bus.execute(new Mark("failing-1"))),
+            refusing);
+
+    assertEquals(AuditOutcome.FAILURE, run.auditOf("failing-1").outcome());
+    assertNotNull(run.auditOf("failing-1").correlationId());
+    assertFalse(IdConstraints.isReserved(run.auditOf("failing-1").correlationId().value()));
+  }
+
+  @Test
+  void aCommandUnderABoundContext_keepsTheContextsCorrelationId_alsoInsideAnUnboundDispatch() {
+    // The generated id of the outer dispatch does not reach a nested command that has a context.
+    var own =
+        new StreamRuneContext.RequestContext(
+            null, null, CorrelationId.of("app-own-correlation"), Instant.now(), Map.of());
+    List<AuditEntry> audit = new java.util.concurrent.CopyOnWriteArrayList<>();
+    InMemoryEventStore eventStore = new InMemoryEventStore();
+    VirtualThreadCommandBus[] holder = new VirtualThreadCommandBus[1];
+    NestingInterceptor nesting =
+        new NestingInterceptor(
+            () -> holder[0],
+            "outer-1",
+            "nested-1",
+            nested -> () -> ScopedValue.where(StreamRuneContext.CURRENT, own).run(nested));
+    holder[0] =
+        VirtualThreadCommandBus.builder()
+            .eventStore(eventStore)
+            .locker(new LocalStripedLocker(16))
+            .retryPolicy(new RetryPolicy(1, Duration.ofMillis(1), 1.0))
+            .objectMapper(new ObjectMapper())
+            .interceptors(new AuditCommandInterceptor(audit::add), nesting)
+            .register(
+                AGGREGATE_TYPE, Mark.class, CommandBusProvenanceContract::aggregateIdOf, DECIDER)
+            .build();
+    try (VirtualThreadCommandBus bus = holder[0]) {
+      bus.execute(new Mark("outer-1"));
+    }
+    UnboundRun run = new UnboundRun(eventStore, List.copyOf(audit));
+
+    assertEquals(null, nesting.thrown);
+    assertEquals(own.correlationId(), run.correlationIdOfTheEventsOf("nested-1"));
+    assertEquals(own.correlationId(), run.auditOf("nested-1").correlationId());
+    assertEquals(run.correlationIdOfTheEventsOf("outer-1"), run.auditOf("outer-1").correlationId());
+    assertNotEquals(own.correlationId(), run.auditOf("outer-1").correlationId());
   }
 
   // ==== Commands executed on the thread of a saga's dispatch, and off it ====

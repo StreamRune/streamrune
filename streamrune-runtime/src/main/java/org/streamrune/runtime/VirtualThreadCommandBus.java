@@ -273,8 +273,21 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    *
    * @param key nullable idempotency key; {@code null} for unkeyed (hot-path) execution
    */
-  @SuppressWarnings("unchecked")
   private <C extends Command> CommandResult executeCounted(C command, IdempotencyKey key) {
+    if (BoundCorrelationId.inEffect() != null) {
+      return executeCountedUnderItsCorrelationId(command, key);
+    }
+    // Nothing names a correlation id for this dispatch: no saga origin, no request context (or one
+    // without an id). The bus chooses it here, before the interceptors run, so that the audit row
+    // of the command names the id its events carry. It belongs to this dispatch alone: a command
+    // executed inside it with nothing bound passes here again and gets its own.
+    return ScopedValue.where(BoundCorrelationId.GENERATED, IdGenerator.generateCorrelationId())
+        .call(() -> executeCountedUnderItsCorrelationId(command, key));
+  }
+
+  @SuppressWarnings("unchecked")
+  private <C extends Command> CommandResult executeCountedUnderItsCorrelationId(
+      C command, IdempotencyKey key) {
     // Guarded like every other meter on this method. This is the FIRST statement of the
     // command path and it sits outside the try below, so an unguarded throw here propagated
     // straight out of execute(): the decider never ran, nothing was appended, no interceptor and no
@@ -1458,15 +1471,15 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
   /**
    * The correlation id of the events the command in progress produces: the one the dispatch records
-   * ({@link BoundCorrelationId#inEffect()}) — the bound saga origin's, derived and not copied from
-   * the bound request context, so an event that carries an origin always carries that origin's
-   * correlation id; otherwise the bound context's — or a generated one when neither is bound. A
-   * reserved one that is not the origin's has been refused by then ({@link
+   * ({@link BoundCorrelationId#ofTheCommandInProgress()}) — the bound saga origin's, derived and
+   * not copied from the bound request context, so an event that carries an origin always carries
+   * that origin's correlation id; otherwise the bound context's; otherwise the one {@link
+   * #executeCounted} generated for this dispatch before its interceptors ran. A reserved one that
+   * is not the origin's has been refused by then ({@link
    * BoundCorrelationId#refuseForeignReserved}).
    */
   private CorrelationId getCorrelationId() {
-    CorrelationId bound = BoundCorrelationId.inEffect();
-    return bound != null ? bound : IdGenerator.generateCorrelationId();
+    return BoundCorrelationId.ofTheCommandInProgress();
   }
 
   /**

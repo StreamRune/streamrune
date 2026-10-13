@@ -26,8 +26,10 @@ import org.streamrune.core.types.UserId;
  * command bus writes into the events of the same command: the bound request context's, or — while a
  * saga origin is bound, inside a saga's dispatch or a continuation of a saga-caused event — that
  * origin's reserved one, whatever context the application bound around a nested command. A row and
- * the events of its command therefore never name different correlation ids. It is {@code null} when
- * neither a context nor an origin was bound.
+ * the events of its command therefore never name different correlation ids. With neither a context
+ * nor an origin bound — a startup task, a scheduler, a listener's plain {@code execute} — {@code
+ * VirtualThreadCommandBus} generates the id before it calls its interceptors, and the row names
+ * that one. It is {@code null} only on a bus that binds none.
  *
  * <p><strong>Calling convention precondition:</strong> This interceptor assumes that the {@link
  * org.streamrune.core.CommandBus} guarantees that exactly one of {@link #after(CommandContext)} or
@@ -84,8 +86,9 @@ public final class AuditCommandInterceptor implements CommandInterceptor {
       }
     }
     // The id the command bus writes into the events of this command: the bound saga origin's when
-    // an origin is bound, otherwise the bound context's. The row and the events agree.
-    CorrelationId correlationId = BoundCorrelationId.inEffect();
+    // an origin is bound, otherwise the bound context's, otherwise the one the bus generated for
+    // this dispatch. The row and the events agree.
+    CorrelationId correlationId = BoundCorrelationId.ofTheCommandInProgress();
     captured.get().push(new Captured(userId, correlationId));
     return true;
   }
