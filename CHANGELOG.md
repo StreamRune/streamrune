@@ -456,7 +456,13 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   returned `claimCompensating` returns the claimed row.
 - Genesis-pending insert: a start event's row is written before its first command is dispatched and
   committed (`genesis_applied = TRUE`) after the dispatch loop, so a saga never dispatches without a
-  row and a crashed start is visible to the timeout runner.
+  row and a crashed start is visible to the timeout runner. The row has a forward status until that
+  commit, whatever the start event's `evolve` returned: a start that evolves to `COMPENSATING` is
+  inserted as `STARTED` with the evolved state and enters its compensation episode with the commit,
+  stamped with the start event as cause — the order a correlated event's step has. Its forward
+  commands are therefore dispatched, and dispatched again after a retry-later failure or a crash,
+  before any path can compensate: a second delivery re-drives the forward loop, a correlated event
+  is held as genesis-pending, the compensation-retry sweeper does not see the row.
 - Effectively-once dispatch: every saga command goes through `CommandBus.execute(command, key)` —
   forward commands keyed `saga:<sagaId>:<triggerOffset>:<index>`, every compensation command
   keyed `saga:<sagaId>:episode:<episodeVersion>:comp:<index>` — so a redelivery, a crash-resume
