@@ -31,9 +31,13 @@ import org.streamrune.core.types.StreamId;
  * They carry no origin of this saga type, and the runner asks {@link #correlateByEventData}, which
  * receives the stream id and the payload and nothing of the metadata.
  *
- * <p>When both could apply, the origin decides and {@link #correlateByEventData} is not called. So
- * when a saga dispatches a command at an aggregate that another saga of the same type watches, the
- * resulting event reaches the dispatching saga.
+ * <p>When both could apply, the origin decides and {@link #correlateByEventData} is not called.
+ * Every event a saga's command produces, and every event of a continuation of such an event, is
+ * routed to the dispatching saga and to no other saga of its type — also an event about another
+ * saga's entity. Such an event is one this saga's command caused, not necessarily one about its
+ * entity, so {@link #evolve} and {@link #handle} take ids from the saga's state. A fact meant for
+ * another saga of the same type is written by a command a listener dispatches outside {@code
+ * StreamRuneContext.continuing}: its event carries no origin and is routed by its data.
  *
  * <p>A correlation id is tracing data: a client sets it with {@code X-Correlation-Id} in every
  * identity mode. Nothing routes by it, and no routing method may derive a saga id from it.
@@ -94,6 +98,12 @@ public interface SagaOrchestrator<S extends SagaState> {
    * the start event names the saga it starts, so the access rule of that event is what protects the
    * saga.
    *
+   * <p><b>Do not throw on the event's data.</b> A {@link SagaId} is at most {@link
+   * SagaId#MAX_LENGTH} characters and not blank, and the event's data is its writer's: an id that
+   * cannot be part of a saga id must not reach {@code SagaId.of} here, where the throw is poison
+   * and each such event becomes a null-saga dead-letter entry. Decline the event in {@link
+   * #isStartEvent} instead, which is where "this event starts no saga" is said.
+   *
    * <p><b>Must not return {@code null}.</b> There is no "ignore this start event" signal here —
    * {@link #isStartEvent} already claimed the event for this saga type. A {@code null} return (e.g.
    * a metadata lookup missing on a malformed producer event) is treated exactly like a thrown
@@ -113,9 +123,29 @@ public interface SagaOrchestrator<S extends SagaState> {
    * loaded and nothing is written for it. The method does not receive the event's metadata, so it
    * cannot route by a correlation id, a trace id, a user id or baggage.
    *
-   * <p>The event's own access rule (the decider's guard, a role requirement on the command that
-   * writes it) is what protects the saga this method names. An event of another cause can arrive at
-   * any step, so {@link #evolve} and {@link #handle} decide by the saga's state what it means.
+   * <p><b>Do not throw on the event's data.</b> The payload is its writer's data. For data that
+   * cannot name a saga — an id too long to be part of a {@link SagaId} ({@link SagaId#MAX_LENGTH}
+   * characters), a blank one — return {@link Optional#empty()}: a throw is poison (see the
+   * class-level failure contract), so every such event a caller writes becomes a null-saga
+   * dead-letter entry, a WARNING and a quarantine count, and a replay of the entry throws again.
+   * Check before {@code SagaId.of}:
+   *
+   * <pre>{@code
+   * static Optional<SagaId> sagaOf(String orderId) {
+   *   if (orderId == null || orderId.isBlank()) {
+   *     return Optional.empty();
+   *   }
+   *   String id = "order-saga-" + orderId;
+   *   return id.length() > SagaId.MAX_LENGTH ? Optional.empty() : Optional.of(SagaId.of(id));
+   * }
+   * }</pre>
+   *
+   * <p>The event's own access rule is what protects the saga this method names, and it must hold
+   * for every writer of the event. A command a saga of another type dispatches runs as the system
+   * principal, which the authorization interceptors admit by default, so a role requirement on the
+   * writing command does not hold for it; a decider guard on the command's data does. An event of
+   * another cause can arrive at any step, so {@link #evolve} and {@link #handle} decide by the
+   * saga's state what it means.
    *
    * <p>Not called for the reply to a command this saga type dispatched: such an event carries the
    * dispatching saga's origin and reaches that saga (see the class-level Correlation section).

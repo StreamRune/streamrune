@@ -446,7 +446,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   dispatching saga even where another saga of the same type watches that aggregate. A listener that
   reacts to a saga's event with a command of its own keeps the origin with
   `StreamRuneContext.continuing`. A correlation id is tracing data a client chooses with
-  `X-Correlation-Id`; it routes nothing.
+  `X-Correlation-Id`; it routes nothing. A saga state class belongs to one saga: the three
+  integrations refuse, at startup, two `SagaRunner` beans that drive the same state class over the
+  same `SagaStore` (`SagaTypeOwnership.requireOneRunnerPerSagaType`).
 - Saga origin: every event a saga-issued command produces carries `EventMetadata.sagaOrigin` — the
   saga's type and id at hop 0 — on the event path, the timeout runner, the compensation-retry sweeper
   and the dead-letter replayer alike; events of forward commands carry the triggering event's id as
