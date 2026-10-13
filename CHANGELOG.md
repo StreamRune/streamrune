@@ -442,6 +442,18 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   event that opened the episode: `SagaStore.claimCompensating` and `createGenesisPending` take it as
   `episodeCause`, `applyEvent` takes it from `AppliedEvent.withEventId`. Every resume path reads it
   from the row and dispatches the episode's compensation commands with it as their causation id.
+- The episode stamp is read, never computed: `SagaStepExecutor` takes the episode version (the scope
+  of the compensation keys), the claim instant (the anchor of the key-age guards) and the cause from
+  the saga row on every dispatch — on a resume from the row its adapter loaded, on a call that opens
+  an episode with a claim of its own (a delivery whose forward command is rejected, a timeout claim,
+  `compensateFaulted`) from the row read back after the claim and before the first compensation
+  command. The version a claim lands at is the optimistic-lock token of the terminal or fault write
+  and the mark by which the read recognises the claimed row; it is never a stamp value. The call
+  that opens an episode and every path that resumes it, one after another or concurrently, therefore
+  present the same keys to the command inbox and each compensation command is stored once; this
+  includes a saga whose own `evolve` yields `COMPENSATING` on its start event and whose forward
+  command is then rejected. A `SagaStore` is read-your-writes for this: a `load` that follows a
+  returned `claimCompensating` returns the claimed row.
 - Genesis-pending insert: a start event's row is written before its first command is dispatched and
   committed (`genesis_applied = TRUE`) after the dispatch loop, so a saga never dispatches without a
   row and a crashed start is visible to the timeout runner.

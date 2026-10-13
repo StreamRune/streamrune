@@ -740,10 +740,11 @@ public final class SagaRunner<S extends SagaState> {
    *       executor (no dead-letter entry) and returns {@link StepOutcome#FAULTED}.
    * </ul>
    *
-   * <p><b>Race-safety:</b> every write here is a version-CAS at the loaded episode version, and
-   * every path that can drive the SAME episode — this sweeper, a concurrent {@link
-   * SagaTimeoutRunner} re-pick, and an event-path resume on a redelivered correlated event — feeds
-   * that same episode version into the shared episode-scoped key. So a genuine double-dispatch
+   * <p><b>Race-safety:</b> every write here is a version-CAS at the loaded row version, and every
+   * path that can drive the SAME episode — this sweeper, a concurrent {@link SagaTimeoutRunner}
+   * re-pick, an event-path resume on a redelivered correlated event, and the delivery that opened
+   * the episode — reads the episode version from the saga row and feeds it into the shared
+   * episode-scoped key ({@code SagaStepExecutor} never computes it). So a genuine double-dispatch
    * dedups in the command inbox (no double-compensation) and exactly one terminal write wins the
    * CAS while the losers skip with an {@link OptimisticLockException} (no compensation missed
    * <em>across the concurrent re-drivers of the same episode</em>). This is a race-coordination

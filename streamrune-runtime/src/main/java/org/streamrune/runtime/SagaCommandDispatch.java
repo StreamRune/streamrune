@@ -173,21 +173,23 @@ final class SagaCommandDispatch {
   }
 
   /**
-   * Shared, episode-scoped compensation command key used by <em>both</em> the correlated-event path
-   * ({@link SagaRunner}) and the timeout path ({@link SagaTimeoutRunner}) once a saga has claimed a
-   * compensation episode (transitioned to {@code COMPENSATING}). Separate keyspace from both
-   * forward commands and start-event compensation keys, scoped by {@code episodeVersion} — the
-   * saga-store version at which ownership of the compensation episode was claimed.
+   * The one compensation command key, shared by every path that dispatches a compensation command
+   * of a saga: a start event's and a correlated event's delivery, a dead-letter replay feed, {@link
+   * SagaTimeoutRunner}, {@link SagaCompensationRetrySweeper} and the operator's {@code
+   * resumeFaulted} / {@code compensateFaulted}. A keyspace separate from the forward keys, scoped
+   * by {@code episodeVersion} — the episode version stamped on the saga row by the write that
+   * entered the episode ({@code LoadedSaga.episodeVersion()}). {@code SagaStepExecutor} reads it
+   * from the row on every dispatch and never computes it.
    *
-   * <p><b>Why both paths must share this key:</b> the correlated-event path and the timeout runner
-   * can each drive compensation for the same saga. Whichever path claims the episode does so by
-   * CAS-writing the saga to {@code COMPENSATING} at its loaded version; the resulting version is
-   * the episode id. If that path then crashes (or loses the terminal write) before finishing, the
-   * saga stays {@code COMPENSATING} at that same version, and the other path resumes the
-   * <em>same</em> episode without re-claiming (no version bump), deriving identical keys. Because
-   * both paths feed the same {@code episodeVersion} into this method, a genuine double-delivery of
-   * the same logical compensation dedups in the command inbox instead of double-executing the side
-   * effect. A genuinely new episode claims a new version, producing fresh keys.
+   * <p><b>Why every path must share this key:</b> more than one of them can drive compensation for
+   * the same saga. The write that enters the episode — a claim, or a forward write that persists an
+   * evolved {@code COMPENSATING} status — stamps the episode version on the row, and no later write
+   * changes it. The path that opens the episode reads the stamp back before it dispatches; if it
+   * then crashes (or loses the terminal write) before finishing, or while it is still dispatching,
+   * another path resumes the <em>same</em> episode without re-claiming and reads the same stamp.
+   * Because every path feeds the row's {@code episodeVersion} into this method, a genuine
+   * double-delivery of the same logical compensation dedups in the command inbox instead of
+   * double-executing the side effect.
    *
    * <p>The key text is {@code saga:<sagaId>:episode:<episodeVersion>:comp:<index>}.
    */
@@ -385,12 +387,11 @@ final class SagaCommandDispatch {
    * {@code COMPENSATING} for the resume path). A permanent failure dominates a transient one:
    * retrying a deterministic failure forever is worse than terminalizing.
    *
-   * <p>Caller-supplied key scheme: every path — {@link SagaRunner}'s start-event path, its
-   * correlated-event path, and {@link SagaTimeoutRunner} (timeout path) — supplies the shared,
-   * episode-scoped {@link #episodeCompensationKey}-derived keys, scoped by the version the saga
-   * persists {@code COMPENSATING} at, so a genuine double-delivery across paths dedups in the
-   * command inbox instead of double-executing the side effect. The classification logic is
-   * identical for all callers.
+   * <p>Caller-supplied key scheme: the one caller, {@code SagaStepExecutor}, supplies the shared,
+   * episode-scoped {@link #episodeCompensationKey}-derived keys on every path, scoped by the
+   * episode version the saga row carries (the row version at which {@code COMPENSATING} was first
+   * persisted), so a genuine double-delivery across paths dedups in the command inbox instead of
+   * double-executing the side effect. The classification logic is identical for all callers.
    */
   static CompensationOutcome compensateAndClassify(
       List<SagaCommand> compensations,
