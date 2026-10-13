@@ -390,21 +390,38 @@ public abstract class CommandBusProvenanceContract {
 
   /**
    * {@code ScopedValue.where(CURRENT, StreamRuneContext.capture())} on a thread with nothing bound
-   * binds the context to {@code null}. The check of the correlation id passes such a binding; the
-   * command then fails where it reads the context, with the {@link NullPointerException} it fails
-   * with on a bus that makes no such check, and nothing is stored.
+   * binds the context to {@code null}. The check of the correlation id passes such a binding: the
+   * dispatch is not refused with {@link ReservedCorrelationIdException}.
+   *
+   * <p>What a bus does with the binding after that is its own. The shipped buses fail where they
+   * read the context, with a {@link NullPointerException}; a bus that takes a context bound to
+   * {@code null} for no context executes the command. Either way a failed dispatch stores nothing,
+   * and nothing stored carries a reserved correlation id.
    */
   @Test
   public void aContextBoundToNull_isNotRefusedForItsCorrelationId() {
     InMemoryEventStore eventStore = new InMemoryEventStore();
     CommandBus bus = newBus(eventStore);
     try {
-      assertThrows(
-          NullPointerException.class,
-          () ->
-              ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
-                  .run(() -> bus.execute(new Mark(AGGREGATE_ID))));
-      assertEquals(List.of(), eventStore.readGlobalStream(GlobalOffset.initial(), 10));
+      RuntimeException failure = null;
+      try {
+        ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+            .run(() -> bus.execute(new Mark(AGGREGATE_ID)));
+      } catch (RuntimeException e) {
+        failure = e;
+      }
+
+      assertFalse(
+          failure instanceof ReservedCorrelationIdException,
+          "a context bound to null names no correlation id, so there is none to refuse");
+      List<EventEnvelope> stored = eventStore.readGlobalStream(GlobalOffset.initial(), 10);
+      if (failure != null) {
+        assertEquals(List.of(), stored, "a failed dispatch stores nothing");
+      }
+      for (EventEnvelope envelope : stored) {
+        assertNull(envelope.metadata().sagaOrigin());
+        assertFalse(IdConstraints.isReserved(envelope.metadata().correlationId().value()));
+      }
     } finally {
       close(bus);
     }
