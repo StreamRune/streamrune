@@ -66,6 +66,11 @@ final class SagaDeciderAdapter<S extends SagaState> implements SagaOrchestrator<
         });
   }
 
+  /** The class of the adapted decider, for messages that name the saga's logic. */
+  Class<?> deciderType() {
+    return decider.getClass();
+  }
+
   @Override
   public Class<S> stateType() {
     return decider.stateType();

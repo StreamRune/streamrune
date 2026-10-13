@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.SagaTypeOwnership;
 
 /**
  * Supplies {@code streamrune.inbox.retention-max-age} to every application {@link SagaRunner}
@@ -25,6 +26,12 @@ import org.streamrune.runtime.SagaRunner;
  *
  * <p>An application that named {@code SagaRunner.Builder.inboxRetentionMaxAge} itself keeps its
  * value — including a deliberate zero/negative "leave the guard off".
+ *
+ * <p><b>One runner per saga type.</b> The same startup hook first refuses two {@link SagaRunner}
+ * beans that drive one saga type — one saga state class — over the same {@code SagaStore} ({@link
+ * SagaTypeOwnership#requireOneRunnerPerSagaType}): the application does not start, and the message
+ * names the state class and what each runner is built from. Two such runners load and write the
+ * same rows, and each takes the replies to the other's commands for its own.
  *
  * <p>Deliberately not gated on {@code streamrune.saga.compensation-retry-enabled}: the event path
  * has no enable knob of its own, so the guard must not disappear with the sweeper. Mirrors the
@@ -80,6 +87,7 @@ public class SagaEventPathRetentionConfigurer {
    * StreamRuneConfigValidator#validate} for why Arc only reads it there.
    */
   public void apply(@Observes @Priority(Interceptor.Priority.LIBRARY_BEFORE) StartupEvent event) {
+    SagaTypeOwnership.requireOneRunnerPerSagaType(sagaRunners);
     Duration window = properties.inbox().retentionMaxAge();
     int applied = SagaEventPathRetention.applyDefault(sagaRunners, window);
     if (applied > 0) {

@@ -233,6 +233,56 @@ class SagaEventPathRetentionWiringTest {
             });
   }
 
+  /**
+   * Two runner beans over one saga state class and one store are one saga type with two sets of
+   * logic: the context does not start, and the failure names the state class and both sagas.
+   */
+  @Test
+  void twoSagaRunnerBeansOverOneStateClassAndOneStore_stopTheContext() {
+    var store = new InMemorySagaStore();
+    runner
+        .withBean(
+            "firstSagaRunner", SagaRunner.class, () -> runnerOver(store, new FakeOrchestrator()))
+        .withBean(
+            "secondSagaRunner",
+            SagaRunner.class,
+            () -> runnerOver(store, new EventDataRoutingOrchestrator()))
+        .run(
+            ctx ->
+                assertThat(ctx)
+                    .hasFailed()
+                    .getFailure()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("the saga type " + FakeState.class.getName())
+                    .hasMessageContaining(FakeOrchestrator.class.getName())
+                    .hasMessageContaining(EventDataRoutingOrchestrator.class.getName()));
+  }
+
+  /** The same state class over two stores shares no row: both beans are wired. */
+  @Test
+  void twoSagaRunnerBeansOverOneStateClassAndTwoStores_start() {
+    runner
+        .withBean(
+            "firstSagaRunner",
+            SagaRunner.class,
+            () -> runnerOver(new InMemorySagaStore(), new FakeOrchestrator()))
+        .withBean(
+            "secondSagaRunner",
+            SagaRunner.class,
+            () -> runnerOver(new InMemorySagaStore(), new FakeOrchestrator()))
+        .run(ctx -> assertThat(ctx).hasNotFailed());
+  }
+
+  private static SagaRunner<FakeState> runnerOver(
+      InMemorySagaStore store, SagaOrchestrator<FakeState> orchestrator) {
+    return SagaRunner.<FakeState>builder()
+        .orchestrator(orchestrator)
+        .sagaStore(store)
+        .commandBus(NOOP_BUS)
+        .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(store))
+        .build();
+  }
+
   /** An event no saga caused; it names the saga it belongs to in its own data. */
   record Nudged(String sagaId) implements DomainEvent {}
 

@@ -2,6 +2,8 @@ package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.smallrye.config.SmallRyeConfig;
 import io.smallrye.config.SmallRyeConfigBuilder;
@@ -181,6 +183,37 @@ class SagaEventPathRetentionWiringTest {
     assertEquals(Duration.ofDays(7), SagaEventPathRetention.effectiveWindowOf(withAHook.runner()));
 
     assertEachRoutesAsItsSagaDeclares(withoutAHook, withAHook);
+  }
+
+  /**
+   * Two runner beans over one saga state class and one store are one saga type with two sets of
+   * logic: the startup observer throws, and the failure names the state class and both sagas.
+   */
+  @Test
+  void twoSagaRunnerBeansOverOneStateClassAndOneStore_failTheStartup() {
+    var store = new InMemorySagaStore();
+    var configurer =
+        new SagaEventPathRetentionConfigurer(
+            List.of(
+                runnerOver(store, new FakeOrchestrator()),
+                runnerOver(store, new EventDataRoutingOrchestrator())),
+            bind(Map.of()));
+
+    var refused = assertThrows(IllegalStateException.class, () -> configurer.apply(null));
+
+    assertTrue(refused.getMessage().contains("the saga type " + FakeState.class.getName()));
+    assertTrue(refused.getMessage().contains(FakeOrchestrator.class.getName()));
+    assertTrue(refused.getMessage().contains(EventDataRoutingOrchestrator.class.getName()));
+  }
+
+  private static SagaRunner<FakeState> runnerOver(
+      InMemorySagaStore store, SagaOrchestrator<FakeState> orchestrator) {
+    return SagaRunner.<FakeState>builder()
+        .orchestrator(orchestrator)
+        .sagaStore(store)
+        .commandBus(NOOP_BUS)
+        .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(store))
+        .build();
   }
 
   /** An event no saga caused; it names the saga it belongs to in its own data. */

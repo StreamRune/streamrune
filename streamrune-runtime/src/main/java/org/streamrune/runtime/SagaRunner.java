@@ -300,6 +300,26 @@ public final class SagaRunner<S extends SagaState> {
     return orchestrator.stateType();
   }
 
+  /** This runner's saga type. Package-private; read through {@link SagaTypeOwnership}. */
+  SagaType sagaType() {
+    return sagaType;
+  }
+
+  /** The store this runner keeps its sagas in. Package-private, as {@link #sagaType()}. */
+  SagaStore sagaStore() {
+    return sagaStore;
+  }
+
+  /**
+   * What this runner's logic is, for a startup message: the orchestrator class, or the decider
+   * class when the runner is built from a {@link SagaDecider}.
+   */
+  String sagaLogicName() {
+    return orchestrator instanceof SagaDeciderAdapter<?> adapter
+        ? "the decider " + adapter.deciderType().getName()
+        : "the orchestrator " + orchestrator.getClass().getName();
+  }
+
   /**
    * The {@code saga.type} metric tag: {@link SagaType#value()}, the saga state's fully-qualified
    * class name. Never the simple class name — two saga-state classes may share one across packages,
@@ -1064,6 +1084,10 @@ public final class SagaRunner<S extends SagaState> {
      * saga origin of this runner's saga type, and returns the saga the event's own data names, or
      * {@code Optional.empty()}. It does not receive the event's metadata. The replies to the saga's
      * own commands are not handed to it: the runner routes them by their origin.
+     *
+     * <p>The payload is its writer's data: for data that cannot name a saga the function returns
+     * {@code Optional.empty()} and does not throw — a throw quarantines the event as a null-saga
+     * dead-letter entry (see {@link SagaOrchestrator#correlateByEventData} for the check).
      *
      * <p>Ignored when the runner is built from an {@link #orchestrator}, which routes through its
      * own {@link SagaOrchestrator#correlateByEventData}.
