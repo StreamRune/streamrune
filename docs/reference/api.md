@@ -308,12 +308,36 @@ StreamRuneContext.continuing(event).run(() -> commandBus.execute(command, key));
 
 The command runs with no user, no captured authority and no baggage, and
 `StreamRuneContext.isSagaDispatch()` is `false` inside the bindings even on the thread of a saga's
-dispatch: the origin says who caused an event and grants nothing. Let a failed dispatch propagate
-out of the listener so that its subscription delivers the event again. A failed command that carries
-a saga origin is not published to the dead letter queue, so a listener that swallows the failure
-loses the command; a failed continuation of an event without an origin is dead-lettered like any
-other command, and its replay stores events with no `causationId`. Give the command an idempotency
-key derived from the causing event, so that a redelivery after the command committed stores nothing.
+dispatch: the origin says who caused an event and grants nothing. A policy that reads
+`StreamRuneContext.cause()` reads its `sagaOrigin()`: a cause without an origin says only that the
+command continues some stored event, and nothing about who wrote that event.
+
+`continuing` trusts the envelope it is given. It is meant for an envelope read from the event store
+(what a subscription delivers), whose metadata the command bus wrote. An envelope built by hand, or
+from request data, carries whatever origin, causation id and correlation id its author wrote, and
+the framework vouches for none of it.
+
+Failures:
+
+- A failed command that carries a saga origin is not published to the dead letter queue; the
+  listener's subscription is its only retry. Let a failure a later attempt can cure propagate out
+  of the listener, so that the subscription delivers the event again; a listener that swallows it
+  loses the command.
+- A rejection by the domain (`DomainException` and its subtypes, `IllegalArgumentException`) fails
+  on every delivery and is never dead-lettered. A plain `EventListener` has no skip for the event,
+  so a propagated rejection stops its subscription's progress until someone intervenes: catch it
+  in the listener and return, or dispatch the command that records the refusal.
+- Under `executeAsync` or `StreamRuneContext.wrap` the failure reaches only the future, or only the
+  other thread. A listener that relies on redelivery waits for the outcome before it returns.
+- A failed continuation of an event **without** an origin is dead-lettered like any other command,
+  once for every failed delivery, and a replay stores events with no `causationId`. With an
+  idempotency key the redelivery and all replays end in one stored event, whose `causationId` is
+  the event's id or `null` depending on which commits first; without a key every replay executes
+  the command again.
+
+Give the command an idempotency key derived from the causing event, so that a redelivery after the
+command committed stores nothing. `continuing` throws `IllegalStateException` for an event whose
+origin is at hop `Integer.MAX_VALUE`.
 
 ### AggregateState
 

@@ -1764,8 +1764,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * command whose bound {@link StreamRuneContext#CAUSE} carries a saga origin — a saga's own
      * dispatch, or a listener's continuation of an event that saga caused ({@link
      * StreamRuneContext#continuing(EventEnvelope)}). An entry has no place for the origin, so its
-     * replay would store the command's events without one; the listener lets the failure propagate
-     * and its subscription delivers the causing event again.
+     * replay would store the command's events without one; the listener lets a failure that a later
+     * attempt can cure propagate, and its subscription delivers the causing event again.
      */
     public Builder deadLetterQueue(DeadLetterQueue deadLetterQueue) {
       this.deadLetterQueue = deadLetterQueue;

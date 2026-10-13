@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntPredicate;
 import java.util.stream.Stream;
@@ -21,6 +22,7 @@ import org.streamrune.core.Command;
 import org.streamrune.core.DeadLetterRetryPolicy;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.DomainException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.RetryPolicy;
@@ -111,6 +113,7 @@ class ListenerContinuationTest {
   private static final class Harness implements AutoCloseable {
     final ObjectMapper mapper = new ObjectMapper();
     final AtomicInteger failuresLeft = new AtomicInteger();
+    final AtomicBoolean rejecting = new AtomicBoolean();
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
     final InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
     final InMemoryDeadLetterQueue dlq = new InMemoryDeadLetterQueue();
@@ -122,8 +125,8 @@ class ListenerContinuationTest {
             .objectMapper(mapper)
             .commandInbox(inbox)
             .deadLetterQueue(dlq)
-            // Every failure is dead-letterable, so an empty queue is the rule under test.
-            .dlqEligible(failure -> true)
+            // The default dead-letter rule: the decider's infrastructure fault is eligible, its
+            // domain rejection is not.
             .register(
                 PAYMENT,
                 Capture.class,
@@ -136,6 +139,9 @@ class ListenerContinuationTest {
 
                   @Override
                   public List<Captured> decide(Capture command, Payment state) {
+                    if (rejecting.get()) {
+                      throw new DomainException("the payment is already refunded");
+                    }
                     if (failuresLeft.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
                       throw new IllegalStateException("payment provider unreachable");
                     }
@@ -207,10 +213,12 @@ class ListenerContinuationTest {
     final List<StreamRuneContext.DispatchCause> boundCauses = new CopyOnWriteArrayList<>();
     final AtomicInteger deliveries = new AtomicInteger();
     final AtomicInteger swallowed = new AtomicInteger();
+    final AtomicInteger rejections = new AtomicInteger();
     IntPredicate crashBeforeDispatch = delivery -> false;
     IntPredicate crashAfterDispatch = delivery -> false;
     boolean keyed = true;
     boolean swallowFailures;
+    boolean takeRejectionsAsTheAnswer;
 
     ProcessManager(Harness harness) {
       this.harness = harness;
@@ -231,6 +239,12 @@ class ListenerContinuationTest {
             dispatch(event, initiated);
           } catch (RuntimeException lost) {
             swallowed.incrementAndGet();
+          }
+        } else if (takeRejectionsAsTheAnswer) {
+          try {
+            dispatch(event, initiated);
+          } catch (DomainException answer) {
+            rejections.incrementAndGet();
           }
         } else {
           dispatch(event, initiated);
@@ -553,20 +567,133 @@ class ListenerContinuationTest {
           assertThat(metadata.userId()).as("the user of the first event issued nothing").isNull();
           assertThat(metadata.baggage()).isEmpty();
 
-          try (DeadLetterRetryRunner replay =
-              DeadLetterRetryRunner.builder()
-                  .deadLetterQueue(harness.dlq)
-                  .commandBus(harness.bus)
-                  .objectMapper(harness.mapper)
-                  .policy(new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false))
-                  .pollInterval(Duration.ofMinutes(1))
-                  .registerCommand(Capture.class)
-                  .build()) {
-            replay.processBatch();
-          }
+          replayDeadLetters(harness);
 
           assertThat(harness.captured()).as("the replay hit the inbox").hasSize(1);
           assertThat(harness.dlq.all()).isEmpty();
+        });
+  }
+
+  /**
+   * The same event, and a listener that lets every failure leave it, as a listener must for an
+   * event a saga caused. Each failed delivery publishes a dead-letter entry of its own, under the
+   * command id of that execution. With an idempotency key the redelivery and the replays of all
+   * entries end in one stored event.
+   */
+  @TestFactory
+  Stream<DynamicTest> anEventWithoutAnOrigin_everyFailedDeliveryLeavesAnEntry_aKeyDrainsThemAll() {
+    return onBothSubscriptions(
+        (harness, listener, feed) -> {
+          EventEnvelope requested = harness.appendRequestCaused();
+          harness.failuresLeft.set(3);
+
+          feed.cycle();
+          feed.cycle();
+          feed.cycle();
+
+          assertThat(harness.captured()).isEmpty();
+          assertThat(harness.dlq.all()).as("one entry per failed delivery").hasSize(3);
+          assertThat(harness.dlq.all())
+              .allSatisfy(entry -> assertThat(entry.idempotencyKey()).isEqualTo(keyOf(requested)));
+          assertThat(harness.dlq.all().stream().map(entry -> entry.commandId()).distinct())
+              .hasSize(3);
+
+          feed.cycle();
+
+          assertThat(harness.captured()).hasSize(1);
+          assertThat(harness.dlq.all())
+              .as("the entries outlive the successful delivery")
+              .hasSize(3);
+
+          replayDeadLetters(harness);
+
+          assertThat(harness.dlq.all()).isEmpty();
+          assertThat(harness.captured()).as("every replay hit the inbox").hasSize(1);
+          assertThat(harness.captured().getFirst().metadata().causationId())
+              .as("the redelivery committed first")
+              .isEqualTo(CausationId.of("evt-request-1"));
+        });
+  }
+
+  /**
+   * Without a key nothing ties the redelivery and the replays together: the command is executed by
+   * the successful delivery and once more by the replay of every entry, and the replays' events are
+   * causation roots.
+   */
+  @TestFactory
+  Stream<DynamicTest> anEventWithoutAnOrigin_withoutAKey_everyEntryRunsTheCommandAgain() {
+    return onBothSubscriptions(
+        (harness, listener, feed) -> {
+          harness.appendRequestCaused();
+          listener.keyed = false;
+          harness.failuresLeft.set(3);
+
+          feed.cycle();
+          feed.cycle();
+          feed.cycle();
+          assertThat(harness.dlq.all()).hasSize(3);
+
+          feed.cycle();
+          assertThat(harness.captured()).hasSize(1);
+
+          replayDeadLetters(harness);
+
+          assertThat(harness.dlq.all()).isEmpty();
+          assertThat(harness.captured())
+              .as("one execution by the delivery, one by each of the three replays")
+              .hasSize(4);
+          assertThat(harness.captured().stream().map(event -> event.metadata().causationId()))
+              .containsExactly(CausationId.of("evt-request-1"), null, null, null);
+          assertThat(harness.captured())
+              .allSatisfy(event -> assertThat(event.metadata().sagaOrigin()).isNull());
+        });
+  }
+
+  /** One batch of the command dead-letter retry runner over the harness's queue. */
+  private static void replayDeadLetters(Harness harness) {
+    try (DeadLetterRetryRunner replay =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(harness.dlq)
+            .commandBus(harness.bus)
+            .objectMapper(harness.mapper)
+            .policy(new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false))
+            .pollInterval(Duration.ofMinutes(1))
+            .registerCommand(Capture.class)
+            .build()) {
+      replay.processBatch();
+    }
+  }
+
+  /**
+   * A command the domain rejects fails on every delivery. The bus dead-letters a rejection under no
+   * rule, and a subscription has no skip for the event, so a listener that lets it propagate is
+   * handed the same event again for as long as it does; one that takes the rejection as the
+   * command's answer and returns lets the subscription move on.
+   */
+  @TestFactory
+  Stream<DynamicTest> aRejectedCommand_blocksTheSubscriptionUntilTheListenerTakesTheAnswer() {
+    return onBothSubscriptions(
+        (harness, listener, feed) -> {
+          EventEnvelope initiated = harness.appendSagaCaused();
+          harness.rejecting.set(true);
+
+          feed.cycle();
+          feed.cycle();
+          feed.cycle();
+
+          assertThat(listener.deliveries).as("delivered again on every cycle").hasValue(3);
+          assertThat(feed.checkpoint()).isZero();
+          assertThat(harness.captured()).isEmpty();
+          assertThat(harness.dlq.all()).as("a rejection is never dead-lettered").isEmpty();
+
+          listener.takeRejectionsAsTheAnswer = true;
+          feed.cycle();
+
+          assertThat(listener.rejections).hasValue(1);
+          assertThat(feed.checkpoint()).isEqualTo(initiated.globalOffset().value());
+          assertThat(harness.captured()).isEmpty();
+          feed.cycle();
+          assertThat(listener.deliveries).as("acknowledged: not delivered again").hasValue(4);
         });
   }
 

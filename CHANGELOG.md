@@ -160,8 +160,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   its saga origin one hop further (`SagaOrigin.nextHop()`), or no origin when the causing event has
   none. A continuation runs with no user, no captured authority, no baggage and without the saga
   privileges (`StreamRuneContext.isSagaDispatch()` is `false`). A failed command that carries a saga
-  origin is not dead-lettered: the listener lets the failure propagate and its subscription delivers
-  the event again.
+  origin is not dead-lettered: the listener lets a failure worth retrying propagate and its
+  subscription delivers the event again, and handles a rejection by the domain itself. `continuing`
+  trusts the envelope it is given, which is meant to be one read from the event store.
 - `PgAdvisoryLocker` — distributed per-stream pessimistic locking via `pg_advisory_xact_lock` over the
   typed stream, with `withDedicatedPool(...)` so lock connections never starve the application pool.
 - Typed identifiers: `StreamId`, `AggregateType`, `AggregateId`, `Version`, `GlobalOffset`, `EventId`,
