@@ -205,15 +205,11 @@ class SagaStepLockWiringTest {
               .sagaStore(p.sagaStore)
               .commandBus(p.bus)
               .sagaType(SagaType.fromClass(OtherState.class));
-      // The compiler ties the runner's state type to the decider's; a raw builder gets past it.
-      @SuppressWarnings({"rawtypes", "unchecked"})
-      SagaTimeoutRunner.Builder raw = builder;
+      // An application often holds its runner as a SagaRunner<?> bean: the saga type is checked
+      // when the timeout runner is built.
+      SagaRunner<?> runnerOfAnotherSagaType = p.runner;
 
-      assertThatThrownBy(
-              () -> {
-                raw.sagaRunner(p.runner);
-                raw.build();
-              })
+      assertThatThrownBy(() -> builder.sagaRunner(runnerOfAnotherSagaType).build())
           .isInstanceOf(IllegalArgumentException.class)
           .hasMessageContaining(TYPE.value())
           .hasMessageContaining(OtherState.class.getName())

@@ -730,7 +730,7 @@ public final class SagaTimeoutRunner<S extends SagaState> {
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private Duration maxCompensatingDwell = null;
     private Duration inboxRetentionMaxAge = null;
-    private SagaRunner<S> sagaRunner;
+    private SagaRunner<?> sagaRunner;
     private SagaStepLock stepLock;
     private Duration claimWait = DEFAULT_CLAIM_WAIT;
 
@@ -852,7 +852,9 @@ public final class SagaTimeoutRunner<S extends SagaState> {
      * <p>The timeout runner takes the runner's step lock and nothing else from it; the decider, the
      * store, the bus and the saga type are still this builder's. {@link #build()} refuses a runner
      * of another saga type or over a store that keeps other rows: its steps are not the ones this
-     * runner's claims race with.
+     * runner's claims race with. The parameter is a {@code SagaRunner<?>} because that check is
+     * made on the runner's saga type at {@code build()}, and an application often holds its runner
+     * as a {@code SagaRunner<?>} bean.
      *
      * <p>This or {@link #stepLock} is required: {@link #build()} refuses a builder that names
      * neither. This is the wiring to use wherever a {@code SagaRunner} of the saga type runs in the
@@ -861,7 +863,7 @@ public final class SagaTimeoutRunner<S extends SagaState> {
      * of one saga type has two locks; the claims of a timeout runner built from one of them do not
      * wait for the other's steps (a saga type has one runner — {@link SagaTypeOwnership}).
      */
-    public Builder<S> sagaRunner(SagaRunner<S> sagaRunner) {
+    public Builder<S> sagaRunner(SagaRunner<?> sagaRunner) {
       this.sagaRunner = Objects.requireNonNull(sagaRunner, "sagaRunner is required");
       return this;
     }
