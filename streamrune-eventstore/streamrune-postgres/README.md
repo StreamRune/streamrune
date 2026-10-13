@@ -105,7 +105,9 @@ query timeout. Neither touches the connection's session, so the next borrower se
 **Metadata column:** the serialized `EventMetadata` record — `eventId`, `commandId`, `traceId`,
 `spanId`, `correlationId`, `causationId`, `userId`, `timestamp`, `baggage` and `sagaOrigin` (the
 saga whose dispatch caused the event as `{"sagaType": …, "sagaId": …, "hop": …}`, `null` for every
-other event).
+other event). An event with an origin holds the reserved correlation id `streamrune:saga:<sagaId>`,
+up to 271 characters; every other event holds the caller's own, which the request edge bounds at
+255 characters and refuses with the `streamrune:` prefix.
 
 ## Key Components
 

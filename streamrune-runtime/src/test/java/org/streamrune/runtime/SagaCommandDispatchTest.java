@@ -67,7 +67,7 @@ class SagaCommandDispatchTest {
   }
 
   @Test
-  void dispatch_bindsTheSagaIdAsCorrelationId_theOriginAndTheCausingEvent() {
+  void dispatch_bindsTheReservedCorrelationIdOfTheSaga_theOriginAndTheCausingEvent() {
     var bound = new AtomicReference<Bound>();
 
     SagaCommandDispatch.dispatch(
@@ -77,7 +77,9 @@ class SagaCommandDispatchTest {
         new Cmd("c"),
         IdempotencyKey.of("saga:x:1:0"));
 
-    assertThat(bound.get().correlationId()).isEqualTo(CorrelationId.of("saga-corr-x"));
+    assertThat(bound.get().correlationId())
+        .isEqualTo(CorrelationId.of("streamrune:saga:saga-corr-x"));
+    assertThat(bound.get().correlationId()).isEqualTo(origin("saga-corr-x").correlationId());
     assertThat(bound.get().cause())
         .isEqualTo(
             new StreamRuneContext.DispatchCause(CausationId.of("evt-7"), origin("saga-corr-x")));

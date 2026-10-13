@@ -273,8 +273,21 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    *
    * @param key nullable idempotency key; {@code null} for unkeyed (hot-path) execution
    */
-  @SuppressWarnings("unchecked")
   private <C extends Command> CommandResult executeCounted(C command, IdempotencyKey key) {
+    if (BoundCorrelationId.inEffect() != null) {
+      return executeCountedUnderItsCorrelationId(command, key);
+    }
+    // Nothing names a correlation id for this dispatch: no saga origin, no request context (or one
+    // without an id). The bus chooses it here, before the interceptors run, so that the audit row
+    // of the command names the id its events carry. It belongs to this dispatch alone: a command
+    // executed inside it with nothing bound passes here again and gets its own.
+    return ScopedValue.where(BoundCorrelationId.GENERATED, IdGenerator.generateCorrelationId())
+        .call(() -> executeCountedUnderItsCorrelationId(command, key));
+  }
+
+  @SuppressWarnings("unchecked")
+  private <C extends Command> CommandResult executeCountedUnderItsCorrelationId(
+      C command, IdempotencyKey key) {
     // Guarded like every other meter on this method. This is the FIRST statement of the
     // command path and it sits outside the try below, so an unguarded throw here propagated
     // straight out of execute(): the decider never ran, nothing was appended, no interceptor and no
@@ -286,11 +299,18 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       // Extract the aggregate id and compose the stream id early: interceptors never observe a
       // null id or an invalid stream, and every later step — the veto result, the replay guard,
       // the lock, the load, the dead-letter request — uses this one stream id. Failures here
-      // happen before any interceptor's before() ran, so no interceptor is notified.
+      // happen before any interceptor's before() ran, so no interceptor is notified. The refusal
+      // of a reserved correlation id that is not the bound saga origin's is the first of them:
+      // nothing of such a command is looked up, audited, retried, stored or dead-lettered.
       DeciderRegistration<C, ?, ?> reg;
       AggregateId aggregateId;
       StreamId streamId;
       try {
+        // A reserved correlation id is the framework's own: saga dispatch binds it together with
+        // the saga's origin, and StreamRuneContext.continuing binds both for a saga-caused event.
+        // Bound without that origin it came from something else, and executing the command would
+        // store events, and an audit row, under a saga's correlation id that no saga caused.
+        BoundCorrelationId.refuseForeignReserved(LOG, "command", command.getClass());
         reg = (DeciderRegistration<C, ?, ?>) findRegistration(command);
         aggregateId = reg.idExtractor().apply(command);
         if (aggregateId == null) {
@@ -1449,11 +1469,17 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     return envelopes;
   }
 
+  /**
+   * The correlation id of the events the command in progress produces: the one the dispatch records
+   * ({@link BoundCorrelationId#ofTheCommandInProgress()}) — the bound saga origin's, derived and
+   * not copied from the bound request context, so an event that carries an origin always carries
+   * that origin's correlation id; otherwise the bound context's; otherwise the one {@link
+   * #executeCounted} generated for this dispatch before its interceptors ran. A reserved one that
+   * is not the origin's has been refused by then ({@link
+   * BoundCorrelationId#refuseForeignReserved}).
+   */
   private CorrelationId getCorrelationId() {
-    if (StreamRuneContext.CURRENT.isBound()) {
-      return StreamRuneContext.CURRENT.get().correlationId();
-    }
-    return IdGenerator.generateCorrelationId();
+    return BoundCorrelationId.ofTheCommandInProgress();
   }
 
   /**
@@ -1463,8 +1489,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * request-creation instant gave every event of a request — and every event of a replayed or
    * re-dispatched request bound to the same context — the same stale timestamp, undermining audit
    * ordering. Each call reads the clock afresh, so events of one command, and successive commands
-   * under one bound context, receive distinct, monotonically-sensible timestamps. Correlation,
-   * trace and user identity are taken from the bound context.
+   * under one bound context, receive distinct, monotonically-sensible timestamps. Trace and user
+   * identity are taken from the bound context; the correlation id is the caller's ({@link
+   * #getCorrelationId()}).
    *
    * <p>The saga origin and the causation id come from the bound {@link StreamRuneContext#CAUSE} and
    * from nowhere else: no component of the request context and no baggage entry reaches {@link

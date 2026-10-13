@@ -148,7 +148,7 @@ class SagaProvenanceWriterRatchetTest {
    *       wrap} carries);
    *   <li>saga dispatch: its one binding;
    *   <li>the bus: the read and the two bindings of {@code prepareAsyncTask};
-   *   <li>the bus contract: the two bindings of its cases;
+   *   <li>the bus contract: the one binding its cases share;
    *   <li>the in-memory subscription: the check and the two bindings to no cause.
    * </ul>
    */
@@ -157,7 +157,7 @@ class SagaProvenanceWriterRatchetTest {
           CONTEXT, new CauseUses(3, 8),
           SAGA_DISPATCH, new CauseUses(1, 1),
           BUS, new CauseUses(2, 4),
-          BUS_CONTRACT, new CauseUses(2, 2),
+          BUS_CONTRACT, new CauseUses(1, 1),
           IN_MEMORY_SUBSCRIPTION, new CauseUses(2, 3));
 
   private static final Pattern CAUSE_CONSTRUCTOR_CALL =

@@ -268,6 +268,18 @@ command bus writes it too, and from one source: the triggering event under a sag
 causing event under `StreamRuneContext.continuing` (below). No request header or baggage entry
 sets it.
 
+The correlation id is the caller's: the first value of the request's `X-Correlation-Id` header, kept
+exactly as sent and generated when absent or blank. A client chooses it in every identity mode, so it is tracing data
+and nothing is addressed, authorized or deduplicated by it. One form is the framework's own: an
+event that carries a saga origin carries the reserved correlation id `streamrune:saga:<sagaId>`,
+and no other event a shipped command bus stores carries a correlation id with the `streamrune:`
+prefix (`IdConstraints.RESERVED_PREFIX`; `IdConstraints.isReserved(String)` is the exact,
+case-sensitive prefix test). `RequestContext.fromRequest` refuses the prefix, the three request
+filters answer that refusal with `400 Bad Request`, and the command and query buses refuse a
+dispatch bound to a reserved correlation id that is not the bound saga origin's
+(`ReservedCorrelationIdException`, below). No API turns a correlation id back into a saga id. See
+[What a client controls in event metadata](../guide/production.md#what-a-client-controls-in-event-metadata).
+
 ### SagaOrigin
 
 `record SagaOrigin(SagaType sagaType, SagaId sagaId, int hop)` in `org.streamrune.core.saga`
@@ -289,7 +301,21 @@ exactly) belongs to the saga the origin names, and the application is not asked;
 no part in that. Every other event is handed to `correlateByEventData(streamId, event)` — see
 [Saga › How it works](../guide/advanced/saga.md#how-it-works).
 In a test, `SagaEnvelopes.causedBy(stateType, sagaId, streamId, event)` from `streamrune-test`
-builds an envelope that carries one.
+builds an envelope that carries one at hop 0, and `SagaEnvelopes.continuationOf(cause, streamId,
+event)` the envelope of a continuation's event: the origin of `cause` one hop further, with the id
+of `cause` as its `causationId`. Both reach the saga the same way; see
+[Testing a listener that dispatches commands](../guide/testing.md#testing-a-listener-that-dispatches-commands).
+
+```java
+CorrelationId correlationId()   // streamrune:saga:<sagaId>
+```
+
+The reserved correlation id of the origin's saga: the `streamrune:` prefix, `saga:`, then the saga
+id verbatim. It depends on the saga id alone, so every hop of one saga's work shares it. Saga
+dispatch binds it around each command, and the command bus writes it into every event that carries
+the origin, whatever the bound request context holds. It is a derived value, not a component: the
+stored origin has the three keys `sagaType`, `sagaId` and `hop`. It can be up to 271 characters
+long, 16 more than a saga id.
 
 ### StreamRuneContext.continuing
 
@@ -319,7 +345,11 @@ command continues some stored event, and nothing about who wrote that event.
 `continuing` trusts the envelope it is given. It is meant for an envelope read from the event store
 (what a subscription delivers), whose metadata the command bus wrote. An envelope built by hand, or
 from request data, carries whatever origin, causation id and correlation id its author wrote, and
-the framework vouches for none of it.
+the framework vouches for none of it. One such envelope is refused later: for an event that holds a
+reserved correlation id and no origin — metadata no command bus writes — the continuation binds
+that id without an origin, and the command bus rejects its command with
+`ReservedCorrelationIdException`. For an event that holds an origin and another correlation id,
+the continuation binds the origin's correlation id.
 
 Failures:
 
@@ -342,6 +372,35 @@ Failures:
 Give the command an idempotency key derived from the causing event, so that a redelivery after the
 command committed stores nothing. `continuing` throws `IllegalStateException` for an event whose
 origin is at hop `Integer.MAX_VALUE`.
+
+### ReservedCorrelationIdException
+
+`final class ReservedCorrelationIdException extends RuntimeException` in `org.streamrune.core`
+
+```java
+static void requireNoForeignReservedCorrelationId()   // in org.streamrune.core.StreamRuneContext
+```
+
+Thrown when a command or a query is dispatched under a correlation id with the reserved
+`streamrune:` prefix that is not the bound saga origin's own: no origin is bound, or the origin of
+another saga. Saga dispatch and `StreamRuneContext.continuing` bind a reserved correlation id
+together with its origin, and `wrap` and `executeAsync` carry the two together, so nothing the
+framework binds is refused. What is refused was bound by other code: a request context built with
+the plain `RequestContext` constructor from a client's value, a listener that copied a saga-caused
+event's correlation id into a context of its own, a context captured with `capture()` and rebound
+on another thread without the cause.
+
+`VirtualThreadCommandBus`, `SimpleQueryBus`, `CachingQueryBus`, `AuditingQueryBus` and the
+in-memory buses of `streamrune-test` make the check first in every dispatch, before a handler is
+looked up and before any interceptor, authorizer, cache or audit store is reached; the production
+buses log the refusal at `WARN` with its fixed reason. Nothing of the dispatch is audited, retried,
+stored or dead-lettered. A command or query bus of your own calls
+`StreamRuneContext.requireNoForeignReservedCorrelationId()` at the same point.
+
+The exception is neither an `IllegalArgumentException` nor a `DomainException`: a `catch` written
+for a rejection by the domain does not swallow it. It is a permanent rejection for the dead letter
+queue and the circuit breaker (`CommandFailureClassification.isPermanentRejection`). Its message
+names the prefix and the two binders, never the bound value.
 
 ### AggregateState
 

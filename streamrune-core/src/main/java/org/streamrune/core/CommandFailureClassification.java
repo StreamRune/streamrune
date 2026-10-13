@@ -23,7 +23,8 @@ import org.streamrune.core.crypto.SubjectForgottenException;
  *   <caption>failure family &rarr; consumer verdicts</caption>
  *   <tr><th>family</th><th>DLQ-eligible</th><th>breaker-eligible</th><th>caller sees</th></tr>
  *   <tr><td>permanent rejection ({@link #isPermanentRejection}: {@link DomainException},
- *       top-level {@link IllegalArgumentException}, {@link SubjectForgottenException} anywhere)
+ *       top-level {@link IllegalArgumentException}, top-level {@link
+ *       ReservedCorrelationIdException}, {@link SubjectForgottenException} anywhere)
  *       </td><td>no</td><td>no</td><td>the typed rejection</td></tr>
  *   <tr><td>deterministic per-aggregate stored-data failure ({@link #isDeterministicPerAggregate}:
  *       {@link EventDeserializationException} / {@link UnknownEventTypeException} anywhere)</td>
@@ -62,6 +63,9 @@ import org.streamrune.core.crypto.SubjectForgottenException;
  *       and will stay wrong. Top-level only: an IAE buried under an {@link
  *       EventDeserializationException} was thrown by Jackson against STORED data, not by validation
  *       against the caller's input;
+ *   <li>top-level {@link ReservedCorrelationIdException} — the dispatch ran under a reserved
+ *       correlation id that is not its saga origin's, a wiring error of the code that bound the
+ *       context. A retry or a replay under the same bindings is refused again;
  *   <li>{@link SubjectForgottenException} anywhere in the cause chain — the subject's key was
  *       crypto-shredded by a GDPR erasure and the engine refuses to re-encrypt. No retry can ever
  *       succeed, and dead-lettering it would persist the subject's identifier in {@code
@@ -107,6 +111,7 @@ public final class CommandFailureClassification {
   public static boolean isPermanentRejection(Throwable error) {
     return error instanceof DomainException
         || error instanceof IllegalArgumentException
+        || error instanceof ReservedCorrelationIdException
         || hasSubjectForgottenCause(error);
   }
 

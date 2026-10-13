@@ -2,8 +2,18 @@ package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.Query;
+import org.streamrune.core.ReservedCorrelationIdException;
+import org.streamrune.core.StreamRuneContext;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.saga.SagaState;
+import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.types.CorrelationId;
 
 class InMemoryQueryBusTest {
 
@@ -68,5 +78,63 @@ class InMemoryQueryBusTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> builder.register(GetById.class, q -> new ItemView(q.id(), "second")));
+  }
+
+  record FulfillmentState(SagaStatus status) implements SagaState {}
+
+  private static StreamRuneContext.RequestContext contextWith(CorrelationId correlationId) {
+    return new StreamRuneContext.RequestContext(null, null, correlationId, Instant.now(), Map.of());
+  }
+
+  @Test
+  void aQueryUnderAReservedCorrelationIdThatIsNotAnOrigins_isRefusedBeforeItsHandlerRuns() {
+    // As the production query buses refuse it: a context of the test's own that carries a saga's
+    // reserved correlation id, with no saga origin bound.
+    AtomicInteger handled = new AtomicInteger();
+    var bus =
+        InMemoryQueryBus.builder()
+            .register(
+                GetById.class,
+                q -> {
+                  handled.incrementAndGet();
+                  return new ItemView(q.id(), "item");
+                })
+            .build();
+
+    assertThrows(
+        ReservedCorrelationIdException.class,
+        () ->
+            ScopedValue.where(
+                    StreamRuneContext.CURRENT,
+                    contextWith(CorrelationId.of("streamrune:saga:order-saga-42")))
+                .run(() -> bus.dispatch(new GetById("1"))));
+    assertThrows(
+        ReservedCorrelationIdException.class,
+        () ->
+            ScopedValue.where(
+                    StreamRuneContext.CURRENT,
+                    contextWith(CorrelationId.of("streamrune:saga:order-saga-42")))
+                .run(() -> bus.dispatch(new GetAll())),
+        "refused before the handler lookup, like the command buses");
+
+    assertEquals(0, handled.get());
+  }
+
+  @Test
+  void aQueryInsideASagaDispatch_isDispatched() {
+    SagaOrigin origin =
+        SagaEnvelopes.metadataCausedBy(FulfillmentState.class, SagaId.of("order-saga-42"))
+            .sagaOrigin();
+    var bus =
+        InMemoryQueryBus.builder()
+            .register(GetById.class, q -> new ItemView(q.id(), "item"))
+            .build();
+
+    ItemView view =
+        ScopedValue.where(StreamRuneContext.CURRENT, contextWith(origin.correlationId()))
+            .where(StreamRuneContext.CAUSE, new StreamRuneContext.DispatchCause(null, origin))
+            .call(() -> bus.dispatch(new GetById("7")));
+
+    assertEquals("7", view.id());
   }
 }

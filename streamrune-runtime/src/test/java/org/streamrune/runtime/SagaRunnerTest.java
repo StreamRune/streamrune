@@ -288,6 +288,43 @@ class SagaRunnerTest {
   }
 
   /**
+   * The event of a command a listener dispatched inside {@code StreamRuneContext.continuing} for
+   * one of the saga's events carries the saga's origin a hop further and a causation id. The runner
+   * routes by the origin's saga type and saga id, so the event reaches the saga like the reply to
+   * its own command, at any hop.
+   */
+  @Test
+  void theEventOfAContinuation_reachesTheSagaItsOriginNames_atAnyHop() {
+    for (int hop : new int[] {1, 4}) {
+      SagaId sagaId = SagaId.of("saga-order-hop-" + hop);
+      sagaStore.create(
+          sagaId,
+          SagaType.fromClass(OrderState.class),
+          new OrderState(SagaStatus.RUNNING, "order-1"),
+          SagaStatus.RUNNING);
+      EventEnvelope reply =
+          SagaEnvelopes.causedBy(
+              OrderState.class,
+              sagaId,
+              hop,
+              StreamId.of(TYPE, AggregateId.of("test-stream")),
+              new OrderPaid("order-1"));
+      assertEquals(hop, reply.metadata().sagaOrigin().hop());
+      assertNotNull(reply.metadata().causationId());
+
+      runner.asEventListener().onEvents(List.of(reply));
+
+      assertEquals(
+          SagaStatus.COMPLETED,
+          sagaStore
+              .load(sagaId, SagaType.fromClass(OrderState.class), OrderState.class)
+              .orElseThrow()
+              .status(),
+          "hop " + hop);
+    }
+  }
+
+  /**
    * Wiring pin: {@code processCorrelatedEvent} is now a thin adapter that routes a live correlated
    * event through {@code SagaStepExecutor} (a {@code ForwardStep} trigger). This asserts the
    * executor path is wired to production — a correlated event evolves the loaded saga and
@@ -1018,7 +1055,7 @@ class SagaRunnerTest {
   // ========== Correlation propagation ==========
 
   @Test
-  void dispatched_command_runs_under_context_with_correlation_id_equal_to_saga_id() {
+  void dispatched_command_runs_under_context_with_the_reserved_correlation_id_of_the_saga() {
     var capturingBus = new ContextCapturingCommandBus();
     var correlatingRunner =
         SagaRunner.<OrderState>builder()
@@ -1034,8 +1071,8 @@ class SagaRunnerTest {
     assertEquals(1, capturingBus.contexts.size());
     RequestContext ctx = capturingBus.contexts.get(0);
     assertNotNull(ctx, "the saga runner must bind a request context around the command bus");
-    // correlationId == sagaId.value(); the saga id is "saga-" + orderId (see extractSagaId).
-    assertEquals("saga-order-1", ctx.correlationId().value());
+    // The reserved form of the saga id; the saga id is "saga-" + orderId (see extractSagaId).
+    assertEquals("streamrune:saga:saga-order-1", ctx.correlationId().value());
   }
 
   @Test
@@ -1064,8 +1101,8 @@ class SagaRunnerTest {
     assertEquals(1, capturingBus.contexts.size());
     RequestContext ctx = capturingBus.contexts.get(0);
     assertNotNull(ctx);
-    // correlation id is overridden to the saga id...
-    assertEquals("saga-order-7", ctx.correlationId().value());
+    // correlation id is overridden to the reserved form of the saga id...
+    assertEquals("streamrune:saga:saga-order-7", ctx.correlationId().value());
     // ...while ambient trace / user / baggage are preserved.
     assertNotNull(ctx.traceId());
     assertEquals("trace-ambient", ctx.traceId().value());
@@ -1098,7 +1135,7 @@ class SagaRunnerTest {
     // Both the primary and the compensation ran under the saga-correlated context.
     for (RequestContext ctx : capturingBus.contexts) {
       assertNotNull(ctx, "every dispatch (primary + compensation) must bind a context");
-      assertEquals("saga-order-8", ctx.correlationId().value());
+      assertEquals("streamrune:saga:saga-order-8", ctx.correlationId().value());
     }
   }
 }

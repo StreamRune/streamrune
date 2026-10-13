@@ -22,9 +22,14 @@ import org.streamrune.core.types.UserId;
  * <p>A {@code null} userId in the audit entry means the command was submitted without an
  * authenticated user (anonymous request).
  *
- * <p>The bound {@link org.streamrune.core.types.CorrelationId} is captured the same way and written
- * to {@link AuditEntry#correlationId()}, tying the audit row to the originating business flow. It
- * is {@code null} when no request context was bound.
+ * <p>The correlation id of the row ties it to the originating business flow, and is the one the
+ * command bus writes into the events of the same command: the bound request context's, or — while a
+ * saga origin is bound, inside a saga's dispatch or a continuation of a saga-caused event — that
+ * origin's reserved one, whatever context the application bound around a nested command. A row and
+ * the events of its command therefore never name different correlation ids. With neither a context
+ * nor an origin bound — a startup task, a scheduler, a listener's plain {@code execute} — {@code
+ * VirtualThreadCommandBus} generates the id before it calls its interceptors, and the row names
+ * that one. It is {@code null} only on a bus that binds none.
  *
  * <p><strong>Calling convention precondition:</strong> This interceptor assumes that the {@link
  * org.streamrune.core.CommandBus} guarantees that exactly one of {@link #after(CommandContext)} or
@@ -74,14 +79,16 @@ public final class AuditCommandInterceptor implements CommandInterceptor {
   @Override
   public boolean before(CommandContext ctx) {
     UserId userId = null;
-    CorrelationId correlationId = null;
     if (StreamRuneContext.CURRENT.isBound()) {
       StreamRuneContext.RequestContext requestCtx = StreamRuneContext.CURRENT.get();
       if (requestCtx != null) {
         userId = requestCtx.userId();
-        correlationId = requestCtx.correlationId();
       }
     }
+    // The id the command bus writes into the events of this command: the bound saga origin's when
+    // an origin is bound, otherwise the bound context's, otherwise the one the bus generated for
+    // this dispatch. The row and the events agree.
+    CorrelationId correlationId = BoundCorrelationId.ofTheCommandInProgress();
     captured.get().push(new Captured(userId, correlationId));
     return true;
   }

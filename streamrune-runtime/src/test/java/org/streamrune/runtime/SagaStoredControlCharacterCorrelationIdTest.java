@@ -40,13 +40,14 @@ import org.streamrune.test.InMemorySagaStore;
  * Chain B — a saga whose stored id carries characters the ingress bound refuses must keep running,
  * and must keep being able to undo itself.
  *
- * <p>{@code SagaStepExecutor} derives the dispatch correlation id from the SAGA ID ({@code
- * CorrelationId.of(sagaId.value())}), and every background saga entry point rebuilds that {@link
- * SagaId} <em>from storage</em>: {@code PostgresSagaStore.findTimedOut / findByStatus /
- * findCompensating} all do {@code SagaId.of(rs.getString("saga_id"))}. {@link SagaId} bounds length
- * (VARCHAR(255)) but deliberately not charset, and user {@code extractSagaId()} and {@code
- * correlateByEventData()} implementations derive the id from event data — a business field, which
- * crosses no ingress door that checks its characters.
+ * <p>Saga dispatch derives the correlation id it binds from the SAGA ID ({@code
+ * SagaOrigin.correlationId()}: the reserved prefix, then the saga id verbatim), and every
+ * background saga entry point rebuilds that {@link SagaId} <em>from storage</em>: {@code
+ * PostgresSagaStore.findTimedOut / findByStatus / findCompensating} all do {@code
+ * SagaId.of(rs.getString("saga_id"))}. {@link SagaId} bounds length (VARCHAR(255)) but deliberately
+ * not charset, and user {@code extractSagaId()} and {@code correlateByEventData()} implementations
+ * derive the id from event data — a business field, which crosses no ingress door that checks its
+ * characters.
  *
  * <p>So if the ingress bound runs inside the {@code RequestContext} constructor, {@code dispatch}
  * throws {@link IllegalArgumentException} <b>before the bus is ever called</b>. On the forward path
@@ -166,8 +167,42 @@ class SagaStoredControlCharacterCorrelationIdTest {
                     IdempotencyKey.of("saga:control-char:1:0")))
         .doesNotThrowAnyException();
     assertThat(captured.get())
-        .as("the stored id is bound verbatim — a rewritten id is a different id")
-        .isEqualTo(CorrelationId.of(CONTROL_CHAR_SAGA_ID));
+        .as("the stored id is carried verbatim after the reserved prefix")
+        .isEqualTo(CorrelationId.of("streamrune:saga:" + CONTROL_CHAR_SAGA_ID));
+  }
+
+  @Test
+  void dispatchAcceptsTheLongestSagaIdAlthoughItsCorrelationIdExceedsTheIngressBound() {
+    // A saga id is at most 255 characters; its reserved correlation id is 16 characters longer,
+    // more than the request edge accepts. Saga dispatch is not the request edge.
+    String longest = "s".repeat(SagaId.MAX_LENGTH);
+    var bus = new ScriptedBus();
+    var captured = new java.util.concurrent.atomic.AtomicReference<CorrelationId>();
+    CommandBus capturing =
+        new CommandBus() {
+          @Override
+          public <C extends Command> CommandResult execute(C command) {
+            throw new UnsupportedOperationException("use keyed execute");
+          }
+
+          @Override
+          public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+            captured.set(StreamRuneContext.capture().correlationId());
+            return bus.execute(command, key);
+          }
+        };
+
+    assertThatCode(
+            () ->
+                SagaCommandDispatch.dispatch(
+                    capturing,
+                    SagaOrigins.of(longest),
+                    null,
+                    new ReserveStock("step-1"),
+                    IdempotencyKey.of("saga:longest:1:0")))
+        .doesNotThrowAnyException();
+    assertThat(captured.get().value()).isEqualTo("streamrune:saga:" + longest).hasSize(271);
+    assertThat(bus.count("step-1")).isEqualTo(1);
   }
 
   @Test

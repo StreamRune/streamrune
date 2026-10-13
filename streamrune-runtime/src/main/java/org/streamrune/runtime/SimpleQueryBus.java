@@ -18,6 +18,13 @@ import org.streamrune.core.StreamRuneMetrics;
  * and {@code queries.duration} tagged with the query type. Wire metrics into exactly one bus in a
  * decorator chain (e.g. either this bus or a wrapping {@link CachingQueryBus}) to avoid
  * double-counting.
+ *
+ * <p>A query dispatched under a correlation id with the reserved {@code streamrune:} prefix that is
+ * not the bound saga origin's is refused with a {@link
+ * org.streamrune.core.ReservedCorrelationIdException} before its handler is looked up, as the
+ * command bus refuses such a command ({@link
+ * org.streamrune.core.StreamRuneContext#requireNoForeignReservedCorrelationId()}); the refusal is
+ * logged at {@code WARN}, without the bound value.
  */
 public final class SimpleQueryBus implements QueryBus {
 
@@ -43,6 +50,9 @@ public final class SimpleQueryBus implements QueryBus {
   @Override
   @SuppressWarnings("unchecked")
   public <R> R dispatch(Query<R> query) {
+    // The rule of the command bus, before the handler lookup: a reserved correlation id that is
+    // not the bound saga origin's is refused.
+    BoundCorrelationId.refuseForeignReserved(LOG, "query", query.getClass());
     QueryHandler<Query<R>, R> handler = (QueryHandler<Query<R>, R>) handlers.get(query.getClass());
     if (handler == null) {
       throw new IllegalArgumentException(

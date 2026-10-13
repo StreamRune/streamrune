@@ -299,6 +299,132 @@ class RequestIdentityPolicyTest {
   }
 
   @Test
+  void everyModesDescriptionEndsByNamingTheHeadersThatStayCallerSupplied() {
+    String sentence =
+        " The correlation, trace and baggage headers are caller-supplied in every mode; nothing may"
+            + " be addressed, authorized or deduplicated by them.";
+
+    for (RequestIdentityPolicy policy :
+        List.of(
+            RequestIdentityPolicy.of(null, false),
+            RequestIdentityPolicy.of(BOB, false),
+            RequestIdentityPolicy.of(null, true),
+            RequestIdentityPolicy.of(new NamedResolver(), true))) {
+      assertTrue(policy.describe().endsWith(sentence), policy.describe());
+      assertEquals(
+          1,
+          policy.describe().split("caller-supplied in every mode", -1).length - 1,
+          "the sentence is stated once");
+    }
+  }
+
+  // ---- an authenticated principal the request edge refuses
+  // ---------------------------------------
+
+  @Test
+  void anUnacceptablePrincipalIsReportedOnce_withoutItsValue() {
+    AuthenticatedUserResolver resolver = new NamedResolver();
+    RequestIdentityPolicy policy = RequestIdentityPolicy.of(resolver, false);
+    UserId overlong = UserId.of("p".repeat(300));
+
+    Optional<String> first = policy.unacceptablePrincipalWarning(overlong);
+
+    assertEquals(
+        "The authenticated principal resolved by "
+            + NamedResolver.class.getName()
+            + " is not an acceptable user id (userId must be at most 255 characters, got 300):"
+            + " every request of that principal is answered 400 Bad Request. Reported once for"
+            + " this reason; each refusal is logged at DEBUG.",
+        first.orElseThrow());
+    assertFalse(first.orElseThrow().contains("ppp"), "the value is not in the message");
+    assertEquals(Optional.empty(), policy.unacceptablePrincipalWarning(overlong), "reported once");
+    assertEquals(
+        Optional.empty(),
+        policy.unacceptablePrincipalWarning(UserId.of("q".repeat(4000))),
+        "once per policy for this reason, whatever the next principal and its length are");
+  }
+
+  @Test
+  void aSecondReasonIsReportedOnceToo_afterTheFirstReasonUsedItsReport() {
+    // A caller who influences its own principal can spend the report of one reason with one
+    // request. The other reason — a different fault of the identity provider — keeps its own.
+    RequestIdentityPolicy policy = RequestIdentityPolicy.of(BOB, false);
+    assertTrue(policy.unacceptablePrincipalWarning(UserId.of("p".repeat(300))).isPresent());
+
+    Optional<String> controlCharacter =
+        policy.unacceptablePrincipalWarning(UserId.of("alice\r\nadmin"));
+
+    assertTrue(
+        controlCharacter.orElseThrow().contains("userId must not contain control characters"),
+        controlCharacter.orElseThrow());
+    assertEquals(
+        Optional.empty(),
+        policy.unacceptablePrincipalWarning(UserId.of("mallory\u0000")),
+        "once for the control character as well");
+    assertEquals(
+        Optional.empty(),
+        policy.unacceptablePrincipalWarning(UserId.of("p".repeat(300))),
+        "and the first reason stays spent");
+  }
+
+  @Test
+  void anOverlongPrincipalWithAControlCharacter_isReportedForItsLength() {
+    // The edge refuses such a value for its length, the first of the two checks.
+    RequestIdentityPolicy policy = RequestIdentityPolicy.of(BOB, false);
+
+    String both =
+        policy.unacceptablePrincipalWarning(UserId.of("p".repeat(300) + "\r\n")).orElseThrow();
+
+    assertTrue(both.contains("userId must be at most 255 characters"), both);
+    assertTrue(
+        policy.unacceptablePrincipalWarning(UserId.of("alice\r\nadmin")).isPresent(),
+        "the report of the control character is not spent by it");
+  }
+
+  @Test
+  void aControlCharacterInThePrincipalIsReportedToo() {
+    String warning =
+        RequestIdentityPolicy.of(BOB, false)
+            .unacceptablePrincipalWarning(UserId.of("alice\r\nadmin"))
+            .orElseThrow();
+
+    assertTrue(warning.contains("userId must not contain control characters"), warning);
+    assertFalse(warning.contains("admin"), warning);
+  }
+
+  @Test
+  void nothingIsReportedForAnAcceptablePrincipal_aMissingOne_orAHeaderIdentity() {
+    RequestIdentityPolicy principal = RequestIdentityPolicy.of(BOB, false);
+    assertEquals(Optional.empty(), principal.unacceptablePrincipalWarning(UserId.of("bob")));
+    assertEquals(Optional.empty(), principal.unacceptablePrincipalWarning(null));
+    assertEquals(
+        Optional.empty(),
+        principal.unacceptablePrincipalWarning(UserId.of("u".repeat(255))),
+        "the bound itself is acceptable");
+    assertTrue(
+        principal.unacceptablePrincipalWarning(UserId.of("u".repeat(256))).isPresent(),
+        "none of the calls above used up the one report");
+
+    // Behind a trusted gateway the user id is the request's header: a client's value, answered
+    // 400 like any other refused header and never reported as a principal.
+    assertEquals(
+        Optional.empty(),
+        RequestIdentityPolicy.of(null, true)
+            .unacceptablePrincipalWarning(UserId.of("u".repeat(256))));
+    assertEquals(
+        Optional.empty(),
+        RequestIdentityPolicy.of(null, false)
+            .unacceptablePrincipalWarning(UserId.of("u".repeat(256))));
+  }
+
+  @Test
+  void theReasonOfARefusedRequestContextNamesNoHeaderAndNoValue() {
+    assertEquals(
+        "The request's correlation id, trace id or user id is not acceptable",
+        RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+  }
+
+  @Test
   void theTrustedGatewayDescriptionNamesAResolverTheHeaderOverrides() {
     // The flag plus an authenticated principal is the risky combination: an authenticated user
     // who can reach the service directly acts as whoever the header names. Say so at startup.

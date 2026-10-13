@@ -23,6 +23,7 @@ import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.UserRoleResolver;
 import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.AggregateId;
@@ -165,17 +166,22 @@ class SagaCompensationAuthzTest {
                 .run(() -> bus.execute(new RefundPayment("order-3"))));
     assertEquals(0, decider.decideCalls.get());
 
-    // The thread of a saga's dispatch, holding a user whose captured authority grants the role.
+    // The thread of a saga's dispatch, bound as saga dispatch binds it — the saga's reserved
+    // correlation id, the saga flag and the saga's origin — and holding a user whose captured
+    // authority grants the role.
+    SagaOrigin origin = reply.metadata().sagaOrigin();
     var privileged =
         new StreamRuneContext.RequestContext(
             null,
             UserId.of("operator"),
-            CorrelationId.of("saga-order-1"),
+            origin.correlationId(),
             Instant.now(),
             Map.of("role", "payments:refund"),
             new UserAuthority(Set.of("payments:refund"), Set.of()));
+    assertEquals("streamrune:saga:saga-order-1", privileged.correlationId().value());
     ScopedValue.where(StreamRuneContext.CURRENT, privileged)
         .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
+        .where(StreamRuneContext.CAUSE, new StreamRuneContext.DispatchCause(null, origin))
         .run(
             () -> {
               // Control: directly on this thread the gated command passes.

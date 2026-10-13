@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.SagaType;
 
 class SagaOriginTest {
@@ -78,5 +79,43 @@ class SagaOriginTest {
         mapper
             .readValue("{\"sagaType\":\"x.S\",\"sagaId\":\"s-1\",\"hop\":1}", SagaOrigin.class)
             .hop());
+  }
+
+  @Test
+  void correlationId_isTheReservedFormOfTheSagaId() {
+    SagaOrigin origin = SagaOrigin.dispatchedBy(TYPE, SagaId.of("order-saga-42"));
+
+    assertEquals(CorrelationId.of("streamrune:saga:order-saga-42"), origin.correlationId());
+    assertEquals(
+        origin.correlationId(),
+        origin.nextHop().correlationId(),
+        "the hop takes no part in it: every hop of one saga's work shares one correlation id");
+    assertEquals(
+        origin.correlationId(),
+        SagaOrigin.dispatchedBy(SagaType.of("y.Other"), SagaId.of("order-saga-42")).correlationId(),
+        "nor does the saga type");
+  }
+
+  @Test
+  void correlationId_carriesTheSagaIdVerbatim() {
+    // A saga id is bounded in length, not in charset, and is at most 255 characters long.
+    String longest = "s".repeat(255);
+    assertEquals(
+        "streamrune:saga:" + longest,
+        SagaOrigin.dispatchedBy(TYPE, SagaId.of(longest)).correlationId().value());
+    assertEquals(
+        "streamrune:saga:order\r\nsaga-1",
+        SagaOrigin.dispatchedBy(TYPE, SagaId.of("order\r\nsaga-1")).correlationId().value());
+  }
+
+  @Test
+  void theJsonStillHasThreeKeys() throws Exception {
+    ObjectMapper mapper = new ObjectMapper();
+    SagaOrigin origin = new SagaOrigin(TYPE, SagaId.of("order-saga-42"), 2);
+
+    String json = mapper.writeValueAsString(origin);
+
+    assertEquals("{\"sagaType\":\"x.S\",\"sagaId\":\"order-saga-42\",\"hop\":2}", json);
+    assertEquals(origin, mapper.readValue(json, SagaOrigin.class));
   }
 }

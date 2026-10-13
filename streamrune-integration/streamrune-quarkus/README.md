@@ -215,6 +215,20 @@ in every event's metadata, so the gateway must forward the caller's role or stri
 the other modes it is ignored and there is no `role` (an authenticated principal's roles are the
 captured authority, not baggage), and a W3C `baggage: role=` entry never reaches the key.
 
+`X-Correlation-Id`, `X-Trace-Id` and the allow-listed baggage are caller-supplied in every mode,
+the trusted-gateway mode included; nothing may be addressed, authorized or deduplicated by them.
+A correlation id is kept exactly as sent, with one exception: the `streamrune:` prefix is reserved
+for the correlation ids the framework binds itself. `StreamRuneRequestFilter`
+aborts a request that carries a correlation id with that prefix, or a correlation id, trace id or
+user id that is longer than 255 characters or holds a control character, with status `400 Bad
+Request`, content type `text/plain;charset=UTF-8` and the body `The request's correlation id, trace
+id or user id is not acceptable` — the answer of the Spring and Micronaut filters, byte for byte.
+The resource method does not run and `StreamRuneRequestContextHolder` stays empty. Of an `X-Correlation-Id` or `X-Trace-Id` header sent more than once the first
+value is the header, as on the other two integrations; a blank first value counts as an absent
+header. An authenticated principal the request edge refuses is logged at `WARN` once
+per reason (its length, a control character). See
+[What a client controls in event metadata](../../docs/guide/production.md#what-a-client-controls-in-event-metadata).
+
 ```properties
 # Trusted-gateway mode. Only when a gateway in front of this service authenticates every caller,
 # overwrites X-User-Id with the authenticated id and strips any client-supplied value (and owns
@@ -272,7 +286,7 @@ which keeps the bus producer itself even in an application that injects no `Comm
 | `StreamRuneLifecycle` | Starts/stops projection runners, outbox poller, DLQ retry runner and the retention sweepers on `StartupEvent`/`ShutdownEvent` |
 | `SseEventFeedLifecycle` | With `streamrune.sse.enabled=true`: starts the `SseEventFeed` that publishes stored events to the SSE endpoint on `StartupEvent` and stops it on `ShutdownEvent` |
 | `StreamRuneQuarkusProperties` | `@ConfigMapping` for `streamrune.*` properties |
-| `StreamRuneRequestFilter` | JAX-RS `@Provider` that builds the `RequestContext`: `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)) |
+| `StreamRuneRequestFilter` | JAX-RS `@Provider` that builds the `RequestContext`: `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)); aborts with `400` for an id the request edge refuses |
 | `StreamRuneRequestIdentityValidator` | Startup observer: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |
 | `StreamRuneAuthorizationValidator` | Startup observer: refuses startup when a command bus registers `@RequireRole`/`@RequirePermission` commands without an `AnnotationAuthorizationInterceptor` in its chain |
 | `StreamRuneRequestContextHolder` | Request-scoped holder carrying the parsed `RequestContext` |
@@ -283,7 +297,9 @@ JAX-RS filters cannot wrap the resource-method invocation, so the filter cannot 
 `ScopedValue` for you. The filter parses headers into a `RequestContext` (generating a trace id /
 correlation id when absent, `X-User-Role` placed into baggage under `role` in the trusted-gateway
 mode only) and stores it in
-`StreamRuneRequestContextHolder`. The user id is the identity authorization checks run against, so
+`StreamRuneRequestContextHolder`. A request whose correlation id, trace id or user id the request
+edge refuses is aborted with `400` instead, and the holder stays empty (see
+[Request identity](#request-identity)). The user id is the identity authorization checks run against, so
 it is never taken from the client unless you say so: it comes from the authenticated
 `SecurityIdentity` when Quarkus Security is present, from `X-User-Id` only with
 `streamrune.security.trust-user-id-header=true`, and is otherwise absent (see

@@ -1,7 +1,9 @@
 package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 
 import java.time.Instant;
@@ -13,6 +15,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
@@ -20,7 +23,10 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.IdGenerator;
+import org.streamrune.core.ReservedCorrelationIdException;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.saga.SagaId;
@@ -31,8 +37,12 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.EventType;
+import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.IdConstraints;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
+import org.streamrune.core.types.Version;
 
 /**
  * The provenance contract every {@link CommandBus} must honour:
@@ -47,6 +57,12 @@ import org.streamrune.core.types.UserId;
  *   <li>A command executed inside {@link StreamRuneContext#continuing(EventEnvelope)} stores what
  *       that helper binds: the causing event's id as the causation id, its saga origin one hop
  *       further (or none), its correlation and trace ids, and no user or baggage.
+ *   <li>A stored event carries a correlation id with the reserved prefix ({@link
+ *       IdConstraints#RESERVED_PREFIX}) if and only if it carries a saga origin. With an origin
+ *       bound the correlation id is the origin's ({@link SagaOrigin#correlationId()}), whatever
+ *       ordinary id the bound request context holds. A command whose bound correlation id is
+ *       reserved and is not the bound origin's — no origin is bound, or the origin of another saga
+ *       — is refused with a {@link ReservedCorrelationIdException} before anything is stored.
  * </ul>
  *
  * <p>Run by {@code InMemoryCommandBusProvenanceTest} and {@code
@@ -127,7 +143,16 @@ public abstract class CommandBusProvenanceContract {
 
   @TestFactory
   public Stream<DynamicTest> withNoCauseBound_noEventCarriesAnOriginOrACausationId() {
-    List<String> correlationIds = Arrays.asList(UUID.randomUUID().toString(), SAGA_ID.value());
+    // An id of the caller's own, the bare id of a saga, and three in the reserved form: the one
+    // saga dispatch binds for that saga, the prefix with something else behind it, the prefix
+    // alone.
+    List<String> correlationIds =
+        Arrays.asList(
+            UUID.randomUUID().toString(),
+            SAGA_ID.value(),
+            ORIGIN.correlationId().value(),
+            IdConstraints.RESERVED_PREFIX + "anything",
+            IdConstraints.RESERVED_PREFIX);
     List<Map<String, String>> baggages =
         List.of(Map.of(), Map.of("sagaOrigin", "x"), Map.of(CAUSATION_BAGGAGE_KEY, "evt-9"));
     List<UserId> users = Arrays.asList(null, UserId.of("u-1"));
@@ -140,7 +165,15 @@ public abstract class CommandBusProvenanceContract {
       tests.add(
           dynamicTest(
               "no context, SAGA_OWNED=" + sagaOwned,
-              () -> assertNoProvenance(storedEventsOf(sagaOwnedCarrier(null, sagaOwned)))));
+              () -> {
+                List<EventEnvelope> stored = storedEventsOf(sagaOwnedCarrier(null, sagaOwned));
+                assertNoProvenance(stored);
+                for (EventEnvelope envelope : stored) {
+                  assertFalse(
+                      IdConstraints.isReserved(envelope.metadata().correlationId().value()),
+                      "a generated correlation id is not in the reserved form");
+                }
+              }));
       for (String correlationId : correlationIds) {
         for (Map<String, String> baggage : baggages) {
           for (UserId user : users) {
@@ -165,12 +198,22 @@ public abstract class CommandBusProvenanceContract {
                           + (authority == null ? "none" : "one role")
                           + ", SAGA_OWNED="
                           + sagaOwned,
-                      () ->
-                          assertNoProvenance(
-                              storedEventsOf(
-                                  sagaOwnedCarrier(
-                                      ScopedValue.where(StreamRuneContext.CURRENT, context),
-                                      sagaOwned)))));
+                      () -> {
+                        ScopedValue.Carrier bindings =
+                            sagaOwnedCarrier(
+                                ScopedValue.where(StreamRuneContext.CURRENT, context), sagaOwned);
+                        if (IdConstraints.isReserved(correlationId)) {
+                          assertRefusedAndNothingStored(bindings);
+                        } else {
+                          List<EventEnvelope> stored = storedEventsOf(bindings);
+                          assertNoProvenance(stored);
+                          for (EventEnvelope envelope : stored) {
+                            assertEquals(
+                                CorrelationId.of(correlationId),
+                                envelope.metadata().correlationId());
+                          }
+                        }
+                      }));
             }
           }
         }
@@ -198,20 +241,271 @@ public abstract class CommandBusProvenanceContract {
             dynamicTest(
                 "cause=" + cause + ", context=" + describe(context),
                 () -> {
-                  ScopedValue.Carrier bindings = ScopedValue.where(StreamRuneContext.CAUSE, cause);
-                  if (context != null) {
-                    bindings = bindings.where(StreamRuneContext.CURRENT, context);
-                  }
-                  List<EventEnvelope> stored = storedEventsOf(bindings);
+                  List<EventEnvelope> stored = storedEventsOf(causedBy(cause, context));
                   assertEquals(2, stored.size());
                   for (EventEnvelope envelope : stored) {
                     assertEquals(cause.sagaOrigin(), envelope.metadata().sagaOrigin());
                     assertEquals(cause.causationId(), envelope.metadata().causationId());
+                    assertEquals(
+                        cause.sagaOrigin() != null,
+                        IdConstraints.isReserved(envelope.metadata().correlationId().value()),
+                        "a reserved correlation id, if and only if an origin");
                   }
                 }));
       }
     }
     return tests.stream();
+  }
+
+  /**
+   * With a saga origin bound, the correlation id of every stored event is the origin's, in the
+   * reserved form — derived from the origin, not copied from the bound request context, which here
+   * holds the origin's id, an ordinary id of its own, or is absent.
+   */
+  @TestFactory
+  public Stream<DynamicTest> withAnOriginBound_theCorrelationIdIsDerivedFromIt() {
+    List<StreamRuneContext.DispatchCause> causes =
+        List.of(
+            new StreamRuneContext.DispatchCause(CausationId.of("evt-1"), ORIGIN),
+            new StreamRuneContext.DispatchCause(null, ORIGIN));
+    List<String> boundCorrelationIds =
+        Arrays.asList(
+            null, ORIGIN.correlationId().value(), UUID.randomUUID().toString(), SAGA_ID.value());
+
+    List<DynamicTest> tests = new ArrayList<>();
+    for (StreamRuneContext.DispatchCause cause : causes) {
+      for (String bound : boundCorrelationIds) {
+        StreamRuneContext.RequestContext context =
+            bound == null
+                ? null
+                : new StreamRuneContext.RequestContext(
+                    null, null, CorrelationId.of(bound), Instant.now(), Map.of());
+        tests.add(
+            dynamicTest(
+                "cause=" + cause + ", bound correlation id " + bound,
+                () -> {
+                  List<EventEnvelope> stored = storedEventsOf(causedBy(cause, context));
+                  assertEquals(2, stored.size());
+                  for (EventEnvelope envelope : stored) {
+                    assertEquals(
+                        CorrelationId.of("streamrune:saga:order-saga-42"),
+                        envelope.metadata().correlationId());
+                    assertEquals(
+                        envelope.metadata().sagaOrigin().correlationId(),
+                        envelope.metadata().correlationId());
+                  }
+                }));
+      }
+    }
+    return tests.stream();
+  }
+
+  /**
+   * A reserved correlation id beside the origin of another saga: the id of another saga, or a
+   * reserved id that is no saga's. Saga dispatch and a continuation bind an origin and that
+   * origin's own id, so this was bound by hand. The command is refused before the bus stores
+   * anything; executed, its events would carry one saga's origin under a context, and a command
+   * audit row, that name another.
+   */
+  @TestFactory
+  public Stream<DynamicTest>
+      aReservedCorrelationIdThatIsNotTheBoundOrigins_isRefusedBeforeAnythingIsStored() {
+    List<String> foreign =
+        List.of(
+            IdConstraints.RESERVED_PREFIX + "saga:another-saga",
+            IdConstraints.RESERVED_PREFIX + "saga:" + SAGA_ID.value() + "0",
+            IdConstraints.RESERVED_PREFIX + "anything",
+            IdConstraints.RESERVED_PREFIX);
+    List<StreamRuneContext.DispatchCause> causes =
+        List.of(
+            new StreamRuneContext.DispatchCause(CausationId.of("evt-1"), ORIGIN),
+            new StreamRuneContext.DispatchCause(null, ORIGIN));
+
+    List<DynamicTest> tests = new ArrayList<>();
+    for (String correlationId : foreign) {
+      for (StreamRuneContext.DispatchCause cause : causes) {
+        for (Boolean sagaOwned : Arrays.asList(null, Boolean.TRUE)) {
+          StreamRuneContext.RequestContext context =
+              new StreamRuneContext.RequestContext(
+                  null, null, CorrelationId.of(correlationId), Instant.now(), Map.of());
+          tests.add(
+              dynamicTest(
+                  "correlationId="
+                      + correlationId
+                      + ", cause="
+                      + cause
+                      + ", SAGA_OWNED="
+                      + sagaOwned,
+                  () ->
+                      assertRefusedAndNothingStored(
+                          sagaOwnedCarrier(causedBy(cause, context), sagaOwned))));
+        }
+      }
+    }
+    return tests.stream();
+  }
+
+  /**
+   * A task wrapped inside a saga's dispatch and run on another thread carries the context and the
+   * cause together ({@link StreamRuneContext#wrap(Runnable)}), so the command it executes there is
+   * the saga's work like one executed on the dispatching thread: not refused, and its events carry
+   * the origin and the origin's correlation id.
+   */
+  @Test
+  public void aTaskWrappedInsideASagaDispatch_executesItsCommandAsTheSagasWork() throws Exception {
+    InMemoryEventStore eventStore = new InMemoryEventStore();
+    CommandBus bus = newBus(eventStore);
+    try {
+      StreamRuneContext.RequestContext dispatched =
+          new StreamRuneContext.RequestContext(
+              null, null, ORIGIN.correlationId(), Instant.now(), Map.of());
+      Runnable command = () -> bus.execute(new Mark("wrapped-1"));
+      Runnable task =
+          sagaOwnedCarrier(
+                  causedBy(
+                      new StreamRuneContext.DispatchCause(CausationId.of("evt-1"), ORIGIN),
+                      dispatched),
+                  Boolean.TRUE)
+              .call(() -> StreamRuneContext.wrap(command));
+
+      Throwable[] failure = new Throwable[1];
+      Thread other = new Thread(task);
+      other.setUncaughtExceptionHandler((thread, thrown) -> failure[0] = thrown);
+      other.start();
+      other.join();
+
+      assertNull(failure[0], "the wrapped command is not refused");
+      List<EventEnvelope> stored =
+          eventStore.load(StreamId.of(AGGREGATE_TYPE, AggregateId.of("wrapped-1"))).events();
+      assertEquals(2, stored.size());
+      for (EventEnvelope envelope : stored) {
+        assertEquals(ORIGIN, envelope.metadata().sagaOrigin());
+        assertEquals(ORIGIN.correlationId(), envelope.metadata().correlationId());
+        assertEquals(CausationId.of("evt-1"), envelope.metadata().causationId());
+      }
+    } finally {
+      close(bus);
+    }
+  }
+
+  /**
+   * {@code ScopedValue.where(CURRENT, StreamRuneContext.capture())} on a thread with nothing bound
+   * binds the context to {@code null}. The check of the correlation id passes such a binding: the
+   * dispatch is not refused with {@link ReservedCorrelationIdException}.
+   *
+   * <p>What a bus does with the binding after that is its own. The shipped buses fail where they
+   * read the context, with a {@link NullPointerException}; a bus that takes a context bound to
+   * {@code null} for no context executes the command. Either way a failed dispatch stores nothing,
+   * and nothing stored carries a reserved correlation id.
+   */
+  @Test
+  public void aContextBoundToNull_isNotRefusedForItsCorrelationId() {
+    InMemoryEventStore eventStore = new InMemoryEventStore();
+    CommandBus bus = newBus(eventStore);
+    try {
+      RuntimeException failure = null;
+      try {
+        ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+            .run(() -> bus.execute(new Mark(AGGREGATE_ID)));
+      } catch (RuntimeException e) {
+        failure = e;
+      }
+
+      assertFalse(
+          failure instanceof ReservedCorrelationIdException,
+          "a context bound to null names no correlation id, so there is none to refuse");
+      List<EventEnvelope> stored = eventStore.readGlobalStream(GlobalOffset.initial(), 10);
+      if (failure != null) {
+        assertEquals(List.of(), stored, "a failed dispatch stores nothing");
+      }
+      for (EventEnvelope envelope : stored) {
+        assertNull(envelope.metadata().sagaOrigin());
+        assertFalse(IdConstraints.isReserved(envelope.metadata().correlationId().value()));
+      }
+    } finally {
+      close(bus);
+    }
+  }
+
+  /**
+   * A correlation id in the reserved form, bound by something that is neither a saga dispatch nor a
+   * continuation of a saga-caused event: a context built with the plain constructor from a value a
+   * request supplied, or a correlation id copied by hand from a saga-caused event. The command is
+   * refused before the bus stores anything, whatever else is bound — the saga flag, a cause that
+   * names a causing event and no origin.
+   */
+  @TestFactory
+  public Stream<DynamicTest>
+      aReservedCorrelationIdWithoutAnOrigin_isRefusedBeforeAnythingIsStored() {
+    List<String> reserved =
+        List.of(
+            IdConstraints.RESERVED_PREFIX + "saga:victim",
+            ORIGIN.correlationId().value(),
+            IdConstraints.RESERVED_PREFIX + "anything",
+            IdConstraints.RESERVED_PREFIX);
+    List<Boolean> sagaOwnedBindings = Arrays.asList(null, Boolean.TRUE, Boolean.FALSE);
+    List<StreamRuneContext.DispatchCause> causes =
+        Arrays.asList(null, new StreamRuneContext.DispatchCause(CausationId.of("evt-1"), null));
+
+    List<DynamicTest> tests = new ArrayList<>();
+    for (String correlationId : reserved) {
+      for (Boolean sagaOwned : sagaOwnedBindings) {
+        for (StreamRuneContext.DispatchCause cause : causes) {
+          StreamRuneContext.RequestContext context =
+              new StreamRuneContext.RequestContext(
+                  null,
+                  UserId.of("u-1"),
+                  CorrelationId.of(correlationId),
+                  Instant.now(),
+                  Map.of("sagaOrigin", "x"),
+                  new UserAuthority(Set.of("ADMIN"), Set.of()));
+          ScopedValue.Carrier bindings =
+              sagaOwnedCarrier(
+                  cause == null
+                      ? ScopedValue.where(StreamRuneContext.CURRENT, context)
+                      : causedBy(cause, context),
+                  sagaOwned);
+          tests.add(
+              dynamicTest(
+                  "correlationId="
+                      + correlationId
+                      + ", SAGA_OWNED="
+                      + sagaOwned
+                      + ", cause="
+                      + (cause == null ? "none" : "a causing event, no origin"),
+                  () -> assertRefusedAndNothingStored(bindings)));
+        }
+      }
+    }
+    return tests.stream();
+  }
+
+  /**
+   * {@link StreamRuneContext#continuing(EventEnvelope)} trusts the envelope it is given. For an
+   * event that holds a reserved correlation id and no saga origin — metadata no bus writes; an
+   * event appended to the store by other means can hold it — the continuation binds the reserved id
+   * and no origin, and the bus refuses its command.
+   */
+  @Test
+  public void continuingAnEventWithAReservedCorrelationIdAndNoOrigin_isRefused() {
+    EventEnvelope appendedByHand =
+        new EventEnvelope(
+            GlobalOffset.of(7),
+            StreamId.of(AGGREGATE_TYPE, AggregateId.of("appended-by-hand")),
+            Version.initial(),
+            EventType.fromClass(Marked.class),
+            new Marked("appended-by-hand", 1),
+            new EventMetadata(
+                IdGenerator.generateEventId(),
+                IdGenerator.generateCommandId(),
+                null,
+                null,
+                ORIGIN.correlationId(),
+                null,
+                null,
+                Instant.now()));
+
+    assertRefusedAndNothingStored(StreamRuneContext.continuing(appendedByHand));
   }
 
   /**
@@ -257,13 +551,10 @@ public abstract class CommandBusProvenanceContract {
           new StreamRuneContext.DispatchCause(CausationId.of("evt-trigger"), ORIGIN);
       EventEnvelope reply =
           executeAndLoad(
-                  bus,
-                  eventStore,
-                  "reply-1",
-                  ScopedValue.where(StreamRuneContext.CAUSE, sagaDispatch)
-                      .where(StreamRuneContext.CURRENT, contextWithBaggage(Map.of())))
+                  bus, eventStore, "reply-1", causedBy(sagaDispatch, contextWithBaggage(Map.of())))
               .getFirst();
       assertEquals(0, reply.metadata().sagaOrigin().hop());
+      assertEquals(ORIGIN.correlationId(), reply.metadata().correlationId());
 
       List<EventEnvelope> firstHop = continueAndLoad(bus, eventStore, "hop-1", ambient, reply);
       assertEquals(2, firstHop.size());
@@ -329,6 +620,10 @@ public abstract class CommandBusProvenanceContract {
     assertEquals(
         CausationId.of(cause.metadata().eventId().value()), continued.metadata().causationId());
     assertEquals(cause.metadata().correlationId(), continued.metadata().correlationId());
+    assertEquals(
+        CorrelationId.of("streamrune:saga:order-saga-42"),
+        continued.metadata().correlationId(),
+        "every hop of a saga's work keeps the saga's reserved correlation id");
     assertEquals(cause.metadata().traceId(), continued.metadata().traceId());
     assertNull(continued.metadata().userId());
     assertEquals(Map.of(), continued.metadata().baggage());
@@ -383,6 +678,38 @@ public abstract class CommandBusProvenanceContract {
     }
   }
 
+  /**
+   * The bindings of a dispatch with {@code cause} bound, under {@code context} when one is given.
+   * The one place the contract binds a cause.
+   */
+  private static ScopedValue.Carrier causedBy(
+      StreamRuneContext.DispatchCause cause, StreamRuneContext.RequestContext context) {
+    ScopedValue.Carrier bindings = ScopedValue.where(StreamRuneContext.CAUSE, cause);
+    return context == null ? bindings : bindings.where(StreamRuneContext.CURRENT, context);
+  }
+
+  /**
+   * One {@link Mark} executed on a fresh bus under {@code bindings} is refused for its reserved
+   * correlation id, and the event store holds no event afterwards, on any stream.
+   */
+  private void assertRefusedAndNothingStored(ScopedValue.Carrier bindings) {
+    InMemoryEventStore eventStore = new InMemoryEventStore();
+    CommandBus bus = newBus(eventStore);
+    try {
+      ReservedCorrelationIdException refused =
+          assertThrows(
+              ReservedCorrelationIdException.class,
+              () -> bindings.run(() -> bus.execute(new Mark(AGGREGATE_ID))));
+      assertEquals(
+          "the bound correlation id uses the reserved 'streamrune:' prefix and is not the bound saga"
+              + " origin's; only a saga dispatch or StreamRuneContext.continuing binds it",
+          refused.getMessage());
+      assertEquals(List.of(), eventStore.readGlobalStream(GlobalOffset.initial(), 10));
+    } finally {
+      close(bus);
+    }
+  }
+
   private static void assertNoProvenance(List<EventEnvelope> stored) {
     assertEquals(2, stored.size());
     for (EventEnvelope envelope : stored) {
@@ -400,6 +727,11 @@ public abstract class CommandBusProvenanceContract {
         : base.where(StreamRuneContext.SAGA_OWNED, sagaOwned);
   }
 
+  /**
+   * A request context that carries {@code baggage} and, as its correlation id, the bare id of the
+   * contract's saga: not the reserved one. The cases that bind it beside an origin therefore also
+   * show that the stored correlation id is the origin's and not this one.
+   */
   private static StreamRuneContext.RequestContext contextWithBaggage(Map<String, String> baggage) {
     return new StreamRuneContext.RequestContext(
         null, null, CorrelationId.of(SAGA_ID.value()), Instant.now(), baggage);

@@ -1,5 +1,7 @@
 package org.streamrune.core.saga;
 
+import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.IdConstraints;
 import org.streamrune.core.types.SagaType;
 
 /**
@@ -68,5 +70,28 @@ public record SagaOrigin(SagaType sagaType, SagaId sagaId, int hop) {
               + " cannot be taken one hop further: the hop count is at its limit");
     }
     return new SagaOrigin(sagaType, sagaId, hop + 1);
+  }
+
+  /**
+   * The correlation id of the work this saga causes: {@code streamrune:saga:<sagaId>}, the saga id
+   * verbatim after the reserved prefix ({@link IdConstraints#RESERVED_PREFIX}). Saga dispatch binds
+   * it around every command the saga sends, and the command bus writes it into every event that
+   * carries this origin, at any hop. It is a function of the saga id alone: the saga type and the
+   * hop take no part in it.
+   *
+   * <p>The form is reserved: the request edge refuses a client value that starts with the prefix,
+   * so this value never comes from a request. It is tracing data all the same — a saga runner
+   * routes by the origin, the saga idempotency keys are derived from the saga id, and nothing reads
+   * a saga id back out of this text. It can be up to 16 characters longer than a saga id, so longer
+   * than {@link IdConstraints#MAX_LENGTH}; that bound is a rule of the request edge, not of this
+   * value.
+   *
+   * <p>A derived value, not a record component: the stored form of an origin has the three keys
+   * {@code sagaType}, {@code sagaId} and {@code hop}.
+   *
+   * @return the reserved correlation id of this origin's saga
+   */
+  public CorrelationId correlationId() {
+    return CorrelationId.of(IdConstraints.RESERVED_PREFIX + "saga:" + sagaId.value());
   }
 }

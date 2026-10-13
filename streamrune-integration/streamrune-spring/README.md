@@ -187,6 +187,36 @@ in every event's metadata, so the gateway must forward the caller's role or stri
 the other modes it is ignored and there is no `role` (an authenticated principal's roles are the
 captured authority, not baggage), and a W3C `baggage: role=` entry never reaches the key.
 
+`X-Correlation-Id`, `X-Trace-Id` and the allow-listed baggage are caller-supplied in every mode,
+the trusted-gateway mode included; nothing may be addressed, authorized or deduplicated by them.
+A correlation id is kept exactly as sent, with one exception: the `streamrune:` prefix is reserved
+for the correlation ids the framework binds itself. `ScopedValueFilter` answers
+a correlation id with that prefix, and a correlation id, trace id or user id that is longer than 255
+characters or holds a control character, with status `400 Bad Request`, content type
+`text/plain;charset=UTF-8` and the body `The request's correlation id, trace id or user id is not
+acceptable` — the answer of the Quarkus and Micronaut filters, byte for byte. It writes that answer
+itself and starts no error dispatch, so your error pages, your `@ControllerAdvice` and the rule
+your Spring Security filter chain has for `/error` take no part, and the rest of the filter chain
+does not run.
+
+**CORS and the `400`.** The filter sits at order `-90`
+(`StreamRuneAutoConfiguration.SCOPED_VALUE_FILTER_ORDER`), and its `400` carries the CORS headers
+only of what ran before it. Spring Security's `cors()` runs before it (the security chain sits at
+`-100`), and so does a `CorsFilter` you register with an order below `-90`: a page of another
+origin reads the `400`. CORS configured in Spring MVC — `WebMvcConfigurer.addCorsMappings`,
+`@CrossOrigin` — is applied inside the `DispatcherServlet`, and a `CorsFilter` bean without an
+order is registered last: both run behind the filter, the refusal carries no
+`Access-Control-Allow-Origin`, and the browser reports a network error to the page instead of the
+status. To let a browser client read the refusal, configure CORS in Spring Security or register
+the `CorsFilter` through a `FilterRegistrationBean` with an order below `-90`. A preflight carries
+no `X-Correlation-Id` value and is never refused.
+
+Of an `X-Correlation-Id` or `X-Trace-Id` header sent more than once the first
+value is the header, as on the other two integrations; a blank first value counts as an absent
+header. An authenticated principal the request edge refuses is logged at `WARN` once
+per reason (its length, a control character). See
+[What a client controls in event metadata](../../docs/guide/production.md#what-a-client-controls-in-event-metadata).
+
 ```yaml
 streamrune:
   security:
@@ -211,7 +241,7 @@ or set the trusted-gateway flag. See
 |---|---|
 | `StreamRuneAutoConfiguration` | Auto-configuration class |
 | `StreamRuneProperties` | `@ConfigurationProperties` binding |
-| `ScopedValueFilter` | Propagates HTTP request metadata into `StreamRuneContext`; the user comes from `RequestIdentityPolicy` (see [Request identity](#request-identity)) |
+| `ScopedValueFilter` | Propagates HTTP request metadata into `StreamRuneContext`; the user comes from `RequestIdentityPolicy` (see [Request identity](#request-identity)); answers `400` to an id the request edge refuses |
 | `SseController` | `GET /api/sse/{aggregateType}/{aggregateId}` — live event stream of one aggregate; only with `streamrune.sse.enabled=true`, and every stream is denied until you provide an `SseAuthorizer` bean |
 | `SseEventFeed` | Publishes every event stored after the application started to the SSE endpoint's clients; registered with `SseController`, started and stopped with the application context |
 

@@ -389,7 +389,9 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
             .metadata();
     assertThat(compensation.sagaOrigin())
         .isEqualTo(new SagaOrigin(SagaType.fromClass(OrderSagaState.class), SagaId.of(sagaId), 0));
-    assertThat(compensation.correlationId()).isEqualTo(CorrelationId.of(sagaId));
+    assertThat(compensation.correlationId())
+        .as("the reserved form saga dispatch binds, as event_stream.metadata holds it")
+        .isEqualTo(CorrelationId.of("streamrune:saga:" + sagaId));
     assertThat(compensation.causationId()).isEqualTo(CausationId.of(orderPlaced.value()));
     assertThat(scalar("SELECT episode_cause_event_id FROM saga_state WHERE saga_id = ?", sagaId))
         .as("the cause is recorded on the saga row, where every resume path reads it")

@@ -1008,12 +1008,19 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
    * RequestContext} constructor and NOT {@code RequestContext.fromRequest}, whose {@code
    * IdConstraints} bound belongs only where an unauthenticated header first enters the system.
    * Applying that bound here would reject persisted ids that never crossed that door (a command
-   * that ran under a context built with the plain constructor, or under a saga-derived correlation
-   * id), and because the failure is deterministic it would burn the entry's entire retry ladder and
-   * permanently discard an already-authorized business command — the loss class the authorization
-   * interceptor's off-request rule exists to prevent, through a different door. The ids are rebound
-   * VERBATIM: truncating or scrubbing one would make the replay carry a different correlation id
-   * from the events the original attempt already produced.
+   * that ran under a context built with the plain constructor), and because the failure is
+   * deterministic it would burn the entry's entire retry ladder and permanently discard an
+   * already-authorized business command — the loss class the authorization interceptor's
+   * off-request rule exists to prevent, through a different door. The ids are rebound VERBATIM:
+   * truncating or scrubbing one would make the replay carry a different correlation id from the
+   * events the original attempt already produced.
+   *
+   * <p><b>A reserved correlation id.</b> No entry {@code VirtualThreadCommandBus} publishes holds a
+   * correlation id with the reserved {@code streamrune:} prefix: a command bound to one carries a
+   * saga origin, and a command that carries a saga origin is not dead-lettered. An entry written by
+   * other means that holds one is rebound here like any other, with no saga origin — a replay binds
+   * no cause — and the command bus refuses the replayed command for it (a {@code
+   * ReservedCorrelationIdException}), so that entry fails every attempt of its ladder.
    */
   private static RequestContext replayContextFrom(DeadLetterQueue.DeadLetterEntry entry) {
     if (entry.correlationId() == null) {

@@ -39,6 +39,8 @@ The integration logs the mode once at startup. More than one `AuthenticatedUserR
 
 If any of them fails, any client can act as any user.
 
+**The contract covers the identity and the role, and no other header.** `X-Correlation-Id`, `X-Trace-Id` and the allow-listed W3C `baggage` entries are caller-supplied in every mode, this one included: a gateway forwards its caller's values or its own, and the framework treats them as tracing data. Never address, authorize or deduplicate anything by them. A correlation id is stored exactly as received (of a repeated `X-Correlation-Id` or `X-Trace-Id` header the first value is the header, on the three integrations alike), with one exception: a value that starts with `streamrune:` is the form of the correlation ids the framework binds for a saga's commands (`streamrune:saga:<sagaId>`), and the request filters answer `400 Bad Request` — the same plain-text answer on Spring, Quarkus and Micronaut, written by the filter with no error dispatch — to a request that carries one — as they do to a correlation id, trace id or user id that is longer than 255 characters or holds a control character. A gateway or an upstream service that forwards the correlation id of a saga-caused event it consumed is refused as well; it sends an id of its own. [What a client controls in event metadata](../production.md#what-a-client-controls-in-event-metadata) lists every metadata field and who can set it.
+
 **A repeated `X-User-Id` is anonymous.** Every entry point — the request filter and the SSE endpoint, on all three integrations — hands the policy every `X-User-Id` value the request carried, as received (one value that contains a comma stays one value). In trusted-gateway mode a request with more than one value resolves to `null`, so a gateway that appends its value after the client's instead of replacing it fails closed instead of letting whichever value an API happens to return first become the identity. In authenticated-principal mode the principal still decides, and each disagreeing value is logged.
 
 **The flag overrides an authenticated principal.** With the flag on, an `AuthenticatedUserResolver` is never consulted, even when one is configured: an authenticated user who can reach the service directly can act as whoever the header names. The startup line names the resolver the header overrides, so this combination is visible in the log.
@@ -94,9 +96,10 @@ public CommandAuthorizationPolicy authorizationPolicy() {
 // cover (they bind the context for every HTTP request already). Use fromRequest(...), never the
 // RequestContext constructor, for values that just arrived from outside: it is the only factory
 // that enforces the id bound (at most 255 characters, no control characters) on the trace,
-// user and correlation ids, and rejects a violating value with IllegalArgumentException before
-// any command runs. The constructor skips that check on purpose — it is the reconstruction path
-// for ids already at rest (DLQ replay, saga dispatch).
+// user and correlation ids and refuses a correlation id with the reserved "streamrune:" prefix,
+// and it rejects a violating value with IllegalArgumentException before any command runs. Answer
+// that exception with 400, as the shipped filters do. The constructor skips those checks on
+// purpose — it is the reconstruction path for ids already at rest (DLQ replay, saga dispatch).
 StreamRuneContext.RequestContext context = StreamRuneContext.RequestContext.fromRequest(
     null,                                            // traceId (from OTel), nullable
     UserId.of(principal.getName()),                  // userId — the authenticated principal
@@ -109,6 +112,12 @@ ScopedValue.where(StreamRuneContext.CURRENT, context)
 
 A context bound this way carries no captured authority, so `executeAsync` of an authz-gated command
 fails closed — see [Commands that execute off the request thread](#commands-that-execute-off-the-request-thread).
+
+A context built with the plain constructor from request values is not checked at all. It must not
+carry a correlation id with the reserved `streamrune:` prefix: the command and query buses refuse a
+dispatch bound to one that is not a bound saga origin's, with `ReservedCorrelationIdException`,
+before any interceptor, authorizer or audit store is reached — the request then fails at its first
+command or query instead of at the edge.
 
 Test utilities:
 
@@ -289,7 +298,7 @@ The captured authority is **process-local and never persisted**. The dead letter
 - The `ScopedValueFilter` (Spring) / `StreamRuneContextFilter` (Micronaut) / `StreamRuneRequestFilter` (Quarkus) binds `RequestContext.userId` from the **authenticated principal** when a resolver is available; `X-User-Id` is the identity only with `streamrune.security.trust-user-id-header=true` (trusted gateway), and without either every request is anonymous — see [Where the identity comes from (security)](#where-the-identity-comes-from-security) above for the startup rule.
 - `CommandAuthorizationPolicy` receives the command typed as the `Command` marker interface — use `instanceof` pattern matching for type-safe checks.
 - Authorization runs before the decider loads aggregate state. For decisions that require current state, perform the check inside the decider.
-- **Saga-dispatched commands bypass per-user authz by default** in both interceptors (they run as the system principal — see above). Gate them with `Decider.guard`/domain checks, not `@RequireRole` or a `CommandAuthorizationPolicy`, or opt out explicitly. In `guard`, `Authorization.requireOwner(...)` denies every saga-dispatched command; use `Authorization.requireOwnerOrSaga(...)` for the commands a saga sends.
+- **Saga-dispatched commands bypass per-user authz by default** in both interceptors (they run as the system principal — see above). Gate them with `Decider.guard`/domain checks, not `@RequireRole` or a `CommandAuthorizationPolicy`, or opt out explicitly. In `guard`, `Authorization.requireOwner(...)` denies every saga-dispatched command; use `Authorization.requireOwnerOrSaga(...)` for the commands a saga sends. The bypass belongs to the saga's own dispatch and does not extend to a continuation: a command a listener dispatches inside `StreamRuneContext.continuing(event)` keeps the saga's origin and its reserved correlation id and none of its authority — it runs with no user, `StreamRuneContext.isSagaDispatch()` is `false`, and both interceptors treat it like any other command without a user. A saga origin and a reserved correlation id state who caused a command; they grant nothing.
 - **A custom `UserRoleResolver` that reads ambient per-request state must override `requiresRequestContext()` to return `true`**, or `executeAsync` and DLQ replay will be denied for legitimately authorized callers — see [Commands that execute off the request thread](#commands-that-execute-off-the-request-thread).
 
 ## Related guides

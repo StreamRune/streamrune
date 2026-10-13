@@ -210,6 +210,37 @@ class PostgresEventStoreTest {
   }
 
   /**
+   * The correlation id saga dispatch binds is the saga id behind a 16-character prefix, so for a
+   * saga id at its 255-character bound it is 271 characters long — more than the request edge
+   * accepts and more than a {@code VARCHAR(255)} holds. {@code event_stream.metadata} is JSON and
+   * stores it whole.
+   */
+  @Test
+  void append_storesTheReservedCorrelationIdOfTheLongestSagaId() throws Exception {
+    StreamId streamId = TestStreams.stream("longest-saga-caused");
+    SagaId longest = SagaId.of("s".repeat(SagaId.MAX_LENGTH));
+    EventEnvelope appended =
+        SagaEnvelopes.causedBy(OrderSagaState.class, longest, streamId, new TestEvent("reserved"));
+    assertEquals(271, appended.metadata().correlationId().value().length());
+
+    store.append(streamId, List.of(appended), Version.initial());
+
+    EventMetadata loaded = store.load(streamId).events().getFirst().metadata();
+    assertEquals("streamrune:saga:" + longest.value(), loaded.correlationId().value());
+    assertEquals(loaded.sagaOrigin().correlationId(), loaded.correlationId());
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "SELECT metadata ->> 'correlationId' FROM event_stream WHERE aggregate_id = ?")) {
+      ps.setString(1, "longest-saga-caused");
+      try (var rs = ps.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals("streamrune:saga:" + longest.value(), rs.getString(1));
+      }
+    }
+  }
+
+  /**
    * {@code AggregateId.of} bounds an id at {@link IdConstraints#MAX_LENGTH} UTF-16 code units
    * because {@code event_stream.aggregate_id} and {@code snapshot_store.aggregate_id} are {@code
    * VARCHAR(255)}, which PostgreSQL measures in characters (code points, in the UTF8 database

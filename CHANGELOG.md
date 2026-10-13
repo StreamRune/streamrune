@@ -446,11 +446,25 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   dispatching saga even where another saga of the same type watches that aggregate. A listener that
   reacts to a saga's event with a command of its own keeps the origin with
   `StreamRuneContext.continuing`. A correlation id is tracing data a client chooses with
-  `X-Correlation-Id`; it routes nothing. A saga state class belongs to one saga: the three
-  integrations refuse, at startup, two `SagaRunner` beans that drive the same state class over the
-  same `SagaStore` (`SagaTypeOwnership.requireOneRunnerPerSagaType`), in their default wiring and
-  with a store of the application's own. One store is one instance, or two instances with equal
-  `SagaStore.storageIdentity()` — the store itself by default, the `DataSource` for
+  `X-Correlation-Id`; it routes nothing. Saga dispatch binds the reserved correlation id
+  `streamrune:saga:<sagaId>` around a saga's commands and a continuation of a saga-caused event
+  keeps it, so an event a shipped command bus stores carries a correlation id with the
+  `streamrune:` prefix if and only if it carries a saga origin: the request edge refuses the
+  prefix from a client, and the command buses and the query buses (`VirtualThreadCommandBus`,
+  `SimpleQueryBus`, `CachingQueryBus`, `AuditingQueryBus`, and the in-memory buses of
+  `streamrune-test`) refuse a dispatch bound to a reserved correlation id that is not the bound
+  saga origin's own, with `ReservedCorrelationIdException`
+  (`StreamRuneContext.requireNoForeignReservedCorrelationId()`): before any interceptor, authorizer
+  or audit store is reached, not retried, not dead-lettered, logged at `WARN`, and neither an
+  `IllegalArgumentException` nor a `DomainException`. The command audit and the query audit record
+  the correlation id the events of the dispatch carry, so an audit row has the reserved form only
+  for a dispatch that ran with that saga's origin bound. A command dispatched with neither a
+  request context nor a saga origin bound is audited under the id the command bus generates for
+  its events, chosen before the interceptors run. A saga state class belongs to one saga:
+  the three integrations refuse, at startup, two `SagaRunner` beans that drive the same state class
+  over the same `SagaStore` (`SagaTypeOwnership.requireOneRunnerPerSagaType`), in their default
+  wiring and with a store of the application's own. One store is one instance, or two instances
+  with equal `SagaStore.storageIdentity()` — the store itself by default, the `DataSource` for
   `PostgresSagaStore`; a custom store that shares rows between instances overrides it, and
   `SagaStoreContract` requires the answer to be stable and non-null. An orchestrator method that
   the interface does not declare is never called by the runner: mark the routing methods
@@ -757,6 +771,19 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `OpenTelemetry` bean exists, the query cache, SSE, and the request filter that binds
   `StreamRuneContext` from `X-Trace-Id`, `X-Correlation-Id`, the resolved identity and allow-listed
   baggage.
+- The request filters (`ScopedValueFilter`, `StreamRuneRequestFilter`, `StreamRuneContextFilter`)
+  answer a request whose correlation id, trace id or user id `RequestContext.fromRequest` refuses —
+  a value longer than 255 characters, a control character, or a correlation id that starts with
+  the reserved `streamrune:` prefix (`IdConstraints.RESERVED_PREFIX`, `IdConstraints.isReserved`) —
+  with the same answer on the three integrations: status `400 Bad Request`, content type
+  `text/plain;charset=UTF-8` and the body `RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT`, before
+  any controller, resource method or command runs. The Spring filter writes it without an error
+  dispatch, so error pages and a security rule for the error path take no part. Every other
+  correlation id is kept exactly as sent; of an `X-Correlation-Id` or `X-Trace-Id` header sent more
+  than once the first value is the header on the three integrations. The correlation, trace and
+  baggage headers are caller-supplied in every identity mode, the trusted-gateway mode included;
+  nothing may be addressed, authorized or deduplicated by them. An authenticated principal the
+  request edge refuses is logged at `WARN` once per reason (its length, a control character).
 - Deciders are registered as `DeciderRegistration` beans carrying their aggregate type;
   `@ProjectionConfig` beans are discovered into a `MultiProjectionRunner` (`CONTINUOUS`), a
   `ScheduledProjectionRunner` (`SCHEDULED`) and the `InlineProjectionInterceptor` (`INLINE`) while
@@ -877,7 +904,10 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
 - Fixtures: `DeciderFixture` (`given(...)` / `when(...)` / `expectEvents`, `expectNoEvents`,
   `expectException`, `expectFailedWith`, `expectState`, `expectStateMatches`, `expectProduced`),
   `EventStoreFixture`, `ProjectionFixture`, `MutableClock`, `SagaEnvelopes` (metadata and envelopes
-  of saga-caused events for unit tests).
+  of saga-caused events for unit tests: `causedBy` for the reply to a saga's own command at hop 0,
+  `continuationOf(cause, streamId, event)` for the event of a command dispatched inside
+  `StreamRuneContext.continuing(cause)` — one hop further, with a causation id — and `causedBy` with
+  a hop for a chain of them).
 - In-memory doubles: `InMemoryCommandBus` (registers with an aggregate type, runs `guard` before
   `decide`), `InMemoryQueryBus`, `InMemoryCommandInbox`, `InMemoryDeadLetterQueue`,
   `InMemoryCryptoEngine` (tests only), `InMemoryEventSubscription` (delivers on the appending
@@ -888,9 +918,14 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `InMemorySagaStore`, `InMemorySagaDeadLetterStore`.
 - Contract suites a custom store can extend: `SagaStoreContract`, `SagaDeadLetterStoreContract`,
   `OutboxStoreContract`, `AtomicBatchProcessorContract`; and `CommandBusProvenanceContract` for a
-  custom `CommandBus` (the saga origin and the causation id come from the bound dispatch cause and
-  from nowhere else, and a command executed inside `StreamRuneContext.continuing` stores what that
-  helper binds).
+  custom `CommandBus`: the saga origin and the causation id come from the bound dispatch cause and
+  from nowhere else; a command executed inside `StreamRuneContext.continuing` stores what that
+  helper binds; with an origin bound the stored correlation id is the origin's reserved one; a
+  dispatch bound to a reserved correlation id that is not the bound origin's is refused with
+  `ReservedCorrelationIdException` and stores nothing; a task wrapped inside a saga dispatch is not
+  refused on another thread; a context bound to `null` is not refused for its correlation id. A
+  hand-written `CommandBus` test double is such a bus: it makes the reserved-id check only when it
+  calls `StreamRuneContext.requireNoForeignReservedCorrelationId()`, and `InMemoryCommandBus` does.
 - Every PostgreSQL-backed suite of the framework runs on PostgreSQL 18 in the default build and on 17
   in a second CI job (Testcontainers).
 

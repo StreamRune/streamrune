@@ -5,6 +5,8 @@ import io.micronaut.core.order.Ordered;
 import io.micronaut.core.propagation.PropagatedContext;
 import io.micronaut.core.propagation.ThreadPropagatedContextElement;
 import io.micronaut.http.HttpRequest;
+import io.micronaut.http.HttpResponse;
+import io.micronaut.http.MediaType;
 import io.micronaut.http.MutableHttpResponse;
 import io.micronaut.http.annotation.RequestFilter;
 import io.micronaut.http.annotation.ServerFilter;
@@ -105,6 +107,24 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * keys are dropped here, before they ever reach {@code RequestContext} or {@code EventMetadata};
  * {@code role} is the role rule's alone (above).
  *
+ * <p><b>A refused request context.</b> The correlation id, the trace id and the user id pass
+ * through {@link StreamRuneContext.RequestContext#fromRequest}, which refuses a value longer than
+ * 255 characters, a value that holds a control character, and a correlation id that starts with
+ * {@code streamrune:} — the prefix of the correlation ids the framework itself binds for a saga's
+ * commands. The filter answers such a request with status {@code 400 Bad Request}, content type
+ * {@code text/plain;charset=UTF-8} and the body {@link
+ * RequestIdentityPolicy#REFUSED_REQUEST_CONTEXT} — the answer of the Spring and Quarkus filters,
+ * byte for byte — and does not proceed: no controller runs, no context is bound or stored on the
+ * request, nothing is stored. The refused value is neither echoed nor logged. Any other correlation
+ * id is bound exactly as the client sent it.
+ *
+ * <p><b>A header sent more than once.</b> Of a repeated {@code X-Correlation-Id} or {@code
+ * X-Trace-Id} header the first value is the header ({@code HttpHeaders#get}), on the three
+ * integrations alike: a blank first value counts as an absent header and an id is generated,
+ * whatever follows it. One line that holds a comma is one value. The correlation id, the trace id
+ * and the baggage are caller-supplied in every identity mode; nothing may be addressed, authorized
+ * or deduplicated by them.
+ *
  * <p><b>What a request cannot set.</b> This filter builds a request context and nothing else. It
  * does not bind {@link StreamRuneContext#CAUSE}, so no header and no baggage entry, allowlisted or
  * not, reaches the saga origin or the causation id of an event: the command bus takes both from
@@ -122,6 +142,9 @@ public class StreamRuneContextFilter implements Ordered {
   public static final String CONTEXT_ATTRIBUTE = "org.streamrune.micronaut.requestContext";
 
   private static final Logger logger = LoggerFactory.getLogger(StreamRuneContextFilter.class);
+
+  /** The content type of the answer to a refused request context, the same on the integrations. */
+  private static final MediaType REFUSAL_CONTENT_TYPE = MediaType.of("text/plain;charset=UTF-8");
 
   private final Set<String> extraAllowedBaggageKeys;
   private final RequestIdentityPolicy identityPolicy;
@@ -192,17 +215,37 @@ public class StreamRuneContextFilter implements Ordered {
 
   /**
    * Builds the request context from headers and runs the rest of the filter chain with that context
-   * bound.
+   * bound. A request whose correlation id, trace id or user id the ingress door refuses ({@link
+   * StreamRuneContext.RequestContext#fromRequest}) is answered with {@code 400 Bad Request} and the
+   * body {@link RequestIdentityPolicy#REFUSED_REQUEST_CONTEXT} instead; the chain does not run.
    *
    * @param request the HTTP request
    * @param continuation the downstream filter chain
-   * @return the downstream response
+   * @return the downstream response, or the {@code 400} answer to a refused request context
    */
   @RequestFilter
   @ExecuteOn(TaskExecutors.BLOCKING)
   public MutableHttpResponse<?> filter(
       HttpRequest<?> request, FilterContinuation<MutableHttpResponse<?>> continuation) {
-    var ctx = buildContext(request);
+    // The baggage and the identity are resolved outside the try below: a failure of the identity
+    // policy or of the application's AuthenticatedUserResolver is not a refused header.
+    Map<String, String> baggage = baggageOf(request);
+    UserId userId = resolveUserId(userIdHeaderValues(request));
+    StreamRuneContext.RequestContext ctx;
+    try {
+      ctx = contextFromHeaders(request, userId, baggage);
+    } catch (IllegalArgumentException refused) {
+      // The door refused an id: too long, a control character, or a correlation id with the
+      // reserved prefix. That is the client's error, answered here before the chain runs. The
+      // message names the field and never the value; the value itself is not logged.
+      logger.debug("Refusing the request with 400: {}", refused.getMessage());
+      // A principal the identity provider asserted and the door refuses is refused on every
+      // request of that user: reported once, at a level an operator sees.
+      identityPolicy.unacceptablePrincipalWarning(userId).ifPresent(logger::warn);
+      return HttpResponse.badRequest(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT)
+          .contentType(REFUSAL_CONTENT_TYPE);
+    }
+    ctx = withCapturedAuthority(ctx);
     request.setAttribute(CONTEXT_ATTRIBUTE, ctx);
     try (var _ = PropagatedContext.getOrEmpty().plus(new RequestContextElement(ctx)).propagate()) {
       return ScopedValue.where(StreamRuneContext.CURRENT, ctx).call(continuation::proceed);
@@ -216,8 +259,40 @@ public class StreamRuneContextFilter implements Ordered {
    *
    * @param request the HTTP request
    * @return the request context
+   * @throws IllegalArgumentException if the ingress door refuses the correlation id, the trace id
+   *     or the user id ({@link StreamRuneContext.RequestContext#fromRequest}); {@link #filter}
+   *     answers that with {@code 400}
    */
   StreamRuneContext.RequestContext buildContext(HttpRequest<?> request) {
+    Map<String, String> baggage = baggageOf(request);
+    UserId userId = resolveUserId(userIdHeaderValues(request));
+    return withCapturedAuthority(contextFromHeaders(request, userId, baggage));
+  }
+
+  /**
+   * The request's baggage: the allow-listed OpenTelemetry entries, with the role rule applied.
+   * Baggage {@code role} is the {@code X-User-Role} header behind a trusted gateway only, never a
+   * client's W3C baggage entry — every value read, like {@code X-User-Id}, so a repeated header is
+   * none.
+   */
+  private Map<String, String> baggageOf(HttpRequest<?> request) {
+    return identityPolicy.applyRole(
+        BaggageAllowlist.filter(readOtelBaggage(), extraAllowedBaggageKeys),
+        request.getHeaders().getAll(RequestIdentityPolicy.USER_ROLE_HEADER));
+  }
+
+  /**
+   * The one step that reads the unauthenticated id headers and takes them through the ingress door.
+   * {@code fromRequest}, not the constructor: these ids came straight off the wire, so this is
+   * where the {@code IdConstraints} bound and the refusal of the reserved correlation prefix apply.
+   * The plain constructor deliberately enforces neither — it is also the DLQ-replay / saga-dispatch
+   * reconstruction path for ids already at rest.
+   *
+   * @throws IllegalArgumentException if the door refuses the correlation id, the trace id or the
+   *     user id
+   */
+  private static StreamRuneContext.RequestContext contextFromHeaders(
+      HttpRequest<?> request, UserId userId, Map<String, String> baggage) {
     var headers = request.getHeaders();
     var traceId = headers.get("X-Trace-Id");
     if (traceId == null || traceId.isBlank()) {
@@ -227,28 +302,18 @@ public class StreamRuneContextFilter implements Ordered {
     if (correlationId == null || correlationId.isBlank()) {
       correlationId = UUID.randomUUID().toString();
     }
-    var userIdHeaderValues = userIdHeaderValues(request);
-    // Baggage `role` is the X-User-Role header behind a trusted gateway only, never a
-    // client's W3C baggage entry — every value read, like X-User-Id, so a repeated header is none.
-    var baggage =
-        identityPolicy.applyRole(
-            BaggageAllowlist.filter(readOtelBaggage(), extraAllowedBaggageKeys),
-            headers.getAll(RequestIdentityPolicy.USER_ROLE_HEADER));
-    // fromRequest, not the constructor. These two ids
-    // came straight off the wire unauthenticated, so this is the ingress door where the
-    // IdConstraints bound applies. The plain constructor deliberately does not enforce it — it is
-    // also the DLQ-replay / saga-dispatch reconstruction path for ids already at rest.
-    var ctx =
-        StreamRuneContext.RequestContext.fromRequest(
-            TraceId.of(traceId),
-            resolveUserId(userIdHeaderValues),
-            CorrelationId.of(correlationId),
-            Instant.now(),
-            baggage);
-    // Resolve the caller's authorities HERE, while
-    // SecurityService can still see this request's authentication, so a command that continues off
-    // this thread (bus.executeAsync) authorizes exactly as a synchronous execute would. A no-op
-    // unless the configured resolver declares requiresRequestContext().
+    return StreamRuneContext.RequestContext.fromRequest(
+        TraceId.of(traceId), userId, CorrelationId.of(correlationId), Instant.now(), baggage);
+  }
+
+  /**
+   * Resolves the caller's authorities while {@code SecurityService} can still see this request's
+   * authentication, so a command that continues off this thread ({@code bus.executeAsync})
+   * authorizes exactly as a synchronous execute would. A no-op unless the configured resolver
+   * declares {@code requiresRequestContext()}.
+   */
+  private StreamRuneContext.RequestContext withCapturedAuthority(
+      StreamRuneContext.RequestContext ctx) {
     return RequestEdgeAuthority.capture(
         ctx,
         userRoleResolver,

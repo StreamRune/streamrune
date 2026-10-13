@@ -471,6 +471,225 @@ class StreamRuneContextTest {
                 null, null, CorrelationId.of("corr-1"), null, Map.of()));
   }
 
+  // ==== The reserved correlation prefix ====
+
+  @Test
+  void fromRequest_refusesAReservedCorrelationId_withoutEchoingIt() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                StreamRuneContext.RequestContext.fromRequest(
+                    null, null, CorrelationId.of("streamrune:saga:victim"), NOW, Map.of()));
+
+    assertEquals("correlationId uses the reserved 'streamrune:' prefix", ex.getMessage());
+    assertFalse(ex.getMessage().contains("victim"), "the refused value is not echoed");
+  }
+
+  @Test
+  void fromRequest_refusesEveryValueWithThePrefix_notOnlyTheSagaForm() {
+    for (String reserved : new String[] {"streamrune:", "streamrune:x", "streamrune:saga:"}) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              StreamRuneContext.RequestContext.fromRequest(
+                  null, null, CorrelationId.of(reserved), NOW, Map.of()),
+          reserved);
+    }
+  }
+
+  @Test
+  void fromRequest_keepsACorrelationIdThatMerelyResemblesTheReservedForm() {
+    // The check is an exact, case-sensitive prefix match: a bare saga id, another case, the word
+    // without its colon and the prefix further inside the value are an upstream's own ids.
+    for (String ordinary :
+        new String[] {
+          "order-saga-42",
+          "saga:order-saga-42",
+          "Streamrune:saga:order-saga-42",
+          "STREAMRUNE:saga:order-saga-42",
+          "streamrune",
+          "streamrune-saga-order-saga-42",
+          "upstream/streamrune:saga:order-saga-42"
+        }) {
+      var ctx =
+          StreamRuneContext.RequestContext.fromRequest(
+              null, null, CorrelationId.of(ordinary), NOW, Map.of());
+      assertEquals(ordinary, ctx.correlationId().value(), "kept verbatim");
+    }
+  }
+
+  @Test
+  void fromRequest_reportsTheLengthAndTheCharsetBeforeThePrefix() {
+    // An over-long or control-bearing value that also starts with the prefix is refused either
+    // way; which message it gets is pinned so the three refusals stay three distinct statements.
+    assertEquals(
+        "correlationId must be at most 255 characters, got 300",
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                    StreamRuneContext.RequestContext.fromRequest(
+                        null,
+                        null,
+                        CorrelationId.of("streamrune:" + "c".repeat(289)),
+                        NOW,
+                        Map.of()))
+            .getMessage());
+  }
+
+  @Test
+  void fromRequest_acceptsATraceIdWithThePrefix() {
+    // The prefix is reserved for correlation ids. A trace id is tracing data with no reserved form.
+    var ctx =
+        StreamRuneContext.RequestContext.fromRequest(
+            TraceId.of("streamrune:saga:victim"),
+            UserId.of("streamrune:saga:victim"),
+            CorrelationId.of("corr-1"),
+            NOW,
+            Map.of("tenant", "streamrune:saga:victim"));
+
+    assertEquals("streamrune:saga:victim", ctx.traceId().value());
+    assertEquals("streamrune:saga:victim", ctx.userId().value());
+    assertEquals("streamrune:saga:victim", ctx.baggage().get("tenant"));
+  }
+
+  @Test
+  void theConstructorAcceptsAReservedCorrelationId() {
+    // The reconstruction door: saga dispatch builds its context here, and StreamRuneContext
+    // .continuing copies a stored event's correlation id through it.
+    var reserved = CorrelationId.of("streamrune:saga:victim");
+
+    var ctx = new StreamRuneContext.RequestContext(null, null, reserved, NOW, Map.of());
+    var withAuthority = ctx.withAuthority(new UserAuthority(Set.of("ADMIN"), Set.of()));
+
+    assertEquals(reserved, ctx.correlationId());
+    assertEquals(reserved, withAuthority.correlationId());
+  }
+
+  // ==== The dispatch-side refusal of a reserved correlation id that is not its origin's ====
+
+  private static StreamRuneContext.RequestContext contextWith(String correlationId) {
+    return new StreamRuneContext.RequestContext(
+        null, null, CorrelationId.of(correlationId), NOW, Map.of());
+  }
+
+  private static final String FOREIGN_RESERVED_ID =
+      "the bound correlation id uses the reserved 'streamrune:' prefix and is not the bound saga"
+          + " origin's; only a saga dispatch or StreamRuneContext.continuing binds it";
+
+  private static void assertRefusedAsForeign(ScopedValue.Carrier bindings) {
+    ReservedCorrelationIdException refused =
+        assertThrows(
+            ReservedCorrelationIdException.class,
+            () -> bindings.run(StreamRuneContext::requireNoForeignReservedCorrelationId));
+    assertEquals(FOREIGN_RESERVED_ID, refused.getMessage());
+  }
+
+  @Test
+  void theRefusalOfAForeignReservedCorrelationId_isNeitherAnArgumentNorADomainRejection() {
+    // A listener that takes a domain rejection as its command's answer catches DomainException or
+    // IllegalArgumentException. This refusal is a wiring error of the caller and is neither.
+    RuntimeException refused = new ReservedCorrelationIdException();
+
+    assertFalse(refused instanceof IllegalArgumentException);
+    assertFalse(refused instanceof DomainException);
+    assertFalse(refused instanceof IllegalStateException);
+    assertEquals(FOREIGN_RESERVED_ID, refused.getMessage());
+    assertFalse(refused.getMessage().contains("saga:"), "the message names no bound value");
+  }
+
+  @Test
+  void requireNoForeignReservedCorrelationId_passesWithNothingBoundOrAnOrdinaryId() {
+    assertDoesNotThrow(StreamRuneContext::requireNoForeignReservedCorrelationId);
+    for (String ordinary :
+        new String[] {"client-corr-7", "order-saga-42", "Streamrune:saga:order-saga-42"}) {
+      ScopedValue.where(StreamRuneContext.CURRENT, contextWith(ordinary))
+          .run(StreamRuneContext::requireNoForeignReservedCorrelationId);
+      // An ordinary id beside a saga origin is not this check's business.
+      ScopedValue.where(StreamRuneContext.CURRENT, contextWith(ordinary))
+          .where(StreamRuneContext.CAUSE, BOUND_CAUSE)
+          .run(StreamRuneContext::requireNoForeignReservedCorrelationId);
+    }
+  }
+
+  @Test
+  void requireNoForeignReservedCorrelationId_passesForAContextBoundToNull() {
+    // ScopedValue.where(CURRENT, StreamRuneContext.capture()) with nothing bound binds null.
+    ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+        .run(StreamRuneContext::requireNoForeignReservedCorrelationId);
+  }
+
+  @Test
+  void requireNoForeignReservedCorrelationId_refusesAReservedIdWithoutAnOrigin() {
+    for (String reserved :
+        new String[] {"streamrune:saga:order-saga-42", "streamrune:anything", "streamrune:"}) {
+      assertRefusedAsForeign(ScopedValue.where(StreamRuneContext.CURRENT, contextWith(reserved)));
+      assertRefusedAsForeign(
+          ScopedValue.where(StreamRuneContext.CURRENT, contextWith(reserved))
+              .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE));
+      assertRefusedAsForeign(
+          ScopedValue.where(StreamRuneContext.CURRENT, contextWith(reserved))
+              .where(
+                  StreamRuneContext.CAUSE,
+                  new StreamRuneContext.DispatchCause(CausationId.of("evt-1"), null)));
+    }
+  }
+
+  @Test
+  void requireNoForeignReservedCorrelationId_passesForTheBoundOriginsOwnId_atAnyHop() {
+    for (SagaOrigin origin :
+        new SagaOrigin[] {ORIGIN, ORIGIN.nextHop(), ORIGIN.nextHop().nextHop()}) {
+      ScopedValue.where(StreamRuneContext.CURRENT, contextWith("streamrune:saga:order-saga-42"))
+          .where(StreamRuneContext.CAUSE, new StreamRuneContext.DispatchCause(null, origin))
+          .run(StreamRuneContext::requireNoForeignReservedCorrelationId);
+    }
+  }
+
+  @Test
+  void requireNoForeignReservedCorrelationId_refusesAReservedIdThatIsNotTheBoundOrigins() {
+    // Another saga's reserved id, and a reserved id that is no saga's, beside the origin of
+    // order-saga-42: the bound correlation id and the origin would name two different things.
+    for (String foreign :
+        new String[] {
+          "streamrune:saga:another-saga", "streamrune:saga:order-saga-4", "streamrune:anything"
+        }) {
+      assertRefusedAsForeign(
+          ScopedValue.where(StreamRuneContext.CURRENT, contextWith(foreign))
+              .where(StreamRuneContext.CAUSE, BOUND_CAUSE));
+    }
+  }
+
+  @Test
+  void continuing_anEventWithAnOriginAndAnotherCorrelationId_bindsTheOriginsCorrelationId() {
+    // Metadata no command bus writes: an origin beside a correlation id that is not the origin's.
+    // The continuation binds the origin's, so the context and the cause name the same saga.
+    EventMetadata bare = sagaCausedEvent().metadata();
+    for (String other : new String[] {"order-saga-42", "streamrune:saga:another-saga"}) {
+      EventEnvelope event =
+          envelopeWith(
+              new EventMetadata(
+                  bare.eventId(),
+                  bare.commandId(),
+                  null,
+                  null,
+                  CorrelationId.of(other),
+                  null,
+                  null,
+                  NOW,
+                  Map.of(),
+                  bare.sagaOrigin()));
+
+      StreamRuneContext.continuing(event)
+          .run(
+              () -> {
+                assertEquals(
+                    CorrelationId.of("streamrune:saga:order-saga-42"),
+                    StreamRuneContext.capture().correlationId());
+                StreamRuneContext.requireNoForeignReservedCorrelationId();
+              });
+    }
+  }
+
   // ==== The cause of the dispatch in progress ====
 
   private static final SagaOrigin ORIGIN =
@@ -686,22 +905,12 @@ class StreamRuneContextTest {
 
   @Test
   void continuing_anEventAlreadyAFewHopsAway_addsOneHop() {
-    EventMetadata hopZero = sagaCausedEvent().metadata();
-    SagaOrigin atHopThree =
-        new SagaOrigin(hopZero.sagaOrigin().sagaType(), hopZero.sagaOrigin().sagaId(), 3);
     EventEnvelope event =
-        envelopeWith(
-            new EventMetadata(
-                hopZero.eventId(),
-                hopZero.commandId(),
-                null,
-                null,
-                hopZero.correlationId(),
-                CausationId.of("evt-hop-2"),
-                null,
-                NOW,
-                Map.of(),
-                atHopThree));
+        SagaEnvelopes.causedBy(
+            ShipmentState.class, SAGA_ID, 3, PAYMENT_STREAM, new PaymentInitiated("o-1"));
+    SagaOrigin atHopThree = event.metadata().sagaOrigin();
+    assertEquals(3, atHopThree.hop());
+    assertNotNull(event.metadata().causationId());
 
     StreamRuneContext.continuing(event)
         .run(
@@ -776,11 +985,18 @@ class StreamRuneContextTest {
             });
 
     EventEnvelope sagaCaused = sagaCausedEvent();
+    assertEquals(
+        CorrelationId.of("streamrune:saga:order-saga-42"), sagaCaused.metadata().correlationId());
     StreamRuneContext.continuing(sagaCaused)
         .run(
             () -> {
               StreamRuneContext.RequestContext context = StreamRuneContext.capture();
-              assertEquals(sagaCaused.metadata().correlationId(), context.correlationId());
+              assertEquals(
+                  CorrelationId.of("streamrune:saga:order-saga-42"),
+                  context.correlationId(),
+                  "a continuation of a saga-caused event binds the reserved form it inherits");
+              assertEquals(
+                  StreamRuneContext.cause().sagaOrigin().correlationId(), context.correlationId());
               assertNull(context.traceId());
             });
   }

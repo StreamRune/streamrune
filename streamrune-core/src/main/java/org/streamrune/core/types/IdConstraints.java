@@ -61,11 +61,12 @@ package org.streamrune.core.types;
  *       can carry an id the bound refuses (its context was built with the plain constructor and
  *       never crossed the door); rejecting there fails every retry of that entry deterministically,
  *       burning the whole ladder and permanently discarding an already-accepted business command.
- *   <li>{@code SagaCommandDispatch.dispatch} rebuilds it from {@code
- *       CorrelationId.of(sagaId.value())}, where the {@code SagaId} came straight out of {@code
- *       saga_state} (or {@code saga_dead_letters}) via {@code PostgresSagaStore}. A {@code SagaId}
- *       is bounded in length, not in charset; rejecting there terminally FAILS an in-flight saga
- *       whose id the bound refuses, with its undo never dispatched.
+ *   <li>{@code SagaCommandDispatch.dispatch} rebuilds it from the saga's origin ({@code
+ *       SagaOrigin.correlationId()}, the reserved form of the saga id; below), where the {@code
+ *       SagaId} came straight out of {@code saga_state} (or {@code saga_dead_letters}) via {@code
+ *       PostgresSagaStore}. A {@code SagaId} is bounded in length, not in charset, and the reserved
+ *       form of the longest one exceeds {@link #MAX_LENGTH}; rejecting there terminally FAILS an
+ *       in-flight saga whose id the bound refuses, with its undo never dispatched.
  * </ul>
  *
  * <p><b>What then stops an untrusted value from entering through the reconstruction door?</b> Four
@@ -86,9 +87,23 @@ package org.streamrune.core.types;
  * would refuse into the metadata of the new events it produces. That is a one-for-one re-emission
  * of a value already in the log — not a channel a remote caller can drive, since every ingress path
  * goes through {@code fromRequest} — and preserving it verbatim is the point. A rewritten id would
- * orphan the replayed command from the events it already produced, and would change every
- * idempotency key derived from it (both saga dispatch keys embed the correlation value), so a
- * rolling upgrade would execute the same compensation twice.
+ * orphan the replayed command from the events it already produced.
+ *
+ * <p><b>The reserved prefix.</b> A correlation id that starts with {@value #RESERVED_PREFIX} is one
+ * the framework itself binds: saga dispatch binds {@code streamrune:saga:<sagaId>} ({@code
+ * SagaOrigin.correlationId()}) around every command a saga sends, and {@code
+ * StreamRuneContext.continuing} inherits it from a saga-caused event. The ingress door refuses the
+ * prefix in a correlation id ({@link #isReserved(String)}, beside the length and charset rules), so
+ * a value in that form never comes from a request, and the shipped command and query buses refuse a
+ * dispatch whose bound correlation id is reserved and is not the bound saga origin's own ({@code
+ * StreamRuneContext.requireNoForeignReservedCorrelationId()}, a {@code
+ * ReservedCorrelationIdException}). Together: an event or an audit row a shipped bus wrote carries
+ * a reserved correlation id if and only if a saga origin was bound, and then that origin's. The
+ * check is on the correlation id alone — a trace id, a user id and a baggage value have no reserved
+ * form — and, like the bound, it is a rule of the door: the constructors accept the prefix, because
+ * saga dispatch and the read path build reserved ids through them. Nothing in the framework reads a
+ * saga id back out of a correlation id, and no routing, authorization or deduplication decision
+ * reads a correlation id at all: the saga idempotency keys are derived from the saga id.
  *
  * <p><b>Ingress FACTORIES.</b> Two value types are built by the application itself from a value it
  * just read off the wire, not by a framework filter: {@link IdempotencyKey} (a client retry token)
@@ -142,7 +157,32 @@ public final class IdConstraints {
    */
   public static final int MAX_LENGTH = 255;
 
+  /**
+   * Prefix of every correlation id the framework itself binds; a request may not carry it. Saga
+   * dispatch binds {@code streamrune:saga:<sagaId>}; the whole prefix is reserved, whatever follows
+   * it.
+   */
+  public static final String RESERVED_PREFIX = "streamrune:";
+
   private IdConstraints() {}
+
+  /**
+   * Whether {@code value} is in the reserved form: it starts with {@link #RESERVED_PREFIX}. The
+   * match is exact and case-sensitive and nothing is trimmed, so {@code Streamrune:x}, {@code
+   * streamrune} and a value with the prefix further inside are not reserved.
+   *
+   * <p>It answers one question — may a request have supplied this correlation id — for the ingress
+   * door ({@link org.streamrune.core.StreamRuneContext.RequestContext#fromRequest}) and the command
+   * buses. It takes a reserved value apart for nobody: no API turns a correlation id back into a
+   * saga id.
+   *
+   * @param value the correlation id text, or {@code null}
+   * @return {@code true} when {@code value} starts with {@link #RESERVED_PREFIX}; {@code false}
+   *     otherwise, and for {@code null}
+   */
+  public static boolean isReserved(String value) {
+    return value != null && value.startsWith(RESERVED_PREFIX);
+  }
 
   /**
    * Enforces the ingress bound on an untrusted identifier value — a header-sourced id, or a

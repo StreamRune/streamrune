@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
@@ -202,6 +203,7 @@ final class SagaOriginHttpFixture implements AutoCloseable {
   private final FlowSaga saga;
   private final SagaRunner<FlowState> runner;
   private final SagaDeadLetterReplayer replayer;
+  private final AtomicInteger endpointCalls = new AtomicInteger();
   private GlobalOffset checkpoint = GlobalOffset.initial();
 
   SagaOriginHttpFixture(Routing routing, boolean confirmsItself) {
@@ -249,7 +251,13 @@ final class SagaOriginHttpFixture implements AutoCloseable {
 
   /** Executes a command as the HTTP endpoint does: under whatever the request filter bound. */
   void execute(FlowCommand command) {
+    endpointCalls.incrementAndGet();
     bus.execute(command);
+  }
+
+  /** How many commands the HTTP endpoint has handed to this fixture, executed or refused. */
+  int endpointCalls() {
+    return endpointCalls.get();
   }
 
   /** Opens a flow from outside any request and runs its saga up to the step that waits. */
@@ -273,6 +281,11 @@ final class SagaOriginHttpFixture implements AutoCloseable {
   /** The saga row of a flow. */
   LoadedSaga<FlowState> row(String flowId) {
     return sagaStore.load(sagaIdOf(flowId), SAGA_TYPE, FlowState.class).orElseThrow();
+  }
+
+  /** Every stored event, in global order. */
+  List<EventEnvelope> stored() {
+    return eventStore.readGlobalStream(GlobalOffset.initial(), 1_000);
   }
 
   /** The stored events of {@code type}, in global order. */

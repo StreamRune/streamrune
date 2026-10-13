@@ -5,8 +5,11 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.streamrune.core.BaggageAllowlist;
+import org.streamrune.core.types.IdConstraints;
 import org.streamrune.core.types.UserId;
 
 /**
@@ -27,6 +30,8 @@ import org.streamrune.core.types.UserId;
  *       that an upstream gateway authenticates every caller, overwrites the header with the
  *       authenticated id, and strips any client-supplied value — and that this service is reachable
  *       only through that gateway. Without those three guarantees any client can act as any user.
+ *       The contract covers the identity and the role headers and no other: see "What a mode does
+ *       not change" below.
  *   <li>{@link Mode#AUTHENTICATED_PRINCIPAL} — a resolver is available and the flag is {@code
  *       false}. The identity is the authenticated principal; the header is ignored, and a header
  *       that disagrees with the principal is reported through the caller's {@link
@@ -58,6 +63,23 @@ import org.streamrune.core.types.UserId;
  * a trusted gateway the header is the only source. As with the identity header, more than one value
  * is ambiguous and is no role.
  *
+ * <p><b>What a mode does not change.</b> The mode decides who the user is and whether there is a
+ * role. It decides nothing about the correlation id, the trace id and the baggage: {@code
+ * X-Correlation-Id}, {@code X-Trace-Id} and the allow-listed W3C {@code baggage} entries are
+ * caller-supplied in every mode, the trusted-gateway mode included — a gateway forwards its
+ * caller's values or its own. They are tracing data, and nothing may be addressed, authorized or
+ * deduplicated by them. The request filters keep a correlation id exactly as received — of an
+ * {@code X-Correlation-Id} or {@code X-Trace-Id} header sent more than once the first value is the
+ * header, on the three integrations alike, and a blank first value is an absent header — with one
+ * exception: a value that starts with {@code streamrune:} is the form of the correlation ids the
+ * framework binds for a saga's commands, and a request that carries one is refused. A gateway or an
+ * upstream service that forwards the correlation id of a saga-caused event it consumed is refused
+ * too; it sends an id of its own. A refused request context — that prefix, a value longer than 255
+ * characters, a control character, in the correlation id, the trace id or the user id — is answered
+ * by the filter itself, before any command runs and with the same answer on the three integrations:
+ * status {@code 400 Bad Request}, content type {@code text/plain;charset=UTF-8}, and the body
+ * {@link #REFUSED_REQUEST_CONTEXT}.
+ *
  * <p><b>Startup rule.</b> An application whose command bus enforces authorization against the
  * request identity, but whose requests can never carry one, is misconfigured: every gated command
  * would be denied. {@link #requireIdentitySourceFor(Collection)} refuses startup in exactly that
@@ -79,6 +101,17 @@ public final class RequestIdentityPolicy {
   /** The property that selects {@link Mode#TRUSTED_GATEWAY}, identical on every integration. */
   public static final String TRUST_USER_ID_HEADER_PROPERTY =
       "streamrune.security.trust-user-id-header";
+
+  /**
+   * The body of the answer the three request filters give to a refused request context: a
+   * correlation id, trace id or user id that {@code RequestContext.fromRequest} does not accept —
+   * longer than 255 characters, holding a control character, or, for the correlation id, starting
+   * with the reserved {@code streamrune:} prefix. The answer is status {@code 400 Bad Request},
+   * content type {@code text/plain;charset=UTF-8} and this text, the same on Spring, Quarkus and
+   * Micronaut. One fixed text for every refusal; it names no header and echoes no value.
+   */
+  public static final String REFUSED_REQUEST_CONTEXT =
+      "The request's correlation id, trace id or user id is not acceptable";
 
   /** Where a request's identity comes from. */
   public enum Mode {
@@ -107,6 +140,11 @@ public final class RequestIdentityPolicy {
 
   private final Mode mode;
   private final AuthenticatedUserResolver resolver;
+
+  // Whether unacceptablePrincipalWarning(UserId) has handed out its report: one per reason the
+  // request edge refuses a user id for — its length, a control character.
+  private final AtomicBoolean overlongPrincipalReported = new AtomicBoolean();
+  private final AtomicBoolean controlCharacterPrincipalReported = new AtomicBoolean();
 
   private RequestIdentityPolicy(Mode mode, AuthenticatedUserResolver resolver) {
     this.mode = mode;
@@ -168,6 +206,59 @@ public final class RequestIdentityPolicy {
         yield principal;
       }
     };
+  }
+
+  /**
+   * The one-time report of an authenticated principal the request edge refuses.
+   *
+   * <p>In {@link Mode#AUTHENTICATED_PRINCIPAL} the user id is what the identity provider asserted.
+   * One that is longer than 255 characters or holds a control character is refused by {@code
+   * RequestContext.fromRequest} like a client's header, and the request filters answer {@code 400}
+   * with {@link #REFUSED_REQUEST_CONTEXT} — for every request of that user, who can do nothing
+   * about it. That is a fact about the identity provider, not about one request, so it is reported
+   * once per policy (one policy serves an application) and per reason — the length, a control
+   * character — at a level an operator sees: a request filter that refused a request context asks
+   * this method and logs what it returns at {@code WARN}. A report per request would let that user
+   * fill the log; one report for both reasons would let a caller who chooses its own subject spend
+   * it on one of them and hide the other.
+   *
+   * <p>Nothing is reported in {@link Mode#TRUSTED_GATEWAY}, where the user id is the request's own
+   * header and its refusal is the client's error, nor in {@link Mode#ANONYMOUS}.
+   *
+   * @param userId the identity {@link #resolve(List, MismatchListener)} returned for the refused
+   *     request; {@code null} when it had none
+   * @return the message to log, the first time this policy is asked about a principal the request
+   *     edge refuses for that reason; empty for an acceptable or absent principal, in the other two
+   *     modes, and after the report of that reason. The message names the resolver and the refused
+   *     bound, never the value
+   */
+  public Optional<String> unacceptablePrincipalWarning(UserId userId) {
+    if (mode != Mode.AUTHENTICATED_PRINCIPAL || userId == null) {
+      return Optional.empty();
+    }
+    String refusal;
+    try {
+      IdConstraints.requireBoundedAndPrintable(userId.value(), "userId");
+      return Optional.empty();
+    } catch (IllegalArgumentException refused) {
+      refusal = refused.getMessage();
+    }
+    // The edge checks the length first, so an overlong value is refused for its length whatever
+    // else it holds.
+    AtomicBoolean reported =
+        userId.value().length() > IdConstraints.MAX_LENGTH
+            ? overlongPrincipalReported
+            : controlCharacterPrincipalReported;
+    if (!reported.compareAndSet(false, true)) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        "The authenticated principal resolved by "
+            + resolver.getClass().getName()
+            + " is not an acceptable user id ("
+            + refusal
+            + "): every request of that principal is answered 400 Bad Request. Reported once for"
+            + " this reason; each refusal is logged at DEBUG.");
   }
 
   /**
@@ -257,9 +348,23 @@ public final class RequestIdentityPolicy {
   }
 
   /**
-   * @return the one startup line that explains where request identities come from
+   * What every mode's startup line ends with: the headers no mode makes trustworthy. Stated in the
+   * line an operator reads when choosing a mode, because the trusted-gateway contract is easily
+   * read as covering every header the gateway forwards.
+   */
+  private static final String CALLER_SUPPLIED_HEADERS =
+      " The correlation, trace and baggage headers are caller-supplied in every mode; nothing may"
+          + " be addressed, authorized or deduplicated by them.";
+
+  /**
+   * @return the one startup line that explains where request identities come from; in every mode it
+   *     ends by naming the headers that stay caller-supplied
    */
   public String describe() {
+    return identitySource() + CALLER_SUPPLIED_HEADERS;
+  }
+
+  private String identitySource() {
     return switch (mode) {
       case AUTHENTICATED_PRINCIPAL ->
           "Request identity: AUTHENTICATED_PRINCIPAL — RequestContext.userId is the principal"

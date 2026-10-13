@@ -41,10 +41,14 @@ import org.streamrune.core.types.Version;
  * false-green), and appending resulting events back to the store.
  *
  * <p>Event metadata follows the same topology as {@code VirtualThreadCommandBus}: all events of one
- * command share a single correlation id (taken from {@link StreamRuneContext} when bound, generated
- * otherwise), the saga origin and the causation id come from the bound {@link
- * StreamRuneContext#CAUSE} and from nowhere else (with none bound an event carries neither), and
- * envelope versions match what the store persists.
+ * command share a single correlation id (the bound saga origin's reserved one when an origin is
+ * bound, otherwise taken from {@link StreamRuneContext} when bound, generated otherwise), the saga
+ * origin and the causation id come from the bound {@link StreamRuneContext#CAUSE} and from nowhere
+ * else (with none bound an event carries neither), and envelope versions match what the store
+ * persists. A command whose bound correlation id has the reserved {@code streamrune:} prefix and is
+ * not the bound saga origin's is refused with a {@link
+ * org.streamrune.core.ReservedCorrelationIdException} before its decider is looked up, as the
+ * production bus refuses it ({@link StreamRuneContext#requireNoForeignReservedCorrelationId()}).
  *
  * <p>This bus has no dead letter queue, so a failed command propagates to its caller and nothing
  * else happens — for a command that carries a saga origin exactly what {@code
@@ -138,6 +142,10 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
     if (closed) {
       throw new IllegalStateException("CommandBus has been closed");
     }
+    // Before the decider lookup, as VirtualThreadCommandBus refuses it: a test that copies a
+    // saga-caused event's correlation id into a context of its own fails here as it would in
+    // production.
+    StreamRuneContext.requireNoForeignReservedCorrelationId();
 
     Class<?> commandType = command.getClass();
     Decider<C, ?, DomainEvent> decider = (Decider<C, ?, DomainEvent>) deciders.get(commandType);
@@ -236,11 +244,31 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
     return decider.evolve((S) state, (E) event);
   }
 
+  /**
+   * The correlation id of the events the command in progress produces, as {@code
+   * VirtualThreadCommandBus} chooses it: the bound saga origin's ({@link
+   * SagaOrigin#correlationId()}) when one is bound, otherwise the bound context's, otherwise a
+   * generated one.
+   */
   private static CorrelationId correlationId() {
+    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
+    if (cause != null && cause.sagaOrigin() != null) {
+      return cause.sagaOrigin().correlationId();
+    }
     if (StreamRuneContext.CURRENT.isBound()) {
       return StreamRuneContext.CURRENT.get().correlationId();
     }
     return IdGenerator.generateCorrelationId();
+  }
+
+  /**
+   * The metadata this bus writes for an event of a command executed under what is bound on the
+   * calling thread right now: {@link #buildMetadata} with {@link #correlationId()}. {@link
+   * SagaEnvelopes} builds a continuation's reply with it, so that a hand-built envelope and a
+   * stored one cannot drift apart.
+   */
+  static EventMetadata metadataUnderTheBoundDispatch(CommandId commandId) {
+    return buildMetadata(commandId, correlationId());
   }
 
   /**
