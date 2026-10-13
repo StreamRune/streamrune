@@ -225,7 +225,8 @@ Request`, content type `text/plain;charset=UTF-8` and the body `The request's co
 id or user id is not acceptable` — the answer of the Spring and Micronaut filters, byte for byte.
 The resource method does not run and `StreamRuneRequestContextHolder` stays empty. Of an `X-Correlation-Id` or `X-Trace-Id` header sent more than once the first
 value is the header, as on the other two integrations; a blank first value counts as an absent
-header. An authenticated principal the request edge refuses is logged once at `WARN`. See
+header. An authenticated principal the request edge refuses is logged at `WARN` once
+per reason (its length, a control character). See
 [What a client controls in event metadata](../../docs/guide/production.md#what-a-client-controls-in-event-metadata).
 
 ```properties

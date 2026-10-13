@@ -189,7 +189,13 @@ refuses such a command (`ReservedCorrelationIdException`) before anything is sto
 fails every attempt and ends as the retry policy ends an exhausted entry.
 
 **What a listener does with a failed continuation.** For a command that carries a saga origin the
-subscription is the only retry, so the listener decides the command's fate:
+subscription is the only retry, so the listener decides the command's fate — and the subscription
+is where a continuation that keeps failing shows: the poll loop's `ERROR` line for every attempt
+(`Poll loop 'subscription '<name>'' failed (N consecutive failure(s)); retrying in M ms`),
+`PollingEventSubscription.consecutiveFailures()`, and the `subscription.<name>` health detail of a
+subscription registered with `SubscriptionHealthContributor` (see
+[Subscription Lifecycle › Failure handling](subscription-lifecycle.md#failure-handling)). No
+dead-letter entry exists for it.
 
 - A failure a later attempt can cure (an unreachable store, a lock timeout) leaves the listener.
   The subscription keeps its checkpoint and delivers the event again. A listener that catches such

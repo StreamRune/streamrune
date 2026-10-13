@@ -458,7 +458,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   or audit store is reached, not retried, not dead-lettered, logged at `WARN`, and neither an
   `IllegalArgumentException` nor a `DomainException`. The command audit and the query audit record
   the correlation id the events of the dispatch carry, so an audit row has the reserved form only
-  for a dispatch that ran with that saga's origin bound. A saga state class belongs to one saga:
+  for a dispatch that ran with that saga's origin bound. A command dispatched with neither a
+  request context nor a saga origin bound is audited under the id the command bus generates for
+  its events, chosen before the interceptors run. A saga state class belongs to one saga:
   the three integrations refuse, at startup, two `SagaRunner` beans that drive the same state class
   over the same `SagaStore` (`SagaTypeOwnership.requireOneRunnerPerSagaType`), in their default
   wiring and with a store of the application's own. One store is one instance, or two instances
@@ -781,7 +783,7 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   than once the first value is the header on the three integrations. The correlation, trace and
   baggage headers are caller-supplied in every identity mode, the trusted-gateway mode included;
   nothing may be addressed, authorized or deduplicated by them. An authenticated principal the
-  request edge refuses is logged once at `WARN`.
+  request edge refuses is logged at `WARN` once per reason (its length, a control character).
 - Deciders are registered as `DeciderRegistration` beans carrying their aggregate type;
   `@ProjectionConfig` beans are discovered into a `MultiProjectionRunner` (`CONTINUOUS`), a
   `ScheduledProjectionRunner` (`SCHEDULED`) and the `InlineProjectionInterceptor` (`INLINE`) while
@@ -902,7 +904,10 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
 - Fixtures: `DeciderFixture` (`given(...)` / `when(...)` / `expectEvents`, `expectNoEvents`,
   `expectException`, `expectFailedWith`, `expectState`, `expectStateMatches`, `expectProduced`),
   `EventStoreFixture`, `ProjectionFixture`, `MutableClock`, `SagaEnvelopes` (metadata and envelopes
-  of saga-caused events for unit tests).
+  of saga-caused events for unit tests: `causedBy` for the reply to a saga's own command at hop 0,
+  `continuationOf(cause, streamId, event)` for the event of a command dispatched inside
+  `StreamRuneContext.continuing(cause)` — one hop further, with a causation id — and `causedBy` with
+  a hop for a chain of them).
 - In-memory doubles: `InMemoryCommandBus` (registers with an aggregate type, runs `guard` before
   `decide`), `InMemoryQueryBus`, `InMemoryCommandInbox`, `InMemoryDeadLetterQueue`,
   `InMemoryCryptoEngine` (tests only), `InMemoryEventSubscription` (delivers on the appending
@@ -913,9 +918,14 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `InMemorySagaStore`, `InMemorySagaDeadLetterStore`.
 - Contract suites a custom store can extend: `SagaStoreContract`, `SagaDeadLetterStoreContract`,
   `OutboxStoreContract`, `AtomicBatchProcessorContract`; and `CommandBusProvenanceContract` for a
-  custom `CommandBus` (the saga origin and the causation id come from the bound dispatch cause and
-  from nowhere else, and a command executed inside `StreamRuneContext.continuing` stores what that
-  helper binds).
+  custom `CommandBus`: the saga origin and the causation id come from the bound dispatch cause and
+  from nowhere else; a command executed inside `StreamRuneContext.continuing` stores what that
+  helper binds; with an origin bound the stored correlation id is the origin's reserved one; a
+  dispatch bound to a reserved correlation id that is not the bound origin's is refused with
+  `ReservedCorrelationIdException` and stores nothing; a task wrapped inside a saga dispatch is not
+  refused on another thread; a context bound to `null` is not refused for its correlation id. A
+  hand-written `CommandBus` test double is such a bus: it makes the reserved-id check only when it
+  calls `StreamRuneContext.requireNoForeignReservedCorrelationId()`, and `InMemoryCommandBus` does.
 - Every PostgreSQL-backed suite of the framework runs on PostgreSQL 18 in the default build and on 17
   in a second CI job (Testcontainers).
 

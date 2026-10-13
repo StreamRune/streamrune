@@ -197,9 +197,24 @@ characters or holds a control character, with status `400 Bad Request`, content 
 acceptable` — the answer of the Quarkus and Micronaut filters, byte for byte. It writes that answer
 itself and starts no error dispatch, so your error pages, your `@ControllerAdvice` and the rule
 your Spring Security filter chain has for `/error` take no part, and the rest of the filter chain
-does not run. Of an `X-Correlation-Id` or `X-Trace-Id` header sent more than once the first
+does not run.
+
+**CORS and the `400`.** The filter sits at order `-90`
+(`StreamRuneAutoConfiguration.SCOPED_VALUE_FILTER_ORDER`), and its `400` carries the CORS headers
+only of what ran before it. Spring Security's `cors()` runs before it (the security chain sits at
+`-100`), and so does a `CorsFilter` you register with an order below `-90`: a page of another
+origin reads the `400`. CORS configured in Spring MVC — `WebMvcConfigurer.addCorsMappings`,
+`@CrossOrigin` — is applied inside the `DispatcherServlet`, and a `CorsFilter` bean without an
+order is registered last: both run behind the filter, the refusal carries no
+`Access-Control-Allow-Origin`, and the browser reports a network error to the page instead of the
+status. To let a browser client read the refusal, configure CORS in Spring Security or register
+the `CorsFilter` through a `FilterRegistrationBean` with an order below `-90`. A preflight carries
+no `X-Correlation-Id` value and is never refused.
+
+Of an `X-Correlation-Id` or `X-Trace-Id` header sent more than once the first
 value is the header, as on the other two integrations; a blank first value counts as an absent
-header. An authenticated principal the request edge refuses is logged once at `WARN`. See
+header. An authenticated principal the request edge refuses is logged at `WARN` once
+per reason (its length, a control character). See
 [What a client controls in event metadata](../../docs/guide/production.md#what-a-client-controls-in-event-metadata).
 
 ```yaml

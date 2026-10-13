@@ -574,6 +574,116 @@ actions run only after a commit, and `writesTo` holds through a forwarding proxy
 
 ---
 
+## Testing a listener that dispatches commands
+
+A listener that reacts to an event with a command — a process manager — is tested against a real
+bus: `InMemoryCommandBus` runs the decider and stores the events as `VirtualThreadCommandBus` does,
+and makes the same check of the bound context first.
+
+```java
+import org.streamrune.core.StreamRuneContext;
+import org.streamrune.core.subscription.EventListener;
+import org.streamrune.test.InMemoryCommandBus;
+import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.SagaEnvelopes;
+
+AggregateType PAYMENT = AggregateType.of("payment");
+StreamId payment = StreamId.of(PAYMENT, AggregateId.of("pay-1"));
+
+var eventStore = new InMemoryEventStore();
+CommandBus commandBus = InMemoryCommandBus.builder()
+    .eventStore(eventStore)
+    .register(new InMemoryCommandBus.DeciderRegistration<>(
+        PAYMENT, CapturePayment.class, c -> AggregateId.of(c.paymentId()), new PaymentDecider()))
+    .build();
+
+// The listener under test: it captures a payment the order saga initiated.
+EventListener processManager = events -> {
+    for (EventEnvelope event : events) {
+        if (event.event() instanceof PaymentInitiated initiated) {
+            StreamRuneContext.continuing(event).run(() ->
+                commandBus.execute(
+                    new CapturePayment(initiated.paymentId()),
+                    IdempotencyKey.of("capture:" + event.metadata().eventId().value())));
+        }
+    }
+};
+
+// The reply to a command the saga dispatched itself.
+EventEnvelope initiated = SagaEnvelopes.causedBy(
+    OrderSaga.State.class, SagaId.of("order-saga-42"), payment, new PaymentInitiated("pay-1"));
+
+processManager.onEvents(List.of(initiated));
+
+EventMetadata captured = eventStore.load(payment).events().getLast().metadata();
+assertEquals(SagaId.of("order-saga-42"), captured.sagaOrigin().sagaId());
+assertEquals(1, captured.sagaOrigin().hop());
+assertEquals(CausationId.of(initiated.metadata().eventId().value()), captured.causationId());
+```
+
+### A hand-written `CommandBus` double is a bus of your own
+
+Every shipped command bus and query bus begins a dispatch with
+`StreamRuneContext.requireNoForeignReservedCorrelationId()`: a dispatch bound to a correlation id in
+the reserved `streamrune:` form that is not the bound saga origin's is refused with
+`ReservedCorrelationIdException`. A test double you write — a recording `CommandBus`, a mock — makes
+that check only if you put it there. A listener that copies the reserved id of a saga-caused event
+into a `RequestContext` of its own, instead of dispatching inside `continuing`, then passes its unit
+test against the double and is refused by the bus it runs on in production, on every delivery: the
+subscription keeps its checkpoint and delivers the event again without end, the bus logs one `WARN`
+per attempt, the poll loop one `ERROR`, and the subscription's health entry stays `DEGRADED`.
+
+Use `InMemoryCommandBus`, or make the check the first statement of the double:
+
+```java
+final class RecordingCommandBus implements CommandBus {
+    final List<Command> executed = new ArrayList<>();
+
+    @Override
+    public boolean supportsIdempotentExecution() {
+        return true;
+    }
+
+    @Override
+    public <C extends Command> CommandResult execute(C command) {
+        return execute(command, null);
+    }
+
+    @Override
+    public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+        StreamRuneContext.requireNoForeignReservedCorrelationId();   // what every shipped bus does first
+        executed.add(command);
+        return new CommandResult(List.of(), null, null, null);
+    }
+}
+```
+
+A custom bus that is more than a double extends `CommandBusProvenanceContract`, which holds the rule
+among its cases (see the `streamrune-test` README).
+
+### Envelopes for a saga's reply and for a continuation's
+
+`SagaEnvelopes` builds, without a saga or a bus, what the command bus stores:
+
+| Call | The event it stands for |
+|---|---|
+| `causedBy(stateType, sagaId, streamId, event)` | the reply to a command the saga dispatched itself: the saga's origin at hop 0, no causation id |
+| `continuationOf(cause, streamId, event)` | the event of a command a listener dispatched inside `StreamRuneContext.continuing(cause)`: the origin of `cause` one hop further, the id of `cause` as the causation id, no user, no baggage |
+| `causedBy(stateType, sagaId, hop, streamId, event)` | the same saga-caused event `hop` continuations away: the last of a chain of `continuationOf` envelopes |
+| `metadataCausedBy(stateType, sagaId)`, `metadataOfContinuation(cause)` | the metadata alone, for an envelope you build at an offset of your choosing |
+
+`continuationOf` binds `continuing(cause)` and asks `InMemoryCommandBus` for the metadata it writes
+under those bindings, so a hand-built continuation and a stored one cannot differ. A `SagaRunner`
+routes by the origin's saga type and saga id; the hop count and the causation id take no part in
+that, so a hop-0 envelope reaches the saga exactly as a continuation's reply does. Build the later
+hop where the code under test reads the hop, the causation id, or the stored shape of the event.
+
+Each envelope sits at global offset 0. A `SagaRunner` skips an event at or below the offset its saga
+applied last, so append the envelope to an event store first (and read it back), or build an
+envelope at a later offset around the metadata.
+
+---
+
 ## Testing Failure Modes
 
 ### DomainException via assertThrows

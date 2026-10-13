@@ -301,7 +301,10 @@ exactly) belongs to the saga the origin names, and the application is not asked;
 no part in that. Every other event is handed to `correlateByEventData(streamId, event)` — see
 [Saga › How it works](../guide/advanced/saga.md#how-it-works).
 In a test, `SagaEnvelopes.causedBy(stateType, sagaId, streamId, event)` from `streamrune-test`
-builds an envelope that carries one.
+builds an envelope that carries one at hop 0, and `SagaEnvelopes.continuationOf(cause, streamId,
+event)` the envelope of a continuation's event: the origin of `cause` one hop further, with the id
+of `cause` as its `causationId`. Both reach the saga the same way; see
+[Testing a listener that dispatches commands](../guide/testing.md#testing-a-listener-that-dispatches-commands).
 
 ```java
 CorrelationId correlationId()   // streamrune:saga:<sagaId>

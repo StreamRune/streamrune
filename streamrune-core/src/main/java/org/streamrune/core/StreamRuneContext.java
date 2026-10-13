@@ -158,7 +158,10 @@ public final class StreamRuneContext {
    *       IllegalArgumentException}). The bus dead-letters a rejection under no rule, and a plain
    *       {@link org.streamrune.core.subscription.EventListener} has no skip or dead-letter
    *       handling for the event, so a listener that lets a rejection propagate is handed the same
-   *       event again until someone intervenes. Decide it in the listener: catch the rejection and
+   *       event again until someone intervenes. Nothing is dead-lettered for it; what shows it is
+   *       the subscription — the {@code ERROR} line its poll loop logs for every attempt, its count
+   *       of consecutive failures, and its health entry where the subscription is registered with a
+   *       {@code SubscriptionHealthContributor}. Decide it in the listener: catch the rejection and
    *       return, which gives the command up on purpose, or dispatch the command that records the
    *       refusal. Skipping or dead-lettering the <em>event</em> exists one level up, for a
    *       projection run by a projection runner ({@link
@@ -227,8 +230,14 @@ public final class StreamRuneContext {
    *
    * <p>The shipped buses call it first in every dispatch — {@code VirtualThreadCommandBus}, {@code
    * SimpleQueryBus}, {@code CachingQueryBus}, {@code AuditingQueryBus}, and the in-memory buses of
-   * the test module — before a handler is looked up and before anything is recorded. A command or
-   * query bus of your own calls it at the same point.
+   * the test module — before a handler is looked up, before an interceptor, an authorizer or a
+   * cache is reached, and before anything is stored or audited. What a refusal leaves behind is the
+   * {@code WARN} line of the production buses and, for a command, its count: {@code
+   * VirtualThreadCommandBus} counts the command as dispatched before the check and as failed after
+   * it; the query buses count nothing for a refused query. A command or query bus of your own calls
+   * it at the same point — and so does a hand-written test double of {@code CommandBus} or {@code
+   * QueryBus}, which is such a bus: a double that skips the call accepts in a unit test what every
+   * shipped bus refuses in production.
    *
    * <p>It passes when no context is bound, and when {@link #CURRENT} is bound to {@code null}
    * (which {@code ScopedValue.where(CURRENT, capture())} does on a thread with nothing bound).
