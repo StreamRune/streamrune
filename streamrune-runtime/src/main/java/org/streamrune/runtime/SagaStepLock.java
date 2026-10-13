@@ -65,7 +65,12 @@ import org.streamrune.core.types.SagaType;
  *       per listener and release the lock before the next event, so no thread holds two saga locks.
  *       Listener plumbing of an application that delivers a second saga's event inside the first
  *       saga's command dispatch does hold two; a cycle between two such threads ends at the step
- *       bound, as a failed delivery that is redelivered.
+ *       bound, as a failed delivery that is redelivered. A step also holds its saga's lock while
+ *       the command bus waits for an aggregate's lock. The reverse order — a thread inside a
+ *       command, holding the aggregate's lock, that enters a step — exists only where events are
+ *       delivered on the appending thread, as the test module's in-memory subscription does; a
+ *       cycle of that kind ends at the command bus's lock timeout or at the step bound, whichever
+ *       is shorter, as a retry-later failure of the step.
  *   <li><b>Released in {@code finally}.</b> A step that ends with an exception or an {@link Error}
  *       releases the lock; a process that dies holds nothing, because the lock is memory. An
  *       interrupt while waiting ends the wait with {@link SagaStepLockException} and leaves the
