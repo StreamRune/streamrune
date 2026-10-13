@@ -1301,17 +1301,14 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       return;
     }
     if (StreamRuneContext.isSagaDispatch()) {
-      // The reason used to read "the saga compensates on failure", which later
-      // became untrue — a forward failure with proven retry-later evidence now propagates for
-      // redelivery instead of compensating, and the interceptor veto joined that
-      // set. The suppression is still correct, but for the broader reason: the SAGA subsystem, not
-      // this queue, owns the recovery of a saga-issued command. Every outcome is covered by one of
-      // its own durable channels — compensate (claim-first, terminal), propagate for redelivery
-      // (subscription checkpoint unadvanced, re-dispatched under the same deterministic forward
-      // key), the saga's own timeout() into SagaTimeoutRunner compensation, or the compensation
-      // resume paths bounded by SagaCompensationRetrySweeper's give-up -> FAULTED. A dead-letter
-      // entry would add a SECOND, uncoordinated retry channel for the same command, whose replay
-      // would re-dispatch a command the saga may already have compensated or superseded.
+      // The saga subsystem, not this queue, owns the recovery of a command a saga issued. Every
+      // outcome is covered by one of its own durable channels: compensate (claim-first, terminal),
+      // propagate for redelivery (the subscription checkpoint stays, and the command is dispatched
+      // again under the same deterministic forward key), the saga's own timeout() into
+      // SagaTimeoutRunner compensation, or the compensation resume paths bounded by
+      // SagaCompensationRetrySweeper's give-up -> FAULTED. A dead-letter entry would be a second,
+      // uncoordinated retry channel for the same command, whose replay would dispatch a command the
+      // saga may already have compensated or superseded.
       LOG.debug(
           "Skipping DLQ publish for command {} ({}) — saga-owned; the saga subsystem owns its"
               + " recovery (compensation, redelivery, timeout, or the compensation resume paths)",
@@ -1319,17 +1316,20 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           command.getClass().getSimpleName());
       return;
     }
-    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
-    if (cause != null && cause.sagaOrigin() != null) {
-      // A dead-letter row cannot carry the origin, and its replay would run under the idempotency
-      // key of the caller's own redelivery: whichever reached the inbox first would decide whether
-      // the reply event names its saga. The caller of an origin-carrying command owns its retry —
-      // the saga subsystem for a saga's dispatch (the block above), the listener's subscription
-      // for a continuation (StreamRuneContext.continuing), which is not a saga dispatch and so
-      // reaches this block.
+    if (StreamRuneContext.cause() != null) {
+      // A dispatch cause is bound by saga dispatch (the block above) and by
+      // StreamRuneContext.continuing, a listener's reaction to a stored event, which is not a saga
+      // dispatch and so reaches this block. Whoever bound the cause retries the command: the
+      // listener lets the failure propagate and its subscription delivers the causing event again.
+      // A dead-letter row has no place for the causing event or for a saga origin, and its replay
+      // runs under the idempotency key of that redelivery: whichever reached the inbox first would
+      // decide whether the stored event names its cause and its saga, one row would be written per
+      // failed delivery, and without a key every row's replay would execute the command once more.
+      // A cause bound to null is no cause (InMemoryEventSubscription binds it so around a listener
+      // it calls on a dispatching thread): such a command is dead-lettered like any other.
       LOG.debug(
-          "Skipping DLQ publish for command {} ({}) — it carries a saga origin; its caller retries"
-              + " it",
+          "Skipping DLQ publish for command {} ({}) — a dispatch cause is bound; its caller"
+              + " retries it",
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName());
       return;
@@ -1788,11 +1788,13 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * <p>Three kinds of command are never published, because something else owns their retry and an
      * entry would add a second, uncoordinated one: a replay of an existing entry ({@link
      * #DLQ_REPLAY}), a command a saga dispatched ({@link StreamRuneContext#SAGA_OWNED}), and a
-     * command whose bound {@link StreamRuneContext#CAUSE} carries a saga origin — a saga's own
-     * dispatch, or a listener's continuation of an event that saga caused ({@link
-     * StreamRuneContext#continuing(EventEnvelope)}). An entry has no place for the origin, so its
-     * replay would store the command's events without one; the listener lets a failure that a later
-     * attempt can cure propagate, and its subscription delivers the causing event again.
+     * command dispatched while a {@link StreamRuneContext#CAUSE} is bound — a saga's own dispatch,
+     * or a listener's continuation of a stored event ({@link
+     * StreamRuneContext#continuing(EventEnvelope)}), whether or not a saga caused that event. An
+     * entry has no place for the causing event or for a saga origin, so its replay would store the
+     * command's events without either; the listener lets a failure that a later attempt can cure
+     * propagate, and its subscription delivers the causing event again. A listener that wants a
+     * failed command parked in the queue dispatches it outside {@code continuing}.
      */
     public Builder deadLetterQueue(DeadLetterQueue deadLetterQueue) {
       this.deadLetterQueue = deadLetterQueue;

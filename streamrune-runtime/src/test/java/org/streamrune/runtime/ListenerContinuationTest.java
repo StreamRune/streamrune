@@ -3,6 +3,10 @@ package org.streamrune.runtime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
@@ -17,6 +21,9 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.slf4j.LoggerFactory;
 import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
 import org.streamrune.core.DeadLetterRetryPolicy;
@@ -33,6 +40,7 @@ import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.SubscriptionConfig;
+import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CausationId;
@@ -45,6 +53,7 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
@@ -69,19 +78,25 @@ import org.streamrune.test.SagaEnvelopes;
  * <ol>
  *   <li>after the event is read and before the command commits: nothing is stored, and the
  *       redelivery binds the same cause, because the cause is a function of the stored event;
- *   <li>the dispatch fails: nothing is dead-lettered for an event a saga caused, the failure leaves
- *       the listener, and the subscription delivers the event again;
+ *   <li>the dispatch fails: nothing is dead-lettered, the failure leaves the listener, and the
+ *       subscription delivers the event again — for as many deliveries as fail; the command is
+ *       stored once, by the delivery that succeeds;
  *   <li>after the command and its idempotency key commit and before the subscription's checkpoint:
  *       the redelivery is answered from the command inbox and stores no second event;
- *   <li>a dispatch without a key is executed again on redelivery, each time with the same saga
- *       origin and causation id;
+ *   <li>a dispatch without a key is executed again by a redelivery after it committed, each time
+ *       with the same saga origin and causation id; a delivery that failed executed nothing;
  *   <li>a listener that swallows the failure loses the command: the checkpoint moves on and no
  *       dead-letter entry exists.
  * </ol>
  *
- * <p>Each runs on both subscriptions a listener can be fed by here: {@link
- * InMemoryEventSubscription}, and {@link PollingEventSubscription} over an {@link
- * InMemoryOffsetStore}, driven one poll cycle at a time.
+ * <p>Each runs for both kinds of event a listener continues — the reply to a saga's command, which
+ * carries a saga origin, and an event a request caused, which carries none — and on both
+ * subscriptions a listener can be fed by here: {@link InMemoryEventSubscription}, and {@link
+ * PollingEventSubscription} over an {@link InMemoryOffsetStore}, driven one poll cycle at a time.
+ * The dead-letter rule is the same for both kinds: no command dispatched inside a continuation is
+ * published to the command dead letter queue. A listener that wants a failed command parked there
+ * dispatches it outside the continuation ({@code
+ * aCommandDispatchedOutsideTheContinuation_isDeadLettered}).
  *
  * <p>The second half lets a real saga dispatch the command whose reply the listener continues.
  */
@@ -109,8 +124,26 @@ class ListenerContinuationTest {
       new SagaOrigin(SagaType.fromClass(FulfillmentState.class), SAGA_ID, 1);
   private static final String SUBSCRIPTION = "payment-process-manager";
 
+  /** The correlation id of a command the listener dispatches outside the continuation. */
+  private static final CorrelationId THE_LISTENERS_OWN = CorrelationId.of("capture-parked-1");
+
+  /** The two kinds of stored event a listener continues. */
+  private enum Cause {
+    /** The reply to a saga's own command: a saga origin at hop 0 and the saga's correlation id. */
+    A_SAGA_CAUSED_EVENT("an event a saga caused"),
+    /** An event a user's request caused: a user, a trace, a client's correlation id; no origin. */
+    A_REQUEST_CAUSED_EVENT("an event a request caused");
+
+    final String label;
+
+    Cause(String label) {
+      this.label = label;
+    }
+  }
+
   /** The production bus with an inbox and a dead letter queue, over the in-memory event store. */
   private static final class Harness implements AutoCloseable {
+    final Cause cause;
     final ObjectMapper mapper = new ObjectMapper();
     final AtomicInteger failuresLeft = new AtomicInteger();
     final AtomicBoolean rejecting = new AtomicBoolean();
@@ -155,8 +188,20 @@ class ListenerContinuationTest {
                 })
             .build();
 
+    Harness(Cause cause) {
+      this.cause = cause;
+    }
+
+    /** Stores the event the listener reacts to, of this harness's kind. */
+    EventEnvelope appendCause() {
+      return switch (cause) {
+        case A_SAGA_CAUSED_EVENT -> appendSagaCaused();
+        case A_REQUEST_CAUSED_EVENT -> appendRequestCaused();
+      };
+    }
+
     /** Stores the reply to a saga's own command: origin at hop 0. */
-    EventEnvelope appendSagaCaused() {
+    private EventEnvelope appendSagaCaused() {
       StreamId stream = StreamId.of(ORDER, AggregateId.of("o-1"));
       return append(
           SagaEnvelopes.causedBy(
@@ -164,7 +209,7 @@ class ListenerContinuationTest {
     }
 
     /** Stores an event a user's request caused: a user, a trace, a client's correlation id. */
-    EventEnvelope appendRequestCaused() {
+    private EventEnvelope appendRequestCaused() {
       StreamId stream = StreamId.of(ORDER, AggregateId.of("o-1"));
       return append(
           new EventEnvelope(
@@ -214,11 +259,13 @@ class ListenerContinuationTest {
     final AtomicInteger deliveries = new AtomicInteger();
     final AtomicInteger swallowed = new AtomicInteger();
     final AtomicInteger rejections = new AtomicInteger();
+    final AtomicInteger parked = new AtomicInteger();
     IntPredicate crashBeforeDispatch = delivery -> false;
     IntPredicate crashAfterDispatch = delivery -> false;
     boolean keyed = true;
     boolean swallowFailures;
     boolean takeRejectionsAsTheAnswer;
+    boolean parkFailuresOutsideTheContinuation;
 
     ProcessManager(Harness harness) {
       this.harness = harness;
@@ -234,7 +281,13 @@ class ListenerContinuationTest {
         if (crashBeforeDispatch.test(delivery)) {
           throw new IllegalStateException("crashed before the dispatch");
         }
-        if (swallowFailures) {
+        if (parkFailuresOutsideTheContinuation) {
+          try {
+            dispatchOutsideTheContinuation(event, initiated);
+          } catch (RuntimeException leftToTheDeadLetterQueue) {
+            parked.incrementAndGet();
+          }
+        } else if (swallowFailures) {
           try {
             dispatch(event, initiated);
           } catch (RuntimeException lost) {
@@ -267,6 +320,18 @@ class ListenerContinuationTest {
                   harness.bus.execute(command);
                 }
               });
+    }
+
+    /**
+     * The same command under a request context of the listener's own and no continuation: an
+     * ordinary command, which the bus dead-letters when it fails.
+     */
+    private void dispatchOutsideTheContinuation(EventEnvelope event, PaymentInitiated initiated) {
+      var context =
+          new StreamRuneContext.RequestContext(
+              null, null, THE_LISTENERS_OWN, Instant.now(), Map.of());
+      ScopedValue.where(StreamRuneContext.CURRENT, context)
+          .run(() -> harness.bus.execute(new Capture(initiated.paymentId()), keyOf(event)));
     }
   }
 
@@ -353,25 +418,31 @@ class ListenerContinuationTest {
     Feed open(Harness harness, EventListener listener);
   }
 
-  /** Runs {@code scenario} once per subscription, each on a fresh harness and listener. */
-  private static Stream<DynamicTest> onBothSubscriptions(Scenario scenario) {
+  /**
+   * Runs {@code scenario} once per kind of causing event and per subscription, each on a fresh
+   * harness and listener.
+   */
+  private static Stream<DynamicTest> forEachCauseOnBothSubscriptions(Scenario scenario) {
     Map<String, FeedFactory> feeds =
         Map.of(
             "in-memory subscription", ListenerContinuationTest::inMemoryFeed,
             "polling subscription", ListenerContinuationTest::pollingFeed);
-    return feeds.entrySet().stream()
-        .map(
-            entry ->
-                dynamicTest(
-                    entry.getKey(),
-                    () -> {
-                      try (Harness harness = new Harness()) {
-                        ProcessManager listener = new ProcessManager(harness);
-                        try (Feed feed = entry.getValue().open(harness, listener)) {
-                          scenario.run(harness, listener, feed);
-                        }
-                      }
-                    }));
+    return Stream.of(Cause.values())
+        .flatMap(
+            cause ->
+                feeds.entrySet().stream()
+                    .map(
+                        entry ->
+                            dynamicTest(
+                                cause.label + ", " + entry.getKey(),
+                                () -> {
+                                  try (Harness harness = new Harness(cause)) {
+                                    ProcessManager listener = new ProcessManager(harness);
+                                    try (Feed feed = entry.getValue().open(harness, listener)) {
+                                      scenario.run(harness, listener, feed);
+                                    }
+                                  }
+                                })));
   }
 
   private static StreamRuneContext.DispatchCause causeOf(EventEnvelope event) {
@@ -383,29 +454,34 @@ class ListenerContinuationTest {
             : new SagaOrigin(origin.sagaType(), origin.sagaId(), origin.hop() + 1));
   }
 
-  /** {@code captured} is the listener's event for the saga-caused {@code initiated}. */
-  private static void assertContinuesTheSagasReply(
-      EventEnvelope initiated, EventEnvelope captured) {
+  /**
+   * {@code captured} is the event of the listener's continuation of {@code initiated}: that event's
+   * id as causation id on every path, its origin one hop further or none, its correlation and trace
+   * ids, and nobody's identity.
+   */
+  private static void assertContinues(EventEnvelope initiated, EventEnvelope captured) {
+    EventMetadata cause = initiated.metadata();
     EventMetadata metadata = captured.metadata();
-    assertThat(metadata.sagaOrigin()).isEqualTo(ONE_HOP_FROM_THE_SAGA);
-    assertThat(metadata.causationId())
-        .isEqualTo(CausationId.of(initiated.metadata().eventId().value()));
-    assertThat(metadata.correlationId()).isEqualTo(initiated.metadata().correlationId());
-    assertThat(metadata.userId()).isNull();
+    assertThat(metadata.sagaOrigin())
+        .isEqualTo(cause.sagaOrigin() == null ? null : ONE_HOP_FROM_THE_SAGA);
+    assertThat(metadata.causationId()).isEqualTo(CausationId.of(cause.eventId().value()));
+    assertThat(metadata.correlationId()).isEqualTo(cause.correlationId());
+    assertThat(metadata.traceId()).isEqualTo(cause.traceId());
+    assertThat(metadata.userId()).as("the user of the causing event issued nothing").isNull();
     assertThat(metadata.baggage()).isEmpty();
   }
 
   @TestFactory
-  Stream<DynamicTest> theHop_storesTheOriginOneHopFurtherAndTheEventsIdAsCausation() {
-    return onBothSubscriptions(
+  Stream<DynamicTest> theHop_storesTheEventsIdAsCausation_andItsOriginOneHopFurther() {
+    return forEachCauseOnBothSubscriptions(
         (harness, listener, feed) -> {
-          EventEnvelope initiated = harness.appendSagaCaused();
+          EventEnvelope initiated = harness.appendCause();
 
           feed.cycle();
 
           assertThat(harness.captured())
               .singleElement()
-              .satisfies(captured -> assertContinuesTheSagasReply(initiated, captured));
+              .satisfies(captured -> assertContinues(initiated, captured));
           assertThat(feed.checkpoint())
               .as("the cycle drained to the head: the listener's own event is acknowledged too")
               .isEqualTo(harness.captured().getFirst().globalOffset().value());
@@ -415,9 +491,9 @@ class ListenerContinuationTest {
 
   @TestFactory
   Stream<DynamicTest> crashAfterReadingTheEvent_beforeTheCommandCommits() {
-    return onBothSubscriptions(
+    return forEachCauseOnBothSubscriptions(
         (harness, listener, feed) -> {
-          EventEnvelope initiated = harness.appendSagaCaused();
+          EventEnvelope initiated = harness.appendCause();
           listener.crashBeforeDispatch = delivery -> delivery == 1;
 
           feed.cycle();
@@ -431,7 +507,7 @@ class ListenerContinuationTest {
 
           assertThat(harness.captured())
               .singleElement()
-              .satisfies(captured -> assertContinuesTheSagasReply(initiated, captured));
+              .satisfies(captured -> assertContinues(initiated, captured));
           assertThat(listener.boundCauses)
               .as("the cause is a function of the stored event")
               .containsExactly(causeOf(initiated));
@@ -444,16 +520,16 @@ class ListenerContinuationTest {
 
   @TestFactory
   Stream<DynamicTest> theDispatchFails_nothingIsDeadLettered_andTheRedeliveryStoresTheEvent() {
-    return onBothSubscriptions(
+    return forEachCauseOnBothSubscriptions(
         (harness, listener, feed) -> {
-          EventEnvelope initiated = harness.appendSagaCaused();
+          EventEnvelope initiated = harness.appendCause();
           harness.failuresLeft.set(1);
 
           feed.cycle();
 
           assertThat(harness.captured()).isEmpty();
           assertThat(harness.dlq.all())
-              .as("a command that carries a saga origin is not dead-lettered")
+              .as("a command dispatched inside a continuation is not dead-lettered")
               .isEmpty();
           assertThat(feed.checkpoint()).as("the failure left the listener").isZero();
 
@@ -461,7 +537,7 @@ class ListenerContinuationTest {
 
           assertThat(harness.captured())
               .singleElement()
-              .satisfies(captured -> assertContinuesTheSagasReply(initiated, captured));
+              .satisfies(captured -> assertContinues(initiated, captured));
           assertThat(harness.dlq.all()).isEmpty();
           assertThat(listener.boundCauses)
               .as("both attempts bound the same cause")
@@ -469,11 +545,73 @@ class ListenerContinuationTest {
         });
   }
 
+  /**
+   * A listener that lets every failure leave it. However many deliveries fail, the queue stays
+   * empty, so the subscription is the one thing that runs the command again: the delivery that
+   * succeeds stores its event once, with the causing event's id as causation id.
+   */
+  @TestFactory
+  Stream<DynamicTest> everyFailedDeliveryLeavesNoEntry_andTheCommandIsStoredOnce() {
+    return forEachCauseOnBothSubscriptions(
+        (harness, listener, feed) ->
+            threeFailedDeliveriesThenOneThatSucceeds(harness, listener, feed));
+  }
+
+  /**
+   * The same without an idempotency key. A delivery that failed stored nothing and left no entry,
+   * so nothing executes the command a second time. What a key guards against is the redelivery
+   * after the command committed ({@code
+   * aDispatchWithoutAKey_isExecutedAgainOnRedelivery_withTheSameProvenance}).
+   */
+  @TestFactory
+  Stream<DynamicTest> withoutAKey_everyFailedDeliveryLeavesNoEntry_andTheCommandRunsOnce() {
+    return forEachCauseOnBothSubscriptions(
+        (harness, listener, feed) -> {
+          listener.keyed = false;
+          threeFailedDeliveriesThenOneThatSucceeds(harness, listener, feed);
+        });
+  }
+
+  private static void threeFailedDeliveriesThenOneThatSucceeds(
+      Harness harness, ProcessManager listener, Feed feed) {
+    EventEnvelope initiated = harness.appendCause();
+    harness.failuresLeft.set(3);
+
+    feed.cycle();
+    feed.cycle();
+    feed.cycle();
+
+    assertThat(listener.deliveries).hasValue(3);
+    assertThat(harness.captured()).isEmpty();
+    assertThat(harness.dlq.all()).as("no entry for any of the failed deliveries").isEmpty();
+    assertThat(feed.checkpoint()).isZero();
+
+    feed.cycle();
+
+    assertThat(harness.captured())
+        .singleElement()
+        .satisfies(captured -> assertContinues(initiated, captured));
+    assertThat(harness.dlq.all()).isEmpty();
+
+    replayDeadLetters(harness);
+    feed.cycle();
+
+    assertThat(harness.captured())
+        .as("nothing is left that runs the command again")
+        .singleElement()
+        .satisfies(captured -> assertContinues(initiated, captured));
+    assertThat(listener.deliveries).as("acknowledged: not delivered again").hasValue(4);
+    assertThat(listener.boundCauses)
+        .as("every attempt bound the same cause")
+        .hasSize(4)
+        .containsOnly(causeOf(initiated));
+  }
+
   @TestFactory
   Stream<DynamicTest> crashAfterTheCommandCommits_beforeTheCheckpoint() {
-    return onBothSubscriptions(
+    return forEachCauseOnBothSubscriptions(
         (harness, listener, feed) -> {
-          EventEnvelope initiated = harness.appendSagaCaused();
+          EventEnvelope initiated = harness.appendCause();
           listener.crashAfterDispatch = delivery -> delivery == 1;
 
           feed.cycle();
@@ -488,17 +626,22 @@ class ListenerContinuationTest {
           assertThat(harness.captured())
               .as("the redelivery is answered from the command inbox")
               .containsExactly(committed);
-          assertContinuesTheSagasReply(initiated, committed);
+          assertContinues(initiated, committed);
           assertThat(listener.deliveries).hasValue(2);
           assertThat(feed.checkpoint()).isEqualTo(committed.globalOffset().value());
+          assertThat(harness.dlq.all()).isEmpty();
         });
   }
 
+  /**
+   * The limit a key removes: without one, a crash between the command's commit and the
+   * subscription's checkpoint makes the redelivery execute the command a second time.
+   */
   @TestFactory
   Stream<DynamicTest> aDispatchWithoutAKey_isExecutedAgainOnRedelivery_withTheSameProvenance() {
-    return onBothSubscriptions(
+    return forEachCauseOnBothSubscriptions(
         (harness, listener, feed) -> {
-          EventEnvelope initiated = harness.appendSagaCaused();
+          EventEnvelope initiated = harness.appendCause();
           listener.keyed = false;
           listener.crashAfterDispatch = delivery -> delivery == 1;
 
@@ -507,17 +650,18 @@ class ListenerContinuationTest {
 
           List<EventEnvelope> captured = harness.captured();
           assertThat(captured).as("no key, no deduplication: the application's choice").hasSize(2);
-          assertThat(captured).allSatisfy(event -> assertContinuesTheSagasReply(initiated, event));
+          assertThat(captured).allSatisfy(event -> assertContinues(initiated, event));
           assertThat(captured.get(0).metadata().eventId())
               .isNotEqualTo(captured.get(1).metadata().eventId());
+          assertThat(harness.dlq.all()).isEmpty();
         });
   }
 
   @TestFactory
   Stream<DynamicTest> aListenerThatSwallowsTheFailure_losesTheCommand() {
-    return onBothSubscriptions(
+    return forEachCauseOnBothSubscriptions(
         (harness, listener, feed) -> {
-          EventEnvelope initiated = harness.appendSagaCaused();
+          EventEnvelope initiated = harness.appendCause();
           listener.swallowFailures = true;
           harness.failuresLeft.set(1);
 
@@ -537,115 +681,49 @@ class ListenerContinuationTest {
   }
 
   /**
-   * An event no saga caused: the failed command is dead-lettered like any other, so it has two
-   * retry channels. Here the subscription's redelivery reaches the command inbox first and the
-   * replay finds the command committed; {@code DeadLetterReplayProvenanceTest} runs the other
-   * order, in which the stored event has no causation id.
+   * "Park it and move on": the listener dispatches the command outside the continuation, under a
+   * request context of its own, and catches the failure. That command is an ordinary one. The bus
+   * dead-letters it, the subscription moves on, and the replay stores an event that names neither
+   * the causing event nor its saga — the price of the second retry channel.
    */
   @TestFactory
-  Stream<DynamicTest> anEventWithoutAnOrigin_aFailedDispatchIsDeadLettered_andOneEventIsStored() {
-    return onBothSubscriptions(
+  Stream<DynamicTest> aCommandDispatchedOutsideTheContinuation_isDeadLettered() {
+    return forEachCauseOnBothSubscriptions(
         (harness, listener, feed) -> {
-          EventEnvelope requested = harness.appendRequestCaused();
+          EventEnvelope initiated = harness.appendCause();
+          listener.parkFailuresOutsideTheContinuation = true;
           harness.failuresLeft.set(1);
 
           feed.cycle();
 
+          assertThat(listener.parked).hasValue(1);
           assertThat(harness.captured()).isEmpty();
-          assertThat(harness.dlq.all()).hasSize(1);
-          assertThat(harness.dlq.all().getFirst().idempotencyKey()).isEqualTo(keyOf(requested));
-          assertThat(harness.dlq.all().getFirst().userId()).isNull();
-
-          feed.cycle();
-
-          assertThat(harness.captured()).hasSize(1);
-          EventMetadata metadata = harness.captured().getFirst().metadata();
-          assertThat(metadata.sagaOrigin()).isNull();
-          assertThat(metadata.causationId()).isEqualTo(CausationId.of("evt-request-1"));
-          assertThat(metadata.correlationId()).isEqualTo(CorrelationId.of("client-corr-7"));
-          assertThat(metadata.traceId()).isEqualTo(TraceId.of("trace-7"));
-          assertThat(metadata.userId()).as("the user of the first event issued nothing").isNull();
-          assertThat(metadata.baggage()).isEmpty();
-
-          replayDeadLetters(harness);
-
-          assertThat(harness.captured()).as("the replay hit the inbox").hasSize(1);
-          assertThat(harness.dlq.all()).isEmpty();
-        });
-  }
-
-  /**
-   * The same event, and a listener that lets every failure leave it, as a listener must for an
-   * event a saga caused. Each failed delivery publishes a dead-letter entry of its own, under the
-   * command id of that execution. With an idempotency key the redelivery and the replays of all
-   * entries end in one stored event.
-   */
-  @TestFactory
-  Stream<DynamicTest> anEventWithoutAnOrigin_everyFailedDeliveryLeavesAnEntry_aKeyDrainsThemAll() {
-    return onBothSubscriptions(
-        (harness, listener, feed) -> {
-          EventEnvelope requested = harness.appendRequestCaused();
-          harness.failuresLeft.set(3);
-
-          feed.cycle();
-          feed.cycle();
-          feed.cycle();
-
-          assertThat(harness.captured()).isEmpty();
-          assertThat(harness.dlq.all()).as("one entry per failed delivery").hasSize(3);
           assertThat(harness.dlq.all())
-              .allSatisfy(entry -> assertThat(entry.idempotencyKey()).isEqualTo(keyOf(requested)));
-          assertThat(harness.dlq.all().stream().map(entry -> entry.commandId()).distinct())
-              .hasSize(3);
-
-          feed.cycle();
-
-          assertThat(harness.captured()).hasSize(1);
-          assertThat(harness.dlq.all())
-              .as("the entries outlive the successful delivery")
-              .hasSize(3);
-
-          replayDeadLetters(harness);
-
-          assertThat(harness.dlq.all()).isEmpty();
-          assertThat(harness.captured()).as("every replay hit the inbox").hasSize(1);
-          assertThat(harness.captured().getFirst().metadata().causationId())
-              .as("the redelivery committed first")
-              .isEqualTo(CausationId.of("evt-request-1"));
-        });
-  }
-
-  /**
-   * Without a key nothing ties the redelivery and the replays together: the command is executed by
-   * the successful delivery and once more by the replay of every entry, and the replays' events are
-   * causation roots.
-   */
-  @TestFactory
-  Stream<DynamicTest> anEventWithoutAnOrigin_withoutAKey_everyEntryRunsTheCommandAgain() {
-    return onBothSubscriptions(
-        (harness, listener, feed) -> {
-          harness.appendRequestCaused();
-          listener.keyed = false;
-          harness.failuresLeft.set(3);
-
-          feed.cycle();
-          feed.cycle();
-          feed.cycle();
-          assertThat(harness.dlq.all()).hasSize(3);
-
-          feed.cycle();
-          assertThat(harness.captured()).hasSize(1);
+              .singleElement()
+              .satisfies(
+                  entry -> {
+                    assertThat(entry.idempotencyKey()).isEqualTo(keyOf(initiated));
+                    assertThat(entry.correlationId()).isEqualTo(THE_LISTENERS_OWN);
+                    assertThat(entry.userId()).isNull();
+                  });
+          assertThat(feed.checkpoint())
+              .as("the listener parked the command and the subscription moved on")
+              .isEqualTo(initiated.globalOffset().value());
 
           replayDeadLetters(harness);
 
           assertThat(harness.dlq.all()).isEmpty();
           assertThat(harness.captured())
-              .as("one execution by the delivery, one by each of the three replays")
-              .hasSize(4);
-          assertThat(harness.captured().stream().map(event -> event.metadata().causationId()))
-              .containsExactly(CausationId.of("evt-request-1"), null, null, null);
-          assertThat(harness.captured())
-              .allSatisfy(event -> assertThat(event.metadata().sagaOrigin()).isNull());
+              .singleElement()
+              .satisfies(
+                  captured -> {
+                    EventMetadata metadata = captured.metadata();
+                    assertThat(metadata.sagaOrigin()).isNull();
+                    assertThat(metadata.causationId()).isNull();
+                    assertThat(metadata.correlationId()).isEqualTo(THE_LISTENERS_OWN);
+                  });
+          feed.cycle();
+          assertThat(listener.deliveries).as("the event is not delivered again").hasValue(1);
         });
   }
 
@@ -672,9 +750,9 @@ class ListenerContinuationTest {
    */
   @TestFactory
   Stream<DynamicTest> aRejectedCommand_blocksTheSubscriptionUntilTheListenerTakesTheAnswer() {
-    return onBothSubscriptions(
+    return forEachCauseOnBothSubscriptions(
         (harness, listener, feed) -> {
-          EventEnvelope initiated = harness.appendSagaCaused();
+          EventEnvelope initiated = harness.appendCause();
           harness.rejecting.set(true);
 
           feed.cycle();
@@ -695,6 +773,102 @@ class ListenerContinuationTest {
           feed.cycle();
           assertThat(listener.deliveries).as("acknowledged: not delivered again").hasValue(4);
         });
+  }
+
+  /**
+   * A continuation that keeps failing is in no dead-letter queue; its subscription is where it
+   * shows. On a started polling subscription that is registered with a {@link
+   * SubscriptionHealthContributor}: the poll loop logs one {@code ERROR} line per attempt with the
+   * failure attached, {@link PollingEventSubscription#consecutiveFailures()} counts the attempts,
+   * and the health entry is {@code DEGRADED} with a rising error count. All three clear with the
+   * delivery that succeeds.
+   */
+  @ParameterizedTest
+  @EnumSource(Cause.class)
+  void aContinuationThatKeepsFailing_showsOnItsSubscription(Cause cause) {
+    Logger pollLoopLogger = (Logger) LoggerFactory.getLogger(ResilientPollLoop.class);
+    ListAppender<ILoggingEvent> log = new ListAppender<>();
+    log.start();
+    pollLoopLogger.addAppender(log);
+    try (Harness harness = new Harness(cause)) {
+      ProcessManager listener = new ProcessManager(harness);
+      InMemoryOffsetStore offsets = new InMemoryOffsetStore();
+      SubscriptionHealthContributor health =
+          new SubscriptionHealthContributor(harness.eventStore, offsets);
+      EventEnvelope initiated = harness.appendCause();
+      harness.failuresLeft.set(Integer.MAX_VALUE);
+
+      try (PollingEventSubscription subscription =
+          PollingEventSubscription.builder()
+              .subscriptionName(SUBSCRIPTION)
+              .eventStore(harness.eventStore)
+              .offsetStore(offsets)
+              .listener(
+                  new HealthTrackingEventListener(
+                      listener, health, SubscriptionName.of(SUBSCRIPTION)))
+              .config(new SubscriptionConfig(false, Duration.ofMillis(10), Duration.ZERO))
+              .build()) {
+        health.register(SUBSCRIPTION, subscription);
+        subscription.start();
+
+        Awaitility.await()
+            .atMost(Duration.ofSeconds(10))
+            .until(() -> subscription.consecutiveFailures() >= 3);
+
+        assertThat(harness.dlq.all()).as("no dead-letter entry for any attempt").isEmpty();
+        assertThat(harness.captured()).isEmpty();
+        assertThat(offsets.getLastOffset(ProjectionName.of(SUBSCRIPTION)).value())
+            .as("the checkpoint stays")
+            .isZero();
+        assertThat(health.health())
+            .singleElement()
+            .satisfies(
+                entry -> {
+                  assertThat(entry.name()).isEqualTo(SUBSCRIPTION);
+                  assertThat(entry.status()).isEqualTo(SubscriptionHealth.Status.DEGRADED);
+                  assertThat(entry.errorCount()).isGreaterThanOrEqualTo(3);
+                });
+        // The lines of this subscription's loop only: the logger is shared by every poll loop.
+        String loop = "Poll loop 'subscription '" + SUBSCRIPTION + "'' failed (";
+        List<ILoggingEvent> errors =
+            List.copyOf(log.list).stream()
+                .filter(line -> line.getLevel() == Level.ERROR)
+                .filter(line -> line.getFormattedMessage().startsWith(loop))
+                .toList();
+        assertThat(errors).hasSizeGreaterThanOrEqualTo(3);
+        for (int attempt = 1; attempt <= 3; attempt++) {
+          ILoggingEvent line = errors.get(attempt - 1);
+          assertThat(line.getFormattedMessage())
+              .startsWith(loop + attempt + " consecutive failure(s)); retrying in ");
+          assertThat(line.getThrowableProxy().getMessage())
+              .isEqualTo("payment provider unreachable");
+        }
+
+        harness.failuresLeft.set(0);
+
+        Awaitility.await()
+            .atMost(Duration.ofSeconds(10))
+            .until(() -> !harness.captured().isEmpty() && subscription.consecutiveFailures() == 0);
+        assertThat(harness.captured())
+            .singleElement()
+            .satisfies(captured -> assertContinues(initiated, captured));
+        assertThat(harness.dlq.all()).isEmpty();
+        Awaitility.await()
+            .atMost(Duration.ofSeconds(10))
+            .untilAsserted(
+                () ->
+                    assertThat(health.health())
+                        .singleElement()
+                        .satisfies(
+                            entry -> {
+                              assertThat(entry.status()).isEqualTo(SubscriptionHealth.Status.UP);
+                              assertThat(entry.errorCount()).isZero();
+                            }));
+      }
+    } finally {
+      pollLoopLogger.detachAppender(log);
+      log.stop();
+    }
   }
 
   // ==== A real saga's reply, continued by a listener ====

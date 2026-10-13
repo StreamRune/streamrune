@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 import org.awaitility.Awaitility;
@@ -307,22 +308,82 @@ class DeadLetterReplayProvenanceTest {
   }
 
   /**
-   * The documented limit of a continuation of an event without an origin: its failed command is
-   * dead-lettered like any other, the entry has no place for the causing event, and the replay
-   * stores the command's events as causation roots. The listener's redelivery under the same key
-   * then finds the command committed and stores nothing.
+   * A failed continuation is dead-lettered for neither kind of causing event, so no replay can
+   * store its events without the causing event. The listener's redelivery is the one retry, and its
+   * events name the event it reacted to — and the saga, when that event has an origin.
+   */
+  @TestFactory
+  Stream<DynamicTest> aFailedContinuation_leavesNothingToReplay() {
+    Map<String, EventEnvelope> causes =
+        Map.of(
+            "an event a saga caused", sagaCausedEvent(),
+            "an event a request caused", requestCausedEvent());
+    return causes.entrySet().stream()
+        .map(
+            entry ->
+                dynamicTest(
+                    entry.getKey(),
+                    () -> {
+                      try (Harness harness = new Harness()) {
+                        EventEnvelope cause = entry.getValue();
+                        IdempotencyKey key =
+                            IdempotencyKey.of("payments:" + cause.metadata().eventId().value());
+                        harness.failing.set(true);
+
+                        assertThrows(
+                            IllegalStateException.class,
+                            () ->
+                                StreamRuneContext.continuing(cause)
+                                    .run(() -> harness.bus.execute(new Pay("pay-1"), key)));
+                        assertTrue(harness.dlq.all().isEmpty());
+                        harness.failing.set(false);
+                        harness.runner.processBatch();
+                        assertTrue(harness.stored("pay-1").isEmpty());
+
+                        StreamRuneContext.continuing(cause)
+                            .run(() -> harness.bus.execute(new Pay("pay-1"), key));
+
+                        List<EventEnvelope> stored = harness.stored("pay-1");
+                        assertEquals(1, stored.size());
+                        EventMetadata metadata = stored.getFirst().metadata();
+                        assertEquals(
+                            CausationId.of(cause.metadata().eventId().value()),
+                            metadata.causationId());
+                        assertEquals(cause.metadata().correlationId(), metadata.correlationId());
+                        if (cause.metadata().sagaOrigin() == null) {
+                          assertNull(metadata.sagaOrigin());
+                        } else {
+                          assertEquals(SAGA_ID, metadata.sagaOrigin().sagaId());
+                          assertEquals(1, metadata.sagaOrigin().hop());
+                        }
+                      }
+                    }));
+  }
+
+  /**
+   * What a listener gives up when it dispatches outside {@code continuing} to have a failed command
+   * parked in the dead letter queue: the entry has no place for the event the listener reacted to,
+   * and the replay stores the command's events as causation roots. A later dispatch under the same
+   * key finds the command committed and stores nothing.
    */
   @Test
-  void aFailedContinuationOfAnEventWithoutAnOrigin_isReplayedWithoutItsCausationId() {
+  void aCommandDispatchedOutsideContinuing_isReplayedWithoutACausationId() {
     try (Harness harness = new Harness()) {
-      EventEnvelope cause = requestCausedEvent();
-      IdempotencyKey key = IdempotencyKey.of("payments:" + cause.metadata().eventId().value());
+      EventEnvelope reactedTo = requestCausedEvent();
+      IdempotencyKey key = IdempotencyKey.of("payments:" + reactedTo.metadata().eventId().value());
+      var plain =
+          new StreamRuneContext.RequestContext(
+              reactedTo.metadata().traceId(),
+              null,
+              reactedTo.metadata().correlationId(),
+              Instant.now(),
+              Map.of());
       harness.failing.set(true);
 
       assertThrows(
           IllegalStateException.class,
           () ->
-              StreamRuneContext.continuing(cause)
+              ScopedValue.where(StreamRuneContext.CURRENT, plain)
                   .run(() -> harness.bus.execute(new Pay("pay-1"), key)));
       assertEquals(1, harness.dlq.all().size());
       assertEquals(key, harness.dlq.all().getFirst().idempotencyKey());
@@ -334,44 +395,11 @@ class DeadLetterReplayProvenanceTest {
       assertNoProvenance(stored);
       assertEquals(CorrelationId.of("client-corr-7"), stored.getFirst().metadata().correlationId());
       assertNull(stored.getFirst().metadata().userId());
-
-      // The listener's redelivery: answered from the inbox, no second event.
-      StreamRuneContext.continuing(cause).run(() -> harness.bus.execute(new Pay("pay-1"), key));
-      assertEquals(1, harness.stored("pay-1").size());
-    }
-  }
-
-  /**
-   * The same failure for a continuation of a saga-caused event: nothing is dead-lettered, so no
-   * replay can store the reply without its origin. The listener's redelivery is the one retry, and
-   * its events name the saga.
-   */
-  @Test
-  void aFailedContinuationOfASagaCausedEvent_leavesNothingToReplay() {
-    try (Harness harness = new Harness()) {
-      EventEnvelope cause = sagaCausedEvent();
-      IdempotencyKey key = IdempotencyKey.of("payments:" + cause.metadata().eventId().value());
-      harness.failing.set(true);
-
-      assertThrows(
-          IllegalStateException.class,
-          () ->
-              StreamRuneContext.continuing(cause)
-                  .run(() -> harness.bus.execute(new Pay("pay-1"), key)));
       assertTrue(harness.dlq.all().isEmpty());
-      harness.runner.processBatch();
-      assertTrue(harness.stored("pay-1").isEmpty());
 
-      harness.failing.set(false);
-      StreamRuneContext.continuing(cause).run(() -> harness.bus.execute(new Pay("pay-1"), key));
-
-      List<EventEnvelope> stored = harness.stored("pay-1");
-      assertEquals(1, stored.size());
-      assertEquals(SAGA_ID, stored.getFirst().metadata().sagaOrigin().sagaId());
-      assertEquals(1, stored.getFirst().metadata().sagaOrigin().hop());
-      assertEquals(
-          CausationId.of(cause.metadata().eventId().value()),
-          stored.getFirst().metadata().causationId());
+      // The same key again, this time inside a continuation: answered from the inbox.
+      StreamRuneContext.continuing(reactedTo).run(() -> harness.bus.execute(new Pay("pay-1"), key));
+      assertEquals(1, harness.stored("pay-1").size());
     }
   }
 }

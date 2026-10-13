@@ -165,32 +165,32 @@ A replay restores those three values and nothing else. An entry has no place for
 for a causing event, and the runner binds neither, so the events of a replayed command carry no
 `sagaOrigin` and no `causationId`. Two rules follow:
 
-- **A command that carries a saga origin is not dead-lettered.** That is every command a saga
-  dispatches, and every command a listener dispatches inside `StreamRuneContext.continuing(event)`
-  for an event a saga caused. A replay would run under the idempotency key of the caller's own
-  retry and store the reply without its origin, and whichever of the two reached the command inbox
-  first would decide what the event says. The caller retries instead: the saga subsystem for its
-  own commands, the subscription for a listener.
-- **A continuation of an event no saga caused is dead-lettered like any other command, once for
-  every failed delivery.** A listener that lets three deliveries of the event fail leaves three
-  entries, each under the command id of its own execution. A replay keeps the flow's correlation
-  and trace ids and stores the command's events as causation roots (`causationId` is `null`).
-  With an idempotency key the redelivery and the replays of all entries end in one stored event,
-  whose `causationId` is the causing event's id when the redelivery commits first and `null` when
-  a replay does. Without a key every entry's replay executes the command once more, besides the
-  redelivery. Give a continuation's command a key derived from the causing event.
+- **A command dispatched with a dispatch cause bound is not dead-lettered.** That is every command
+  a saga dispatches, and every command a listener dispatches inside
+  `StreamRuneContext.continuing(event)`, whether or not a saga caused that event. A replay would
+  run under the idempotency key of the caller's own retry and store the command's events without
+  the causing event and without the saga origin; whichever of the two reached the command inbox
+  first would decide what the event says, and without a key the replay would execute the command
+  once more. The caller retries instead: the saga subsystem for its own commands, the subscription
+  for a listener. However many deliveries of the event fail, the queue holds nothing for them, and
+  the delivery that succeeds stores the command's events once.
+- **A listener that wants a failed command parked dispatches it outside `continuing`.** Under a
+  request context of its own the command is an ordinary one: the bus dead-letters it, the listener
+  catches the failure and its subscription moves on, and the replay stores the command's events as
+  causation roots (`causationId` is `null`) with no saga origin.
 
-No entry the command bus writes holds a correlation id in the reserved `streamrune:` form — the
-form saga dispatch binds, `streamrune:saga:<sagaId>`. A command bound to one carries a saga origin,
-so the first rule keeps it out of the queue; that is also why the entry's `VARCHAR(255)`
-correlation column never meets the up to 271 characters of that form. An entry written by other
-means that holds one is replayed under that id with no saga origin bound, and the command bus
-refuses such a command (`ReservedCorrelationIdException`) before anything is stored: the entry
-fails every attempt and ends as the retry policy ends an exhausted entry.
+No entry the command bus writes holds a correlation id in the reserved `streamrune:` form — the form
+saga dispatch binds, `streamrune:saga:<sagaId>`. A command bound to one carries a saga origin, which
+is a bound dispatch cause, so the first rule keeps it out of the queue; that is also why the entry's
+`VARCHAR(255)` correlation column never meets the up to 271 characters of that form. An entry
+written by other means that holds one is replayed under that id with no saga origin bound, and the
+command bus refuses such a command (`ReservedCorrelationIdException`) before anything is stored: the
+entry fails every attempt and ends as the retry policy ends an exhausted entry.
 
-**What a listener does with a failed continuation.** For a command that carries a saga origin the
-subscription is the only retry, so the listener decides the command's fate — and the subscription
-is where a continuation that keeps failing shows: the poll loop's `ERROR` line for every attempt
+**What a listener does with a failed continuation.** For a command dispatched inside `continuing`
+the subscription is the only retry, so the listener decides the command's fate — and the
+subscription is where a continuation that keeps failing shows: the poll loop's `ERROR` line for
+every attempt
 (`Poll loop 'subscription '<name>'' failed (N consecutive failure(s)); retrying in M ms`),
 `PollingEventSubscription.consecutiveFailures()`, and the `subscription.<name>` health detail of a
 subscription registered with `SubscriptionHealthContributor` (see
