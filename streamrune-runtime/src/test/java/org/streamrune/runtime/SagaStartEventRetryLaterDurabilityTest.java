@@ -13,6 +13,7 @@ import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStateSerializationException;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.test.InMemorySagaStore;
 
@@ -423,7 +424,12 @@ class SagaStartEventRetryLaterDurabilityTest {
     return new ForwardingSagaStore(new InMemorySagaStore()) {
       @Override
       public void createGenesisPending(
-          SagaId id, SagaType t, SagaState s, SagaStatus st, boolean deadLetterPending) {
+          SagaId id,
+          SagaType t,
+          SagaState s,
+          SagaStatus st,
+          boolean deadLetterPending,
+          EventId episodeCause) {
         throw failure;
       }
     };

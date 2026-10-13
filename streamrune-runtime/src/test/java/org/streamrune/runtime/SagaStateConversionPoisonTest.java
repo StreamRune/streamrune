@@ -185,9 +185,11 @@ class SagaStateConversionPoisonTest {
         SagaType sagaType,
         SagaState state,
         SagaStatus status,
-        boolean deadLetterPending) {
+        boolean deadLetterPending,
+        EventId episodeCause) {
       raise(sagaId, "create", failCreateWith);
-      delegate.createGenesisPending(sagaId, sagaType, state, status, deadLetterPending);
+      delegate.createGenesisPending(
+          sagaId, sagaType, state, status, deadLetterPending, episodeCause);
     }
 
     /** The runner's evolve-poison create raises like {@code create}. */
@@ -237,9 +239,13 @@ class SagaStateConversionPoisonTest {
 
     @Override
     public void claimCompensating(
-        SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
+        SagaId sagaId,
+        SagaType sagaType,
+        SagaState state,
+        long expectedVersion,
+        EventId episodeCause) {
       raiseUpdate(sagaId, "claim");
-      delegate.claimCompensating(sagaId, sagaType, state, expectedVersion);
+      delegate.claimCompensating(sagaId, sagaType, state, expectedVersion, episodeCause);
     }
 
     @Override

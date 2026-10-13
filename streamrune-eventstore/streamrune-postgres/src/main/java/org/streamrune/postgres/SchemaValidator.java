@@ -65,6 +65,9 @@ public final class SchemaValidator {
                   // episode_claimed_at is read by every saga load SELECT and
                   // anchors the stale-compensation replay guard.
                   "episode_claimed_at",
+                  // episode_cause_event_id is read by every saga load SELECT and written by every
+                  // statement that stamps a compensation episode.
+                  "episode_cause_event_id",
                   // The five recorded recovery facts, read by every saga
                   // load SELECT and written by the executor / runner / replayer.
                   "genesis_applied",

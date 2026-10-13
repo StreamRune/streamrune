@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.streamrune.core.OptimisticLockException;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.SagaType;
 
@@ -14,11 +15,14 @@ import org.streamrune.core.types.SagaType;
  * <p>Write operations use an explicit create / CAS-update split so the framework detects lost
  * updates at the persistence layer rather than relying on application-level checks.
  *
- * <p>Every operation the saga runtime needs is abstract. Besides the four-argument {@code create}
- * convenience, the only {@code default} methods are {@link #countByStatus} and {@link
- * #findCompensating}, which back optional features (the saga backlog gauges and the
- * compensation-retry sweeper) and throw {@link UnsupportedOperationException} unless a store
- * supports them.
+ * <p>Every operation the saga runtime needs is abstract. The {@code default} methods are of two
+ * kinds. Three are short forms that delegate to an abstract method: the four-argument {@code
+ * create} (no shield), the five-argument {@code createGenesisPending} and the four-argument {@code
+ * claimCompensating} (both: an episode opened with no event in hand, so no cause to record). A
+ * store implements the long forms and inherits the short ones. The other two, {@link
+ * #countByStatus} and {@link #findCompensating}, back optional features (the saga backlog gauges
+ * and the compensation-retry sweeper) and throw {@link UnsupportedOperationException} unless a
+ * store supports them.
  *
  * <p><b>Type-scoped, with no untyped mode.</b> The store is keyed by {@code saga_id} alone, and
  * every operation that takes a {@link SagaType} is scoped to it. A {@code null} saga type is a
@@ -60,7 +64,9 @@ public interface SagaStore {
    *
    * <p>A row created with {@code status = COMPENSATING} is born stamped — {@code episode_version =
    * 1}, {@code episode_claimed_at = now}, in the same insert: the episode stamp rule, see {@link
-   * #claimCompensating}. Any other status leaves both {@code NULL}.
+   * #claimCompensating}. Any other status leaves both {@code NULL}. This method is given no event,
+   * so the episode it stamps records no cause ({@link LoadedSaga#episodeCauseEventId()} is {@code
+   * null}).
    *
    * @param sagaId the saga identifier
    * @param sagaType the saga type (the framework derives it from the saga state's fully-qualified
@@ -100,7 +106,8 @@ public interface SagaStore {
    * <p>The episode stamp rule applies here too (see {@link #claimCompensating}): landing the row at
    * {@code COMPENSATING} stamps the episode ({@code episode_version = expectedVersion + 1}, {@code
    * episode_claimed_at = now}) unless the row already carries one; any other status leaves the
-   * stamp exactly as it is — a terminal write never clears it.
+   * stamp exactly as it is — a terminal write never clears it. This method is given no event: an
+   * episode it stamps records no cause, and a stamped row keeps the cause it has.
    *
    * @param sagaId the saga identifier
    * @param sagaType the saga type (must match the type set at {@link #create} time)
@@ -132,13 +139,19 @@ public interface SagaStore {
    * <p>When the genesis-evolved {@code status} is {@code COMPENSATING} the row is born stamped
    * ({@code episode_version = 1}, {@code episode_claimed_at = now}) in the same insert — the
    * episode stamp rule, see {@link #claimCompensating} — so there is no crash point between "row is
-   * COMPENSATING" and "episode stamped" either.
+   * COMPENSATING" and "episode stamped" either. The same insert records {@code episodeCause} as the
+   * episode's cause ({@link LoadedSaga#episodeCauseEventId()}): the executor passes the start
+   * event's id, because that event's evolve opened the episode. A row born at any other status
+   * opens no episode and records no cause, whatever {@code episodeCause} is.
    *
    * <p>This insert must happen BEFORE any command is dispatched, and it must not be implemented by
    * delegating to {@code create}: that records an applied genesis for a start whose dispatch loop
    * never ran, so a redelivery dedup-skips it and the saga strands.
    *
    * @param deadLetterPending the shield the row is born with
+   * @param episodeCause the id of the event whose evolve yielded {@code status}, recorded as the
+   *     episode's cause when {@code status} is {@code COMPENSATING} and ignored otherwise; {@code
+   *     null} when the caller has no event in hand
    * @throws org.streamrune.core.OptimisticLockException when a row already exists
    * @throws SagaTypeCollisionException when the existing row belongs to another saga type
    * @throws IllegalArgumentException if {@code sagaId}, {@code sagaType}, {@code state} or {@code
@@ -149,7 +162,22 @@ public interface SagaStore {
       SagaType sagaType,
       SagaState state,
       SagaStatus status,
-      boolean deadLetterPending);
+      boolean deadLetterPending,
+      EventId episodeCause);
+
+  /**
+   * {@link #createGenesisPending(SagaId, SagaType, SagaState, SagaStatus, boolean, EventId)} with
+   * no event id in hand: a row born {@code COMPENSATING} is stamped and records no cause. The
+   * tooling and test form; the executor always passes the start event's id.
+   */
+  default void createGenesisPending(
+      SagaId sagaId,
+      SagaType sagaType,
+      SagaState state,
+      SagaStatus status,
+      boolean deadLetterPending) {
+    createGenesisPending(sagaId, sagaType, state, status, deadLetterPending, null);
+  }
 
   /**
    * The evolve-poison create: version 1, status FAULTED, {@code genesis_applied = FALSE}, {@code
@@ -169,9 +197,10 @@ public interface SagaStore {
   void createFaulted(SagaId sagaId, SagaType sagaType, SagaState initialState);
 
   /**
-   * What {@link SagaStore#applyEvent} records about the event it applies: the event's global offset
-   * and the path it was delivered on. Build it with one of the four named factories; each names one
-   * combination of the two flags. The canonical constructor stays public only because a record
+   * What {@link SagaStore#applyEvent} records about the event it applies: the event's global
+   * offset, the path it was delivered on and, optionally, its id. Build it with one of the four
+   * named factories; each names one combination of the two flags and carries no event id. {@link
+   * #withEventId} adds the id. The canonical constructor stays public only because a record
    * requires it, and a call through it can still swap the two booleans, so use the factories:
    *
    * <ul>
@@ -194,8 +223,12 @@ public interface SagaStore {
    *     genesis_applied} (never clears it)
    * @param replayRedrive {@code true} when a dead-letter replay feed delivers the event: the write
    *     sets {@code last_replayed_offset = eventOffset} (left unchanged otherwise)
+   * @param eventId the applied event's id, or {@code null} when the caller has none in hand. It is
+   *     recorded only by a write that stamps a compensation episode, as that episode's cause
+   *     ({@link LoadedSaga#episodeCauseEventId()}); every other write ignores it
    */
-  record AppliedEvent(GlobalOffset eventOffset, boolean startPath, boolean replayRedrive) {
+  record AppliedEvent(
+      GlobalOffset eventOffset, boolean startPath, boolean replayRedrive, EventId eventId) {
 
     /**
      * Validates the offset; prefer the named factories over this constructor.
@@ -210,22 +243,33 @@ public interface SagaStore {
 
     /** A correlated event delivered live by the subscription. */
     public static AppliedEvent live(GlobalOffset eventOffset) {
-      return new AppliedEvent(eventOffset, false, false);
+      return new AppliedEvent(eventOffset, false, false, null);
     }
 
     /** The saga's start event delivered live by the subscription. */
     public static AppliedEvent liveStart(GlobalOffset eventOffset) {
-      return new AppliedEvent(eventOffset, true, false);
+      return new AppliedEvent(eventOffset, true, false, null);
     }
 
     /** A correlated event fed by the dead-letter replay drain. */
     public static AppliedEvent replayed(GlobalOffset eventOffset) {
-      return new AppliedEvent(eventOffset, false, true);
+      return new AppliedEvent(eventOffset, false, true, null);
     }
 
     /** The saga's start event fed by the dead-letter replay drain. */
     public static AppliedEvent replayedStart(GlobalOffset eventOffset) {
-      return new AppliedEvent(eventOffset, true, true);
+      return new AppliedEvent(eventOffset, true, true, null);
+    }
+
+    /**
+     * The same offset and delivery path with {@code eventId} as the applied event's id. The saga
+     * runtime calls it on every step, so that a write which stamps a compensation episode names the
+     * event that opened it.
+     *
+     * @param eventId the applied event's id, or {@code null} for none
+     */
+    public AppliedEvent withEventId(EventId eventId) {
+      return new AppliedEvent(eventOffset, startPath, replayRedrive, eventId);
     }
   }
 
@@ -240,7 +284,10 @@ public interface SagaStore {
    * SagaState.status()} — the same statement stamps the episode ({@code episode_version =
    * expectedVersion + 1}, {@code episode_claimed_at = now}) unless the row already carries a stamp:
    * the episode stamp rule, see {@link #claimCompensating}. The evolved episode is thereby as
-   * durable as a claimed one, and there is no second write for a crash to fall between.
+   * durable as a claimed one, and there is no second write for a crash to fall between. The
+   * statement that stamps the episode also records {@link AppliedEvent#eventId()} as its cause
+   * ({@link LoadedSaga#episodeCauseEventId()}); on a row that already carries a stamp, and for
+   * every other status, the event id is ignored and the recorded cause stays as it is.
    *
    * <p>Must not be implemented by delegating to {@code update}: that leaves all three columns
    * untouched, so a redelivered event re-applies its side effects (the live-path redelivery dedup),
@@ -305,6 +352,16 @@ public interface SagaStore {
    * now}). Used by the claim-first and timeout compensation claim paths. A row that already carries
    * a stamp keeps it (the rule below).
    *
+   * <p><b>The cause of the episode.</b> The statement that stamps the episode also records {@code
+   * episodeCause}, the id of the event that opened it, which {@link
+   * LoadedSaga#episodeCauseEventId()} later returns. The claim-first path passes the event whose
+   * forward command was refused; a claim made with no event in hand (a timeout, an operator's
+   * compensation) passes {@code null}. The saga runtime sets the recorded value as the causation id
+   * of every compensation command of the episode and reads it from the loaded row on every resume,
+   * so the events those commands produce carry the same causation id whichever path commits them:
+   * the delivery that opened the episode, a later event, the timeout runner, the compensation-retry
+   * sweeper or an operator.
+   *
    * <p>The stamped {@code episode_version} is the value {@link LoadedSaga#episodeVersion()} later
    * returns for this row, and is deliberately NOT touched by any other write — {@link #markFaulted}
    * and the CAS writes ({@link #applyEvent}, {@link #update}), terminal ones included — so a
@@ -328,10 +385,15 @@ public interface SagaStore {
    * status ({@code RUNNING}) breaks that premise and is outside this contract: no store refuses it
    * and the stamp is kept, so if the row then entered {@code COMPENSATING} again, the new episode
    * would reuse the old one's compensation keys and its compensations would dedup-skip against the
-   * old episode's inbox rows. The framework never issues such a write; a tool must not either. A
-   * store MUST NOT implement this method as the plain {@link #update} CAS of old, and MUST NOT
-   * leave a {@code COMPENSATING} row unstamped on any write: the runtime derives the compensation
-   * idempotency keys from {@code episode_version} and the key-age anchors from {@code
+   * old episode's inbox rows. The framework never issues such a write; a tool must not either. The
+   * cause belongs to the stamp: the write that stamps the episode records the cause it is given —
+   * {@code episodeCause} here and for {@link #createGenesisPending}, {@link AppliedEvent#eventId()}
+   * for {@link #applyEvent}, none for {@link #create} and {@link #update} — and no other write
+   * touches it. A stamped row keeps its cause, a recorded one or none, through a second claim, an
+   * {@code applyEvent}, {@link #markFaulted} and a terminal write; a row without a stamp has no
+   * cause. A store MUST NOT implement this method as the plain {@link #update} CAS of old, and MUST
+   * NOT leave a {@code COMPENSATING} row unstamped on any write: the runtime derives the
+   * compensation idempotency keys from {@code episode_version} and the key-age anchors from {@code
    * episode_claimed_at} with no fallback, and refuses an unstamped episode with {@link
    * SagaUnstampedCompensationEpisodeException} (nothing dispatched). {@code SagaStoreContract} pins
    * the rule for every write of every implementation; the framework's {@code PostgresSagaStore}
@@ -342,11 +404,29 @@ public interface SagaStore {
    * @param sagaType the saga type (must match the type set at {@link #create} time)
    * @param state the saga state to persist
    * @param expectedVersion the version token obtained from {@link LoadedSaga#version()}
+   * @param episodeCause the id of the event that opens the episode, recorded when this write stamps
+   *     the episode and ignored when the row already carries a stamp; {@code null} when the episode
+   *     is opened with no event in hand
    * @throws OptimisticLockException on version mismatch, terminal row, or missing row
    * @throws IllegalArgumentException if {@code sagaId}, {@code sagaType} or {@code state} is {@code
    *     null}
    */
-  void claimCompensating(SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion);
+  void claimCompensating(
+      SagaId sagaId,
+      SagaType sagaType,
+      SagaState state,
+      long expectedVersion,
+      EventId episodeCause);
+
+  /**
+   * {@link #claimCompensating(SagaId, SagaType, SagaState, long, EventId)} with no event in hand: a
+   * timeout claim, an operator's compensation of a faulted forward step, tooling and tests. The
+   * episode it stamps records no cause.
+   */
+  default void claimCompensating(
+      SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
+    claimCompensating(sagaId, sagaType, state, expectedVersion, null);
+  }
 
   /**
    * Type-scoped load: loads a saga only if it is of {@code sagaType}, returning the deserialized

@@ -29,6 +29,7 @@ import org.streamrune.core.saga.SagaStateSerializationException;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaTypeCollisionException;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
@@ -304,6 +305,92 @@ class PostgresSagaStoreTest {
     }
     assertThat(sagaStore.load(other, casType, TestSagaState.class).orElseThrow().status())
         .isEqualTo(SagaStatus.RUNNING);
+  }
+
+  // --- The cause of an episode (episode_cause_event_id) belongs to the stamp ---
+
+  /**
+   * The third conjunct of {@code saga_state_episode_stamped}: a cause without a stamp cannot exist,
+   * however the row is written. The store's statements write the two together; this is the second
+   * line behind them.
+   */
+  @Test
+  void theBaselineRefusesACauseOnARowWithoutAStamp() throws Exception {
+    sagaStore.create(casId, casType, casState, SagaStatus.RUNNING); // v1, unstamped
+
+    assertCheckViolation(
+        "UPDATE saga_state SET episode_cause_event_id = 'evt-1' WHERE saga_id = ?",
+        "a RUNNING row has entered no episode, so it names no cause");
+
+    var loaded = sagaStore.load(casId, casType, TestSagaState.class).orElseThrow();
+    assertThat(loaded.episodeVersion()).isNull();
+    assertThat(loaded.episodeCauseEventId()).isNull();
+
+    sagaStore.claimCompensating(casId, casType, casState, 1L, EventId.of("evt-1")); // v2, stamped
+    assertCheckViolation(
+        "UPDATE saga_state SET episode_version = NULL, episode_claimed_at = NULL,"
+            + " status = 'COMPLETED' WHERE saga_id = ?",
+        "a row cannot keep a cause and lose its stamp");
+  }
+
+  /**
+   * An {@code EventId} is a non-blank string of any shape, not a UUID, so the column is {@code
+   * TEXT}: a saga triggered by an event with a hand-built id records it as it is.
+   */
+  @Test
+  void anEventIdOfAnyShapeIsStoredAsTheCause() {
+    EventId longId = EventId.of("evt-" + "x".repeat(300));
+    sagaStore.create(casId, casType, casState, SagaStatus.RUNNING); // v1
+    sagaStore.claimCompensating(casId, casType, casState, 1L, longId); // v2
+
+    assertThat(sagaStore.load(casId, casType, TestSagaState.class).orElseThrow())
+        .satisfies(
+            row -> {
+              assertThat(row.episodeVersion()).isEqualTo(2L);
+              assertThat(row.episodeCauseEventId()).isEqualTo(longId);
+            });
+
+    EventId punctuated = EventId.of("order/42 #refund: \u00e9v\u00e9nement");
+    var born = SagaId.of("saga-born-compensating");
+    sagaStore.createGenesisPending(
+        born, casType, casState, SagaStatus.COMPENSATING, false, punctuated);
+    assertThat(
+            sagaStore.load(born, casType, TestSagaState.class).orElseThrow().episodeCauseEventId())
+        .isEqualTo(punctuated);
+  }
+
+  /**
+   * The cause is written by the statement that stamps the episode and by no other: a fault, the
+   * replayed step that clears it, a second claim and the terminal write all leave the column as the
+   * stamping write left it.
+   */
+  @Test
+  void theCauseSurvivesAFaultAndReplayCycleUnchanged() {
+    EventId opening = EventId.of("evt-opening");
+    sagaStore.create(casId, casType, casState, SagaStatus.RUNNING); // v1
+    sagaStore.applyEvent(
+        casId,
+        casType,
+        casState,
+        SagaStatus.COMPENSATING,
+        1L,
+        SagaStore.AppliedEvent.live(GlobalOffset.of(5L)).withEventId(opening)); // v2, stamped
+    assertThat(sagaStore.markFaulted(casId, casType, 2L)).isTrue(); // v3
+    sagaStore.applyEvent(
+        casId,
+        casType,
+        casState,
+        SagaStatus.COMPENSATING,
+        3L,
+        SagaStore.AppliedEvent.replayed(GlobalOffset.of(6L))
+            .withEventId(EventId.of("evt-replayed"))); // v4
+    sagaStore.claimCompensating(casId, casType, casState, 4L, EventId.of("evt-late")); // v5
+    sagaStore.update(casId, casType, casState, SagaStatus.COMPENSATED, 5L); // v6
+
+    var row = sagaStore.load(casId, casType, TestSagaState.class).orElseThrow();
+    assertThat(row.status()).isEqualTo(SagaStatus.COMPENSATED);
+    assertThat(row.episodeVersion()).isEqualTo(2L);
+    assertThat(row.episodeCauseEventId()).isEqualTo(opening);
   }
 
   private void assertCheckViolation(String sql, String because) throws Exception {

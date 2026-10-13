@@ -446,6 +446,51 @@ class SchemaValidatorTest {
   }
 
   @Test
+  void aSagaStateTableWithoutTheEpisodeCauseColumnIsReported() throws Exception {
+    // saga_state.episode_cause_event_id is read by every saga load and written by every statement
+    // that stamps a compensation episode; without it each of them fails at runtime, so its absence
+    // must fail validation instead.
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute("CREATE SCHEMA IF NOT EXISTS missing_episode_cause_schema");
+    }
+    var ds = new PGSimpleDataSource();
+    ds.setUrl(PG.getJdbcUrl() + "&currentSchema=missing_episode_cause_schema");
+    ds.setUser(PG.getUsername());
+    ds.setPassword(PG.getPassword());
+
+    Flyway.configure()
+        .dataSource(ds)
+        .schemas("missing_episode_cause_schema")
+        .locations("classpath:db/streamrune-migration")
+        .table("flyway_schema_history_streamrune")
+        .baselineOnMigrate(false)
+        .load()
+        .migrate();
+
+    assertTrue(
+        SchemaValidator.validate(ds).isValid(), "the baseline as shipped carries the column");
+
+    try (var conn = ds.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute("ALTER TABLE saga_state DROP COLUMN episode_cause_event_id");
+    }
+
+    var result = SchemaValidator.validate(ds);
+    assertFalse(
+        result.isValid(),
+        () -> "Missing saga_state.episode_cause_event_id must fail: " + result.issues());
+    assertTrue(
+        result.issues().stream()
+            .anyMatch(
+                i ->
+                    i.severity() == SchemaIssue.Severity.ERROR
+                        && i.table().equals("saga_state")
+                        && i.message().contains("episode_cause_event_id")),
+        () -> "Should report the missing saga_state.episode_cause_event_id: " + result.issues());
+  }
+
+  @Test
   void factoryTolerantAndValidatorProducesWarningForSchemaAhead() throws Exception {
     // The factory validates by default and must NOT throw on a WARNING-only result (schema version
     // ahead of expected). It logs each WARNING (see PostgresEventStoreFactory.create) rather than

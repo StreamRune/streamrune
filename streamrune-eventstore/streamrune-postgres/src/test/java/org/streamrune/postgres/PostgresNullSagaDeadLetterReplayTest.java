@@ -236,8 +236,9 @@ class PostgresNullSagaDeadLetterReplayTest {
         SagaId sagaId,
         org.streamrune.core.types.SagaType sagaType,
         SagaState state,
-        long expectedVersion) {
-      delegate.claimCompensating(sagaId, sagaType, state, expectedVersion);
+        long expectedVersion,
+        EventId episodeCause) {
+      delegate.claimCompensating(sagaId, sagaType, state, expectedVersion, episodeCause);
     }
 
     @Override
@@ -246,8 +247,10 @@ class PostgresNullSagaDeadLetterReplayTest {
         org.streamrune.core.types.SagaType sagaType,
         SagaState state,
         SagaStatus status,
-        boolean deadLetterPending) {
-      delegate.createGenesisPending(sagaId, sagaType, state, status, deadLetterPending);
+        boolean deadLetterPending,
+        EventId episodeCause) {
+      delegate.createGenesisPending(
+          sagaId, sagaType, state, status, deadLetterPending, episodeCause);
     }
 
     @Override

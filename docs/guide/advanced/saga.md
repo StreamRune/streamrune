@@ -40,12 +40,12 @@ sequenceDiagram
     Runner-->>Bus: execute(command, idempotencyKey)
     alt command succeeds
         Bus-->>Runner: CommandResult
-        Runner->>Store: applyEvent(sagaId, state, status, expectedVersion, AppliedEvent.live(offset))
+        Runner->>Store: applyEvent(sagaId, state, status, expectedVersion, AppliedEvent.live(offset).withEventId(eventId))
     else command fails, proven retry-later (open breaker, lock, SQLException, key-store outage)
         Runner-->>Sub: rethrow — nothing written, saga stays RUNNING at the same version
         Note over Sub,Runner: checkpoint not advanced → event redelivered → forward keys dedup
     else command fails otherwise (business rejection, or not provably retriable)
-        Runner->>Store: claimCompensating(sagaId, state, expectedVersion)
+        Runner->>Store: claimCompensating(sagaId, state, expectedVersion, eventId)
         Runner->>Runner: compensate(state, failure, failedCommand)
         Runner-->>Bus: execute(compensationCommand, idempotencyKey)
         Runner->>Store: update(sagaId, state, COMPENSATED/FAILED, expectedVersion)
@@ -363,6 +363,8 @@ Every saga command dispatch — forward commands from `handle()`, event-path com
 
 If you grep `command_inbox` during an incident, compensation commands carry the `:episode:` form.
 
+**Causation of compensation events.** Each compensation command carries, as its causation id, the id of the event that opened the compensation episode: the event whose forward command was rejected, or the event whose `evolve` returned a `COMPENSATING` state. The write that stamps the episode stores that id in `saga_state.episode_cause_event_id` (`LoadedSaga.episodeCauseEventId()`), in the same statement as `episode_version` and `episode_claimed_at`, and no later write changes it. The delivery that opens the episode dispatches with the id it recorded, and every path that resumes the episode — a redelivery, a later correlated event, `SagaTimeoutRunner`, `SagaCompensationRetrySweeper`, `SagaDeadLetterReplayer.resumeFaulted` — reads the id from the saga row, so the events of one episode carry the same `causationId` whichever path commits them, and the event that happens to drive a resume is never recorded as their cause. An episode opened with no event in hand — a timeout claim, or `SagaDeadLetterReplayer.compensateFaulted` — has no cause: its compensation events carry no `causationId`.
+
 The command inbox (`CommandInbox`, backed by `PostgresCommandInbox` in production) records the key atomically with the event append. If a redelivered event or a retried batch causes the runner to attempt the same dispatch again, the bus finds the key already recorded and returns the prior result without re-running the handler or re-persisting events. This is what makes saga command dispatch *effectively-once* despite at-least-once event delivery.
 
 Inbox rows are pruned by a background `InboxRetentionSweeper`; the recommended (and Spring/Quarkus/Micronaut auto-configured) retention window is **7 days**, chosen to comfortably exceed realistic broker redelivery and subscription-replay horizons. Do not shrink this below your actual redelivery window — a pruned key can no longer prevent a genuine duplicate.
@@ -373,6 +375,7 @@ Saga writes are CAS-protected end to end:
 
 - `SagaStore.createGenesisPending` — the executor's first write for a fresh saga, made before any forward command is dispatched — atomically inserts at `version = 1`; a second insert of the **same saga type** for the same `sagaId` throws `OptimisticLockException` rather than silently overwriting. `SagaRunner` treats this as expected (two listeners racing on the same start event): it reloads the row and routes on its recorded facts. The losing attempt has dispatched nothing yet — the insert precedes every dispatch — and if it re-drives a genesis-pending row, the commands the winner already ran dedup in the command inbox. An insert of a **different** saga type for the same `sagaId` is a cross-type id collision (see the `SagaId` note under Operations) and throws a distinct `SagaTypeCollisionException` (naming both types) that is *not* swallowed.
 - `SagaStore.update`, `applyEvent`, `claimCompensating` and `markFaulted` are compare-and-swaps on `version`, refused outright when the stored status is terminal (`COMPLETED`, `COMPENSATED`, `FAILED`). Any mismatch — wrong version, terminal row, or missing row — throws `OptimisticLockException`.
+- The write that lands a row at `COMPENSATING` stamps the compensation episode in the same statement: `episode_version`, `episode_claimed_at` and, when the write has an event in hand, `episode_cause_event_id` — the `episodeCause` argument of `claimCompensating` and `createGenesisPending`, the `AppliedEvent.eventId()` of `applyEvent`. A row that already carries a stamp keeps all three through every later write, so every path that resumes the episode reads the same episode version and the same cause from the saga row.
 - A conflict on a *correlated* event's write is not swallowed: it propagates out of the listener like an infrastructure failure, so the subscription retries the whole batch against fresh state. Because the command inbox already recorded whatever the losing attempt dispatched, the retry does not double-dispatch, and if the winning writer applied the same event the retry skips it on `last_applied_offset`.
 
 Saga **command dispatch** is protected by the command inbox, and the guarantee the bus gives is stronger than the pre-execution lookup alone:

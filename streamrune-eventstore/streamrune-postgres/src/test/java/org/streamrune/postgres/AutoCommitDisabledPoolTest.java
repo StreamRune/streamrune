@@ -366,12 +366,7 @@ class AutoCommitDisabledPoolTest {
     assertEquals(2, sagaVersion(id));
 
     store.applyEvent(
-        id,
-        type,
-        state,
-        SagaStatus.RUNNING,
-        2,
-        new SagaStore.AppliedEvent(GlobalOffset.of(7), false, false));
+        id, type, state, SagaStatus.RUNNING, 2, SagaStore.AppliedEvent.live(GlobalOffset.of(7)));
     assertEquals(
         7, count("SELECT last_applied_offset FROM saga_state WHERE saga_id = ?", id.value()));
 

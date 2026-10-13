@@ -21,6 +21,7 @@ import org.streamrune.core.saga.SagaStateSerializationException;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaTypeCollisionException;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.crypto.CryptoShreddingModule;
@@ -50,10 +51,15 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * a row at {@code COMPENSATING} — the two forward inserts and the two CAS updates ({@link
  * #claimCompensating} is the CAS with that status) — stamps {@code episode_version} (the version
  * the row lands at) and {@code episode_claimed_at} ({@code NOW()}) in that same statement unless
- * the row already carries a stamp, and no statement ever clears or re-stamps one. The schema
- * enforces it a second time: the {@code saga_state_episode_stamped} CHECK constraint in {@code
- * V001__streamrune_baseline.sql} refuses any row that is {@code COMPENSATING}, or {@code FAULTED}
- * out of {@code COMPENSATING}, without both halves.
+ * the row already carries a stamp, and no statement ever clears or re-stamps one. The statement
+ * that stamps the episode also writes {@code episode_cause_event_id}, the id of the event that
+ * opened it: the cause given to {@link #claimCompensating} and {@link #createGenesisPending}, the
+ * applied event's id for {@link #applyEvent}, {@code NULL} for {@link #create} and {@link #update}.
+ * No other statement writes that column, so every resume of the episode loads the same cause. The
+ * schema enforces the rule a second time: the {@code saga_state_episode_stamped} CHECK constraint
+ * in {@code V001__streamrune_baseline.sql} refuses any row that is {@code COMPENSATING}, or {@code
+ * FAULTED} out of {@code COMPENSATING}, without both halves of the stamp, and any row that names a
+ * cause without a stamp.
  *
  * <p><b>Failure taxonomy.</b> Every write path converts the state to JSON <em>before</em> it
  * acquires a pooled connection, and every path reports the two failure classes distinctly:
@@ -91,14 +97,16 @@ public final class PostgresSagaStore implements SagaStore {
   // Atomic insert at version 1; ON CONFLICT DO NOTHING — 0 rows → already exists. The episode stamp
   // rule: a row born COMPENSATING is born stamped — episode_version = 1 (the version it
   // is born at), episode_claimed_at = NOW() — in this same statement; any other status leaves the
-  // episode-identity columns NULL (no compensation episode exists yet). Both
-  // CASE binds are the same boolean, status == COMPENSATING.
+  // episode-identity columns NULL (no compensation episode exists yet). The three
+  // CASE binds are the same boolean, status == COMPENSATING. The fourth bind is the cause of the
+  // episode (the id of the event that opened it, or NULL), written only when the row is born
+  // stamped; the cast gives the parameter a type when the bind is NULL.
   private static final String EPISODE_STAMP_VALUES =
-      ", CASE WHEN ? THEN 1 END, CASE WHEN ? THEN NOW() END)";
+      ", CASE WHEN ? THEN 1 END, CASE WHEN ? THEN NOW() END, CASE WHEN ? THEN CAST(? AS TEXT) END)";
 
   private static final String INSERT_NEW =
       "INSERT INTO saga_state (saga_id, saga_type, status, state_json, version, genesis_applied,"
-          + " dead_letter_pending, episode_version, episode_claimed_at)"
+          + " dead_letter_pending, episode_version, episode_claimed_at, episode_cause_event_id)"
           + " VALUES (?, ?, ?, ?::jsonb, 1, TRUE, ?"
           + EPISODE_STAMP_VALUES
           + " ON CONFLICT (saga_id) DO NOTHING";
@@ -114,7 +122,7 @@ public final class PostgresSagaStore implements SagaStore {
   // between "row is COMPENSATING" and "episode stamped".
   private static final String INSERT_GENESIS_PENDING =
       "INSERT INTO saga_state (saga_id, saga_type, status, state_json, version, genesis_applied,"
-          + " dead_letter_pending, episode_version, episode_claimed_at)"
+          + " dead_letter_pending, episode_version, episode_claimed_at, episode_cause_event_id)"
           + " VALUES (?, ?, ?, ?::jsonb, 1, FALSE, ?"
           + EPISODE_STAMP_VALUES
           + " ON CONFLICT (saga_id) DO NOTHING";
@@ -138,9 +146,12 @@ public final class PostgresSagaStore implements SagaStore {
       " AND status NOT IN ('COMPLETED', 'COMPENSATED', 'FAILED')";
 
   // The episode stamp rule for the CAS writes: when the write
-  // lands the row at COMPENSATING (both binds are status == COMPENSATING) and the row carries no
-  // stamp yet, stamp both halves in this same statement — episode_version with the version the row
-  // lands at, episode_claimed_at with NOW(); otherwise leave both exactly as they are. A stamped
+  // lands the row at COMPENSATING (the three boolean binds are status == COMPENSATING) and the row
+  // carries no stamp yet, stamp it in this same statement — episode_version with the version the
+  // row lands at, episode_claimed_at with NOW(), episode_cause_event_id with the cause bind (the id
+  // of the event that opened the episode, or NULL); otherwise leave all three exactly as they are.
+  // The cause is therefore written once, by the stamping statement, and a later claim or applied
+  // event with another id does not replace it. A stamped
   // row is never re-stamped (an episode is absorbing: COMPENSATING only leaves to a terminal status
   // or to FAULTED and back), a terminal write never clears the stamp, and MARK_FAULTED (a separate
   // statement) does not touch it, so a fault->replay cycle (+2 versions: fault, replayed step)
@@ -151,7 +162,9 @@ public final class PostgresSagaStore implements SagaStore {
       "episode_version = CASE WHEN ? AND saga_state.episode_version IS NULL"
           + " THEN saga_state.version + 1 ELSE saga_state.episode_version END, "
           + "episode_claimed_at = CASE WHEN ? AND saga_state.episode_version IS NULL"
-          + " THEN NOW() ELSE saga_state.episode_claimed_at END ";
+          + " THEN NOW() ELSE saga_state.episode_claimed_at END, "
+          + "episode_cause_event_id = CASE WHEN ? AND saga_state.episode_version IS NULL"
+          + " THEN CAST(? AS TEXT) ELSE saga_state.episode_cause_event_id END ";
 
   // pre_fault_status = NULL on every plain CAS write -- a completed write means the
   // row no longer resumes from a fault. claimCompensating is this statement with status =
@@ -202,10 +215,11 @@ public final class PostgresSagaStore implements SagaStore {
   private static final String SET_DEAD_LETTER_PENDING =
       "UPDATE saga_state SET dead_letter_pending = ? WHERE saga_id = ? AND saga_type = ?";
 
-  // The five recorded recovery facts, read by load into LoadedSaga's 11-arg shape.
+  // The episode stamp with its cause and the five recorded recovery facts, read by load into
+  // LoadedSaga.
   private static final String COLUMNS =
       "state_json, status, version, updated_at, episode_version, episode_claimed_at, "
-          + "genesis_applied, pre_fault_status, dead_letter_pending, "
+          + "episode_cause_event_id, genesis_applied, pre_fault_status, dead_letter_pending, "
           + "last_applied_offset, last_replayed_offset";
 
   // Type-scoped load. A row owned by a different saga_type is NOT returned, so the
@@ -366,7 +380,7 @@ public final class PostgresSagaStore implements SagaStore {
       SagaState state,
       SagaStatus status,
       boolean deadLetterPending) {
-    doCreate(sagaId, sagaType, state, status, deadLetterPending, INSERT_NEW);
+    doCreate(sagaId, sagaType, state, status, deadLetterPending, null, INSERT_NEW);
   }
 
   /**
@@ -381,8 +395,10 @@ public final class PostgresSagaStore implements SagaStore {
       SagaType sagaType,
       SagaState state,
       SagaStatus status,
-      boolean deadLetterPending) {
-    doCreate(sagaId, sagaType, state, status, deadLetterPending, INSERT_GENESIS_PENDING);
+      boolean deadLetterPending,
+      EventId episodeCause) {
+    doCreate(
+        sagaId, sagaType, state, status, deadLetterPending, episodeCause, INSERT_GENESIS_PENDING);
   }
 
   /**
@@ -394,7 +410,7 @@ public final class PostgresSagaStore implements SagaStore {
    */
   @Override
   public void createFaulted(SagaId sagaId, SagaType sagaType, SagaState initialState) {
-    doCreate(sagaId, sagaType, initialState, SagaStatus.FAULTED, true, INSERT_FAULTED);
+    doCreate(sagaId, sagaType, initialState, SagaStatus.FAULTED, true, null, INSERT_FAULTED);
   }
 
   /**
@@ -438,6 +454,7 @@ public final class PostgresSagaStore implements SagaStore {
       SagaState state,
       SagaStatus status,
       boolean deadLetterPending,
+      EventId episodeCause,
       String sql) {
     // createFaulted binds no status (a SQL literal), but still takes one from doCreate: FAULTED.
     requireWrite(sagaId, sagaType, state, status);
@@ -464,6 +481,8 @@ public final class PostgresSagaStore implements SagaStore {
           boolean entersEpisode = status == SagaStatus.COMPENSATING; // the episode stamp rule
           ps.setBoolean(6, entersEpisode);
           ps.setBoolean(7, entersEpisode);
+          ps.setBoolean(8, entersEpisode);
+          ps.setString(9, causeValue(episodeCause)); // written only when the row is born stamped
         }
         inserted =
             PostgresTransactions.commitIfManual(conn, "saga create", c -> ps.executeUpdate());
@@ -501,12 +520,15 @@ public final class PostgresSagaStore implements SagaStore {
   @Override
   public void update(
       SagaId sagaId, SagaType sagaType, SagaState state, SagaStatus status, long expectedVersion) {
-    casUpdate(sagaId, sagaType, state, status, expectedVersion, "Failed to update saga state: ");
+    casUpdate(
+        sagaId, sagaType, state, status, expectedVersion, null, "Failed to update saga state: ");
   }
 
   /**
    * The shared CAS write ({@link #UPDATE_CAS}) behind {@link #update} and {@link
    * #claimCompensating}: the episode stamp rule is decided by {@code status} inside the statement.
+   * {@code episodeCause} is written only when this statement stamps the episode; {@link #update}
+   * passes {@code null}.
    */
   private void casUpdate(
       SagaId sagaId,
@@ -514,6 +536,7 @@ public final class PostgresSagaStore implements SagaStore {
       SagaState state,
       SagaStatus status,
       long expectedVersion,
+      EventId episodeCause,
       String failureMessage) {
     requireWrite(sagaId, sagaType, state, status);
     String json = serialize(sagaId, state);
@@ -525,9 +548,11 @@ public final class PostgresSagaStore implements SagaStore {
       ps.setString(2, json);
       ps.setBoolean(3, entersEpisode);
       ps.setBoolean(4, entersEpisode);
-      ps.setString(5, sagaId.value());
-      ps.setString(6, sagaType.value());
-      ps.setLong(7, expectedVersion);
+      ps.setBoolean(5, entersEpisode);
+      ps.setString(6, causeValue(episodeCause));
+      ps.setString(7, sagaId.value());
+      ps.setString(8, sagaType.value());
+      ps.setLong(9, expectedVersion);
       updated = PostgresTransactions.commitIfManual(conn, "saga update", c -> ps.executeUpdate());
     } catch (Exception e) {
       throw new EventStoreException(failureMessage + forLog(sagaId), e);
@@ -566,9 +591,12 @@ public final class PostgresSagaStore implements SagaStore {
       ps.setLong(6, eventOffset);
       ps.setBoolean(7, entersEpisode);
       ps.setBoolean(8, entersEpisode);
-      ps.setString(9, sagaId.value());
-      ps.setString(10, sagaType.value());
-      ps.setLong(11, expectedVersion);
+      ps.setBoolean(9, entersEpisode);
+      // The applied event is the cause of an episode this write opens.
+      ps.setString(10, causeValue(applied.eventId()));
+      ps.setString(11, sagaId.value());
+      ps.setString(12, sagaType.value());
+      ps.setLong(13, expectedVersion);
       updated =
           PostgresTransactions.commitIfManual(conn, "saga apply event", c -> ps.executeUpdate());
     } catch (Exception e) {
@@ -636,21 +664,32 @@ public final class PostgresSagaStore implements SagaStore {
    *
    * <p>The CAS write with {@code status = COMPENSATING} — {@link #UPDATE_CAS}'s {@link
    * #EPISODE_STAMP_SET} stamps {@code episode_version = expectedVersion + 1} (the version the row
-   * lands at) and {@code episode_claimed_at = NOW()} (the claim instant, anchoring the key-age
-   * guards) in the same atomic UPDATE, unless the row already carries a stamp. Deliberately the
-   * SAME statement as {@link #update}: the episode stamp rule is a property of the landed status,
-   * not of this method, so an evolved {@code COMPENSATING} is stamped identically.
+   * lands at), {@code episode_claimed_at = NOW()} (the claim instant, anchoring the key-age guards)
+   * and {@code episode_cause_event_id = episodeCause} in the same atomic UPDATE, unless the row
+   * already carries a stamp, in which case all three stay as they are. Deliberately the SAME
+   * statement as {@link #update}: the episode stamp rule is a property of the landed status, not of
+   * this method, so an evolved {@code COMPENSATING} is stamped identically.
    */
   @Override
   public void claimCompensating(
-      SagaId sagaId, SagaType sagaType, SagaState state, long expectedVersion) {
+      SagaId sagaId,
+      SagaType sagaType,
+      SagaState state,
+      long expectedVersion,
+      EventId episodeCause) {
     casUpdate(
         sagaId,
         sagaType,
         state,
         SagaStatus.COMPENSATING,
         expectedVersion,
+        episodeCause,
         "Failed to claim compensating saga: ");
+  }
+
+  /** The bind value of an episode cause: the event id's text, or SQL {@code NULL} for none. */
+  private static String causeValue(EventId episodeCause) {
+    return episodeCause == null ? null : episodeCause.value();
   }
 
   /**
@@ -682,6 +721,7 @@ public final class PostgresSagaStore implements SagaStore {
     Instant updatedAt = null;
     Long episodeVersion = null;
     Instant episodeClaimedAt = null;
+    EventId episodeCauseEventId = null;
     boolean genesisApplied = false;
     SagaStatus preFaultStatus = null;
     boolean deadLetterPending = false;
@@ -706,6 +746,10 @@ public final class PostgresSagaStore implements SagaStore {
           episodeVersion = rs.wasNull() ? null : ev;
           var claimedTs = rs.getTimestamp("episode_claimed_at");
           episodeClaimedAt = claimedTs == null ? null : claimedTs.toInstant();
+          // NULL for a row that never entered an episode and for an episode opened with no event
+          // in hand (a timeout claim, an operator's compensation).
+          String cause = rs.getString("episode_cause_event_id");
+          episodeCauseEventId = cause == null ? null : new EventId(cause);
           genesisApplied = rs.getBoolean("genesis_applied");
           String preFaultStatusStr = rs.getString("pre_fault_status");
           preFaultStatus = preFaultStatusStr == null ? null : SagaStatus.valueOf(preFaultStatusStr);
@@ -735,6 +779,7 @@ public final class PostgresSagaStore implements SagaStore {
               updatedAt,
               episodeVersion,
               episodeClaimedAt,
+              episodeCauseEventId,
               genesisApplied,
               preFaultStatus,
               deadLetterPending,

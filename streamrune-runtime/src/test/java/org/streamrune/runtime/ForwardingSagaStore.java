@@ -9,6 +9,7 @@ import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.SagaType;
 
 /**
@@ -51,8 +52,13 @@ class ForwardingSagaStore implements SagaStore {
 
   @Override
   public void createGenesisPending(
-      SagaId id, SagaType t, SagaState s, SagaStatus st, boolean deadLetterPending) {
-    delegate.createGenesisPending(id, t, s, st, deadLetterPending);
+      SagaId id,
+      SagaType t,
+      SagaState s,
+      SagaStatus st,
+      boolean deadLetterPending,
+      EventId episodeCause) {
+    delegate.createGenesisPending(id, t, s, st, deadLetterPending, episodeCause);
     wrote("createGenesisPending");
   }
 
@@ -76,8 +82,8 @@ class ForwardingSagaStore implements SagaStore {
   }
 
   @Override
-  public void claimCompensating(SagaId id, SagaType t, SagaState s, long v) {
-    delegate.claimCompensating(id, t, s, v);
+  public void claimCompensating(SagaId id, SagaType t, SagaState s, long v, EventId episodeCause) {
+    delegate.claimCompensating(id, t, s, v, episodeCause);
     wrote("claimCompensating");
   }
 

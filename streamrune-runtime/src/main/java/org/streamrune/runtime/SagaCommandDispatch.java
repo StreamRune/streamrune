@@ -41,8 +41,9 @@ final class SagaCommandDispatch {
 
   /**
    * Executes a saga-issued command with the dispatching saga stated as its cause: {@code origin}
-   * and, for a forward command, the id of the triggering event are bound as {@link
-   * StreamRuneContext#CAUSE}, and the command bus copies them into {@link
+   * and {@code causingEvent} — for a forward command the id of the triggering event, for a
+   * compensation command the id of the event that opened the compensation episode — are bound as
+   * {@link StreamRuneContext#CAUSE}, and the command bus copies them into {@link
    * org.streamrune.core.EventMetadata#sagaOrigin()} and {@link
    * org.streamrune.core.EventMetadata#causationId()} of every event the command produces. The saga
    * id is bound as the request correlation id; ambient trace/user/baggage is preserved. The {@code
@@ -50,8 +51,11 @@ final class SagaCommandDispatch {
    * without re-running the handler.
    *
    * <p><b>The bound cause is the same on every attempt.</b> {@code origin} is a function of the
-   * saga type and the saga id, and {@code causingEvent} is the id of a stored event, so a first
-   * attempt, a redelivery, a replay feed, a timeout claim and a sweeper resume of the same step
+   * saga type and the saga id, and {@code causingEvent} is the id of a stored event — the
+   * triggering event of a forward step, which is the same event on every delivery of it, or the
+   * cause recorded with a compensation episode's stamp, which every resume reads from the saga row
+   * ({@link org.streamrune.core.saga.LoadedSaga#episodeCauseEventId()}). A first attempt, a
+   * redelivery, a replay feed, a timeout re-pick and a sweeper resume of the same command therefore
    * bind equal values: whichever attempt commits the command stores the same saga origin and the
    * same causation id. The trace id, the user id and the baggage of the stored events are those of
    * the ambient context of the thread that commits the command (none on a subscription thread, an
@@ -105,8 +109,10 @@ final class SagaCommandDispatch {
    *
    * @param commandBus the bus the command is executed on
    * @param origin the dispatching saga (required)
-   * @param causingEvent the id of the event the command reacts to, or {@code null} for a command
-   *     that reacts to none (a compensation command)
+   * @param causingEvent the id of the event the command reacts to: the triggering event of a
+   *     forward command, the event that opened the episode of a compensation command; {@code null}
+   *     for a compensation command of an episode opened with no event in hand (a timeout claim, an
+   *     operator's compensation of a faulted forward step)
    * @param command the saga-issued command
    * @param key the command's idempotency key
    * @throws NullPointerException when {@code origin} is {@code null}; the bus is not called

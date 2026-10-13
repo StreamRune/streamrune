@@ -23,6 +23,7 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaStore.AppliedEvent;
 import org.streamrune.core.saga.SagaUnstampedCompensationEpisodeException;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
@@ -88,6 +89,18 @@ import org.streamrune.core.types.SagaType;
  * that the redelivery resumes under that episode's own keys. Every resume — a {@code ForwardStep}
  * over a COMPENSATING row, {@code ResumeCompensation}, {@code ResumeFaultedEpisode} — therefore
  * reads the stamp with no fallback and refuses a row without one ({@link #requireStampedEpisode}).
+ *
+ * <p><b>Every compensation command names the event that opened its episode.</b> The write that
+ * stamps an episode records the id of the event in hand: the event whose forward command was
+ * refused ({@link SagaStore#claimCompensating}), or the event whose evolve yielded {@code
+ * COMPENSATING} ({@link SagaStore#applyEvent}, {@link SagaStore#createGenesisPending}); a timeout
+ * claim and an operator's compensation of a faulted forward step have no event and record none.
+ * Every dispatch of a compensation command sets that recorded id as the command's causation id: the
+ * attempt that opened the episode passes the id it wrote, and each resume reads {@link
+ * LoadedSaga#episodeCauseEventId()} from the row it loaded. The event that happens to drive a
+ * resume is never used. The stored compensation events therefore carry the same saga origin and
+ * causation id whichever path commits their command — the opening delivery, a redelivery, a later
+ * event, the timeout runner, the compensation-retry sweeper, an operator.
  *
  * @param <S> the saga state type
  */
@@ -187,6 +200,7 @@ final class SagaStepExecutor<S extends SagaState> {
             loaded.get().state(),
             requireStampedEpisode(sagaId, loaded.get(), /* hasTriggeringEvent= */ false),
             loaded.get().version(),
+            loaded.get().episodeCauseEventId(),
             rc.resumeCause(),
             null,
             /* catchPoison= */ true);
@@ -211,6 +225,7 @@ final class SagaStepExecutor<S extends SagaState> {
             row.state(),
             episodeVersion,
             row.version(),
+            row.episodeCauseEventId(),
             new SagaCompensationResumeException(),
             null,
             /* catchPoison= */ true);
@@ -249,7 +264,8 @@ final class SagaStepExecutor<S extends SagaState> {
    * the durable episode identity, so the episode key scope and the CAS version are both {@code
    * loaded.version() + 1}. No triggering event to quarantine, so {@code catchPoison = true}: a
    * throwing {@code compensate()} is CAS-FAULTed (the row keeps the new stamp and records {@code
-   * pre_fault_status = COMPENSATING}), never thrown.
+   * pre_fault_status = COMPENSATING}), never thrown. Neither trigger has an event in hand, so the
+   * episode is claimed with no cause and its compensation commands carry no causation id.
    */
   private StepOutcome claimFreshEpisodeAndCompensate(
       SagaId sagaId, LoadedSaga<S> loaded, Throwable cause) {
@@ -257,7 +273,7 @@ final class SagaStepExecutor<S extends SagaState> {
     long baseVersion = loaded.version();
     S state = loaded.state();
     try {
-      sagaStore.claimCompensating(sagaId, type, state, baseVersion);
+      sagaStore.claimCompensating(sagaId, type, state, baseVersion, /* episodeCause= */ null);
     } catch (SagaStateSerializationException conversionFailed) {
       // Deterministic conversion failures are poison, outages infrastructure; nothing dispatched.
       throw SagaStateConversion.classify(sagaId, conversionFailed);
@@ -269,7 +285,14 @@ final class SagaStepExecutor<S extends SagaState> {
       return StepOutcome.CLAIM_LOST;
     }
     return compensateEpisode(
-        sagaId, state, baseVersion + 1, baseVersion + 1, cause, null, /* catchPoison= */ true);
+        sagaId,
+        state,
+        baseVersion + 1,
+        baseVersion + 1,
+        /* episodeCause= */ null,
+        cause,
+        null,
+        /* catchPoison= */ true);
   }
 
   private StepOutcome forwardStep(
@@ -291,7 +314,8 @@ final class SagaStepExecutor<S extends SagaState> {
         // episode identity. A ForwardStep HAS a triggering event, so poison propagates
         // and the adapter quarantines it. A FAULTED row whose recorded pre-fault status is
         // COMPENSATING resumes here on a replay re-drive: the episode is never
-        // re-opened forward, whatever the genesis flag says.
+        // re-opened forward, whatever the genesis flag says. The causation id of the compensation
+        // commands is the cause recorded on the row, not the event that drives this resume.
         long episodeVersion = requireStampedEpisode(sagaId, row, /* hasTriggeringEvent= */ true);
         requireFreshEpisodeKeys(sagaId, row, fs.operatorForced(), /* hasTriggeringEvent= */ true);
         return compensateEpisode(
@@ -299,6 +323,7 @@ final class SagaStepExecutor<S extends SagaState> {
             row.state(),
             episodeVersion,
             row.version(),
+            row.episodeCauseEventId(),
             new SagaCompensationResumeException(),
             null,
             /* catchPoison= */ false);
@@ -368,9 +393,15 @@ final class SagaStepExecutor<S extends SagaState> {
         // The row is born shielded when the saga already owns dead-letter
         // entries (the row-less residual and its held correlated events), so a live event is never
         // applied ahead of them and retention never prunes them — shielded from the first
-        // statement.
+        // statement. When the evolved status is COMPENSATING the same insert stamps the episode
+        // and records the start event as its cause.
         sagaStore.createGenesisPending(
-            sagaId, type, state, evolvedStatus, fs.sagaOwnsDeadLetterRecord());
+            sagaId,
+            type,
+            state,
+            evolvedStatus,
+            fs.sagaOwnsDeadLetterRecord(),
+            event.metadata().eventId());
         rowVersion = 1L;
       } catch (SagaStateSerializationException conversionFailed) {
         throw SagaStateConversion.classify(sagaId, conversionFailed);
@@ -467,7 +498,14 @@ final class SagaStepExecutor<S extends SagaState> {
                 + " may never succeed — see SagaCommandDispatch.isRetryLater.",
             primary);
         return claimFirstAndCompensate(
-            sagaId, type, state, rowVersion, fs.startPath(), primary, sagaCommand);
+            sagaId,
+            type,
+            state,
+            rowVersion,
+            fs.startPath(),
+            fs.event().metadata().eventId(),
+            primary,
+            sagaCommand);
       }
     }
     return null;
@@ -558,13 +596,20 @@ final class SagaStepExecutor<S extends SagaState> {
     }
   }
 
-  /** The {@link AppliedEvent} naming this step's delivery path. */
+  /**
+   * The {@link AppliedEvent} naming this step's delivery path and the applied event's id. The id is
+   * recorded only when the write stamps a compensation episode (an evolved {@code COMPENSATING}),
+   * as that episode's cause.
+   */
   private static AppliedEvent appliedEvent(SagaTrigger.ForwardStep fs) {
     GlobalOffset offset = fs.event().globalOffset();
+    AppliedEvent applied;
     if (fs.replayRedrive()) {
-      return fs.startPath() ? AppliedEvent.replayedStart(offset) : AppliedEvent.replayed(offset);
+      applied = fs.startPath() ? AppliedEvent.replayedStart(offset) : AppliedEvent.replayed(offset);
+    } else {
+      applied = fs.startPath() ? AppliedEvent.liveStart(offset) : AppliedEvent.live(offset);
     }
-    return fs.startPath() ? AppliedEvent.liveStart(offset) : AppliedEvent.live(offset);
+    return applied.withEventId(fs.event().metadata().eventId());
   }
 
   private Optional<LoadedSaga<S>> reload(SagaId sagaId, SagaType type) {
@@ -584,6 +629,10 @@ final class SagaStepExecutor<S extends SagaState> {
    * 1}. Start path: a lost claim is SWALLOWED -> {@code CLAIM_LOST} (no orphaned refund —
    * claim-first). Correlated path: a lost claim is RETHROWN (batch retry). Claim COMPENSATING
    * BEFORE invoking compensate() or dispatching any compensation command.
+   *
+   * <p>{@code episodeCause} is the id of the event whose forward command failed. The claim records
+   * it with the episode stamp, and the compensation commands dispatched here carry it as their
+   * causation id — the value a resume later reads back from the row.
    */
   private StepOutcome claimFirstAndCompensate(
       SagaId sagaId,
@@ -591,10 +640,12 @@ final class SagaStepExecutor<S extends SagaState> {
       S state,
       long rowVersion,
       boolean startPath,
+      EventId episodeCause,
       Exception primary,
       SagaCommand failedCommand) {
     try {
-      sagaStore.claimCompensating(sagaId, type, state, rowVersion); // the row always exists
+      // The row always exists.
+      sagaStore.claimCompensating(sagaId, type, state, rowVersion, episodeCause);
     } catch (SagaStateSerializationException conversionFailed) {
       // A deterministic claim-write conversion failure quarantines the triggering event
       // rather than wedging the subscription. Claim-first still holds — nothing was dispatched.
@@ -615,6 +666,7 @@ final class SagaStepExecutor<S extends SagaState> {
         state,
         episodeVersion,
         episodeVersion,
+        episodeCause,
         primary,
         failedCommand,
         /* catchPoison= */ false);
@@ -765,12 +817,18 @@ final class SagaStepExecutor<S extends SagaState> {
    * identity); {@code rowVersion} is the CAS expected-version for the terminal / FAULT write (the
    * CURRENT row version). They are equal on a fresh claim but DIFFER on a resume after a
    * fault->replay cycle bumped the row version — the whole point.
+   *
+   * <p>{@code episodeCause} is the id of the event that opened the episode, or {@code null} when no
+   * event did. Every compensation command is dispatched with it as the causation id. A caller that
+   * resumes an episode passes {@link LoadedSaga#episodeCauseEventId()} of the row it loaded; the
+   * caller that claimed the episode passes the id it gave the claim.
    */
   private StepOutcome compensateEpisode(
       SagaId sagaId,
       S state,
       long episodeVersion,
       long rowVersion,
+      EventId episodeCause,
       Throwable cause,
       SagaCommand failedCommand,
       boolean catchPoison) {
@@ -792,7 +850,7 @@ final class SagaStepExecutor<S extends SagaState> {
             compensations,
             commandBus,
             origin,
-            null,
+            episodeCause,
             i -> SagaCommandDispatch.episodeCompensationKey(sagaId, episodeVersion, i),
             LOG);
     recordCompensation(outcome.name());

@@ -426,10 +426,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - Saga origin: every event a saga-issued command produces carries `EventMetadata.sagaOrigin` — the
   saga's type and id at hop 0 — on the event path, the timeout runner, the compensation-retry sweeper
   and the dead-letter replayer alike; events of forward commands carry the triggering event's id as
-  `causationId`. Saga dispatch binds both as `StreamRuneContext.CAUSE` (read with
-  `StreamRuneContext.cause()`), `executeAsync` and `StreamRuneContext.wrap` carry the binding across
-  threads, and the origin a saga binds depends only on its type and id, so a rerun stores the same
-  saga origin and causation id.
+  `causationId`, and events of compensation commands carry the id of the event that opened the
+  compensation episode (none when a timeout or an operator opened it). Saga dispatch binds both as
+  `StreamRuneContext.CAUSE` (read with `StreamRuneContext.cause()`), `executeAsync` and
+  `StreamRuneContext.wrap` carry the binding across threads, and the origin a saga binds depends
+  only on its type and id, so a rerun stores the same saga origin and causation id.
 - Lifecycle: `STARTED`, `RUNNING`, `COMPLETED`, `COMPENSATING`, `COMPENSATED`, `FAILED`, `FAULTED`.
   The `saga_state` row's `status` is authoritative. Recovery facts live on the row and are written only
   by the code that establishes them: `genesis_applied`, `pre_fault_status`, `dead_letter_pending`,
@@ -437,6 +438,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `episode_version` and `episode_claimed_at`, stamped by the very write that lands a row at
   `COMPENSATING` and enforced by the `saga_state_episode_stamped` `CHECK` constraint. A row in a
   compensation episode without the stamp is refused with `SagaUnstampedCompensationEpisodeException`.
+  The same write records `episode_cause_event_id` (`LoadedSaga.episodeCauseEventId()`), the id of the
+  event that opened the episode: `SagaStore.claimCompensating` and `createGenesisPending` take it as
+  `episodeCause`, `applyEvent` takes it from `AppliedEvent.withEventId`. Every resume path reads it
+  from the row and dispatches the episode's compensation commands with it as their causation id.
 - Genesis-pending insert: a start event's row is written before its first command is dispatched and
   committed (`genesis_applied = TRUE`) after the dispatch loop, so a saga never dispatches without a
   row and a crashed start is visible to the timeout runner.

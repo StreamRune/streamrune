@@ -21,6 +21,7 @@ import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaStore.AppliedEvent;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.SagaType;
 
@@ -697,6 +698,12 @@ public abstract class SagaStoreContract {
     assertEquals(2L, claimed.episodeVersion());
     Instant claimedAt = claimed.episodeClaimedAt();
     assertNotNull(claimedAt);
+    store.setDeadLetterPending(ID, TYPE, true); // the shield write: no version bump, no stamp
+    assertEquals(2L, row().episodeVersion(), "the shield write keeps the stamp");
+    assertEquals(claimedAt, row().episodeClaimedAt());
+    store.setDeadLetterPending(ID, TYPE, false);
+    assertEquals(2L, row().episodeVersion());
+    assertEquals(claimedAt, row().episodeClaimedAt());
     assertTrue(store.markFaulted(ID, TYPE, 2L)); // v3: a fault keeps the stamp
     var faulted = row();
     assertEquals(SagaStatus.COMPENSATING, faulted.effectiveStatus());
@@ -730,11 +737,207 @@ public abstract class SagaStoreContract {
     assertEquals(5L, row.version());
     assertNull(row.episodeVersion(), "no write entered a compensation episode");
     assertNull(row.episodeClaimedAt());
+    assertNull(row.episodeCauseEventId());
     store.createFaulted(SagaId.of("faulted-at-genesis"), TYPE, INITIAL);
     var faulted =
         store.load(SagaId.of("faulted-at-genesis"), TYPE, ContractState.class).orElseThrow();
     assertNull(faulted.episodeVersion(), "the evolve-poison create enters no episode");
     assertNull(faulted.episodeClaimedAt());
+    assertNull(faulted.episodeCauseEventId(), "and names no cause");
+  }
+
+  // ===== The cause of an episode. The write that stamps the episode also records the id of the
+  // event that opened it: the cause given to claimCompensating and createGenesisPending, the
+  // applied event's id for applyEvent, none for create and update. A stamped row keeps its cause
+  // through every later write, exactly as it keeps the stamp, and a row without a stamp has no
+  // cause. The runtime sets it as the causation id of every compensation command of the episode.
+
+  private static final EventId OPENING_EVENT = EventId.of("evt-7");
+
+  @Test
+  public void claimCompensating_withAnEvent_recordsItAsTheEpisodeCause() {
+    store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+    store.claimCompensating(ID, TYPE, EVOLVED, 1L, OPENING_EVENT); // v2
+    var row = row();
+    assertEquals(SagaStatus.COMPENSATING, row.status());
+    assertEquals(2L, row.episodeVersion());
+    assertNotNull(row.episodeClaimedAt());
+    assertEquals(OPENING_EVENT, row.episodeCauseEventId());
+  }
+
+  @Test
+  public void claimCompensating_withoutAnEvent_recordsNoCause() {
+    store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+    store.claimCompensating(ID, TYPE, EVOLVED, 1L); // v2: a timeout or an operator, no event
+    var row = row();
+    assertEquals(SagaStatus.COMPENSATING, row.status());
+    assertEquals(2L, row.episodeVersion(), "the episode is stamped with or without a cause");
+    assertNotNull(row.episodeClaimedAt());
+    assertNull(row.episodeCauseEventId());
+  }
+
+  @Test
+  public void applyEvent_landingCompensating_recordsTheAppliedEventAsTheCause() {
+    store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+    store.applyEvent(
+        ID,
+        TYPE,
+        EVOLVED,
+        SagaStatus.COMPENSATING,
+        1L,
+        AppliedEvent.live(GlobalOffset.of(11L)).withEventId(OPENING_EVENT));
+    var row = row();
+    assertEquals(2L, row.episodeVersion());
+    assertEquals(OPENING_EVENT, row.episodeCauseEventId());
+    assertEquals(11L, row.lastAppliedOffset(), "the applied-event facts ride in the same write");
+  }
+
+  @Test
+  public void applyEvent_landingAnotherStatus_recordsNoCause() {
+    store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+    store.applyEvent(
+        ID,
+        TYPE,
+        EVOLVED,
+        SagaStatus.RUNNING,
+        1L,
+        AppliedEvent.live(GlobalOffset.of(11L)).withEventId(OPENING_EVENT));
+    assertNull(row().episodeVersion());
+    assertNull(row().episodeCauseEventId(), "a forward write opens no episode and names no cause");
+    store.applyEvent(
+        ID,
+        TYPE,
+        EVOLVED,
+        SagaStatus.COMPLETED,
+        2L,
+        AppliedEvent.live(GlobalOffset.of(12L)).withEventId(EventId.of("evt-8")));
+    assertNull(row().episodeVersion());
+    assertNull(row().episodeCauseEventId(), "nor does a terminal one");
+  }
+
+  @Test
+  public void applyEvent_withoutAnEventId_stampsWithNoCause() {
+    store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+    store.applyEvent(
+        ID, TYPE, EVOLVED, SagaStatus.COMPENSATING, 1L, AppliedEvent.live(GlobalOffset.of(11L)));
+    var row = row();
+    assertEquals(2L, row.episodeVersion());
+    assertNotNull(row.episodeClaimedAt());
+    assertNull(row.episodeCauseEventId());
+  }
+
+  @Test
+  public void createGenesisPending_bornCompensating_recordsTheCause() {
+    store.createGenesisPending(ID, TYPE, EVOLVED, SagaStatus.COMPENSATING, false, OPENING_EVENT);
+    var row = row();
+    assertEquals(SagaStatus.COMPENSATING, row.status());
+    assertFalse(row.genesisApplied());
+    assertEquals(1L, row.episodeVersion());
+    assertNotNull(row.episodeClaimedAt());
+    assertEquals(OPENING_EVENT, row.episodeCauseEventId());
+  }
+
+  @Test
+  public void createGenesisPending_bornRunning_recordsNoCause() {
+    store.createGenesisPending(ID, TYPE, EVOLVED, SagaStatus.RUNNING, false, OPENING_EVENT);
+    var row = row();
+    assertEquals(SagaStatus.RUNNING, row.status());
+    assertNull(row.episodeVersion());
+    assertNull(row.episodeClaimedAt());
+    assertNull(row.episodeCauseEventId(), "the start event opened no episode");
+  }
+
+  @Test
+  public void createGenesisPending_withoutAnEvent_bornCompensating_recordsNoCause() {
+    store.createGenesisPending(ID, TYPE, EVOLVED, SagaStatus.COMPENSATING, false);
+    var row = row();
+    assertEquals(1L, row.episodeVersion());
+    assertNull(row.episodeCauseEventId());
+  }
+
+  @Test
+  public void createAndUpdate_landingCompensating_recordNoCause() {
+    store.create(ID, TYPE, EVOLVED, SagaStatus.COMPENSATING);
+    assertEquals(1L, row().episodeVersion());
+    assertNull(row().episodeCauseEventId(), "create is given no event");
+    store.create(FRESH_ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+    store.update(FRESH_ID, TYPE, EVOLVED, SagaStatus.COMPENSATING, 1L); // v2
+    var updated = store.load(FRESH_ID, TYPE, ContractState.class).orElseThrow();
+    assertEquals(2L, updated.episodeVersion());
+    assertNull(updated.episodeCauseEventId(), "update is given no event");
+  }
+
+  @Test
+  public void aStampedEpisode_keepsItsCauseThroughEveryLaterWrite() {
+    store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+    store.claimCompensating(ID, TYPE, EVOLVED, 1L, OPENING_EVENT); // v2: the episode opens here
+    assertEquals(OPENING_EVENT, row().episodeCauseEventId());
+    store.setDeadLetterPending(ID, TYPE, true); // the shield write: no version bump
+    assertEquals(OPENING_EVENT, row().episodeCauseEventId(), "the shield write keeps the cause");
+    store.setDeadLetterPending(ID, TYPE, false);
+    assertEquals(OPENING_EVENT, row().episodeCauseEventId(), "set or cleared");
+    store.claimCompensating(ID, TYPE, EVOLVED, 2L, EventId.of("evt-8")); // v3: a second claim
+    assertEquals(OPENING_EVENT, row().episodeCauseEventId(), "a second claim names no new cause");
+    store.applyEvent(
+        ID,
+        TYPE,
+        EVOLVED,
+        SagaStatus.COMPENSATING,
+        3L,
+        AppliedEvent.live(GlobalOffset.of(5L)).withEventId(EventId.of("evt-9"))); // v4
+    assertEquals(OPENING_EVENT, row().episodeCauseEventId(), "nor does an applied event");
+    assertTrue(store.markFaulted(ID, TYPE, 4L)); // v5
+    assertEquals(SagaStatus.COMPENSATING, row().effectiveStatus());
+    assertEquals(OPENING_EVENT, row().episodeCauseEventId(), "a fault keeps the cause");
+    store.applyEvent(
+        ID,
+        TYPE,
+        EVOLVED,
+        SagaStatus.COMPENSATING,
+        5L,
+        AppliedEvent.replayed(GlobalOffset.of(6L)).withEventId(EventId.of("evt-10"))); // v6
+    assertEquals(OPENING_EVENT, row().episodeCauseEventId(), "a replayed step keeps the cause");
+    store.claimCompensating(ID, TYPE, EVOLVED, 6L); // v7: a claim with no event clears nothing
+    assertEquals(OPENING_EVENT, row().episodeCauseEventId(), "a claim with no event keeps it");
+    store.update(ID, TYPE, EVOLVED, SagaStatus.COMPENSATED, 7L); // v8: terminal
+    var row = row();
+    assertEquals(SagaStatus.COMPENSATED, row.status());
+    assertEquals(2L, row.episodeVersion());
+    assertEquals(OPENING_EVENT, row.episodeCauseEventId(), "a terminal write keeps the cause");
+  }
+
+  @Test
+  public void aStampedEpisode_keepsItsCauseThroughATerminalApplyEvent() {
+    store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+    store.claimCompensating(ID, TYPE, EVOLVED, 1L, OPENING_EVENT); // v2: the episode opens here
+    store.applyEvent(
+        ID,
+        TYPE,
+        EVOLVED,
+        SagaStatus.COMPENSATED,
+        2L,
+        AppliedEvent.live(GlobalOffset.of(5L)).withEventId(EventId.of("evt-9"))); // v3: terminal
+    var row = row();
+    assertEquals(SagaStatus.COMPENSATED, row.status());
+    assertEquals(2L, row.episodeVersion());
+    assertEquals(OPENING_EVENT, row.episodeCauseEventId(), "the applied event is not the cause");
+  }
+
+  @Test
+  public void aStampedEpisodeWithoutACause_isNotGivenOneByALaterWrite() {
+    store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING); // v1
+    store.claimCompensating(ID, TYPE, EVOLVED, 1L); // v2: opened with no event in hand
+    store.claimCompensating(ID, TYPE, EVOLVED, 2L, OPENING_EVENT); // v3
+    assertNull(row().episodeCauseEventId(), "the episode was opened with no event");
+    store.applyEvent(
+        ID,
+        TYPE,
+        EVOLVED,
+        SagaStatus.COMPENSATING,
+        3L,
+        AppliedEvent.live(GlobalOffset.of(5L)).withEventId(OPENING_EVENT)); // v4
+    assertEquals(2L, row().episodeVersion());
+    assertNull(row().episodeCauseEventId(), "and no later write names one");
   }
 
   // ===== findTimedOut serves two populations — forward timeouts (STARTED/RUNNING past their
