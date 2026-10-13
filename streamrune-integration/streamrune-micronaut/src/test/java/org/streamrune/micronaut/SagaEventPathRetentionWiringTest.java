@@ -201,11 +201,13 @@ class SagaEventPathRetentionWiringTest {
   }
 
   /**
-   * Two runner beans over one saga state class and one store are one saga type with two sets of
-   * logic: the startup listener throws, and the failure names the state class and both sagas.
+   * Two runners over one saga state class and one store are one saga type with two sets of logic:
+   * the configurer throws, and the failure names the state class and both sagas. The runners are
+   * built by hand here; {@link SagaTypeOwnershipContainerWiringTest} declares them as beans and
+   * starts the container.
    */
   @Test
-  void twoSagaRunnerBeansOverOneStateClassAndOneStore_failTheStartup() {
+  void twoSagaRunnersOverOneStateClassAndOneStore_areRefusedByTheConfigurer() {
     var store = new InMemorySagaStore();
     var runners =
         List.<SagaRunner<?>>of(

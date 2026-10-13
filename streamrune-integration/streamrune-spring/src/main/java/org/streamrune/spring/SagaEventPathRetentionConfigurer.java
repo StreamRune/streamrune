@@ -27,7 +27,9 @@ import org.streamrune.runtime.SagaTypeOwnership;
  * drive one saga type — one saga state class — over the same {@code SagaStore} ({@link
  * SagaTypeOwnership#requireOneRunnerPerSagaType}): the context does not start, and the message
  * names the state class and what each runner is built from. Two such runners load and write the
- * same rows, and each takes the replies to the other's commands for its own.
+ * same rows, and each takes the replies to the other's commands for its own. One store is one
+ * instance, or two instances that keep the same rows ({@code SagaStore.storageIdentity()}: two
+ * {@code PostgresSagaStore}s over one {@code DataSource}).
  *
  * <p>Runs after all singletons are instantiated so every {@link SagaRunner} bean is visible, and
  * before {@code SmartLifecycle} starts any subscription — the same hook, for the same reason, as

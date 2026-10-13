@@ -31,6 +31,13 @@ import org.streamrune.core.types.StreamId;
  * They carry no origin of this saga type, and the runner asks {@link #correlateByEventData}, which
  * receives the stream id and the payload and nothing of the metadata.
  *
+ * <p>The runner calls the methods this interface declares and no other. Mark each implementation
+ * {@code @Override}: a method {@code correlate(EventEnvelope)} declared without the annotation
+ * compiles, and the runner never calls it. A saga with such a method receives the replies to its
+ * own commands, which the origin routes, and none of the events somebody else caused — for those
+ * the runner asks {@link #correlateByEventData}, whose default answers that the event is no saga's
+ * business.
+ *
  * <p>When both could apply, the origin decides and {@link #correlateByEventData} is not called.
  * Every event a saga's command produces, and every event of a continuation of such an event, is
  * routed to the dispatching saga and to no other saga of its type — also an event about another

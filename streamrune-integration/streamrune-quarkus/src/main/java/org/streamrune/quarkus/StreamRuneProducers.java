@@ -78,6 +78,12 @@ import org.streamrune.runtime.gdpr.ForgetSubjectService;
  * leadership) is {@code @Singleton} even though its feature is optional, with an inert non-null
  * fallback ({@code NOOP}, an inert contributor) instead of {@code null}: a {@code @Dependent}
  * producer would hand each injection point its own copy.
+ *
+ * <p>The {@link SagaStore} is shared too, and has no inert fallback to be {@code @Singleton} with:
+ * a saga store that keeps nothing would let a runner lose its sagas, and {@code null} is the
+ * documented answer of the saga kill switch ({@code streamrune.saga.enabled=false}) that consumers
+ * null-check. Its producer therefore stays dependent-scoped and hands every injection point the one
+ * instance it creates — see {@link #sagaStore}.
  */
 @ApplicationScoped
 public class StreamRuneProducers {
@@ -711,8 +717,25 @@ public class StreamRuneProducers {
   }
 
   /**
+   * The one {@link SagaStore} of the application, created by the first call of {@link #sagaStore}
+   * and handed to every later one.
+   */
+  private volatile SagaStore sharedSagaStore;
+
+  /**
    * Produces a {@link org.streamrune.postgres.PostgresSagaStore} as the default {@link SagaStore}
-   * when sagas are enabled. Dependent-scoped optional bean.
+   * when sagas are enabled. Dependent-scoped optional bean: {@code null} when {@code
+   * streamrune.saga.enabled=false}.
+   *
+   * <p><strong>One store per application.</strong> A dependent-scoped producer is called once per
+   * injection point, so the instance is created once and every injection point receives it: each
+   * {@code SagaRunner} producer of the application that takes a {@code SagaStore} parameter, the
+   * compensation-retry sweepers and the saga dead-letter wiring work on the same object. Runners
+   * that share their rows so share their store, which is the first thing the startup check that
+   * refuses two saga runners over one saga state class and one store compares ({@code
+   * SagaTypeOwnership.requireOneRunnerPerSagaType}). The product cannot be {@code @Singleton} like
+   * the other shared products of this class, because the disabled case answers {@code null}, which
+   * CDI permits for a dependent bean only.
    *
    * <p>Wires the {@link CryptoEngine} bean (if present) into the saga store's ObjectMapper via
    * {@code CryptoShreddingModule}, the same way {@link #postgresEventStoreFactory} wires the event
@@ -732,6 +755,23 @@ public class StreamRuneProducers {
     if (!properties.saga().enabled()) {
       return null;
     }
+    SagaStore shared = sharedSagaStore;
+    if (shared == null) {
+      synchronized (this) {
+        shared = sharedSagaStore;
+        if (shared == null) {
+          shared = newSagaStore(dataSource, cryptoEngineInstance, metricsInstance);
+          sharedSagaStore = shared;
+        }
+      }
+    }
+    return shared;
+  }
+
+  private static SagaStore newSagaStore(
+      DataSource dataSource,
+      Instance<CryptoEngine> cryptoEngineInstance,
+      Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance) {
     if (cryptoEngineInstance.isAmbiguous()) {
       throw new IllegalStateException(
           "Multiple CryptoEngine beans exist but none is marked @Priority — StreamRune cannot "

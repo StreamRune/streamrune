@@ -31,7 +31,9 @@ import org.streamrune.runtime.SagaTypeOwnership;
  * beans that drive one saga type — one saga state class — over the same {@code SagaStore} ({@link
  * SagaTypeOwnership#requireOneRunnerPerSagaType}): the application does not start, and the message
  * names the state class and what each runner is built from. Two such runners load and write the
- * same rows, and each takes the replies to the other's commands for its own.
+ * same rows, and each takes the replies to the other's commands for its own. One store is one
+ * instance, or two instances that keep the same rows ({@code SagaStore.storageIdentity()}: two
+ * {@code PostgresSagaStore}s over one {@code DataSource}).
  *
  * <p>Deliberately not gated on {@code streamrune.saga.compensation-retry-enabled}: the event path
  * has no enable knob of its own, so the guard must not disappear with the sweeper. Mirrors the
@@ -45,8 +47,8 @@ import org.streamrune.runtime.SagaTypeOwnership;
  * LIBRARY_BEFORE + 100}), this configurer ran DETERMINISTICALLY AFTER them — the event-path key-age
  * guard landed only after the framework-hosted runners had already started, so a backlog of events
  * delivered to the saga event path during that window saw the guard still inert. Spring's sibling
- * ({@code SmartInitializingSingleton}) and Micronaut's (no {@code Ordered}, default order 0) both
- * already run before their runners start; this restores parity.
+ * ({@code SmartInitializingSingleton}) and Micronaut's ({@code Ordered}, the validators' order)
+ * both run before their runners start; this restores parity.
  */
 @ApplicationScoped
 public class SagaEventPathRetentionConfigurer {
