@@ -225,6 +225,124 @@ class SagaTypeOwnershipTest {
         .doesNotThrowAnyException();
   }
 
+  // ==== "The same store" is decided by what a store keeps its rows in ====
+
+  /** A store over the rows of {@code delegate} that answers with the given storage identity. */
+  private static SagaStore storeOver(SagaStore delegate, java.util.function.Supplier<Object> id) {
+    return (SagaStore)
+        java.lang.reflect.Proxy.newProxyInstance(
+            SagaStore.class.getClassLoader(),
+            new Class<?>[] {SagaStore.class},
+            (proxy, method, args) -> {
+              switch (method.getName()) {
+                case "storageIdentity" -> {
+                  Object identity = id.get();
+                  return identity == SELF ? proxy : identity;
+                }
+                case "equals" -> {
+                  return proxy == args[0];
+                }
+                case "hashCode" -> {
+                  return System.identityHashCode(proxy);
+                }
+                default -> {}
+              }
+              try {
+                return method.invoke(delegate, args);
+              } catch (java.lang.reflect.InvocationTargetException failed) {
+                throw failed.getCause();
+              }
+            });
+  }
+
+  /** Stands for "the store itself", the default answer of {@code SagaStore.storageIdentity()}. */
+  private static final Object SELF = new Object();
+
+  /**
+   * Two store instances over one set of rows — two {@code PostgresSagaStore}s over one {@code
+   * DataSource}, each with a mapper of its own, are that — are one store for this check: both
+   * runners load and write the same rows.
+   */
+  @Test
+  void twoStoreInstancesWithOneStorageIdentity_areOneStore() {
+    var rows = new InMemorySagaStore();
+    Object dataSource = new Object();
+    var first = storeOver(rows, () -> dataSource);
+    var second = storeOver(rows, () -> dataSource);
+
+    assertThatThrownBy(
+            () ->
+                SagaTypeOwnership.requireOneRunnerPerSagaType(
+                    List.of(runner(new OrderOrchestrator(), first), refundRunner(second))))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("the saga type " + OrderState.class.getName())
+        .hasMessageContaining("over the same SagaStore");
+    assertThatCode(
+            () ->
+                SagaTypeOwnership.requireOneRunnerPerSagaType(
+                    List.of(
+                        runner(new OrderOrchestrator(), first),
+                        runner(new ShipmentOrchestrator(), second))))
+        .doesNotThrowAnyException();
+  }
+
+  /** A wrapper that answers with the identity of the store it wraps is that store. */
+  @Test
+  void aWrapperThatForwardsTheStorageIdentity_isTheStoreItWraps() {
+    var rows = new InMemorySagaStore();
+    var wrapper = storeOver(rows, rows::storageIdentity);
+
+    assertThatThrownBy(
+            () ->
+                SagaTypeOwnership.requireOneRunnerPerSagaType(
+                    List.of(runner(new OrderOrchestrator(), rows), refundRunner(wrapper))))
+        .isInstanceOf(IllegalStateException.class);
+  }
+
+  /**
+   * The limit of the check: a wrapper that keeps the default identity — itself — is a store of its
+   * own to the check, although it shares the rows of the store it wraps; and so are two stores
+   * whose identities differ although they reach the same rows (two {@code DataSource}s over one
+   * database).
+   */
+  @Test
+  void aWrapperWithAnIdentityOfItsOwn_andTwoIdentitiesOverOneSetOfRows_areBeyondTheCheck() {
+    var rows = new InMemorySagaStore();
+    var wrapper = storeOver(rows, () -> SELF);
+
+    assertThatCode(
+            () ->
+                SagaTypeOwnership.requireOneRunnerPerSagaType(
+                    List.of(runner(new OrderOrchestrator(), rows), refundRunner(wrapper))))
+        .doesNotThrowAnyException();
+    assertThatCode(
+            () ->
+                SagaTypeOwnership.requireOneRunnerPerSagaType(
+                    List.of(
+                        runner(new OrderOrchestrator(), storeOver(rows, Object::new)),
+                        refundRunner(storeOver(rows, Object::new)))))
+        .doesNotThrowAnyException();
+  }
+
+  @Test
+  void aStoreThatAnswersNoIdentity_isComparedAsItself() {
+    var rows = new InMemorySagaStore();
+    var nameless = storeOver(rows, () -> null);
+
+    assertThatThrownBy(
+            () ->
+                SagaTypeOwnership.requireOneRunnerPerSagaType(
+                    List.of(runner(new OrderOrchestrator(), nameless), refundRunner(nameless))))
+        .isInstanceOf(IllegalStateException.class);
+    assertThatCode(
+            () ->
+                SagaTypeOwnership.requireOneRunnerPerSagaType(
+                    List.of(
+                        runner(new OrderOrchestrator(), nameless),
+                        refundRunner(storeOver(rows, () -> null)))))
+        .doesNotThrowAnyException();
+  }
+
   @Test
   void theSameRunnerListedTwice_nullElements_andNoRunners_areAccepted() {
     var order = runner(new OrderOrchestrator(), new InMemorySagaStore());

@@ -3,6 +3,7 @@ package org.streamrune.runtime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import org.streamrune.core.saga.SagaStore;
 
 /**
  * Startup guard: a saga type has one {@link SagaRunner} over a saga store.
@@ -17,13 +18,20 @@ import java.util.List;
  * tell the two apart, because the reply does not reach one.
  *
  * <p>The framework never builds a {@code SagaRunner}; applications do, and the three integration
- * modules discover the beans. They call {@link #requireOneRunnerPerSagaType} at startup, before a
- * subscription delivers an event. A hand-wired application calls it itself, or keeps the rule: a
- * saga state class belongs to one saga.
+ * modules discover the beans. They call {@link #requireOneRunnerPerSagaType} at startup, in the
+ * step that validates the configuration, ahead of the runners, sweepers and subscriptions the
+ * integration starts itself; the application does not start. A subscription that an application
+ * starts on its own while its beans are created is already polling when the refusal stops the
+ * startup. A hand-wired application calls the method itself, or keeps the rule: a saga state class
+ * belongs to one saga.
  *
- * <p>Two runners of one saga type over <em>different</em> store instances are not refused: they
- * share no row. The check compares store instances, so two wrappers around one underlying store are
- * beyond it.
+ * <p><b>The same store.</b> Two runners share their rows when their stores are one instance, or
+ * when the two instances say they keep the same rows ({@link SagaStore#storageIdentity()}): two
+ * {@code PostgresSagaStore}s over one {@code DataSource} are one store, whatever mapper each has.
+ * Two runners of one saga type over stores with <em>different</em> identities are not refused. The
+ * identity is what a store answers without I/O, so it has a limit: two {@code DataSource} objects
+ * configured for one database, and a wrapper that does not forward the identity of the store it
+ * wraps, are two stores to this check although their runners share rows.
  *
  * <p>Lives in {@code org.streamrune.runtime} for the same reason {@link SagaStateCryptoValidation}
  * does: it reads {@link SagaRunner}'s package-private state.
@@ -33,8 +41,9 @@ public final class SagaTypeOwnership {
   private SagaTypeOwnership() {}
 
   /**
-   * Refuses two runners that drive the same saga type over the same {@code SagaStore} instance. The
-   * same runner listed twice is one runner.
+   * Refuses two runners that drive the same saga type over the same {@code SagaStore}: one
+   * instance, or two with equal {@link SagaStore#storageIdentity() storage identities}. The same
+   * runner listed twice is one runner.
    *
    * @param sagaRunners the discovered saga runners; {@code null}/empty is a no-op, {@code null}
    *     elements are skipped
@@ -52,7 +61,7 @@ public final class SagaTypeOwnership {
       }
       for (SagaRunner<?> earlier : accepted) {
         if (earlier.sagaType().equals(runner.sagaType())
-            && earlier.sagaStore() == runner.sagaStore()) {
+            && keepTheSameRows(earlier.sagaStore(), runner.sagaStore())) {
           throw new IllegalStateException(
               "Two SagaRunner instances drive the saga type "
                   + runner.sagaType().value()
@@ -68,5 +77,16 @@ public final class SagaTypeOwnership {
       }
       accepted.add(runner);
     }
+  }
+
+  /** Whether two stores are one instance, or say they keep the same rows. */
+  private static boolean keepTheSameRows(SagaStore first, SagaStore second) {
+    return first == second || storageOf(first).equals(storageOf(second));
+  }
+
+  /** A store's storage identity; the store itself for one that answers {@code null}. */
+  private static Object storageOf(SagaStore store) {
+    Object identity = store.storageIdentity();
+    return identity != null ? identity : store;
   }
 }

@@ -61,6 +61,19 @@ public abstract class SagaStoreContract {
     return store.load(ID, TYPE, ContractState.class).orElseThrow();
   }
 
+  /**
+   * What a store keeps its rows in ({@link SagaStore#storageIdentity()}) is never {@code null} and
+   * is the same on every call: the startup check that refuses two saga runners of one saga type
+   * over one store compares it.
+   */
+  @Test
+  public void storageIdentity_isStable_andNeverNull() {
+    Object identity = store.storageIdentity();
+
+    org.junit.jupiter.api.Assertions.assertNotNull(identity);
+    org.junit.jupiter.api.Assertions.assertEquals(identity, store.storageIdentity());
+  }
+
   @Test
   public void create_isACompleteRow_genesisApplied_noFault_noShield_noOffsets() {
     store.create(ID, TYPE, EVOLVED, SagaStatus.RUNNING);

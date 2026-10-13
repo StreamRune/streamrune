@@ -47,6 +47,31 @@ import org.streamrune.core.types.SagaType;
 public interface SagaStore {
 
   /**
+   * What this store keeps its rows in, for one question: do two stores share their rows?
+   *
+   * <p>Two stores whose answers are {@linkplain Object#equals equal} keep the same saga rows. The
+   * startup check that refuses two saga runners of one saga type over one store ({@code
+   * SagaTypeOwnership.requireOneRunnerPerSagaType}) compares this value, so that two store
+   * instances over the same rows — one per runner bean, each with a mapper of its own — count as
+   * the one store they are.
+   *
+   * <p>The default is the store itself: an instance shares its rows with nobody. {@code
+   * PostgresSagaStore} answers with its {@code DataSource}, the object its {@code saga_state} rows
+   * are reached through. A store that wraps another answers with the wrapped store's identity when
+   * it keeps no rows of its own.
+   *
+   * <p><b>What it cannot tell.</b> Equal answers mean the same rows; different answers do not mean
+   * different rows. Two {@code DataSource} objects configured for one database are two identities,
+   * and so is a wrapper that keeps this default. The answer is cheap — no I/O — and is asked at
+   * startup only.
+   *
+   * @return the identity of this store's storage; never {@code null}, and the same on every call
+   */
+  default Object storageIdentity() {
+    return this;
+  }
+
+  /**
    * Atomically inserts a new saga at {@code version = 1} as a COMPLETE row: {@code genesis_applied
    * = TRUE} (nothing of the start is left to dispatch — the executor's DONE-at-genesis write,
    * tooling and tests; a store that leaves the column at its default would hold every such saga's
