@@ -457,6 +457,7 @@ class SagaEpisodeStampReadFromRowTest {
               .build();
       timeoutRunner =
           SagaTimeoutRunner.<State>builder()
+              .stepLock(new SagaStepLock())
               .decider(saga)
               .sagaStore(sagaStore)
               .commandBus(bus)

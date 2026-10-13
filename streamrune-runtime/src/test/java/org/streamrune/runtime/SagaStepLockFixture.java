@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -27,12 +28,14 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.saga.SagaStore.AppliedEvent;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -232,12 +235,61 @@ final class SagaStepLockFixture implements AutoCloseable {
     }
   }
 
-  /** A forwarding store with a hook that runs once, right before the next claim is written. */
+  /**
+   * A forwarding store with hooks that run once — right before the next claim is written, right
+   * before the next event write — a switch that fails one coming read, and a record of how many ids
+   * each timeout query asked for.
+   */
   static final class HookedSagaStore extends ForwardingSagaStore {
     private final AtomicReference<Runnable> beforeClaim = new AtomicReference<>();
+    private final AtomicReference<Runnable> beforeEventWrite = new AtomicReference<>();
+    private final AtomicInteger readsUntilAFailure = new AtomicInteger();
+
+    /** The {@code limit} of every {@code findTimedOut} call, in call order. */
+    final List<Integer> timeoutQueryLimits = new CopyOnWriteArrayList<>();
 
     HookedSagaStore(InMemorySagaStore delegate) {
       super(delegate);
+    }
+
+    /** Runs once, on the writing thread, after the step's read and before its event write. */
+    void runOnceBeforeTheEventWrite(Runnable action) {
+      beforeEventWrite.set(action);
+    }
+
+    /** Makes the {@code n}-th read of a row from here on throw; the reads around it succeed. */
+    void failTheReadNumber(int n) {
+      readsUntilAFailure.set(n);
+    }
+
+    @Override
+    public void applyEvent(
+        SagaId id,
+        SagaType type,
+        SagaState state,
+        SagaStatus status,
+        long version,
+        AppliedEvent applied) {
+      Runnable once = beforeEventWrite.getAndSet(null);
+      if (once != null) {
+        once.run();
+      }
+      super.applyEvent(id, type, state, status, version, applied);
+    }
+
+    @Override
+    public <S extends SagaState> Optional<LoadedSaga<S>> load(
+        SagaId id, SagaType type, Class<S> stateType) {
+      if (readsUntilAFailure.get() > 0 && readsUntilAFailure.decrementAndGet() == 0) {
+        throw new IllegalStateException("the saga store is unreachable");
+      }
+      return super.load(id, type, stateType);
+    }
+
+    @Override
+    public List<SagaId> findTimedOut(SagaType type, Instant cutoff, int limit) {
+      timeoutQueryLimits.add(limit);
+      return super.findTimedOut(type, cutoff, limit);
     }
 
     /** Runs once, on the claiming thread, after the claim's read and before its write. */
@@ -267,6 +319,17 @@ final class SagaStepLockFixture implements AutoCloseable {
   final OneEventDecider<Release> release = new OneEventDecider<>(c -> new Released(c.orderId()));
   final OneEventDecider<Refund> refund = new OneEventDecider<>(c -> new Refunded(c.orderId()));
   final OrderSaga saga = new OrderSaga();
+
+  /** The saga type of every deferred timeout claim the timeout runner counted. */
+  final List<String> deferredClaimSamples = new CopyOnWriteArrayList<>();
+
+  final StreamRuneMetrics metrics =
+      new StreamRuneMetrics() {
+        @Override
+        public void recordSagaTimeoutClaimDeferred(String sagaType) {
+          deferredClaimSamples.add(sagaType);
+        }
+      };
   private final AtomicInteger triggerIds = new AtomicInteger();
   final VirtualThreadCommandBus realBus =
       VirtualThreadCommandBus.builder()
@@ -335,6 +398,7 @@ final class SagaStepLockFixture implements AutoCloseable {
             .sagaRunner(runner)
             .claimWait(claimWait)
             .batchSize(1_000)
+            .metrics(metrics)
             .build();
     sweeper =
         SagaCompensationRetrySweeper.<State>builder()
@@ -396,6 +460,13 @@ final class SagaStepLockFixture implements AutoCloseable {
 
   LoadedSaga<State> row(String orderId) {
     return rows.load(sagaOf(orderId), TYPE, State.class).orElseThrow();
+  }
+
+  /** Waits until the order's saga has a row: its start step has written the genesis-pending row. */
+  void awaitRow(String orderId) {
+    awaitUntil(
+        "the saga of order " + orderId + " has a row",
+        () -> rows.load(sagaOf(orderId), TYPE, State.class).isPresent());
   }
 
   /** The stored forward and compensation events of one order, in global order. */

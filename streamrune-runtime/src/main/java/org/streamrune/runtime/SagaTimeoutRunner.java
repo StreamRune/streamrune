@@ -3,10 +3,13 @@ package org.streamrune.runtime;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -80,13 +83,24 @@ import org.streamrune.core.types.SagaType;
  * not made, the row is left as it is, and the saga — still past its deadline, still selected — is
  * claimed on the first poll that finds the step ended. After {@value #DEFERRALS_BEFORE_WAITING}
  * polls in a row that passed a saga over, the claim waits for the step, for a bounded time and in
- * arrival order, so a saga whose deliveries never stop is claimed between two of them; a step that
- * is still in flight after that wait is a forward command that does not return, and every such poll
- * says so at WARN. The claim is never made underneath a step. The lock is released as soon as the
- * claim is written, before any compensation command. This holds within one process: a timeout
- * runner on another node shares nothing with this node's deliveries. A runner built without {@link
- * Builder#sagaRunner} and without {@link Builder#stepLock} shares its lock with nothing and {@link
- * #start()} says so.
+ * arrival order, so a delivery that arrives later does not go ahead of it. The claim is never made
+ * underneath a step, however long the step lasts: a poll that waited and still found a step in
+ * flight says so at WARN, counts {@link StreamRuneMetrics#recordSagaTimeoutClaimDeferred}, and the
+ * runner reports {@link #claimsDeferredPastTheWait()} to the health check. The lock is released as
+ * soon as the claim is written, before any compensation command. This holds within one process: a
+ * timeout runner on another node shares nothing with this node's deliveries. {@link
+ * Builder#build()} refuses a builder that names neither {@link Builder#sagaRunner} nor {@link
+ * Builder#stepLock}.
+ *
+ * <p><b>A saga whose claim is deferred takes no slot of the batch.</b> It stays a forward row past
+ * its deadline and is selected again on every poll, so counted against {@code batchSize} it would
+ * keep later sagas out of the batch for as long as its step lasts. A poll therefore asks the store
+ * for two more ids for each saga it passes over — one for each of the store's two populations — and
+ * handles everything it reads, so both populations keep the share {@code batchSize} gives them. It
+ * reads past at most {@code batchSize} such sagas: no query asks for more than three times {@code
+ * batchSize} ids, and a poll repeats its query only while the previous one passed over sagas it had
+ * not counted. The sagas a poll has to wait for are tried after all the others, so their waits
+ * delay no other saga's claim.
  *
  * <p><b>Fair batches:</b> each poll takes up to {@code batchSize} sagas from {@link
  * SagaStore#findTimedOut}, which serves forward timeouts (oldest start first) and {@code
@@ -150,16 +164,10 @@ public final class SagaTimeoutRunner<S extends SagaState> {
 
   /**
    * The step lock a claim takes around its read of the row and its claim: the {@link SagaRunner}'s
-   * when the builder named one, so the claim waits for that runner's steps; otherwise a lock no
-   * step holds.
+   * when the builder named the runner, so the claim waits for that runner's steps; otherwise the
+   * lock the builder named.
    */
   private final SagaStepLock stepLock;
-
-  /**
-   * Whether {@link #stepLock} is shared with something that runs steps, as far as the builder
-   * knows.
-   */
-  private final boolean stepLockNamed;
 
   private final Duration claimWait;
 
@@ -170,6 +178,9 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    * only sagas that are past their deadline and in a step at this moment.
    */
   private final Map<SagaId, Integer> deferredClaims = new ConcurrentHashMap<>();
+
+  /** What {@link #claimsDeferredPastTheWait()} answers: written at the end of every poll. */
+  private volatile int claimsDeferredPastTheWait;
 
   private final AtomicBoolean started = new AtomicBoolean(false);
 
@@ -196,10 +207,8 @@ public final class SagaTimeoutRunner<S extends SagaState> {
       Duration maxCompensatingDwell,
       Duration inboxRetentionMaxAge,
       SagaStepLock stepLock,
-      boolean stepLockNamed,
       Duration claimWait) {
     this.stepLock = stepLock;
-    this.stepLockNamed = stepLockNamed;
     this.claimWait = claimWait;
     this.decider = decider;
     this.sagaStore = sagaStore;
@@ -242,15 +251,6 @@ public final class SagaTimeoutRunner<S extends SagaState> {
     if (!started.compareAndSet(false, true)) {
       throw new IllegalStateException(
           "SagaTimeoutRunner already started — call start() exactly once, or stop() first");
-    }
-    if (!stepLockNamed) {
-      LOG.warn(
-          "SagaTimeoutRunner for {} shares its step lock with no SagaRunner: in this process its"
-              + " claim at a saga's deadline does not wait for a delivery that is dispatching that"
-              + " saga's forward commands. Build it with sagaRunner(theSagaRunner) so the claim"
-              + " waits for that runner's steps, or name stepLock(new SagaStepLock()) when no"
-              + " SagaRunner of this saga type runs in this process.",
-          sagaType.value());
     }
     running = true;
     pollThread =
@@ -328,6 +328,19 @@ public final class SagaTimeoutRunner<S extends SagaState> {
   }
 
   /**
+   * How many sagas past their deadline the latest poll waited for and still did not claim, because
+   * a step of each was in flight in this process for the whole wait. {@code 0} when the latest poll
+   * claimed every saga it waited for, or waited for none. A nonzero value is a deadline that is not
+   * being enforced in this process: a forward command of that saga has not returned (or its
+   * attempts follow each other without a gap), the claim is not made underneath it, and it is made
+   * by the first poll that finds the step ended — a restart of the process ends such a step and
+   * frees its lock. The health check reports the runner {@code DEGRADED} while this is nonzero.
+   */
+  public int claimsDeferredPastTheWait() {
+    return claimsDeferredPastTheWait;
+  }
+
+  /**
    * The saga type this runner polls, as {@link SagaType#value()} — the saga state's fully-qualified
    * class name, the value the saga store persists in {@code saga_type}. It keys the runner's health
    * component ({@code saga-timeout:<saga type>}) and is the {@code saga.type} tag of its metrics:
@@ -353,25 +366,73 @@ public final class SagaTimeoutRunner<S extends SagaState> {
     processBatch(cutoff);
   }
 
-  /** Processes a single batch of timed-out sagas. Package-private for testing. */
+  /**
+   * Processes a single batch of timed-out sagas. Package-private for testing.
+   *
+   * <p>A saga whose claim is deferred ({@link #claimAtTheDeadline}) takes no slot. The poll asks
+   * {@link SagaStore#findTimedOut} for {@code batchSize} ids and two more for each saga it expects
+   * to pass over — the sagas the previous poll passed over. A deferred saga is a forward row, and
+   * the store gives the forward population half of what is asked for when both populations are
+   * backlogged, so two more ids per deferred saga give the forward population the one slot that
+   * saga holds and leave both populations the share {@code batchSize} gives them. Every id read is
+   * handled. When a query comes back full and the poll has passed over more sagas than it counted,
+   * it asks again with the larger number and handles the ids it has not seen; each further query
+   * needs sagas newly passed over, and the number counted stops at {@code batchSize}, so no query
+   * asks for more than three times {@code batchSize} ids.
+   *
+   * <p>A saga the poll has to wait for ({@value #DEFERRALS_BEFORE_WAITING} polls in a row passed it
+   * over) is counted as passed over when it is read and tried after every other saga of the poll,
+   * so its wait delays no other claim. Nothing here starves it: it stays selected, by its start
+   * instant, and is tried on every poll.
+   */
   void processBatch(Instant cutoff) {
-    List<SagaId> timedOut = sagaStore.findTimedOut(sagaType, cutoff, batchSize);
-    // Sample the timed-out backlog gauge each cycle so a stalled-but-alive runner (or a
-    // growing timeout backlog) is visible on the metrics endpoint, not only in logs. This is the
-    // number of sagas picked up this cycle — forward timeouts plus COMPENSATING re-picks — bounded
-    // by batchSize (like OUTBOX_PENDING is the depth the relay works). Decoupled from processing: a
-    // metric failure never aborts the batch.
-    if (metrics != StreamRuneMetrics.NOOP) {
-      recordMetric(
-          () -> metrics.recordSagaTimedOutBacklog(sagaType.value(), timedOut.size()),
-          "recordSagaTimedOutBacklog");
+    Set<SagaId> seen = new HashSet<>();
+    List<SagaId> toWaitFor = new ArrayList<>();
+    int passedOver = 0;
+    int readPast = Math.min(deferredClaims.size(), batchSize);
+    boolean firstQuery = true;
+    while (true) {
+      int limit = batchSize + 2 * readPast;
+      List<SagaId> timedOut = sagaStore.findTimedOut(sagaType, cutoff, limit);
+      if (firstQuery) {
+        firstQuery = false;
+        // Sample the timed-out backlog gauge each cycle so a stalled-but-alive runner (or a
+        // growing timeout backlog) is visible on the metrics endpoint, not only in logs. This is
+        // the number of sagas the poll's first query picked up — forward timeouts plus
+        // COMPENSATING re-picks. Decoupled from processing: a metric failure never aborts the
+        // batch.
+        if (metrics != StreamRuneMetrics.NOOP) {
+          recordMetric(
+              () -> metrics.recordSagaTimedOutBacklog(sagaType.value(), timedOut.size()),
+              "recordSagaTimedOutBacklog");
+        }
+      }
+      for (SagaId sagaId : timedOut) {
+        if (!seen.add(sagaId)) {
+          continue;
+        }
+        if (deferredClaims.getOrDefault(sagaId, 0) >= DEFERRALS_BEFORE_WAITING) {
+          toWaitFor.add(sagaId);
+          passedOver++;
+        } else if (processTimedOutSaga(sagaId)) {
+          passedOver++;
+        }
+      }
+      if (timedOut.size() < limit || passedOver <= readPast || readPast == batchSize) {
+        break; // nothing more is selected, or every saga passed over was read past, or the bound
+      }
+      readPast = Math.min(passedOver, batchSize);
     }
-    // A saga that is not selected is not a forward saga past its deadline: forget how often its
-    // claim was passed over.
-    deferredClaims.keySet().retainAll(timedOut);
-    for (SagaId sagaId : timedOut) {
-      processTimedOutSaga(sagaId);
+    // A saga this poll did not read is not a forward saga past its deadline within the poll's
+    // reach: forget how often its claim was passed over.
+    deferredClaims.keySet().retainAll(seen);
+    int stillInFlight = 0;
+    for (SagaId sagaId : toWaitFor) {
+      if (processTimedOutSaga(sagaId)) {
+        stillInFlight++;
+      }
     }
+    claimsDeferredPastTheWait = stillInFlight;
   }
 
   /**
@@ -399,8 +460,11 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    *
    * <p>Package-private for testing — tests call this directly to exercise the halted-guard branch
    * without relying on store filtering.
+   *
+   * @return {@code true} when the saga's claim was deferred because a step of it is in flight in
+   *     this process: nothing was written, and the saga holds no slot of the batch
    */
-  void processTimedOutSaga(SagaId sagaId) {
+  boolean processTimedOutSaga(SagaId sagaId) {
     try {
       // Type-scoped load so a row owned by a different saga type (a cross-type SagaId collision)
       // reads as "no saga for this type" — never deserialized, routed, or compensated from —
@@ -410,18 +474,19 @@ public final class SagaTimeoutRunner<S extends SagaState> {
       // guards only isEmpty(), and update() does not terminal-guard FAULTED, so a halted row
       // routed there would be CAS'd back to COMPENSATING and re-compensated.
       if (selected.isEmpty() || selected.get().status().isHalted()) {
-        return;
+        return false;
       }
       SagaTimeoutException cause =
           new SagaTimeoutException(sagaId, decider.timeout().orElse(Duration.ZERO));
       if (selected.get().status() == SagaStatus.COMPENSATING) {
         resumeClaimedEpisode(sagaId, selected.get(), cause);
-      } else {
-        claimAtTheDeadline(sagaId, cause);
+        return false;
       }
+      return claimAtTheDeadline(sagaId, cause);
     } catch (Exception e) {
       LOG.warn(
           "Failed to process timed-out saga: " + LogSanitizer.sanitizeForLog(sagaId.value()), e);
+      return false;
     }
   }
 
@@ -434,7 +499,9 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    * counts the poll. Nothing marks the saga as handled — it is selected by its start instant, which
    * no write here touches — so the next poll comes back to it. From the poll after {@value
    * #DEFERRALS_BEFORE_WAITING} such polls in a row the claim waits for the step, for at most the
-   * claim wait and in arrival order.
+   * claim wait and in arrival order: a delivery that arrives while the claim waits goes after it. A
+   * step that lasts longer than the wait is not waited out: the claim is made by a poll that finds
+   * the lock free, or that sees the step end within its wait.
    *
    * <p>With the lock held the row is read again, because the read that routed the saga here is
    * older than the lock: a step may have written since. What the claim then finds:
@@ -448,8 +515,10 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    *   <li>a {@code COMPENSATING} row — a step's own claim, or its event write, opened the episode
    *       since the first read: the lock is released and the episode is resumed like a re-pick.
    * </ul>
+   *
+   * @return {@code true} when the claim was deferred
    */
-  private void claimAtTheDeadline(SagaId sagaId, SagaTimeoutException cause) {
+  private boolean claimAtTheDeadline(SagaId sagaId, SagaTimeoutException cause) {
     int passedOver = deferredClaims.getOrDefault(sagaId, 0);
     Duration wait = passedOver >= DEFERRALS_BEFORE_WAITING ? claimWait : Duration.ZERO;
     SagaStepLock.Hold claimHold;
@@ -460,39 +529,45 @@ public final class SagaTimeoutRunner<S extends SagaState> {
       LOG.debug(
           "The timeout claim of saga {} was interrupted while it waited for a step in flight",
           LogSanitizer.sanitizeForLog(sagaId.value()));
-      return;
+      return false;
     }
     if (claimHold == null) {
       claimDeferred(sagaId, wait);
-      return;
+      return true;
     }
     LoadedSaga<S> claimedByAStep;
     try {
       deferredClaims.remove(sagaId);
       Optional<LoadedSaga<S>> current = sagaStore.load(sagaId, sagaType, decider.stateType());
       if (current.isEmpty() || current.get().status().isHalted()) {
-        return;
+        return false;
       }
       if (current.get().status() != SagaStatus.COMPENSATING) {
         executor.execute(sagaId, current, new SagaTrigger.ClaimTimeout(cause, claimHold));
-        return;
+        return false;
       }
       claimedByAStep = current.get();
     } finally {
       claimHold.close(); // every exit on which the executor did not reach its claim
     }
     resumeClaimedEpisode(sagaId, claimedByAStep, cause);
+    return false;
   }
 
   /**
    * A poll passed the saga over: a step of it is in flight in this process, so its claim is not
-   * made. The first polls are expected — a delivery at the deadline, an outage ending in a
-   * redelivery — and logged at DEBUG. A poll that waited for the step and still found it in flight
-   * is logged at WARN on every occurrence: the step is a forward command that does not return, and
-   * until it does the saga's deadline is not enforced in this process.
+   * made. Every such poll counts one {@link StreamRuneMetrics#recordSagaTimeoutClaimDeferred}
+   * sample. The first polls are expected — a delivery at the deadline, an outage ending in a
+   * redelivery — and logged at DEBUG. A poll that waited for the step and still found one in flight
+   * is logged at WARN on every occurrence: until a poll finds the saga free, its deadline is not
+   * enforced in this process. The poll cannot tell one forward command that does not return from
+   * attempts that follow each other without a gap long enough for the claim, and says so.
    */
   private void claimDeferred(SagaId sagaId, Duration waited) {
     int passedOver = deferredClaims.merge(sagaId, 1, Integer::sum);
+    recordMetric(
+        () -> metrics.recordSagaTimeoutClaimDeferred(sagaType.value()),
+        "recordSagaTimeoutClaimDeferred");
     if (waited.isZero()) {
       LOG.debug(
           "Saga {} is past its deadline and a step of it is in flight; its timeout claim waits for"
@@ -504,9 +579,10 @@ public final class SagaTimeoutRunner<S extends SagaState> {
     LOG.warn(
         "Saga {} is past its deadline, and a step of it has been in flight in this process on {}"
             + " polls in a row; this poll waited {} for it. The timeout claim is not made"
-            + " underneath a step: it is made on the first poll that finds the step ended. A step"
-            + " in flight this long is a forward command that does not return — look at the"
-            + " command bus and the aggregate the saga is dispatching to.",
+            + " underneath a step: it is made by the first poll that finds the saga free. Either"
+            + " one forward command of the saga does not return, or its attempts follow each other"
+            + " without a gap — look at the command bus and the aggregate the saga is dispatching"
+            + " to. A restart of the process ends a step that does not return and frees its lock.",
         LogSanitizer.sanitizeForLog(sagaId.value()),
         passedOver,
         waited);
@@ -778,9 +854,12 @@ public final class SagaTimeoutRunner<S extends SagaState> {
      * of another saga type or over a store that keeps other rows: its steps are not the ones this
      * runner's claims race with.
      *
-     * <p>Optional, and the wiring to use wherever a {@code SagaRunner} of the saga type runs in the
+     * <p>This or {@link #stepLock} is required: {@link #build()} refuses a builder that names
+     * neither. This is the wiring to use wherever a {@code SagaRunner} of the saga type runs in the
      * same process. The guarantee is that process's: a timeout runner on another node shares
-     * nothing with this node's deliveries.
+     * nothing with this node's deliveries. An application that hand-wires two {@code SagaRunner}s
+     * of one saga type has two locks; the claims of a timeout runner built from one of them do not
+     * wait for the other's steps (a saga type has one runner — {@link SagaTypeOwnership}).
      */
     public Builder<S> sagaRunner(SagaRunner<S> sagaRunner) {
       this.sagaRunner = Objects.requireNonNull(sagaRunner, "sagaRunner is required");
@@ -790,9 +869,13 @@ public final class SagaTimeoutRunner<S extends SagaState> {
     /**
      * Names the step lock this runner's claims take, for an application that arranges the sharing
      * itself: the same instance goes to {@link SagaRunner.Builder#stepLock}. Prefer {@link
-     * #sagaRunner}, which cannot end with two instances. A process that runs timeout runners and no
-     * {@code SagaRunner} of the saga type names a lock of its own here, {@code new SagaStepLock()},
-     * to say that nothing shares it. Not both this and {@link #sagaRunner}.
+     * #sagaRunner}, which cannot end with two instances. Not both this and {@link #sagaRunner}.
+     *
+     * <p>A lock of the timeout runner's own, {@code stepLock(new SagaStepLock())}, is the explicit
+     * way to say that nothing shares it: for a process that runs timeout runners and no {@code
+     * SagaRunner} of the saga type, and for an application that wants the deadline to win over a
+     * step in flight. Such a runner claims underneath a delivery that is dispatching, as a timeout
+     * runner on another node does.
      */
     public Builder<S> stepLock(SagaStepLock stepLock) {
       this.stepLock = Objects.requireNonNull(stepLock, "stepLock is required");
@@ -880,11 +963,21 @@ public final class SagaTimeoutRunner<S extends SagaState> {
                   + " SagaStepLock through stepLock(...) on both builders instead.");
         }
       }
-      boolean stepLockNamed = sagaRunner != null || stepLock != null;
-      SagaStepLock claimLock =
-          sagaRunner != null
-              ? sagaRunner.stepLock()
-              : stepLock != null ? stepLock : new SagaStepLock();
+      if (sagaRunner == null && stepLock == null) {
+        throw new IllegalStateException(
+            "The SagaTimeoutRunner for '"
+                + sagaType.value()
+                + "' names neither sagaRunner(...) nor stepLock(...). Pass sagaRunner(theSagaRunner)"
+                + " — the SagaRunner that delivers this saga type's events in this process — so that"
+                + " a claim at a saga's deadline waits for a delivery that is dispatching that"
+                + " saga's forward commands. A timeout runner bound to nothing claims underneath"
+                + " such a delivery: the compensation is computed from a state that does not"
+                + " include that step, and the step's forward command is stored after its"
+                + " compensation with nothing to undo it. A process that runs no SagaRunner of"
+                + " this saga type, or an application that wants the deadline to win over a step"
+                + " in flight, says so with stepLock(new SagaStepLock()).");
+      }
+      SagaStepLock claimLock = sagaRunner != null ? sagaRunner.stepLock() : stepLock;
       return new SagaTimeoutRunner<>(
           decider,
           sagaStore,
@@ -897,7 +990,6 @@ public final class SagaTimeoutRunner<S extends SagaState> {
           maxCompensatingDwell,
           inboxRetentionMaxAge,
           claimLock,
-          stepLockNamed,
           claimWait);
     }
   }

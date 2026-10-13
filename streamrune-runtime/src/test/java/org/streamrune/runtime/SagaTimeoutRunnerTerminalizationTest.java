@@ -169,6 +169,7 @@ class SagaTimeoutRunnerTerminalizationTest {
 
     runner =
         SagaTimeoutRunner.<FakeSagaState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(sagaStore)
             .commandBus(bus)
@@ -355,6 +356,7 @@ class SagaTimeoutRunnerTerminalizationTest {
 
     var throwingRunner =
         SagaTimeoutRunner.<FakeSagaState>builder()
+            .stepLock(new SagaStepLock())
             .decider(throwingDecider)
             .sagaStore(sagaStore)
             .commandBus(bus)
@@ -495,6 +497,7 @@ class SagaTimeoutRunnerTerminalizationTest {
 
     var staleRunner =
         SagaTimeoutRunner.<FakeSagaState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(staleStore)
             .commandBus(bus)

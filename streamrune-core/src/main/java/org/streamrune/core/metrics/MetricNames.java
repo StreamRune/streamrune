@@ -363,13 +363,28 @@ public final class MetricNames {
   /**
    * Current timed-out saga backlog — the number of sagas the {@code SagaTimeoutRunner} picked up in
    * its most recent poll cycle: forward timeouts plus {@code COMPENSATING} re-picks, bounded by its
-   * batch size, each population getting at least half the batch when both are backlogged. Reported
-   * as a gauge. A sustained nonzero value means the timeout runner is not draining them (a
-   * stalled/dead runner — also caught by the driver-liveness health check — timeouts arriving
-   * faster than compensation completes, or re-picked episodes whose compensation keeps failing;
-   * compare {@link #SAGA_COMPENSATING}). Tagged by {@link #TAG_SAGA_TYPE}.
+   * batch size (and two more for each saga whose claim it defers, which takes no slot), each
+   * population getting at least half the batch when both are backlogged. Reported as a gauge. A
+   * sustained nonzero value means the timeout runner is not draining them (a stalled/dead runner —
+   * also caught by the driver-liveness health check — timeouts arriving faster than compensation
+   * completes, or re-picked episodes whose compensation keeps failing; compare {@link
+   * #SAGA_COMPENSATING}). Tagged by {@link #TAG_SAGA_TYPE}.
    */
   public static final String SAGA_TIMED_OUT = "streamrune.saga.timed_out";
+
+  /**
+   * Timeout claims the {@code SagaTimeoutRunner} did not make because a step of the saga was in
+   * flight in its process: one sample for each saga past its deadline that a poll passes over,
+   * tagged by {@link #TAG_SAGA_TYPE}. A claim at a deadline is not made underneath a delivery that
+   * is dispatching that saga's forward commands; the saga stays selected and is claimed by the
+   * first poll that finds it free. A few samples around a deadline are a delivery that happened to
+   * be in flight. A rate that persists is a step that has not returned — one forward command that
+   * hangs, or attempts that follow each other without a gap — and a deadline that is not enforced
+   * in that process meanwhile; the runner's health component reads {@code DEGRADED} then. A restart
+   * of the process ends such a step and frees its lock.
+   */
+  public static final String SAGA_TIMEOUT_CLAIMS_DEFERRED =
+      "streamrune.saga.timeout_claims_deferred";
 
   /**
    * Current <b>stranded-saga backlog</b> — the number of saga dead-letter entries the retention

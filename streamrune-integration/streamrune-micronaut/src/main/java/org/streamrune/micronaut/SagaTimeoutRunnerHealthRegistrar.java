@@ -30,6 +30,14 @@ import org.streamrune.runtime.SagaTimeoutRunner;
  * Quarkus (unconditional bean) both register regardless of the switch; Micronaut matches. With
  * sagas disabled and no runner beans declared, the injected list is empty and nothing is registered
  * — no phantom health component either way.
+ *
+ * <p>The beans are the application's: each is built with {@code
+ * SagaTimeoutRunner.Builder.sagaRunner(...)}, naming the {@code SagaRunner} bean of its saga type,
+ * so that its claim at a saga's deadline waits for a delivery that is dispatching that saga's
+ * forward commands in this process (the builder refuses a timeout runner that names neither a
+ * runner nor a step lock of its own). The component registered here reads {@code DEGRADED} while
+ * such a claim has been waited for and is still deferred ({@link
+ * SagaTimeoutRunner#claimsDeferredPastTheWait()}): a step of that saga has not returned.
  */
 @Singleton
 @Requires(beans = BackgroundRelayHealthContributor.class)

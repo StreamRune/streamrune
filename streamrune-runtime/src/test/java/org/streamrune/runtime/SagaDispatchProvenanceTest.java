@@ -366,6 +366,7 @@ class SagaDispatchProvenanceTest {
       h.open();
       SagaTimeoutRunner<State> timeoutRunner =
           SagaTimeoutRunner.<State>builder()
+              .stepLock(new SagaStepLock())
               .decider(h.saga)
               .sagaStore(h.sagaStore)
               .commandBus(h.bus)

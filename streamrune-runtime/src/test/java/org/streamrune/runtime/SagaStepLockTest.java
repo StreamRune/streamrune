@@ -159,6 +159,88 @@ class SagaStepLockTest {
     assertThat(lock.sagasInFlight()).isZero();
   }
 
+  /**
+   * Fairness. The thread that leaves a step asks for the lock again at once, while a claim waits.
+   * With a fair lock it queues behind the claim, every time. With an unfair one the thread that has
+   * just released takes the lock back before the waiting thread has woken, so the claim goes second
+   * in nearly every round; the rounds make that certain enough to fail.
+   */
+  @Test
+  void aThreadThatLeavesAStepAndAsksAgainAtOnce_doesNotGoAheadOfAClaimThatWaits() {
+    var lock = new SagaStepLock();
+    for (int round = 0; round < 200; round++) {
+      List<String> order = new CopyOnWriteArrayList<>();
+      var inTheFirstStep = new CountDownLatch(1);
+      var leaveTheFirstStep = new CountDownLatch(1);
+      CompletableFuture<Void> delivering =
+          onAnotherThread(
+              () -> {
+                SagaStepLock.Hold first = lock.enterStep(ORDERS, SAGA);
+                inTheFirstStep.countDown();
+                park(leaveTheFirstStep);
+                first.close();
+                try (SagaStepLock.Hold _ = lock.enterStep(ORDERS, SAGA)) {
+                  order.add("next step");
+                }
+              });
+      await(inTheFirstStep);
+      CompletableFuture<Void> claim =
+          onAnotherThread(
+              () -> {
+                try (SagaStepLock.Hold hold = lock.tryEnterClaim(ORDERS, SAGA, LONG)) {
+                  order.add(hold == null ? "claim refused" : "claim");
+                }
+              });
+      awaitUntil("the claim waits", () -> lock.waitingFor(ORDERS, SAGA) == 1);
+
+      leaveTheFirstStep.countDown();
+
+      assertThat(outcomeOf(delivering)).isNull();
+      assertThat(outcomeOf(claim)).isNull();
+      assertThat(order).as("round %d", round).containsExactly("claim", "next step");
+    }
+    assertThat(lock.sagasInFlight()).isZero();
+  }
+
+  @Test
+  void aThreadWhoseInterruptStatusIsSet_entersAStepWhenTheLockIsFree_andKeepsItsStatus() {
+    var lock = new SagaStepLock();
+    var entered = new AtomicBoolean();
+    var interruptStatusKept = new AtomicBoolean();
+    CompletableFuture<Void> interrupted =
+        onAnotherThread(
+            () -> {
+              Thread.currentThread().interrupt();
+              try (SagaStepLock.Hold _ = lock.enterStep(ORDERS, SAGA)) {
+                entered.set(true);
+              }
+              interruptStatusKept.set(Thread.currentThread().isInterrupted());
+            });
+
+    assertThat(outcomeOf(interrupted)).as("nothing to wait for: no failure").isNull();
+    assertThat(entered).isTrue();
+    assertThat(interruptStatusKept).isTrue();
+    assertThat(lock.sagasInFlight()).isZero();
+  }
+
+  @Test
+  void aThreadWhoseInterruptStatusIsSet_failsWhereItWouldHaveToWait() {
+    var lock = new SagaStepLock();
+    var step = new StepInFlight(lock, ORDERS, SAGA);
+    CompletableFuture<Void> interrupted =
+        onAnotherThread(
+            () -> {
+              Thread.currentThread().interrupt();
+              lock.enterStep(ORDERS, SAGA);
+            });
+
+    assertThat(outcomeOf(interrupted))
+        .isInstanceOf(SagaStepLockException.class)
+        .hasMessageContaining("Interrupted while waiting");
+    step.leave();
+    assertThat(lock.sagasInFlight()).isZero();
+  }
+
   @Test
   void aStepWaitsForAClaim_andEntersWhenTheClaimIsReleased() {
     var lock = new SagaStepLock();

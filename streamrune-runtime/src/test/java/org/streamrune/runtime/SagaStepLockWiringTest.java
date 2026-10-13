@@ -130,15 +130,15 @@ class SagaStepLockWiringTest {
   }
 
   /**
-   * What another process does, and what a timeout runner wired without the runner does in the same
-   * process: its claim lands under the step, and the step's forward command is stored after its
-   * compensation.
+   * What a timeout runner on another node does, and what an application asks for when it gives the
+   * timeout runner a lock of its own: the claim lands under the step, and the step's forward
+   * command is stored after its compensation.
    */
   @Test
-  void aTimeoutRunnerThatSharesItsLockWithNothing_claimsUnderAStepInFlight() {
+  void aTimeoutRunnerWithALockOfItsOwn_claimsUnderAStepInFlight() {
     try (var p = new SagaStepLockFixture()) {
       EventEnvelope opened = p.append(new Opened(ORDER));
-      SagaTimeoutRunner<State> timeouts = timeoutRunnerOf(p).build();
+      SagaTimeoutRunner<State> timeouts = timeoutRunnerOf(p).stepLock(new SagaStepLock()).build();
       p.bus.runOnceBefore(
           Reserve.class,
           () -> {
@@ -155,26 +155,30 @@ class SagaStepLockWiringTest {
   }
 
   @Test
-  void aTimeoutRunnerThatNamesNeitherARunnerNorALock_saysSoWhenItStarts() {
+  void aTimeoutRunnerThatNamesNeitherARunnerNorALock_isRefused_withWhatToPassAndWhy() {
     try (var p = new SagaStepLockFixture()) {
-      SagaTimeoutRunner<State> timeouts =
-          timeoutRunnerOf(p).pollInterval(Duration.ofHours(1)).build();
-
-      List<String> warnings = warningsDuring(() -> startAndStop(timeouts));
-
-      assertThat(warnings)
-          .singleElement()
-          .satisfies(
-              line -> {
-                assertThat(line).contains(TYPE.value());
-                assertThat(line).contains("shares its step lock with no SagaRunner");
-                assertThat(line).contains("sagaRunner(");
-              });
+      assertThatThrownBy(() -> timeoutRunnerOf(p).build())
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining(TYPE.value())
+          .hasMessageContaining("sagaRunner(theSagaRunner)")
+          .hasMessageContaining("stepLock(new SagaStepLock())")
+          .hasMessageContaining("claims underneath")
+          .hasMessageContaining("stored after its compensation");
     }
   }
 
   @Test
-  void aTimeoutRunnerThatNamesARunnerOrALock_startsWithoutThatWarning() {
+  void theRefusalComesAfterEveryOtherCheckOfTheBuilder() {
+    try (var p = new SagaStepLockFixture()) {
+      // A builder with another fault is told that fault: the lock is asked for last.
+      assertThatThrownBy(() -> timeoutRunnerOf(p).batchSize(0).build())
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("batchSize");
+    }
+  }
+
+  @Test
+  void aTimeoutRunnerThatNamesARunnerOrALock_isBuiltAndStartsWithoutAWarning() {
     try (var p = new SagaStepLockFixture()) {
       SagaTimeoutRunner<State> fromTheRunner =
           timeoutRunnerOf(p).sagaRunner(p.runner).pollInterval(Duration.ofHours(1)).build();

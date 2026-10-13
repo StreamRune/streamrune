@@ -227,6 +227,7 @@ class BackgroundRelayHealthContributorTest {
     var contributor = new BackgroundRelayHealthContributor();
     var runner =
         SagaTimeoutRunner.<TinyState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TinyDecider())
             .sagaStore(new org.streamrune.test.InMemorySagaStore())
             .commandBus(new NoOpCommandBus())

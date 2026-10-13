@@ -125,6 +125,26 @@ class MicrometerStreamRuneMetricsSagaTest {
   }
 
   @Test
+  void recordSagaTimeoutClaimDeferredIncrementsACounterTaggedWithTheSagaTypeOnly() {
+    var registry = new SimpleMeterRegistry();
+    var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
+
+    metrics.recordSagaTimeoutClaimDeferred("OrderFulfillmentSaga");
+    metrics.recordSagaTimeoutClaimDeferred("OrderFulfillmentSaga");
+    metrics.recordSagaTimeoutClaimDeferred("OrderFulfillmentSaga");
+
+    var counter =
+        registry
+            .find("streamrune.saga.timeout_claims_deferred")
+            .tag("saga.type", "OrderFulfillmentSaga")
+            .counter();
+    assertEquals(3.0, counter.count());
+    assertEquals(
+        java.util.List.of("saga.type"),
+        counter.getId().getTags().stream().map(io.micrometer.core.instrument.Tag::getKey).toList());
+  }
+
+  @Test
   void recordSagaResumeFaultedIncrementsTaggedCounter() {
     // Every SagaDeadLetterReplayer.resumeFaulted outcome, refusals
     // included, is one sample tagged by saga type and outcome.

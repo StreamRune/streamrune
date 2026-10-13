@@ -131,6 +131,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(bus)
@@ -171,6 +172,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(bus)
@@ -200,6 +202,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(bus)
@@ -220,6 +223,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(bus)
@@ -262,6 +266,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(failingBus)
@@ -307,6 +312,7 @@ class SagaTimeoutRunnerTest {
             IllegalStateException.class,
             () ->
                 SagaTimeoutRunner.<OrderState>builder()
+                    .stepLock(new SagaStepLock())
                     .decider(decider)
                     .sagaStore(store)
                     .commandBus(noInboxBus)
@@ -367,6 +373,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(flakyBus)
@@ -442,6 +449,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(alwaysFailingBus)
@@ -514,6 +522,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(conflicting)
             .commandBus(alwaysFailingBus)
@@ -574,6 +583,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(alwaysFailingBus)
@@ -635,6 +645,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(failingBus)
@@ -712,6 +723,7 @@ class SagaTimeoutRunnerTest {
     clock.advance(Duration.ofMinutes(1));
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(alwaysFailingBus)
@@ -739,6 +751,7 @@ class SagaTimeoutRunnerTest {
     // can surface a dead/wedged timeout runner as DOWN instead of leaving timed-out sagas stranded.
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(new InMemorySagaStore())
             .commandBus(new CapturingCommandBus())
@@ -775,6 +788,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(store)
             .commandBus(new CapturingCommandBus())
@@ -796,6 +810,7 @@ class SagaTimeoutRunnerTest {
         NullPointerException.class,
         () ->
             SagaTimeoutRunner.builder()
+                .stepLock(new SagaStepLock())
                 .sagaStore(new InMemorySagaStore())
                 .commandBus(new CapturingCommandBus())
                 .sagaType(SagaType.of("T"))
@@ -811,6 +826,7 @@ class SagaTimeoutRunnerTest {
               IllegalArgumentException.class,
               () ->
                   SagaTimeoutRunner.<OrderState>builder()
+                      .stepLock(new SagaStepLock())
                       .decider(new TimeoutDecider())
                       .sagaStore(new InMemorySagaStore())
                       .commandBus(new CapturingCommandBus())
@@ -831,6 +847,7 @@ class SagaTimeoutRunnerTest {
             IllegalArgumentException.class,
             () ->
                 SagaTimeoutRunner.<OrderState>builder()
+                    .stepLock(new SagaStepLock())
                     .decider(new TimeoutDecider())
                     .sagaStore(new InMemorySagaStore())
                     .commandBus(new CapturingCommandBus())
@@ -936,6 +953,7 @@ class SagaTimeoutRunnerTest {
     Instant fixedNow = Instant.parse("2026-06-17T12:00:00Z");
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(capturingStore)
             .commandBus(new CapturingCommandBus())
@@ -955,6 +973,7 @@ class SagaTimeoutRunnerTest {
         NullPointerException.class,
         () ->
             SagaTimeoutRunner.<OrderState>builder()
+                .stepLock(new SagaStepLock())
                 .decider(new TimeoutDecider())
                 .sagaStore(new InMemorySagaStore())
                 .commandBus(new CapturingCommandBus())
@@ -971,6 +990,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(bus)
@@ -1079,6 +1099,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(countingStore)
             .commandBus(new CapturingCommandBus())
@@ -1198,6 +1219,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(countingStore)
             .commandBus(new CapturingCommandBus())
@@ -1228,6 +1250,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(blockingStore)
             .commandBus(mockBus)
@@ -1283,6 +1306,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(bus)
@@ -1338,6 +1362,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(bus)
@@ -1395,6 +1420,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(decider)
             .sagaStore(store)
             .commandBus(bus)
@@ -1462,6 +1488,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(unstamping)
             .commandBus(bus)
@@ -1524,6 +1551,7 @@ class SagaTimeoutRunnerTest {
 
     var runner =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutDecider())
             .sagaStore(store)
             .commandBus(outageBus)

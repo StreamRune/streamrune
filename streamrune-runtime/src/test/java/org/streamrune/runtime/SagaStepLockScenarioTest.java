@@ -18,6 +18,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -704,6 +705,211 @@ class SagaStepLockScenarioTest {
     }
   }
 
+  // ---- every exit of a claim releases the lock ----
+
+  @Test
+  void aClaimThatWaitedFindsTheSagaCompletedByThatStep_itWritesNothingAndHoldsNothing() {
+    try (var p = new SagaStepLockFixture(new SagaStepLock(SHORT_BOUND), Duration.ofSeconds(20))) {
+      p.deliver(p.append(new Opened(ORDER)));
+      EventEnvelope completed = p.append(new Completed(ORDER));
+      var stepAtItsWrite = new CountDownLatch(1);
+      var letTheStepGo = new CountDownLatch(1);
+      p.sagaStore.runOnceBeforeTheEventWrite(
+          () -> {
+            stepAtItsWrite.countDown();
+            park(letTheStepGo);
+          });
+      CompletableFuture<Void> step = onAnotherThread(() -> p.deliver(completed));
+      await(stepAtItsWrite);
+      p.timeOut();
+      p.timeoutRunner.pollOnce();
+      p.timeoutRunner.pollOnce();
+      CompletableFuture<Void> waitingPoll = onAnotherThread(p.timeoutRunner::pollOnce);
+      p.awaitWaitingFor(ORDER, 1);
+
+      letTheStepGo.countDown();
+
+      assertThat(outcomeOf(step)).isNull();
+      assertThat(outcomeOf(waitingPoll)).isNull();
+      assertThat(p.row(ORDER).status()).isEqualTo(SagaStatus.COMPLETED);
+      assertThat(p.storedOrder(ORDER)).as("nothing is compensated").containsExactly("Reserved");
+      assertThat(p.lock.sagasInFlight()).as("the claim that found nothing to claim").isZero();
+      assertALaterDeliveryIsNotHeldUp(p);
+    }
+  }
+
+  @Test
+  void aClaimThatWaitedFindsAnEpisodeTheStepOpened_itReleasesTheLockBeforeItResumesTheEpisode() {
+    try (var p = new SagaStepLockFixture(new SagaStepLock(SHORT_BOUND), Duration.ofSeconds(20))) {
+      // The step's command is rejected; it claims, and its refund fails on infrastructure, so it
+      // leaves the episode COMPENSATING for the claim that waits behind it.
+      p.reserve.failure = () -> new IllegalArgumentException("out of stock");
+      p.refund.failure = () -> new IllegalStateException("connection reset");
+      EventEnvelope opened = p.append(new Opened(ORDER));
+      var stepAtItsCommand = new CountDownLatch(1);
+      var letTheStepGo = new CountDownLatch(1);
+      p.bus.runOnceBefore(
+          Reserve.class,
+          () -> {
+            stepAtItsCommand.countDown();
+            park(letTheStepGo);
+          });
+      CompletableFuture<Void> step = onAnotherThread(() -> p.deliver(opened));
+      await(stepAtItsCommand);
+      p.timeOut();
+      p.timeoutRunner.pollOnce();
+      p.timeoutRunner.pollOnce();
+      var pollThread = new AtomicReference<Thread>();
+      List<Integer> heldWhileThePollDispatches = new CopyOnWriteArrayList<>();
+      p.bus.beforeEveryCommand =
+          command -> {
+            if (Thread.currentThread() == pollThread.get()) {
+              heldWhileThePollDispatches.add(p.lock.sagasInFlight());
+            }
+          };
+      CompletableFuture<Void> waitingPoll =
+          onAnotherThread(
+              () -> {
+                pollThread.set(Thread.currentThread());
+                p.timeoutRunner.pollOnce();
+              });
+      p.awaitWaitingFor(ORDER, 1);
+
+      letTheStepGo.countDown();
+
+      assertThat(outcomeOf(step)).isNull();
+      assertThat(outcomeOf(waitingPoll)).isNull();
+      assertThat(heldWhileThePollDispatches)
+          .as("the poll resumed the episode, with the lock free")
+          .containsExactly(0, 0);
+      assertThat(p.storedOrder(ORDER)).containsExactly("Released");
+      assertThat(p.row(ORDER).status()).isEqualTo(SagaStatus.COMPENSATING);
+      assertThat(p.lock.sagasInFlight()).isZero();
+      p.refund.failure = null;
+      assertALaterDeliveryIsNotHeldUp(p);
+      assertThat(p.storedOrder(ORDER)).containsExactly("Released", "Refunded");
+    }
+  }
+
+  @Test
+  void aClaimThatWaitedBehindAStepThatCompensatedItself_findsATerminalRowAndWritesNothing() {
+    try (var p = new SagaStepLockFixture(new SagaStepLock(SHORT_BOUND), Duration.ofSeconds(20))) {
+      p.reserve.failure = () -> new IllegalArgumentException("out of stock");
+      EventEnvelope opened = p.append(new Opened(ORDER));
+      var stepAtItsCommand = new CountDownLatch(1);
+      var letTheStepGo = new CountDownLatch(1);
+      p.bus.runOnceBefore(
+          Reserve.class,
+          () -> {
+            stepAtItsCommand.countDown();
+            park(letTheStepGo);
+          });
+      CompletableFuture<Void> step = onAnotherThread(() -> p.deliver(opened));
+      await(stepAtItsCommand);
+      p.timeOut();
+      p.timeoutRunner.pollOnce();
+      p.timeoutRunner.pollOnce();
+      CompletableFuture<Void> waitingPoll = onAnotherThread(p.timeoutRunner::pollOnce);
+      p.awaitWaitingFor(ORDER, 1);
+
+      letTheStepGo.countDown();
+
+      assertThat(outcomeOf(step)).isNull();
+      assertThat(outcomeOf(waitingPoll)).isNull();
+      assertThat(p.storedOrder(ORDER))
+          .as("the step's own compensation, once")
+          .containsExactly("Released", "Refunded");
+      assertThat(p.row(ORDER).status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(p.lock.sagasInFlight()).isZero();
+    }
+  }
+
+  @Test
+  void theReadUnderTheClaimsHoldFails_theLockIsReleased_andTheNextPollClaims() {
+    try (var p =
+        new SagaStepLockFixture(
+            new SagaStepLock(SHORT_BOUND), SagaTimeoutRunner.DEFAULT_CLAIM_WAIT)) {
+      p.deliver(p.append(new Opened(ORDER)));
+      // The poll reads the row to route it, takes the lock, and reads it again: that read fails.
+      p.sagaStore.failTheReadNumber(2);
+
+      p.timeOut(); // the failure of one saga is logged, not thrown
+
+      assertThat(p.lock.sagasInFlight()).isZero();
+      assertThat(p.row(ORDER).status()).isEqualTo(SagaStatus.RUNNING);
+      assertALaterDeliveryIsNotHeldUp(p);
+      p.timeoutRunner.pollOnce();
+      assertThat(p.row(ORDER).status()).isEqualTo(SagaStatus.COMPENSATED);
+    }
+  }
+
+  @Test
+  void theOperatorsClaimFindsNothingToClaim_theLockIsReleased() {
+    try (var p =
+        new SagaStepLockFixture(
+            new SagaStepLock(SHORT_BOUND), SagaTimeoutRunner.DEFAULT_CLAIM_WAIT)) {
+      // No row: the executor answers before it reaches a claim.
+      assertThat(p.runner.compensateForwardFault(sagaOf(ORDER)))
+          .isEqualTo(StepOutcome.NOT_COMPENSATING);
+      assertThat(p.lock.sagasInFlight()).as("no row").isZero();
+
+      // A live row: not this operation's.
+      p.deliver(p.append(new Opened(ORDER)));
+      assertThat(p.runner.compensateForwardFault(sagaOf(ORDER)))
+          .isEqualTo(StepOutcome.NOT_COMPENSATING);
+      assertThat(p.lock.sagasInFlight()).as("a live row").isZero();
+      assertALaterDeliveryIsNotHeldUp(p);
+
+      // A read that fails under the hold.
+      p.sagaStore.failTheReadNumber(1);
+      assertThatThrownBy(() -> p.runner.compensateForwardFault(sagaOf(ORDER)))
+          .isInstanceOf(IllegalStateException.class);
+      assertThat(p.lock.sagasInFlight()).as("a failed read").isZero();
+      assertALaterDeliveryIsNotHeldUp(p);
+    }
+  }
+
+  // ---- a waiting claim against deliveries that keep arriving ----
+
+  @Test
+  void theDeliveringThreadGoesStraightOnToTheSagasNextEvent_theClaimThatWaitsIsMadeFirst() {
+    try (var p = new SagaStepLockFixture(new SagaStepLock(), Duration.ofSeconds(20))) {
+      p.deliver(p.append(new Opened(ORDER)));
+      EventEnvelope first = p.append(new Advanced(ORDER));
+      EventEnvelope second = p.append(new Advanced(ORDER));
+      var stepAtItsCommand = new CountDownLatch(1);
+      var letTheStepGo = new CountDownLatch(1);
+      p.bus.runOnceBefore(
+          Ship.class,
+          () -> {
+            stepAtItsCommand.countDown();
+            park(letTheStepGo);
+          });
+      // One batch, as a subscription delivers it: the thread that ends the first step asks for
+      // the lock again at once, for the second. It did not wait; the claim did.
+      CompletableFuture<Void> batch =
+          onAnotherThread(() -> p.runner.asEventListener().onEvents(List.of(first, second)));
+      await(stepAtItsCommand);
+      p.timeOut();
+      p.timeoutRunner.pollOnce();
+      p.timeoutRunner.pollOnce();
+      CompletableFuture<Void> waitingPoll = onAnotherThread(p.timeoutRunner::pollOnce);
+      p.awaitWaitingFor(ORDER, 1);
+
+      letTheStepGo.countDown();
+
+      assertThat(outcomeOf(batch)).isNull();
+      assertThat(outcomeOf(waitingPoll)).isNull();
+      assertThat(p.storedOrder(ORDER))
+          .as(
+              "the second event's step runs after the claim and resumes the episode: it dispatches"
+                  + " no forward command")
+          .containsExactly("Reserved", "Shipped", "Released", "Refunded");
+      assertThat(p.row(ORDER).status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(p.lock.sagasInFlight()).isZero();
+    }
+  }
+
   // ---- the operator's compensation of a faulted forward step ----
 
   @Test
@@ -783,6 +989,20 @@ class SagaStepLockScenarioTest {
   }
 
   private static final SagaStatus RUNNING = SagaStatus.RUNNING;
+
+  /** A step bound short enough for a leaked lock to fail a test at once. */
+  private static final Duration SHORT_BOUND = Duration.ofSeconds(2);
+
+  /**
+   * A delivery of the saga from another thread returns. A lock left held by a thread that has gone
+   * on — or has ended — would keep it waiting until the step bound and fail it.
+   */
+  private static void assertALaterDeliveryIsNotHeldUp(SagaStepLockFixture p) {
+    EventEnvelope later = p.append(new Advanced(ORDER));
+    assertThat(outcomeOf(onAnotherThread(() -> p.deliver(later))))
+        .as("a later delivery of the saga, from another thread")
+        .isNull();
+  }
 
   /** The timeout runner's WARN lines written while {@code body} runs. */
   private static List<String> timeoutRunnerWarningsDuring(Runnable body) {

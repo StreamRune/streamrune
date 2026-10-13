@@ -52,14 +52,19 @@ import org.streamrune.core.types.SagaType;
  *       the caller says the saga has been passed over before; a claim that waits queues in arrival
  *       order (the lock is fair), so deliveries that keep arriving cannot overtake it.
  *   <li><b>A step waits for the lock for at most {@link #DEFAULT_STEP_WAIT}</b> and then fails with
- *       {@link SagaStepLockException}, a {@link org.streamrune.core.LockException}: the delivery
- *       leaves its listener, nothing was read or dispatched, and the subscription delivers the
- *       event again. The bound is what turns a cycle of waits into a redelivery (see lock order).
+ *       {@link SagaStepLockException}, a {@link RuntimeException} of its own that {@code
+ *       SagaCommandDispatch.isRetryLater} counts as retry-later evidence: the delivery leaves its
+ *       listener, nothing was read or dispatched, and the subscription delivers the event again.
+ *       The bound is what turns a cycle of waits into a redelivery (see lock order).
  *   <li><b>Reentrant for steps, never for a claim.</b> A step of a saga that starts on a thread
  *       already inside a step of that saga — an event delivered synchronously inside the first
  *       step's command dispatch — enters without waiting, since a thread cannot wait for itself,
- *       and runs as it does without the lock. A claim attempted on a thread that is inside a step
- *       of that saga is refused like any claim under a step in flight.
+ *       and runs as it does without the lock: a claim that nested step makes after a rejected
+ *       command lands under the outer step. None of the framework's subscriptions nests a delivery
+ *       — the production ones deliver on their own thread, and the test module's in-memory
+ *       subscription queues an append made inside its listener — so this is listener plumbing of an
+ *       application. A claim without an event attempted on a thread that is inside a step of that
+ *       saga is refused like any claim under a step in flight.
  *   <li><b>Lock order.</b> A step takes the lock of its own saga and of no other, and a claim holds
  *       nothing else while it holds one. The framework's subscriptions deliver one event at a time
  *       per listener and release the lock before the next event, so no thread holds two saga locks.
@@ -68,13 +73,20 @@ import org.streamrune.core.types.SagaType;
  *       bound, as a failed delivery that is redelivered. A step also holds its saga's lock while
  *       the command bus waits for an aggregate's lock. The reverse order — a thread inside a
  *       command, holding the aggregate's lock, that enters a step — exists only where events are
- *       delivered on the appending thread, as the test module's in-memory subscription does; a
- *       cycle of that kind ends at the command bus's lock timeout or at the step bound, whichever
- *       is shorter, as a retry-later failure of the step.
+ *       delivered on the appending thread, as the test module's in-memory subscription does. Two
+ *       cycles exist there, both bounded. A step that waits for an aggregate's lock held by an
+ *       appender whose delivery waits for the step: the bus gives up after its lock timeout on each
+ *       attempt of its retry policy (three attempts of 5 s by default) and the step fails
+ *       retry-later. A step that appends while another thread's delivery holds that subscription's
+ *       delivery monitor and waits for the step: the waiting delivery fails at the step bound, and
+ *       the event is then delivered on the appending thread.
  *   <li><b>Released in {@code finally}.</b> A step that ends with an exception or an {@link Error}
  *       releases the lock; a process that dies holds nothing, because the lock is memory. An
  *       interrupt while waiting ends the wait with {@link SagaStepLockException} and leaves the
  *       thread's interrupt status set.
+ *   <li><b>A thread whose interrupt status is set</b> enters a step when the lock is free and
+ *       nobody waits for it, and keeps its interrupt status; it fails only where it would have to
+ *       wait.
  *   <li><b>One entry per saga in flight.</b> Entries are keyed by saga type and saga id, created on
  *       demand and removed when the last thread that holds or waits for one leaves. No two sagas
  *       share a lock, so one saga's step never delays another saga, and a finished saga leaves
@@ -90,7 +102,16 @@ import org.streamrune.core.types.SagaType;
  * that runner. A {@link SagaTimeoutRunner} shares it when it is built with {@link
  * SagaTimeoutRunner.Builder#sagaRunner}. An application passes an instance of its own to both
  * builders ({@link SagaRunner.Builder#stepLock}, {@link SagaTimeoutRunner.Builder#stepLock}) only
- * to arrange the sharing itself.
+ * to arrange the sharing itself. A timeout runner names one of the two; its builder refuses to
+ * build without. Two {@code SagaRunner}s of one saga type that an application wires by hand have
+ * two locks and exclude nothing between them; a saga type has one runner ({@link
+ * SagaTypeOwnership}).
+ *
+ * <p><b>What a step's end does not prove.</b> A forward command whose dispatch fails on the caller
+ * after the store accepted its commit — a connection cut inside the commit — ends its step with a
+ * retry-later failure and releases the lock, while the commit can still land. A claim made after
+ * that step ended can precede that commit; the lock orders steps and claims, not a commit its own
+ * caller never saw.
  */
 public final class SagaStepLock {
 
@@ -142,8 +163,8 @@ public final class SagaStepLock {
       if (released) {
         return;
       }
-      released = true;
       entry.lock.unlock();
+      released = true;
       leave(key);
     }
   }
@@ -160,7 +181,15 @@ public final class SagaStepLock {
     Entry entry = arrive(key);
     boolean entered = false;
     try {
-      entered = entry.lock.tryLock(stepWait.toNanos(), TimeUnit.NANOSECONDS);
+      // The timed form tests the interrupt status before it tests the lock. A thread that arrives
+      // interrupted takes a lock nobody holds or waits for, and keeps its status for its caller.
+      entered =
+          Thread.currentThread().isInterrupted()
+              && !entry.lock.hasQueuedThreads()
+              && entry.lock.tryLock();
+      if (!entered) {
+        entered = entry.lock.tryLock(stepWait.toNanos(), TimeUnit.NANOSECONDS);
+      }
     } catch (InterruptedException interrupted) {
       Thread.currentThread().interrupt();
       throw new SagaStepLockException(

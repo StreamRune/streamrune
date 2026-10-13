@@ -425,6 +425,7 @@ class SagaConcurrencyRaceTest {
     var commandBus = new SagaTimeoutRunnerTerminalizationTest.RecordingCommandBus();
     var timeoutRunner =
         SagaTimeoutRunner.<FulfillState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutOrchestrator())
             .sagaStore(interleaving)
             .commandBus(commandBus)

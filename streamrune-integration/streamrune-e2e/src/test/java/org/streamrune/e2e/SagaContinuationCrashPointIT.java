@@ -700,6 +700,7 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
               .sagaType(TYPE)
               .pollInterval(Duration.ofMillis(20))
               .clock(TEN_MINUTES_LATER)
+              .sagaRunner(runner)
               .build();
       timeouts.start();
       try {

@@ -163,6 +163,7 @@ class SagaTimeoutRunnerLogSanitizationTest {
     when(store.load(any(), any(), any()))
         .thenThrow(new IllegalStateException("saga store unavailable"));
     return SagaTimeoutRunner.<OrderState>builder()
+        .stepLock(new SagaStepLock())
         .decider(new TimeoutDecider())
         .sagaStore(store)
         .commandBus(new NoopCommandBus())

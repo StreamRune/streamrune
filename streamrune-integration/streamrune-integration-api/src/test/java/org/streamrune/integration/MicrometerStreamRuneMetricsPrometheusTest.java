@@ -360,6 +360,7 @@ class MicrometerStreamRuneMetricsPrometheusTest {
     metrics.recordSagaCompensatingBacklog("OrderSaga", 2);
     metrics.recordSagaTimedOutBacklog("OrderSaga", 1);
     metrics.recordSagaFaultedRows("OrderSaga", 1);
+    metrics.recordSagaTimeoutClaimDeferred("OrderSaga");
     metrics.recordSagaFaultedBacklog(1);
     metrics.recordSagaReplayed("OrderSaga", "SKIPPED_DEDUP");
     metrics.recordSagaForcedStaleResume("OrderSaga");

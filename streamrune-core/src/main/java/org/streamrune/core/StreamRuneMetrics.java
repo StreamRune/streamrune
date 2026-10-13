@@ -539,6 +539,16 @@ public interface StreamRuneMetrics {
   default void recordSagaTimedOutBacklog(String sagaType, long count) {}
 
   /**
+   * Records a timeout claim the {@code SagaTimeoutRunner} did not make because a step of the saga
+   * was in flight in its process: one call for each saga past its deadline that a poll passes over.
+   * See {@link org.streamrune.core.metrics.MetricNames#SAGA_TIMEOUT_CLAIMS_DEFERRED}.
+   *
+   * @param sagaType the saga type, {@link org.streamrune.core.types.SagaType#value()} — the saga
+   *     state's fully-qualified class name
+   */
+  default void recordSagaTimeoutClaimDeferred(String sagaType) {}
+
+  /**
    * Records the current <b>stranded-saga backlog</b> — the dead-letter entries the retention guard
    * protects (the population is listed on {@link
    * org.streamrune.core.metrics.MetricNames#SAGA_FAULTED_BACKLOG}). Reported as the latest sampled

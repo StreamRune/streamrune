@@ -1031,6 +1031,17 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   }
 
   @Override
+  public void recordSagaTimeoutClaimDeferred(String sagaType) {
+    Counter.builder(meter(MetricNames.SAGA_TIMEOUT_CLAIMS_DEFERRED))
+        .tag(MetricNames.TAG_SAGA_TYPE, sagaType)
+        .description(
+            "Timeout claims not made because a step of the saga was in flight in the process,"
+                + " one per saga past its deadline that a poll passes over")
+        .register(registry)
+        .increment();
+  }
+
+  @Override
   public void recordSagaFaultedRows(String sagaType, long count) {
     sagaFaultedRowsBacklog
         .computeIfAbsent(
