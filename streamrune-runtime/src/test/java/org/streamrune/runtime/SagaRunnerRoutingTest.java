@@ -309,6 +309,70 @@ class SagaRunnerRoutingTest {
     assertThat(row("saga-victim").orElseThrow()).isEqualTo(before);
   }
 
+  /**
+   * Whatever state the saga named by the correlation id is in — running, {@code FAULTED} and
+   * shielded, {@code COMPENSATING}, genesis-pending, terminal — an event that carries no origin
+   * leaves its row as it is and files nothing under it: a faulted saga gets no held entry, a
+   * compensating one is not resumed, a genesis-pending one gets no hold. With no routing method the
+   * store is not even asked; with one that names another saga, only that saga's row is read.
+   */
+  @Test
+  void anEventWithoutAnOrigin_leavesTheSagaItsCorrelationIdNames_inEveryStateOfThatSaga() {
+    Map<String, Runnable> victims = new java.util.LinkedHashMap<>();
+    RouteState running = new RouteState(SagaStatus.RUNNING, 0);
+    victims.put(
+        "running",
+        () -> sagaStore.create(NAMED_BY_CORRELATION_ID, OWN_TYPE, running, running.status()));
+    victims.put(
+        "faulted and shielded",
+        () -> {
+          sagaStore.create(NAMED_BY_CORRELATION_ID, OWN_TYPE, running, running.status(), true);
+          sagaStore.markFaulted(NAMED_BY_CORRELATION_ID, OWN_TYPE, 1L);
+        });
+    victims.put(
+        "compensating",
+        () -> {
+          sagaStore.create(NAMED_BY_CORRELATION_ID, OWN_TYPE, running, running.status());
+          sagaStore.claimCompensating(
+              NAMED_BY_CORRELATION_ID,
+              OWN_TYPE,
+              new RouteState(SagaStatus.COMPENSATING, 0),
+              1L,
+              null);
+        });
+    victims.put(
+        "genesis-pending",
+        () ->
+            sagaStore.createGenesisPending(
+                NAMED_BY_CORRELATION_ID, OWN_TYPE, running, running.status(), false));
+    victims.put(
+        "terminal",
+        () -> {
+          RouteState completed = new RouteState(SagaStatus.COMPLETED, 0);
+          sagaStore.create(NAMED_BY_CORRELATION_ID, OWN_TYPE, completed, completed.status());
+        });
+    victims.forEach(
+        (state, create) -> {
+          setUp();
+          create.run();
+          var before = row(NAMED_BY_CORRELATION_ID.value()).orElseThrow();
+          var reply = envelope(9L, new Replied("victim"), null);
+
+          int calls = sagaStore.calls().size();
+          runner(new DefaultRoutingSaga()).asEventListener().onEvents(List.of(reply));
+          assertThat(sagaStore.calls()).as("%s: no routing method", state).hasSize(calls);
+
+          runner(new HookedSaga((streamId, event) -> Optional.of(SagaId.of("saga-of-the-caller"))))
+              .asEventListener()
+              .onEvents(List.of(reply));
+
+          assertThat(row(NAMED_BY_CORRELATION_ID.value()).orElseThrow())
+              .as("%s: the row of the saga the correlation id names", state)
+              .isEqualTo(before);
+          assertThat(deadLetters.all()).as("%s: nothing filed", state).isEmpty();
+        });
+  }
+
   @Test
   void aHookThatThrows_isANullSagaQuarantine() {
     var saga =
