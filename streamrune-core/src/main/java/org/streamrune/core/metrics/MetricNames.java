@@ -347,6 +347,22 @@ public final class MetricNames {
   public static final String SAGA_CAS_CONFLICTS = "streamrune.saga.cas_conflicts";
 
   /**
+   * Forward saga steps that executed a command and then found a compensation episode opened
+   * underneath them: one sample per such step, tagged by {@link #TAG_SAGA_TYPE}. A step reads the
+   * saga row, dispatches its forward commands and writes the row; a compensation claim by another
+   * path between the read and the write (the timeout runner at the saga's deadline, a delivery on
+   * another node whose own command was rejected) makes that write lose its compare-and-swap. The
+   * compensation was computed from a state that does not include the step, so a forward command the
+   * step committed after it is not undone by anything. Counted when the step executed at least one
+   * forward command in that call (a command the inbox answered is not counted), its write or its
+   * own claim was refused, and the row then carries an episode stamp and does not record the step's
+   * event as applied. Each sample names a saga whose target aggregates should be inspected for a
+   * forward effect the compensation left in place.
+   */
+  public static final String SAGA_FORWARD_AFTER_COMPENSATION =
+      "streamrune.saga.forward_after_compensation";
+
+  /**
    * Current {@code COMPENSATING} saga backlog — sagas whose compensation (refund / stock release)
    * has not yet completed. Reported as a gauge, sampled each cycle by the {@code
    * SagaCompensationRetrySweeper} (the saga analog of {@link #OUTBOX_PENDING}/{@link
