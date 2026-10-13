@@ -139,7 +139,12 @@ import org.streamrune.core.types.StreamId;
  * classified as a business rejection and compensated. As a result, concurrent listeners are safe —
  * no leadership gate is required for correctness, and neither {@code PollingEventSubscription} nor
  * {@code HybridEventSubscription} has one — but a single subscription per saga type remains the
- * recommended and most efficient topology. A throwing {@code compensate()} is treated as a poison
+ * recommended and most efficient topology. Within one process the steps of one saga do not overlap
+ * at all: each delivery and each replay feed holds the saga's {@link SagaStepLock} from before its
+ * read of the row to after its write, and a claim that has no event of its own — the timeout
+ * runner's, the operator's compensation of a faulted forward step — is not made while a step holds
+ * it. That lock is memory and reaches no other process; between processes the compare-and-swaps and
+ * the inbox carry everything said here. A throwing {@code compensate()} is treated as a poison
  * event: the triggering event is quarantined and the saga is marked {@code FAULTED}. The event path
  * does not advance a claimed compensation: once a saga is {@code COMPENSATING} (claimed by {@code
  * SagaTimeoutRunner} or by a prior event-path delivery), correlated events never re-run forward
@@ -243,6 +248,19 @@ public final class SagaRunner<S extends SagaState> {
   private final SagaStepExecutor<S> executor;
 
   /**
+   * The step lock of this runner's sagas ({@link SagaStepLock}). Every path of this runner that
+   * runs forward commands for an event holds it from before its read of the row to after the
+   * executor returns: a live delivery ({@link #deliver}) and a replay feed ({@link #feedReplay}).
+   * The operator's compensation of a forward-faulted saga takes it as a claim ({@link
+   * #compensateForwardFault}). The compensation-retry sweeper and the dead-letter replayer built
+   * from this runner enter through those methods, so they use this instance; a {@link
+   * SagaTimeoutRunner} built with {@link SagaTimeoutRunner.Builder#sagaRunner} takes it from {@link
+   * #stepLock()}. The resumes of an episode that is already claimed ({@link #sweepCompensation},
+   * {@link #resumeFaultedEpisode}) take no lock: a stamped row is never the row of a forward step.
+   */
+  private final SagaStepLock stepLock;
+
+  /**
    * Whether the application named {@link Builder#inboxRetentionMaxAge(Duration)} itself. When it
    * did, its value wins — including a deliberate zero/negative "disable this guard" — and {@link
    * SagaEventPathRetention#applyDefault} leaves this runner alone.
@@ -258,6 +276,7 @@ public final class SagaRunner<S extends SagaState> {
     this.metrics = builder.metrics;
     this.clock = builder.clock;
     this.inboxRetentionMaxAgeConfigured = builder.inboxRetentionMaxAge != null;
+    this.stepLock = builder.stepLock != null ? builder.stepLock : new SagaStepLock();
     this.executor =
         new SagaStepExecutor<>(
             orchestrator,
@@ -308,6 +327,14 @@ public final class SagaRunner<S extends SagaState> {
   /** The store this runner keeps its sagas in. Package-private, as {@link #sagaType()}. */
   SagaStore sagaStore() {
     return sagaStore;
+  }
+
+  /**
+   * The step lock this runner's deliveries hold. Package-private: {@link SagaTimeoutRunner} takes
+   * it from here so that its claims wait for this runner's steps.
+   */
+  SagaStepLock stepLock() {
+    return stepLock;
   }
 
   /**
@@ -397,15 +424,7 @@ public final class SagaRunner<S extends SagaState> {
     return events -> {
       for (EventEnvelope event : events) {
         try {
-          resolveTarget(event)
-              .ifPresent(
-                  target -> {
-                    if (target.startPath()) {
-                      processStartEvent(target.sagaId(), event);
-                    } else {
-                      processCorrelatedEvent(target.sagaId(), event);
-                    }
-                  });
+          resolveTarget(event).ifPresent(target -> deliver(target, event));
         } catch (SagaPoisonException poison) {
           SagaId poisonSagaId = poison.sagaId();
           recordPoison(poisonSagaId, event, poison.getCause());
@@ -426,10 +445,34 @@ public final class SagaRunner<S extends SagaState> {
   }
 
   /**
+   * One live delivery, as a step of its saga: the row is read, the event's commands are dispatched
+   * and the row is written while this thread holds the saga's step lock, so within this process no
+   * claim without an event lands between that read and that write, and no second step of the saga
+   * runs beside this one ({@link SagaStepLock}). The lock is released when the step returns or
+   * throws — a poison, a retry-later failure, a lost compare-and-swap, an {@link Error} — and the
+   * poison handler of {@link #asEventListener} runs after it.
+   *
+   * @throws SagaStepLockException when another step of the saga stays in flight past the step
+   *     bound, or this thread is interrupted while it waits; nothing was read, and the failure
+   *     leaves the listener so the event is delivered again
+   */
+  private void deliver(ReplayTarget target, EventEnvelope event) {
+    try (SagaStepLock.Hold _ = stepLock.enterStep(sagaType, target.sagaId())) {
+      if (target.startPath()) {
+        processStartEvent(target.sagaId(), event);
+      } else {
+        processCorrelatedEvent(target.sagaId(), event);
+      }
+    }
+  }
+
+  /**
    * The replayer's feed: the same executor call as live delivery with {@code replayRedrive=true},
    * never the live hold rules (the replay feed IS the recovery channel). Poison is recorded by the
    * single poison handler and reported as {@link StepOutcome#FAULTED}; a retry-later failure and
-   * every infrastructure failure propagate to the replayer.
+   * every infrastructure failure propagate to the replayer. A feed is a step of its saga and holds
+   * the saga's step lock as a live delivery does ({@link #deliver}); a wait for it that ends
+   * without the lock propagates as {@link SagaStepLockException}.
    *
    * @param operatorForced the operator's {@code force} on {@link SagaDeadLetterReplayer#replay(
    *     SagaId, org.streamrune.core.types.GlobalOffset, boolean)} / {@link
@@ -441,7 +484,7 @@ public final class SagaRunner<S extends SagaState> {
   StepOutcome feedReplay(
       SagaId sagaId, EventEnvelope event, boolean startPath, boolean operatorForced) {
     Objects.requireNonNull(sagaId, SAGA_ID_REQUIRED);
-    try {
+    try (SagaStepLock.Hold _ = stepLock.enterStep(sagaType, sagaId)) {
       // a deterministic conversion poison on the load lands in the catch below
       Optional<LoadedSaga<S>> row = loadForDelivery(sagaId);
       // the entry being fed exists, so a row the feed creates is born shielded
@@ -869,15 +912,29 @@ public final class SagaRunner<S extends SagaState> {
    * answers {@link StepOutcome#NOT_COMPENSATING}; a lost claim {@link StepOutcome#CLAIM_LOST}
    * (nothing dispatched). Infrastructure failures propagate. Package-private: the replayer is its
    * only caller.
+   *
+   * <p>The claim has no event of its own, so it takes the saga's step lock as a claim: it asks once
+   * and, while a step of the saga is in flight in this process (a replay feed, or a delivery that
+   * read the row before it was faulted), answers {@link StepOutcome#CLAIM_DEFERRED} with nothing
+   * read and nothing written. Otherwise the row is read and claimed under the lock, and the
+   * executor releases it before the compensation is dispatched.
    */
   StepOutcome compensateForwardFault(SagaId sagaId) {
     Objects.requireNonNull(sagaId, SAGA_ID_REQUIRED);
-    var existing =
-        sagaStore.load(
-            sagaId,
-            SagaType.fromClass(orchestrator.stateType()),
-            orchestrator.stateType()); // INFRA load → propagates
-    return executor.execute(sagaId, existing, new SagaTrigger.CompensateForwardFault());
+    SagaStepLock.Hold claimHold = stepLock.tryEnterClaim(sagaType, sagaId, Duration.ZERO);
+    if (claimHold == null) {
+      return StepOutcome.CLAIM_DEFERRED;
+    }
+    try {
+      var existing =
+          sagaStore.load(
+              sagaId,
+              SagaType.fromClass(orchestrator.stateType()),
+              orchestrator.stateType()); // INFRA load → propagates
+      return executor.execute(sagaId, existing, new SagaTrigger.CompensateForwardFault(claimHold));
+    } finally {
+      claimHold.close(); // every exit on which the executor did not reach its claim
+    }
   }
 
   /**
@@ -1044,6 +1101,7 @@ public final class SagaRunner<S extends SagaState> {
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private Duration inboxRetentionMaxAge;
     private Clock clock = Clock.systemUTC();
+    private SagaStepLock stepLock;
 
     public Builder<S> orchestrator(SagaOrchestrator<S> orchestrator) {
       this.orchestrator = orchestrator;
@@ -1153,6 +1211,21 @@ public final class SagaRunner<S extends SagaState> {
     /** Clock for the {@link #inboxRetentionMaxAge} key-age bound. Defaults to system UTC. */
     public Builder<S> clock(Clock clock) {
       this.clock = Objects.requireNonNull(clock, "clock is required");
+      return this;
+    }
+
+    /**
+     * The step lock of this runner's sagas. Optional: a runner creates one, and everything built
+     * from the runner uses it — the compensation-retry sweeper, the dead-letter replayer, and a
+     * {@link SagaTimeoutRunner} built with {@link SagaTimeoutRunner.Builder#sagaRunner}. That is
+     * the wiring to prefer, because it cannot end with two lock instances for one saga type.
+     *
+     * <p>Pass an instance only to arrange the sharing yourself, with the same instance on {@link
+     * SagaTimeoutRunner.Builder#stepLock}. The lock works between the pieces that hold the same
+     * instance and between no others, and within one process only ({@link SagaStepLock}).
+     */
+    public Builder<S> stepLock(SagaStepLock stepLock) {
+      this.stepLock = Objects.requireNonNull(stepLock, "stepLock is required");
       return this;
     }
 

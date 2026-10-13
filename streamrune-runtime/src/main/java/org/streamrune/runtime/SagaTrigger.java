@@ -97,13 +97,32 @@ sealed interface SagaTrigger {
    * COMPENSATING} at the faulted row's version, which stamps the episode and clears {@code
    * pre_fault_status} — and compensates from the persisted state with {@code catchPoison = true}.
    * Set only by {@code SagaRunner.compensateForwardFault}, which only the replayer calls.
+   *
+   * @param claimHold what the caller holds of the saga's {@link SagaStepLock} for this claim, as
+   *     for {@link ClaimTimeout}; {@code null} when the caller holds none
    */
-  record CompensateForwardFault() implements SagaTrigger {}
+  record CompensateForwardFault(SagaStepLock.Hold claimHold) implements SagaTrigger {
+
+    /** A claim made by a caller that holds no step lock. */
+    CompensateForwardFault() {
+      this(null);
+    }
+  }
 
   /**
    * A claim-timeout reclaim.
    *
    * @param timeoutCause the cause associated with the claim timeout
+   * @param claimHold what the caller holds of the saga's {@link SagaStepLock} for this claim, taken
+   *     before it read the row; the executor releases it as soon as the claim is written or
+   *     refused, before it reads the stamp back and before any compensation command. {@code null}
+   *     when the caller shares the lock with no step
    */
-  record ClaimTimeout(Throwable timeoutCause) implements SagaTrigger {}
+  record ClaimTimeout(Throwable timeoutCause, SagaStepLock.Hold claimHold) implements SagaTrigger {
+
+    /** A claim made by a caller that holds no step lock. */
+    ClaimTimeout(Throwable timeoutCause) {
+      this(timeoutCause, null);
+    }
+  }
 }

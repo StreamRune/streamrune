@@ -132,12 +132,19 @@ class SagaCompensationRetryLifecycleAutoConfigurationTest {
     }
   }
 
+  /**
+   * A timeout runner as an application declares it: bound to the {@link SagaRunner} of its saga
+   * type over the same store, so that its claim at a deadline waits for that runner's step in
+   * flight.
+   */
   private static SagaTimeoutRunner<FakeState> timeoutRunner() {
+    var sagaStore = new InMemorySagaStore();
     return SagaTimeoutRunner.<FakeState>builder()
         .decider(new FakeDecider())
-        .sagaStore(new InMemorySagaStore())
+        .sagaStore(sagaStore)
         .commandBus(NOOP_BUS)
         .sagaType(SagaType.fromClass(FakeState.class))
+        .sagaRunner(sagaRunner(sagaStore))
         .build();
   }
 

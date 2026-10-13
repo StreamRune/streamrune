@@ -317,6 +317,7 @@ class SagaCompensationCausationTest {
             .build();
     final SagaTimeoutRunner<State> timeoutRunner =
         SagaTimeoutRunner.<State>builder()
+            .stepLock(new SagaStepLock())
             .decider(saga)
             .sagaStore(sagaStore)
             .commandBus(bus)

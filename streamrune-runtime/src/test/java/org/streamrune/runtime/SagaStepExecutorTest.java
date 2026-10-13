@@ -64,6 +64,7 @@ class SagaStepExecutorTest {
             StepOutcome.FAILED,
             StepOutcome.FAULTED,
             StepOutcome.CLAIM_LOST,
+            StepOutcome.CLAIM_DEFERRED, // a claim not made under a step in flight
             StepOutcome.SKIPPED_HALTED,
             StepOutcome.SKIPPED_DEDUP,
             StepOutcome.SKIPPED_NO_ROW, // a correlated event on an absent row

@@ -23,7 +23,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * <ul>
  *   <li><b>DOWN</b> — started but the poll thread is no longer alive/running (died unexpectedly).
  *   <li><b>DEGRADED</b> — running but with one or more consecutive poll-cycle failures (in
- *       backoff-retry: store/broker unreachable).
+ *       backoff-retry: store/broker unreachable); or, for a saga timeout runner, running while a
+ *       saga's deadline is not enforced because a step of that saga has not returned.
  *   <li><b>UP</b> — running with no consecutive failures, or not started (nothing to be unhealthy
  *       about).
  * </ul>
@@ -63,6 +64,15 @@ public class BackgroundRelayHealthContributor {
     boolean alive();
 
     int consecutiveFailures();
+
+    /**
+     * Whether the relay, alive and with no failed cycle, is leaving work undone that it reports
+     * itself. Only the saga timeout runner has such a state: a deadline it does not enforce because
+     * a step of that saga has not returned.
+     */
+    default boolean leavingWorkUndone() {
+      return false;
+    }
   }
 
   private final List<RelayStatusSource> sources = new CopyOnWriteArrayList<>();
@@ -175,6 +185,10 @@ public class BackgroundRelayHealthContributor {
    * SagaTimeoutRunner#sagaTypeName()} — the saga state's fully-qualified class name, unique where
    * the simple name is not. A dead timeout-runner thread ({@code isStarted() && !isAlive()}) is
    * reported DOWN, so a timed-out saga that never fires its compensation shows in the health check.
+   * A started, alive runner is reported DEGRADED while {@link
+   * SagaTimeoutRunner#claimsDeferredPastTheWait()} is above zero: its latest poll waited for a step
+   * of a saga past its deadline, the step was still in flight, and the claim is not made underneath
+   * it — that saga's deadline is not enforced in this process until the step returns.
    */
   public void registerSagaTimeoutRunner(SagaTimeoutRunner<?> runner) {
     if (runner == null) {
@@ -200,6 +214,11 @@ public class BackgroundRelayHealthContributor {
           @Override
           public int consecutiveFailures() {
             return runner.consecutiveFailures();
+          }
+
+          @Override
+          public boolean leavingWorkUndone() {
+            return runner.claimsDeferredPastTheWait() > 0;
           }
         });
   }
@@ -288,9 +307,11 @@ public class BackgroundRelayHealthContributor {
       boolean started = s.started();
       boolean alive = s.alive();
       int failures = s.consecutiveFailures();
-      components.add(
-          new ComponentHealth(
-              s.name(), statusFor(started, alive, failures), started, alive, failures));
+      Status status = statusFor(started, alive, failures);
+      if (status == Status.UP && started && s.leavingWorkUndone()) {
+        status = Status.DEGRADED;
+      }
+      components.add(new ComponentHealth(s.name(), status, started, alive, failures));
     }
     return components;
   }

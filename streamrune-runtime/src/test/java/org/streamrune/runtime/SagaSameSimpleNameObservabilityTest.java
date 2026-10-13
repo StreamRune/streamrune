@@ -152,6 +152,7 @@ class SagaSameSimpleNameObservabilityTest {
   private static <S extends SagaState> SagaTimeoutRunner<S> timeoutRunner(
       Class<S> stateType, InMemorySagaStore store, StreamRuneMetrics metrics) {
     return SagaTimeoutRunner.<S>builder()
+        .stepLock(new SagaStepLock())
         .decider(new MinimalDecider<>(stateType))
         .sagaStore(store)
         .commandBus(new UnusedCommandBus())

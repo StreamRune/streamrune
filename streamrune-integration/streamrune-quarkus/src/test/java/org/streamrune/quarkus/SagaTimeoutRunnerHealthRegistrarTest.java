@@ -23,7 +23,9 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.runtime.BackgroundRelayHealthContributor;
+import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SagaTimeoutRunner;
+import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
 
 /**
@@ -80,12 +82,29 @@ class SagaTimeoutRunnerHealthRegistrarTest {
         }
       };
 
+  /**
+   * A timeout runner as an application declares it: bound to the {@link SagaRunner} of its saga
+   * type over the same store, so that its claim at a deadline waits for that runner's step in
+   * flight.
+   */
   private static SagaTimeoutRunner<FakeState> timeoutRunner() {
+    var decider = new FakeDecider();
+    var sagaStore = new InMemorySagaStore();
+    SagaRunner<FakeState> sagaRunner =
+        SagaRunner.<FakeState>builder()
+            .decider(decider)
+            .startWhen(event -> false)
+            .extractSagaId(event -> SagaId.of("unused"))
+            .sagaStore(sagaStore)
+            .commandBus(NOOP_BUS)
+            .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+            .build();
     return SagaTimeoutRunner.<FakeState>builder()
-        .decider(new FakeDecider())
-        .sagaStore(new InMemorySagaStore())
+        .decider(decider)
+        .sagaStore(sagaStore)
         .commandBus(NOOP_BUS)
         .sagaType(SagaType.fromClass(FakeState.class))
+        .sagaRunner(sagaRunner)
         .build();
   }
 

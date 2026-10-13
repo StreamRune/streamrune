@@ -425,18 +425,23 @@ class SagaConcurrencyRaceTest {
     var commandBus = new SagaTimeoutRunnerTerminalizationTest.RecordingCommandBus();
     var timeoutRunner =
         SagaTimeoutRunner.<FulfillState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new TimeoutOrchestrator())
             .sagaStore(interleaving)
             .commandBus(commandBus)
             .sagaType(TIMEOUT_TYPE)
             .build();
 
-    // Hook: after timeoutRunner loads v1, the event path advances the saga to v2 — this races
-    // against the timeout runner's COMPENSATING claim (also targeting expectedVersion=1).
+    // The timeout runner reads the row twice: once to route it, and once more with the saga's step
+    // lock held — the read its claim is made on. Hook: after that second read of v1, the event
+    // path of another process advances the saga to v2 — this races against the timeout runner's
+    // COMPENSATING claim (also targeting expectedVersion=1).
     interleaving.afterLoadHook(
         () ->
-            underlying.update(
-                sagaId, TIMEOUT_TYPE, advancedState, SagaStatus.RUNNING, 1L)); // event path → v2
+            interleaving.afterLoadHook(
+                () ->
+                    underlying.update(
+                        sagaId, TIMEOUT_TYPE, advancedState, SagaStatus.RUNNING, 1L))); // → v2
 
     // The timeout runner must not throw and must silently skip — before dispatching anything.
     timeoutRunner.processTimedOutSaga(sagaId);

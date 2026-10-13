@@ -51,6 +51,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.LocalStripedLocker;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.SagaStepLock;
 import org.streamrune.runtime.SagaTimeoutRunner;
 import org.streamrune.runtime.SagaTimeoutRunnerTestAccess;
 import org.streamrune.runtime.VirtualThreadCommandBus;
@@ -273,6 +274,9 @@ class PostgresSagaCompensationUnderForwardStepSignalTest {
               .commandBus(bus)
               .sagaType(TYPE)
               .clock(Clock.fixed(Instant.now().plus(TIMEOUT).plus(TIMEOUT), ZoneOffset.UTC))
+              // A lock of its own: this timeout runner stands for one on another node, whose
+              // claim the step lock of this node's runner does not hold back.
+              .stepLock(new SagaStepLock())
               .build();
       EventEnvelope opened = append(eventStore, new Opened(ORDER));
       bus.runOnceBeforeReserve(() -> SagaTimeoutRunnerTestAccess.pollOnce(timeoutRunner));

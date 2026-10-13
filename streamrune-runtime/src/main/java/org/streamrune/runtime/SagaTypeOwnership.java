@@ -23,7 +23,9 @@ import org.streamrune.core.saga.SagaStore;
  * integration starts itself; the application does not start. A subscription that an application
  * starts on its own while its beans are created is already polling when the refusal stops the
  * startup. A hand-wired application calls the method itself, or keeps the rule: a saga state class
- * belongs to one saga.
+ * belongs to one saga. Two runners of one saga type also have two step locks ({@link
+ * SagaStepLock}): the steps of one are not excluded from the other's, and a timeout runner built
+ * from one of them does not wait for the other's deliveries.
  *
  * <p><b>The same store.</b> Two runners share their rows when their stores are one instance, or
  * when the two instances say they keep the same rows ({@link SagaStore#storageIdentity()}): two
@@ -80,7 +82,7 @@ public final class SagaTypeOwnership {
   }
 
   /** Whether two stores are one instance, or say they keep the same rows. */
-  private static boolean keepTheSameRows(SagaStore first, SagaStore second) {
+  static boolean keepTheSameRows(SagaStore first, SagaStore second) {
     return first == second || storageOf(first).equals(storageOf(second));
   }
 

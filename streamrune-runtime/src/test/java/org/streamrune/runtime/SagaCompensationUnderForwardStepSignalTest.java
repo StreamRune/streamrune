@@ -195,6 +195,9 @@ class SagaCompensationUnderForwardStepSignalTest {
               .sagaType(TYPE)
               .clock(clock)
               .metrics(metrics)
+              // A lock of its own: this timeout runner stands for one on another node, whose
+              // claim the step lock of this node's runner does not hold back.
+              .stepLock(new SagaStepLock())
               .build();
     }
 

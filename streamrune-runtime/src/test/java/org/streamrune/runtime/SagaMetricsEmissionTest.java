@@ -803,6 +803,7 @@ class SagaMetricsEmissionTest {
 
     var timeoutRunner =
         SagaTimeoutRunner.<FakeState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new NoTimeoutOrchestrator())
             .sagaStore(staleStore)
             .commandBus(commandBus)

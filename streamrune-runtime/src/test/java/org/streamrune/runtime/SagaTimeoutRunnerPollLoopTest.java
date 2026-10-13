@@ -42,6 +42,7 @@ class SagaTimeoutRunnerPollLoopTest {
 
   private static SagaTimeoutRunner.Builder<OrderState> builder(SagaStore store, Duration interval) {
     return SagaTimeoutRunner.<OrderState>builder()
+        .stepLock(new SagaStepLock())
         .decider(new TimeoutDecider())
         .sagaStore(store)
         .commandBus(new CapturingCommandBus())
@@ -207,6 +208,7 @@ class SagaTimeoutRunnerPollLoopTest {
   void buildRefusesADeciderWithoutATimeout() {
     var builder =
         SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
             .decider(new NoTimeoutDecider())
             .sagaStore(new InMemorySagaStore())
             .commandBus(new CapturingCommandBus())

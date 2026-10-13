@@ -564,7 +564,8 @@ public interface SagaStore {
    * @param cutoff {@code now - timeout}; select sagas timed out before this instant (measured from
    *     the start instant for {@code STARTED}/{@code RUNNING}, from the last-write instant for
    *     {@code COMPENSATING})
-   * @param limit maximum number of results — the timeout runner's batch size
+   * @param limit maximum number of results — the timeout runner's batch size, and two more for each
+   *     saga whose claim the runner defers (at most three times the batch size)
    * @return the batch of saga IDs, the two populations interleaved by rank as described above
    * @throws IllegalArgumentException if {@code sagaType} or {@code cutoff} is {@code null}
    */

@@ -511,17 +511,42 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   dispatched again after a retry-later failure or a crash, before a second delivery, a correlated
   event or the compensation-retry sweeper can compensate: a second delivery re-drives the forward
   loop, a correlated event is held as genesis-pending, the sweeper does not see the row. The timeout
-  runner claims a start at its deadline, as it claims any start whose dispatch has not completed;
-  a forward command that a delivery is dispatching at that moment commits after the timeout's
-  compensation.
+  runner claims a start at its deadline, as it claims any start whose dispatch has not completed:
+  within one process after a delivery that is dispatching at that moment has written (the step
+  lock, below); from another node underneath it, so that the forward command commits after that
+  timeout's compensation.
+- Step lock, within one process: `SagaRunner` holds an in-memory lock per saga (`SagaStepLock`,
+  keyed by saga type and saga id) around every step — a live delivery and a replay feed, from before
+  the read of the row to after the write — and a claim that has no event of its own takes it around
+  its read and its claim: the timeout runner's claim and `SagaDeadLetterReplayer.compensateFaulted`.
+  While a step is in flight on another thread the claim is not made and nothing is written, so that
+  step's forward command is stored before its saga's compensation, and two deliveries of one saga
+  on two threads run one after the other. The exception is a delivery nested on the thread of a
+  step of the same saga, which runs as without the lock; no subscription of the framework delivers
+  that way. The lock is released before any compensation command; a delivery waits for it for at
+  most 30 s and then fails with `SagaStepLockException` and is redelivered. It writes nothing,
+  needs no configuration and reaches no other process: a timeout runner or a delivery on another
+  node claims underneath a step in flight, and the target aggregate's refusal of a forward command
+  that arrives after its cancel remains the protection there.
+- `SagaTimeoutRunner` names its step lock: `Builder.sagaRunner(runner)` shares the runner's, and
+  `build()` refuses a builder that names neither `sagaRunner(...)` nor `stepLock(...)`. A lock of
+  its own, `stepLock(new SagaStepLock())`, is the explicit choice of a timeout runner that claims
+  underneath a step in flight (no `SagaRunner` of the saga type in the process, or the deadline is
+  to win). A bound runner makes a deferred claim on the first poll that finds the saga free, waits
+  for the step (5 s, in arrival order) once three polls in a row passed the saga over, and never
+  claims underneath a step that does not return: each such poll logs a WARN and counts
+  `saga.timeout_claims_deferred`, and the `saga-timeout:<saga type>` health component reads
+  `DEGRADED`. A deferred saga takes no slot of the batch — the poll reads two more ids for each one,
+  up to three times `batchSize` — so other sagas past their deadline are claimed in the same poll.
 - A compensation episode opened underneath a forward step that executed a command is reported. A
   step that executed at least one forward command that stored events in a call (a command the inbox
   answered is not counted), whose write after the forward loop or whose own claim is then refused,
   and whose row carries a compensation episode without recording the step's event as applied, logs
   one WARN — saga type, saga id, event offset, number of commands executed — and counts one
-  `saga.compensation_under_forward_step` sample. This covers a timeout claim and a claim by a
-  delivery on another node that land under a step in flight. The report does not know the order in
-  which the step's command and the compensation were stored — before it, which a cancel/void
+  `saga.compensation_under_forward_step` sample. This covers the claims the step lock does not hold
+  back: a timeout runner on another node or one given a lock of its own, a delivery on another
+  node, and a step nested on the thread of the step that loses. The report does not know the order
+  in which the step's command and the compensation were stored — before it, which a cancel/void
   compensation covers, or after it, which nothing undoes — so each sample is a saga whose target
   aggregates are to be inspected. A twin delivery that lost an ordinary race and a later event that
   opens no episode are not reported; neither is a step that never reaches a write after a late
@@ -869,8 +894,7 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   - sagas (tagged `saga.type`): `saga.quarantined`, `saga.faulted`, `saga.skipped_while_faulted`,
     `saga.event_held{hold.reason}`, `saga.replay_deferred`, `saga.compensation{outcome}`,
     `saga.compensation_retries`, `saga.cas_conflicts`, `saga.compensation_under_forward_step`,
-    `saga.compensating`, `saga.timed_out`,
-    `saga.faulted_backlog`, `saga.faulted_rows`, `saga.replayed{outcome}`,
+    `saga.compensating`, `saga.timed_out`, `saga.timeout_claims_deferred`, `saga.faulted_backlog`, `saga.faulted_rows`, `saga.replayed{outcome}`,
     `saga.forced_stale_resume`, `saga.resume_faulted{outcome}`, `saga.compensate_faulted`,
     `saga.dead_letters_swept`
   - outbox: `outbox.pending`, `outbox.in_flight`, `outbox.in_flight_horizon_violation`,
