@@ -3,12 +3,15 @@ package org.streamrune.runtime;
 import static com.tngtech.archunit.base.DescribedPredicate.not;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noCodeUnits;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.AccessTarget;
 import com.tngtech.archunit.core.domain.JavaAccess;
 import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaCodeUnit;
+import com.tngtech.archunit.core.domain.ReferencedClassObject;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
@@ -20,6 +23,8 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import org.streamrune.core.Command;
+import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.StreamRuneContext;
@@ -29,6 +34,7 @@ import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
+import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.SpanId;
 import org.streamrune.core.types.TraceId;
@@ -50,6 +56,10 @@ import org.streamrune.core.types.UserId;
  *       stores.
  * </ul>
  *
+ * <p>The cause's scoped value itself is touched by six code units, named one by one: a method that
+ * reads or binds it anywhere else, in one of these classes too, fails {@link
+ * #onlyItsSixCodeUnitsTouchTheCause}.
+ *
  * <p>A rule matches a call of the guarded method or constructor and a method reference to it
  * ({@code SagaOrigin::dispatchedBy}, {@code SagaOrigin::new}, {@code SagaOrigin::nextHop}, {@code
  * EventMetadata::new}) alike.
@@ -65,14 +75,110 @@ class SagaProvenanceArchitectureTest {
 
   private static final String CONSTRUCTOR = "<init>";
 
+  /**
+   * The code units that touch the cause's scoped value, by owner and name: its declaration, the
+   * read in {@code cause()}, the two binders that choose a cause ({@code continuing} and saga
+   * dispatch), and the two carriers that take the bound one to another thread ({@code
+   * capturedBindings} for {@code wrap}, {@code prepareAsyncTask} for {@code executeAsync}). A new
+   * method that reads or binds the cause, in these classes or in any other, is not in the list.
+   */
+  private static final DescribedPredicate<JavaCodeUnit> MAY_TOUCH_THE_CAUSE =
+      DescribedPredicate.describe(
+          "one of the six code units that declare, read, bind or carry StreamRuneContext.CAUSE",
+          unit ->
+              isCodeUnit(unit, StreamRuneContext.class, "<clinit>")
+                  || isCodeUnit(unit, StreamRuneContext.class, "cause")
+                  || isCodeUnit(unit, StreamRuneContext.class, "continuing", EventEnvelope.class)
+                  || isCodeUnit(unit, StreamRuneContext.class, "capturedBindings")
+                  || isCodeUnit(
+                      unit,
+                      SagaCommandDispatch.class,
+                      "dispatch",
+                      CommandBus.class,
+                      SagaOrigin.class,
+                      EventId.class,
+                      Command.class,
+                      IdempotencyKey.class)
+                  || (unit.getOwner().isEquivalentTo(VirtualThreadCommandBus.class)
+                      && unit.getName().equals("prepareAsyncTask")));
+
+  private static final DescribedPredicate<JavaAccess<?>> THE_CAUSE_FIELD =
+      DescribedPredicate.describe(
+          "target is the field StreamRuneContext.CAUSE",
+          access ->
+              access.getTarget() instanceof AccessTarget.FieldAccessTarget field
+                  && field.getOwner().isEquivalentTo(StreamRuneContext.class)
+                  && field.getName().equals("CAUSE"));
+
   @ArchTest
-  static final ArchRule onlyTheContextSagaDispatchAndTheBusTouchTheCause =
+  static final ArchRule onlyItsSixCodeUnitsTouchTheCause =
+      noCodeUnits().that(not(MAY_TOUCH_THE_CAUSE)).should(access(THE_CAUSE_FIELD));
+
+  /**
+   * Guards the list above against going stale: it names six code units, each of them exists and
+   * each touches the cause. A unit renamed or emptied of its access would otherwise leave an entry
+   * that admits whatever takes its name next.
+   */
+  @ArchTest
+  static void theSixListedCodeUnitsExistAndTouchTheCause(JavaClasses classes) {
+    List<String> touching =
+        classes.stream()
+            .flatMap(javaClass -> javaClass.getCodeUnits().stream())
+            .filter(MAY_TOUCH_THE_CAUSE)
+            .filter(unit -> unit.getAccessesFromSelf().stream().anyMatch(THE_CAUSE_FIELD))
+            .map(JavaCodeUnit::getFullName)
+            .sorted()
+            .toList();
+    assertEquals(
+        List.of(
+            "org.streamrune.core.StreamRuneContext.<clinit>()",
+            "org.streamrune.core.StreamRuneContext.capturedBindings()",
+            "org.streamrune.core.StreamRuneContext.cause()",
+            "org.streamrune.core.StreamRuneContext.continuing(org.streamrune.core.EventEnvelope)",
+            "org.streamrune.runtime.SagaCommandDispatch.dispatch("
+                + "org.streamrune.core.CommandBus, org.streamrune.core.saga.SagaOrigin,"
+                + " org.streamrune.core.types.EventId, org.streamrune.core.Command,"
+                + " org.streamrune.core.types.IdempotencyKey)",
+            "org.streamrune.runtime.VirtualThreadCommandBus.prepareAsyncTask("
+                + "org.streamrune.core.Command, java.util.concurrent.CompletableFuture,"
+                + " org.streamrune.runtime.VirtualThreadCommandBus$AdmissionSlot)"),
+        touching);
+  }
+
+  /**
+   * A dispatch cause obtained without its constructor — read from JSON, built by reflection — needs
+   * the class object of the type. No class of the two modules takes it; in particular nothing that
+   * replays a stored row does.
+   */
+  @ArchTest
+  static final ArchRule noClassTakesTheClassObjectOfTheDispatchCause =
       noClasses()
-          .that()
-          .doNotBelongToAnyOf(
-              StreamRuneContext.class, SagaCommandDispatch.class, VirtualThreadCommandBus.class)
-          .should()
-          .accessField(StreamRuneContext.class, "CAUSE");
+          .should(
+              new ArchCondition<JavaClass>(
+                  "take the class object of StreamRuneContext.DispatchCause") {
+                @Override
+                public void check(JavaClass javaClass, ConditionEvents events) {
+                  boolean found = false;
+                  for (ReferencedClassObject reference : javaClass.getReferencedClassObjects()) {
+                    if (reference
+                        .getRawType()
+                        .isEquivalentTo(StreamRuneContext.DispatchCause.class)) {
+                      found = true;
+                      events.add(
+                          SimpleConditionEvent.satisfied(
+                              reference,
+                              javaClass.getName()
+                                  + " takes the class object of DispatchCause in "
+                                  + reference.getSourceCodeLocation()));
+                    }
+                  }
+                  if (!found) {
+                    events.add(
+                        SimpleConditionEvent.violated(
+                            javaClass, javaClass.getName() + " takes no such class object"));
+                  }
+                }
+              });
 
   @ArchTest
   static final ArchRule onlyTheStepExecutorNamesADispatchingSaga =
@@ -148,6 +254,16 @@ class SagaProvenanceArchitectureTest {
                   Instant.class,
                   Map.class,
                   SagaOrigin.class));
+
+  private static boolean isCodeUnit(
+      JavaCodeUnit unit, Class<?> owner, String name, Class<?>... parameterTypes) {
+    return unit.getOwner().isEquivalentTo(owner)
+        && unit.getName().equals(name)
+        && unit.getRawParameterTypes().stream()
+            .map(JavaClass::getName)
+            .toList()
+            .equals(Arrays.stream(parameterTypes).map(Class::getName).toList());
+  }
 
   /**
    * A code unit satisfies this when one of its accesses matches {@code target}; under {@code
