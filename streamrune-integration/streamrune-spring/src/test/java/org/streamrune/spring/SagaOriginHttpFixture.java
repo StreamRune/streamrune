@@ -24,6 +24,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.runtime.LocalStripedLocker;
+import org.streamrune.runtime.SagaDeadLetterReplayer;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.test.InMemoryCommandInbox;
@@ -40,6 +41,10 @@ import org.streamrune.test.InMemorySagaStore;
  * Prepared} is the reply to that command. The next step waits for {@link Confirmed}: either the
  * saga dispatches {@link Confirm} itself ({@code confirmsItself}), or a request writes it. On
  * {@link Confirmed} the saga dispatches {@link Finish}, and {@link Finished} completes it.
+ *
+ * <p>The saga of one flow can be made to fault on its {@link Prepared} ({@link #poisonPreparedOf}):
+ * its row is then {@code FAULTED} and shielded and owns one dead-letter entry, which {@link
+ * #replayAll} drains through the {@link SagaDeadLetterReplayer} once the poison is lifted.
  *
  * <p>Any caller may execute {@link Confirm} for a flow of its own. With {@link Routing#BUILT_IN}
  * the saga declares no routing for the events of others; with {@link Routing#EVENT_DATA_HOOK} it
@@ -113,6 +118,9 @@ final class SagaOriginHttpFixture implements AutoCloseable {
   static class FlowSaga implements SagaOrchestrator<FlowState> {
     private final boolean confirmsItself;
 
+    /** The flow whose saga refuses its {@link Prepared}; {@code null} for none. */
+    volatile String poisonPreparedFor;
+
     FlowSaga(boolean confirmsItself) {
       this.confirmsItself = confirmsItself;
     }
@@ -141,7 +149,12 @@ final class SagaOriginHttpFixture implements AutoCloseable {
     public FlowState evolve(FlowState state, EventEnvelope event) {
       return switch (event.event()) {
         case FlowOpened opened -> new FlowState(SagaStatus.RUNNING, opened.flowId(), "OPENED");
-        case Prepared _ -> new FlowState(SagaStatus.RUNNING, state.flowId(), "PREPARED");
+        case Prepared _ -> {
+          if (state.flowId().equals(poisonPreparedFor)) {
+            throw new IllegalStateException("evolve refuses this event");
+          }
+          yield new FlowState(SagaStatus.RUNNING, state.flowId(), "PREPARED");
+        }
         case Confirmed _ -> new FlowState(SagaStatus.RUNNING, state.flowId(), "CONFIRMED");
         case Finished _ -> new FlowState(SagaStatus.COMPLETED, state.flowId(), "FINISHED");
         default -> state;
@@ -186,7 +199,9 @@ final class SagaOriginHttpFixture implements AutoCloseable {
   private final SagaStore sagaStore = new InMemorySagaStore();
   final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(sagaStore);
   private final VirtualThreadCommandBus bus;
+  private final FlowSaga saga;
   private final SagaRunner<FlowState> runner;
+  private final SagaDeadLetterReplayer replayer;
   private GlobalOffset checkpoint = GlobalOffset.initial();
 
   SagaOriginHttpFixture(Routing routing, boolean confirmsItself) {
@@ -199,16 +214,37 @@ final class SagaOriginHttpFixture implements AutoCloseable {
             .commandInbox(inbox)
             .register(FLOW, FlowCommand.class, c -> AggregateId.of(c.flowId()), new FlowDecider())
             .build();
+    this.saga =
+        routing == Routing.EVENT_DATA_HOOK
+            ? new FlowSagaWithEventDataHook(confirmsItself)
+            : new FlowSaga(confirmsItself);
     this.runner =
         SagaRunner.<FlowState>builder()
-            .orchestrator(
-                routing == Routing.EVENT_DATA_HOOK
-                    ? new FlowSagaWithEventDataHook(confirmsItself)
-                    : new FlowSaga(confirmsItself))
+            .orchestrator(saga)
             .sagaStore(sagaStore)
             .commandBus(bus)
             .sagaDeadLetterStore(deadLetters)
             .build();
+    this.replayer =
+        SagaDeadLetterReplayer.builder()
+            .sagaDeadLetterStore(deadLetters)
+            .sagaStore(sagaStore)
+            .eventStore(eventStore)
+            .sagaRunner(runner)
+            .build();
+  }
+
+  /**
+   * Makes the saga of {@code flowId} fault on its {@link Prepared}: opened afterwards, its row is
+   * {@code FAULTED} and shielded and owns one dead-letter entry. {@code null} lifts the poison.
+   */
+  void poisonPreparedOf(String flowId) {
+    saga.poisonPreparedFor = flowId;
+  }
+
+  /** Drains the dead-letter entries of a flow's saga through the replayer, oldest first. */
+  List<SagaDeadLetterReplayer.ReplayOutcome> replayAll(String flowId) {
+    return replayer.replayAll(sagaIdOf(flowId));
   }
 
   /** Executes a command as the HTTP endpoint does: under whatever the request filter bound. */

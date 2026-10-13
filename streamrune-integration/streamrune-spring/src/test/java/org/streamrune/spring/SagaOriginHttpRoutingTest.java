@@ -4,8 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestFactory;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,6 +24,9 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.UserId;
+import org.streamrune.integration.RequestIdentityPolicy;
+import org.streamrune.runtime.SagaDeadLetterReplayer.ReplayOutcome;
 import org.streamrune.spring.SagaOriginHttpFixture.Confirm;
 import org.streamrune.spring.SagaOriginHttpFixture.Confirmed;
 import org.streamrune.spring.SagaOriginHttpFixture.Finished;
@@ -138,6 +150,128 @@ class SagaOriginHttpRoutingTest {
     assertThat(fixture.deadLetters.all()).isEmpty();
   }
 
+  /**
+   * A victim whose saga is {@code FAULTED} and shielded, with one dead-letter entry of its own. The
+   * caller's event is not filed as an entry of the victim and does not touch its row, and the drain
+   * of the victim feeds the victim's own entry and nothing of the caller's.
+   */
+  private void aFaultedShieldedVictimKeepsItsRowAndItsOneEntry(Routing routing) throws Exception {
+    fixture = new SagaOriginHttpFixture(routing, false);
+    fixture.poisonPreparedOf(VICTIM);
+    fixture.open(VICTIM);
+    fixture.open(ATTACKER);
+    LoadedSaga<FlowState> victim = fixture.row(VICTIM);
+    assertThat(victim.status()).isEqualTo(SagaStatus.FAULTED);
+    assertThat(victim.deadLetterPending()).isTrue();
+    var entries = List.copyOf(fixture.deadLetters.all());
+    assertThat(entries)
+        .singleElement()
+        .satisfies(
+            entry -> assertThat(entry.sagaId()).isEqualTo(SagaOriginHttpFixture.sagaIdOf(VICTIM)));
+
+    attackerConfirmsItsOwnFlowNamingTheVictimsSaga();
+
+    assertUntouched(victim, VICTIM);
+    assertThat(fixture.deadLetters.all())
+        .as("the caller's event is filed under no saga, the victim's least of all")
+        .isEqualTo(entries);
+    if (routing == Routing.EVENT_DATA_HOOK) {
+      assertThat(fixture.row(ATTACKER).status()).isEqualTo(SagaStatus.COMPLETED);
+    } else {
+      assertThat(fixture.row(ATTACKER).state().step()).isEqualTo("PREPARED");
+    }
+
+    fixture.poisonPreparedOf(null);
+    assertThat(fixture.replayAll(VICTIM)).containsExactly(ReplayOutcome.REPLAYED);
+
+    assertThat(fixture.row(VICTIM).state())
+        .as("the drain fed the victim its own Prepared and no Confirmed")
+        .isEqualTo(new FlowState(SagaStatus.RUNNING, VICTIM, "PREPARED"));
+    assertThat(fixture.deadLetters.all()).isEmpty();
+    assertThat(fixture.stored(Finished.class))
+        .extracting(EventEnvelope::event)
+        .doesNotContain(new Finished(VICTIM));
+  }
+
+  @Test
+  void aFaultedShieldedVictim_isNotReachedThroughItsDeadLetterEntries() throws Exception {
+    aFaultedShieldedVictimKeepsItsRowAndItsOneEntry(Routing.BUILT_IN);
+  }
+
+  @Test
+  void aFaultedShieldedVictim_isNotReachedThroughItsDeadLetterEntries_withAnEventDataHook()
+      throws Exception {
+    aFaultedShieldedVictimKeepsItsRowAndItsOneEntry(Routing.EVENT_DATA_HOOK);
+  }
+
+  /**
+   * The three identity modes of the request filter — an authenticated principal, a trusted gateway
+   * whose headers are the caller, and an anonymous request — each with every header a client can
+   * send naming the victim's saga: the correlation id, the trace id, the user id, a role, and
+   * baggage entries named like the metadata fields that carry a saga origin and a causation id. The
+   * mode decides who the user is; it decides nothing about which saga an event reaches.
+   */
+  @TestFactory
+  Stream<DynamicTest> inEveryIdentityMode_noHeaderOfTheRequestReachesTheVictim() {
+    Map<String, RequestIdentityPolicy> modes = new LinkedHashMap<>();
+    modes.put(
+        "an authenticated principal",
+        RequestIdentityPolicy.of(() -> Optional.of(UserId.of("mallory")), false));
+    modes.put("a trusted gateway", RequestIdentityPolicy.of(null, true));
+    modes.put("an anonymous request", RequestIdentityPolicy.of(null, false));
+    List<DynamicTest> cases = new ArrayList<>();
+    for (var mode : modes.entrySet()) {
+      for (Routing routing : Routing.values()) {
+        cases.add(
+            DynamicTest.dynamicTest(
+                mode.getKey() + ", " + routing,
+                () -> everyHeaderNamesTheVictim(mode.getValue(), routing)));
+      }
+    }
+    return cases.stream();
+  }
+
+  private static void everyHeaderNamesTheVictim(RequestIdentityPolicy mode, Routing routing)
+      throws Exception {
+    String victimSaga = SagaOriginHttpFixture.sagaIdOf(VICTIM).value();
+    try (var flows = new SagaOriginHttpFixture(routing, false)) {
+      flows.open(VICTIM);
+      flows.open(ATTACKER);
+      LoadedSaga<FlowState> victim = flows.row(VICTIM);
+      MockMvc mvc =
+          MockMvcBuilders.standaloneSetup(new FlowController(flows))
+              .addFilters(new ScopedValueFilter(Set.of(), mode, null))
+              .build();
+
+      mvc.perform(
+              post("/flows/" + ATTACKER + "/confirm")
+                  .header("X-Correlation-Id", victimSaga)
+                  .header("X-Trace-Id", victimSaga)
+                  .header("X-User-Id", victimSaga)
+                  .header("X-User-Role", "ADMIN")
+                  .header("baggage", "sagaOrigin=" + victimSaga + ",sagaId=" + victimSaga))
+          .andExpect(status().isOk());
+      flows.deliver();
+
+      assertThat(flows.stored(Confirmed.class))
+          .singleElement()
+          .satisfies(
+              confirmed -> {
+                assertThat(confirmed.metadata().correlationId())
+                    .isEqualTo(CorrelationId.of(victimSaga));
+                assertThat(confirmed.metadata().sagaOrigin()).isNull();
+                assertThat(confirmed.metadata().causationId()).isNull();
+              });
+      assertThat(flows.row(VICTIM)).isEqualTo(victim);
+      assertThat(flows.deadLetters.all()).isEmpty();
+      if (routing == Routing.EVENT_DATA_HOOK) {
+        assertThat(flows.row(ATTACKER).status()).isEqualTo(SagaStatus.COMPLETED);
+      } else {
+        assertThat(flows.row(ATTACKER).state().step()).isEqualTo("PREPARED");
+      }
+    }
+  }
+
   @Test
   void theSagasOwnFlow_completesByOrigin() throws Exception {
     fixture = new SagaOriginHttpFixture(Routing.BUILT_IN, true);
@@ -149,7 +283,7 @@ class SagaOriginHttpRoutingTest {
 
     assertThat(fixture.row("own").status()).isEqualTo(SagaStatus.COMPLETED);
     assertThat(fixture.row("own").state().step()).isEqualTo("FINISHED");
-    for (var reply : java.util.List.of(Prepared.class, Confirmed.class, Finished.class)) {
+    for (var reply : List.of(Prepared.class, Confirmed.class, Finished.class)) {
       assertThat(fixture.stored(reply))
           .singleElement()
           .satisfies(

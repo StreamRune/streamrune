@@ -81,8 +81,12 @@ import org.streamrune.core.types.UserId;
  * caused — through a method that receives the stream id and the payload. No method of the saga
  * interfaces or of the runner's builder that routes such an event is handed the envelope or its
  * metadata ({@link #noRoutingHookForNonStartEventsSeesTheEnvelopeOrItsMetadata}), so an application
- * cannot route by a correlation id, a trace id, a user id or baggage: all four are values a request
- * chooses.
+ * cannot route such an event by a correlation id, a trace id, a user id or baggage: values a
+ * request chooses. (An implementation that still declares the removed envelope-taking method either
+ * does not compile — with {@code @Override}, or as the builder call — or declares a method the
+ * runner never calls: the saga then receives no event of another cause.) The start-event methods
+ * still receive the envelope; their javadoc and the documentation ratchet keep the metadata out of
+ * them.
  *
  * <p>Compiled classes of both modules are analysed; the source scan {@code
  * SagaProvenanceWriterRatchetTest} in {@code streamrune-core} covers the main sources of every
@@ -284,19 +288,45 @@ class SagaProvenanceArchitectureTest {
           SagaRunner.Builder.class);
 
   /**
-   * A parameter through which a method sees an event's metadata: the envelope or the metadata
-   * itself, directly or as a type argument ({@code Function<EventEnvelope, …>}).
+   * A parameter through which a method sees an event's metadata:
+   *
+   * <ul>
+   *   <li>the envelope or the metadata itself, directly or as a type argument ({@code
+   *       Function<EventEnvelope, …>});
+   *   <li>a type outside the JDK one of whose methods takes the envelope or the metadata in one of
+   *       those two ways — a functional interface of the framework's own, {@code EnvelopeRouter}
+   *       with {@code route(EventEnvelope)}, hands the envelope over exactly as a {@code Function}
+   *       does.
+   * </ul>
+   *
+   * <p>One level deep: a parameter type whose method takes a third type that in turn carries the
+   * envelope is not seen. Such a type would have to be added to the framework's API first, where
+   * the first bullet finds its method.
    */
   private static boolean seesTheEnvelopeOrItsMetadata(JavaMethod method) {
     for (JavaType parameter : method.getParameterTypes()) {
       for (JavaClass involved : parameter.getAllInvolvedRawTypes()) {
-        if (involved.isEquivalentTo(EventEnvelope.class)
-            || involved.isEquivalentTo(EventMetadata.class)) {
+        if (isTheEnvelopeOrItsMetadata(involved)) {
           return true;
+        }
+        if (involved.getPackageName().startsWith("java.")) {
+          continue;
+        }
+        for (JavaMethod handedOver : involved.getAllMethods()) {
+          for (JavaType itsParameter : handedOver.getParameterTypes()) {
+            if (itsParameter.getAllInvolvedRawTypes().stream()
+                .anyMatch(SagaProvenanceArchitectureTest::isTheEnvelopeOrItsMetadata)) {
+              return true;
+            }
+          }
         }
       }
     }
     return false;
+  }
+
+  private static boolean isTheEnvelopeOrItsMetadata(JavaClass type) {
+    return type.isEquivalentTo(EventEnvelope.class) || type.isEquivalentTo(EventMetadata.class);
   }
 
   private static final ArchCondition<JavaMethod> SEE_THE_ENVELOPE_OR_ITS_METADATA =
@@ -340,8 +370,10 @@ class SagaProvenanceArchitectureTest {
 
   /**
    * The rule above goes by name. This one goes by shape: the methods of the routing types that are
-   * handed an envelope are exactly the start-event methods and the saga's own logic. A routing
-   * method added under another name is not in the list.
+   * handed an envelope are exactly the start-event methods, the saga's own logic, and the three
+   * methods that take a whole saga ({@code SagaOrchestrator} or {@code SagaDecider}, whose {@code
+   * evolve} and {@code handle} receive the envelope). A routing method added under another name —
+   * with an envelope, a function of one, or a functional interface of its own — is not in the list.
    */
   @ArchTest
   static void theMethodsOfTheRoutingTypesThatReceiveAnEnvelopeAreTheListedOnes(
@@ -357,10 +389,13 @@ class SagaProvenanceArchitectureTest {
             .toList();
     assertEquals(
         List.of(
+            "Builder.decider",
             "Builder.extractSagaId",
+            "Builder.orchestrator",
             "Builder.startWhen",
             "SagaDecider.evolve",
             "SagaDecider.handle",
+            "SagaDeciderAdapter.compensationOnly",
             "SagaDeciderAdapter.evolve",
             "SagaDeciderAdapter.extractSagaId",
             "SagaDeciderAdapter.handle",
@@ -379,6 +414,20 @@ class SagaProvenanceArchitectureTest {
     Optional<SagaId> correlateByMetadata(StreamId streamId, EventMetadata metadata);
 
     void correlateByFunctionOfTheEnvelope(Function<EventEnvelope, Optional<SagaId>> router);
+
+    void correlateByRouterOfTheEnvelope(EnvelopeRouter router);
+
+    void correlateByRouterOfTheMetadata(MetadataRouter router);
+  }
+
+  /** A functional interface of its own that hands the envelope to the application. */
+  interface EnvelopeRouter {
+    Optional<SagaId> route(EventEnvelope event);
+  }
+
+  /** The same, with the metadata behind a type argument of its method. */
+  interface MetadataRouter {
+    Optional<SagaId> route(StreamId streamId, Optional<EventMetadata> metadata);
   }
 
   /** The admitted shape: the stream id and the payload. */
@@ -386,12 +435,19 @@ class SagaProvenanceArchitectureTest {
     Optional<SagaId> correlateByEventData(StreamId streamId, org.streamrune.core.DomainEvent event);
   }
 
-  /** The rule fails on each planted shape and passes on the admitted one. */
+  /**
+   * The rule fails on each planted shape — the envelope, the metadata, a function of the envelope,
+   * and a functional interface of its own that takes either — and passes on the admitted one.
+   */
   @ArchTest
   static void theRoutingHookRuleRejectsEachPlantedShape(JavaClasses unused) {
     JavaClasses planted =
         new ClassFileImporter()
-            .importClasses(PlantedRoutingMethods.class, AdmittedRoutingMethod.class);
+            .importClasses(
+                PlantedRoutingMethods.class,
+                AdmittedRoutingMethod.class,
+                EnvelopeRouter.class,
+                MetadataRouter.class);
 
     var refused =
         noCorrelatingMethodSeesTheEnvelopeIn(List.of(PlantedRoutingMethods.class))
@@ -399,7 +455,12 @@ class SagaProvenanceArchitectureTest {
     assertTrue(refused.hasViolation(), "the planted routing methods must violate the rule");
     String report = String.join("\n", refused.getFailureReport().getDetails());
     for (String method :
-        List.of("correlateByEnvelope", "correlateByMetadata", "correlateByFunctionOfTheEnvelope")) {
+        List.of(
+            "correlateByEnvelope",
+            "correlateByMetadata",
+            "correlateByFunctionOfTheEnvelope",
+            "correlateByRouterOfTheEnvelope",
+            "correlateByRouterOfTheMetadata")) {
       assertTrue(report.contains(method), "must reject " + method + ": " + report);
     }
 

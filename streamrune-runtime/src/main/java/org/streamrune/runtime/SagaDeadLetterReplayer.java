@@ -1121,8 +1121,9 @@ public final class SagaDeadLetterReplayer {
     }
     if (entrySagaId != null && (routed.isEmpty() || !entrySagaId.equals(routed.get().sagaId()))) {
       LOG.warn(
-          "Saga dead-letter entry at offset {} was recorded for saga {} but the orchestrator"
-              + " now routes the event {}; feeding the RECORDED saga — the entry is the"
+          "Saga dead-letter entry at offset {} was recorded for saga {} but the event's saga"
+              + " origin or the orchestrator's routing now sends it {}; feeding the RECORDED saga"
+              + " — the entry is the"
               + " authority, and the saga was faulted by this very event.",
           offset.value(),
           LogSanitizer.sanitizeForLog(entrySagaId.value()),

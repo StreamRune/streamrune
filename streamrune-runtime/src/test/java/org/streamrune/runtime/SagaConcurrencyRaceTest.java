@@ -142,8 +142,8 @@ class SagaConcurrencyRaceTest {
   }
 
   /**
-   * Start-and-route orchestrator: {@link OrderCreated} starts a saga; {@link OrderShipped}
-   * correlates by orderId prefix in correlationId. {@link AdvanceOrder} is dispatched on start.
+   * Start-and-route orchestrator: {@link OrderCreated} starts a saga; {@link OrderShipped} is
+   * routed by the order id in its payload. {@link AdvanceOrder} is dispatched on start.
    */
   static class FulfillOrchestrator implements SagaOrchestrator<FulfillState> {
     @Override

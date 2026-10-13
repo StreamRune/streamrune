@@ -26,6 +26,7 @@ import org.streamrune.quarkus.SagaOriginHttpFixture.FlowState;
 import org.streamrune.quarkus.SagaOriginHttpFixture.OpenFlow;
 import org.streamrune.quarkus.SagaOriginHttpFixture.Prepared;
 import org.streamrune.quarkus.SagaOriginHttpFixture.Routing;
+import org.streamrune.runtime.SagaDeadLetterReplayer.ReplayOutcome;
 
 /**
  * A request through {@link StreamRuneRequestFilter} into a running saga, served by Quarkus REST
@@ -172,6 +173,60 @@ class SagaOriginHttpRoutingTest {
         .extracting(EventEnvelope::event)
         .containsExactly(new Finished(ATTACKER));
     assertThat(fixture.deadLetters.all()).isEmpty();
+  }
+
+  /**
+   * A victim whose saga is {@code FAULTED} and shielded, with one dead-letter entry of its own. The
+   * caller's event is not filed as an entry of the victim and does not touch its row, and the drain
+   * of the victim feeds the victim's own entry and nothing of the caller's.
+   */
+  private void aFaultedShieldedVictimKeepsItsRowAndItsOneEntry(Routing routing) throws Exception {
+    fixture = new SagaOriginHttpFixture(routing, false);
+    fixture.poisonPreparedOf(VICTIM);
+    fixture.open(VICTIM);
+    fixture.open(ATTACKER);
+    LoadedSaga<FlowState> victim = fixture.row(VICTIM);
+    assertThat(victim.status()).isEqualTo(SagaStatus.FAULTED);
+    assertThat(victim.deadLetterPending()).isTrue();
+    var entries = List.copyOf(fixture.deadLetters.all());
+    assertThat(entries)
+        .singleElement()
+        .satisfies(
+            entry -> assertThat(entry.sagaId()).isEqualTo(SagaOriginHttpFixture.sagaIdOf(VICTIM)));
+
+    attackerConfirmsItsOwnFlowNamingTheVictimsSaga();
+
+    assertUntouched(victim, VICTIM);
+    assertThat(fixture.deadLetters.all())
+        .as("the caller's event is filed under no saga, the victim's least of all")
+        .isEqualTo(entries);
+    if (routing == Routing.EVENT_DATA_HOOK) {
+      assertThat(fixture.row(ATTACKER).status()).isEqualTo(SagaStatus.COMPLETED);
+    } else {
+      assertThat(fixture.row(ATTACKER).state().step()).isEqualTo("PREPARED");
+    }
+
+    fixture.poisonPreparedOf(null);
+    assertThat(fixture.replayAll(VICTIM)).containsExactly(ReplayOutcome.REPLAYED);
+
+    assertThat(fixture.row(VICTIM).state())
+        .as("the drain fed the victim its own Prepared and no Confirmed")
+        .isEqualTo(new FlowState(SagaStatus.RUNNING, VICTIM, "PREPARED"));
+    assertThat(fixture.deadLetters.all()).isEmpty();
+    assertThat(fixture.stored(Finished.class))
+        .extracting(EventEnvelope::event)
+        .doesNotContain(new Finished(VICTIM));
+  }
+
+  @Test
+  void aFaultedShieldedVictim_isNotReachedThroughItsDeadLetterEntries() throws Exception {
+    aFaultedShieldedVictimKeepsItsRowAndItsOneEntry(Routing.BUILT_IN);
+  }
+
+  @Test
+  void aFaultedShieldedVictim_isNotReachedThroughItsDeadLetterEntries_withAnEventDataHook()
+      throws Exception {
+    aFaultedShieldedVictimKeepsItsRowAndItsOneEntry(Routing.EVENT_DATA_HOOK);
   }
 
   @Test

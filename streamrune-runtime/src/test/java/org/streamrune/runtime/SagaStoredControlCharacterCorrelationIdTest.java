@@ -44,10 +44,9 @@ import org.streamrune.test.InMemorySagaStore;
  * CorrelationId.of(sagaId.value())}), and every background saga entry point rebuilds that {@link
  * SagaId} <em>from storage</em>: {@code PostgresSagaStore.findTimedOut / findByStatus /
  * findCompensating} all do {@code SagaId.of(rs.getString("saga_id"))}. {@link SagaId} bounds length
- * (VARCHAR(255)) but deliberately not charset, and user {@code correlateByEventData()}
- * implementations derive the id from event data — a business field, or an event's metadata
- * correlation id, which a context built with the plain {@code RequestContext} constructor or
- * application-built {@code EventMetadata} carries without ever crossing the ingress door.
+ * (VARCHAR(255)) but deliberately not charset, and user {@code extractSagaId()} and {@code
+ * correlateByEventData()} implementations derive the id from event data — a business field, which
+ * crosses no ingress door that checks its characters.
  *
  * <p>So if the ingress bound runs inside the {@code RequestContext} constructor, {@code dispatch}
  * throws {@link IllegalArgumentException} <b>before the bus is ever called</b>. On the forward path

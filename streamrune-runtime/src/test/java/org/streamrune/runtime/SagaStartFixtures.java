@@ -111,6 +111,12 @@ final class SagaStartFixtures {
         java.util.Collections.synchronizedList(new java.util.ArrayList<>());
     private final StartOrchestrator start = new StartOrchestrator();
 
+    /**
+     * Whether {@link #correlateByEventData} routes an {@link Advance}. Cleared, an {@link Advance}
+     * reaches the saga only by the origin it carries.
+     */
+    volatile boolean routesAdvanceByEventData = true;
+
     /** {@code evolve} throws for {@link Advance} events while set. */
     volatile boolean poisonCorrelated;
 
@@ -145,7 +151,9 @@ final class SagaStartFixtures {
 
     @Override
     public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
-      return event instanceof Advance ? Optional.of(SagaId.of("saga-1")) : Optional.empty();
+      return routesAdvanceByEventData && event instanceof Advance
+          ? Optional.of(SagaId.of("saga-1"))
+          : Optional.empty();
     }
 
     @Override
