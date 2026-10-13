@@ -82,17 +82,6 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   private static final Duration DEFAULT_LOCK_TIMEOUT = Duration.ofSeconds(5);
 
   /**
-   * Baggage key naming the id of the message (typically an event) that caused the current command.
-   * With no {@link StreamRuneContext#CAUSE} bound, the bus writes the entry of the bound request
-   * context's baggage into {@link EventMetadata#causationId()} of every event the command produces;
-   * when the entry is absent too, the events have a {@code null} causationId (chain root). Under a
-   * bound cause the entry is ignored and the cause decides the causation id: saga dispatch names
-   * the triggering event through the cause, not through this key. The command's own id is always
-   * recorded separately in {@link EventMetadata#commandId()}.
-   */
-  public static final String CAUSATION_ID_BAGGAGE_KEY = "streamrune.causation-id";
-
-  /**
    * Marker for command executions that replay an existing dead-letter-queue entry. DLQ retry
    * infrastructure (e.g. {@link DeadLetterRetryRunner}) binds this to {@code true} around {@code
    * execute(...)}: while bound, a failing execution is NOT published to the DLQ again — the retry
@@ -1310,6 +1299,21 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           command.getClass().getSimpleName());
       return;
     }
+    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
+    if (cause != null && cause.sagaOrigin() != null) {
+      // A dead-letter row cannot carry the origin, and its replay would run under the idempotency
+      // key of the caller's own redelivery: whichever reached the inbox first would decide whether
+      // the reply event names its saga. The caller of an origin-carrying command owns its retry —
+      // the saga subsystem for a saga's dispatch (the block above), the listener's subscription
+      // for a continuation (StreamRuneContext.continuing), which is not a saga dispatch and so
+      // reaches this block.
+      LOG.debug(
+          "Skipping DLQ publish for command {} ({}) — it carries a saga origin; its caller retries"
+              + " it",
+          LogSanitizer.sanitizeForLog(commandId.value()),
+          command.getClass().getSimpleName());
+      return;
+    }
     String commandPayload;
     try {
       commandPayload = objectMapper.writeValueAsString(command);
@@ -1462,21 +1466,21 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * under one bound context, receive distinct, monotonically-sensible timestamps. Correlation,
    * trace and user identity are taken from the bound context.
    *
-   * <p>The saga origin comes from the bound {@link StreamRuneContext#CAUSE} and from nowhere else:
-   * no component of the request context and no baggage entry reaches {@link
-   * EventMetadata#sagaOrigin()}. A bound cause also decides the causation id.
+   * <p>The saga origin and the causation id come from the bound {@link StreamRuneContext#CAUSE} and
+   * from nowhere else: no component of the request context and no baggage entry reaches {@link
+   * EventMetadata#sagaOrigin()} or {@link EventMetadata#causationId()}. With no cause bound the
+   * event carries neither and is a causation root. The command's own id is recorded separately in
+   * {@link EventMetadata#commandId()}.
    */
   private EventMetadata buildMetadata(CorrelationId correlationId, CommandId commandId) {
     EventId eventId = IdGenerator.generateEventId();
     Instant now = clock.instant();
     StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
     SagaOrigin origin = cause == null ? null : cause.sagaOrigin();
+    CausationId causation = cause == null ? null : cause.causationId();
 
     if (StreamRuneContext.CURRENT.isBound()) {
       StreamRuneContext.RequestContext ctx = StreamRuneContext.CURRENT.get();
-      // A bound cause decides the causation id, a null one included; the baggage entry is read
-      // only with no cause bound.
-      CausationId causation = cause != null ? cause.causationId() : causationIdFrom(ctx);
       return new EventMetadata(
           eventId,
           commandId,
@@ -1490,32 +1494,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           origin);
     }
     return new EventMetadata(
-        eventId,
-        commandId,
-        null,
-        null,
-        correlationId,
-        cause == null ? null : cause.causationId(),
-        null,
-        now,
-        null,
-        origin);
-  }
-
-  /**
-   * Resolves the causation id for events produced with no {@link StreamRuneContext#CAUSE} bound.
-   * Per the {@link EventMetadata} contract, {@code causationId} references the direct predecessor
-   * message (typically the event a saga or subscriber reacted to) — never the command's own id,
-   * which lives in {@link EventMetadata#commandId()}. The causing message id is read from the
-   * {@link #CAUSATION_ID_BAGGAGE_KEY} baggage entry; when absent, produced events are causation
-   * roots.
-   */
-  private static CausationId causationIdFrom(StreamRuneContext.RequestContext ctx) {
-    String causingMessageId = ctx.baggage().get(CAUSATION_ID_BAGGAGE_KEY);
-    if (causingMessageId == null || causingMessageId.isBlank()) {
-      return null;
-    }
-    return CausationId.of(causingMessageId);
+        eventId, commandId, null, null, correlationId, causation, null, now, null, origin);
   }
 
   @SuppressWarnings("unchecked")
@@ -1778,6 +1757,15 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     /**
      * Sets the dead letter queue for failed commands. When a command exhausts all retry attempts,
      * it is published to the DLQ before the exception propagates.
+     *
+     * <p>Three kinds of command are never published, because something else owns their retry and an
+     * entry would add a second, uncoordinated one: a replay of an existing entry ({@link
+     * #DLQ_REPLAY}), a command a saga dispatched ({@link StreamRuneContext#SAGA_OWNED}), and a
+     * command whose bound {@link StreamRuneContext#CAUSE} carries a saga origin — a saga's own
+     * dispatch, or a listener's continuation of an event that saga caused ({@link
+     * StreamRuneContext#continuing(EventEnvelope)}). An entry has no place for the origin, so its
+     * replay would store the command's events without one; the listener lets a failure that a later
+     * attempt can cure propagate, and its subscription delivers the causing event again.
      */
     public Builder deadLetterQueue(DeadLetterQueue deadLetterQueue) {
       this.deadLetterQueue = deadLetterQueue;

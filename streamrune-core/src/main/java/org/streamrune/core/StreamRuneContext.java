@@ -55,9 +55,9 @@ public final class StreamRuneContext {
    * What caused the command dispatch in progress: the causing event, the saga origin, or both.
    *
    * <p>The command bus copies both parts into the metadata of every event the command produces:
-   * {@link EventMetadata#causationId()} and {@link EventMetadata#sagaOrigin()}. A request context
-   * has no saga origin component, so nothing a request carries reaches {@link
-   * EventMetadata#sagaOrigin()}.
+   * {@link EventMetadata#causationId()} and {@link EventMetadata#sagaOrigin()}, and takes neither
+   * from anywhere else. A request context has no component for either, and the bus reads no baggage
+   * entry into a metadata field, so nothing a request carries reaches them.
    *
    * @param causationId the id of the event the dispatch reacts to, or {@code null} when it reacts
    *     to none
@@ -74,13 +74,16 @@ public final class StreamRuneContext {
   }
 
   /**
-   * The cause of the command dispatch in progress on this thread. Saga dispatch binds it around
-   * every command a saga sends ({@code SagaCommandDispatch}); {@code
-   * VirtualThreadCommandBus.executeAsync} and {@link #wrap(Runnable)} / {@link #wrap(Callable)}
-   * carry it onto another thread. Unbound for a command a request, a background job or a
-   * dead-letter replay dispatches: the events of such a command carry no saga origin.
+   * The cause of the command dispatch in progress on this thread. It has two binders: saga
+   * dispatch, around every command a saga sends ({@code SagaCommandDispatch}), and {@link
+   * #continuing(EventEnvelope)}, around the commands a listener dispatches in reaction to an event.
+   * {@code VirtualThreadCommandBus.executeAsync} and {@link #wrap(Runnable)} / {@link
+   * #wrap(Callable)} carry it onto another thread. Unbound for a command a request, a background
+   * job or a dead-letter replay dispatches: the events of such a command carry no saga origin and
+   * no causation id.
    *
-   * <p>Application code reads it through {@link #cause()} and does not bind it.
+   * <p>Application code reads it through {@link #cause()} and binds it only through {@link
+   * #continuing(EventEnvelope)}.
    */
   public static final ScopedValue<DispatchCause> CAUSE = ScopedValue.newInstance();
 
@@ -92,6 +95,110 @@ public final class StreamRuneContext {
    */
   public static DispatchCause cause() {
     return CAUSE.isBound() ? CAUSE.get() : null;
+  }
+
+  /**
+   * Bindings for commands dispatched in reaction to {@code cause}, an event read from the store. A
+   * listener that reacts to an event by sending a command (a process manager) runs the dispatch
+   * inside them:
+   *
+   * <pre>{@code
+   * StreamRuneContext.continuing(event).run(() -> commandBus.execute(command, key));
+   * }</pre>
+   *
+   * <p><b>What the command inherits from the event.</b> The command bus writes four values of the
+   * causing event into the metadata of every event the command produces:
+   *
+   * <ul>
+   *   <li>the correlation id and the trace id, unchanged: one business flow keeps one correlation
+   *       id and one trace;
+   *   <li>the causing event's id, as the causation id ({@link EventMetadata#causationId()});
+   *   <li>the causing event's saga origin, one hop further ({@link SagaOrigin#nextHop()}), or no
+   *       origin when the causing event carries none.
+   * </ul>
+   *
+   * <p><b>What it does not inherit.</b> A continuation runs like any command dispatched from a
+   * background thread with no user. The bound request context has no user, no captured authority
+   * and empty baggage, whatever the causing event's metadata and the calling thread's own context
+   * hold: the user who caused the first event did not issue this command, and a baggage {@code
+   * role} is authority too. {@link #SAGA_OWNED} is bound to {@code FALSE}, so {@link
+   * #isSagaDispatch()} is {@code false} even when the listener runs on the thread of a saga's
+   * dispatch, and no authorization interceptor treats the command as the system's. A saga origin
+   * states who caused an event; it grants nothing. An application whose continuation must pass an
+   * authorization gate decides that in its own policy, which can read {@link #cause()}. Such a
+   * policy reads the cause's saga origin, not the mere presence of a cause: a cause without an
+   * origin says only that the command continues some stored event, and nothing about who wrote that
+   * event — a client's own request stores events too.
+   *
+   * <p><b>The envelope is trusted as given.</b> This method copies the event id, the correlation
+   * id, the trace id and the saga origin out of {@code cause} and checks none of them. It is meant
+   * for an envelope read from the event store, which is what a subscription delivers: the command
+   * bus wrote that metadata. An envelope built by hand, or from request data, carries whatever
+   * origin, causation id and correlation id its author wrote, and the framework vouches for none of
+   * it.
+   *
+   * <p><b>A failure belongs to the caller.</b> While the bound cause carries a saga origin, {@code
+   * VirtualThreadCommandBus} publishes a failed command to no dead letter queue: a dead-letter
+   * entry cannot hold the origin, and its replay would store the command's events without one. The
+   * listener's subscription is then the only thing that runs the command again, so what the
+   * listener does with a failure decides the command's fate:
+   *
+   * <ul>
+   *   <li>A failure a later attempt can cure — an unreachable store, a lock timeout — leaves the
+   *       listener: the subscription keeps its checkpoint and delivers the causing event again. A
+   *       listener that catches such a failure and returns loses the command.
+   *   <li>A failure no later attempt cures is the command's answer: a rejection by the domain
+   *       ({@link DomainException} and its validation and authorization subtypes, {@link
+   *       IllegalArgumentException}). The bus dead-letters a rejection under no rule, and a plain
+   *       {@link org.streamrune.core.subscription.EventListener} has no skip or dead-letter
+   *       handling for the event, so a listener that lets a rejection propagate is handed the same
+   *       event again until someone intervenes. Decide it in the listener: catch the rejection and
+   *       return, which gives the command up on purpose, or dispatch the command that records the
+   *       refusal. Skipping or dead-lettering the <em>event</em> exists one level up, for a
+   *       projection run by a projection runner ({@link
+   *       org.streamrune.core.projection.ProjectionErrorStrategy}).
+   *   <li>Under {@code executeAsync}, or in a task handed to another thread through {@link
+   *       #wrap(Runnable)}, the failure reaches only the returned future, or only that thread. A
+   *       listener that relies on redelivery waits for the outcome before it returns; a failure it
+   *       does not see is a failure it swallowed.
+   * </ul>
+   *
+   * <p><b>An event without a saga origin.</b> A failed continuation of such an event is published
+   * to the dead letter queue like any other command, once for every failed delivery: a listener
+   * that lets three deliveries fail leaves three entries. An entry has no place for the causing
+   * event, so its replay stores the command's events with no causation id. With an idempotency key
+   * the redelivery and the replays of all entries end in one stored event; its causation id is the
+   * causing event's id when the redelivery commits first and absent when a replay does. Without a
+   * key the replay of every entry executes the command once more, besides the redelivery.
+   *
+   * <p><b>Reruns.</b> Everything bound here except the context's timestamp is a function of the
+   * stored event, so a redelivery of that event binds the same saga origin and causation id. Give
+   * the command an idempotency key derived from the causing event: a redelivery after the command
+   * committed is then answered from the command inbox and stores no second event. Without a key
+   * every redelivery that reaches the bus executes the command again, with the same origin and
+   * causation id, and for an event without an origin so does every dead-letter replay (above).
+   *
+   * @param cause the event the dispatched commands react to, as read from the event store
+   *     (required); its metadata is trusted as given
+   * @return the bindings to run the dispatch in
+   * @throws NullPointerException if {@code cause} is {@code null}
+   * @throws IllegalStateException if the saga origin of {@code cause} is at the hop limit ({@link
+   *     SagaOrigin#nextHop()})
+   */
+  public static ScopedValue.Carrier continuing(EventEnvelope cause) {
+    Objects.requireNonNull(cause, "cause is required");
+    EventMetadata metadata = cause.metadata();
+    SagaOrigin origin = metadata.sagaOrigin();
+    RequestContext context =
+        new RequestContext(
+            metadata.traceId(), null, metadata.correlationId(), Instant.now(), Map.of(), null);
+    return ScopedValue.where(CURRENT, context)
+        .where(SAGA_OWNED, Boolean.FALSE)
+        .where(
+            CAUSE,
+            new DispatchCause(
+                CausationId.of(metadata.eventId().value()),
+                origin == null ? null : origin.nextHop()));
   }
 
   /**

@@ -188,15 +188,16 @@ class RequestIdentityPolicyTest {
 
   // ---- the role rule --------------------------------------------------------------------
 
-  private static final String CAUSATION = "streamrune.causation-id";
+  /** A baggage key the application allow-listed; the role rule leaves it as it is. */
+  private static final String TENANT = "tenant";
 
   @Test
   void theTrustedGatewayTakesTheRoleFromASingleRoleHeader() {
     var policy = RequestIdentityPolicy.of(null, true);
 
     assertEquals(
-        Map.of(CAUSATION, "evt-1", "role", "ADMIN"),
-        policy.applyRole(Map.of(CAUSATION, "evt-1"), List.of("ADMIN")));
+        Map.of(TENANT, "acme", "role", "ADMIN"),
+        policy.applyRole(Map.of(TENANT, "acme"), List.of("ADMIN")));
   }
 
   @Test
@@ -207,8 +208,8 @@ class RequestIdentityPolicyTest {
             RequestIdentityPolicy.of(BOB, false),
             RequestIdentityPolicy.of(UNAUTHENTICATED, false))) {
       assertEquals(
-          Map.of(CAUSATION, "evt-1"),
-          policy.applyRole(Map.of(CAUSATION, "evt-1"), List.of("ADMIN")),
+          Map.of(TENANT, "acme"),
+          policy.applyRole(Map.of(TENANT, "acme"), List.of("ADMIN")),
           policy.mode().name());
     }
   }
@@ -217,17 +218,17 @@ class RequestIdentityPolicyTest {
   void aRoleEntryTheBaggageAlreadyCarriedIsNeverKept() {
     // A W3C `baggage: role=` entry (or an application that allow-listed `role`) must not reach the
     // key in any mode: behind a trusted gateway the header is the only source.
-    Map<String, String> smuggled = Map.of("role", "ADMIN", CAUSATION, "evt-1");
+    Map<String, String> smuggled = Map.of("role", "ADMIN", TENANT, "acme");
     for (var policy :
         List.of(
             RequestIdentityPolicy.of(null, false),
             RequestIdentityPolicy.of(BOB, false),
             RequestIdentityPolicy.of(null, true))) {
       assertEquals(
-          Map.of(CAUSATION, "evt-1"), policy.applyRole(smuggled, List.of()), policy.mode().name());
+          Map.of(TENANT, "acme"), policy.applyRole(smuggled, List.of()), policy.mode().name());
     }
     assertEquals(
-        Map.of(CAUSATION, "evt-1", "role", "CUSTOMER"),
+        Map.of(TENANT, "acme", "role", "CUSTOMER"),
         RequestIdentityPolicy.of(null, true).applyRole(smuggled, List.of("CUSTOMER")));
   }
 

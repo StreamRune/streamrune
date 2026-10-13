@@ -88,11 +88,16 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * <p><b>Baggage allowlisting:</b> OpenTelemetry baggage is populated from the client-supplied,
  * unauthenticated W3C {@code baggage:} HTTP header, and every baggage entry ends up in every
  * produced event's immutable, plaintext {@code event_stream.metadata}. To prevent a caller from
- * smuggling arbitrary PII permanently into the event log, only {@link
- * BaggageAllowlist#DEFAULT_ALLOWED_KEYS} (the causation-id key) plus any keys configured via {@code
- * streamrune.metadata.baggage-allowlist} are copied into the request context. Non-allowlisted keys
- * are dropped here, before they ever reach {@code RequestContext} or {@code EventMetadata}; {@code
- * role} is the role rule's alone (above).
+ * smuggling arbitrary PII permanently into the event log, only the keys configured via {@code
+ * streamrune.metadata.baggage-allowlist} are copied into the request context; with none configured
+ * no baggage entry is ({@link BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty). Non-allowlisted
+ * keys are dropped here, before they ever reach {@code RequestContext} or {@code EventMetadata};
+ * {@code role} is the role rule's alone (above).
+ *
+ * <p><b>What a request cannot set.</b> This filter builds a request context and nothing else. It
+ * does not bind {@link StreamRuneContext#CAUSE}, so no header and no baggage entry, allowlisted or
+ * not, reaches the saga origin or the causation id of an event: the command bus takes both from
+ * that binding alone.
  */
 @Provider
 public class StreamRuneRequestFilter implements ContainerRequestFilter {
@@ -111,11 +116,11 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
   private final UserRoleResolver userRoleResolver;
 
   /**
-   * Creates the filter with no additional allowlisted baggage keys beyond the framework defaults.
-   * Its identity policy is {@link RequestIdentityPolicy.Mode#ANONYMOUS} — every request runs
-   * without a user or a role, and the {@code X-User-Id} and {@code X-User-Role} headers are ignored
-   * — and no {@link UserRoleResolver} is wired, so no authority is captured at the request edge.
-   * Quarkus/Arc uses the {@link Inject}-annotated constructor.
+   * Creates the filter with no allowlisted baggage key. Its identity policy is {@link
+   * RequestIdentityPolicy.Mode#ANONYMOUS} — every request runs without a user or a role, and the
+   * {@code X-User-Id} and {@code X-User-Role} headers are ignored — and no {@link UserRoleResolver}
+   * is wired, so no authority is captured at the request edge. Quarkus/Arc uses the {@link
+   * Inject}-annotated constructor.
    *
    * @param holder the request-scoped context holder
    */
@@ -124,11 +129,11 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
   }
 
   /**
-   * Creates the filter, seeding the OTel baggage allowlist from {@code
-   * streamrune.metadata.baggage-allowlist} on top of the framework defaults ({@link
-   * BaggageAllowlist#DEFAULT_ALLOWED_KEYS}), and resolving identities through the application's
-   * {@link RequestIdentityPolicy} bean. This is the constructor Quarkus/Arc uses for dependency
-   * injection.
+   * Creates the filter, taking the OTel baggage allowlist from {@code
+   * streamrune.metadata.baggage-allowlist} (the framework adds no key of its own: {@link
+   * BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty), and resolving identities through the
+   * application's {@link RequestIdentityPolicy} bean. This is the constructor Quarkus/Arc uses for
+   * dependency injection.
    *
    * @param holder the request-scoped context holder
    * @param properties the bound StreamRune Quarkus properties
@@ -237,10 +242,9 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
 
   /**
    * Builds an anonymous {@link StreamRuneContext.RequestContext} from a header lookup, applying the
-   * defaulting rules documented on this class, with no additional allowlisted baggage keys beyond
-   * the framework defaults. Neither {@code X-User-Id} nor {@code X-User-Role} is read: the identity
-   * and the role are only ever resolved by the filter's {@link RequestIdentityPolicy}, so the
-   * context has no user and no {@code role}.
+   * defaulting rules documented on this class, with no allowlisted baggage key. Neither {@code
+   * X-User-Id} nor {@code X-User-Role} is read: the identity and the role are only ever resolved by
+   * the filter's {@link RequestIdentityPolicy}, so the context has no user and no {@code role}.
    *
    * @param headers header lookup, e.g. {@code requestContext::getHeaderString}
    * @return the request context with no user, never {@code null}
@@ -255,8 +259,8 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
    * read: the context has no user and no {@code role}.
    *
    * @param headers header lookup, e.g. {@code requestContext::getHeaderString}
-   * @param extraAllowedBaggageKeys additional OTel baggage keys to allow, on top of the framework
-   *     defaults ({@link BaggageAllowlist#DEFAULT_ALLOWED_KEYS})
+   * @param extraAllowedBaggageKeys the OTel baggage keys to allow (the framework's own {@link
+   *     BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty)
    * @return the request context with no user and no role, never {@code null}
    */
   static StreamRuneContext.RequestContext buildContext(

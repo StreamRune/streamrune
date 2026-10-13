@@ -539,8 +539,10 @@ domain events — as long as that path serializes with the `CryptoEngine`:
   populated from the client-supplied, unauthenticated W3C `baggage:` header — without filtering, a
   caller could smuggle arbitrary PII permanently into the event log. Each framework's request
   filter allowlists baggage before it reaches request context or event metadata. The default
-  allowlist covers only the framework's own key (`streamrune.causation-id`); add application keys via
-  `streamrune.metadata.baggage-allowlist` (a list, added on top of the defaults). Baggage `role` is
+  allowlist is empty: no baggage entry of a request reaches event metadata until you list its key in
+  `streamrune.metadata.baggage-allowlist`. A baggage entry is data you asked to keep and nothing
+  more — no entry sets an event's `causationId` or `sagaOrigin`, which the command bus alone
+  writes. Baggage `role` is
   never taken from the `baggage:` header, even if you list it: it is the `X-User-Role` header, and
   only in the trusted-gateway identity mode (see
   [Authorization](guide/advanced/authorization.md#where-the-identity-comes-from-security)).

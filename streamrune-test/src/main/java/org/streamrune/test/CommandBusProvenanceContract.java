@@ -38,16 +38,16 @@ import org.streamrune.core.types.UserId;
  * The provenance contract every {@link CommandBus} must honour:
  *
  * <ul>
- *   <li>The saga origin of a produced event comes from the bound {@link StreamRuneContext#CAUSE}
- *       and from nothing else. With no cause bound no event carries an origin, whatever the
- *       correlation id, the baggage, the user, the captured authority or the saga flag.
- *   <li>A bound cause decides the causation id of every produced event, a {@code null} one
- *       included, whatever the baggage holds.
+ *   <li>The saga origin and the causation id of a produced event come from the bound {@link
+ *       StreamRuneContext#CAUSE} and from nothing else. With no cause bound no event carries an
+ *       origin or a causation id, whatever the correlation id, the baggage, the user, the captured
+ *       authority or the saga flag.
+ *   <li>A bound cause decides both for every produced event, a {@code null} part included, whatever
+ *       the baggage holds.
+ *   <li>A command executed inside {@link StreamRuneContext#continuing(EventEnvelope)} stores what
+ *       that helper binds: the causing event's id as the causation id, its saga origin one hop
+ *       further (or none), its correlation and trace ids, and no user or baggage.
  * </ul>
- *
- * <p>The contract says nothing about the causation id of an event produced with no cause bound:
- * both shipped buses read it from the {@code streamrune.causation-id} baggage entry of the bound
- * request context.
  *
  * <p>Run by {@code InMemoryCommandBusProvenanceTest} and {@code
  * VirtualThreadCommandBusProvenanceTest}, so the test bus and the production bus cannot diverge
@@ -115,7 +115,10 @@ public abstract class CommandBusProvenanceContract {
   protected abstract CommandBus newBus(EventStore eventStore);
 
   private static final String AGGREGATE_ID = "marked-1";
+
+  /** A baggage key a bus gives no meaning; an entry under it never becomes a causation id. */
   private static final String CAUSATION_BAGGAGE_KEY = "streamrune.causation-id";
+
   private static final SagaId SAGA_ID = SagaId.of("order-saga-42");
 
   /** The origin the contract binds; built as saga dispatch builds it. */
@@ -123,7 +126,7 @@ public abstract class CommandBusProvenanceContract {
       SagaEnvelopes.metadataCausedBy(ContractSagaState.class, SAGA_ID).sagaOrigin();
 
   @TestFactory
-  public Stream<DynamicTest> withNoCauseBound_noEventCarriesAnOrigin() {
+  public Stream<DynamicTest> withNoCauseBound_noEventCarriesAnOriginOrACausationId() {
     List<String> correlationIds = Arrays.asList(UUID.randomUUID().toString(), SAGA_ID.value());
     List<Map<String, String>> baggages =
         List.of(Map.of(), Map.of("sagaOrigin", "x"), Map.of(CAUSATION_BAGGAGE_KEY, "evt-9"));
@@ -137,7 +140,7 @@ public abstract class CommandBusProvenanceContract {
       tests.add(
           dynamicTest(
               "no context, SAGA_OWNED=" + sagaOwned,
-              () -> assertNoOrigin(storedEventsOf(sagaOwnedCarrier(null, sagaOwned)))));
+              () -> assertNoProvenance(storedEventsOf(sagaOwnedCarrier(null, sagaOwned)))));
       for (String correlationId : correlationIds) {
         for (Map<String, String> baggage : baggages) {
           for (UserId user : users) {
@@ -163,7 +166,7 @@ public abstract class CommandBusProvenanceContract {
                           + ", SAGA_OWNED="
                           + sagaOwned,
                       () ->
-                          assertNoOrigin(
+                          assertNoProvenance(
                               storedEventsOf(
                                   sagaOwnedCarrier(
                                       ScopedValue.where(StreamRuneContext.CURRENT, context),
@@ -212,6 +215,152 @@ public abstract class CommandBusProvenanceContract {
   }
 
   /**
+   * A listener's hop, and the hop after it: each command runs inside {@link
+   * StreamRuneContext#continuing(EventEnvelope)} of an event the previous one stored. Run once with
+   * nothing else bound and once on a thread that holds a user's request context and the saga flag,
+   * which a continuation must not pass on.
+   */
+  @TestFactory
+  public Stream<DynamicTest> continuing_storesOriginHopAndCausation() {
+    StreamRuneContext.RequestContext caller =
+        new StreamRuneContext.RequestContext(
+            null,
+            UserId.of("caller"),
+            CorrelationId.of("caller-corr"),
+            Instant.now(),
+            Map.of("role", "ADMIN", CAUSATION_BAGGAGE_KEY, "evt-9"),
+            new UserAuthority(Set.of("ADMIN"), Set.of()));
+    ScopedValue.Carrier sagaThread =
+        ScopedValue.where(StreamRuneContext.CURRENT, caller)
+            .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE);
+    return Stream.of(
+        dynamicTest(
+            "an event a saga caused, nothing else bound",
+            () -> assertContinuationsCarryTheOrigin(null)),
+        dynamicTest(
+            "an event a saga caused, on a thread with a user and the saga flag",
+            () -> assertContinuationsCarryTheOrigin(sagaThread)),
+        dynamicTest(
+            "an event no saga caused, nothing else bound",
+            () -> assertAContinuationOfAnOriginlessEventCarriesNone(null)),
+        dynamicTest(
+            "an event no saga caused, on a thread with a user and the saga flag",
+            () -> assertAContinuationOfAnOriginlessEventCarriesNone(sagaThread)));
+  }
+
+  private void assertContinuationsCarryTheOrigin(ScopedValue.Carrier ambient) {
+    InMemoryEventStore eventStore = new InMemoryEventStore();
+    CommandBus bus = newBus(eventStore);
+    try {
+      // What a saga's own command stored: the origin at hop 0.
+      StreamRuneContext.DispatchCause sagaDispatch =
+          new StreamRuneContext.DispatchCause(CausationId.of("evt-trigger"), ORIGIN);
+      EventEnvelope reply =
+          executeAndLoad(
+                  bus,
+                  eventStore,
+                  "reply-1",
+                  ScopedValue.where(StreamRuneContext.CAUSE, sagaDispatch)
+                      .where(StreamRuneContext.CURRENT, contextWithBaggage(Map.of())))
+              .getFirst();
+      assertEquals(0, reply.metadata().sagaOrigin().hop());
+
+      List<EventEnvelope> firstHop = continueAndLoad(bus, eventStore, "hop-1", ambient, reply);
+      assertEquals(2, firstHop.size());
+      for (EventEnvelope envelope : firstHop) {
+        assertContinues(reply, envelope, 1);
+      }
+
+      List<EventEnvelope> secondHop =
+          continueAndLoad(bus, eventStore, "hop-2", ambient, firstHop.getLast());
+      assertEquals(2, secondHop.size());
+      for (EventEnvelope envelope : secondHop) {
+        assertContinues(firstHop.getLast(), envelope, 2);
+      }
+    } finally {
+      close(bus);
+    }
+  }
+
+  private void assertAContinuationOfAnOriginlessEventCarriesNone(ScopedValue.Carrier ambient) {
+    InMemoryEventStore eventStore = new InMemoryEventStore();
+    CommandBus bus = newBus(eventStore);
+    try {
+      // What a user's request stored: a correlation id of the client's choosing, a user, baggage.
+      StreamRuneContext.RequestContext request =
+          new StreamRuneContext.RequestContext(
+              null,
+              UserId.of("alice"),
+              CorrelationId.of("client-corr-7"),
+              Instant.now(),
+              Map.of("role", "ADMIN"),
+              new UserAuthority(Set.of("ADMIN"), Set.of()));
+      EventEnvelope requested =
+          executeAndLoad(
+                  bus,
+                  eventStore,
+                  "request-1",
+                  ScopedValue.where(StreamRuneContext.CURRENT, request))
+              .getFirst();
+      assertEquals(UserId.of("alice"), requested.metadata().userId());
+
+      List<EventEnvelope> continued = continueAndLoad(bus, eventStore, "hop-1", ambient, requested);
+      assertEquals(2, continued.size());
+      for (EventEnvelope envelope : continued) {
+        assertNull(envelope.metadata().sagaOrigin());
+        assertEquals(
+            CausationId.of(requested.metadata().eventId().value()),
+            envelope.metadata().causationId());
+        assertEquals(CorrelationId.of("client-corr-7"), envelope.metadata().correlationId());
+        assertNull(envelope.metadata().userId());
+        assertEquals(Map.of(), envelope.metadata().baggage());
+      }
+    } finally {
+      close(bus);
+    }
+  }
+
+  /** The stored event {@code continued} continues {@code cause} at {@code hop}. */
+  private static void assertContinues(EventEnvelope cause, EventEnvelope continued, int hop) {
+    SagaOrigin origin = continued.metadata().sagaOrigin();
+    assertEquals(ORIGIN.sagaType(), origin.sagaType());
+    assertEquals(ORIGIN.sagaId(), origin.sagaId());
+    assertEquals(hop, origin.hop());
+    assertEquals(
+        CausationId.of(cause.metadata().eventId().value()), continued.metadata().causationId());
+    assertEquals(cause.metadata().correlationId(), continued.metadata().correlationId());
+    assertEquals(cause.metadata().traceId(), continued.metadata().traceId());
+    assertNull(continued.metadata().userId());
+    assertEquals(Map.of(), continued.metadata().baggage());
+  }
+
+  /**
+   * Executes one {@link Mark} as a listener does that continues {@code cause} on a thread that
+   * already holds {@code ambient} ({@code null}: holds nothing), and returns the stored events.
+   */
+  private static List<EventEnvelope> continueAndLoad(
+      CommandBus bus,
+      InMemoryEventStore eventStore,
+      String aggregateId,
+      ScopedValue.Carrier ambient,
+      EventEnvelope cause) {
+    Runnable listener =
+        () -> StreamRuneContext.continuing(cause).run(() -> bus.execute(new Mark(aggregateId)));
+    if (ambient == null) {
+      listener.run();
+    } else {
+      ambient.run(listener);
+    }
+    return eventStore.load(StreamId.of(AGGREGATE_TYPE, AggregateId.of(aggregateId))).events();
+  }
+
+  private static List<EventEnvelope> executeAndLoad(
+      CommandBus bus, InMemoryEventStore eventStore, String aggregateId, ScopedValue.Carrier in) {
+    in.run(() -> bus.execute(new Mark(aggregateId)));
+    return eventStore.load(StreamId.of(AGGREGATE_TYPE, AggregateId.of(aggregateId))).events();
+  }
+
+  /**
    * Executes one {@link Mark} on a fresh bus under {@code bindings} ({@code null}: nothing bound)
    * and returns the events the store holds for its stream.
    *
@@ -234,10 +383,11 @@ public abstract class CommandBusProvenanceContract {
     }
   }
 
-  private static void assertNoOrigin(List<EventEnvelope> stored) {
+  private static void assertNoProvenance(List<EventEnvelope> stored) {
     assertEquals(2, stored.size());
     for (EventEnvelope envelope : stored) {
       assertNull(envelope.metadata().sagaOrigin());
+      assertNull(envelope.metadata().causationId());
     }
   }
 

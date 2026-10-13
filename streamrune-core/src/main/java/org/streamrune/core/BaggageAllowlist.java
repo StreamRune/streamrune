@@ -20,13 +20,12 @@ import java.util.Set;
  * before placing it into the request context, so non-allowlisted keys never reach {@code
  * RequestContext} or {@code EventMetadata} in the first place.
  *
- * <p>The default allowlist covers only the baggage key the framework itself reads from incoming
- * baggage: {@link #CAUSATION_ID_BAGGAGE_KEY}, read by {@code
- * VirtualThreadCommandBus.causationIdFrom} / {@code InMemoryCommandBus} to populate {@link
- * EventMetadata#causationId()}. It is duplicated here as a literal (not referenced from {@code
- * streamrune-runtime}) because {@code streamrune-runtime} depends on {@code streamrune-core}, not
- * the other way around — the same duplication already exists between {@code
- * VirtualThreadCommandBus} and {@code InMemoryCommandBus}.
+ * <p>The default allowlist is empty: the framework reads no key of incoming baggage, so with no
+ * configuration no baggage entry of a request reaches event metadata. A baggage entry is data the
+ * application asked to keep and nothing more. No entry, under any key, becomes the {@link
+ * EventMetadata#causationId() causation id} or the {@link EventMetadata#sagaOrigin() saga origin}
+ * of an event; the command bus takes both from {@link StreamRuneContext#CAUSE}, which no request
+ * filter binds.
  *
  * <p>{@link #ROLE_BAGGAGE_KEY} is deliberately <em>not</em> a default key. The request context's
  * role is set by each framework filter's role rule ({@code RequestIdentityPolicy#applyRole} in
@@ -34,20 +33,12 @@ import java.util.Set;
  * trusted-gateway identity mode, and nothing else — a client's W3C {@code baggage: role=} entry
  * never reaches it, whatever the allowlist says.
  *
- * <p>Applications that rely on additional baggage keys reaching event metadata configure them via
- * each framework's {@code streamrune.metadata.baggage-allowlist} property (a list of extra
- * permitted keys, added on top of the default set — not a replacement for it). Listing {@code role}
- * there has no effect: the request filters' role rule replaces whatever the baggage carried under
- * it.
+ * <p>Applications that rely on baggage keys reaching event metadata configure them via each
+ * framework's {@code streamrune.metadata.baggage-allowlist} property (the list of permitted keys).
+ * Listing {@code role} there has no effect: the request filters' role rule replaces whatever the
+ * baggage carried under it.
  */
 public final class BaggageAllowlist {
-
-  /**
-   * Baggage key naming the id of the message (typically an event) that caused the current command.
-   * Must stay equal to {@code VirtualThreadCommandBus.CAUSATION_ID_BAGGAGE_KEY} / {@code
-   * InMemoryCommandBus.CAUSATION_ID_BAGGAGE_KEY}.
-   */
-  public static final String CAUSATION_ID_BAGGAGE_KEY = "streamrune.causation-id";
 
   /**
    * Baggage key under which each framework filter places the {@code X-User-Role} header — in the
@@ -56,22 +47,22 @@ public final class BaggageAllowlist {
   public static final String ROLE_BAGGAGE_KEY = "role";
 
   /**
-   * The framework-meaningful baggage keys preserved regardless of configuration: {@link
-   * #CAUSATION_ID_BAGGAGE_KEY}. {@link #ROLE_BAGGAGE_KEY} is not one of them (see the class
-   * comment).
+   * The baggage keys kept regardless of configuration: none. Every key that reaches the request
+   * context is one the application listed; {@link #ROLE_BAGGAGE_KEY} is not a default key either
+   * (see the class comment).
    */
-  public static final Set<String> DEFAULT_ALLOWED_KEYS = Set.of(CAUSATION_ID_BAGGAGE_KEY);
+  public static final Set<String> DEFAULT_ALLOWED_KEYS = Set.of();
 
   private BaggageAllowlist() {}
 
   /**
    * Maximum length of a retained baggage value. A value longer than this is DROPPED, not truncated.
    *
-   * <p>Framework-meaningful values are ids and short labels: a causation id is a UUID (36 chars), a
-   * role is a word. 256 is far above any legitimate value and far below the ~8 KB an HTTP header
-   * permits. Truncation was rejected deliberately — the first 256 characters of a smuggled medical
-   * note are still the note, and silently shortening an application's legitimate value would
-   * corrupt it rather than reject it.
+   * <p>Legitimate values are ids and short labels: a tenant id is a UUID (36 chars), a role is a
+   * word. 256 is far above any such value and far below the ~8 KB an HTTP header permits.
+   * Truncation was rejected deliberately — the first 256 characters of a smuggled medical note are
+   * still the note, and silently shortening an application's legitimate value would corrupt it
+   * rather than reject it.
    */
   public static final int MAX_VALUE_LENGTH = 256;
 
@@ -83,9 +74,9 @@ public final class BaggageAllowlist {
    *
    * @param raw the raw baggage read from the OTel context (or an equivalent source); {@code null}
    *     is treated as empty
-   * @param extraAllowedKeys additional keys to permit on top of {@link #DEFAULT_ALLOWED_KEYS},
-   *     typically sourced from the {@code streamrune.metadata.baggage-allowlist} configuration
-   *     property; {@code null} is treated as empty
+   * @param extraAllowedKeys the keys to permit besides {@link #DEFAULT_ALLOWED_KEYS} (which is
+   *     empty), typically sourced from the {@code streamrune.metadata.baggage-allowlist}
+   *     configuration property; {@code null} is treated as empty
    * @return an immutable map containing only the allowlisted, value-policy-compliant entries
    *     present in {@code raw}
    */

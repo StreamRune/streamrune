@@ -288,8 +288,8 @@ it is never taken from the client unless you say so: it comes from the authentic
 `SecurityIdentity` when Quarkus Security is present, from `X-User-Id` only with
 `streamrune.security.trust-user-id-header=true`, and is otherwise absent (see
 [Request identity](#request-identity)). Only
-allowlisted OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist` on top of the
-framework defaults) reach the context, because baggage is written into every event's metadata. Bind the context explicitly around
+allowlisted OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist`; none by
+default) reach the context, because baggage is written into every event's metadata. Bind the context explicitly around
 StreamRune calls with `StreamRuneRequestFilter.withContext(...)` / `callWithContext(...)` as shown
 above.
 

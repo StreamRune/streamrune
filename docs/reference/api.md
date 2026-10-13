@@ -263,6 +263,11 @@ that does not bind fails every read of its stream and of the global stream.
 every other event. The command bus writes it; the two shorter constructors (without `sagaOrigin`,
 and without `baggage` and `sagaOrigin`) build metadata with no origin.
 
+`causationId` is the id of the event the command reacted to, and `null` for a causation root. The
+command bus writes it too, and from one source: the triggering event under a saga's dispatch, the
+causing event under `StreamRuneContext.continuing` (below). No request header or baggage entry
+sets it.
+
 ### SagaOrigin
 
 `record SagaOrigin(SagaType sagaType, SagaId sagaId, int hop)` in `org.streamrune.core.saga`
@@ -272,13 +277,67 @@ compensation, on the event path, the timeout runner, the compensation-retry swee
 dead-letter replayer — runs with the saga's origin bound as the dispatch cause
 (`StreamRuneContext.CAUSE`), and the command bus copies it into `EventMetadata.sagaOrigin` of each
 event the command stores. `sagaType` is the saga state's fully-qualified class name, `sagaId` the
-saga instance, and `hop` is `0` for an event produced by a command the saga dispatched itself.
+saga instance, and `hop` is `0` for an event produced by a command the saga dispatched itself and
+`n` for an event produced by the n-th continuation in a row after such an event (`nextHop()`,
+called by `StreamRuneContext.continuing` alone).
 
 The origin a saga binds depends only on its type and its id, so a redelivery, a replay or a resume
 of the same step stores the same origin as the first attempt would have. No request header, baggage
 entry or dead-letter row sets it. An origin states who caused an event; it grants no authority.
 In a test, `SagaEnvelopes.causedBy(stateType, sagaId, streamId, event)` from `streamrune-test`
 builds an envelope that carries one.
+
+### StreamRuneContext.continuing
+
+`static ScopedValue.Carrier continuing(EventEnvelope cause)` in `org.streamrune.core.StreamRuneContext`
+
+The bindings for commands a listener dispatches in reaction to `cause`, an event read from the
+store:
+
+```java
+StreamRuneContext.continuing(event).run(() -> commandBus.execute(command, key));
+```
+
+| The command's events | Value |
+|---|---|
+| `correlationId`, `traceId` | the causing event's |
+| `causationId` | the causing event's `eventId` |
+| `sagaOrigin` | the causing event's origin with `hop + 1`; `null` when it has none |
+| `userId` | `null` |
+| `baggage` | empty |
+
+The command runs with no user, no captured authority and no baggage, and
+`StreamRuneContext.isSagaDispatch()` is `false` inside the bindings even on the thread of a saga's
+dispatch: the origin says who caused an event and grants nothing. A policy that reads
+`StreamRuneContext.cause()` reads its `sagaOrigin()`: a cause without an origin says only that the
+command continues some stored event, and nothing about who wrote that event.
+
+`continuing` trusts the envelope it is given. It is meant for an envelope read from the event store
+(what a subscription delivers), whose metadata the command bus wrote. An envelope built by hand, or
+from request data, carries whatever origin, causation id and correlation id its author wrote, and
+the framework vouches for none of it.
+
+Failures:
+
+- A failed command that carries a saga origin is not published to the dead letter queue; the
+  listener's subscription is its only retry. Let a failure a later attempt can cure propagate out
+  of the listener, so that the subscription delivers the event again; a listener that swallows it
+  loses the command.
+- A rejection by the domain (`DomainException` and its subtypes, `IllegalArgumentException`) fails
+  on every delivery and is never dead-lettered. A plain `EventListener` has no skip for the event,
+  so a propagated rejection stops its subscription's progress until someone intervenes: catch it
+  in the listener and return, or dispatch the command that records the refusal.
+- Under `executeAsync` or `StreamRuneContext.wrap` the failure reaches only the future, or only the
+  other thread. A listener that relies on redelivery waits for the outcome before it returns.
+- A failed continuation of an event **without** an origin is dead-lettered like any other command,
+  once for every failed delivery, and a replay stores events with no `causationId`. With an
+  idempotency key the redelivery and all replays end in one stored event, whose `causationId` is
+  the event's id or `null` depending on which commits first; without a key every replay executes
+  the command again.
+
+Give the command an idempotency key derived from the causing event, so that a redelivery after the
+command committed stores nothing. `continuing` throws `IllegalStateException` for an event whose
+origin is at hop `Integer.MAX_VALUE`.
 
 ### AggregateState
 

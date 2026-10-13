@@ -24,6 +24,8 @@ In `onError(ctx, error)`: writes `AuditEntry` with `AuditOutcome.FAILURE`, `erro
 
 `AuditStore` is append-only (`void save(AuditEntry entry)`).
 
+**What `causationId` states, and who sets it.** `EventMetadata.causationId` names the direct predecessor of an event: the event the command behind it reacted to. The command bus alone writes it, in exactly two situations — under a saga's dispatch, where it is the event that triggered the forward command (for a compensation command, the event that opened the compensation episode, or none when a timeout or an operator opened it), and inside `StreamRuneContext.continuing(event)`, where it is the event your listener reacts to. Every other event is a causation root with a `null` `causationId`: the events of a command a request, a background job or a dead-letter replay dispatched. No request header and no baggage entry sets it, so a chain you read back through `EventAuditQuery.findByCausationId` or `traceFullCausationChain` is the framework's own statement: start event, the saga's reply events, the events of the listeners that continued them.
+
 **Auto-registration:** in all three frameworks, if a `DataSource` bean is present, a `PostgresAuditStore` is auto-registered. If an `AuditStore` bean is present, `AuditCommandInterceptor` is auto-registered.
 
 ## Quick example

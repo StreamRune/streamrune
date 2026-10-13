@@ -161,13 +161,54 @@ and trace id recorded on the entry, so the replayed events keep the original cor
 authorization check sees the original user. An entry for a command that ran with no context bound
 (a startup task, a background job) replays with no context bound.
 
+A replay restores those three values and nothing else. An entry has no place for a saga origin or
+for a causing event, and the runner binds neither, so the events of a replayed command carry no
+`sagaOrigin` and no `causationId`, whatever the entry's correlation id looks like. Two rules
+follow:
+
+- **A command that carries a saga origin is not dead-lettered.** That is every command a saga
+  dispatches, and every command a listener dispatches inside `StreamRuneContext.continuing(event)`
+  for an event a saga caused. A replay would run under the idempotency key of the caller's own
+  retry and store the reply without its origin, and whichever of the two reached the command inbox
+  first would decide what the event says. The caller retries instead: the saga subsystem for its
+  own commands, the subscription for a listener.
+- **A continuation of an event no saga caused is dead-lettered like any other command, once for
+  every failed delivery.** A listener that lets three deliveries of the event fail leaves three
+  entries, each under the command id of its own execution. A replay keeps the flow's correlation
+  and trace ids and stores the command's events as causation roots (`causationId` is `null`).
+  With an idempotency key the redelivery and the replays of all entries end in one stored event,
+  whose `causationId` is the causing event's id when the redelivery commits first and `null` when
+  a replay does. Without a key every entry's replay executes the command once more, besides the
+  redelivery. Give a continuation's command a key derived from the causing event.
+
+**What a listener does with a failed continuation.** For a command that carries a saga origin the
+subscription is the only retry, so the listener decides the command's fate:
+
+- A failure a later attempt can cure (an unreachable store, a lock timeout) leaves the listener.
+  The subscription keeps its checkpoint and delivers the event again. A listener that catches such
+  a failure and returns loses the command.
+- A failure no later attempt cures is the command's answer: a `DomainException` (with its
+  `ValidationException` and `AuthorizationException` subtypes) or an `IllegalArgumentException`.
+  The bus dead-letters a rejection under no rule, and a plain `EventListener` on a subscription
+  has no skip or dead-letter handling for the event: a listener that lets a rejection propagate is
+  handed the same event again, and its subscription makes no progress until someone intervenes.
+  Decide it in the listener — catch the rejection and return, which gives the command up on
+  purpose, or dispatch the command that records the refusal. Skipping or dead-lettering the
+  *event* exists one level up, for a projection run by a projection runner
+  (`ProjectionErrorStrategy.SKIP` and `DLQ`).
+- Under `executeAsync`, or in a task handed to another thread through `StreamRuneContext.wrap`,
+  the failure reaches only the returned future, or only that thread. A listener that relies on
+  redelivery waits for the outcome before it returns; a failure it does not see is a failure it
+  swallowed.
+
 For an on-demand single retry (e.g. an operator clicking "Retry" in an admin UI), call
 `retry(CommandId)` — it re-dispatches that one entry immediately, bypassing the per-entry backoff
 window, and returns `true` if a matching entry was found. The replay runs on a fresh virtual thread
 that `retry` waits for, so it carries exactly what a scheduled replay carries. Nothing the calling
 thread has bound reaches it — not the admin request's user, correlation id, baggage or captured
-authorities, not a saga-dispatch marker, not an inheritable thread-local — so the replayed events and
-the audit row never name the operator as the actor of a command they did not issue. A failure to
+authorities, not a saga-dispatch marker or a dispatch cause, not an inheritable thread-local — so
+the replayed events and the audit row never name the operator as the actor of a command they did
+not issue. A failure to
 record the outcome on the entry is rethrown to the caller. Retrying an entry that already exhausted
 its retries and failing again logs a WARN; `streamrune.dlq.exhausted` and the terminal ERROR fire
 only once, when the entry first runs out of retries. The background loop is controlled with

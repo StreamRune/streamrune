@@ -11,11 +11,22 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.saga.SagaState;
+import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.types.AggregateId;
+import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CausationId;
+import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.EventId;
+import org.streamrune.core.types.EventType;
+import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.SagaType;
+import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
+import org.streamrune.core.types.Version;
+import org.streamrune.test.SagaEnvelopes;
 
 class StreamRuneContextTest {
 
@@ -611,5 +622,293 @@ class StreamRuneContextTest {
 
     assertSame(runnable, StreamRuneContext.wrap(runnable));
     assertSame(callable, StreamRuneContext.wrap(callable));
+  }
+
+  // ==== Continuing an event's flow ====
+
+  private record ShipmentState(SagaStatus status) implements SagaState {}
+
+  private record PaymentInitiated(String orderId) implements DomainEvent {}
+
+  private static final SagaId SAGA_ID = SagaId.of("order-saga-42");
+
+  private static final StreamId PAYMENT_STREAM =
+      StreamId.of(AggregateType.of("payment"), AggregateId.of("pay-1"));
+
+  /** The reply to a command the saga dispatched itself: origin at hop 0. */
+  private static EventEnvelope sagaCausedEvent() {
+    return SagaEnvelopes.causedBy(
+        ShipmentState.class, SAGA_ID, PAYMENT_STREAM, new PaymentInitiated("o-1"));
+  }
+
+  /**
+   * An event a user's request caused: a trace, a user, a correlation id of the client's choosing, a
+   * baggage role, and no origin.
+   */
+  private static EventEnvelope requestCausedEvent() {
+    return envelopeWith(
+        new EventMetadata(
+            EventId.of("evt-request-1"),
+            CommandId.of("cmd-request-1"),
+            TraceId.of("trace-7"),
+            null,
+            CorrelationId.of("client-corr-7"),
+            CausationId.of("evt-earlier"),
+            UserId.of("alice"),
+            NOW,
+            Map.of("role", "ADMIN", "tenant", "acme")));
+  }
+
+  private static EventEnvelope envelopeWith(EventMetadata metadata) {
+    PaymentInitiated event = new PaymentInitiated("o-1");
+    return new EventEnvelope(
+        GlobalOffset.of(7),
+        PAYMENT_STREAM,
+        Version.initial(),
+        EventType.fromClass(PaymentInitiated.class),
+        event,
+        metadata);
+  }
+
+  @Test
+  void continuing_anEventWithAnOrigin_bindsItOneHopFurther() {
+    EventEnvelope event = sagaCausedEvent();
+    SagaOrigin stored = event.metadata().sagaOrigin();
+    assertEquals(0, stored.hop());
+
+    StreamRuneContext.continuing(event)
+        .run(
+            () -> {
+              SagaOrigin bound = StreamRuneContext.cause().sagaOrigin();
+              assertEquals(new SagaOrigin(stored.sagaType(), stored.sagaId(), 1), bound);
+            });
+  }
+
+  @Test
+  void continuing_anEventAlreadyAFewHopsAway_addsOneHop() {
+    EventMetadata hopZero = sagaCausedEvent().metadata();
+    SagaOrigin atHopThree =
+        new SagaOrigin(hopZero.sagaOrigin().sagaType(), hopZero.sagaOrigin().sagaId(), 3);
+    EventEnvelope event =
+        envelopeWith(
+            new EventMetadata(
+                hopZero.eventId(),
+                hopZero.commandId(),
+                null,
+                null,
+                hopZero.correlationId(),
+                CausationId.of("evt-hop-2"),
+                null,
+                NOW,
+                Map.of(),
+                atHopThree));
+
+    StreamRuneContext.continuing(event)
+        .run(
+            () ->
+                assertEquals(
+                    new SagaOrigin(atHopThree.sagaType(), atHopThree.sagaId(), 4),
+                    StreamRuneContext.cause().sagaOrigin()));
+  }
+
+  @Test
+  void continuing_anEventAtTheLargestHop_isRefusedAndBindsNothing() {
+    EventMetadata hopZero = sagaCausedEvent().metadata();
+    EventEnvelope event =
+        envelopeWith(
+            new EventMetadata(
+                hopZero.eventId(),
+                hopZero.commandId(),
+                null,
+                null,
+                hopZero.correlationId(),
+                null,
+                null,
+                NOW,
+                Map.of(),
+                new SagaOrigin(
+                    hopZero.sagaOrigin().sagaType(),
+                    hopZero.sagaOrigin().sagaId(),
+                    Integer.MAX_VALUE)));
+
+    var ex = assertThrows(IllegalStateException.class, () -> StreamRuneContext.continuing(event));
+
+    assertTrue(ex.getMessage().contains("hop 2147483647"), ex.getMessage());
+    assertNull(StreamRuneContext.cause());
+  }
+
+  @Test
+  void continuing_anEventWithoutAnOrigin_bindsNoOrigin() {
+    StreamRuneContext.continuing(requestCausedEvent())
+        .run(
+            () -> {
+              assertNotNull(StreamRuneContext.cause());
+              assertNull(StreamRuneContext.cause().sagaOrigin());
+            });
+  }
+
+  @Test
+  void continuing_bindsTheEventsIdAsTheCausationId() {
+    EventEnvelope sagaCaused = sagaCausedEvent();
+    StreamRuneContext.continuing(sagaCaused)
+        .run(
+            () ->
+                assertEquals(
+                    CausationId.of(sagaCaused.metadata().eventId().value()),
+                    StreamRuneContext.cause().causationId()));
+
+    // The event's own id, not the causation id the event itself carries.
+    StreamRuneContext.continuing(requestCausedEvent())
+        .run(
+            () ->
+                assertEquals(
+                    CausationId.of("evt-request-1"), StreamRuneContext.cause().causationId()));
+  }
+
+  @Test
+  void continuing_keepsTheEventsCorrelationAndTraceIds() {
+    StreamRuneContext.continuing(requestCausedEvent())
+        .run(
+            () -> {
+              StreamRuneContext.RequestContext context = StreamRuneContext.capture();
+              assertEquals(CorrelationId.of("client-corr-7"), context.correlationId());
+              assertEquals(TraceId.of("trace-7"), context.traceId());
+            });
+
+    EventEnvelope sagaCaused = sagaCausedEvent();
+    StreamRuneContext.continuing(sagaCaused)
+        .run(
+            () -> {
+              StreamRuneContext.RequestContext context = StreamRuneContext.capture();
+              assertEquals(sagaCaused.metadata().correlationId(), context.correlationId());
+              assertNull(context.traceId());
+            });
+  }
+
+  @Test
+  void continuing_bindsNoUserNoAuthorityAndNoBaggage() {
+    Instant before = Instant.now();
+    // Bound around the continuation: a caller with a user, a captured authority and baggage.
+    var caller =
+        new StreamRuneContext.RequestContext(
+            TraceId.of("caller-trace"),
+            UserId.of("bob"),
+            CorrelationId.of("caller-corr"),
+            NOW,
+            Map.of("role", "OPERATOR"),
+            new UserAuthority(Set.of("OPERATOR"), Set.of()));
+
+    ScopedValue.where(StreamRuneContext.CURRENT, caller)
+        .run(
+            () ->
+                StreamRuneContext.continuing(requestCausedEvent())
+                    .run(
+                        () -> {
+                          StreamRuneContext.RequestContext context = StreamRuneContext.capture();
+                          assertNull(context.userId(), "neither the event's user nor the caller's");
+                          assertNull(context.authority());
+                          assertTrue(context.baggage().isEmpty(), "a baggage role is authority");
+                          assertFalse(context.timestamp().isBefore(before));
+                        }));
+  }
+
+  @Test
+  void continuing_insideASagaDispatch_isNotASagaDispatch() {
+    StreamRuneContext.continuing(sagaCausedEvent())
+        .run(() -> assertFalse(StreamRuneContext.isSagaDispatch()));
+
+    // A listener called on the thread of a saga's dispatch: the continuation takes the saga
+    // privileges away for its own commands and gives them back afterwards.
+    ScopedValue.where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
+        .run(
+            () -> {
+              assertTrue(StreamRuneContext.isSagaDispatch());
+              StreamRuneContext.continuing(sagaCausedEvent())
+                  .run(
+                      () -> {
+                        assertFalse(StreamRuneContext.isSagaDispatch());
+                        assertTrue(StreamRuneContext.SAGA_OWNED.isBound());
+                        // The saga's pass does not extend to the continuation, and it has no user.
+                        assertThrows(
+                            AuthorizationException.class,
+                            () -> Authorization.requireOwnerOrSaga(UserId.of("alice")));
+                        assertNull(Authorization.currentUserId());
+                      });
+              assertTrue(StreamRuneContext.isSagaDispatch());
+              Authorization.requireOwnerOrSaga(UserId.of("alice"));
+            });
+  }
+
+  @Test
+  void continuing_insideAnotherCause_bindsItsOwnEventsCause() {
+    EventEnvelope event = requestCausedEvent();
+
+    ScopedValue.where(StreamRuneContext.CAUSE, BOUND_CAUSE)
+        .run(
+            () -> {
+              StreamRuneContext.continuing(event)
+                  .run(
+                      () ->
+                          assertEquals(
+                              new StreamRuneContext.DispatchCause(
+                                  CausationId.of("evt-request-1"), null),
+                              StreamRuneContext.cause()));
+              assertSame(BOUND_CAUSE, StreamRuneContext.cause());
+            });
+  }
+
+  @Test
+  void continuing_bindsTheSameCauseEveryTimeItIsGivenTheSameEvent() {
+    EventEnvelope event = sagaCausedEvent();
+    var first = new AtomicReference<StreamRuneContext.DispatchCause>();
+    var second = new AtomicReference<StreamRuneContext.DispatchCause>();
+
+    StreamRuneContext.continuing(event).run(() -> first.set(StreamRuneContext.cause()));
+    StreamRuneContext.continuing(event).run(() -> second.set(StreamRuneContext.cause()));
+
+    assertEquals(first.get(), second.get());
+  }
+
+  @Test
+  void continuing_leavesNothingBoundAfterwards() {
+    StreamRuneContext.continuing(sagaCausedEvent()).run(() -> {});
+
+    assertNull(StreamRuneContext.cause());
+    assertNull(StreamRuneContext.capture());
+    assertFalse(StreamRuneContext.SAGA_OWNED.isBound());
+  }
+
+  @Test
+  void continuing_refusesANullEvent() {
+    var ex = assertThrows(NullPointerException.class, () -> StreamRuneContext.continuing(null));
+    assertEquals("cause is required", ex.getMessage());
+  }
+
+  @Test
+  void wrap_insideContinuing_keepsTheCause() throws Exception {
+    EventEnvelope event = sagaCausedEvent();
+    var observedCause = new AtomicReference<StreamRuneContext.DispatchCause>();
+    var observedContext = new AtomicReference<StreamRuneContext.RequestContext>();
+
+    Runnable wrapped =
+        StreamRuneContext.continuing(event)
+            .call(
+                () ->
+                    StreamRuneContext.wrap(
+                        () -> {
+                          observedCause.set(StreamRuneContext.cause());
+                          observedContext.set(StreamRuneContext.capture());
+                        }));
+    Thread thread = new Thread(wrapped);
+    thread.start();
+    thread.join();
+
+    assertEquals(
+        new StreamRuneContext.DispatchCause(
+            CausationId.of(event.metadata().eventId().value()),
+            new SagaOrigin(SagaType.fromClass(ShipmentState.class), SAGA_ID, 1)),
+        observedCause.get());
+    assertEquals(event.metadata().correlationId(), observedContext.get().correlationId());
+    assertNull(observedContext.get().userId());
   }
 }

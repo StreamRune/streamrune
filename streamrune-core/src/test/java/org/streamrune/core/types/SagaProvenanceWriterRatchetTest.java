@@ -23,26 +23,36 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Keeps the statement "a saga's dispatch caused this event" with the writers it has: the main
- * sources of every module may bind the dispatch cause, build one, or create a saga origin only in
- * the files listed here.
+ * sources of every module may bind the dispatch cause, build one, create a saga origin or take an
+ * origin one hop further only in the files listed here.
  *
- * <p><b>Why.</b> {@code EventMetadata.sagaOrigin} is the framework's statement of which saga's
- * dispatch caused an event, and it is worth only as much as its writer is single. The command bus
- * copies the origin from {@code StreamRuneContext.CAUSE}, and saga dispatch is what binds it; a
- * request filter, a dead-letter replay or an integration that bound the cause, or built an origin,
- * from a value it read off the wire would let a client make that statement. The compiler cannot
- * stop that — the cause is a public constant and the origin a public record — so this scan does.
+ * <p><b>Why.</b> {@code EventMetadata.sagaOrigin} and {@code EventMetadata.causationId} are the
+ * framework's statements of which saga's dispatch and which event caused an event, and they are
+ * worth only as much as their writers are few. The command bus copies both from {@code
+ * StreamRuneContext.CAUSE}, which saga dispatch binds for a saga's own commands and {@code
+ * StreamRuneContext.continuing} binds for a listener's reaction to a stored event; a request
+ * filter, a dead-letter replay or an integration that bound the cause, or built an origin, from a
+ * value it read off the wire would let a client make those statements. The compiler cannot stop
+ * that — the cause is a public constant and the origin a public record — so this scan does.
  *
  * <p><b>What is scanned.</b> Every {@code .java} file under any module's {@code src/main/java}.
  * Test sources bind causes and build origins freely. A file is matched as a whole, so a shape that
  * the formatter wrapped over two lines is still found. Each shape is refused as a call and as a
  * method reference ({@code SagaOrigin::dispatchedBy}, {@code SagaOrigin::new}, {@code
- * DispatchCause::new}, {@code EventMetadata::new}).
+ * SagaOrigin::nextHop}, {@code DispatchCause::new}, {@code EventMetadata::new}). {@link
+ * #noGuideOrMainSourceNamesTheCausationBaggageKey()} also reads every {@code .md} file.
  *
  * <p><b>The allow-lists.</b> One per forbidden shape ({@link #RULES}), each entry with the text
  * that keeps it listed. {@link #theAllowListsHoldNoStaleEntries()} fails an entry whose file is
  * gone or holds that text no more, so a list only shrinks on its own; adding a writer is a reviewed
  * edit of this file.
+ *
+ * <p><b>Inside a listed file.</b> An entry admits a whole file, so three counts look inside the
+ * listed ones: how often each file that may reference the cause binds it and uses it ({@link
+ * #everyFileThatMayReferenceTheCauseBindsAndUsesItAsOftenAsListed()}), and how often the declaring
+ * class builds a cause and takes an origin one hop further ({@link
+ * #theContextBuildsADispatchCauseInContinuingOnly()}). A second binder written into a listed file
+ * changes a count.
  *
  * <p>The scanned tree is declared as an input of {@code :streamrune-core:test} in {@code
  * streamrune-core/build.gradle.kts}, so Gradle re-runs this test when a main source of another
@@ -82,10 +92,11 @@ class SagaProvenanceWriterRatchetTest {
 
   /**
    * A reference to the cause's scoped value: qualified, or through a wildcard static import that
-   * would hide every later use. Allowed where it is declared, where saga dispatch binds it, where
-   * the bus carries it onto its asynchronous thread, and in two places of the test module: the bus
-   * contract, which binds a cause to prove that a bus copies it, and the in-memory subscription,
-   * which binds it to no cause around a listener that runs on the appending thread.
+   * would hide every later use. Allowed where it is declared (the declaring class also binds it,
+   * unqualified, in {@code continuing} and carries it in {@code wrap}), where saga dispatch binds
+   * it, where the bus carries it onto its asynchronous thread, and in two places of the test
+   * module: the bus contract, which binds a cause to prove that a bus copies it, and the in-memory
+   * subscription, which binds it to no cause around a listener that runs on the appending thread.
    */
   private static final Rule CAUSE_REFERENCE =
       new Rule(
@@ -105,11 +116,51 @@ class SagaProvenanceWriterRatchetTest {
               IN_MEMORY_SUBSCRIPTION,
               QUALIFIED_CAUSE));
 
+  /** A binding of the cause: {@code where(CAUSE, …)}, qualified or not, wrapped or not. */
+  private static final Pattern CAUSE_BINDING =
+      Pattern.compile("\\bwhere\\s*\\(\\s*(?:[\\w.]+\\s*\\.\\s*)?CAUSE\\b");
+
+  /** A use of the cause in code, qualified or not; a javadoc link ({@code #CAUSE}) is none. */
+  private static final Pattern CAUSE_USE = Pattern.compile("(?<![#\\w])CAUSE\\b");
+
+  /**
+   * How often a file that may reference the cause binds it and uses it.
+   *
+   * @param bindings occurrences of {@link #CAUSE_BINDING}
+   * @param uses occurrences of {@link #CAUSE_USE}, the bindings and the declaration included
+   */
+  private record CauseUses(int bindings, int uses) {}
+
+  /**
+   * What each allow-listed file does with the cause today. An allow-list entry admits a whole file,
+   * so without these numbers a second binder written into one of the files would pass the scan.
+   *
+   * <ul>
+   *   <li>the context: the declaration, the read in {@code cause()}, the binding in {@code
+   *       continuing}, and the read and the two bindings of {@code capturedBindings} (what {@code
+   *       wrap} carries);
+   *   <li>saga dispatch: its one binding;
+   *   <li>the bus: the read and the two bindings of {@code prepareAsyncTask};
+   *   <li>the bus contract: the two bindings of its cases;
+   *   <li>the in-memory subscription: the check and the two bindings to no cause.
+   * </ul>
+   */
+  private static final Map<String, CauseUses> CAUSE_USES =
+      Map.of(
+          CONTEXT, new CauseUses(3, 8),
+          SAGA_DISPATCH, new CauseUses(1, 1),
+          BUS, new CauseUses(2, 4),
+          BUS_CONTRACT, new CauseUses(2, 2),
+          IN_MEMORY_SUBSCRIPTION, new CauseUses(2, 3));
+
   private static final Pattern CAUSE_CONSTRUCTOR_CALL =
       Pattern.compile("\\bnew\\s+(?:StreamRuneContext\\s*\\.\\s*)?DispatchCause\\s*\\(");
 
   /**
    * The dispatch cause's record header, a construction of it, or a reference to its constructor.
+   * The declaring file holds the header and the one construction of {@code continuing} ({@link
+   * #theContextBuildsADispatchCauseInContinuingOnly()} counts it); saga dispatch and the bus
+   * contract hold one each.
    */
   private static final Rule CAUSE_CONSTRUCTION =
       new Rule(
@@ -150,6 +201,31 @@ class SagaProvenanceWriterRatchetTest {
           Map.of(STEP_EXECUTOR, ORIGIN_FACTORY_CALL, SAGA_ENVELOPES, ORIGIN_FACTORY_CALL));
 
   /**
+   * The class object of the dispatch cause. A cause read from JSON, or built by reflection, comes
+   * into being without a constructor call the other rules see; both need the class object. No main
+   * source holds one: a dispatch cause is never serialised.
+   */
+  private static final Rule CAUSE_CLASS_OBJECT =
+      new Rule(
+          "takes the class object of DispatchCause",
+          Pattern.compile("\\bDispatchCause\\s*\\.\\s*class\\b"),
+          Map.of());
+
+  private static final Pattern NEXT_HOP_CALL = Pattern.compile("\\.\\s*nextHop\\s*\\(");
+
+  /**
+   * A declaration of {@code nextHop}, a call of it or a reference to it. The origin declares it and
+   * {@code StreamRuneContext.continuing} is its one caller: a second caller would hand out an
+   * origin for an event nobody read from the store.
+   */
+  private static final Rule ORIGIN_NEXT_HOP =
+      new Rule(
+          "declares, calls or references nextHop",
+          Pattern.compile("(?<!#)\\bnextHop\\s*\\(|::\\s*nextHop\\b"),
+          Map.of(
+              ORIGIN, Pattern.compile("\\bSagaOrigin\\s+nextHop\\s*\\("), CONTEXT, NEXT_HOP_CALL));
+
+  /**
    * A reference to a constructor of the event metadata. The text of a reference does not say which
    * constructor it resolves to, so every one is refused: a reference to the ten-argument
    * constructor would build metadata with an origin without a call the other checks see. No main
@@ -165,19 +241,118 @@ class SagaProvenanceWriterRatchetTest {
       List.of(
           CAUSE_REFERENCE,
           CAUSE_CONSTRUCTION,
+          CAUSE_CLASS_OBJECT,
           ORIGIN_CONSTRUCTION,
           ORIGIN_FACTORY,
+          ORIGIN_NEXT_HOP,
           METADATA_CONSTRUCTOR_REFERENCE);
 
   @Test
   void theCauseIsBoundOnlyByItsWriters() {
-    assertNoViolations(List.of(CAUSE_REFERENCE, CAUSE_CONSTRUCTION));
+    assertNoViolations(List.of(CAUSE_REFERENCE, CAUSE_CONSTRUCTION, CAUSE_CLASS_OBJECT));
+  }
+
+  /**
+   * Inside the files that may reference the cause, every binding and every use is counted: a second
+   * binder added to one of them changes a number here, and the number is changed only by a reviewed
+   * edit of {@link #CAUSE_USES}.
+   */
+  @Test
+  void everyFileThatMayReferenceTheCauseBindsAndUsesItAsOftenAsListed() {
+    assertEquals(
+        CAUSE_REFERENCE.allowed().keySet(),
+        CAUSE_USES.keySet(),
+        "every file that may reference the cause has its bindings and uses counted");
+    Path root = repositoryRoot();
+    for (Map.Entry<String, CauseUses> listed : CAUSE_USES.entrySet()) {
+      String source = read(root.resolve(listed.getKey()));
+      assertEquals(
+          listed.getValue(),
+          new CauseUses(count(CAUSE_BINDING, source), count(CAUSE_USE, source)),
+          "bindings and uses of StreamRuneContext.CAUSE in "
+              + listed.getKey()
+              + ". Only saga dispatch and StreamRuneContext.continuing bind a cause they chose;"
+              + " wrap and executeAsync carry the bound one to another thread");
+    }
   }
 
   @Test
   void originsAreCreatedOnlyByTheirWriters() {
     assertNoViolations(
-        List.of(ORIGIN_CONSTRUCTION, ORIGIN_FACTORY, METADATA_CONSTRUCTOR_REFERENCE));
+        List.of(
+            ORIGIN_CONSTRUCTION, ORIGIN_FACTORY, ORIGIN_NEXT_HOP, METADATA_CONSTRUCTOR_REFERENCE));
+  }
+
+  /**
+   * The declaring file is allow-listed as a whole, so the scan above cannot tell its one legitimate
+   * construction from a second one. This counts them: the record header, and the construction in
+   * {@code continuing}; and one call of {@code nextHop}, in the same method.
+   */
+  @Test
+  void theContextBuildsADispatchCauseInContinuingOnly() {
+    String context = read(repositoryRoot().resolve(CONTEXT));
+
+    assertEquals(1, count(CAUSE_CONSTRUCTOR_CALL, context), "constructions of a DispatchCause");
+    assertEquals(1, count(NEXT_HOP_CALL, context), "calls of nextHop");
+    Matcher continuing =
+        Pattern.compile(
+                "public static ScopedValue\\.Carrier continuing\\(EventEnvelope cause\\) \\{.*?\n  }\n",
+                Pattern.DOTALL)
+            .matcher(context);
+    assertTrue(continuing.find(), "StreamRuneContext.continuing(EventEnvelope) is declared");
+    assertEquals(1, count(CAUSE_CONSTRUCTOR_CALL, continuing.group()));
+    assertEquals(1, count(NEXT_HOP_CALL, continuing.group()));
+  }
+
+  private static int count(Pattern pattern, String source) {
+    int found = 0;
+    Matcher matcher = pattern.matcher(source);
+    while (matcher.find()) {
+      found++;
+    }
+    return found;
+  }
+
+  // A baggage key by which a client claims to name the causing event of its command, and the name
+  // of a constant that would make it a framework key. Built from pieces so that this file names
+  // neither.
+  private static final String CAUSATION_BAGGAGE_KEY = "streamrune." + "causation" + "-id";
+  private static final String CAUSATION_BAGGAGE_CONSTANT = "CAUSATION_ID" + "_BAGGAGE_KEY";
+
+  /**
+   * The command bus reads no baggage entry into the causation id, so no guide may tell a reader to
+   * send one and no main source may hold the key. The one main source that names it is the bus
+   * contract of the test module, which binds an entry under it to prove that it decides nothing.
+   */
+  @Test
+  void noGuideOrMainSourceNamesTheCausationBaggageKey() {
+    Path root = repositoryRoot();
+    List<String> violations = new ArrayList<>();
+    List<Path> files = new ArrayList<>(mainSources());
+    List<Path> guides = filesMatching(rel -> rel.endsWith(".md"));
+    assertTrue(guides.size() > 20, "expected every guide, found " + guides.size());
+    files.addAll(guides);
+    for (Path file : files) {
+      String relative = relative(file);
+      String source = read(file);
+      if (source.contains(CAUSATION_BAGGAGE_CONSTANT)) {
+        violations.add(relative + ": names " + CAUSATION_BAGGAGE_CONSTANT);
+      }
+      if (source.contains(CAUSATION_BAGGAGE_KEY) && !relative.equals(BUS_CONTRACT)) {
+        violations.add(relative + ": names the baggage key " + CAUSATION_BAGGAGE_KEY);
+      }
+    }
+    assertTrue(
+        read(root.resolve(BUS_CONTRACT)).contains(CAUSATION_BAGGAGE_KEY),
+        "the bus contract holds the key no more; drop its exemption");
+    if (!violations.isEmpty()) {
+      fail(
+          violations.size()
+              + " file(s) name the causation baggage key. The command bus takes the causation id"
+              + " from StreamRuneContext.CAUSE and from nowhere else; a baggage entry under that"
+              + " key is ordinary baggage. Offenders:\n  "
+              + String.join("\n  ", violations));
+    }
   }
 
   @Test
@@ -204,6 +379,29 @@ class SagaProvenanceWriterRatchetTest {
     }
     for (String shape :
         List.of(
+            "mapper.readValue(json, StreamRuneContext.DispatchCause.class)",
+            "DispatchCause.class.getDeclaredConstructors()",
+            "Class<?> type = org.streamrune.core.StreamRuneContext.DispatchCause\n    .class;")) {
+      assertTrue(CAUSE_CLASS_OBJECT.forbidden().matcher(shape).find(), "must reject: " + shape);
+    }
+    for (String binding :
+        List.of(
+            "ScopedValue.where(StreamRuneContext.CAUSE, cause)",
+            "ScopedValue.where(CAUSE, cause)",
+            "carrier.where(\n            CAUSE,\n            new DispatchCause(id, origin))",
+            "detached.where(org.streamrune.core.StreamRuneContext.CAUSE, null)")) {
+      assertEquals(1, count(CAUSE_BINDING, binding), "one binding: " + binding);
+      assertEquals(1, count(CAUSE_USE, binding), "one use: " + binding);
+    }
+    assertEquals(0, count(CAUSE_BINDING, "ScopedValue.where(StreamRuneContext.CURRENT, context)"));
+    assertEquals(0, count(CAUSE_BINDING, "ScopedValue.where(SAGA_OWNED, Boolean.FALSE)"));
+    assertEquals(2, count(CAUSE_USE, "return CAUSE.isBound() ? CAUSE.get() : null;"));
+    assertEquals(
+        0, count(CAUSE_USE, " * carries {@link StreamRuneContext#CAUSE} and {@link #CAUSE}"));
+    assertEquals(
+        0, count(CAUSE_USE, "DispatchCause cause = StreamRuneContext.cause(); // BECAUSE"));
+    for (String shape :
+        List.of(
             "new SagaOrigin(type, id, 0)",
             "return new  SagaOrigin\n      (type, id, 3);",
             "new org.streamrune.core.saga.SagaOrigin(type, id, 1)",
@@ -221,6 +419,15 @@ class SagaProvenanceWriterRatchetTest {
             "BiFunction<SagaType, SagaId, SagaOrigin> name = SagaOrigin::dispatchedBy;",
             "name = SagaOrigin :: dispatchedBy;")) {
       assertTrue(ORIGIN_FACTORY.forbidden().matcher(shape).find(), "must reject: " + shape);
+    }
+    for (String shape :
+        List.of(
+            "origin.nextHop()",
+            "metadata.sagaOrigin()\n        .nextHop ()",
+            "UnaryOperator<SagaOrigin> further = SagaOrigin::nextHop;",
+            "further = origin :: nextHop;",
+            "public SagaOrigin nextHop() {")) {
+      assertTrue(ORIGIN_NEXT_HOP.forbidden().matcher(shape).find(), "must reject: " + shape);
     }
     for (String shape :
         List.of(
@@ -245,6 +452,11 @@ class SagaProvenanceWriterRatchetTest {
             "DispatchCause::causationId",
             "EventMetadata::eventId",
             "new EventMetadata(eventId, commandId, null, null, correlationId, null, null, now)",
+            "{@link SagaOrigin#nextHop()}",
+            "{@link StreamRuneContext.DispatchCause}",
+            "StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();",
+            "int nextHopCount = 0;",
+            "StreamRuneContext.continuing(event).run(task)",
             "StreamRuneContext.CAUSES")) {
       for (Rule rule : RULES) {
         assertFalse(rule.forbidden().matcher(ordinary).find(), "must not flag: " + ordinary);
@@ -278,6 +490,9 @@ class SagaProvenanceWriterRatchetTest {
     }
     for (Pattern evidence : ORIGIN_FACTORY.allowed().values()) {
       assertFalse(evidence.matcher(" * see {@link SagaOrigin#dispatchedBy}").find());
+    }
+    for (Pattern evidence : ORIGIN_NEXT_HOP.allowed().values()) {
+      assertFalse(evidence.matcher(" * one hop further ({@link SagaOrigin#nextHop()})").find());
     }
   }
 
@@ -318,9 +533,12 @@ class SagaProvenanceWriterRatchetTest {
     if (!violations.isEmpty()) {
       fail(
           violations.size()
-              + " place(s) outside the allow-list touch saga provenance. Only saga dispatch binds"
-              + " the dispatch cause and only the saga step executor names a dispatching saga; a"
-              + " command bus reads the cause through StreamRuneContext.cause(). Offenders:\n  "
+              + " place(s) outside the allow-list touch saga provenance. Only saga dispatch and"
+              + " StreamRuneContext.continuing bind the dispatch cause, only the saga step"
+              + " executor names a dispatching saga and only continuing takes an origin one hop"
+              + " further; a command bus reads the cause through StreamRuneContext.cause(), and a"
+              + " listener that reacts to an event dispatches inside"
+              + " StreamRuneContext.continuing(event). Offenders:\n  "
               + String.join("\n  ", violations));
     }
   }
@@ -368,6 +586,14 @@ class SagaProvenanceWriterRatchetTest {
    * sibling tasks of a parallel build create and delete files under {@code build/} all the time.
    */
   private static List<Path> mainSources() {
+    return filesMatching(rel -> rel.endsWith(".java") && rel.contains("/src/main/java/"));
+  }
+
+  /**
+   * Every regular file whose repository-relative path {@code wanted} accepts, sorted, with the same
+   * pruning as {@link #mainSources()}.
+   */
+  private static List<Path> filesMatching(java.util.function.Predicate<String> wanted) {
     Path root = repositoryRoot();
     List<Path> files = new ArrayList<>();
     try {
@@ -387,9 +613,7 @@ class SagaProvenanceWriterRatchetTest {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
               String rel = root.relativize(file).toString().replace('\\', '/');
-              if (attrs.isRegularFile()
-                  && rel.endsWith(".java")
-                  && rel.contains("/src/main/java/")) {
+              if (attrs.isRegularFile() && wanted.test(rel)) {
                 files.add(file);
               }
               return FileVisitResult.CONTINUE;

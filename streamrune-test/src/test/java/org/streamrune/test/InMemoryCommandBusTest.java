@@ -330,11 +330,7 @@ class InMemoryCommandBusTest {
     var timestamp = Instant.parse("2026-06-12T10:00:00Z");
     var ctx =
         new StreamRuneContext.RequestContext(
-            null,
-            userId,
-            correlationId,
-            timestamp,
-            Map.of(InMemoryCommandBus.CAUSATION_ID_BAGGAGE_KEY, "evt-99"));
+            null, userId, correlationId, timestamp, Map.of("streamrune.causation-id", "evt-99"));
 
     var result =
         ScopedValue.where(StreamRuneContext.CURRENT, ctx)
@@ -345,8 +341,27 @@ class InMemoryCommandBusTest {
       assertEquals(correlationId, metadata.correlationId());
       assertEquals(userId, metadata.userId());
       assertEquals(timestamp, metadata.timestamp());
-      assertEquals("evt-99", metadata.causationId().value());
-      assertEquals("evt-99", metadata.baggage().get(InMemoryCommandBus.CAUSATION_ID_BAGGAGE_KEY));
+      // No baggage entry becomes the causation id; the entry stays ordinary baggage.
+      assertNull(metadata.causationId());
+      assertEquals("evt-99", metadata.baggage().get("streamrune.causation-id"));
+    }
+  }
+
+  @Test
+  void aCommandExecutedInsideContinuing_storesTheCausingEventsIdAsTheCausationId() {
+    var eventStore = new InMemoryEventStore();
+    var commandBus = busWithTwoEventDecider(eventStore);
+    var first = commandBus.execute(new CreateWithItemCmd("cart-1", "SKU-1")).envelopes().getFirst();
+
+    var continued =
+        StreamRuneContext.continuing(first)
+            .call(() -> commandBus.execute(new CreateWithItemCmd("cart-2", "SKU-2")));
+
+    for (var envelope : continued.envelopes()) {
+      assertEquals(first.metadata().eventId().value(), envelope.metadata().causationId().value());
+      assertEquals(first.metadata().correlationId(), envelope.metadata().correlationId());
+      assertNull(envelope.metadata().sagaOrigin());
+      assertNull(envelope.metadata().userId());
     }
   }
 

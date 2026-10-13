@@ -99,11 +99,16 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * <p><b>Baggage allowlisting:</b> OpenTelemetry baggage is populated from the client-supplied,
  * unauthenticated W3C {@code baggage:} HTTP header, and every baggage entry ends up in every
  * produced event's immutable, plaintext {@code event_stream.metadata}. To prevent a caller from
- * smuggling arbitrary PII permanently into the event log, only {@link
- * BaggageAllowlist#DEFAULT_ALLOWED_KEYS} (the causation-id key) plus any keys configured via {@code
- * streamrune.metadata.baggage-allowlist} are copied into the request context. Non-allowlisted keys
- * are dropped here, before they ever reach {@code RequestContext} or {@code EventMetadata}; {@code
- * role} is the role rule's alone (above).
+ * smuggling arbitrary PII permanently into the event log, only the keys configured via {@code
+ * streamrune.metadata.baggage-allowlist} are copied into the request context; with none configured
+ * no baggage entry is ({@link BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty). Non-allowlisted
+ * keys are dropped here, before they ever reach {@code RequestContext} or {@code EventMetadata};
+ * {@code role} is the role rule's alone (above).
+ *
+ * <p><b>What a request cannot set.</b> This filter builds a request context and nothing else. It
+ * does not bind {@link StreamRuneContext#CAUSE}, so no header and no baggage entry, allowlisted or
+ * not, reaches the saga origin or the causation id of an event: the command bus takes both from
+ * that binding alone.
  */
 @ServerFilter("/**")
 public class StreamRuneContextFilter implements Ordered {
@@ -123,22 +128,22 @@ public class StreamRuneContextFilter implements Ordered {
   private final UserRoleResolver userRoleResolver;
 
   /**
-   * Creates the context filter with no additional allowlisted baggage keys. Its identity policy is
-   * {@link RequestIdentityPolicy.Mode#ANONYMOUS} — every request runs without a user or a role, and
-   * the {@code X-User-Id} and {@code X-User-Role} headers are ignored — and no {@link
-   * UserRoleResolver} is wired, so no authority is captured at the request edge. Micronaut uses the
-   * {@link Inject}-annotated constructor.
+   * Creates the context filter with no allowlisted baggage key. Its identity policy is {@link
+   * RequestIdentityPolicy.Mode#ANONYMOUS} — every request runs without a user or a role, and the
+   * {@code X-User-Id} and {@code X-User-Role} headers are ignored — and no {@link UserRoleResolver}
+   * is wired, so no authority is captured at the request edge. Micronaut uses the {@link
+   * Inject}-annotated constructor.
    */
   public StreamRuneContextFilter() {
     this(Set.of(), RequestIdentityPolicy.of(null, false), null);
   }
 
   /**
-   * Creates the context filter, seeding the OTel baggage allowlist from {@code
-   * streamrune.metadata.baggage-allowlist} on top of the framework defaults ({@link
-   * BaggageAllowlist#DEFAULT_ALLOWED_KEYS}), and resolving identities through the application's
-   * {@link RequestIdentityPolicy} bean. This is the constructor Micronaut uses for dependency
-   * injection.
+   * Creates the context filter, taking the OTel baggage allowlist from {@code
+   * streamrune.metadata.baggage-allowlist} (the framework adds no key of its own: {@link
+   * BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty), and resolving identities through the
+   * application's {@link RequestIdentityPolicy} bean. This is the constructor Micronaut uses for
+   * dependency injection.
    *
    * @param properties the bound StreamRune Micronaut properties
    * @param identityPolicy where the request identity and role come from (authenticated principal,

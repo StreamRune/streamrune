@@ -103,10 +103,10 @@ public interface SseAuthorizer {
    *       forwarded in trusted-gateway mode, as trustworthy as the gateway's handling of that
    *       header, and absent in every other mode: the roles of an authenticated principal are never
    *       there. Every other entry (the keys the application allow-lists in {@code
-   *       streamrune.metadata.baggage-allowlist} and the causation id) is copied from the client's
-   *       own W3C {@code baggage} header in every identity mode. Any caller sets those to any
-   *       value, so a rule that compares one of them (a tenant, an owner, a flag) admits whoever
-   *       names the value it looks for.
+   *       streamrune.metadata.baggage-allowlist}) is copied from the client's own W3C {@code
+   *       baggage} header in every identity mode. Any caller sets those to any value, so a rule
+   *       that compares one of them (a tenant, an owner, a flag) admits whoever names the value it
+   *       looks for.
    * </ul>
    *
    * <p>In short: {@code userId()} and {@code authority()} are established at the request edge, in

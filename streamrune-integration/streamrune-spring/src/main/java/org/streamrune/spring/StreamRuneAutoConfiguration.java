@@ -185,9 +185,8 @@ public class StreamRuneAutoConfiguration {
      * Registers a {@link ScopedValueFilter} that propagates HTTP request metadata into {@link
      * org.streamrune.core.StreamRuneContext} via ScopedValue. Registered into the servlet filter
      * chain by {@link #scopedValueFilterRegistration(ScopedValueFilter)}. The filter's OTel baggage
-     * allowlist is seeded from {@code streamrune.metadata.baggage-allowlist}, on top of the
-     * framework-meaningful defaults ({@link
-     * org.streamrune.core.BaggageAllowlist#DEFAULT_ALLOWED_KEYS}).
+     * allowlist is {@code streamrune.metadata.baggage-allowlist}; the framework adds no key of its
+     * own ({@link org.streamrune.core.BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty).
      */
     @Bean
     @ConditionalOnMissingBean
