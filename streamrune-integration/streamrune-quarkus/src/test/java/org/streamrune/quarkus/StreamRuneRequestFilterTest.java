@@ -6,8 +6,10 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.MultivaluedHashMap;
 import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -58,45 +60,135 @@ class StreamRuneRequestFilterTest {
   // filter to fall back to the plain constructor, an unauthenticated header would reach
   // event_stream.metadata unbounded again.
 
-  @Test
-  void controlCharactersInAnUnauthenticatedIdHeaderAreRejectedAtTheRequestEdge() {
-    var holder = new StreamRuneRequestContextHolder();
-    var filter =
-        new StreamRuneRequestFilter(
-            holder, Set.of(), RequestIdentityPolicy.of(Optional::empty, false), null);
+  // The filter answers a refusal of the door itself: 400 Bad Request with one fixed body, before
+  // the resource method runs.
 
-    ContainerRequestContext forgedCorrelation = mock(ContainerRequestContext.class);
-    when(forgedCorrelation.getHeaderString("X-Correlation-Id")).thenReturn("corr\r\nX-Injected: 1");
-    assertThrows(IllegalArgumentException.class, () -> filter.filter(forgedCorrelation));
-
-    ContainerRequestContext forgedTrace = mock(ContainerRequestContext.class);
-    when(forgedTrace.getHeaderString("X-Trace-Id")).thenReturn("trace" + (char) 0x01);
-    assertThrows(IllegalArgumentException.class, () -> filter.filter(forgedTrace));
+  private static StreamRuneRequestFilter anonymousFilter(StreamRuneRequestContextHolder holder) {
+    return new StreamRuneRequestFilter(
+        holder, Set.of(), RequestIdentityPolicy.of(Optional::empty, false), null);
   }
 
-  @Test
-  void anOversizedIdHeaderIsRejectedAtTheRequestEdge() {
-    var holder = new StreamRuneRequestContextHolder();
-    var filter =
-        new StreamRuneRequestFilter(
-            holder, Set.of(), RequestIdentityPolicy.of(Optional::empty, false), null);
-
-    ContainerRequestContext rc = mock(ContainerRequestContext.class);
-    when(rc.getHeaderString("X-Correlation-Id")).thenReturn("c".repeat(256));
-    assertThrows(IllegalArgumentException.class, () -> filter.filter(rc));
+  /** A request that carries one single-valued header. */
+  private static ContainerRequestContext requestWith(String header, String value) {
+    ContainerRequestContext request = mock(ContainerRequestContext.class);
+    when(request.getHeaderString(header)).thenReturn(value);
+    return request;
   }
 
   /**
-   * The identity crosses the same door and is now bounded there too. Both arms are covered — the
-   * header arm (only the trusted-gateway mode, {@code trust-user-id-header=true}) and the
-   * authenticated-principal arm, whose value is whatever the IdP asserted and is therefore neither
-   * automatically bounded nor charset-safe. An identity over 255 characters cannot be written to
-   * {@code dead_letter_queue.user_id VARCHAR(255)} at all, and the bus catches and logs that INSERT
+   * {@code filter} aborts {@code request} with {@code 400} and the shared reason as a plain-text
+   * body, and publishes no context: the holder and the request property stay unset. The answer
+   * repeats nothing of {@code refusedValue}.
+   */
+  private static void assertAnswered400(
+      StreamRuneRequestFilter filter,
+      StreamRuneRequestContextHolder holder,
+      ContainerRequestContext request,
+      String refusedValue) {
+    filter.filter(request);
+
+    ArgumentCaptor<Response> answer = ArgumentCaptor.forClass(Response.class);
+    verify(request).abortWith(answer.capture());
+    assertEquals(400, answer.getValue().getStatus());
+    assertEquals(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT, answer.getValue().getEntity());
+    assertEquals(MediaType.TEXT_PLAIN_TYPE, answer.getValue().getMediaType());
+    assertFalse(
+        answer.getValue().getEntity().toString().contains(refusedValue), "the value is not echoed");
+    verify(request, never()).setProperty(anyString(), any());
+    assertNull(holder.context(), "no context is published");
+  }
+
+  @Test
+  void aReservedCorrelationId_isAnswered400() {
+    for (String reserved :
+        List.of("streamrune:saga:order-saga-42", "streamrune:", "streamrune:anything")) {
+      var holder = new StreamRuneRequestContextHolder();
+      assertAnswered400(
+          anonymousFilter(holder), holder, requestWith("X-Correlation-Id", reserved), reserved);
+      assertAnswered400(
+          new StreamRuneRequestFilter(holder, Set.of(), RequestIdentityPolicy.of(null, true), null),
+          holder,
+          requestWith("X-Correlation-Id", reserved),
+          reserved);
+      assertAnswered400(
+          new StreamRuneRequestFilter(
+              holder,
+              Set.of(),
+              RequestIdentityPolicy.of(() -> Optional.of(UserId.of("bob")), false),
+              null),
+          holder,
+          requestWith("X-Correlation-Id", reserved),
+          reserved);
+    }
+  }
+
+  @Test
+  void aCorrelationIdThatIsNotInTheReservedForm_isKeptAsSent() {
+    for (String ordinary :
+        List.of(
+            "order-saga-42",
+            "saga:order-saga-42",
+            "Streamrune:saga:order-saga-42",
+            "streamrune",
+            "upstream/streamrune:saga:order-saga-42",
+            "c".repeat(255))) {
+      var holder = new StreamRuneRequestContextHolder();
+      ContainerRequestContext request = requestWith("X-Correlation-Id", ordinary);
+
+      anonymousFilter(holder).filter(request);
+
+      verify(request, never()).abortWith(any());
+      assertEquals(ordinary, holder.context().correlationId().value());
+    }
+  }
+
+  @Test
+  void aTraceIdWithTheReservedPrefix_isKeptAsSent() {
+    var holder = new StreamRuneRequestContextHolder();
+
+    anonymousFilter(holder).filter(requestWith("X-Trace-Id", "streamrune:saga:order-saga-42"));
+
+    assertEquals("streamrune:saga:order-saga-42", holder.context().traceId().value());
+  }
+
+  @Test
+  void anOverlongCorrelationId_isAnswered400() {
+    String overlong = "c".repeat(256);
+    var holder = new StreamRuneRequestContextHolder();
+
+    assertAnswered400(
+        anonymousFilter(holder), holder, requestWith("X-Correlation-Id", overlong), overlong);
+    assertAnswered400(
+        anonymousFilter(holder), holder, requestWith("X-Trace-Id", overlong), overlong);
+  }
+
+  @Test
+  void aControlCharacterInTheTraceId_isAnswered400() {
+    var holder = new StreamRuneRequestContextHolder();
+
+    assertAnswered400(
+        anonymousFilter(holder),
+        holder,
+        requestWith("X-Trace-Id", "trace" + (char) 0x01),
+        "trace" + (char) 0x01);
+    assertAnswered400(
+        anonymousFilter(holder),
+        holder,
+        requestWith("X-Correlation-Id", "corr\r\nX-Injected: 1"),
+        "X-Injected");
+  }
+
+  /**
+   * The identity crosses the same door. Both arms are covered — the header arm ({@code
+   * trust-user-id-header=true}, the trusted-gateway mode) and the authenticated-principal arm,
+   * whose value is whatever the IdP asserted and is therefore neither automatically bounded nor
+   * charset-safe. An identity over 255 characters cannot be written to {@code
+   * dead_letter_queue.user_id VARCHAR(255)} at all, and the bus catches and logs that INSERT
    * failure — so accepting the request would leave an accepted command with no recovery channel and
-   * no signal. Identical rejection on Spring and Micronaut.
+   * no signal. Identical on Spring and Micronaut.
    */
   @Test
-  void anOversizedOrControlBearingUserIdIsRejectedAtTheRequestEdge() {
+  void anOverlongUserId_isAnswered400() {
     var holder = new StreamRuneRequestContextHolder();
 
     // Header-identity arm: the trusted-gateway mode, the only one that reads the header.
@@ -104,26 +196,59 @@ class StreamRuneRequestFilterTest {
         new StreamRuneRequestFilter(holder, Set.of(), RequestIdentityPolicy.of(null, true), null);
     ContainerRequestContext oversized = mock(ContainerRequestContext.class);
     when(oversized.getHeaders()).thenReturn(TestRequestHeaders.userIdHeader("u".repeat(256)));
-    assertThrows(IllegalArgumentException.class, () -> headerFilter.filter(oversized));
+    assertAnswered400(headerFilter, holder, oversized, "u".repeat(256));
 
     ContainerRequestContext forged = mock(ContainerRequestContext.class);
     when(forged.getHeaders()).thenReturn(TestRequestHeaders.userIdHeader("alice\r\nadmin"));
-    assertThrows(IllegalArgumentException.class, () -> headerFilter.filter(forged));
+    assertAnswered400(headerFilter, holder, forged, "admin");
 
     // Authenticated-principal arm: "already authenticated" is not "bounded".
     AuthenticatedUserResolver oversizedPrincipal = () -> Optional.of(UserId.of("p".repeat(256)));
     var principalFilter =
         new StreamRuneRequestFilter(
             holder, Set.of(), RequestIdentityPolicy.of(oversizedPrincipal, false), null);
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> principalFilter.filter(mock(ContainerRequestContext.class)));
+    assertAnswered400(
+        principalFilter, holder, mock(ContainerRequestContext.class), "p".repeat(256));
 
     // At the bound it is accepted — the ceiling is the DLQ column width, not a style preference.
     ContainerRequestContext atBound = mock(ContainerRequestContext.class);
     when(atBound.getHeaders()).thenReturn(TestRequestHeaders.userIdHeader("u".repeat(255)));
     headerFilter.filter(atBound);
     assertEquals(255, holder.context().userId().value().length());
+  }
+
+  /**
+   * Only the door's refusal is answered {@code 400}. An {@link IllegalArgumentException} of the
+   * application's identity resolver is not a refused header and leaves the filter as it is.
+   */
+  @Test
+  void anIllegalArgumentExceptionOfTheIdentityResolver_isNotAnswered400() {
+    var resolverFailure = new IllegalArgumentException("the resolver's own failure");
+    AuthenticatedUserResolver failing =
+        () -> {
+          throw resolverFailure;
+        };
+    var holder = new StreamRuneRequestContextHolder();
+    var filter =
+        new StreamRuneRequestFilter(
+            holder, Set.of(), RequestIdentityPolicy.of(failing, false), null);
+    ContainerRequestContext request = mock(ContainerRequestContext.class);
+
+    assertSame(
+        resolverFailure,
+        assertThrows(IllegalArgumentException.class, () -> filter.filter(request)));
+    verify(request, never()).abortWith(any());
+  }
+
+  @Test
+  void theStaticBuildContext_throwsForADirectCaller() {
+    // The package-private helpers build a context for a caller that is not the filter; a refusal
+    // reaches that caller as the exception.
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            StreamRuneRequestFilter.buildContext(
+                headers(Map.of("X-Correlation-Id", "streamrune:saga:order-saga-42"))));
   }
 
   @Test

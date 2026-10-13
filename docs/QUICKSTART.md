@@ -558,7 +558,12 @@ domain events — as long as that path serializes with the `CryptoEngine`:
   `StreamRuneContext.RequestContext.fromRequest(...)`, which every request filter calls with the
   values it just read off the wire: at most 255 characters (matching the `VARCHAR(255)` columns
   they land in) and no control characters. An over-long or control-bearing id is
-  **rejected**, because a truncated identifier is a wrong identifier. *If you write your own edge
+  **rejected**, because a truncated identifier is a wrong identifier. The same door refuses a
+  correlation id that starts with `streamrune:`: that prefix is reserved for the correlation ids
+  the framework binds itself, and every other value is kept exactly as sent. The three request
+  filters answer each of these refusals with `400 Bad Request`, before any command runs —
+  [What a client controls in event metadata](guide/production.md#what-a-client-controls-in-event-metadata)
+  lists every metadata field and who can set it. *If you write your own edge
   filter, call `fromRequest` — not the constructor.* The bound is deliberately *not* enforced in
   `CorrelationId`/`TraceId` themselves: those constructors also run on the **read** path — Jackson
   rebuilds `EventMetadata` on every aggregate load, projection page and subscription delivery — so a

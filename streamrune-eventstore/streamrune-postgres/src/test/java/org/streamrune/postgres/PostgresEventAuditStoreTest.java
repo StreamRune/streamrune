@@ -155,6 +155,35 @@ class PostgresEventAuditStoreTest {
   }
 
   @Test
+  void savePersistsTheReservedCorrelationIdOfTheLongestSagaId() throws Exception {
+    // event_audit_log.correlation_id is TEXT: the 271 characters of a saga-caused event of a saga
+    // whose id is at its 255-character bound are stored whole.
+    String reserved = "streamrune:saga:" + "s".repeat(255);
+    store.save(
+        new EventAuditEntry(
+            EventId.of("evt-longest-saga"),
+            new EventType("StockReserved"),
+            TestStreams.stream("order-3"),
+            Version.initial(),
+            CommandId.of("cmd-longest-saga"),
+            CorrelationId.of(reserved),
+            null,
+            null,
+            Instant.now()));
+
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "SELECT correlation_id FROM event_audit_log WHERE event_id = ?")) {
+      ps.setString(1, "evt-longest-saga");
+      try (var rs = ps.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(reserved, rs.getString("correlation_id"));
+      }
+    }
+  }
+
+  @Test
   void savePersistsNullCausationAndUser() throws Exception {
     var entry =
         new EventAuditEntry(

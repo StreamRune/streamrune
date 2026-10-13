@@ -21,6 +21,18 @@ import com.fasterxml.jackson.annotation.JsonValue;
  * permanently unloadable rather than preventing anything. The same reasoning is why the check is
  * not in the {@code RequestContext} constructor either — that is also the DLQ-replay and
  * saga-dispatch reconstruction path. See {@link IdConstraints}.
+ *
+ * <p><b>Who sets it.</b> A caller does, for its own requests: the {@code X-Correlation-Id} header
+ * is read in every identity mode, kept verbatim, and generated when absent. It is tracing data, so
+ * nothing is addressed, authorized or deduplicated by it. The framework sets it in one case: saga
+ * dispatch binds {@code streamrune:saga:<sagaId>} ({@code SagaOrigin.correlationId()}) around every
+ * command a saga sends, and a continuation of a saga-caused event ({@code
+ * StreamRuneContext.continuing}) carries the same value on. The whole {@value
+ * IdConstraints#RESERVED_PREFIX} prefix is reserved for values the framework binds: the ingress
+ * door refuses a correlation id that starts with it ({@link IdConstraints#isReserved(String)}), and
+ * the command buses refuse a command whose bound correlation id is reserved while no saga origin is
+ * bound. This constructor accepts the prefix, as it accepts everything else already at rest. No API
+ * turns a correlation id back into a saga id.
  */
 public record CorrelationId(@JsonValue String value) {
 

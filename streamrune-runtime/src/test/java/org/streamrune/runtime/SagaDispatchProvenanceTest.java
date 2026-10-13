@@ -92,6 +92,11 @@ class SagaDispatchProvenanceTest {
   private static final SagaId SAGA = SagaId.of("order-saga-" + ORDER);
   private static final SagaType TYPE = SagaType.fromClass(State.class);
   private static final SagaOrigin ORIGIN = new SagaOrigin(TYPE, SAGA, 0);
+
+  /** The correlation id every dispatch path binds for the saga: the reserved form of its id. */
+  private static final CorrelationId RESERVED_CORRELATION_ID =
+      CorrelationId.of("streamrune:saga:order-saga-42");
+
   private static final Duration TIMEOUT = Duration.ofMinutes(5);
   private static final Duration RETRY_INTERVAL = Duration.ofSeconds(30);
   private static final Duration WINDOW = Duration.ofDays(7);
@@ -292,7 +297,7 @@ class SagaDispatchProvenanceTest {
 
   private static void assertForwardEvent(EventEnvelope produced, EventEnvelope trigger) {
     assertThat(produced.metadata().sagaOrigin()).isEqualTo(ORIGIN);
-    assertThat(produced.metadata().correlationId()).isEqualTo(CorrelationId.of(SAGA.value()));
+    assertThat(produced.metadata().correlationId()).isEqualTo(RESERVED_CORRELATION_ID);
     assertThat(produced.metadata().causationId())
         .isEqualTo(CausationId.of(trigger.metadata().eventId().value()));
   }
@@ -300,7 +305,7 @@ class SagaDispatchProvenanceTest {
   /** A compensation event of an episode that {@code opening} opened. */
   private static void assertCompensationEvent(EventEnvelope produced, EventEnvelope opening) {
     assertThat(produced.metadata().sagaOrigin()).isEqualTo(ORIGIN);
-    assertThat(produced.metadata().correlationId()).isEqualTo(CorrelationId.of(SAGA.value()));
+    assertThat(produced.metadata().correlationId()).isEqualTo(RESERVED_CORRELATION_ID);
     assertThat(produced.metadata().causationId())
         .isEqualTo(CausationId.of(opening.metadata().eventId().value()));
   }
@@ -308,7 +313,7 @@ class SagaDispatchProvenanceTest {
   /** A compensation event of an episode opened with no event in hand. */
   private static void assertCompensationEventWithoutACause(EventEnvelope produced) {
     assertThat(produced.metadata().sagaOrigin()).isEqualTo(ORIGIN);
-    assertThat(produced.metadata().correlationId()).isEqualTo(CorrelationId.of(SAGA.value()));
+    assertThat(produced.metadata().correlationId()).isEqualTo(RESERVED_CORRELATION_ID);
     assertThat(produced.metadata().causationId()).isNull();
   }
 

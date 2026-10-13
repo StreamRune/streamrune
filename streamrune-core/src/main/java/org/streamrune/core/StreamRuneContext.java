@@ -111,7 +111,8 @@ public final class StreamRuneContext {
    *
    * <ul>
    *   <li>the correlation id and the trace id, unchanged: one business flow keeps one correlation
-   *       id and one trace;
+   *       id and one trace. For an event a saga caused that is the saga's reserved correlation id
+   *       ({@link SagaOrigin#correlationId()}), which only this method and saga dispatch bind;
    *   <li>the causing event's id, as the causation id ({@link EventMetadata#causationId()});
    *   <li>the causing event's saga origin, one hop further ({@link SagaOrigin#nextHop()}), or no
    *       origin when the causing event carries none.
@@ -135,7 +136,10 @@ public final class StreamRuneContext {
    * for an envelope read from the event store, which is what a subscription delivers: the command
    * bus wrote that metadata. An envelope built by hand, or from request data, carries whatever
    * origin, causation id and correlation id its author wrote, and the framework vouches for none of
-   * it.
+   * it. Two combinations no command bus writes are settled at the bus: for an event with an origin
+   * and another correlation id, the events of the command carry the origin's correlation id; for an
+   * event with a reserved correlation id and no origin, the bus refuses the command with an {@link
+   * IllegalArgumentException}.
    *
    * <p><b>A failure belongs to the caller.</b> While the bound cause carries a saga origin, {@code
    * VirtualThreadCommandBus} publishes a failed command to no dead letter queue: a dead-letter
@@ -217,7 +221,10 @@ public final class StreamRuneContext {
    * bound.
    *
    * <p>For crossing async boundaries prefer {@link #wrap(Runnable)} / {@link #wrap(Callable)},
-   * which capture and re-bind in one step.
+   * which capture and re-bind in one step, and carry the {@link DispatchCause} with the context. A
+   * context captured here inside a saga's dispatch, or inside a continuation of a saga-caused
+   * event, holds a reserved correlation id; rebound on another thread without the cause, it makes
+   * the command bus refuse the commands executed under it.
    */
   public static RequestContext capture() {
     return CURRENT.isBound() ? CURRENT.get() : null;
@@ -345,6 +352,10 @@ public final class StreamRuneContext {
       //
       // The bound lives on the ingress DOOR instead — RequestContext#fromRequest, which every
       // framework request filter calls with the values it just read off the wire (IdConstraints).
+      //
+      // The reserved correlation prefix is a rule of that door for the same reason: saga dispatch
+      // builds its context here with the reserved form of the saga id, and continuing() copies a
+      // stored event's correlation id through here. Checked here, a saga could dispatch nothing.
 
       // The value policy is enforced HERE, not only in
       // BaggageAllowlist.filter. filter() is the shared key-allowlist choke point the three
@@ -396,16 +407,38 @@ public final class StreamRuneContext {
      * user's, which is an authorization decision made on a value nobody chose. Rejection surfaces
      * at the filter as a client error, before any command is dispatched or any event is written.
      *
+     * <p><b>The reserved correlation prefix.</b> A correlation id that starts with {@value
+     * IdConstraints#RESERVED_PREFIX} is refused here as well ({@link IdConstraints#isReserved}; an
+     * exact, case-sensitive prefix match). That form is the framework's own: saga dispatch binds
+     * {@code streamrune:saga:<sagaId>} around a saga's commands ({@link
+     * SagaOrigin#correlationId()}), and {@link StreamRuneContext#continuing(EventEnvelope)}
+     * inherits it from a saga-caused event. A request that sends it — a client, or an upstream
+     * service forwarding the correlation id it read from a saga-caused event — is refused; an
+     * upstream sends an id of its own. Every other value within the bound is kept verbatim, so an
+     * upstream's correlation ids keep tracing across services. The prefix is reserved for the
+     * correlation id only: a trace id, a user id and a baggage value may start with it.
+     *
      * <p><b>Use this, not the constructor, whenever the id values are attacker-controlled</b> — all
      * three shipped request filters do, and an application that writes its own edge filter must
-     * too. The plain constructor deliberately does not run the check because it is also the
-     * <em>reconstruction</em> path for values already at rest (DLQ replay, saga dispatch); see the
-     * comment on the compact constructor above and {@link IdConstraints} for the full argument.
+     * too. The plain constructor deliberately runs none of these checks because it is also the
+     * <em>reconstruction</em> path for values already at rest (DLQ replay, saga dispatch, a
+     * continuation); see the comment on the compact constructor above and {@link IdConstraints} for
+     * the full argument. An ingress that builds its context with the constructor from values it
+     * read off the wire therefore admits an unbounded id, a control character and the reserved
+     * prefix. For the prefix both shipped command buses are a second door: they refuse a command
+     * whose bound correlation id is reserved while no saga origin is bound, before any interceptor
+     * runs and before anything is stored, so such a request fails at its first command with an
+     * {@link IllegalArgumentException} the application maps itself. An ingress that neither calls
+     * this method nor executes its commands through a shipped bus — it appends to the event store
+     * directly, or uses a command bus of its own — can store a reserved correlation id on an event
+     * that carries no saga origin. No framework decision reads a correlation id, so that matters to
+     * application code that keys on correlation ids, which it should not.
      *
      * <p>Rejecting rather than truncating is deliberate (see {@link IdConstraints}): a caller
      * sending a 4 KB "id" is not making a typo, and a truncated identifier is a wrong identifier.
      * The resulting {@link IllegalArgumentException} surfaces at the filter, before any command is
-     * dispatched or any event is written.
+     * dispatched or any event is written; the three shipped request filters answer it with {@code
+     * 400 Bad Request}.
      *
      * @param traceId the trace id read from the request, or {@code null} when absent
      * @param userId the resolved caller, or {@code null} when anonymous
@@ -415,7 +448,9 @@ public final class StreamRuneContext {
      * @param baggage request baggage; sanitized and copied like any other context
      * @return a validated context carrying no captured authority
      * @throws IllegalArgumentException if any of the correlation id, trace id or user id exceeds
-     *     {@link IdConstraints#MAX_LENGTH} or contains a Unicode control character
+     *     {@link IdConstraints#MAX_LENGTH} or contains a Unicode control character, or if the
+     *     correlation id starts with the reserved prefix; the message names the field and never
+     *     echoes the value
      */
     public static RequestContext fromRequest(
         TraceId traceId,
@@ -432,6 +467,13 @@ public final class StreamRuneContext {
       // which is the only point at which stopping it accomplishes anything.
       if (correlationId != null) {
         IdConstraints.requireBoundedAndPrintable(correlationId.value(), "correlationId");
+        // The reserved prefix marks a correlation id the framework itself bound (saga dispatch, and
+        // a continuation of a saga-caused event). A request never supplies one. The value is not
+        // echoed, like the two refusals above.
+        if (IdConstraints.isReserved(correlationId.value())) {
+          throw new IllegalArgumentException(
+              "correlationId uses the reserved '" + IdConstraints.RESERVED_PREFIX + "' prefix");
+        }
       }
       if (traceId != null) {
         IdConstraints.requireBoundedAndPrintable(traceId.value(), "traceId");
@@ -457,7 +499,8 @@ public final class StreamRuneContext {
      * Convenience constructor for a context that carries no captured {@link #authority()}.
      * Authorization then resolves through the configured {@link UserRoleResolver} when the decision
      * is made. Like the canonical constructor, it does not run {@link #fromRequest}'s ingress
-     * check.
+     * checks: it accepts an id of any length, a control character and a correlation id with the
+     * reserved prefix. Build a context from request input with {@link #fromRequest}.
      */
     public RequestContext(
         TraceId traceId,

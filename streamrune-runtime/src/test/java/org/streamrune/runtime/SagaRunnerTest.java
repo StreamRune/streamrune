@@ -1018,7 +1018,7 @@ class SagaRunnerTest {
   // ========== Correlation propagation ==========
 
   @Test
-  void dispatched_command_runs_under_context_with_correlation_id_equal_to_saga_id() {
+  void dispatched_command_runs_under_context_with_the_reserved_correlation_id_of_the_saga() {
     var capturingBus = new ContextCapturingCommandBus();
     var correlatingRunner =
         SagaRunner.<OrderState>builder()
@@ -1034,8 +1034,8 @@ class SagaRunnerTest {
     assertEquals(1, capturingBus.contexts.size());
     RequestContext ctx = capturingBus.contexts.get(0);
     assertNotNull(ctx, "the saga runner must bind a request context around the command bus");
-    // correlationId == sagaId.value(); the saga id is "saga-" + orderId (see extractSagaId).
-    assertEquals("saga-order-1", ctx.correlationId().value());
+    // The reserved form of the saga id; the saga id is "saga-" + orderId (see extractSagaId).
+    assertEquals("streamrune:saga:saga-order-1", ctx.correlationId().value());
   }
 
   @Test
@@ -1064,8 +1064,8 @@ class SagaRunnerTest {
     assertEquals(1, capturingBus.contexts.size());
     RequestContext ctx = capturingBus.contexts.get(0);
     assertNotNull(ctx);
-    // correlation id is overridden to the saga id...
-    assertEquals("saga-order-7", ctx.correlationId().value());
+    // correlation id is overridden to the reserved form of the saga id...
+    assertEquals("streamrune:saga:saga-order-7", ctx.correlationId().value());
     // ...while ambient trace / user / baggage are preserved.
     assertNotNull(ctx.traceId());
     assertEquals("trace-ambient", ctx.traceId().value());
@@ -1098,7 +1098,7 @@ class SagaRunnerTest {
     // Both the primary and the compensation ran under the saga-correlated context.
     for (RequestContext ctx : capturingBus.contexts) {
       assertNotNull(ctx, "every dispatch (primary + compensation) must bind a context");
-      assertEquals("saga-order-8", ctx.correlationId().value());
+      assertEquals("streamrune:saga:saga-order-8", ctx.correlationId().value());
     }
   }
 }

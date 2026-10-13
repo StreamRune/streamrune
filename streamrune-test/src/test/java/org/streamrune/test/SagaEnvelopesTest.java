@@ -38,7 +38,8 @@ class SagaEnvelopesTest {
 
     assertEquals(
         new SagaOrigin(SagaType.fromClass(State.class), SAGA_ID, 0), metadata.sagaOrigin());
-    assertEquals(CorrelationId.of("order-saga-42"), metadata.correlationId());
+    assertEquals(CorrelationId.of("streamrune:saga:order-saga-42"), metadata.correlationId());
+    assertEquals(metadata.sagaOrigin().correlationId(), metadata.correlationId());
     assertNotNull(metadata.eventId());
     assertNotNull(metadata.commandId());
     assertNotNull(metadata.timestamp());
@@ -66,6 +67,7 @@ class SagaEnvelopesTest {
     assertEquals(
         SagaOrigin.dispatchedBy(SagaType.fromClass(State.class), SAGA_ID),
         envelope.metadata().sagaOrigin());
-    assertEquals(CorrelationId.of("order-saga-42"), envelope.metadata().correlationId());
+    assertEquals(
+        CorrelationId.of("streamrune:saga:order-saga-42"), envelope.metadata().correlationId());
   }
 }

@@ -420,7 +420,7 @@ class SagaCompensationCausationTest {
   private static List<Provenance> compensationCausedBy(EventEnvelope opening) {
     CausationId cause =
         opening == null ? null : CausationId.of(opening.metadata().eventId().value());
-    CorrelationId correlation = CorrelationId.of(SAGA.value());
+    CorrelationId correlation = CorrelationId.of("streamrune:saga:" + SAGA.value());
     return List.of(
         new Provenance("Refunded", ORIGIN, cause, correlation),
         new Provenance("Released", ORIGIN, cause, correlation));

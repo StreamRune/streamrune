@@ -28,6 +28,7 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.IdConstraints;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
@@ -41,10 +42,13 @@ import org.streamrune.core.types.Version;
  * false-green), and appending resulting events back to the store.
  *
  * <p>Event metadata follows the same topology as {@code VirtualThreadCommandBus}: all events of one
- * command share a single correlation id (taken from {@link StreamRuneContext} when bound, generated
- * otherwise), the saga origin and the causation id come from the bound {@link
- * StreamRuneContext#CAUSE} and from nowhere else (with none bound an event carries neither), and
- * envelope versions match what the store persists.
+ * command share a single correlation id (the bound saga origin's reserved one when an origin is
+ * bound, otherwise taken from {@link StreamRuneContext} when bound, generated otherwise), the saga
+ * origin and the causation id come from the bound {@link StreamRuneContext#CAUSE} and from nowhere
+ * else (with none bound an event carries neither), and envelope versions match what the store
+ * persists. A command whose bound correlation id has the reserved {@code streamrune:} prefix while
+ * no saga origin is bound is refused with an {@link IllegalArgumentException} before its decider is
+ * looked up, as the production bus refuses it.
  *
  * <p>This bus has no dead letter queue, so a failed command propagates to its caller and nothing
  * else happens — for a command that carries a saga origin exactly what {@code
@@ -138,6 +142,7 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
     if (closed) {
       throw new IllegalStateException("CommandBus has been closed");
     }
+    requireNoForeignReservedCorrelationId();
 
     Class<?> commandType = command.getClass();
     Decider<C, ?, DomainEvent> decider = (Decider<C, ?, DomainEvent>) deciders.get(commandType);
@@ -236,11 +241,43 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
     return decider.evolve((S) state, (E) event);
   }
 
+  /**
+   * The correlation id of the events the command in progress produces, as {@code
+   * VirtualThreadCommandBus} chooses it: the bound saga origin's ({@link
+   * SagaOrigin#correlationId()}) when one is bound, otherwise the bound context's, otherwise a
+   * generated one.
+   */
   private static CorrelationId correlationId() {
+    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
+    if (cause != null && cause.sagaOrigin() != null) {
+      return cause.sagaOrigin().correlationId();
+    }
     if (StreamRuneContext.CURRENT.isBound()) {
       return StreamRuneContext.CURRENT.get().correlationId();
     }
     return IdGenerator.generateCorrelationId();
+  }
+
+  /**
+   * Refuses the command in progress when the bound correlation id is in the reserved form ({@link
+   * IdConstraints#isReserved(String)}) and no saga origin is bound, as {@code
+   * VirtualThreadCommandBus} does: only saga dispatch and {@link
+   * StreamRuneContext#continuing(EventEnvelope)} bind a reserved correlation id, and they bind the
+   * origin with it. A test that copies a saga-caused event's correlation id into a context of its
+   * own fails here as it would in production.
+   */
+  private static void requireNoForeignReservedCorrelationId() {
+    if (!StreamRuneContext.CURRENT.isBound()
+        || !IdConstraints.isReserved(StreamRuneContext.CURRENT.get().correlationId().value())) {
+      return;
+    }
+    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
+    if (cause == null || cause.sagaOrigin() == null) {
+      throw new IllegalArgumentException(
+          "the bound correlation id uses the reserved '"
+              + IdConstraints.RESERVED_PREFIX
+              + "' prefix; only a saga dispatch or StreamRuneContext.continuing binds it");
+    }
   }
 
   /**

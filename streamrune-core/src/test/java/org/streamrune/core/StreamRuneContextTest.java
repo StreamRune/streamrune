@@ -471,6 +471,101 @@ class StreamRuneContextTest {
                 null, null, CorrelationId.of("corr-1"), null, Map.of()));
   }
 
+  // ==== The reserved correlation prefix ====
+
+  @Test
+  void fromRequest_refusesAReservedCorrelationId_withoutEchoingIt() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                StreamRuneContext.RequestContext.fromRequest(
+                    null, null, CorrelationId.of("streamrune:saga:victim"), NOW, Map.of()));
+
+    assertEquals("correlationId uses the reserved 'streamrune:' prefix", ex.getMessage());
+    assertFalse(ex.getMessage().contains("victim"), "the refused value is not echoed");
+  }
+
+  @Test
+  void fromRequest_refusesEveryValueWithThePrefix_notOnlyTheSagaForm() {
+    for (String reserved : new String[] {"streamrune:", "streamrune:x", "streamrune:saga:"}) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              StreamRuneContext.RequestContext.fromRequest(
+                  null, null, CorrelationId.of(reserved), NOW, Map.of()),
+          reserved);
+    }
+  }
+
+  @Test
+  void fromRequest_keepsACorrelationIdThatMerelyResemblesTheReservedForm() {
+    // The check is an exact, case-sensitive prefix match: a bare saga id, another case, the word
+    // without its colon and the prefix further inside the value are an upstream's own ids.
+    for (String ordinary :
+        new String[] {
+          "order-saga-42",
+          "saga:order-saga-42",
+          "Streamrune:saga:order-saga-42",
+          "STREAMRUNE:saga:order-saga-42",
+          "streamrune",
+          "streamrune-saga-order-saga-42",
+          "upstream/streamrune:saga:order-saga-42"
+        }) {
+      var ctx =
+          StreamRuneContext.RequestContext.fromRequest(
+              null, null, CorrelationId.of(ordinary), NOW, Map.of());
+      assertEquals(ordinary, ctx.correlationId().value(), "kept verbatim");
+    }
+  }
+
+  @Test
+  void fromRequest_reportsTheLengthAndTheCharsetBeforeThePrefix() {
+    // An over-long or control-bearing value that also starts with the prefix is refused either
+    // way; which message it gets is pinned so the three refusals stay three distinct statements.
+    assertEquals(
+        "correlationId must be at most 255 characters, got 300",
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                    StreamRuneContext.RequestContext.fromRequest(
+                        null,
+                        null,
+                        CorrelationId.of("streamrune:" + "c".repeat(289)),
+                        NOW,
+                        Map.of()))
+            .getMessage());
+  }
+
+  @Test
+  void fromRequest_acceptsATraceIdWithThePrefix() {
+    // The prefix is reserved for correlation ids. A trace id is tracing data with no reserved form.
+    var ctx =
+        StreamRuneContext.RequestContext.fromRequest(
+            TraceId.of("streamrune:saga:victim"),
+            UserId.of("streamrune:saga:victim"),
+            CorrelationId.of("corr-1"),
+            NOW,
+            Map.of("tenant", "streamrune:saga:victim"));
+
+    assertEquals("streamrune:saga:victim", ctx.traceId().value());
+    assertEquals("streamrune:saga:victim", ctx.userId().value());
+    assertEquals("streamrune:saga:victim", ctx.baggage().get("tenant"));
+  }
+
+  @Test
+  void theConstructorAcceptsAReservedCorrelationId() {
+    // The reconstruction door: saga dispatch builds its context here, and StreamRuneContext
+    // .continuing copies a stored event's correlation id through it.
+    var reserved = CorrelationId.of("streamrune:saga:victim");
+
+    var ctx = new StreamRuneContext.RequestContext(null, null, reserved, NOW, Map.of());
+    var withAuthority = ctx.withAuthority(new UserAuthority(Set.of("ADMIN"), Set.of()));
+
+    assertEquals(reserved, ctx.correlationId());
+    assertEquals(reserved, withAuthority.correlationId());
+  }
+
   // ==== The cause of the dispatch in progress ====
 
   private static final SagaOrigin ORIGIN =
@@ -776,11 +871,18 @@ class StreamRuneContextTest {
             });
 
     EventEnvelope sagaCaused = sagaCausedEvent();
+    assertEquals(
+        CorrelationId.of("streamrune:saga:order-saga-42"), sagaCaused.metadata().correlationId());
     StreamRuneContext.continuing(sagaCaused)
         .run(
             () -> {
               StreamRuneContext.RequestContext context = StreamRuneContext.capture();
-              assertEquals(sagaCaused.metadata().correlationId(), context.correlationId());
+              assertEquals(
+                  CorrelationId.of("streamrune:saga:order-saga-42"),
+                  context.correlationId(),
+                  "a continuation of a saga-caused event binds the reserved form it inherits");
+              assertEquals(
+                  StreamRuneContext.cause().sagaOrigin().correlationId(), context.correlationId());
               assertNull(context.traceId());
             });
   }

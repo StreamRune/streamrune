@@ -4,6 +4,8 @@ import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 import java.time.Instant;
 import java.util.HashMap;
@@ -93,6 +95,17 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * no baggage entry is ({@link BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty). Non-allowlisted
  * keys are dropped here, before they ever reach {@code RequestContext} or {@code EventMetadata};
  * {@code role} is the role rule's alone (above).
+ *
+ * <p><b>A refused request context.</b> The correlation id, the trace id and the user id pass
+ * through {@link StreamRuneContext.RequestContext#fromRequest}, which refuses a value longer than
+ * 255 characters, a value that holds a control character, and a correlation id that starts with
+ * {@code streamrune:} — the prefix of the correlation ids the framework itself binds for a saga's
+ * commands. The filter aborts such a request with {@code 400 Bad Request} and the plain-text body
+ * {@link RequestIdentityPolicy#REFUSED_REQUEST_CONTEXT}: the resource method does not run, and
+ * neither the {@link StreamRuneRequestContextHolder} nor the {@link #CONTEXT_PROPERTY} is set. The
+ * refused value is neither echoed nor logged. Any other correlation id is kept exactly as the
+ * client sent it. The correlation id, the trace id and the baggage are caller-supplied in every
+ * identity mode; nothing may be addressed, authorized or deduplicated by them.
  *
  * <p><b>What a request cannot set.</b> This filter builds a request context and nothing else. It
  * does not bind {@link StreamRuneContext#CAUSE}, so no header and no baggage entry, allowlisted or
@@ -188,7 +201,23 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
         identityPolicy.applyRole(
             BaggageAllowlist.filter(readOtelBaggage(), extraAllowedBaggageKeys),
             headerValues(requestContext, RequestIdentityPolicy.USER_ROLE_HEADER));
-    var ctx = buildContext(requestContext::getHeaderString, baggage, userId);
+    StreamRuneContext.RequestContext ctx;
+    try {
+      ctx = buildContext(requestContext::getHeaderString, baggage, userId);
+    } catch (IllegalArgumentException refused) {
+      // The ingress door refused an id: too long, a control character, or a correlation id with
+      // the reserved prefix. That is the client's error, answered here before the resource method
+      // runs; the holder and the request property stay unset. The identity and the baggage were
+      // resolved above, outside this try, so a failure of theirs is not answered as a refusal. The
+      // message names the field and never the value; the value itself is not logged.
+      logger.debug("Refusing the request with 400: {}", refused.getMessage());
+      requestContext.abortWith(
+          Response.status(Response.Status.BAD_REQUEST)
+              .type(MediaType.TEXT_PLAIN_TYPE)
+              .entity(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT)
+              .build());
+      return;
+    }
     // Resolve the caller's authorities HERE, while the CDI request
     // scope holding SecurityIdentity is still active, and store the result on the context object
     // itself. That object is the ONLY thing this integration can carry across the boundary — a

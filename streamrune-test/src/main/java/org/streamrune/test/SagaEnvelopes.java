@@ -9,7 +9,6 @@ import org.streamrune.core.IdGenerator;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaState;
-import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.SagaType;
@@ -30,8 +29,9 @@ public final class SagaEnvelopes {
 
   /**
    * Metadata of an event produced by a command the saga dispatched itself: the saga's origin at hop
-   * 0, the correlation id saga dispatch binds (the saga id), generated event and command ids, the
-   * current instant, and no trace, user, causation id or baggage.
+   * 0, the correlation id saga dispatch binds (the origin's, {@code streamrune:saga:<sagaId>}),
+   * generated event and command ids, the current instant, and no trace, user, causation id or
+   * baggage.
    *
    * @param stateType the saga's state class; its saga type is derived as the runners derive it
    * @param sagaId the dispatching saga instance
@@ -39,17 +39,18 @@ public final class SagaEnvelopes {
    */
   public static EventMetadata metadataCausedBy(
       Class<? extends SagaState> stateType, SagaId sagaId) {
+    SagaOrigin origin = SagaOrigin.dispatchedBy(SagaType.fromClass(stateType), sagaId);
     return new EventMetadata(
         IdGenerator.generateEventId(),
         IdGenerator.generateCommandId(),
         null,
         null,
-        CorrelationId.of(sagaId.value()),
+        origin.correlationId(),
         null,
         null,
         Instant.now(),
         Map.of(),
-        SagaOrigin.dispatchedBy(SagaType.fromClass(stateType), sagaId));
+        origin);
   }
 
   /**

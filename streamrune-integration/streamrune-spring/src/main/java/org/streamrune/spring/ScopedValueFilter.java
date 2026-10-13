@@ -6,6 +6,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Collections;
@@ -86,6 +87,18 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty). Non-allowlisted keys are dropped here, before
  * they ever reach {@code RequestContext} or {@code EventMetadata}; {@code role} is the role rule's
  * alone (above).
+ *
+ * <p><b>A refused request context.</b> The correlation id, the trace id and the user id pass
+ * through {@link StreamRuneContext.RequestContext#fromRequest}, which refuses a value longer than
+ * 255 characters, a value that holds a control character, and a correlation id that starts with
+ * {@code streamrune:} — the prefix of the correlation ids the framework itself binds for a saga's
+ * commands. The filter answers such a request with {@code 400 Bad Request} ({@code sendError} with
+ * the reason {@link RequestIdentityPolicy#REFUSED_REQUEST_CONTEXT}, rendered by the container's or
+ * the application's error handling) and does not call the rest of the chain: no controller runs, no
+ * command is executed, nothing is stored. The refused value is neither echoed nor logged. Any other
+ * correlation id is bound exactly as the client sent it. The correlation id, the trace id and the
+ * baggage are caller-supplied in every identity mode; nothing may be addressed, authorized or
+ * deduplicated by them.
  *
  * <p><b>What a request cannot set.</b> This filter binds a request context and nothing else. It
  * does not bind {@link StreamRuneContext#CAUSE}, so no header and no baggage entry, allowlisted or
@@ -173,17 +186,28 @@ public class ScopedValueFilter implements Filter {
         identityPolicy.applyRole(
             BaggageAllowlist.filter(readOtelBaggage(), extraAllowedBaggageKeys),
             headerValues(httpReq, RequestIdentityPolicy.USER_ROLE_HEADER));
+    // Resolved before the context is built, outside the try below: a failure of the identity
+    // policy or of the application's AuthenticatedUserResolver is not a refused header.
+    UserId userId = resolveUserId(userIdHeaderValues);
     // fromRequest, not the constructor. These two ids
     // came straight off the wire unauthenticated, so this is the ingress door where the
     // IdConstraints bound applies. The plain constructor deliberately does not enforce it — it is
     // also the DLQ-replay / saga-dispatch reconstruction path for ids already at rest.
-    StreamRuneContext.RequestContext ctx =
-        StreamRuneContext.RequestContext.fromRequest(
-            TraceId.of(traceId),
-            resolveUserId(userIdHeaderValues),
-            CorrelationId.of(correlationId),
-            Instant.now(),
-            baggage);
+    StreamRuneContext.RequestContext ctx;
+    try {
+      ctx =
+          StreamRuneContext.RequestContext.fromRequest(
+              TraceId.of(traceId), userId, CorrelationId.of(correlationId), Instant.now(), baggage);
+    } catch (IllegalArgumentException refused) {
+      // The door refused an id: too long, a control character, or a correlation id with the
+      // reserved prefix. That is the client's error, answered here before the chain runs. The
+      // message names the field and never the value; the value itself is not logged.
+      logger.debug("Refusing the request with 400: {}", refused.getMessage());
+      ((HttpServletResponse) response)
+          .sendError(
+              HttpServletResponse.SC_BAD_REQUEST, RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+      return;
+    }
     // Resolve the caller's authorities HERE, while Spring
     // Security's SecurityContextHolder ThreadLocal is still populated, so a command that continues
     // off this thread (bus.executeAsync) authorizes exactly as a synchronous execute would. A

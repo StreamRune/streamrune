@@ -268,6 +268,18 @@ command bus writes it too, and from one source: the triggering event under a sag
 causing event under `StreamRuneContext.continuing` (below). No request header or baggage entry
 sets it.
 
+The correlation id is the caller's: the `X-Correlation-Id` header of the request, kept exactly as
+sent and generated when absent. A client chooses it in every identity mode, so it is tracing data
+and nothing is addressed, authorized or deduplicated by it. One form is the framework's own: an
+event that carries a saga origin carries the reserved correlation id `streamrune:saga:<sagaId>`,
+and no other event a shipped command bus stores carries a correlation id with the `streamrune:`
+prefix (`IdConstraints.RESERVED_PREFIX`; `IdConstraints.isReserved(String)` is the exact,
+case-sensitive prefix test). `RequestContext.fromRequest` refuses the prefix, the three request
+filters answer that refusal with `400 Bad Request`, and both command buses refuse a command bound
+to a reserved correlation id while no saga origin is bound. No API turns a correlation id back into
+a saga id. See
+[What a client controls in event metadata](../guide/production.md#what-a-client-controls-in-event-metadata).
+
 ### SagaOrigin
 
 `record SagaOrigin(SagaType sagaType, SagaId sagaId, int hop)` in `org.streamrune.core.saga`
@@ -290,6 +302,17 @@ no part in that. Every other event is handed to `correlateByEventData(streamId, 
 [Saga › How it works](../guide/advanced/saga.md#how-it-works).
 In a test, `SagaEnvelopes.causedBy(stateType, sagaId, streamId, event)` from `streamrune-test`
 builds an envelope that carries one.
+
+```java
+CorrelationId correlationId()   // streamrune:saga:<sagaId>
+```
+
+The reserved correlation id of the origin's saga: the `streamrune:` prefix, `saga:`, then the saga
+id verbatim. It depends on the saga id alone, so every hop of one saga's work shares it. Saga
+dispatch binds it around each command, and the command bus writes it into every event that carries
+the origin, whatever the bound request context holds. It is a derived value, not a component: the
+stored origin has the three keys `sagaType`, `sagaId` and `hop`. It can be up to 271 characters
+long, 16 more than a saga id.
 
 ### StreamRuneContext.continuing
 
@@ -319,7 +342,9 @@ command continues some stored event, and nothing about who wrote that event.
 `continuing` trusts the envelope it is given. It is meant for an envelope read from the event store
 (what a subscription delivers), whose metadata the command bus wrote. An envelope built by hand, or
 from request data, carries whatever origin, causation id and correlation id its author wrote, and
-the framework vouches for none of it.
+the framework vouches for none of it. One such envelope is refused later: for an event that holds a
+reserved correlation id and no origin — metadata no command bus writes — the continuation binds
+that id without an origin, and the command bus rejects its command with `IllegalArgumentException`.
 
 Failures:
 

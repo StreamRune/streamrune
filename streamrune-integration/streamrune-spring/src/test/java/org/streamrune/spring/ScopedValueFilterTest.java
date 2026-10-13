@@ -52,81 +52,179 @@ class ScopedValueFilterTest {
   // filter to fall back to the plain constructor, an unauthenticated header would reach
   // event_stream.metadata unbounded again.
 
-  @Test
-  void controlCharactersInAnUnauthenticatedIdHeaderAreRejectedAtTheRequestEdge() throws Exception {
-    var filter =
-        new ScopedValueFilter(Set.of(), RequestIdentityPolicy.of(Optional::empty, false), null);
-    var response = mock(HttpServletResponse.class);
-    FilterChain chain = (req, res) -> {};
+  // The filter answers a refusal of the door itself: 400 Bad Request with one fixed reason, before
+  // the chain runs.
 
-    var forgedCorrelation = mock(HttpServletRequest.class);
-    when(forgedCorrelation.getHeader("X-Correlation-Id")).thenReturn("corr\r\nX-Injected: 1");
-    assertThrows(
-        IllegalArgumentException.class, () -> filter.doFilter(forgedCorrelation, response, chain));
-
-    var forgedTrace = mock(HttpServletRequest.class);
-    when(forgedTrace.getHeader("X-Trace-Id")).thenReturn("trace" + (char) 0x01);
-    assertThrows(
-        IllegalArgumentException.class, () -> filter.doFilter(forgedTrace, response, chain));
+  private static ScopedValueFilter anonymousFilter() {
+    return new ScopedValueFilter(Set.of(), RequestIdentityPolicy.of(Optional::empty, false), null);
   }
 
-  @Test
-  void anOversizedIdHeaderIsRejectedAtTheRequestEdge() throws Exception {
-    var filter =
-        new ScopedValueFilter(Set.of(), RequestIdentityPolicy.of(Optional::empty, false), null);
-    var response = mock(HttpServletResponse.class);
-    FilterChain chain = (req, res) -> {};
-
-    var request = mock(HttpServletRequest.class);
-    when(request.getHeader("X-Correlation-Id")).thenReturn("c".repeat(256));
-    assertThrows(IllegalArgumentException.class, () -> filter.doFilter(request, response, chain));
+  /** A request that carries one header. */
+  private static MockHttpServletRequest requestWith(String header, String value) {
+    var request = new MockHttpServletRequest();
+    request.addHeader(header, value);
+    return request;
   }
 
   /**
-   * The identity crosses the same door and is now bounded there too. Both arms are covered — the
-   * header arm ({@code trust-user-id-header=true}, the trusted-gateway mode) and the
-   * authenticated-principal arm, whose value is whatever the IdP asserted and is therefore neither
-   * automatically bounded nor charset-safe. An identity over 255 characters cannot be written to
-   * {@code dead_letter_queue.user_id VARCHAR(255)} at all, and the bus catches and logs that INSERT
+   * {@code filter} answers {@code request} with {@code 400} and the shared reason, calls no chain
+   * and leaves nothing bound; the response repeats nothing of {@code refusedValue}.
+   */
+  private static void assertAnswered400(
+      ScopedValueFilter filter, HttpServletRequest request, String refusedValue) throws Exception {
+    var response = new MockHttpServletResponse();
+    var chainCalls = new ArrayList<StreamRuneContext.RequestContext>();
+    FilterChain chain = (req, res) -> chainCalls.add(StreamRuneContext.capture());
+
+    filter.doFilter(request, response, chain);
+
+    assertEquals(400, response.getStatus());
+    assertEquals(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT, response.getErrorMessage());
+    assertTrue(chainCalls.isEmpty(), "the chain is not called");
+    assertFalse(StreamRuneContext.CURRENT.isBound());
+    assertFalse(response.getErrorMessage().contains(refusedValue), "the value is not echoed");
+    assertEquals("", response.getContentAsString());
+  }
+
+  @Test
+  void aReservedCorrelationId_isAnswered400() throws Exception {
+    for (String reserved :
+        List.of("streamrune:saga:order-saga-42", "streamrune:", "streamrune:anything")) {
+      assertAnswered400(anonymousFilter(), requestWith("X-Correlation-Id", reserved), reserved);
+      assertAnswered400(
+          new ScopedValueFilter(Set.of(), RequestIdentityPolicy.of(null, true), null),
+          requestWith("X-Correlation-Id", reserved),
+          reserved);
+      assertAnswered400(
+          new ScopedValueFilter(
+              Set.of(), RequestIdentityPolicy.of(() -> Optional.of(UserId.of("bob")), false), null),
+          requestWith("X-Correlation-Id", reserved),
+          reserved);
+    }
+  }
+
+  @Test
+  void aCorrelationIdThatIsNotInTheReservedForm_isBoundAsSent() throws Exception {
+    for (String ordinary :
+        List.of(
+            "order-saga-42",
+            "saga:order-saga-42",
+            "Streamrune:saga:order-saga-42",
+            "streamrune",
+            "upstream/streamrune:saga:order-saga-42",
+            "c".repeat(255))) {
+      var bound = new AtomicReference<StreamRuneContext.RequestContext>();
+      var response = new MockHttpServletResponse();
+
+      anonymousFilter()
+          .doFilter(
+              requestWith("X-Correlation-Id", ordinary),
+              response,
+              (req, res) -> bound.set(StreamRuneContext.CURRENT.get()));
+
+      assertEquals(200, response.getStatus());
+      assertEquals(ordinary, bound.get().correlationId().value());
+    }
+  }
+
+  @Test
+  void aTraceIdWithTheReservedPrefix_isBoundAsSent() throws Exception {
+    var bound = new AtomicReference<StreamRuneContext.RequestContext>();
+
+    anonymousFilter()
+        .doFilter(
+            requestWith("X-Trace-Id", "streamrune:saga:order-saga-42"),
+            new MockHttpServletResponse(),
+            (req, res) -> bound.set(StreamRuneContext.CURRENT.get()));
+
+    assertEquals("streamrune:saga:order-saga-42", bound.get().traceId().value());
+  }
+
+  @Test
+  void anOverlongCorrelationId_isAnswered400() throws Exception {
+    String overlong = "c".repeat(256);
+
+    assertAnswered400(anonymousFilter(), requestWith("X-Correlation-Id", overlong), overlong);
+    assertAnswered400(anonymousFilter(), requestWith("X-Trace-Id", overlong), overlong);
+  }
+
+  @Test
+  void aControlCharacterInTheTraceId_isAnswered400() throws Exception {
+    assertAnswered400(
+        anonymousFilter(), requestWith("X-Trace-Id", "trace" + (char) 0x01), "trace" + (char) 0x01);
+    assertAnswered400(
+        anonymousFilter(), requestWith("X-Correlation-Id", "corr\r\nX-Injected: 1"), "X-Injected");
+  }
+
+  /**
+   * The identity crosses the same door. Both arms are covered — the header arm ({@code
+   * trust-user-id-header=true}, the trusted-gateway mode) and the authenticated-principal arm,
+   * whose value is whatever the IdP asserted and is therefore neither automatically bounded nor
+   * charset-safe. An identity over 255 characters cannot be written to {@code
+   * dead_letter_queue.user_id VARCHAR(255)} at all, and the bus catches and logs that INSERT
    * failure — so accepting the request would leave an accepted command with no recovery channel and
-   * no signal. Identical rejection on Quarkus and Micronaut.
+   * no signal. Identical on Quarkus and Micronaut.
    */
   @Test
-  void anOversizedOrControlBearingUserIdIsRejectedAtTheRequestEdge() throws Exception {
-    var response = mock(HttpServletResponse.class);
-    FilterChain chain = (req, res) -> {};
-
+  void anOverlongUserId_isAnswered400() throws Exception {
     // Header-identity arm: the trusted-gateway mode (the only mode that reads the header).
     var headerFilter = new ScopedValueFilter(Set.of(), RequestIdentityPolicy.of(null, true), null);
-    var oversizedHeader = mock(HttpServletRequest.class);
-    when(oversizedHeader.getHeaders("X-User-Id"))
-        .thenAnswer(invocation -> TestServletHeaders.userIdHeader("u".repeat(256)));
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> headerFilter.doFilter(oversizedHeader, response, chain));
-
-    var forgedHeader = mock(HttpServletRequest.class);
-    when(forgedHeader.getHeaders("X-User-Id"))
-        .thenAnswer(invocation -> TestServletHeaders.userIdHeader("alice\r\nadmin"));
-    assertThrows(
-        IllegalArgumentException.class, () -> headerFilter.doFilter(forgedHeader, response, chain));
+    assertAnswered400(headerFilter, requestWith("X-User-Id", "u".repeat(256)), "u".repeat(256));
+    assertAnswered400(headerFilter, requestWith("X-User-Id", "alice\r\nadmin"), "admin");
 
     // Authenticated-principal arm: "already authenticated" is not "bounded".
     AuthenticatedUserResolver oversizedPrincipal = () -> Optional.of(UserId.of("p".repeat(256)));
     var principalFilter =
         new ScopedValueFilter(Set.of(), RequestIdentityPolicy.of(oversizedPrincipal, false), null);
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> principalFilter.doFilter(mock(HttpServletRequest.class), response, chain));
+    assertAnswered400(principalFilter, new MockHttpServletRequest(), "p".repeat(256));
 
     // At the bound it is accepted — the ceiling is the DLQ column width, not a style preference.
-    var atBound = mock(HttpServletRequest.class);
-    when(atBound.getHeaders("X-User-Id"))
-        .thenAnswer(invocation -> TestServletHeaders.userIdHeader("u".repeat(255)));
     var captured = new AtomicReference<StreamRuneContext.RequestContext>();
     FilterChain capturing = (req, res) -> captured.set(StreamRuneContext.CURRENT.get());
-    headerFilter.doFilter(atBound, response, capturing);
+    headerFilter.doFilter(
+        requestWith("X-User-Id", "u".repeat(255)), new MockHttpServletResponse(), capturing);
     assertEquals(255, captured.get().userId().value().length());
+  }
+
+  /**
+   * Only the door's refusal is answered {@code 400}. An {@link IllegalArgumentException} of the
+   * application's identity resolver, or of the application behind the filter, is not a refused
+   * header and leaves the filter as it is.
+   */
+  @Test
+  void anIllegalArgumentExceptionThatIsNotTheDoors_isNotAnswered400() {
+    var resolverFailure = new IllegalArgumentException("the resolver's own failure");
+    AuthenticatedUserResolver failing =
+        () -> {
+          throw resolverFailure;
+        };
+    var failingResolverFilter =
+        new ScopedValueFilter(Set.of(), RequestIdentityPolicy.of(failing, false), null);
+    var response = new MockHttpServletResponse();
+
+    assertSame(
+        resolverFailure,
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                failingResolverFilter.doFilter(
+                    new MockHttpServletRequest(), response, (req, res) -> {})));
+    assertEquals(200, response.getStatus());
+
+    var applicationFailure = new IllegalArgumentException("the application's own failure");
+    assertSame(
+        applicationFailure,
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                anonymousFilter()
+                    .doFilter(
+                        new MockHttpServletRequest(),
+                        response,
+                        (req, res) -> {
+                          throw applicationFailure;
+                        })));
+    assertEquals(200, response.getStatus());
   }
 
   @Test

@@ -187,6 +187,16 @@ in every event's metadata, so the gateway must forward the caller's role or stri
 the other modes it is ignored and there is no `role` (an authenticated principal's roles are the
 captured authority, not baggage), and a W3C `baggage: role=` entry never reaches the key.
 
+`X-Correlation-Id`, `X-Trace-Id` and the allow-listed baggage are caller-supplied in every mode,
+the trusted-gateway mode included; nothing may be addressed, authorized or deduplicated by them.
+A correlation id is kept exactly as sent, with one exception: the `streamrune:` prefix is reserved
+for the correlation ids the framework binds itself. `ScopedValueFilter` answers
+`400 Bad Request` — `sendError` with the reason `The request's correlation id, trace id or user id
+is not acceptable`, rendered by the container's or your own error handling — to a correlation id
+with that prefix and to a correlation id, trace id or user id that is longer than 255 characters or
+holds a control character. The rest of the filter chain does not run. See
+[What a client controls in event metadata](../../docs/guide/production.md#what-a-client-controls-in-event-metadata).
+
 ```yaml
 streamrune:
   security:
@@ -211,7 +221,7 @@ or set the trusted-gateway flag. See
 |---|---|
 | `StreamRuneAutoConfiguration` | Auto-configuration class |
 | `StreamRuneProperties` | `@ConfigurationProperties` binding |
-| `ScopedValueFilter` | Propagates HTTP request metadata into `StreamRuneContext`; the user comes from `RequestIdentityPolicy` (see [Request identity](#request-identity)) |
+| `ScopedValueFilter` | Propagates HTTP request metadata into `StreamRuneContext`; the user comes from `RequestIdentityPolicy` (see [Request identity](#request-identity)); answers `400` to an id the request edge refuses |
 | `SseController` | `GET /api/sse/{aggregateType}/{aggregateId}` — live event stream of one aggregate; only with `streamrune.sse.enabled=true`, and every stream is denied until you provide an `SseAuthorizer` bean |
 | `SseEventFeed` | Publishes every event stored after the application started to the SSE endpoint's clients; registered with `SseController`, started and stopped with the application context |
 

@@ -66,7 +66,7 @@ comes from — see [Request identity](#request-identity).
 |---|---|
 | `StreamRuneMicronautModule` | Factory producing framework default beans (`@Requires(missingBeans = ...)` — application beans of the same type always win) |
 | `StreamRuneMicronautProperties` | `@ConfigurationProperties` record bound from `streamrune.*` |
-| `StreamRuneContextFilter` | HTTP filter that builds the request context — `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)) — and binds `StreamRuneContext.CURRENT` around the request |
+| `StreamRuneContextFilter` | HTTP filter that builds the request context — `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)) — and binds `StreamRuneContext.CURRENT` around the request; answers `400` to an id the request edge refuses |
 | `StreamRuneRequestIdentityValidator` | Startup listener: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |
 | `StreamRuneAuthorizationValidator` | Startup listener: refuses startup when a command bus registers `@RequireRole`/`@RequirePermission` commands without an `AnnotationAuthorizationInterceptor` in its chain |
 | `StreamRuneContextHelper` | ThreadLocal mirror of the request context for threads `ScopedValue` bindings cannot reach (kept in sync via Micronaut's `PropagatedContext`) |
@@ -224,6 +224,16 @@ closed:
 in every event's metadata, so the gateway must forward the caller's role or strip the header. In
 the other modes it is ignored and there is no `role` (an authenticated principal's roles are the
 captured authority, not baggage), and a W3C `baggage: role=` entry never reaches the key.
+
+`X-Correlation-Id`, `X-Trace-Id` and the allow-listed baggage are caller-supplied in every mode,
+the trusted-gateway mode included; nothing may be addressed, authorized or deduplicated by them.
+A correlation id is kept exactly as sent, with one exception: the `streamrune:` prefix is reserved
+for the correlation ids the framework binds itself. `StreamRuneContextFilter`
+answers `400 Bad Request` with the plain-text body `The request's correlation id, trace id or user
+id is not acceptable` to a correlation id with that prefix and to a correlation id, trace id or
+user id that is longer than 255 characters or holds a control character. The controller does not
+run. See
+[What a client controls in event metadata](../../docs/guide/production.md#what-a-client-controls-in-event-metadata).
 
 Micronaut Security with `micronaut.security.enabled=false` counts as absent: its beans are not
 created, so there is no authenticated principal to resolve.

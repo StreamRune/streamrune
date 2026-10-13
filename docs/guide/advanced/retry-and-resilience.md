@@ -163,8 +163,7 @@ authorization check sees the original user. An entry for a command that ran with
 
 A replay restores those three values and nothing else. An entry has no place for a saga origin or
 for a causing event, and the runner binds neither, so the events of a replayed command carry no
-`sagaOrigin` and no `causationId`, whatever the entry's correlation id looks like. Two rules
-follow:
+`sagaOrigin` and no `causationId`. Two rules follow:
 
 - **A command that carries a saga origin is not dead-lettered.** That is every command a saga
   dispatches, and every command a listener dispatches inside `StreamRuneContext.continuing(event)`
@@ -180,6 +179,14 @@ follow:
   whose `causationId` is the causing event's id when the redelivery commits first and `null` when
   a replay does. Without a key every entry's replay executes the command once more, besides the
   redelivery. Give a continuation's command a key derived from the causing event.
+
+No entry the command bus writes holds a correlation id in the reserved `streamrune:` form — the
+form saga dispatch binds, `streamrune:saga:<sagaId>`. A command bound to one carries a saga origin,
+so the first rule keeps it out of the queue; that is also why the entry's `VARCHAR(255)`
+correlation column never meets the up to 271 characters of that form. An entry written by other
+means that holds one is replayed under that id with no saga origin bound, and the command bus
+refuses such a command before anything is stored: the entry fails every attempt and ends as the
+retry policy ends an exhausted entry.
 
 **What a listener does with a failed continuation.** For a command that carries a saga origin the
 subscription is the only retry, so the listener decides the command's fate:

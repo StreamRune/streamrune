@@ -24,7 +24,6 @@ import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.CausationId;
-import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.IdempotencyKey;
 
@@ -45,10 +44,11 @@ final class SagaCommandDispatch {
    * compensation command the id of the event that opened the compensation episode — are bound as
    * {@link StreamRuneContext#CAUSE}, and the command bus copies them into {@link
    * org.streamrune.core.EventMetadata#sagaOrigin()} and {@link
-   * org.streamrune.core.EventMetadata#causationId()} of every event the command produces. The saga
-   * id is bound as the request correlation id; ambient trace/user/baggage is preserved. The {@code
-   * key} is recorded atomically with the append so redelivered correlated events short-circuit
-   * without re-running the handler.
+   * org.streamrune.core.EventMetadata#causationId()} of every event the command produces. The
+   * request correlation id bound is the origin's ({@link SagaOrigin#correlationId()}, {@code
+   * streamrune:saga:<sagaId>}), a form the request edge refuses from a client; ambient
+   * trace/user/baggage is preserved. The {@code key} is recorded atomically with the append so
+   * redelivered correlated events short-circuit without re-running the handler.
    *
    * <p><b>The bound cause is the same on every attempt.</b> {@code origin} is a function of the
    * saga type and the saga id, and {@code causingEvent} is the id of a stored event — the
@@ -56,8 +56,11 @@ final class SagaCommandDispatch {
    * cause recorded with a compensation episode's stamp, which every resume reads from the saga row
    * ({@link org.streamrune.core.saga.LoadedSaga#episodeCauseEventId()}). A first attempt, a
    * redelivery, a replay feed, a timeout re-pick and a sweeper resume of the same command therefore
-   * bind equal values: whichever attempt commits the command stores the same saga origin and the
-   * same causation id. The trace id, the user id and the baggage of the stored events are those of
+   * bind equal values: whichever attempt commits the command stores the same saga origin, the same
+   * correlation id (a function of the origin's saga id) and the same causation id. The idempotency
+   * keys are derived from the saga id and not from the correlation id ({@link #forwardKey}, {@link
+   * #episodeCompensationKey}), so the form of the correlation id takes no part in what the command
+   * inbox deduplicates. The trace id, the user id and the baggage of the stored events are those of
    * the ambient context of the thread that commits the command (none on a subscription thread, an
    * operator's on a replay run from a request).
    *
@@ -86,12 +89,15 @@ final class SagaCommandDispatch {
    * is intact) and never terminal {@code FAILED}.
    *
    * <p><b>The context built here is a RECONSTRUCTION, not an ingress.</b> The correlation id is
-   * {@code CorrelationId.of(origin.sagaId().value())}, and every background entry point (timeout
-   * runner, compensation sweeper, dead-letter replayer) got that {@code SagaId} out of {@code
-   * saga_state} / {@code saga_dead_letters} via {@code PostgresSagaStore}; the trace/user fields
-   * are copied from an ambient context that may itself be a reconstruction. So this uses the plain
-   * {@code RequestContext} constructor and NOT {@code RequestContext.fromRequest} — the {@code
-   * IdConstraints} bound belongs only where an unauthenticated header first enters the system.
+   * {@code origin.correlationId()} — the reserved prefix, then the saga id verbatim — and every
+   * background entry point (timeout runner, compensation sweeper, dead-letter replayer) got that
+   * {@code SagaId} out of {@code saga_state} / {@code saga_dead_letters} via {@code
+   * PostgresSagaStore}; the trace/user fields are copied from an ambient context that may itself be
+   * a reconstruction. So this uses the plain {@code RequestContext} constructor and NOT {@code
+   * RequestContext.fromRequest} — the {@code IdConstraints} bound and the refusal of the reserved
+   * prefix belong only where an unauthenticated header first enters the system. Through {@code
+   * fromRequest} no saga could dispatch at all: the door refuses the very prefix this method binds,
+   * and the reserved form of a saga id longer than 239 characters exceeds its length bound.
    * Enforcing it here threw before the bus was ever called, which the forward classifier reads as
    * permanent evidence ({@link #isRetryLater} is {@code false} for {@code
    * IllegalArgumentException}) → claim-first compensation → every compensation dispatch fails
@@ -130,7 +136,7 @@ final class SagaCommandDispatch {
         new StreamRuneContext.RequestContext(
             ambient != null ? ambient.traceId() : null,
             ambient != null ? ambient.userId() : null,
-            CorrelationId.of(origin.sagaId().value()),
+            origin.correlationId(),
             Instant.now(),
             ambient != null ? ambient.baggage() : Map.of(),
             // Carry the request edge's captured authority when a

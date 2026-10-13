@@ -106,6 +106,36 @@ class PostgresAuditStoreTest {
   }
 
   @Test
+  void save_persists_theReservedCorrelationIdOfTheLongestSagaId() throws Exception {
+    // audit_log.correlation_id is TEXT: the command audit of a saga's command shows the reserved
+    // form saga dispatch binds, whole, for a saga id at its 255-character bound too.
+    String reserved = "streamrune:saga:" + "s".repeat(255);
+    var cmdId = CommandId.of("cmd-longest-saga");
+    store.save(
+        new AuditEntry(
+            cmdId,
+            "ReserveStock",
+            TestStreams.TYPE,
+            AggregateId.of("order-10"),
+            null,
+            Instant.parse("2026-01-01T10:00:00Z"),
+            AuditOutcome.SUCCESS,
+            null,
+            1,
+            CorrelationId.of(reserved)));
+
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement("SELECT correlation_id FROM audit_log WHERE command_id = ?")) {
+      ps.setString(1, "cmd-longest-saga");
+      try (var rs = ps.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(reserved, rs.getString("correlation_id"));
+      }
+    }
+  }
+
+  @Test
   void save_persists_correlation_id() throws Exception {
     var cmdId = CommandId.of("cmd-corr");
     store.save(

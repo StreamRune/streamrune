@@ -299,6 +299,33 @@ class RequestIdentityPolicyTest {
   }
 
   @Test
+  void everyModesDescriptionEndsByNamingTheHeadersThatStayCallerSupplied() {
+    String sentence =
+        " The correlation, trace and baggage headers are caller-supplied in every mode; nothing may"
+            + " be addressed, authorized or deduplicated by them.";
+
+    for (RequestIdentityPolicy policy :
+        List.of(
+            RequestIdentityPolicy.of(null, false),
+            RequestIdentityPolicy.of(BOB, false),
+            RequestIdentityPolicy.of(null, true),
+            RequestIdentityPolicy.of(new NamedResolver(), true))) {
+      assertTrue(policy.describe().endsWith(sentence), policy.describe());
+      assertEquals(
+          1,
+          policy.describe().split("caller-supplied in every mode", -1).length - 1,
+          "the sentence is stated once");
+    }
+  }
+
+  @Test
+  void theReasonOfARefusedRequestContextNamesNoHeaderAndNoValue() {
+    assertEquals(
+        "The request's correlation id, trace id or user id is not acceptable",
+        RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+  }
+
+  @Test
   void theTrustedGatewayDescriptionNamesAResolverTheHeaderOverrides() {
     // The flag plus an authenticated principal is the risky combination: an authenticated user
     // who can reach the service directly acts as whoever the header names. Say so at startup.

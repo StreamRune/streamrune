@@ -6,6 +6,8 @@ import static org.mockito.Mockito.*;
 
 import io.micronaut.http.HttpHeaders;
 import io.micronaut.http.HttpRequest;
+import io.micronaut.http.HttpStatus;
+import io.micronaut.http.MediaType;
 import io.micronaut.http.MutableHttpResponse;
 import io.micronaut.http.filter.FilterContinuation;
 import java.util.ArrayList;
@@ -198,6 +200,147 @@ class StreamRuneContextFilterTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> principalFilter.buildContext(request("trace-1", null, "corr-1", null)));
+  }
+
+  // The filter answers a refusal of the door itself: 400 Bad Request with one fixed body, before
+  // the chain runs. buildContext, called directly, throws.
+
+  /**
+   * {@code filter} answers {@code request} with {@code 400} and the shared reason as a plain-text
+   * body, does not proceed and publishes no context; the answer repeats nothing of {@code
+   * refusedValue}.
+   */
+  @SuppressWarnings("unchecked")
+  private static void assertAnswered400(
+      StreamRuneContextFilter filter, HttpRequest<Object> request, String refusedValue) {
+    FilterContinuation<MutableHttpResponse<?>> continuation = mock(FilterContinuation.class);
+
+    MutableHttpResponse<?> answer = filter.filter(request, continuation);
+
+    assertEquals(HttpStatus.BAD_REQUEST, answer.getStatus());
+    assertEquals(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT, answer.body());
+    assertEquals(MediaType.TEXT_PLAIN_TYPE, answer.getContentType().orElseThrow());
+    assertFalse(answer.body().toString().contains(refusedValue), "the value is not echoed");
+    verify(continuation, never()).proceed();
+    verify(request, never()).setAttribute(any(), any());
+    assertNull(StreamRuneContextHelper.get(), "no context is published");
+    assertFalse(StreamRuneContext.CURRENT.isBound());
+  }
+
+  @Test
+  void aReservedCorrelationId_isAnswered400() {
+    for (String reserved :
+        List.of("streamrune:saga:order-saga-42", "streamrune:", "streamrune:anything")) {
+      assertAnswered400(
+          new StreamRuneContextFilter(), request("trace-1", "user-1", reserved, null), reserved);
+      assertAnswered400(
+          filterWith(RequestIdentityPolicy.of(null, true)),
+          request("trace-1", "user-1", reserved, "ADMIN"),
+          reserved);
+      assertAnswered400(
+          filterWith(RequestIdentityPolicy.of(() -> Optional.of(UserId.of("bob")), false)),
+          request("trace-1", "user-1", reserved, null),
+          reserved);
+    }
+  }
+
+  @Test
+  void aCorrelationIdThatIsNotInTheReservedForm_isBoundAsSent() {
+    for (String ordinary :
+        List.of(
+            "order-saga-42",
+            "saga:order-saga-42",
+            "Streamrune:saga:order-saga-42",
+            "streamrune",
+            "upstream/streamrune:saga:order-saga-42",
+            "c".repeat(255))) {
+      var ctx =
+          new StreamRuneContextFilter().buildContext(request("trace-1", null, ordinary, null));
+
+      assertEquals(ordinary, ctx.correlationId().value());
+    }
+    assertEquals(
+        "streamrune:saga:order-saga-42",
+        new StreamRuneContextFilter()
+            .buildContext(request("streamrune:saga:order-saga-42", null, "corr-1", null))
+            .traceId()
+            .value(),
+        "the prefix is reserved for the correlation id only");
+  }
+
+  @Test
+  void anOverlongCorrelationId_isAnswered400() {
+    String overlong = "c".repeat(256);
+
+    assertAnswered400(
+        new StreamRuneContextFilter(), request("trace-1", "user-1", overlong, null), overlong);
+    assertAnswered400(
+        new StreamRuneContextFilter(), request(overlong, "user-1", "corr-1", null), overlong);
+  }
+
+  @Test
+  void aControlCharacterInTheTraceId_isAnswered400() {
+    assertAnswered400(
+        new StreamRuneContextFilter(),
+        request("trace" + (char) 0x01, "user-1", "corr-1", null),
+        "trace" + (char) 0x01);
+    assertAnswered400(
+        new StreamRuneContextFilter(),
+        request("trace-1", "user-1", "corr\r\nX-Injected: 1", null),
+        "X-Injected");
+  }
+
+  @Test
+  void anOverlongUserId_isAnswered400() {
+    // Header-identity arm: the trusted-gateway mode (the only mode that reads the header).
+    var headerFilter = filterWith(RequestIdentityPolicy.of(null, true));
+    assertAnswered400(
+        headerFilter, request("trace-1", "u".repeat(256), "corr-1", null), "u".repeat(256));
+    assertAnswered400(headerFilter, request("trace-1", "alice\r\nadmin", "corr-1", null), "admin");
+
+    // Authenticated-principal arm: "already authenticated" is not "bounded".
+    AuthenticatedUserResolver oversizedPrincipal = () -> Optional.of(UserId.of("p".repeat(256)));
+    assertAnswered400(
+        filterWith(RequestIdentityPolicy.of(oversizedPrincipal, false)),
+        request("trace-1", null, "corr-1", null),
+        "p".repeat(256));
+  }
+
+  /**
+   * Only the door's refusal is answered {@code 400}. An {@link IllegalArgumentException} of the
+   * application's identity resolver, or of the application behind the filter, is not a refused
+   * header and leaves the filter as it is.
+   */
+  @Test
+  @SuppressWarnings("unchecked")
+  void anIllegalArgumentExceptionThatIsNotTheDoors_isNotAnswered400() {
+    var resolverFailure = new IllegalArgumentException("the resolver's own failure");
+    AuthenticatedUserResolver failing =
+        () -> {
+          throw resolverFailure;
+        };
+    FilterContinuation<MutableHttpResponse<?>> unreached = mock(FilterContinuation.class);
+
+    assertSame(
+        resolverFailure,
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                filterWith(RequestIdentityPolicy.of(failing, false))
+                    .filter(request("trace-1", null, "corr-1", null), unreached)));
+    verify(unreached, never()).proceed();
+
+    var applicationFailure = new IllegalArgumentException("the application's own failure");
+    FilterContinuation<MutableHttpResponse<?>> failingChain = mock(FilterContinuation.class);
+    when(failingChain.proceed()).thenThrow(applicationFailure);
+
+    assertSame(
+        applicationFailure,
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                new StreamRuneContextFilter()
+                    .filter(request("trace-1", null, "corr-1", null), failingChain)));
   }
 
   @Test
