@@ -420,12 +420,20 @@ class PollingEventSubscriptionTest {
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-error"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
+    var seenRunning = new CountDownLatch(1);
     var sub =
         new PollingEventSubscription(
             SubscriptionName.of("bg-error"),
             store,
             new InMemoryOffsetStore(),
             events -> {
+              // Held until the test has seen the subscription running: the Error ends the poll
+              // thread, and an Error thrown at once could do so before that first look.
+              try {
+                seenRunning.await();
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              }
               throw new AssertionError("boom — an unrecoverable Error, not a RuntimeException");
             },
             new SubscriptionConfig(false, Duration.ofMillis(10), Duration.ofMillis(1)),
@@ -434,6 +442,7 @@ class PollingEventSubscriptionTest {
     sub.start();
     try {
       assertTrue(sub.isRunning(), "subscription must be RUNNING right after start()");
+      seenRunning.countDown();
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (sub.isRunning() && System.nanoTime() < deadline) {
         Thread.sleep(20);
