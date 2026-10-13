@@ -4,7 +4,9 @@ package org.streamrune.core.saga;
  * Lifecycle states of a saga instance.
  *
  * <ul>
- *   <li>{@link #STARTED} — initial state after the start event is processed.
+ *   <li>{@link #STARTED} — the saga exists and has not progressed past its start: the status a
+ *       start event's {@code evolve} usually yields, and the status of a start event's row while
+ *       its forward commands are dispatched when that evolve yields {@link #COMPENSATING}.
  *   <li>{@link #RUNNING} — one or more steps are in progress.
  *   <li>{@link #COMPLETED} — all steps succeeded; terminal state.
  *   <li>{@link #COMPENSATING} — claimed by {@code SagaTimeoutRunner} (timeout path) or by {@code

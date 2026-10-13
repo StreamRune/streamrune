@@ -52,14 +52,14 @@ import org.streamrune.core.types.EventId;
  * episode, recorded by the write that stamps {@code episodeVersion} and {@code episodeClaimedAt}
  * and, like them, left untouched by every other write. It is the event whose forward command was
  * refused ({@link SagaStore#claimCompensating}), or the event whose evolve yielded {@code
- * COMPENSATING} ({@link SagaStore#applyEvent}, {@link SagaStore#createGenesisPending}). {@code
- * null} when the episode was opened with no event in hand — a timeout claim, an operator's
- * compensation of a faulted forward step, {@link SagaStore#create} or {@link SagaStore#update}
- * landing {@code COMPENSATING} — and for a row that has never entered an episode. The engine sets
- * it as the causation id of every compensation command of the episode, on the first attempt and on
- * every resume, so the events those commands produce carry the same causation id whichever path
- * commits them. Unlike the two stamp columns it is optional: a {@code null} here is a statement (no
- * event opened the episode), never a contract violation.
+ * COMPENSATING} ({@link SagaStore#applyEvent}, after that event's forward loop). {@code null} when
+ * the episode was opened with no event in hand — a timeout claim, an operator's compensation of a
+ * faulted forward step, {@link SagaStore#create} or {@link SagaStore#update} landing {@code
+ * COMPENSATING} — and for a row that has never entered an episode. The engine sets it as the
+ * causation id of every compensation command of the episode, on the first attempt and on every
+ * resume, so the events those commands produce carry the same causation id whichever path commits
+ * them. Unlike the two stamp columns it is optional: a {@code null} here is a statement (no event
+ * opened the episode), never a contract violation.
  *
  * <p>{@code genesisApplied} records whether the start event's forward step (evolve → handle →
  * dispatch loop) has committed: {@code false} for a row inserted by {@link

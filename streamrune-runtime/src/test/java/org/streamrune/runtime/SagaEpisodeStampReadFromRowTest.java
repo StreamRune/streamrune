@@ -40,6 +40,7 @@ import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStateSerializationException;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.saga.SagaStore.AppliedEvent;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -65,17 +66,19 @@ import org.streamrune.test.MutableClock;
 /**
  * The executor takes the stamp of a compensation episode — the episode version that scopes the
  * compensation idempotency keys, and the cause that becomes the causation id — from the saga row,
- * on the delivery that opens the episode as on every resume. It computes neither.
+ * on the call that opens the episode with a claim as on every resume. It computes neither.
  *
- * <p>The opening that tells a read from a computation is a start event whose own {@code evolve}
- * yields {@code COMPENSATING} and whose forward command is then rejected: the insert stamps the
- * episode at version 1 and the claim that follows lands the row at version 2 and keeps the stamp.
- * Every case here runs that opening, or runs every opening on a store whose stamps are not "the row
- * version plus one" ({@link Harness#Harness(boolean, long)}), and compares the keys the command bus
+ * <p>Inside the store contract a claim is the write that stamps the episode, so "the version the
+ * claim landed at" and "the event the claim was given" equal the stamp. Two things here tell a read
+ * from a computation all the same: a store whose loaded stamps are neither ({@link
+ * Harness#Harness(boolean, long)} with a non-zero offset), on which every opening and every case of
+ * a start event whose own {@code evolve} yields {@code COMPENSATING} runs; and a claim over a row
+ * that already carries a stamp, prepared by hand. Each case compares the keys the command bus
  * received with the keys the row's stamp gives.
  *
- * <p>Concurrency is driven without threads: a second path runs inside a hook, at a chosen point of
- * the opening delivery (after its claim, before a chosen command, before its terminal write).
+ * <p>Concurrency is driven without timing: a second path runs inside a hook, at a chosen point of
+ * the opening delivery (after its claim, before a chosen command, before its terminal write), or on
+ * a second thread parked at such a point by latches.
  */
 class SagaEpisodeStampReadFromRowTest {
 
@@ -117,6 +120,9 @@ class SagaEpisodeStampReadFromRowTest {
   private static final Duration RETRY_INTERVAL = Duration.ofSeconds(30);
   private static final Duration WINDOW = Duration.ofDays(7);
 
+  /** A stamp offset under which no stamp is "the row version plus one". */
+  private static final long SHIFTED = 1_000L;
+
   /** Stores one event per command; {@code failure}, while set, makes {@code decide} throw. */
   static final class OneEventDecider<C extends Command>
       implements Decider<C, Untouched, DomainEvent> {
@@ -156,6 +162,12 @@ class SagaEpisodeStampReadFromRowTest {
     private final boolean bornCompensating;
     volatile boolean poisonAdvanced;
 
+    /** The start event issues {@link Ship} after {@link Reserve}. */
+    volatile boolean startAlsoShips;
+
+    /** {@code handle} throws on the start event. */
+    volatile boolean poisonHandleOnStart;
+
     OrderSaga(boolean bornCompensating) {
       this.bornCompensating = bornCompensating;
     }
@@ -184,11 +196,21 @@ class SagaEpisodeStampReadFromRowTest {
     @Override
     public List<SagaCommand> handle(State state, EventEnvelope event) {
       return switch (event.event()) {
-        case Opened opened -> List.of(SagaCommand.of(new Reserve(ORDER), AggregateId.of(ORDER)));
+        case Opened opened -> commandsOfTheStartEvent();
         case Advanced advanced -> List.of(SagaCommand.of(new Ship(ORDER), AggregateId.of(ORDER)));
         case Cancelled cancelled -> List.of(SagaCommand.of(new Ship(ORDER), AggregateId.of(ORDER)));
         default -> List.of();
       };
+    }
+
+    private List<SagaCommand> commandsOfTheStartEvent() {
+      if (poisonHandleOnStart) {
+        throw new IllegalStateException("handle refuses the start event");
+      }
+      SagaCommand reserve = SagaCommand.of(new Reserve(ORDER), AggregateId.of(ORDER));
+      return startAlsoShips
+          ? List.of(reserve, SagaCommand.of(new Ship(ORDER), AggregateId.of(ORDER)))
+          : List.of(reserve);
     }
 
     @Override
@@ -265,6 +287,7 @@ class SagaEpisodeStampReadFromRowTest {
     private boolean failNextClaim;
     private Runnable afterClaim;
     private Runnable beforeTerminalWrite;
+    private Runnable beforeApplyEvent;
     private boolean failNextLoad;
     private boolean loadsUnstamped;
     private RuntimeException loadFailure;
@@ -282,6 +305,27 @@ class SagaEpisodeStampReadFromRowTest {
     /** Runs once, right before the next write of a terminal status. */
     void runOnceBeforeTheTerminalWrite(Runnable action) {
       beforeTerminalWrite = action;
+    }
+
+    /** Runs once, right before the next event write reaches the delegate. */
+    void runOnceBeforeTheEventWrite(Runnable action) {
+      beforeApplyEvent = action;
+    }
+
+    @Override
+    public void applyEvent(
+        SagaId id,
+        SagaType type,
+        SagaState state,
+        SagaStatus status,
+        long version,
+        AppliedEvent applied) {
+      if (beforeApplyEvent != null) {
+        Runnable once = beforeApplyEvent;
+        beforeApplyEvent = null;
+        once.run();
+      }
+      super.applyEvent(id, type, state, status, version, applied);
     }
 
     @Override
@@ -647,7 +691,7 @@ class SagaEpisodeStampReadFromRowTest {
    */
   @Test
   void bornCompensating_theTerminalWriteIsLost_aResumeStoresNoCompensationTwice() {
-    try (var h = new Harness(true, 0)) {
+    try (var h = new Harness(true, SHIFTED)) {
       h.sagaStore.runOnceBeforeTheTerminalWrite(
           () -> {
             throw new SimulatedCrash("nothing: the terminal write did not reach the store");
@@ -719,7 +763,7 @@ class SagaEpisodeStampReadFromRowTest {
                             DynamicTest.dynamicTest(
                                 point.getKey() + "_" + path.getKey(),
                                 () -> {
-                                  try (var h = new Harness(true, 0)) {
+                                  try (var h = new Harness(true, SHIFTED)) {
                                     h.reserve.failure =
                                         () -> new IllegalArgumentException("out of stock");
                                     opened[0] = h.append(new Opened(ORDER));
@@ -738,12 +782,13 @@ class SagaEpisodeStampReadFromRowTest {
   }
 
   /**
-   * A second path completes the episode before the opening delivery's forward command is rejected:
-   * the opening delivery's claim loses its compare-and-swap and dispatches nothing.
+   * A second delivery of the start event runs its own forward loop, is rejected, claims and
+   * completes the episode before the opening delivery's forward command is rejected: the opening
+   * delivery's claim loses its compare-and-swap and dispatches nothing.
    */
   @Test
   void bornCompensating_aSecondPathCompletesTheEpisodeBeforeTheClaim_theClaimIsLost() {
-    try (var h = new Harness(true, 0)) {
+    try (var h = new Harness(true, SHIFTED)) {
       h.reserve.failure = () -> new IllegalArgumentException("out of stock");
       EventEnvelope opened = h.append(new Opened(ORDER));
       h.bus.runOnceBefore(
@@ -760,14 +805,15 @@ class SagaEpisodeStampReadFromRowTest {
   }
 
   /**
-   * A second path straddles the claim: another replica loads the row before the opening delivery
-   * claims it and dispatches its first compensation command only after the opening delivery has
-   * claimed, read the row back, dispatched both commands and written the terminal status. Two
-   * threads, sequenced by latches at fixed points, so the interleaving is the same on every run.
+   * Two deliveries of the start event race for the claim on two threads. The second replica's
+   * forward command is rejected first; it claims, reads the row back and parks right before its
+   * first compensation command. The opening delivery's forward command is then rejected and its
+   * claim loses: it dispatches nothing. The second replica then compensates alone. The threads are
+   * sequenced by latches at fixed points, so the interleaving is the same on every run.
    */
   @Test
-  void bornCompensating_aSecondPathStraddlesTheClaim_bothPresentTheRowsKeys() throws Exception {
-    try (var h = new Harness(true, 0)) {
+  void bornCompensating_twoDeliveriesRaceForTheClaim_oneClaimsAndCompensates() throws Exception {
+    try (var h = new Harness(true, SHIFTED)) {
       h.reserve.failure = () -> new IllegalArgumentException("out of stock");
       EventEnvelope opened = h.append(new Opened(ORDER));
       CountDownLatch secondAtItsFirstCompensation = new CountDownLatch(1);
@@ -777,33 +823,63 @@ class SagaEpisodeStampReadFromRowTest {
       h.bus.runOnceBefore(
           Reserve.class,
           () -> {
-            // The second replica resumes the row the insert stamped and parks right before its
-            // first compensation command; the opening delivery then continues with its own claim.
             h.bus.runOnceBefore(
                 Release.class,
                 () -> {
                   secondAtItsFirstCompensation.countDown();
                   await(openingDone);
                 });
-            Thread.ofPlatform()
-                .start(
-                    () -> {
-                      try {
-                        h.secondReplica.asEventListener().onEvents(List.of(opened));
-                      } catch (Throwable t) {
-                        secondFailure.set(t);
-                      } finally {
-                        secondDone.countDown();
-                      }
-                    });
+            startSecondReplica(h, opened, secondFailure, secondDone);
+            await(secondAtItsFirstCompensation);
+          });
+
+      h.deliver(opened);
+
+      assertThat(h.bus.compensationKeys()).as("the opening delivery lost the claim").isEmpty();
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATING);
+      openingDone.countDown();
+      await(secondDone);
+
+      assertThat(secondFailure.get()).isNull();
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(h.bus.compensationKeys()).isEqualTo(h.keysOfTheRowsEpisode());
+      h.assertEachCompensationStoredOnce();
+    }
+  }
+
+  /**
+   * A second path straddles the opening delivery's read and dispatch on a second thread: another
+   * replica loads the row right after the opening delivery's claim and dispatches its first
+   * compensation command only after the opening delivery has read the row back, dispatched both
+   * commands and written the terminal status. Both present the keys of the row's stamp. The threads
+   * are sequenced by latches at fixed points.
+   */
+  @Test
+  void bornCompensating_aSecondPathResumesWhileTheOpeningDeliveryDispatches_bothPresentTheRowsKeys()
+      throws Exception {
+    try (var h = new Harness(true, SHIFTED)) {
+      h.reserve.failure = () -> new IllegalArgumentException("out of stock");
+      EventEnvelope opened = h.append(new Opened(ORDER));
+      CountDownLatch secondAtItsFirstCompensation = new CountDownLatch(1);
+      CountDownLatch openingDone = new CountDownLatch(1);
+      CountDownLatch secondDone = new CountDownLatch(1);
+      AtomicReference<Throwable> secondFailure = new AtomicReference<>();
+      h.sagaStore.runOnceAfterTheClaim(
+          () -> {
+            h.bus.runOnceBefore(
+                Release.class,
+                () -> {
+                  secondAtItsFirstCompensation.countDown();
+                  await(openingDone);
+                });
+            startSecondReplica(h, opened, secondFailure, secondDone);
             await(secondAtItsFirstCompensation);
           });
 
       h.deliver(opened);
 
       assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
-      List<String> openingKeys = List.copyOf(h.bus.compensationKeys());
-      assertThat(openingKeys).isEqualTo(h.keysOfTheRowsEpisode());
+      assertThat(h.bus.compensationKeys()).isEqualTo(h.keysOfTheRowsEpisode());
       openingDone.countDown();
       await(secondDone);
 
@@ -814,6 +890,21 @@ class SagaEpisodeStampReadFromRowTest {
           .containsOnlyElementsOf(h.keysOfTheRowsEpisode());
       h.assertEachCompensationStoredOnce();
     }
+  }
+
+  private static void startSecondReplica(
+      Harness h, EventEnvelope opened, AtomicReference<Throwable> failure, CountDownLatch done) {
+    Thread.ofPlatform()
+        .start(
+            () -> {
+              try {
+                h.secondReplica.asEventListener().onEvents(List.of(opened));
+              } catch (Throwable t) {
+                failure.set(t);
+              } finally {
+                done.countDown();
+              }
+            });
   }
 
   private static void await(CountDownLatch latch) {
@@ -867,12 +958,13 @@ class SagaEpisodeStampReadFromRowTest {
   }
 
   /**
-   * The claim of the opening delivery is not written. The row is the one the insert left: stamped,
-   * with no command dispatched. The redelivery resumes that episode under the insert's stamp.
+   * The claim of the opening delivery is not written. The row is the genesis-pending forward row
+   * the insert left, with no episode and no command dispatched. The redelivery re-evolves, its
+   * forward command is rejected again, and its claim stamps the episode it then compensates.
    */
   @Test
-  void bornCompensating_theClaimIsNotWritten_theRedeliveryResumesUnderTheInsertsStamp() {
-    try (var h = new Harness(true, 0)) {
+  void bornCompensating_theClaimIsNotWritten_theRedeliveryClaimsAndCompensatesOnce() {
+    try (var h = new Harness(true, SHIFTED)) {
       h.sagaStore.failNextClaim = true;
       h.reserve.failure = () -> new IllegalArgumentException("out of stock");
       EventEnvelope opened = h.append(new Opened(ORDER));
@@ -880,9 +972,9 @@ class SagaEpisodeStampReadFromRowTest {
       assertThatThrownBy(() -> h.deliver(opened)).isInstanceOf(SimulatedCrash.class);
 
       assertThat(h.bus.compensationKeys()).isEmpty();
-      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATING);
+      assertThat(h.row().status()).isEqualTo(SagaStatus.STARTED);
       assertThat(h.row().version()).isEqualTo(1L);
-      assertThat(h.row().episodeVersion()).isEqualTo(1L);
+      assertThat(h.row().episodeVersion()).isNull();
 
       h.deliver(opened);
 
@@ -899,7 +991,7 @@ class SagaEpisodeStampReadFromRowTest {
    */
   @Test
   void theRowCannotBeReadBackAfterTheClaim_nothingIsDispatched_theRedeliveryResumes() {
-    try (var h = new Harness(true, 0)) {
+    try (var h = new Harness(true, SHIFTED)) {
       h.sagaStore.runOnceAfterTheClaim(() -> h.sagaStore.failNextLoad = true);
       h.reserve.failure = () -> new IllegalArgumentException("out of stock");
       EventEnvelope opened = h.append(new Opened(ORDER));
@@ -924,7 +1016,7 @@ class SagaEpisodeStampReadFromRowTest {
    */
   @Test
   void theRowIsGoneAfterTheClaim_onADelivery_nothingIsDispatched_andTheStaleViewPropagates() {
-    try (var h = new Harness(true, 0)) {
+    try (var h = new Harness(true, SHIFTED)) {
       h.sagaStore.runOnceAfterTheClaim(() -> h.rows.delete(SAGA, TYPE));
       h.reserve.failure = () -> new IllegalArgumentException("out of stock");
       EventEnvelope opened = h.append(new Opened(ORDER));
@@ -1140,7 +1232,7 @@ class SagaEpisodeStampReadFromRowTest {
    */
   @Test
   void theRowIsFaultedAfterTheClaim_theOpeningDeliveryKeysWithTheRowsStamp() {
-    try (var h = new Harness(true, 0)) {
+    try (var h = new Harness(true, SHIFTED)) {
       h.sagaStore.runOnceAfterTheClaim(
           () -> assertThat(h.runner.sweepCompensation(SAGA, true)).isEqualTo(StepOutcome.FAULTED));
       h.reserve.failure = () -> new IllegalArgumentException("out of stock");

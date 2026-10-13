@@ -125,9 +125,9 @@ public interface SagaStore {
   /**
    * The executor's create-first write for a fresh saga: version 1, {@code genesis_applied = FALSE},
    * {@code pre_fault_status = NULL}, {@code dead_letter_pending} as given, no applied offsets,
-   * holding the genesis-EVOLVED state and status (so {@code findTimedOut} can see the saga during a
-   * start-path outage). {@link #create(SagaId, SagaType, SagaState, SagaStatus, boolean)} is the
-   * same insert with {@code genesis_applied = TRUE} — a complete row.
+   * holding the genesis-EVOLVED state and the status it is given (so {@code findTimedOut} can see
+   * the saga during a start-path outage). {@link #create(SagaId, SagaType, SagaState, SagaStatus,
+   * boolean)} is the same insert with {@code genesis_applied = TRUE} — a complete row.
    *
    * <p>{@code deadLetterPending} exists for the same reason as on {@code create}: the saga may
    * already own dead-letter entries (the row-less residual and its held correlated events), and a
@@ -136,13 +136,19 @@ public interface SagaStore {
    * live start; the flag rides in the one INSERT statement, so there is no crash point between "row
    * exists" and "row shielded".
    *
-   * <p>When the genesis-evolved {@code status} is {@code COMPENSATING} the row is born stamped
-   * ({@code episode_version = 1}, {@code episode_claimed_at = now}) in the same insert — the
-   * episode stamp rule, see {@link #claimCompensating} — so there is no crash point between "row is
-   * COMPENSATING" and "episode stamped" either. The same insert records {@code episodeCause} as the
-   * episode's cause ({@link LoadedSaga#episodeCauseEventId()}): the executor passes the start
-   * event's id, because that event's evolve opened the episode. A row born at any other status
-   * opens no episode and records no cause, whatever {@code episodeCause} is.
+   * <p>The saga runtime never passes {@code COMPENSATING} here. It passes the evolved status,
+   * except that a start event whose evolve yields {@code COMPENSATING} is inserted as {@code
+   * STARTED} with the evolved state, and the {@link #applyEvent} that follows its forward loop
+   * lands {@code COMPENSATING} and stamps the episode: a {@code COMPENSATING} row is a claimed
+   * episode to every path that reads it, so the row must not be one while the start event's forward
+   * commands are still being dispatched.
+   *
+   * <p>A store asked to insert at {@code COMPENSATING} all the same (tooling, tests) follows the
+   * episode stamp rule, see {@link #claimCompensating}: the row is born stamped ({@code
+   * episode_version = 1}, {@code episode_claimed_at = now}) in the same insert, so there is no
+   * crash point between "row is COMPENSATING" and "episode stamped", and the insert records {@code
+   * episodeCause} as the episode's cause ({@link LoadedSaga#episodeCauseEventId()}). A row born at
+   * any other status opens no episode and records no cause, whatever {@code episodeCause} is.
    *
    * <p>This insert must happen BEFORE any command is dispatched, and it must not be implemented by
    * delegating to {@code create}: that records an applied genesis for a start whose dispatch loop
@@ -168,7 +174,7 @@ public interface SagaStore {
   /**
    * {@link #createGenesisPending(SagaId, SagaType, SagaState, SagaStatus, boolean, EventId)} with
    * no event id in hand: a row born {@code COMPENSATING} is stamped and records no cause. The
-   * tooling and test form; the executor always passes the start event's id.
+   * tooling and test form.
    */
   default void createGenesisPending(
       SagaId sagaId,

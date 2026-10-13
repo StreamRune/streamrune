@@ -78,17 +78,22 @@ import org.streamrune.core.types.SagaType;
  * pre_fault_status}).
  *
  * <p><b>Every compensation episode is stamped .</b> A forward step whose {@code evolve()} yields a
- * state with {@code status() == COMPENSATING} enters the compensation episode through the same
- * write that persists it — {@link SagaStore#createGenesisPending} on a fresh start, {@link
- * SagaStore#applyEvent} on every other step — and the store stamps that write with claim semantics
- * ({@code episode_version} = the version the row lands at, {@code episode_claimed_at} = now: the
- * episode stamp rule, {@link SagaStore#claimCompensating}). There is no second write, so there is
- * no crash point between "row is COMPENSATING" and "episode stamped": a crash before the write
- * leaves nothing durable (the redelivered event re-evolves, and the forward commands already
- * dispatched dedup on their offset-stable forward keys), a crash after it leaves a stamped episode
- * that the redelivery resumes under that episode's own keys. Every resume — a {@code ForwardStep}
- * over a COMPENSATING row, {@code ResumeCompensation}, {@code ResumeFaultedEpisode} — therefore
- * reads the stamp with no fallback and refuses a row without one ({@link #requireStampedEpisode}).
+ * state with {@code status() == COMPENSATING} enters the compensation episode through the event
+ * write that follows its forward loop — {@link SagaStore#applyEvent}, on a start event and on a
+ * correlated event alike — and the store stamps that write with claim semantics ({@code
+ * episode_version} = the version the row lands at, {@code episode_claimed_at} = now, the applied
+ * event as the cause: the episode stamp rule, {@link SagaStore#claimCompensating}). The status and
+ * the stamp ride in one statement, so there is no crash point between "row is COMPENSATING" and
+ * "episode stamped": a crash before the write leaves a forward row (the redelivered event
+ * re-evolves, and the forward commands already dispatched dedup on their offset-stable forward
+ * keys), a crash after it leaves a stamped episode that the redelivery resumes under that episode's
+ * own keys. The executor never inserts a row at {@code COMPENSATING}: the genesis-pending row of a
+ * start event that has commands to dispatch is never {@code COMPENSATING} before a claim or the
+ * event write after its forward loop makes it so ({@link #genesisStep}), because a {@code
+ * COMPENSATING} row is a claimed episode to every other path from the statement that writes it.
+ * Every resume — a {@code ForwardStep} over a COMPENSATING row, {@code ResumeCompensation}, {@code
+ * ResumeFaultedEpisode} — therefore reads the stamp with no fallback and refuses a row without one
+ * ({@link #requireStampedEpisode}).
  *
  * <p><b>The executor never computes a stamp value.</b> The stamp of an episode is three values the
  * store writes in one statement: the episode version, which scopes the compensation idempotency
@@ -101,12 +106,12 @@ import org.streamrune.core.types.SagaType;
  * only, {@code rowVersion + 1}: the version its own claim landed the row at. It is the
  * optimistic-lock token of the terminal or fault write and the mark by which the read recognises
  * the claimed row; it is never a stamp value. That number is the episode version only when the
- * claim was the stamping write; a claim over a row that already carries a stamp (a start event
- * whose evolve yielded {@code COMPENSATING}, whose forward command is then rejected) keeps the
- * stamp it found, which is why the stamp is read and not derived. The call that opens an episode
- * and every path that resumes it — a redelivery, a later event, a second replica's delivery, the
- * timeout runner, the compensation-retry sweeper, an operator — therefore present the same keys to
- * the command inbox, sequentially or concurrently, and each compensation command is stored once.
+ * claim was the stamping write; a claim over a row that already carries a stamp (a row a tool
+ * wrote, or a store whose stamps are not "the version the claim landed at") keeps the stamp it
+ * found, which is why the stamp is read and not derived. The call that opens an episode and every
+ * path that resumes it — a redelivery, a later event, a second replica's delivery, the timeout
+ * runner, the compensation-retry sweeper, an operator — therefore present the same keys to the
+ * command inbox, sequentially or concurrently, and each compensation command is stored once.
  *
  * <p><b>Why the read after the claim needs no transaction.</b> A stamp is immutable: no statement
  * of a {@link SagaStore} re-stamps or clears one (the episode stamp rule). Whatever happens to the
@@ -154,13 +159,13 @@ import org.streamrune.core.types.SagaType;
  * <p><b>Every compensation command names the event that opened its episode.</b> The write that
  * stamps an episode records the id of the event in hand: the event whose forward command was
  * refused ({@link SagaStore#claimCompensating}), or the event whose evolve yielded {@code
- * COMPENSATING} ({@link SagaStore#applyEvent}, {@link SagaStore#createGenesisPending}); a timeout
- * claim and an operator's compensation of a faulted forward step have no event and record none.
- * Every dispatch of a compensation command sets the cause the row records as the command's
- * causation id. The event that happens to drive a resume is never used. The stored compensation
- * events therefore carry the same saga origin and causation id whichever path commits their command
- * — the opening delivery, a redelivery, a later event, the timeout runner, the compensation-retry
- * sweeper, an operator.
+ * COMPENSATING} ({@link SagaStore#applyEvent}, after that event's forward loop); a timeout claim
+ * and an operator's compensation of a faulted forward step have no event and record none. Every
+ * dispatch of a compensation command sets the cause the row records as the command's causation id.
+ * The event that happens to drive a resume is never used. The stored compensation events therefore
+ * carry the same saga origin and causation id whichever path commits their command — the opening
+ * delivery, a redelivery, a later event, the timeout runner, the compensation-retry sweeper, an
+ * operator.
  *
  * @param <S> the saga state type
  */
@@ -448,6 +453,58 @@ final class SagaStepExecutor<S extends SagaState> {
    * present, from a redelivery or a replay) re-evolves from {@code initialState} — start events are
    * genesis events; the recorded state on a genesis-pending row exists for the timeout runner's
    * compensation, not as a resume point.
+   *
+   * <p><b>The row is never inserted as {@code COMPENSATING}.</b> A start event whose evolve yields
+   * {@code COMPENSATING} is inserted with {@code STARTED} and the evolved state, and the event
+   * write after the forward loop lands {@code COMPENSATING} and stamps the episode with the start
+   * event as its cause — the order a correlated event's step has. Only that one status is mapped:
+   * any other non-terminal status is inserted as evolved, and a start whose evolve is terminal has
+   * no command to dispatch and is written complete with {@link SagaStore#create}. Two writes can
+   * land {@code COMPENSATING} before the event write: the claim after a rejected forward command,
+   * and the timeout runner's claim. The row is visible to every path from the insert on, and a
+   * {@code COMPENSATING} row is a claimed episode to all of them: inserted as {@code COMPENSATING}
+   * it would be compensated by another path while this delivery still dispatches its forward
+   * commands, and a redelivery after a retry-later failure or a crash would resume the compensation
+   * and never finish the forward loop. {@code STARTED} is the status of a saga whose start step is
+   * not applied yet; it is not a status this event's evolve produced, and every reader already has
+   * a rule for a genesis-pending row in a forward status, none of which loses the transition the
+   * evolved state asks for:
+   *
+   * <ul>
+   *   <li>the redelivered start event, a second replica's delivery of it, a replayed start entry:
+   *       re-evolve from {@code initialState}, dispatch the forward commands again (committed ones
+   *       answer from the inbox), then the event write;
+   *   <li>a correlated event: held as genesis-pending and fed after the genesis lands; it is never
+   *       applied to this row;
+   *   <li>the compensation-retry sweeper: does not see the row;
+   *   <li>the timeout runner: claims the row at the saga's deadline, as it claims any start whose
+   *       dispatch has not completed, and compensates the persisted evolved state. It does not wait
+   *       for the forward loop: commands not yet dispatched by a dead delivery are never
+   *       dispatched, and a command a live delivery is dispatching at that moment commits after the
+   *       timeout's compensation;
+   *   <li>a poison in {@code handle}: the fault of a genesis-pending forward row ({@code
+   *       pre_fault_status} {@code NULL}); the replayed start entry re-evolves.
+   * </ul>
+   *
+   * <p><b>Crash points of a start event whose evolve yields {@code COMPENSATING}.</b>
+   *
+   * <ul>
+   *   <li>the insert is not committed: nothing is stored; the redelivery starts over;
+   *   <li>the insert is committed and forward command <i>k</i> is not (a retry-later failure, which
+   *       propagates, or a crash): the genesis-pending {@code STARTED} row; the redelivery
+   *       re-evolves, the commands before <i>k</i> answer from the inbox, <i>k</i> and the rest
+   *       run, then the event write;
+   *   <li>forward command <i>k</i> is rejected: the claim at the row's version is the stamping
+   *       write (cause: the start event), the compensation is dispatched under the stamp read back
+   *       from the row, and the row is a claimed episode whose genesis is not applied — resumed by
+   *       every path, re-driven forward by none;
+   *   <li>the forward loop finished and the event write is not committed: as the second point, with
+   *       every command answering from the inbox;
+   *   <li>the event write is committed: {@code COMPENSATING}, stamped at the version it landed at
+   *       with the start event as cause, genesis applied. This call dispatches no compensation
+   *       command; the episode is driven by the sweeper, the timeout runner's re-pick or the saga's
+   *       next event, and a redelivery of the start event resumes it.
+   * </ul>
    */
   private StepOutcome genesisStep(
       SagaId sagaId, SagaType type, Optional<LoadedSaga<S>> loaded, SagaTrigger.ForwardStep fs) {
@@ -480,15 +537,16 @@ final class SagaStepExecutor<S extends SagaState> {
         // The row is born shielded when the saga already owns dead-letter
         // entries (the row-less residual and its held correlated events), so a live event is never
         // applied ahead of them and retention never prunes them — shielded from the first
-        // statement. When the evolved status is COMPENSATING the same insert stamps the episode
-        // and records the start event as its cause.
+        // statement. The inserted status is never COMPENSATING: an evolved COMPENSATING is
+        // landed by the event write after the forward loop, so the insert opens no episode and
+        // names no cause.
         sagaStore.createGenesisPending(
             sagaId,
             type,
             state,
-            evolvedStatus,
+            evolvedStatus == SagaStatus.COMPENSATING ? SagaStatus.STARTED : evolvedStatus,
             fs.sagaOwnsDeadLetterRecord(),
-            event.metadata().eventId());
+            /* episodeCause= */ null);
         rowVersion = 1L;
       } catch (SagaStateSerializationException conversionFailed) {
         throw SagaStateConversion.classify(sagaId, conversionFailed);
@@ -607,7 +665,7 @@ final class SagaStepExecutor<S extends SagaState> {
    * loop runs BEFORE {@link #applyEvent}, so no {@code claimCompensating}, no status change and no
    * version bump have happened for this delivery. On a CORRELATED event nothing durable at all is
    * written; on a fresh START event the ONE durable write is the genesis-pending row ({@link
-   * SagaStore#createGenesisPending} — version 1, evolved status, {@code genesis_applied = FALSE},
+   * SagaStore#createGenesisPending} — version 1, a forward status, {@code genesis_applied = FALSE},
    * written BEFORE the first dispatch), which exists so the saga is visible to {@code
    * SagaTimeoutRunner} and so the redelivery has a recorded fact to route on; it is left untouched
    * here (no escape write, no CAS). Propagating leaves the subscription checkpoint unadvanced, so
@@ -720,13 +778,12 @@ final class SagaStepExecutor<S extends SagaState> {
    * <p>The claim lands the row at {@code rowVersion + 1}; that number is the optimistic-lock token
    * of the terminal write and nothing more. The episode's stamp — the version that scopes the
    * compensation keys, and the cause — is read back from the row ({@link #readClaimedEpisode}). On
-   * a row without a stamp the claim writes one ({@code rowVersion + 1}, {@code episodeCause}); on a
-   * row that already carries one — the row of a start event whose evolve yielded {@code
-   * COMPENSATING}, inserted and stamped earlier in this same call — the claim keeps it, and the
-   * commands are keyed with the stamp the insert wrote. A row deleted since the claim has no stamp:
-   * nothing is dispatched and the stale view propagates on both paths. The redelivered start event
-   * then finds no row and starts the saga again; a redelivered correlated event finds no row and is
-   * dropped.
+   * a row without a stamp the claim writes one ({@code rowVersion + 1}, {@code episodeCause}) — the
+   * case for every row this executor wrote, a start event's genesis-pending row included. On a row
+   * that already carries one (a row a tool wrote) the claim keeps it, and the commands are keyed
+   * with the stamp the row carries. A row deleted since the claim has no stamp: nothing is
+   * dispatched and the stale view propagates on both paths. The redelivered start event then finds
+   * no row and starts the saga again; a redelivered correlated event finds no row and is dropped.
    *
    * <p>{@code episodeCause} is the id of the event whose forward command failed, handed to the
    * claim to be recorded with a stamp the claim writes.
@@ -882,7 +939,7 @@ final class SagaStepExecutor<S extends SagaState> {
    *
    * <p><b>No fallback .</b> Every write that lands a row at {@code COMPENSATING} stamps the episode
    * in the same statement — the claim writes and, for an evolved {@code SagaState.status()} of
-   * {@code COMPENSATING}, {@code applyEvent} / {@code createGenesisPending} (the episode stamp
+   * {@code COMPENSATING}, the {@code applyEvent} after the step's forward loop (the episode stamp
    * rule, {@link SagaStore#claimCompensating}) — so a row in a compensation episode without BOTH
    * {@code episodeVersion} and {@code episodeClaimedAt} violates the {@link SagaStore} contract.
    * Guessing either would be unsafe: a key derived from the row version re-executes a committed

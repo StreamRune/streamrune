@@ -127,8 +127,9 @@ public final class InMemorySagaStore implements SagaStore {
     requireArgs(sagaId, sagaType, state, status);
     Instant now = clock.instant();
     // The episode stamp rule: a row born COMPENSATING is born stamped (episode 1, claimed now), in
-    // the same insert — the start event's evolve yielded COMPENSATING (createGenesisPending), or a
-    // tooling create did. Any other status enters no episode. The cause given to the insert is
+    // the same insert. Only tooling and tests insert at COMPENSATING; the saga runtime inserts a
+    // start event's row with a forward status. Any other status enters no episode. The cause given
+    // to the insert is
     // recorded with the stamp and only with it.
     boolean entersEpisode = status == SagaStatus.COMPENSATING;
     Long episodeVersion = entersEpisode ? 1L : null;
