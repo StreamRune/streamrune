@@ -481,8 +481,7 @@ final class SagaStepExecutor<S extends SagaState> {
    *       dispatch has not completed, and compensates the persisted evolved state. It does not wait
    *       for the forward loop: commands not yet dispatched by a dead delivery are never
    *       dispatched, and a command a live delivery is dispatching at that moment commits after the
-   *       timeout's compensation. That delivery's event write then loses its compare-and-swap and
-   *       reports the command ({@link #reportCompensationUnderForwardStep});
+   *       timeout's compensation;
    *   <li>a poison in {@code handle}: the fault of a genesis-pending forward row ({@code
    *       pre_fault_status} {@code NULL}); the replayed start entry re-evolves.
    * </ul>
