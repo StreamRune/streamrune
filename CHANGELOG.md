@@ -147,8 +147,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   the database, a registered type with an `@Encrypted` component when no `CryptoEngine` is
   configured.
 - `EventMetadata` on every envelope: `eventId`, `commandId`, `traceId`, `spanId`, `correlationId`,
-  `causationId`, `userId`, `timestamp` and allow-listed W3C baggage, built by the command bus from
-  the bound `StreamRuneContext`.
+  `causationId`, `userId`, `timestamp`, allow-listed W3C baggage and `sagaOrigin`, built by the
+  command bus from the bound `StreamRuneContext`. `sagaOrigin` (`SagaOrigin`: saga type, saga id,
+  hop) names the saga whose dispatch caused the event and is `null` on every other event; the bus
+  copies it from the dispatch cause that saga dispatch binds (`StreamRuneContext.CAUSE`), never from
+  a request header or a baggage entry.
 - `PgAdvisoryLocker` — distributed per-stream pessimistic locking via `pg_advisory_xact_lock` over the
   typed stream, with `withDedicatedPool(...)` so lock connections never starve the application pool.
 - Typed identifiers: `StreamId`, `AggregateType`, `AggregateId`, `Version`, `GlobalOffset`, `EventId`,
@@ -420,6 +423,13 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   dispatch's target; correlation rides on `EventMetadata.correlationId`, set to the saga id on every
   saga-issued command. Domain code recognises a saga dispatch through
   `StreamRuneContext.isSagaDispatch()` (`StreamRuneContext.SAGA_OWNED`).
+- Saga origin: every event a saga-issued command produces carries `EventMetadata.sagaOrigin` — the
+  saga's type and id at hop 0 — on the event path, the timeout runner, the compensation-retry sweeper
+  and the dead-letter replayer alike; events of forward commands carry the triggering event's id as
+  `causationId`. Saga dispatch binds both as `StreamRuneContext.CAUSE` (read with
+  `StreamRuneContext.cause()`), `executeAsync` and `StreamRuneContext.wrap` carry the binding across
+  threads, and the origin a saga binds depends only on its type and id, so a rerun stores the same
+  saga origin and causation id.
 - Lifecycle: `STARTED`, `RUNNING`, `COMPLETED`, `COMPENSATING`, `COMPENSATED`, `FAILED`, `FAULTED`.
   The `saga_state` row's `status` is authoritative. Recovery facts live on the row and are written only
   by the code that establishes them: `genesis_applied`, `pre_fault_status`, `dead_letter_pending`,
@@ -431,8 +441,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   committed (`genesis_applied = TRUE`) after the dispatch loop, so a saga never dispatches without a
   row and a crashed start is visible to the timeout runner.
 - Effectively-once dispatch: every saga command goes through `CommandBus.execute(command, key)` —
-  forward commands keyed `saga:<correlationId>:<triggerOffset>:<index>`, every compensation command
-  keyed `saga:<correlationId>:episode:<episodeVersion>:comp:<index>` — so a redelivery, a crash-resume
+  forward commands keyed `saga:<sagaId>:<triggerOffset>:<index>`, every compensation command
+  keyed `saga:<sagaId>:episode:<episodeVersion>:comp:<index>` — so a redelivery, a crash-resume
   or a concurrent re-driver dedups in the command inbox instead of re-executing a refund.
 - Forward-command failure classification: a proven retry-later failure (`CircuitBreakerOpenException`,
   an interceptor veto, `CommandBusClosedException`, `CommandBusOverloadedException`,
@@ -807,15 +817,20 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `InMemoryEventStoreFactory` for DI.
 - Fixtures: `DeciderFixture` (`given(...)` / `when(...)` / `expectEvents`, `expectNoEvents`,
   `expectException`, `expectFailedWith`, `expectState`, `expectStateMatches`, `expectProduced`),
-  `EventStoreFixture`, `ProjectionFixture`, `MutableClock`.
+  `EventStoreFixture`, `ProjectionFixture`, `MutableClock`, `SagaEnvelopes` (metadata and envelopes
+  of saga-caused events for unit tests).
 - In-memory doubles: `InMemoryCommandBus` (registers with an aggregate type, runs `guard` before
   `decide`), `InMemoryQueryBus`, `InMemoryCommandInbox`, `InMemoryDeadLetterQueue`,
-  `InMemoryCryptoEngine` (tests only), `InMemoryEventSubscription`, `InMemoryOutboxStore`,
+  `InMemoryCryptoEngine` (tests only), `InMemoryEventSubscription` (delivers on the appending
+  thread, outside that thread's request context, saga flag and dispatch cause, so a listener's
+  command is never taken for a saga dispatch), `InMemoryOutboxStore`,
   `InMemoryOffsetStore`, `InMemoryProjectionRepository` (a fencing-capable processor and its own offset
   store, for `TRANSACTIONAL_LOCAL` unit tests without Docker), `InMemoryProjectionDeadLetterStore`,
   `InMemorySagaStore`, `InMemorySagaDeadLetterStore`.
 - Contract suites a custom store can extend: `SagaStoreContract`, `SagaDeadLetterStoreContract`,
-  `OutboxStoreContract`, `AtomicBatchProcessorContract`.
+  `OutboxStoreContract`, `AtomicBatchProcessorContract`; and `CommandBusProvenanceContract` for a
+  custom `CommandBus` (the saga origin comes from the bound dispatch cause only, and a bound cause
+  decides the causation id).
 - Every PostgreSQL-backed suite of the framework runs on PostgreSQL 18 in the default build and on 17
   in a second CI job (Testcontainers).
 

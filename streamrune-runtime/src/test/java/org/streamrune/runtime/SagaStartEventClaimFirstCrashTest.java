@@ -19,15 +19,18 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
@@ -145,6 +148,16 @@ class SagaStartEventClaimFirstCrashTest {
     private final java.util.Set<IdempotencyKey> committed = ConcurrentHashMap.newKeySet();
     private final Map<String, AtomicInteger> execCounts = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> failuresRemaining = new ConcurrentHashMap<>();
+    private final Map<String, List<StreamRuneContext.DispatchCause>> causes =
+        new ConcurrentHashMap<>();
+
+    /**
+     * The cause bound around every dispatch of {@code cmdId} this bus received, in order —
+     * executed, deduplicated and failed dispatches alike.
+     */
+    List<StreamRuneContext.DispatchCause> causes(String cmdId) {
+      return List.copyOf(causes.getOrDefault(cmdId, List.of()));
+    }
 
     @Override
     public boolean supportsIdempotentExecution() {
@@ -166,10 +179,13 @@ class SagaStartEventClaimFirstCrashTest {
 
     @Override
     public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+      String id = ((TestCommand) command).cmdId();
+      causes
+          .computeIfAbsent(id, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+          .add(StreamRuneContext.cause());
       if (committed.contains(key)) {
         return ok();
       }
-      String id = ((TestCommand) command).cmdId();
       AtomicInteger remaining = failuresRemaining.get(id);
       if (remaining != null && remaining.get() > 0) {
         remaining.decrementAndGet();
@@ -374,7 +390,9 @@ class SagaStartEventClaimFirstCrashTest {
     // 1) First delivery: Charge ok, Reserve fails -> compensate -> Refund executes. The terminal
     // write (COMPENSATED) then crashes. With claim-first, a COMPENSATING row was durably written
     // BEFORE the refund ran; the crash only loses the terminal write.
-    assertThatThrownBy(() -> runner.asEventListener().onEvents(List.of(startEnvelope("x", 0L))))
+    // One stored event, delivered twice: a redelivery hands the runner the same envelope.
+    EventEnvelope start = startEnvelope("x", 0L);
+    assertThatThrownBy(() -> runner.asEventListener().onEvents(List.of(start)))
         .as("the simulated crash on the terminal write propagates like an infra failure")
         .isInstanceOf(EventStoreException.class);
 
@@ -400,7 +418,7 @@ class SagaStartEventClaimFirstCrashTest {
     // COMPENSATED. (This is the ONLY recovery for a start-path claim crash with no timeout runner
     // and
     // no correlated event to arrive.)
-    runner.asEventListener().onEvents(List.of(startEnvelope("x", 0L)));
+    runner.asEventListener().onEvents(List.of(start));
 
     var afterRedelivery =
         backing
@@ -413,6 +431,20 @@ class SagaStartEventClaimFirstCrashTest {
         .as("Reserve (the shipped step) must NEVER execute after the charge was refunded")
         .isZero();
     assertThat(bus.execCount("undo-1")).as("the refund must not double-execute").isEqualTo(1);
+
+    // The cause saga dispatch binds is a function of the saga type, the saga id and the triggering
+    // event, so the crashed attempt and the resume bind equal values: whichever attempt commits a
+    // command stores the same saga origin and causation id.
+    var origin = new SagaOrigin(SagaType.fromClass(FakeSagaState.class), sagaId, 0);
+    var forwardCause =
+        new StreamRuneContext.DispatchCause(
+            CausationId.of(start.metadata().eventId().value()), origin);
+    var compensationCause = new StreamRuneContext.DispatchCause(null, origin);
+    assertThat(bus.causes("do-1")).containsExactly(forwardCause);
+    assertThat(bus.causes("do-2")).as("the failed dispatch").containsExactly(forwardCause);
+    assertThat(bus.causes("undo-1"))
+        .as("the crashed attempt and the resume bind the same cause")
+        .containsExactly(compensationCause, compensationCause);
 
     // 3) A later correlated event is now a no-op — the saga already reached terminal COMPENSATED
     // via

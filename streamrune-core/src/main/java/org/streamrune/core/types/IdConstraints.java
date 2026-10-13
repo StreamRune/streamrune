@@ -61,7 +61,7 @@ package org.streamrune.core.types;
  *       can carry an id the bound refuses (its context was built with the plain constructor and
  *       never crossed the door); rejecting there fails every retry of that entry deterministically,
  *       burning the whole ladder and permanently discarding an already-accepted business command.
- *   <li>{@code SagaCommandDispatch.executeCorrelated} rebuilds it from {@code
+ *   <li>{@code SagaCommandDispatch.dispatch} rebuilds it from {@code
  *       CorrelationId.of(sagaId.value())}, where the {@code SagaId} came straight out of {@code
  *       saga_state} (or {@code saga_dead_letters}) via {@code PostgresSagaStore}. A {@code SagaId}
  *       is bounded in length, not in charset; rejecting there terminally FAILS an in-flight saga

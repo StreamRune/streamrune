@@ -36,6 +36,7 @@ import org.streamrune.core.projection.WindowResult;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionHealth;
@@ -138,9 +139,10 @@ import org.streamrune.core.types.Version;
       ProjectionDeadLetterEntry.class,
       Window.class,
       WindowResult.class,
-      // Core records — org.streamrune.core.saga (2)
+      // Core records — org.streamrune.core.saga (3)
       SagaCommand.class,
       SagaId.class,
+      SagaOrigin.class,
       // Core records — org.streamrune.core.subscription (2)
       SubscriptionConfig.class,
       SubscriptionHealth.class,

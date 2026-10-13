@@ -11,13 +11,16 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.CircuitBreakerOpenException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.OptimisticLockException;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore.AppliedEvent;
+import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.runtime.SagaStartFixtures.ScriptedBus;
 import org.streamrune.runtime.SagaStartFixtures.StartOrchestrator;
@@ -30,6 +33,12 @@ class SagaGenesisCrashPointTest {
 
   private SagaStepExecutor<StartState> executor(ForwardingSagaStore store, ScriptedBus bus) {
     return new SagaStepExecutor<>(new StartOrchestrator(), store, bus, StreamRuneMetrics.NOOP);
+  }
+
+  /** The cause every forward dispatch of the saga binds for {@code trigger}. */
+  private StreamRuneContext.DispatchCause forwardCause(EventEnvelope trigger) {
+    return new StreamRuneContext.DispatchCause(
+        CausationId.of(trigger.metadata().eventId().value()), new SagaOrigin(TYPE, sagaId, 0));
   }
 
   @Test
@@ -64,6 +73,47 @@ class SagaGenesisCrashPointTest {
     assertThat(applied.genesisApplied()).isTrue();
     assertThat(applied.version()).isEqualTo(2L);
     assertThat(applied.lastAppliedOffset()).isEqualTo(3L);
+    assertThat(bus.causes("step-1")).containsExactly(forwardCause(event));
+    assertThat(bus.causes("step-2")).containsExactly(forwardCause(event));
+  }
+
+  /**
+   * The process dies after the first command and its key committed and before the saga row
+   * advances. The rerun dispatches under the same keys with the same cause bound, so the committed
+   * command is deduplicated and whichever attempt commits a command stores the same saga origin and
+   * causation id.
+   */
+  @Test
+  void crashAfterTheFirstCommandCommits_rerunBindsTheSameCause_andCommitsNothingTwice() {
+    var store = new ForwardingSagaStore(new InMemorySagaStore());
+    var bus = new ScriptedBus();
+    var exec = executor(store, bus);
+    bus.crashOnceAfterCommit("step-1");
+    var event = startEvent(3L);
+
+    Throwable crash =
+        catchThrowable(
+            () ->
+                exec.execute(
+                    sagaId, Optional.empty(), new SagaTrigger.ForwardStep(event, true, false)));
+    assertThat(crash).isInstanceOf(SagaStartFixtures.SimulatedProcessCrash.class);
+    assertThat(bus.count("step-1")).isEqualTo(1);
+    assertThat(bus.count("step-2")).isZero();
+    assertThat(store.load(sagaId, TYPE, StartState.class).orElseThrow().genesisApplied()).isFalse();
+
+    StepOutcome rerun =
+        exec.execute(
+            sagaId,
+            store.load(sagaId, TYPE, StartState.class),
+            new SagaTrigger.ForwardStep(event, true, false));
+
+    assertThat(rerun).isEqualTo(StepOutcome.FORWARD_PROGRESSED);
+    assertThat(bus.count("step-1")).as("deduplicated on its key: no second event").isEqualTo(1);
+    assertThat(bus.count("step-2")).isEqualTo(1);
+    assertThat(bus.causes("step-1"))
+        .as("the crashed attempt and the rerun bind the same cause")
+        .containsExactly(forwardCause(event), forwardCause(event));
+    assertThat(bus.causes("step-2")).containsExactly(forwardCause(event));
   }
 
   @Test
@@ -95,6 +145,10 @@ class SagaGenesisCrashPointTest {
     assertThat(rerun).isEqualTo(StepOutcome.FORWARD_PROGRESSED);
     assertThat(bus.count("step-1")).as("index 0 dedups on its offset-stable key").isEqualTo(1);
     assertThat(bus.count("step-2")).isEqualTo(1);
+    assertThat(bus.causes("step-1"))
+        .as("the interrupted attempt and the rerun bind the same cause")
+        .containsExactly(forwardCause(event), forwardCause(event));
+    assertThat(bus.causes("step-2")).containsExactly(forwardCause(event), forwardCause(event));
     assertThat(store.load(sagaId, TYPE, StartState.class).orElseThrow().genesisApplied()).isTrue();
   }
 
@@ -122,6 +176,10 @@ class SagaGenesisCrashPointTest {
     assertThat(rerun).isEqualTo(StepOutcome.SKIPPED_DEDUP);
     assertThat(bus.count("step-1")).isEqualTo(1);
     assertThat(bus.count("step-2")).isEqualTo(1);
+    assertThat(bus.causes("step-1"))
+        .as("the rerun dispatches nothing: one dispatch, under the trigger's cause")
+        .containsExactly(forwardCause(event));
+    assertThat(bus.causes("step-2")).containsExactly(forwardCause(event));
   }
 
   @Test

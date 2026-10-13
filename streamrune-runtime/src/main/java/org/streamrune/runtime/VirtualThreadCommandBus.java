@@ -53,6 +53,7 @@ import org.streamrune.core.SnapshotPolicy;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.SubjectForgottenException;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CausationId;
@@ -82,11 +83,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
   /**
    * Baggage key naming the id of the message (typically an event) that caused the current command.
-   * Reaction dispatchers (sagas, subscriptions) put the triggering message id under this key in
-   * {@link StreamRuneContext} baggage; the bus then writes it into {@link
-   * EventMetadata#causationId()} of every event the command produces, keeping causation chains
-   * traversable. When absent, produced events have a {@code null} causationId (chain root). The
-   * command's own id is always recorded separately in {@link EventMetadata#commandId()}.
+   * With no {@link StreamRuneContext#CAUSE} bound, the bus writes the entry of the bound request
+   * context's baggage into {@link EventMetadata#causationId()} of every event the command produces;
+   * when the entry is absent too, the events have a {@code null} causationId (chain root). Under a
+   * bound cause the entry is ignored and the cause decides the causation id: saga dispatch names
+   * the triggering event through the cause, not through this key. The command's own id is always
+   * recorded separately in {@link EventMetadata#commandId()}.
    */
   public static final String CAUSATION_ID_BAGGAGE_KEY = "streamrune.causation-id";
 
@@ -629,10 +631,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * runnable throws before running the command, the future fails with that throwable.
    *
    * <p>Caller context that does not cross {@code Thread.start()} is captured at submission: {@link
-   * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, and {@link StreamRuneContext#SAGA_OWNED} are
-   * re-bound on the new thread, and the configured {@link Builder#asyncTaskWrapper(UnaryOperator)
-   * asyncTaskWrapper} can capture other thread-bound state such as the current OpenTelemetry
-   * context.
+   * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED} and
+   * {@link StreamRuneContext#CAUSE} are re-bound on the new thread, and the configured {@link
+   * Builder#asyncTaskWrapper(UnaryOperator) asyncTaskWrapper} can capture other thread-bound state
+   * such as the current OpenTelemetry context.
    */
   @Override
   public <C extends Command> CompletableFuture<CommandResult> executeAsync(C command) {
@@ -728,10 +730,11 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   /**
    * Builds the runnable that {@link #executeAsync} runs on its new virtual thread. Runs on the
    * submitting thread so caller context can be captured before it is lost: ScopedValues ({@link
-   * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED}) don't
-   * inherit across {@code Thread.start()} and are re-bound via a carrier, and the configured {@link
-   * Builder#asyncTaskWrapper(java.util.function.UnaryOperator) asyncTaskWrapper} is applied here so
-   * it can capture thread-bound caller state such as the current OpenTelemetry context.
+   * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED}, {@link
+   * StreamRuneContext#CAUSE}) don't inherit across {@code Thread.start()} and are re-bound via a
+   * carrier, and the configured {@link Builder#asyncTaskWrapper(java.util.function.UnaryOperator)
+   * asyncTaskWrapper} is applied here so it can capture thread-bound caller state such as the
+   * current OpenTelemetry context.
    */
   private <C extends Command> Runnable prepareAsyncTask(
       C command, CompletableFuture<CommandResult> future, AdmissionSlot slot) {
@@ -739,6 +742,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     var capturedDlqReplay = DLQ_REPLAY.isBound() ? DLQ_REPLAY.get() : null;
     var capturedSagaOwned =
         StreamRuneContext.SAGA_OWNED.isBound() ? StreamRuneContext.SAGA_OWNED.get() : null;
+    var capturedCause = StreamRuneContext.CAUSE.isBound() ? StreamRuneContext.CAUSE.get() : null;
     // The slot is freed BEFORE the future completes, on success and failure alike: a stage chained
     // on the future runs inside complete() on this very thread, and a caller blocked in get() or
     // join() may resubmit the instant it wakes — either must find its own command's slot free, or
@@ -772,6 +776,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           (carrier == null)
               ? ScopedValue.where(StreamRuneContext.SAGA_OWNED, capturedSagaOwned)
               : carrier.where(StreamRuneContext.SAGA_OWNED, capturedSagaOwned);
+    }
+    if (capturedCause != null) {
+      carrier =
+          (carrier == null)
+              ? ScopedValue.where(StreamRuneContext.CAUSE, capturedCause)
+              : carrier.where(StreamRuneContext.CAUSE, capturedCause);
     }
     ScopedValue.Carrier boundCarrier = carrier;
     Runnable task = boundCarrier != null ? () -> boundCarrier.run(completeFuture) : completeFuture;
@@ -1450,34 +1460,55 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * re-dispatched request bound to the same context — the same stale timestamp, undermining audit
    * ordering. Each call reads the clock afresh, so events of one command, and successive commands
    * under one bound context, receive distinct, monotonically-sensible timestamps. Correlation,
-   * causation, trace and user identity are still taken from the bound context.
+   * trace and user identity are taken from the bound context.
+   *
+   * <p>The saga origin comes from the bound {@link StreamRuneContext#CAUSE} and from nowhere else:
+   * no component of the request context and no baggage entry reaches {@link
+   * EventMetadata#sagaOrigin()}. A bound cause also decides the causation id.
    */
   private EventMetadata buildMetadata(CorrelationId correlationId, CommandId commandId) {
     EventId eventId = IdGenerator.generateEventId();
     Instant now = clock.instant();
+    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
+    SagaOrigin origin = cause == null ? null : cause.sagaOrigin();
 
     if (StreamRuneContext.CURRENT.isBound()) {
       StreamRuneContext.RequestContext ctx = StreamRuneContext.CURRENT.get();
+      // A bound cause decides the causation id, a null one included; the baggage entry is read
+      // only with no cause bound.
+      CausationId causation = cause != null ? cause.causationId() : causationIdFrom(ctx);
       return new EventMetadata(
           eventId,
           commandId,
           ctx.traceId(),
           null,
           correlationId,
-          causationIdFrom(ctx),
+          causation,
           ctx.userId(),
           now,
-          ctx.baggage());
+          ctx.baggage(),
+          origin);
     }
-    return new EventMetadata(eventId, commandId, null, null, correlationId, null, null, now);
+    return new EventMetadata(
+        eventId,
+        commandId,
+        null,
+        null,
+        correlationId,
+        cause == null ? null : cause.causationId(),
+        null,
+        now,
+        null,
+        origin);
   }
 
   /**
-   * Resolves the causation id for produced events. Per the {@link EventMetadata} contract, {@code
-   * causationId} references the direct predecessor message (typically the event a saga or
-   * subscriber reacted to) — never the command's own id, which lives in {@link
-   * EventMetadata#commandId()}. The causing message id is read from the {@link
-   * #CAUSATION_ID_BAGGAGE_KEY} baggage entry; when absent, produced events are causation roots.
+   * Resolves the causation id for events produced with no {@link StreamRuneContext#CAUSE} bound.
+   * Per the {@link EventMetadata} contract, {@code causationId} references the direct predecessor
+   * message (typically the event a saga or subscriber reacted to) — never the command's own id,
+   * which lives in {@link EventMetadata#commandId()}. The causing message id is read from the
+   * {@link #CAUSATION_ID_BAGGAGE_KEY} baggage entry; when absent, produced events are causation
+   * roots.
    */
   private static CausationId causationIdFrom(StreamRuneContext.RequestContext ctx) {
     String causingMessageId = ctx.baggage().get(CAUSATION_ID_BAGGAGE_KEY);

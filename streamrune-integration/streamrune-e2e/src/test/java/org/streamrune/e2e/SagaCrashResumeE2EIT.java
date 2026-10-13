@@ -26,6 +26,7 @@ import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.AggregateId;
@@ -35,6 +36,7 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
@@ -363,6 +365,26 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
                 "SELECT COUNT(*) FROM event_stream WHERE event_type = ?",
                 EventType.fromClass(OrderCancelled.class).name()))
         .as("compensation executed exactly once — OrderCancelled appended once")
+        .isEqualTo(1L);
+
+    // The compensating event, read back from event_stream.metadata, names the saga that
+    // dispatched its command: the saga's type, its id, hop 0. A compensation command reacts to no
+    // event, so the event carries no causation id.
+    EventMetadata compensation =
+        store
+            .load(StreamId.of(AggregateType.of("cancel"), AggregateId.of("cancel-" + orderId)))
+            .events()
+            .getFirst()
+            .metadata();
+    assertThat(compensation.sagaOrigin())
+        .isEqualTo(new SagaOrigin(SagaType.fromClass(OrderSagaState.class), SagaId.of(sagaId), 0));
+    assertThat(compensation.correlationId()).isEqualTo(CorrelationId.of(sagaId));
+    assertThat(compensation.causationId()).isNull();
+    assertThat(
+            count(
+                "SELECT COUNT(*) FROM event_stream WHERE metadata -> 'sagaOrigin' ->> 'sagaId' = ?",
+                sagaId))
+        .as("the origin is stored in the metadata JSON of the saga-caused event only")
         .isEqualTo(1L);
   }
 }

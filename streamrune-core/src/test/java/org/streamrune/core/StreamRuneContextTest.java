@@ -6,8 +6,14 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
 
@@ -452,5 +458,158 @@ class StreamRuneContextTest {
         () ->
             new StreamRuneContext.RequestContext(
                 null, null, CorrelationId.of("corr-1"), null, Map.of()));
+  }
+
+  // ==== The cause of the dispatch in progress ====
+
+  private static final SagaOrigin ORIGIN =
+      SagaOrigin.dispatchedBy(SagaType.of("com.shop.OrderSaga$State"), SagaId.of("order-saga-42"));
+
+  private static final StreamRuneContext.DispatchCause BOUND_CAUSE =
+      new StreamRuneContext.DispatchCause(CausationId.of("evt-1"), ORIGIN);
+
+  @Test
+  void cause_isNullWhenNothingIsBound() {
+    assertFalse(StreamRuneContext.CAUSE.isBound());
+    assertNull(StreamRuneContext.cause());
+  }
+
+  @Test
+  void cause_returnsTheBoundValue() {
+    ScopedValue.where(StreamRuneContext.CAUSE, BOUND_CAUSE)
+        .run(() -> assertSame(BOUND_CAUSE, StreamRuneContext.cause()));
+    assertNull(StreamRuneContext.cause());
+  }
+
+  @Test
+  void aDispatchCauseNeedsAnEventOrAnOrigin() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class, () -> new StreamRuneContext.DispatchCause(null, null));
+    assertEquals("a dispatch cause names a causing event, a saga origin, or both", ex.getMessage());
+
+    var eventOnly = new StreamRuneContext.DispatchCause(CausationId.of("evt-1"), null);
+    assertEquals(CausationId.of("evt-1"), eventOnly.causationId());
+    assertNull(eventOnly.sagaOrigin());
+
+    var originOnly = new StreamRuneContext.DispatchCause(null, ORIGIN);
+    assertNull(originOnly.causationId());
+    assertEquals(ORIGIN, originOnly.sagaOrigin());
+  }
+
+  @Test
+  void wrapRunnable_carriesTheCauseToAnotherThread() throws Exception {
+    var ctx =
+        new StreamRuneContext.RequestContext(
+            null, UserId.of("user-1"), CorrelationId.of("corr-1"), NOW, null);
+    var observedCause = new AtomicReference<StreamRuneContext.DispatchCause>();
+    var observedContext = new AtomicReference<StreamRuneContext.RequestContext>();
+
+    Runnable wrapped =
+        ScopedValue.where(StreamRuneContext.CURRENT, ctx)
+            .where(StreamRuneContext.CAUSE, BOUND_CAUSE)
+            .call(
+                () ->
+                    StreamRuneContext.wrap(
+                        () -> {
+                          observedCause.set(StreamRuneContext.cause());
+                          observedContext.set(StreamRuneContext.capture());
+                        }));
+
+    Thread thread = new Thread(wrapped);
+    thread.start();
+    thread.join();
+    assertSame(BOUND_CAUSE, observedCause.get());
+    assertSame(ctx, observedContext.get());
+  }
+
+  @Test
+  void wrapCallable_carriesTheCauseToAnotherThread() throws Exception {
+    var ctx =
+        new StreamRuneContext.RequestContext(
+            null, UserId.of("user-2"), CorrelationId.of("corr-2"), NOW, null);
+
+    Callable<Object[]> wrapped =
+        ScopedValue.where(StreamRuneContext.CURRENT, ctx)
+            .where(StreamRuneContext.CAUSE, BOUND_CAUSE)
+            .call(
+                () ->
+                    StreamRuneContext.wrap(
+                        () ->
+                            new Object[] {StreamRuneContext.cause(), StreamRuneContext.capture()}));
+
+    try (var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      Object[] observed = executor.submit(wrapped).get();
+      assertSame(BOUND_CAUSE, observed[0]);
+      assertSame(ctx, observed[1]);
+    }
+  }
+
+  @Test
+  void wrap_carriesACauseBoundWithoutAContext() throws Exception {
+    var observedCause = new AtomicReference<StreamRuneContext.DispatchCause>();
+    var contextBound = new AtomicReference<Boolean>();
+
+    Runnable wrappedRunnable =
+        ScopedValue.where(StreamRuneContext.CAUSE, BOUND_CAUSE)
+            .call(
+                () ->
+                    StreamRuneContext.wrap(
+                        () -> {
+                          observedCause.set(StreamRuneContext.cause());
+                          contextBound.set(StreamRuneContext.CURRENT.isBound());
+                        }));
+    Thread thread = new Thread(wrappedRunnable);
+    thread.start();
+    thread.join();
+    assertSame(BOUND_CAUSE, observedCause.get());
+    assertEquals(Boolean.FALSE, contextBound.get());
+
+    Callable<Object[]> wrappedCallable =
+        ScopedValue.where(StreamRuneContext.CAUSE, BOUND_CAUSE)
+            .call(
+                () ->
+                    StreamRuneContext.wrap(
+                        () ->
+                            new Object[] {
+                              StreamRuneContext.cause(), StreamRuneContext.CURRENT.isBound()
+                            }));
+    try (var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      Object[] observed = executor.submit(wrappedCallable).get();
+      assertSame(BOUND_CAUSE, observed[0]);
+      assertEquals(Boolean.FALSE, observed[1]);
+    }
+  }
+
+  @Test
+  void wrap_carriesAContextBoundWithoutACause() throws Exception {
+    var ctx =
+        new StreamRuneContext.RequestContext(null, null, CorrelationId.of("corr-4"), NOW, null);
+    var observedCause = new AtomicReference<Object>("unset");
+    var observedContext = new AtomicReference<StreamRuneContext.RequestContext>();
+
+    Runnable wrapped =
+        ScopedValue.where(StreamRuneContext.CURRENT, ctx)
+            .call(
+                () ->
+                    StreamRuneContext.wrap(
+                        () -> {
+                          observedCause.set(StreamRuneContext.cause());
+                          observedContext.set(StreamRuneContext.capture());
+                        }));
+    Thread thread = new Thread(wrapped);
+    thread.start();
+    thread.join();
+    assertNull(observedCause.get());
+    assertSame(ctx, observedContext.get());
+  }
+
+  @Test
+  void wrap_returnsTheTaskUnchangedWhenNothingIsBound() {
+    Runnable runnable = () -> {};
+    Callable<String> callable = () -> "x";
+
+    assertSame(runnable, StreamRuneContext.wrap(runnable));
+    assertSame(callable, StreamRuneContext.wrap(callable));
   }
 }

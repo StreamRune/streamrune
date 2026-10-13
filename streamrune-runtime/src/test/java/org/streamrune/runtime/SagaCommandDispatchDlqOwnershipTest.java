@@ -24,8 +24,8 @@ import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemoryCommandInbox;
 
 /**
- * Verifies that commands dispatched via {@link SagaCommandDispatch#executeCorrelated} are marked
- * saga-owned and therefore NOT published to the dead-letter queue on failure.
+ * Verifies that commands dispatched via {@link SagaCommandDispatch#dispatch} are marked saga-owned
+ * and therefore NOT published to the dead-letter queue on failure.
  *
  * <p>The saga already owns the failure (it compensates on failure). Independently DLQ-retrying the
  * command in addition would double-drive the compensation — both the retry infrastructure and the
@@ -172,7 +172,7 @@ class SagaCommandDispatchDlqOwnershipTest {
 
   @Test
   void sagaOwnedCommandFailure_isNotPublishedToDlq() {
-    // A command dispatched through SagaCommandDispatch.executeCorrelated must NOT be published
+    // A command dispatched through SagaCommandDispatch.dispatch must NOT be published
     // to the DLQ on permanent failure: the SAGA subsystem owns its recovery — compensation,
     // redelivery, its own timeout(), or the compensation resume paths —
     // so the DLQ must not independently retry it too (double-drive).
@@ -187,9 +187,10 @@ class SagaCommandDispatchDlqOwnershipTest {
             assertThrows(
                 RuntimeException.class,
                 () ->
-                    SagaCommandDispatch.executeCorrelated(
+                    SagaCommandDispatch.dispatch(
                         bus,
-                        CorrelationId.of("saga-x"),
+                        SagaOrigins.of("saga-x"),
+                        null,
                         new AlwaysFailingCommand.Blow("agg-1"),
                         IdempotencyKey.of("saga:saga-x:1:0")),
                 "saga-dispatched command must propagate the original exception"));

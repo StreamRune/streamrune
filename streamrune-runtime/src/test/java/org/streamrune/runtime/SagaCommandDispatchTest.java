@@ -15,10 +15,15 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.DomainException;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaCommand;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
@@ -34,9 +39,87 @@ class SagaCommandDispatchTest {
     return new SagaCommand(new Cmd(id), AggregateId.of(id));
   }
 
+  private static SagaOrigin origin(String sagaId) {
+    return new SagaOrigin(SagaType.of("com.shop.OrderSaga$State"), SagaId.of(sagaId), 0);
+  }
+
+  /** What a bus sees bound while saga dispatch executes a command on it. */
+  private record Bound(
+      CorrelationId correlationId, StreamRuneContext.DispatchCause cause, boolean sagaDispatch) {}
+
+  private static CommandBus capturing(AtomicReference<Bound> bound) {
+    return new CommandBus() {
+      public <C extends Command> CommandResult execute(C command) {
+        throw new UnsupportedOperationException("use keyed execute");
+      }
+
+      @Override
+      public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+        StreamRuneContext.RequestContext ctx = StreamRuneContext.capture();
+        bound.set(
+            new Bound(
+                ctx != null ? ctx.correlationId() : null,
+                StreamRuneContext.cause(),
+                StreamRuneContext.isSagaDispatch()));
+        return null;
+      }
+    };
+  }
+
   @Test
-  void executeCorrelated_bindsCorrelationIdDuringExecution() {
-    var capturedCorrelationId = new AtomicReference<CorrelationId>();
+  void dispatch_bindsTheSagaIdAsCorrelationId_theOriginAndTheCausingEvent() {
+    var bound = new AtomicReference<Bound>();
+
+    SagaCommandDispatch.dispatch(
+        capturing(bound),
+        origin("saga-corr-x"),
+        EventId.of("evt-7"),
+        new Cmd("c"),
+        IdempotencyKey.of("saga:x:1:0"));
+
+    assertThat(bound.get().correlationId()).isEqualTo(CorrelationId.of("saga-corr-x"));
+    assertThat(bound.get().cause())
+        .isEqualTo(
+            new StreamRuneContext.DispatchCause(CausationId.of("evt-7"), origin("saga-corr-x")));
+    assertThat(bound.get().sagaDispatch()).isTrue();
+    assertThat(StreamRuneContext.cause()).as("nothing stays bound after the dispatch").isNull();
+  }
+
+  @Test
+  void dispatch_withNoCausingEvent_bindsTheOriginAlone() {
+    var bound = new AtomicReference<Bound>();
+
+    SagaCommandDispatch.dispatch(
+        capturing(bound),
+        origin("saga-corr-x"),
+        null,
+        new Cmd("c"),
+        IdempotencyKey.of("saga:x:1:0"));
+
+    assertThat(bound.get().cause())
+        .isEqualTo(new StreamRuneContext.DispatchCause(null, origin("saga-corr-x")));
+  }
+
+  @Test
+  void dispatch_refusesAMissingOrigin_beforeTheBusIsCalled() {
+    var bound = new AtomicReference<Bound>();
+
+    assertThatThrownBy(
+            () ->
+                SagaCommandDispatch.dispatch(
+                    capturing(bound),
+                    null,
+                    EventId.of("evt-7"),
+                    new Cmd("c"),
+                    IdempotencyKey.of("saga:x:1:0")))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("origin is required");
+    assertThat(bound.get()).as("the command never reached the bus").isNull();
+  }
+
+  @Test
+  void compensateAndClassify_bindsTheOriginAndTheCausingEventOnEveryCommand() {
+    var causes = new java.util.ArrayList<StreamRuneContext.DispatchCause>();
     CommandBus bus =
         new CommandBus() {
           public <C extends Command> CommandResult execute(C command) {
@@ -45,14 +128,21 @@ class SagaCommandDispatchTest {
 
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
-            StreamRuneContext.RequestContext ctx = StreamRuneContext.capture();
-            capturedCorrelationId.set(ctx != null ? ctx.correlationId() : null);
+            causes.add(StreamRuneContext.cause());
             return null;
           }
         };
-    SagaCommandDispatch.executeCorrelated(
-        bus, CorrelationId.of("saga-corr-x"), new Cmd("c"), IdempotencyKey.of("saga:x:1:0"));
-    assertThat(capturedCorrelationId.get()).isEqualTo(CorrelationId.of("saga-corr-x"));
+
+    SagaCommandDispatch.compensateAndClassify(
+        List.of(sc("a"), sc("b")),
+        bus,
+        origin("saga-1"),
+        EventId.of("evt-3"),
+        episodeKey("saga-1"),
+        LOG);
+
+    var expected = new StreamRuneContext.DispatchCause(CausationId.of("evt-3"), origin("saga-1"));
+    assertThat(causes).containsExactly(expected, expected);
   }
 
   @Test
@@ -72,7 +162,7 @@ class SagaCommandDispatchTest {
         };
     var result =
         SagaCommandDispatch.compensateAndClassify(
-            List.of(sc("a"), sc("b")), bus, CorrelationId.of("saga-1"), episodeKey("saga-1"), LOG);
+            List.of(sc("a"), sc("b")), bus, origin("saga-1"), null, episodeKey("saga-1"), LOG);
     assertThat(result).isEqualTo(SagaCommandDispatch.CompensationOutcome.COMPENSATED);
     assertThat(executed.get()).isEqualTo(2);
   }
@@ -98,7 +188,7 @@ class SagaCommandDispatchTest {
         };
     var result =
         SagaCommandDispatch.compensateAndClassify(
-            List.of(sc("a"), sc("b")), bus, CorrelationId.of("saga-1"), episodeKey("saga-1"), LOG);
+            List.of(sc("a"), sc("b")), bus, origin("saga-1"), null, episodeKey("saga-1"), LOG);
     assertThat(result).isEqualTo(SagaCommandDispatch.CompensationOutcome.RETRY);
     assertThat(executed.get()).isEqualTo(2); // does not break on the first failure
   }
@@ -124,7 +214,7 @@ class SagaCommandDispatchTest {
         };
     var result =
         SagaCommandDispatch.compensateAndClassify(
-            List.of(sc("a"), sc("b")), bus, CorrelationId.of("saga-1"), episodeKey("saga-1"), LOG);
+            List.of(sc("a"), sc("b")), bus, origin("saga-1"), null, episodeKey("saga-1"), LOG);
     assertThat(result).isEqualTo(SagaCommandDispatch.CompensationOutcome.FAILED);
     assertThat(executed.get()).isEqualTo(2);
   }
@@ -148,7 +238,7 @@ class SagaCommandDispatchTest {
         };
     var result =
         SagaCommandDispatch.compensateAndClassify(
-            List.of(sc("a"), sc("b")), bus, CorrelationId.of("saga-1"), episodeKey("saga-1"), LOG);
+            List.of(sc("a"), sc("b")), bus, origin("saga-1"), null, episodeKey("saga-1"), LOG);
     assertThat(result).isEqualTo(SagaCommandDispatch.CompensationOutcome.FAILED);
   }
 
@@ -162,7 +252,7 @@ class SagaCommandDispatchTest {
         };
     var result =
         SagaCommandDispatch.compensateAndClassify(
-            List.of(), bus, CorrelationId.of("saga-1"), episodeKey("saga-1"), LOG);
+            List.of(), bus, origin("saga-1"), null, episodeKey("saga-1"), LOG);
     assertThat(result).isEqualTo(SagaCommandDispatch.CompensationOutcome.FAILED);
   }
 
@@ -208,16 +298,16 @@ class SagaCommandDispatchTest {
   }
 
   @Test
-  void executeCorrelated_vetoedResult_throwsVetoException() {
+  void dispatch_vetoedResult_throwsVetoException() {
     // The bus RETURNS (never throws) a VETOED CommandResult when a user interceptor's before()
     // returns false. Discarding it made the veto indistinguishable from success;
-    // executeCorrelated must surface it instead.
+    // dispatch must surface it instead.
     CommandBus bus = busReturning(vetoedResult("MaintenanceModeInterceptor"));
 
     assertThatThrownBy(
             () ->
-                SagaCommandDispatch.executeCorrelated(
-                    bus, CorrelationId.of("saga-1"), new Cmd("c"), IdempotencyKey.of("saga:x:1:0")))
+                SagaCommandDispatch.dispatch(
+                    bus, origin("saga-1"), null, new Cmd("c"), IdempotencyKey.of("saga:x:1:0")))
         .isInstanceOf(SagaCommandVetoedException.class)
         // Classification contract: a veto is deliberately NOT a DomainException. It
         // refuses to ADMIT the command, so the domain never gave an answer to record permanently —
@@ -235,14 +325,14 @@ class SagaCommandDispatchTest {
   }
 
   @Test
-  void executeCorrelated_idempotentReplayResult_isSuccess_noThrow() {
+  void dispatch_idempotentReplayResult_isSuccess_noThrow() {
     // The other short-circuit reason is a SUCCESS (events were persisted by the prior keyed
     // execution) and must NOT be treated as a rejection.
     CommandBus bus = busReturning(idempotentReplayResult());
     assertThatCode(
             () ->
-                SagaCommandDispatch.executeCorrelated(
-                    bus, CorrelationId.of("saga-1"), new Cmd("c"), IdempotencyKey.of("saga:x:1:0")))
+                SagaCommandDispatch.dispatch(
+                    bus, origin("saga-1"), null, new Cmd("c"), IdempotencyKey.of("saga:x:1:0")))
         .doesNotThrowAnyException();
   }
 
@@ -270,7 +360,7 @@ class SagaCommandDispatchTest {
         };
     var result =
         SagaCommandDispatch.compensateAndClassify(
-            List.of(sc("a"), sc("b")), bus, CorrelationId.of("saga-1"), episodeKey("saga-1"), LOG);
+            List.of(sc("a"), sc("b")), bus, origin("saga-1"), null, episodeKey("saga-1"), LOG);
     // A veto REFUSES ADMISSION — RETRY-class (the episode stays COMPENSATING), surfaced
     // as RETRY_REFUSED so the sweeper's give-up bookkeeping does not count it as an attempt.
     assertThat(result).isEqualTo(SagaCommandDispatch.CompensationOutcome.RETRY_REFUSED);
@@ -278,17 +368,29 @@ class SagaCommandDispatchTest {
     assertThat(executed.get()).as("the remaining compensation still dispatches").isEqualTo(2);
   }
 
+  @Test
+  void forwardKey_isSagaOffsetIndex() {
+    assertThat(SagaCommandDispatch.forwardKey(SagaId.of("s-1"), 7L, 0).value())
+        .isEqualTo("saga:s-1:7:0");
+  }
+
+  @Test
+  void episodeCompensationKey_isSagaEpisodeIndex() {
+    assertThat(SagaCommandDispatch.episodeCompensationKey(SagaId.of("s-1"), 3L, 1).value())
+        .isEqualTo("saga:s-1:episode:3:comp:1");
+  }
+
   /**
-   * {@link IdempotencyKey#of} now refuses control characters — it is the INGRESS door. Saga
-   * dispatch keys are DERIVED from a stored saga correlation, and a {@code SagaId} is bounded in
-   * length, not in charset, so they are built through the decode door instead. Through {@code of},
-   * a saga whose id carries a control character could never dispatch a forward or compensation
-   * command again; and the derivation must stay byte-identical, or a rerun after a crash would
-   * present a different key than the one the earlier run recorded and execute the command twice.
+   * {@link IdempotencyKey#of} refuses control characters — it is the INGRESS door. Saga dispatch
+   * keys are DERIVED from a stored saga id, and a {@code SagaId} is bounded in length, not in
+   * charset, so they are built through the decode door instead. Through {@code of}, a saga whose id
+   * carries a control character could never dispatch a forward or compensation command again; and
+   * the derivation must stay byte-identical, or a rerun after a crash would present a different key
+   * than the one the earlier run recorded and execute the command twice.
    */
   @Test
-  void dispatchKeys_fromAStoredCorrelationWithAControlCharacter_areDerivedVerbatim() {
-    CorrelationId stored = CorrelationId.of("saga-1\n\u0085x");
+  void dispatchKeys_fromAStoredSagaIdWithAControlCharacter_areDerivedVerbatim() {
+    SagaId stored = SagaId.of("saga-1\n\u0085x");
     assertThat(SagaCommandDispatch.forwardKey(stored, 42L, 0).value())
         .isEqualTo("saga:saga-1\n\u0085x:42:0");
     assertThat(SagaCommandDispatch.episodeCompensationKey(stored, 7L, 1).value())
@@ -298,7 +400,7 @@ class SagaCommandDispatchTest {
   /**
    * Episode-scoped key function (version 1), mirroring the production compensation-dispatch key.
    */
-  private static java.util.function.IntFunction<IdempotencyKey> episodeKey(String correlation) {
-    return i -> SagaCommandDispatch.episodeCompensationKey(CorrelationId.of(correlation), 1L, i);
+  private static java.util.function.IntFunction<IdempotencyKey> episodeKey(String sagaId) {
+    return i -> SagaCommandDispatch.episodeCompensationKey(SagaId.of(sagaId), 1L, i);
   }
 }

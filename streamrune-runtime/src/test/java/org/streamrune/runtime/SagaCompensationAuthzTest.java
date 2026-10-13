@@ -29,11 +29,11 @@ import org.streamrune.test.InMemoryEventStore;
 
 /**
  * End-to-end: a saga's {@code @RequireRole}-gated compensation command, dispatched via {@link
- * SagaCommandDispatch#executeCorrelated} on a thread with NO bound user (exactly how the
- * subscription / timeout / sweeper threads run), must reach its handler and commit — because {@code
- * executeCorrelated} binds {@link StreamRuneContext#SAGA_OWNED} and {@link
- * AnnotationAuthorizationInterceptor} honors the saga-system principal. The contrast test proves
- * the gate is real: the same command executed directly (not saga-owned) with no user is rejected.
+ * SagaCommandDispatch#dispatch} on a thread with NO bound user (exactly how the subscription /
+ * timeout / sweeper threads run), must reach its handler and commit — because {@code dispatch}
+ * binds {@link StreamRuneContext#SAGA_OWNED} and {@link AnnotationAuthorizationInterceptor} honors
+ * the saga-system principal. The contrast test proves the gate is real: the same command executed
+ * directly (not saga-owned) with no user is rejected.
  */
 class SagaCompensationAuthzTest {
 
@@ -76,7 +76,7 @@ class SagaCompensationAuthzTest {
   }
 
   private VirtualThreadCommandBus buildBus(RefundDecider decider) {
-    // executeCorrelated dispatches with an idempotency key → the keyed append path needs the same
+    // Saga dispatch executes with an idempotency key → the keyed append path needs the same
     // inbox wired into the event store AND the bus.
     var inbox = new InMemoryCommandInbox();
     EventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
@@ -98,12 +98,13 @@ class SagaCompensationAuthzTest {
 
     // No StreamRuneContext user is bound (a subscription/timeout/sweeper thread). The refund is
     // @RequireRole-gated and the resolver grants nothing — the ONLY way this succeeds is the
-    // saga-system-principal bypass wired to SAGA_OWNED (bound by executeCorrelated).
+    // saga-system-principal bypass wired to SAGA_OWNED (bound by saga dispatch).
     assertDoesNotThrow(
         () ->
-            SagaCommandDispatch.executeCorrelated(
+            SagaCommandDispatch.dispatch(
                 bus,
-                CorrelationId.of("saga-order-1"),
+                SagaOrigins.of("saga-order-1"),
+                null,
                 new RefundPayment("order-1"),
                 IdempotencyKey.of("saga:saga-order-1:episode:1:comp:0")));
 

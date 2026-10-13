@@ -45,6 +45,7 @@
   {"name": "org.streamrune.core.projection.WindowResult", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.saga.SagaCommand", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.saga.SagaId", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
+  {"name": "org.streamrune.core.saga.SagaOrigin", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.subscription.SubscriptionConfig", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.subscription.SubscriptionHealth", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.subscription.SubscriptionHealth$Status", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
