@@ -60,16 +60,17 @@ import org.streamrune.test.InMemorySagaStore;
 import org.streamrune.test.MutableClock;
 
 /**
- * The executor reports a forward step that executed a command and then found a compensation episode
- * opened underneath it: one WARN and one {@code streamrune.saga.forward_after_compensation} sample
- * per step. The report changes no outcome; each case asserts the stored order and the delivery's
- * result beside the report.
+ * The executor reports a compensation episode opened underneath a forward step that executed a
+ * command: one WARN and one {@code streamrune.saga.compensation_under_forward_step} sample per
+ * step. It reports that the episode was opened in the step's window, not the order in which the
+ * step's command and the compensation were stored. The report changes no outcome; each case asserts
+ * the stored order and the delivery's result beside the report.
  *
  * <p>A second path — the timeout runner, or another node's delivery (a second {@link SagaRunner}
  * over the same stores) — runs inside a hook, on the delivery's thread, right before a chosen
  * forward command of the delivery under test. Nothing waits on a clock.
  */
-class SagaForwardAfterCompensationSignalTest {
+class SagaCompensationUnderForwardStepSignalTest {
 
   private static final String ORDER = "42";
   private static final SagaId SAGA = SagaId.of("order-saga-" + ORDER);
@@ -89,7 +90,7 @@ class SagaForwardAfterCompensationSignalTest {
     volatile boolean failing;
 
     @Override
-    public void recordSagaForwardAfterCompensation(String sagaType) {
+    public void recordSagaCompensationUnderForwardStep(String sagaType) {
       if (failing) {
         throw new IllegalStateException("the metrics backend is down");
       }
@@ -503,8 +504,13 @@ class SagaForwardAfterCompensationSignalTest {
     }
   }
 
+  /**
+   * Silent because the row records an offset at or past this event's: the later event's write
+   * raised {@code last_applied_offset}. The stamp is not what decides here; {@link
+   * #aFaultWriteWinsTheWrite_theRowCarriesNoStamp_nothingIsReported} is the case it decides.
+   */
   @Test
-  void aLaterOrdinaryEventWinsTheWrite_theRowCarriesNoStamp_nothingIsReported() {
+  void aLaterEventThatOpensNoEpisodeWinsTheWrite_theRowRecordsItsOffset_nothingIsReported() {
     try (var h = new Fixture(false)) {
       h.deliver(h.append(new Opened(ORDER)));
       EventEnvelope advanced = h.append(new Advanced(ORDER));
@@ -521,6 +527,36 @@ class SagaForwardAfterCompensationSignalTest {
       assertThat(h.storedOrder()).containsExactly("Reserved", "Shipped");
       assertThat(h.row().status()).isEqualTo(SagaStatus.RUNNING);
       assertThat(h.row().episodeVersion()).isNull();
+      assertSilent(h, warnings);
+    }
+  }
+
+  /**
+   * The step loses its write to a fault write — the poison handling of another delivery marks the
+   * row {@code FAULTED} — and the row does not record the step's event. Nothing compensates, so
+   * nothing is reported: the row carries no episode stamp.
+   */
+  @Test
+  void aFaultWriteWinsTheWrite_theRowCarriesNoStamp_nothingIsReported() {
+    try (var h = new Fixture(false)) {
+      h.deliver(h.append(new Opened(ORDER)));
+      EventEnvelope advanced = h.append(new Advanced(ORDER));
+      h.bus.runOnceBefore(
+          Ship.class, () -> assertThat(h.rows.markFaulted(SAGA, TYPE, h.row().version())).isTrue());
+
+      List<String> warnings =
+          executorLinesDuring(
+              Level.WARN,
+              () ->
+                  assertThatThrownBy(() -> h.deliver(advanced))
+                      .isInstanceOf(OptimisticLockException.class));
+
+      assertThat(h.storedOrder()).containsExactly("Reserved", "Shipped");
+      assertThat(h.row().status()).isEqualTo(SagaStatus.FAULTED);
+      assertThat(h.row().episodeVersion()).as("no episode was opened").isNull();
+      assertThat(h.row().lastAppliedOffset())
+          .as("the row does not record the step's event")
+          .isLessThan(advanced.globalOffset().value());
       assertSilent(h, warnings);
     }
   }
@@ -573,18 +609,16 @@ class SagaForwardAfterCompensationSignalTest {
     try (var h = new Fixture(false)) {
       h.reserve.failure = () -> new IllegalArgumentException("out of stock");
       EventEnvelope opened = h.append(new Opened(ORDER));
-      h.bus.runOnceBefore(
-          Reserve.class,
-          () -> {
-            h.timeOut();
-            // Any further read of the row would throw.
-            h.sagaStore.loadFailure = new IllegalStateException("the saga store is unreachable");
-          });
+      h.bus.runOnceBefore(Reserve.class, h::timeOut);
 
       List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(opened));
 
       assertThat(h.storedOrder()).containsExactly("Released", "Refunded");
       assertSilent(h, warnings);
+      List<String> calls = h.sagaStore.calls();
+      assertThat(calls.subList(calls.lastIndexOf("claimCompensating") + 1, calls.size()))
+          .as("the store is not read after the step's lost claim")
+          .doesNotContain("load");
     }
   }
 

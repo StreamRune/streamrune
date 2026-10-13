@@ -107,16 +107,16 @@ class MicrometerStreamRuneMetricsSagaTest {
   }
 
   @Test
-  void recordSagaForwardAfterCompensationIncrementsACounterTaggedWithTheSagaTypeOnly() {
+  void recordSagaCompensationUnderForwardStepIncrementsACounterTaggedWithTheSagaTypeOnly() {
     var registry = new SimpleMeterRegistry();
     var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
 
-    metrics.recordSagaForwardAfterCompensation("OrderFulfillmentSaga");
-    metrics.recordSagaForwardAfterCompensation("OrderFulfillmentSaga");
+    metrics.recordSagaCompensationUnderForwardStep("OrderFulfillmentSaga");
+    metrics.recordSagaCompensationUnderForwardStep("OrderFulfillmentSaga");
 
     var counter =
         registry
-            .find("streamrune.saga.forward_after_compensation")
+            .find("streamrune.saga.compensation_under_forward_step")
             .tag("saga.type", "OrderFulfillmentSaga")
             .counter();
     assertEquals(2.0, counter.count());

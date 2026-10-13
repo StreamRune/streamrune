@@ -66,14 +66,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * On {@link PostgresSagaStore}: the timeout runner claims a saga while a delivery of its start
  * event is between its read of the row and its forward command. The command is stored after the
  * compensation, the delivery's event write loses its compare-and-swap, and the executor reports it:
- * one WARN and one {@code streamrune.saga.forward_after_compensation} sample. The stamp and the
- * genesis flag the report reads are the ones the PostgreSQL statements write.
+ * one WARN and one {@code streamrune.saga.compensation_under_forward_step} sample. The stamp and
+ * the genesis flag the report reads are the ones the PostgreSQL statements write.
  *
  * <p>The timeout runner polls once inside a hook, on the delivery's thread, right before the
  * forward command reaches the bus.
  */
 @Testcontainers
-class PostgresSagaForwardAfterCompensationSignalTest {
+class PostgresSagaCompensationUnderForwardStepSignalTest {
 
   @Container
   static final PostgreSQLContainer<?> PG =
@@ -194,7 +194,7 @@ class PostgresSagaForwardAfterCompensationSignalTest {
     final List<String> reportedSagaTypes = new CopyOnWriteArrayList<>();
 
     @Override
-    public void recordSagaForwardAfterCompensation(String sagaType) {
+    public void recordSagaCompensationUnderForwardStep(String sagaType) {
       reportedSagaTypes.add(sagaType);
     }
   }

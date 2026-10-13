@@ -665,7 +665,7 @@ final class SagaStepExecutor<S extends SagaState> {
    *     {@code null} when every command was dispatched
    * @param executedCommands how many forward commands this call executed. A command the inbox
    *     answered with the outcome of an earlier execution is not counted: its events were stored by
-   *     that execution
+   *     that execution. A command that ran and stored no event is not counted either
    */
   private record ForwardDispatch(StepOutcome compensated, int executedCommands) {}
 
@@ -763,25 +763,24 @@ final class SagaStepExecutor<S extends SagaState> {
 
   /**
    * Reports a compensation episode opened underneath a forward step that executed a command: one
-   * WARN and one {@link StreamRuneMetrics#recordSagaForwardAfterCompensation} sample. Called where
-   * the step's write after its forward loop, or its own claim, is refused by the optimistic lock.
-   * It reports and changes nothing: the caller's outcome stands whatever happens here.
+   * WARN and one {@link StreamRuneMetrics#recordSagaCompensationUnderForwardStep} sample. Called
+   * where the step's write after its forward loop, or its own claim, is refused by the optimistic
+   * lock. It reports and changes nothing: the caller's outcome stands whatever happens here.
    *
    * <p><b>What is reported.</b> A step reads the saga row, dispatches its forward commands and
    * writes the row; nothing it does between the read and the write is visible on the row. A
-   * compensation claim by another path in that window — the timeout runner at the saga's deadline,
-   * a delivery of another node whose own command was rejected — succeeds at the version the step
-   * read, and the compensation is computed from a state that does not include the step. A forward
-   * command the step commits after that compensation is undone by nothing, and the redelivered
-   * event meets a row in its episode or a terminal row and is not applied. The step learns of the
-   * claim when its own write loses.
+   * compensation claim by another path in that window — a timeout claim, a delivery of another node
+   * whose own command was rejected — succeeds at the version the step read, and the compensation is
+   * computed from a state that does not include the step. A forward command the step commits after
+   * that compensation is undone by nothing, and the redelivered event meets a row in its episode or
+   * a terminal row and is not applied. The step learns of the claim when its own write loses.
    *
    * <p><b>The condition</b>, all of it read from the row after the lost write:
    *
    * <ol>
-   *   <li>this call executed at least one forward command. A command the inbox answered was
-   *       committed by an earlier attempt, before this attempt read the row, so before any claim
-   *       this attempt can lose to;
+   *   <li>this call executed at least one forward command that stored events. A command the inbox
+   *       answered was committed by an earlier attempt, before this attempt read the row, so before
+   *       any claim this attempt can lose to; a command that stored nothing left nothing to undo;
    *   <li>the row carries an episode stamp. A forward step never starts on a stamped row — a
    *       stamped row is {@code COMPENSATING}, {@code FAULTED} out of it, or terminal, and {@link
    *       #forwardStep} routes all three away before {@code evolve} — so a stamp found here was
@@ -804,10 +803,13 @@ final class SagaStepExecutor<S extends SagaState> {
    * executed-but-unrecorded step a cancel/void compensation covers, one that committed after it
    * stays. The report names the saga to inspect.
    *
-   * <p><b>What it does not see.</b> A step that does not reach a write: it fails with a retry-later
-   * failure at a later command, or the process dies, after an earlier command committed late. Its
-   * redelivery meets a row in its episode or a terminal row. A twin delivery whose rejection does
-   * not repeat and whose claim this step's own claim then loses to (condition 4).
+   * <p><b>What it does not see.</b> Two cases. A step that does not reach a write: it fails with a
+   * retry-later failure at a later command, or the process dies, after an earlier command committed
+   * late; its redelivery meets a row in its episode or a terminal row and runs no forward step. And
+   * a step whose own claim loses to a twin delivery of the same event whose rejection does not
+   * repeat: the twin is rejected at an earlier command and claims, this step's earlier commands
+   * then succeed, a later one is rejected, and its claim loses to a stamp that names its own event
+   * (condition 4, which a twin rejected at the same command needs).
    *
    * <p>The reload is one read on a path that has already lost. A reload that fails — the store is
    * unreachable, the state does not convert — is logged at DEBUG and nothing is reported.
@@ -849,9 +851,11 @@ final class SagaStepExecutor<S extends SagaState> {
     LOG.warn(
         "Saga {} {}: a compensation episode was opened underneath the forward step of the event at"
             + " offset {}, which executed {} forward command(s) in this call. The compensation is"
-            + " computed from a state that does not include that step, so a forward command the"
-            + " step committed after it is undone by nothing. Inspect the target aggregates of this"
-            + " saga for a forward effect its compensation left in place.",
+            + " computed from a state that does not include that step. A command the step"
+            + " committed before the compensation ran is what a cancel/void compensation covers;"
+            + " one it committed after it is undone by nothing, and the framework does not know"
+            + " which of the two happened. Inspect the target aggregates of this saga for an"
+            + " effect its compensation did not undo.",
         // The saga type is a class name, written whole as the sweeper and the timeout runner
         // write it; the saga id is a business id and is sanitised.
         type.value(),
@@ -859,9 +863,9 @@ final class SagaStepExecutor<S extends SagaState> {
         fs.event().globalOffset().value(),
         executedCommands);
     try {
-      metrics.recordSagaForwardAfterCompensation(sagaTypeTag());
+      metrics.recordSagaCompensationUnderForwardStep(sagaTypeTag());
     } catch (RuntimeException e) {
-      LOG.warn("Metrics recording failed for recordSagaForwardAfterCompensation", e);
+      LOG.warn("Metrics recording failed for recordSagaCompensationUnderForwardStep", e);
     }
   }
 

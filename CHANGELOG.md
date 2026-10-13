@@ -514,14 +514,20 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   runner claims a start at its deadline, as it claims any start whose dispatch has not completed;
   a forward command that a delivery is dispatching at that moment commits after the timeout's
   compensation.
-- A forward command stored after its saga's compensation is reported. A step that executed at least
-  one forward command in a call (a command the inbox answered is not counted), whose write after the
-  forward loop or whose own claim is then refused, and whose row carries a compensation episode
-  without recording the step's event as applied, logs one WARN — saga type, saga id, event offset,
-  number of commands executed — and counts one `saga.forward_after_compensation` sample. This
-  covers a timeout claim and a claim by a delivery on another node under a step in flight; a twin
-  delivery that lost an ordinary race and a later event that opens no episode are not reported. The
-  report changes no outcome and reads the row once, on a path that has already lost its write.
+- A compensation episode opened underneath a forward step that executed a command is reported. A
+  step that executed at least one forward command that stored events in a call (a command the inbox
+  answered is not counted), whose write after the forward loop or whose own claim is then refused,
+  and whose row carries a compensation episode without recording the step's event as applied, logs
+  one WARN — saga type, saga id, event offset, number of commands executed — and counts one
+  `saga.compensation_under_forward_step` sample. This covers a timeout claim and a claim by a
+  delivery on another node that land under a step in flight. The report does not know the order in
+  which the step's command and the compensation were stored — before it, which a cancel/void
+  compensation covers, or after it, which nothing undoes — so each sample is a saga whose target
+  aggregates are to be inspected. A twin delivery that lost an ordinary race and a later event that
+  opens no episode are not reported; neither is a step that never reaches a write after a late
+  command, nor a step whose own claim loses to a twin of the same event whose rejection did not
+  repeat. The report changes no outcome and reads the row once, on a path that has already lost
+  its write.
 - Effectively-once dispatch: every saga command goes through `CommandBus.execute(command, key)` —
   forward commands keyed `saga:<sagaId>:<triggerOffset>:<index>`, every compensation command
   keyed `saga:<sagaId>:episode:<episodeVersion>:comp:<index>` — so a redelivery, a crash-resume
@@ -862,7 +868,7 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   - queries: `queries.dispatched`, `queries.duration`, `queries.cache.hits`, `queries.cache.misses`
   - sagas (tagged `saga.type`): `saga.quarantined`, `saga.faulted`, `saga.skipped_while_faulted`,
     `saga.event_held{hold.reason}`, `saga.replay_deferred`, `saga.compensation{outcome}`,
-    `saga.compensation_retries`, `saga.cas_conflicts`, `saga.forward_after_compensation`,
+    `saga.compensation_retries`, `saga.cas_conflicts`, `saga.compensation_under_forward_step`,
     `saga.compensating`, `saga.timed_out`,
     `saga.faulted_backlog`, `saga.faulted_rows`, `saga.replayed{outcome}`,
     `saga.forced_stale_resume`, `saga.resume_faulted{outcome}`, `saga.compensate_faulted`,

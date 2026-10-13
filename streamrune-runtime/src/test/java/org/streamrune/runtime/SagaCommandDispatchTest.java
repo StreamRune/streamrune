@@ -340,7 +340,15 @@ class SagaCommandDispatchTest {
 
   @Test
   void dispatch_tellsAnExecutedCommandFromOneTheInboxAnswered() {
+    record Stored() implements org.streamrune.core.DomainEvent {}
     CommandBus.CommandResult executedResult =
+        new CommandBus.CommandResult(
+            List.of(new Stored()),
+            StreamId.of(TYPE, AggregateId.of("s1")),
+            Version.initial(),
+            List.of(),
+            List.of());
+    CommandBus.CommandResult storedNothing =
         new CommandBus.CommandResult(
             List.of(), StreamId.of(TYPE, AggregateId.of("s1")), Version.initial(), List.of());
     IdempotencyKey key = IdempotencyKey.of("saga:x:1:0");
@@ -348,8 +356,13 @@ class SagaCommandDispatchTest {
     assertThat(
             SagaCommandDispatch.dispatch(
                 busReturning(executedResult), origin("saga-1"), null, new Cmd("c"), key))
-        .as("the command ran in this call")
+        .as("the command ran in this call and stored an event")
         .isTrue();
+    assertThat(
+            SagaCommandDispatch.dispatch(
+                busReturning(storedNothing), origin("saga-1"), null, new Cmd("c"), key))
+        .as("the command ran and stored nothing: there is nothing of it to undo")
+        .isFalse();
     assertThat(
             SagaCommandDispatch.dispatch(
                 busReturning(idempotentReplayResult()), origin("saga-1"), null, new Cmd("c"), key))

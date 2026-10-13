@@ -121,10 +121,11 @@ final class SagaCommandDispatch {
    *     operator's compensation of a faulted forward step)
    * @param command the saga-issued command
    * @param key the command's idempotency key
-   * @return {@code true} when this call executed the command; {@code false} when the command inbox
-   *     answered it with the outcome of an earlier execution under the same key ({@link
-   *     CommandBus.CommandResult#idempotentReplay()}), whose events were stored by that execution.
-   *     A bus that returns no result is taken to have executed the command
+   * @return {@code true} when this call executed the command and the command stored events; {@code
+   *     false} when the command inbox answered it with the outcome of an earlier execution under
+   *     the same key ({@link CommandBus.CommandResult#idempotentReplay()}), whose events were
+   *     stored by that execution, and when the command ran and stored nothing. A bus that returns
+   *     no result is taken to have executed the command
    * @throws NullPointerException when {@code origin} is {@code null}; the bus is not called
    * @throws SagaCommandVetoedException when an interceptor vetoed the command (it never executed)
    */
@@ -165,7 +166,10 @@ final class SagaCommandDispatch {
       throw new SagaCommandVetoedException(
           result.shortCircuitedBy(), command.getClass().getSimpleName());
     }
-    return result == null || !result.idempotentReplay();
+    if (result == null) {
+      return true;
+    }
+    return !result.idempotentReplay() && result.events() != null && !result.events().isEmpty();
   }
 
   /**
