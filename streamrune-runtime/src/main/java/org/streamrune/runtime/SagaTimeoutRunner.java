@@ -366,7 +366,8 @@ public final class SagaTimeoutRunner<S extends SagaState> {
           () -> metrics.recordSagaTimedOutBacklog(sagaType.value(), timedOut.size()),
           "recordSagaTimedOutBacklog");
     }
-    // A saga that left the selection is past no deadline any more: forget how often it waited.
+    // A saga that is not selected is not a forward saga past its deadline: forget how often its
+    // claim was passed over.
     deferredClaims.keySet().retainAll(timedOut);
     for (SagaId sagaId : timedOut) {
       processTimedOutSaga(sagaId);
