@@ -82,6 +82,10 @@ public final class StreamRuneContext {
    * job or a dead-letter replay dispatches: the events of such a command carry no saga origin and
    * no causation id.
    *
+   * <p>While a cause is bound, {@code VirtualThreadCommandBus} publishes a failed command to no
+   * dead letter queue. Whoever bound the cause retries the command: the saga subsystem for a saga's
+   * dispatch, the listener's subscription for a continuation.
+   *
    * <p>Application code reads it through {@link #cause()} and binds it only through {@link
    * #continuing(EventEnvelope)}.
    */
@@ -143,11 +147,12 @@ public final class StreamRuneContext {
    * with a reserved correlation id and no origin, the bus refuses the command with a {@link
    * ReservedCorrelationIdException}.
    *
-   * <p><b>A failure belongs to the caller.</b> While the bound cause carries a saga origin, {@code
-   * VirtualThreadCommandBus} publishes a failed command to no dead letter queue: a dead-letter
-   * entry cannot hold the origin, and its replay would store the command's events without one. The
-   * listener's subscription is then the only thing that runs the command again, so what the
-   * listener does with a failure decides the command's fate:
+   * <p><b>A failure belongs to the caller.</b> {@code VirtualThreadCommandBus} publishes a command
+   * dispatched inside these bindings to no dead letter queue, whether or not the causing event
+   * carries a saga origin: a dead-letter entry has no place for the causing event or for an origin,
+   * and its replay would store the command's events without either. The listener's subscription is
+   * the one thing that runs the command again, so what the listener does with a failure decides the
+   * command's fate:
    *
    * <ul>
    *   <li>A failure a later attempt can cure — an unreachable store, a lock timeout — leaves the
@@ -172,20 +177,20 @@ public final class StreamRuneContext {
    *       does not see is a failure it swallowed.
    * </ul>
    *
-   * <p><b>An event without a saga origin.</b> A failed continuation of such an event is published
-   * to the dead letter queue like any other command, once for every failed delivery: a listener
-   * that lets three deliveries fail leaves three entries. An entry has no place for the causing
-   * event, so its replay stores the command's events with no causation id. With an idempotency key
-   * the redelivery and the replays of all entries end in one stored event; its causation id is the
-   * causing event's id when the redelivery commits first and absent when a replay does. Without a
-   * key the replay of every entry executes the command once more, besides the redelivery.
+   * <p><b>Parking a failed command instead.</b> A listener that prefers to move on and leave a
+   * failed command to the dead letter queue dispatches it outside these bindings, under a request
+   * context of its own, and catches the failure. That command is an ordinary one: the bus
+   * dead-letters it, and its events carry no causation id and no saga origin, so a saga that caused
+   * the event the listener reacted to does not receive them by origin.
    *
    * <p><b>Reruns.</b> Everything bound here except the context's timestamp is a function of the
-   * stored event, so a redelivery of that event binds the same saga origin and causation id. Give
-   * the command an idempotency key derived from the causing event: a redelivery after the command
-   * committed is then answered from the command inbox and stores no second event. Without a key
-   * every redelivery that reaches the bus executes the command again, with the same origin and
-   * causation id, and for an event without an origin so does every dead-letter replay (above).
+   * stored event, so a redelivery of that event binds the same saga origin and causation id. A
+   * delivery whose command failed stored nothing, so however many deliveries fail, the delivery
+   * that succeeds stores the command's events once. Give the command an idempotency key derived
+   * from the causing event: a redelivery after the command committed — the listener, or the
+   * process, stopped between the command's commit and the subscription's checkpoint — is then
+   * answered from the command inbox and stores no second event. Without a key that redelivery
+   * executes the command again, with the same origin and causation id.
    *
    * @param cause the event the dispatched commands react to, as read from the event store
    *     (required); its metadata is trusted as given

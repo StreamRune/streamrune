@@ -353,8 +353,9 @@ the continuation binds the origin's correlation id.
 
 Failures:
 
-- A failed command that carries a saga origin is not published to the dead letter queue; the
-  listener's subscription is its only retry. Let a failure a later attempt can cure propagate out
+- A failed command dispatched inside `continuing` is not published to the dead letter queue,
+  whether or not the causing event carries a saga origin; the listener's subscription is its only
+  retry. Let a failure a later attempt can cure propagate out
   of the listener, so that the subscription delivers the event again; a listener that swallows it
   loses the command.
 - A rejection by the domain (`DomainException` and its subtypes, `IllegalArgumentException`) fails
@@ -363,15 +364,13 @@ Failures:
   in the listener and return, or dispatch the command that records the refusal.
 - Under `executeAsync` or `StreamRuneContext.wrap` the failure reaches only the future, or only the
   other thread. A listener that relies on redelivery waits for the outcome before it returns.
-- A failed continuation of an event **without** an origin is dead-lettered like any other command,
-  once for every failed delivery, and a replay stores events with no `causationId`. With an
-  idempotency key the redelivery and all replays end in one stored event, whose `causationId` is
-  the event's id or `null` depending on which commits first; without a key every replay executes
-  the command again.
+- A listener that wants a failed command parked in the dead letter queue dispatches it outside
+  `continuing`, under a request context of its own: an ordinary command, whose replayed events
+  carry no `causationId` and no saga origin.
 
 Give the command an idempotency key derived from the causing event, so that a redelivery after the
-command committed stores nothing. `continuing` throws `IllegalStateException` for an event whose
-origin is at hop `Integer.MAX_VALUE`.
+command committed stores nothing; without a key that redelivery executes the command a second time.
+`continuing` throws `IllegalStateException` for an event whose origin is at hop `Integer.MAX_VALUE`.
 
 ### ReservedCorrelationIdException
 

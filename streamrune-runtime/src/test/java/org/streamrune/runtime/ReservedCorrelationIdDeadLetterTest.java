@@ -51,9 +51,9 @@ import org.streamrune.test.SagaEnvelopes;
  * VARCHAR(255)}). The reserved form saga dispatch binds is the saga id behind a 16-character
  * prefix, so the one of a saga id at its own 255-character bound does not fit that column. It never
  * gets there: a reserved correlation id is bound together with a saga origin (saga dispatch, a
- * continuation of a saga-caused event), a command that carries an origin is not dead-lettered, and
- * a reserved correlation id bound without an origin is refused before the command runs. Each
- * failing command below fails with an error the queue would otherwise accept.
+ * continuation of a saga-caused event), a command dispatched with a dispatch cause bound is not
+ * dead-lettered, and a reserved correlation id bound without an origin is refused before the
+ * command runs. Each failing command below fails with an error the queue would otherwise accept.
  */
 class ReservedCorrelationIdDeadLetterTest {
 
@@ -204,7 +204,8 @@ class ReservedCorrelationIdDeadLetterTest {
         () ->
             ScopedValue.where(StreamRuneContext.CURRENT, request)
                 .run(() -> bus.execute(new Charge("pay-request"))));
-    // A continuation of an event a request caused: the client's correlation id, inherited.
+    // A continuation of an event a request caused inherits the client's correlation id, and is
+    // not dead-lettered: its cause is bound.
     EventEnvelope requestCaused =
         new EventEnvelope(
             GlobalOffset.of(3),
@@ -230,7 +231,7 @@ class ReservedCorrelationIdDeadLetterTest {
 
     assertThat(deadLetters.all())
         .extracting(entry -> entry.correlationId() == null ? null : entry.correlationId().value())
-        .containsExactlyInAnyOrder("c".repeat(255), "client-corr-7", null);
+        .containsExactlyInAnyOrder("c".repeat(255), null);
     assertNoEntryIsReserved(deadLetters.all());
   }
 

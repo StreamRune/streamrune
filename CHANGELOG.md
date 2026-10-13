@@ -159,9 +159,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   such a command carry the causing event's id as `causationId`, its correlation and trace ids, and
   its saga origin one hop further (`SagaOrigin.nextHop()`), or no origin when the causing event has
   none. A continuation runs with no user, no captured authority, no baggage and without the saga
-  privileges (`StreamRuneContext.isSagaDispatch()` is `false`). A failed command that carries a saga
-  origin is not dead-lettered: the listener lets a failure worth retrying propagate and its
-  subscription delivers the event again, and handles a rejection by the domain itself. `continuing`
+  privileges (`StreamRuneContext.isSagaDispatch()` is `false`). A failed command dispatched inside
+  `continuing` is not dead-lettered, whether or not the causing event carries a saga origin: the
+  listener lets a failure worth retrying propagate and its subscription delivers the event again,
+  and handles a rejection by the domain itself. A listener that wants a failed command parked in
+  the dead letter queue dispatches it outside `continuing`. `continuing`
   trusts the envelope it is given, which is meant to be one read from the event store.
 - `PgAdvisoryLocker` — distributed per-stream pessimistic locking via `pg_advisory_xact_lock` over the
   typed stream, with `withDedicatedPool(...)` so lock connections never starve the application pool.
@@ -250,8 +252,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   fields read `[REDACTED]`, is leadership-gated, and offers an on-demand `retry(CommandId)` that runs
   on its own virtual thread with the context recorded on the entry, never the operator's identity,
   correlation, baggage, saga marker or dispatch cause. A replay restores user, correlation id and
-  trace id and never a saga origin or a causation id; a command that carries a saga origin (a
-  saga's own dispatch, or a `StreamRuneContext.continuing` reaction to an event a saga caused) is
+  trace id and never a saga origin or a causation id; a command dispatched with a dispatch cause
+  bound (a saga's own dispatch, or a `StreamRuneContext.continuing` reaction to a stored event) is
   not dead-lettered, its caller retries it. `DeadLetterRetentionSweeper` prunes after
   `streamrune.dead-letter.retention-max-age` (default 30 days; zero or negative disables pruning) and
   is registered for any `DeadLetterQueue` bean; `streamrune.dead-letter.enabled=false` switches off

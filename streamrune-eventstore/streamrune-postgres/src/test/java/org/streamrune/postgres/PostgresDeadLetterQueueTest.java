@@ -996,9 +996,10 @@ class PostgresDeadLetterQueueTest {
    * {@code dead_letter_queue.correlation_id} is {@code VARCHAR(255)}, the width of the request
    * edge's bound. The correlation id saga dispatch binds — the saga id behind the 16-character
    * {@code streamrune:saga:} prefix — fits it only for a saga id of at most 239 characters. The
-   * command bus therefore never publishes an entry with one: a command that carries a saga origin
-   * is not dead-lettered, and a reserved correlation id bound without an origin is refused before
-   * the command runs. This pins the column's side of that rule: a longer value is not storable.
+   * command bus therefore never publishes an entry with one: a command dispatched with a dispatch
+   * cause bound is not dead-lettered, and a reserved correlation id bound without an origin is
+   * refused before the command runs. This pins the column's side of that rule: a longer value is
+   * not storable.
    */
   @Test
   void theReservedCorrelationIdOfTheLongestSagaId_doesNotFitTheColumn() {

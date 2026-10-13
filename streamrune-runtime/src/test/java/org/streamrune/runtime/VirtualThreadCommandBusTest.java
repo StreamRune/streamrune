@@ -1582,7 +1582,7 @@ class VirtualThreadCommandBusTest {
   }
 
   @Test
-  void aFailingCommandThatCarriesASagaOrigin_isNotDeadLettered() {
+  void aFailingCommandWithADispatchCauseBound_isNotDeadLettered() {
     var dlq = new InMemoryDeadLetterQueue();
     var bus = infraFailingBus(dlq);
 
@@ -1606,7 +1606,21 @@ class VirtualThreadCommandBusTest {
                           bus.execute(new FailingCommand.Fail("fail-hop-1"));
                         }));
     assertEquals("simulated infra failure", failure.getMessage());
-    assertEquals(1, dlq.all().size(), "a command that carries a saga origin is not dead-lettered");
+    assertEquals(1, dlq.all().size(), "a continuation of a saga-caused event is not dead-lettered");
+
+    // A continuation of an event no saga caused: the cause holds a causing event and no origin.
+    failure =
+        assertThrows(
+            RuntimeException.class,
+            () ->
+                StreamRuneContext.continuing(requestCausedEvent())
+                    .run(
+                        () -> {
+                          assertNull(StreamRuneContext.cause().sagaOrigin());
+                          bus.execute(new FailingCommand.Fail("fail-originless"));
+                        }));
+    assertEquals("simulated infra failure", failure.getMessage());
+    assertEquals(1, dlq.all().size(), "a continuation of any other event is not dead-lettered");
 
     // The rule reads the bound cause, whoever bound it: an origin without a causing event too.
     var originOnly =
@@ -1620,73 +1634,189 @@ class VirtualThreadCommandBusTest {
     assertEquals(1, dlq.all().size());
   }
 
+  /**
+   * The other side of the rule: a command dispatched in reaction to the same event, outside {@code
+   * continuing} and under a plain request context, is an ordinary command and is dead-lettered.
+   */
   @Test
-  void aFailingContinuationOfAnEventWithoutAnOrigin_isDeadLettered() {
+  void aFailingCommandDispatchedOutsideContinuing_isDeadLettered() {
     var dlq = new InMemoryDeadLetterQueue();
     var bus = infraFailingBus(dlq);
+    EventMetadata reactedTo = requestCausedEvent().metadata();
+    var plain =
+        new StreamRuneContext.RequestContext(
+            reactedTo.traceId(), null, reactedTo.correlationId(), Instant.now(), Map.of());
 
     assertThrows(
         RuntimeException.class,
         () ->
-            StreamRuneContext.continuing(requestCausedEvent())
-                .run(() -> bus.execute(new FailingCommand.Fail("fail-hop-1"))));
+            ScopedValue.where(StreamRuneContext.CURRENT, plain)
+                .run(
+                    () -> {
+                      assertNull(StreamRuneContext.cause());
+                      bus.execute(new FailingCommand.Fail("fail-parked"));
+                    }));
 
     assertEquals(1, dlq.all().size());
     var entry = dlq.all().getFirst();
-    // The entry holds what a replay rebinds: the flow's correlation and trace ids and no user.
-    // It has no place for the causing event.
+    // The entry holds what a replay rebinds: the correlation and trace ids and no user. It has
+    // no place for a causing event.
     assertEquals(CorrelationId.of("client-corr-7"), entry.correlationId());
     assertEquals(TraceId.of("trace-7"), entry.traceId());
     assertNull(entry.userId());
+
+    // A cause bound to null is no cause: InMemoryEventSubscription binds it so around a listener
+    // it calls on the thread of a saga's dispatch, and the listener's own command is ordinary.
+    assertThrows(
+        RuntimeException.class,
+        () ->
+            ScopedValue.where(StreamRuneContext.CAUSE, null)
+                .run(() -> bus.execute(new FailingCommand.Fail("fail-detached"))));
+    assertEquals(2, dlq.all().size());
+  }
+
+  /** A failure that is not dead-lettered is a failed command all the same. */
+  @Test
+  void aFailingContinuation_isCountedAsFailedAndNotAsDeadLettered() {
+    var failed = new AtomicInteger();
+    var deadLettered = new AtomicInteger();
+    var metrics =
+        new StreamRuneMetrics() {
+          @Override
+          public void recordCommandFailed() {
+            failed.incrementAndGet();
+          }
+
+          @Override
+          public void recordDeadLetterPublished(String commandType) {
+            deadLettered.incrementAndGet();
+          }
+        };
+    var dlq = new InMemoryDeadLetterQueue();
+    var bus =
+        infraFailingBusBuilder(new InMemoryEventStore())
+            .deadLetterQueue(dlq)
+            .metrics(metrics)
+            .build();
+
+    for (EventEnvelope cause : List.of(sagaCausedEvent(), requestCausedEvent())) {
+      assertThrows(
+          RuntimeException.class,
+          () ->
+              StreamRuneContext.continuing(cause)
+                  .run(() -> bus.execute(new FailingCommand.Fail("fail-counted"))));
+    }
+    assertEquals(2, failed.get());
+    assertEquals(0, deadLettered.get());
+    assertTrue(dlq.all().isEmpty());
+
+    // Control: the same failure with no cause bound counts in both.
+    assertThrows(RuntimeException.class, () -> bus.execute(new FailingCommand.Fail("fail-root")));
+    assertEquals(3, failed.get());
+    assertEquals(1, deadLettered.get());
   }
 
   @Test
-  void aFailingAsyncCommandThatCarriesASagaOrigin_isNotDeadLettered() {
+  void aFailingAsyncCommandWithADispatchCauseBound_isNotDeadLettered() {
     var dlq = new InMemoryDeadLetterQueue();
     var bus = infraFailingBus(dlq);
 
-    // The continuation's bindings end when call() returns; the command fails on the bus's own
-    // virtual thread, where only what executeAsync carried over is bound.
-    CompletableFuture<CommandResult> future =
-        StreamRuneContext.continuing(sagaCausedEvent())
-            .call(() -> bus.executeAsync(new FailingCommand.Fail("fail-async")));
+    for (EventEnvelope cause : List.of(sagaCausedEvent(), requestCausedEvent())) {
+      // The continuation's bindings end when call() returns; the command fails on the bus's own
+      // virtual thread, where only what executeAsync carried over is bound.
+      CompletableFuture<CommandResult> future =
+          StreamRuneContext.continuing(cause)
+              .call(() -> bus.executeAsync(new FailingCommand.Fail("fail-async")));
 
-    var failure = assertThrows(java.util.concurrent.CompletionException.class, future::join);
-    assertEquals("simulated infra failure", failure.getCause().getMessage());
-    assertTrue(dlq.all().isEmpty(), "the origin crosses executeAsync, and with it the rule");
+      var failure = assertThrows(java.util.concurrent.CompletionException.class, future::join);
+      assertEquals("simulated infra failure", failure.getCause().getMessage());
+      assertTrue(dlq.all().isEmpty(), "the cause crosses executeAsync, and with it the rule");
+    }
 
-    // Control: without an origin the asynchronous failure is dead-lettered.
-    CompletableFuture<CommandResult> originless =
-        StreamRuneContext.continuing(requestCausedEvent())
-            .call(() -> bus.executeAsync(new FailingCommand.Fail("fail-async-originless")));
-    assertThrows(java.util.concurrent.CompletionException.class, originless::join);
+    // Control: with no cause bound the asynchronous failure is dead-lettered.
+    CompletableFuture<CommandResult> uncaused =
+        bus.executeAsync(new FailingCommand.Fail("fail-async-uncaused"));
+    assertThrows(java.util.concurrent.CompletionException.class, uncaused::join);
     assertEquals(1, dlq.all().size());
   }
 
   @Test
-  void aFailingCommandInAWrappedTaskThatCarriesASagaOrigin_isNotDeadLettered() throws Exception {
+  void aFailingCommandInAWrappedTaskWithADispatchCauseBound_isNotDeadLettered() throws Exception {
     var dlq = new InMemoryDeadLetterQueue();
     var bus = infraFailingBus(dlq);
-    var failure = new AtomicReference<Throwable>();
 
-    Runnable wrapped =
-        StreamRuneContext.continuing(sagaCausedEvent())
-            .call(
-                () ->
-                    StreamRuneContext.wrap(
-                        () -> {
-                          try {
-                            bus.execute(new FailingCommand.Fail("fail-wrapped"));
-                          } catch (RuntimeException e) {
-                            failure.set(e);
-                          }
-                        }));
-    Thread thread = new Thread(wrapped);
-    thread.start();
-    thread.join();
+    for (EventEnvelope cause : List.of(sagaCausedEvent(), requestCausedEvent())) {
+      var failure = new AtomicReference<Throwable>();
+      Runnable wrapped =
+          StreamRuneContext.continuing(cause)
+              .call(
+                  () ->
+                      StreamRuneContext.wrap(
+                          () -> {
+                            try {
+                              bus.execute(new FailingCommand.Fail("fail-wrapped"));
+                            } catch (RuntimeException e) {
+                              failure.set(e);
+                            }
+                          }));
+      Thread thread = new Thread(wrapped);
+      thread.start();
+      thread.join();
 
-    assertEquals("simulated infra failure", failure.get().getMessage());
-    assertTrue(dlq.all().isEmpty(), "the origin crosses wrap, and with it the rule");
+      assertEquals("simulated infra failure", failure.get().getMessage());
+      assertTrue(dlq.all().isEmpty(), "the cause crosses wrap, and with it the rule");
+    }
+  }
+
+  /**
+   * A command executed on the thread of a continuation's command — from an interceptor's {@code
+   * after}, here — runs with the same cause bound, so the rule covers it too.
+   */
+  @Test
+  void aFailingCommandNestedInAContinuationsCommand_isNotDeadLettered() {
+    var dlq = new InMemoryDeadLetterQueue();
+    var store = new InMemoryEventStore();
+    var nestedFailures = new CopyOnWriteArrayList<Throwable>();
+    var busRef = new AtomicReference<VirtualThreadCommandBus>();
+    CommandInterceptor nesting =
+        new CommandInterceptor() {
+          @Override
+          public void after(CommandContext ctx) {
+            if (ctx.command() instanceof CounterCommand.Inc) {
+              try {
+                busRef.get().execute(new FailingCommand.Fail("fail-nested"));
+              } catch (RuntimeException e) {
+                nestedFailures.add(e);
+              }
+            }
+          }
+        };
+    var bus =
+        infraFailingBusBuilder(store)
+            .deadLetterQueue(dlq)
+            .interceptors(nesting)
+            .register(
+                COUNTER,
+                CounterCommand.class,
+                cmd ->
+                    switch (cmd) {
+                      case CounterCommand.Inc c -> AggregateId.of(c.counterId());
+                    },
+                new CounterDecider())
+            .build();
+    busRef.set(bus);
+
+    for (EventEnvelope cause : List.of(sagaCausedEvent(), requestCausedEvent())) {
+      StreamRuneContext.continuing(cause)
+          .run(() -> bus.execute(new CounterCommand.Inc("counter-outer")));
+    }
+    assertEquals(2, nestedFailures.size());
+    assertTrue(dlq.all().isEmpty(), "the nested command runs under the outer command's cause");
+
+    // Control: nested in a command with no cause bound, the failure is dead-lettered.
+    bus.execute(new CounterCommand.Inc("counter-outer"));
+    assertEquals(3, nestedFailures.size());
+    assertEquals(1, dlq.all().size());
   }
 
   @Test

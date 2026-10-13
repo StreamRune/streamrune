@@ -51,8 +51,9 @@ import org.streamrune.core.types.Version;
  * production bus refuses it ({@link StreamRuneContext#requireNoForeignReservedCorrelationId()}).
  *
  * <p>This bus has no dead letter queue, so a failed command propagates to its caller and nothing
- * else happens — for a command that carries a saga origin exactly what {@code
- * VirtualThreadCommandBus} does, which publishes such a command to no dead letter queue.
+ * else happens — for a command dispatched while a {@link StreamRuneContext#CAUSE} is bound (a
+ * saga's dispatch, a continuation) exactly what {@code VirtualThreadCommandBus} does, which
+ * publishes such a command to no dead letter queue.
  *
  * <p><strong>Note: This class is not thread-safe.</strong> Do not share a single instance across
  * threads. Use a separate {@link InMemoryCommandBus} per test thread.
