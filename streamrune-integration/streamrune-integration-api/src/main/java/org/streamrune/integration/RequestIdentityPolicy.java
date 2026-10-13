@@ -141,8 +141,10 @@ public final class RequestIdentityPolicy {
   private final Mode mode;
   private final AuthenticatedUserResolver resolver;
 
-  /** Whether {@link #unacceptablePrincipalWarning(UserId)} has handed out its one report. */
-  private final AtomicBoolean unacceptablePrincipalReported = new AtomicBoolean();
+  // Whether unacceptablePrincipalWarning(UserId) has handed out its report: one per reason the
+  // request edge refuses a user id for — its length, a control character.
+  private final AtomicBoolean overlongPrincipalReported = new AtomicBoolean();
+  private final AtomicBoolean controlCharacterPrincipalReported = new AtomicBoolean();
 
   private RequestIdentityPolicy(Mode mode, AuthenticatedUserResolver resolver) {
     this.mode = mode;
@@ -214,9 +216,11 @@ public final class RequestIdentityPolicy {
    * RequestContext.fromRequest} like a client's header, and the request filters answer {@code 400}
    * with {@link #REFUSED_REQUEST_CONTEXT} — for every request of that user, who can do nothing
    * about it. That is a fact about the identity provider, not about one request, so it is reported
-   * once per policy (one policy serves an application) at a level an operator sees: a request
-   * filter that refused a request context asks this method and logs what it returns at {@code
-   * WARN}. A report per request would let that user fill the log.
+   * once per policy (one policy serves an application) and per reason — the length, a control
+   * character — at a level an operator sees: a request filter that refused a request context asks
+   * this method and logs what it returns at {@code WARN}. A report per request would let that user
+   * fill the log; one report for both reasons would let a caller who chooses its own subject spend
+   * it on one of them and hide the other.
    *
    * <p>Nothing is reported in {@link Mode#TRUSTED_GATEWAY}, where the user id is the request's own
    * header and its refusal is the client's error, nor in {@link Mode#ANONYMOUS}.
@@ -224,8 +228,9 @@ public final class RequestIdentityPolicy {
    * @param userId the identity {@link #resolve(List, MismatchListener)} returned for the refused
    *     request; {@code null} when it had none
    * @return the message to log, the first time this policy is asked about a principal the request
-   *     edge refuses; empty for an acceptable or absent principal, in the other two modes, and
-   *     after the one report. The message names the resolver and the refused bound, never the value
+   *     edge refuses for that reason; empty for an acceptable or absent principal, in the other two
+   *     modes, and after the report of that reason. The message names the resolver and the refused
+   *     bound, never the value
    */
   public Optional<String> unacceptablePrincipalWarning(UserId userId) {
     if (mode != Mode.AUTHENTICATED_PRINCIPAL || userId == null) {
@@ -238,7 +243,13 @@ public final class RequestIdentityPolicy {
     } catch (IllegalArgumentException refused) {
       refusal = refused.getMessage();
     }
-    if (!unacceptablePrincipalReported.compareAndSet(false, true)) {
+    // The edge checks the length first, so an overlong value is refused for its length whatever
+    // else it holds.
+    AtomicBoolean reported =
+        userId.value().length() > IdConstraints.MAX_LENGTH
+            ? overlongPrincipalReported
+            : controlCharacterPrincipalReported;
+    if (!reported.compareAndSet(false, true)) {
       return Optional.empty();
     }
     return Optional.of(
@@ -246,8 +257,8 @@ public final class RequestIdentityPolicy {
             + resolver.getClass().getName()
             + " is not an acceptable user id ("
             + refusal
-            + "): every request of that principal is answered 400 Bad Request. Reported once; each"
-            + " refusal is logged at DEBUG.");
+            + "): every request of that principal is answered 400 Bad Request. Reported once for"
+            + " this reason; each refusal is logged at DEBUG.");
   }
 
   /**

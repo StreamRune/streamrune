@@ -333,15 +333,52 @@ class RequestIdentityPolicyTest {
         "The authenticated principal resolved by "
             + NamedResolver.class.getName()
             + " is not an acceptable user id (userId must be at most 255 characters, got 300):"
-            + " every request of that principal is answered 400 Bad Request. Reported once; each"
-            + " refusal is logged at DEBUG.",
+            + " every request of that principal is answered 400 Bad Request. Reported once for"
+            + " this reason; each refusal is logged at DEBUG.",
         first.orElseThrow());
     assertFalse(first.orElseThrow().contains("ppp"), "the value is not in the message");
     assertEquals(Optional.empty(), policy.unacceptablePrincipalWarning(overlong), "reported once");
     assertEquals(
         Optional.empty(),
-        policy.unacceptablePrincipalWarning(UserId.of("alice\r\nadmin")),
-        "once per policy, whatever the next principal is");
+        policy.unacceptablePrincipalWarning(UserId.of("q".repeat(4000))),
+        "once per policy for this reason, whatever the next principal and its length are");
+  }
+
+  @Test
+  void aSecondReasonIsReportedOnceToo_afterTheFirstReasonUsedItsReport() {
+    // A caller who influences its own principal can spend the report of one reason with one
+    // request. The other reason — a different fault of the identity provider — keeps its own.
+    RequestIdentityPolicy policy = RequestIdentityPolicy.of(BOB, false);
+    assertTrue(policy.unacceptablePrincipalWarning(UserId.of("p".repeat(300))).isPresent());
+
+    Optional<String> controlCharacter =
+        policy.unacceptablePrincipalWarning(UserId.of("alice\r\nadmin"));
+
+    assertTrue(
+        controlCharacter.orElseThrow().contains("userId must not contain control characters"),
+        controlCharacter.orElseThrow());
+    assertEquals(
+        Optional.empty(),
+        policy.unacceptablePrincipalWarning(UserId.of("mallory\u0000")),
+        "once for the control character as well");
+    assertEquals(
+        Optional.empty(),
+        policy.unacceptablePrincipalWarning(UserId.of("p".repeat(300))),
+        "and the first reason stays spent");
+  }
+
+  @Test
+  void anOverlongPrincipalWithAControlCharacter_isReportedForItsLength() {
+    // The edge refuses such a value for its length, the first of the two checks.
+    RequestIdentityPolicy policy = RequestIdentityPolicy.of(BOB, false);
+
+    String both =
+        policy.unacceptablePrincipalWarning(UserId.of("p".repeat(300) + "\r\n")).orElseThrow();
+
+    assertTrue(both.contains("userId must be at most 255 characters"), both);
+    assertTrue(
+        policy.unacceptablePrincipalWarning(UserId.of("alice\r\nadmin")).isPresent(),
+        "the report of the control character is not spent by it");
   }
 
   @Test
