@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -73,6 +74,7 @@ class PostgresCryptoForgetSignalIntegrationTest {
         delegate.encrypt(subject, "alice@example.com".getBytes(StandardCharsets.UTF_8));
 
     // Two replicas over the same delegate + DB, each with its own real NOTIFY channel.
+    String replicaBName = "replica-b-" + UUID.randomUUID();
     var replicaA =
         CachedCryptoEngine.builder()
             .delegate(delegate)
@@ -81,7 +83,7 @@ class PostgresCryptoForgetSignalIntegrationTest {
     var replicaB =
         CachedCryptoEngine.builder()
             .delegate(delegate)
-            .forgetSignal(new PostgresCryptoForgetSignal(dataSource))
+            .forgetSignal(new PostgresCryptoForgetSignal(dataSourceNamed(replicaBName)))
             .build();
     try {
       // B caches the decrypted plaintext for the subject (a cache hit is served without the
@@ -90,6 +92,9 @@ class PostgresCryptoForgetSignalIntegrationTest {
           "alice@example.com".getBytes(StandardCharsets.UTF_8),
           replicaB.decrypt(subject, ciphertext),
           "B should decrypt and cache the plaintext");
+
+      // A's forget reaches B only if B is listening when it is published.
+      awaitListening(replicaBName);
 
       // A processes the GDPR erasure: deletes the DB key AND publishes the cross-replica forget.
       replicaA.deleteKey(subject);
@@ -148,9 +153,11 @@ class PostgresCryptoForgetSignalIntegrationTest {
   void closeIsIdempotentAfterASuccessfulSubscribe() throws Exception {
     // Exercises the double-close path: the first close() hands the dedicated LISTEN pool over for
     // closing, so the second finds none and closes nothing.
-    var channel = new PostgresCryptoForgetSignal(dataSource);
+    String name = "double-close-" + UUID.randomUUID();
+    var channel = new PostgresCryptoForgetSignal(dataSourceNamed(name));
     BlockingQueue<String> received = new LinkedBlockingQueue<>();
     channel.subscribe(received::add);
+    awaitListening(name);
     channel.publish("double-close-token");
     assertEquals(
         "double-close-token",
@@ -167,8 +174,9 @@ class PostgresCryptoForgetSignalIntegrationTest {
     // Exercises the `dataSource instanceof HikariDataSource` branch of createListenDataSource: the
     // app's own DataSource is itself Hikari-backed, so its jdbcUrl/username/password are read via
     // the direct getters rather than the reflective firstString() fallback.
+    String name = "hikari-branch-" + UUID.randomUUID();
     var hikari = new HikariDataSource();
-    hikari.setJdbcUrl(PG.getJdbcUrl());
+    hikari.setJdbcUrl(jdbcUrlNamed(name));
     hikari.setUsername(PG.getUsername());
     hikari.setPassword(PG.getPassword());
     hikari.setMaximumPoolSize(2);
@@ -177,6 +185,7 @@ class PostgresCryptoForgetSignalIntegrationTest {
         var channel = new PostgresCryptoForgetSignal(hikari)) {
       BlockingQueue<String> received = new LinkedBlockingQueue<>();
       channel.subscribe(received::add);
+      awaitListening(name);
       channel.publish("hikari-instanceof-branch-token");
       assertEquals("hikari-instanceof-branch-token", received.poll(15, TimeUnit.SECONDS));
     }
@@ -187,15 +196,15 @@ class PostgresCryptoForgetSignalIntegrationTest {
     // getJdbcUrl() alone is present (credentials embedded as URL query params);
     // getUsername()/getUser()/getPassword() are absent, so firstString() must return null for both
     // and createListenDataSource must still build a working pool from the URL alone.
-    String base = PG.getJdbcUrl();
-    String separator = base.contains("?") ? "&" : "?";
+    String name = "url-only-branch-" + UUID.randomUUID();
     String urlWithCredentials =
-        base + separator + "user=" + PG.getUsername() + "&password=" + PG.getPassword();
+        jdbcUrlNamed(name) + "&user=" + PG.getUsername() + "&password=" + PG.getPassword();
     var minimal = new UrlOnlyDataSource(urlWithCredentials);
     var channel = new PostgresCryptoForgetSignal(minimal);
     try {
       BlockingQueue<String> received = new LinkedBlockingQueue<>();
       channel.subscribe(received::add);
+      awaitListening(name);
       channel.publish("url-only-branch-token");
       assertEquals("url-only-branch-token", received.poll(15, TimeUnit.SECONDS));
     } finally {
@@ -222,6 +231,58 @@ class PostgresCryptoForgetSignalIntegrationTest {
       awaitDelivered(received, "supplied-pool-token");
     }
     assertTrue(listenPool.isClosed(), "closing the channel closes the LISTEN pool it was handed");
+  }
+
+  /** The container's JDBC URL with {@code applicationName} as the session's application name. */
+  private static String jdbcUrlNamed(String applicationName) {
+    String base = PG.getJdbcUrl();
+    return base + (base.contains("?") ? "&" : "?") + "ApplicationName=" + applicationName;
+  }
+
+  /**
+   * A data source whose sessions carry {@code applicationName}, and with them the sessions of the
+   * LISTEN pool a channel opens from its URL.
+   */
+  private static PGSimpleDataSource dataSourceNamed(String applicationName) {
+    var named = new PGSimpleDataSource();
+    named.setUrl(jdbcUrlNamed(applicationName));
+    named.setUser(PG.getUsername());
+    named.setPassword(PG.getPassword());
+    return named;
+  }
+
+  /**
+   * Waits until a session of {@code applicationName} has completed its {@code LISTEN} on the
+   * channel.
+   *
+   * <p>{@code subscribe} returns when the channel's own thread is started; that thread opens the
+   * connection and issues the LISTEN. PostgreSQL delivers a NOTIFY to the sessions that listen when
+   * it is committed, so a token published before the LISTEN never reaches the channel: prompt
+   * eviction is best effort, and the cache's write TTL is what bounds a signal that is missed. A
+   * test that publishes once therefore waits for the session first. The session shows the LISTEN as
+   * its last statement and is idle once that statement is committed; the channel sends nothing else
+   * on it.
+   */
+  private static void awaitListening(String applicationName) throws Exception {
+    long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+    while (System.nanoTime() < deadline) {
+      try (var conn = dataSource.getConnection();
+          var ps =
+              conn.prepareStatement(
+                  "SELECT count(*) FROM pg_stat_activity"
+                      + " WHERE application_name = ? AND query = ? AND state = 'idle'")) {
+        ps.setString(1, applicationName);
+        ps.setString(2, "LISTEN " + PostgresCryptoForgetSignal.CHANNEL);
+        try (var rs = ps.executeQuery()) {
+          rs.next();
+          if (rs.getInt(1) > 0) {
+            return;
+          }
+        }
+      }
+      Thread.sleep(50);
+    }
+    fail("no session of '" + applicationName + "' ever completed its LISTEN on the channel");
   }
 
   /**

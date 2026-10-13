@@ -69,7 +69,12 @@ class PgNotificationListenerLivenessTest {
     listener.start();
     try {
       Statement probe = healthy.createStatement();
-      await(() -> probes(probe) >= 3, "an idle connection must be probed once per probe interval");
+      // A probe is its statement and then, on this manual-commit connection, the rollback that
+      // ends its transaction: the listen thread issues the rollback after the statement has
+      // returned. The test waits for three probes that are complete, statement and rollback.
+      await(
+          () -> probes(probe) >= 3 && rollbacks(healthy) >= 3,
+          "an idle connection must be probed once per probe interval");
       assertEquals(1, dataSource.handedOut.size(), "a connection that answers is kept");
       assertEquals(0, metrics.reconnects.get());
       assertTrue(listener.isListening());
@@ -109,11 +114,23 @@ class PgNotificationListenerLivenessTest {
     // Rejected credentials, an unreachable primary, max_connections reached: every connect fails.
     var dataSource = new SwitchableDataSource();
     dataSource.down = true;
+
+    // Within its grace. This listener's grace is far longer than the test, so the answer does not
+    // depend on how soon after start() the test thread gets to ask.
+    var patient = listener(dataSource, new CountingMetrics(), Duration.ofSeconds(30));
+    patient.start();
+    try {
+      assertTrue(patient.isPushPathLive(), "a listener that has just started is within its grace");
+      assertFalse(patient.isListening());
+    } finally {
+      patient.close();
+    }
+
+    // Past its grace: with a short one the test waits for the push path to be reported dead.
     var listener = listener(dataSource, new CountingMetrics(), Duration.ofMillis(200));
 
     listener.start();
     try {
-      assertTrue(listener.isPushPathLive(), "a listener that has just started is within its grace");
       await(() -> !listener.isPushPathLive(), "a push path that cannot connect stayed live");
       assertTrue(listener.isRunning(), "the listener keeps reconnecting — it never gives up");
       assertFalse(listener.isListening());
@@ -186,6 +203,12 @@ class PgNotificationListenerLivenessTest {
     return mockingDetails(stmt).getInvocations().stream()
         .filter(i -> i.getMethod().getName().equals("execute"))
         .filter(i -> "SELECT 1".equals(i.getArgument(0)))
+        .count();
+  }
+
+  private static long rollbacks(Connection conn) {
+    return mockingDetails(conn).getInvocations().stream()
+        .filter(i -> i.getMethod().getName().equals("rollback"))
         .count();
   }
 
