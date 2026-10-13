@@ -163,12 +163,19 @@ class SseEarlyClientResetTest {
       Thread.sleep(300);
       authorizer.decided.countDown();
 
+      // What the test waits for is the outcome: the one client that was subscribed is registered
+      // with the publisher no more. The number of unsubscribe requests the endpoint sends varies
+      // with the interleaving: the release of the failed hand-over and a keepalive tick that meets
+      // the failed response at the same moment each unsubscribe the client, and the second request
+      // is a no-op by the publisher's contract.
       await()
           .atMost(Duration.ofSeconds(5))
           .untilAsserted(
               () -> {
                 assertThat(publisher.subscribed).as("the client was subscribed").hasValue(1);
-                assertThat(publisher.unsubscribed).as("and is unsubscribed again").hasValue(1);
+                assertThat(publisher.hasSubscribers())
+                    .as("and is registered with the publisher no more")
+                    .isFalse();
                 assertThat(controller.activeCountForTest()).isZero();
               });
 
@@ -207,23 +214,19 @@ class SseEarlyClientResetTest {
     }
   }
 
-  /** Counts the subscriptions the endpoint makes and releases. */
+  /**
+   * Counts the subscriptions the endpoint makes. Whether a client is still registered is the
+   * publisher's own answer, {@link SseEventPublisher#hasSubscribers()}.
+   */
   static final class CountingPublisher extends SseEventPublisher {
 
     final AtomicInteger subscribed = new AtomicInteger();
-    final AtomicInteger unsubscribed = new AtomicInteger();
 
     @Override
     public void subscribe(
         StreamId streamId, SseSubscriber subscriber, Consumer<Throwable> onDisconnect) {
       super.subscribe(streamId, subscriber, onDisconnect);
       subscribed.incrementAndGet();
-    }
-
-    @Override
-    public void unsubscribe(StreamId streamId, SseSubscriber subscriber) {
-      super.unsubscribe(streamId, subscriber);
-      unsubscribed.incrementAndGet();
     }
   }
 

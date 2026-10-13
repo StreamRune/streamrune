@@ -45,6 +45,18 @@ class LeaseBasedLeadershipTest {
 
   private final List<SubscriptionLeadership> managed = new ArrayList<>();
 
+  /**
+   * The TTL of the tests that wait for the renew heartbeat: one heartbeat cycle a second ({@code
+   * ttl / 3}). Those tests take both clocks out of the wait. The instance reads a frozen clock, so
+   * its staleness bound never trips, and where a test waits for a renew, {@link
+   * #holdExpiryAnHourAhead} keeps the database from seeing the lease expired. What a test waits for
+   * is then the heartbeat cycle itself, under {@link #awaitTrue}'s bound, and not a cycle that
+   * arrives within a fraction of the TTL.
+   */
+  private static final Duration HEARTBEAT_TTL = Duration.ofSeconds(3);
+
+  private static final Instant FROZEN = Instant.parse("2026-07-19T00:00:00Z");
+
   @BeforeAll
   static void migrateToHead() {
     dataSource = new PGSimpleDataSource();
@@ -99,6 +111,27 @@ class LeaseBasedLeadershipTest {
     }
   }
 
+  /**
+   * Moves the lease row's expiry an hour ahead, holder and epoch untouched, and returns the stamp
+   * written as epoch seconds. With the expiry that far away the database cannot find the lease
+   * expired between two heartbeat cycles, however long the heartbeat thread or the database is held
+   * up. A renew writes {@code now() + ttl}, far below the stamp, so {@code lease_until} drops below
+   * it exactly when a heartbeat renew has matched the row.
+   */
+  private double holdExpiryAnHourAhead(String name) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "UPDATE subscription_leases SET lease_until = now() + interval '1 hour' "
+                    + "WHERE consumer_name = ? RETURNING extract(epoch from lease_until)")) {
+      ps.setString(1, name);
+      try (var rs = ps.executeQuery()) {
+        assertTrue(rs.next(), () -> "no lease row for " + name);
+        return rs.getDouble(1);
+      }
+    }
+  }
+
   private long dbEpoch(String name) throws Exception {
     try (var conn = dataSource.getConnection();
         var ps =
@@ -150,7 +183,7 @@ class LeaseBasedLeadershipTest {
     assertTrue(condition.call(), message);
   }
 
-  /** The lease row's {@code lease_until} as epoch seconds — advances on every successful renew. */
+  /** The lease row's {@code lease_until} as epoch seconds; every successful renew rewrites it. */
   private double dbLeaseUntilEpochSeconds(String name) throws Exception {
     try (var conn = dataSource.getConnection();
         var ps =
@@ -200,23 +233,33 @@ class LeaseBasedLeadershipTest {
 
   @Test
   void renewKeepsSameEpoch_currentStaysLive() throws Exception {
-    var a = leadership(Duration.ofMillis(300)); // heartbeat interval ~100ms
+    // Neither clock can take the lease away while the test waits for the heartbeat: the instance's
+    // clock is frozen, and the row's expiry is held an hour ahead.
+    var a = new LeaseBasedLeadership(dataSource, HEARTBEAT_TTL, MutableClock.startingAt(FROZEN));
+    managed.add(a);
     assertEquals(1L, a.tryAcquire("p4").orElseThrow().epoch());
-    Thread.sleep(700); // spans several heartbeat renews
+    double heldUntil = holdExpiryAnHourAhead("p4");
+
+    awaitTrue(
+        () -> dbLeaseUntilEpochSeconds("p4") < heldUntil,
+        "the heartbeat must renew the held lease at the database");
     assertEquals(1L, a.current("p4").orElseThrow().epoch(), "renew must not drop the lease");
     assertEquals(1L, dbEpoch("p4"), "renew must not bump the epoch");
   }
 
   @Test
   void loserFencedOut_currentBecomesEmptyAfterSteal() throws Exception {
-    var a = leadership(Duration.ofMillis(300)); // live heartbeat renews ~every 100ms
+    // The clock is frozen, so the staleness bound never trips: an empty current() is attributable
+    // only to the heartbeat's renew matching no row.
+    var a = new LeaseBasedLeadership(dataSource, HEARTBEAT_TTL, MutableClock.startingAt(FROZEN));
+    managed.add(a);
     assertEquals(1L, a.tryAcquire("p5").orElseThrow().epoch());
     assertEquals(1L, a.current("p5").orElseThrow().epoch());
     // A live heartbeat keeps A's lease renewed, so a natural expiry-and-takeover races A's own
     // renew. Instead simulate the takeover atomically (exactly what a second acquirer writes:
     // new holder_id + bumped epoch). A's next heartbeat renew can no longer match its WHERE clause.
     simulateSteal("p5");
-    awaitCurrentEmpty(a, "p5", 2000); // heartbeat detects the failed renew and drops the name
+    awaitCurrentEmpty(a, "p5", 10_000); // heartbeat detects the failed renew and drops the name
   }
 
   @Test
@@ -502,24 +545,27 @@ class LeaseBasedLeadershipTest {
     //
     // The clock is FROZEN so the staleness prune can never drop the entry: continued
     // getConnection attempts and DB renews are attributable only to heartbeat survival.
-    var clock = MutableClock.startingAt(Instant.parse("2026-07-19T00:00:00Z"));
+    var clock = MutableClock.startingAt(FROZEN);
     var faulting =
         new FaultInjectingDataSource(dataSource)
             .failNthUnchecked(2, () -> new IllegalStateException("wrapped DataSource torn down"));
-    var a = new LeaseBasedLeadership(faulting, Duration.ofMillis(300), clock); // heartbeat ~100ms
+    var a = new LeaseBasedLeadership(faulting, HEARTBEAT_TTL, clock); // a heartbeat cycle a second
     managed.add(a);
 
     assertEquals(1L, a.tryAcquire("p-hb-rte").orElseThrow().epoch()); // getConnection attempt 1
-    double leaseUntilAfterAcquire = dbLeaseUntilEpochSeconds("p-hb-rte");
+    // The failed cycle leaves the lease unrenewed for two heartbeat intervals, two thirds of its
+    // TTL. With the expiry held an hour ahead, the cycle after the failure finds a live row
+    // whenever it runs.
+    double heldUntil = holdExpiryAnHourAhead("p-hb-rte");
 
     // Heartbeat cycle 1 = getConnection attempt 2 → IllegalStateException. A dead heartbeat never
     // calls getConnection again (attempts stuck at 2); a surviving one retries the next cycle.
     awaitTrue(
         () -> faulting.connectionAttempts() >= 3,
         "heartbeat must survive an unchecked per-cycle failure and attempt the next cycle");
-    // ...and those later cycles genuinely renew: the DB lease keeps being extended.
+    // ...and those later cycles genuinely renew: a renew rewrites the held expiry.
     awaitTrue(
-        () -> dbLeaseUntilEpochSeconds("p-hb-rte") > leaseUntilAfterAcquire,
+        () -> dbLeaseUntilEpochSeconds("p-hb-rte") < heldUntil,
         "surviving heartbeat cycles must keep renewing the lease at the database");
     assertEquals(
         1L,

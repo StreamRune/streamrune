@@ -2436,7 +2436,12 @@ class DeadLetterRetryRunnerTest {
     runner.start();
     try {
       long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
-      while (!dlq.all().isEmpty() && System.nanoTime() < deadline) {
+      // The recovery has two observable effects and the test waits for both. The poll cycle that
+      // retries the entry discards it from the queue while the cycle is still running; the loop
+      // clears its failure counter when that cycle returns. An empty queue is therefore visible
+      // before the counter is zero.
+      while ((!dlq.all().isEmpty() || runner.consecutiveFailures() != 0)
+          && System.nanoTime() < deadline) {
         Thread.sleep(10);
       }
       assertTrue(

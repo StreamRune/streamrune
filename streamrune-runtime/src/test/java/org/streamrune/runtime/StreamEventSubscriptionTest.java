@@ -279,7 +279,11 @@ class StreamEventSubscriptionTest {
     sub.start();
     try {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-      while (received.isEmpty() && System.nanoTime() < deadline) {
+      // The recovery has two observable effects and the test waits for both. The listener fills
+      // `received` from inside the poll cycle; the loop clears its failure counter when that cycle
+      // returns. A delivered event is therefore visible before the counter is zero.
+      while ((received.isEmpty() || sub.consecutiveFailures() != 0)
+          && System.nanoTime() < deadline) {
         Thread.sleep(20);
       }
       assertTrue(sub.isRunning(), "transient failures must not stop the subscription");
