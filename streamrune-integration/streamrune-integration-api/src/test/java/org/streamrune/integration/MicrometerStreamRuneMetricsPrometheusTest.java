@@ -357,6 +357,7 @@ class MicrometerStreamRuneMetricsPrometheusTest {
     metrics.recordSagaCompensation("OrderSaga", "SUCCESS");
     metrics.recordSagaCompensationRetry("OrderSaga");
     metrics.recordSagaCasConflict("OrderSaga");
+    metrics.recordSagaCompensationUnderForwardStep("OrderSaga");
     metrics.recordSagaCompensatingBacklog("OrderSaga", 2);
     metrics.recordSagaTimedOutBacklog("OrderSaga", 1);
     metrics.recordSagaFaultedRows("OrderSaga", 1);
