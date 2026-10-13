@@ -5,11 +5,17 @@ import java.util.Map;
 import org.streamrune.core.Query;
 import org.streamrune.core.QueryBus;
 import org.streamrune.core.QueryHandler;
+import org.streamrune.core.StreamRuneContext;
 
 /**
  * In-memory implementation of {@link QueryBus} for unit testing.
  *
  * <p>Handlers are registered at build time and dispatched by exact query class match.
+ *
+ * <p>Like the production query buses it refuses a query dispatched under a correlation id with the
+ * reserved {@code streamrune:} prefix that is not the bound saga origin's, with a {@link
+ * org.streamrune.core.ReservedCorrelationIdException}, before the handler is looked up ({@link
+ * StreamRuneContext#requireNoForeignReservedCorrelationId()}).
  *
  * <pre>{@code
  * record GetOrderQuery(String orderId) implements Query<OrderView> {}
@@ -40,6 +46,8 @@ public final class InMemoryQueryBus implements QueryBus {
     if (query == null) {
       throw new IllegalArgumentException("query must not be null");
     }
+    // As the production query buses refuse it, before the handler lookup.
+    StreamRuneContext.requireNoForeignReservedCorrelationId();
     QueryHandler<Query<R>, R> handler = (QueryHandler<Query<R>, R>) handlers.get(query.getClass());
     if (handler == null) {
       throw new IllegalArgumentException(

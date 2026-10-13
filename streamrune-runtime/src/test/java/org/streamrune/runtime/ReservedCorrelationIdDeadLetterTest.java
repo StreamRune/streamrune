@@ -20,6 +20,7 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.ReservedCorrelationIdException;
 import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaId;
@@ -187,7 +188,7 @@ class ReservedCorrelationIdDeadLetterTest {
             () ->
                 ScopedValue.where(StreamRuneContext.CURRENT, copiedByHand)
                     .run(() -> bus.execute(new Charge("pay-1"))))
-        .isInstanceOf(IllegalArgumentException.class)
+        .isInstanceOf(ReservedCorrelationIdException.class)
         .hasMessageContaining("reserved 'streamrune:' prefix");
 
     assertThat(deadLetters.all()).isEmpty();

@@ -62,7 +62,6 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
-import org.streamrune.core.types.IdConstraints;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.StreamId;
@@ -288,13 +287,17 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       // null id or an invalid stream, and every later step — the veto result, the replay guard,
       // the lock, the load, the dead-letter request — uses this one stream id. Failures here
       // happen before any interceptor's before() ran, so no interceptor is notified. The refusal
-      // of a reserved correlation id bound without a saga origin is the first of them: nothing of
-      // such a command is looked up, audited, retried, stored or dead-lettered.
+      // of a reserved correlation id that is not the bound saga origin's is the first of them:
+      // nothing of such a command is looked up, audited, retried, stored or dead-lettered.
       DeciderRegistration<C, ?, ?> reg;
       AggregateId aggregateId;
       StreamId streamId;
       try {
-        requireNoForeignReservedCorrelationId();
+        // A reserved correlation id is the framework's own: saga dispatch binds it together with
+        // the saga's origin, and StreamRuneContext.continuing binds both for a saga-caused event.
+        // Bound without that origin it came from something else, and executing the command would
+        // store events, and an audit row, under a saga's correlation id that no saga caused.
+        BoundCorrelationId.refuseForeignReserved(LOG, "command", command.getClass());
         reg = (DeciderRegistration<C, ?, ?>) findRegistration(command);
         aggregateId = reg.idExtractor().apply(command);
         if (aggregateId == null) {
@@ -1454,53 +1457,16 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
-   * The correlation id of the events the command in progress produces. With a saga origin bound it
-   * is the origin's ({@link SagaOrigin#correlationId()}), derived and not copied from the bound
-   * request context, so an event that carries an origin always carries that origin's correlation
-   * id. Otherwise it is the bound context's, or a generated one when no context is bound; {@link
-   * #requireNoForeignReservedCorrelationId()} has refused a reserved one by then.
+   * The correlation id of the events the command in progress produces: the one the dispatch records
+   * ({@link BoundCorrelationId#inEffect()}) — the bound saga origin's, derived and not copied from
+   * the bound request context, so an event that carries an origin always carries that origin's
+   * correlation id; otherwise the bound context's — or a generated one when neither is bound. A
+   * reserved one that is not the origin's has been refused by then ({@link
+   * BoundCorrelationId#refuseForeignReserved}).
    */
   private CorrelationId getCorrelationId() {
-    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
-    if (cause != null && cause.sagaOrigin() != null) {
-      return cause.sagaOrigin().correlationId();
-    }
-    if (StreamRuneContext.CURRENT.isBound()) {
-      return StreamRuneContext.CURRENT.get().correlationId();
-    }
-    return IdGenerator.generateCorrelationId();
-  }
-
-  /**
-   * Refuses the command in progress when the bound correlation id is in the reserved form ({@link
-   * IdConstraints#isReserved(String)}) and no saga origin is bound.
-   *
-   * <p>A reserved correlation id is the framework's own: saga dispatch binds it together with the
-   * saga's origin, and {@link StreamRuneContext#continuing(EventEnvelope)} inherits both from a
-   * saga-caused event. Bound without an origin it was put there by something else — a request
-   * context built with the plain constructor from a client's value, a listener that copied a
-   * saga-caused event's correlation id into a context of its own instead of continuing the event, a
-   * task that carried the context to another thread without the cause. Executing the command would
-   * store an event that carries a saga's correlation id and no statement of which saga caused it.
-   * With this refusal and the derivation in {@link #getCorrelationId()}, an event this bus stores
-   * carries a reserved correlation id if and only if it carries a saga origin.
-   *
-   * <p>It runs before the registration lookup and before any interceptor, is counted as a failed
-   * command, is not retried, and reaches no dead letter queue: the caller gets the {@link
-   * IllegalArgumentException}. The message names the prefix and never the bound value.
-   */
-  private static void requireNoForeignReservedCorrelationId() {
-    if (!StreamRuneContext.CURRENT.isBound()
-        || !IdConstraints.isReserved(StreamRuneContext.CURRENT.get().correlationId().value())) {
-      return;
-    }
-    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
-    if (cause == null || cause.sagaOrigin() == null) {
-      throw new IllegalArgumentException(
-          "the bound correlation id uses the reserved '"
-              + IdConstraints.RESERVED_PREFIX
-              + "' prefix; only a saga dispatch or StreamRuneContext.continuing binds it");
-    }
+    CorrelationId bound = BoundCorrelationId.inEffect();
+    return bound != null ? bound : IdGenerator.generateCorrelationId();
   }
 
   /**

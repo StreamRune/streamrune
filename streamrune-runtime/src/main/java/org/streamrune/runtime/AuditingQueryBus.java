@@ -25,9 +25,19 @@ import org.streamrune.core.types.UserId;
  *
  * <p>Queries without {@code @Auditable} pass through without auditing. Audit entries reuse the
  * existing {@code audit_log} table with {@code commandId=null} (a query is not a command), {@code
- * aggregateId=null}, and {@code eventCount=0}. The {@code correlationId} is carried from the bound
- * {@link StreamRuneContext}, tying the query audit row to the originating business flow; it is
- * {@code null} when no context is bound.
+ * aggregateId=null}, and {@code eventCount=0}. The correlation id of the row is the one the
+ * dispatch runs under, tying the row to the originating business flow: the bound {@link
+ * StreamRuneContext}'s, or — for a query dispatched with a saga origin bound, inside a saga's
+ * dispatch or a continuation — that origin's reserved one, as the command audit records it. It is
+ * {@code null} when neither is bound.
+ *
+ * <p><strong>A reserved correlation id.</strong> A query dispatched under a correlation id with the
+ * reserved {@code streamrune:} prefix that is not the bound saga origin's is refused with a {@link
+ * org.streamrune.core.ReservedCorrelationIdException} before anything is recorded — no audit row,
+ * no metric, no delegate call — as the command bus refuses such a command ({@link
+ * StreamRuneContext#requireNoForeignReservedCorrelationId()}). So a row this bus writes carries a
+ * reserved correlation id only for a query that ran with that saga's origin bound. The refusal is
+ * logged once at {@code WARN}, without the bound value.
  *
  * <p>When a {@link StreamRuneMetrics} is supplied, every dispatch records {@code
  * queries.dispatched} and {@code queries.duration} tagged with the query type (auditable or not).
@@ -69,6 +79,9 @@ public final class AuditingQueryBus implements QueryBus {
 
   @Override
   public <R> R dispatch(Query<R> query) {
+    // Before anything is recorded: an audit row written here carries the bound correlation id, and
+    // a reserved one that is not a bound saga origin's would mark the row as a saga's work.
+    BoundCorrelationId.refuseForeignReserved(LOG, "query", query.getClass());
     String queryType = query.getClass().getSimpleName();
     recordMetric(() -> metrics.recordQueryDispatched(queryType), "recordQueryDispatched");
     long start = System.nanoTime();
@@ -172,13 +185,12 @@ public final class AuditingQueryBus implements QueryBus {
     return null;
   }
 
+  /**
+   * The correlation id the row records, as the command audit records it: the bound saga origin's
+   * when a query runs with an origin bound (inside a saga's dispatch or a continuation), otherwise
+   * the bound context's, otherwise none.
+   */
   private static CorrelationId currentCorrelationId() {
-    if (StreamRuneContext.CURRENT.isBound()) {
-      StreamRuneContext.RequestContext ctx = StreamRuneContext.CURRENT.get();
-      if (ctx != null) {
-        return ctx.correlationId();
-      }
-    }
-    return null;
+    return BoundCorrelationId.inEffect();
   }
 }

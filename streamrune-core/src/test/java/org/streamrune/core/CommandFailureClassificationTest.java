@@ -45,6 +45,17 @@ class CommandFailureClassificationTest {
   }
 
   @Test
+  void aReservedCorrelationIdRefusalIsPermanent() {
+    // The dispatch ran under a reserved correlation id that is not its saga origin's: a wiring
+    // error of the caller, the same on every retry and every replay.
+    var refusal = new ReservedCorrelationIdException();
+
+    assertTrue(CommandFailureClassification.isPermanentRejection(refusal));
+    assertFalse(CommandFailureClassification.DLQ_ELIGIBLE.test(refusal));
+    assertFalse(CommandFailureClassification.BREAKER_ELIGIBLE.test(refusal));
+  }
+
+  @Test
   void infrastructureFailuresAreNotPermanent() {
     assertFalse(CommandFailureClassification.isPermanentRejection(new EventStoreException("down")));
     assertFalse(

@@ -28,7 +28,6 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
-import org.streamrune.core.types.IdConstraints;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
@@ -46,9 +45,10 @@ import org.streamrune.core.types.Version;
  * bound, otherwise taken from {@link StreamRuneContext} when bound, generated otherwise), the saga
  * origin and the causation id come from the bound {@link StreamRuneContext#CAUSE} and from nowhere
  * else (with none bound an event carries neither), and envelope versions match what the store
- * persists. A command whose bound correlation id has the reserved {@code streamrune:} prefix while
- * no saga origin is bound is refused with an {@link IllegalArgumentException} before its decider is
- * looked up, as the production bus refuses it.
+ * persists. A command whose bound correlation id has the reserved {@code streamrune:} prefix and is
+ * not the bound saga origin's is refused with a {@link
+ * org.streamrune.core.ReservedCorrelationIdException} before its decider is looked up, as the
+ * production bus refuses it ({@link StreamRuneContext#requireNoForeignReservedCorrelationId()}).
  *
  * <p>This bus has no dead letter queue, so a failed command propagates to its caller and nothing
  * else happens — for a command that carries a saga origin exactly what {@code
@@ -142,7 +142,10 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
     if (closed) {
       throw new IllegalStateException("CommandBus has been closed");
     }
-    requireNoForeignReservedCorrelationId();
+    // Before the decider lookup, as VirtualThreadCommandBus refuses it: a test that copies a
+    // saga-caused event's correlation id into a context of its own fails here as it would in
+    // production.
+    StreamRuneContext.requireNoForeignReservedCorrelationId();
 
     Class<?> commandType = command.getClass();
     Decider<C, ?, DomainEvent> decider = (Decider<C, ?, DomainEvent>) deciders.get(commandType);
@@ -256,28 +259,6 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
       return StreamRuneContext.CURRENT.get().correlationId();
     }
     return IdGenerator.generateCorrelationId();
-  }
-
-  /**
-   * Refuses the command in progress when the bound correlation id is in the reserved form ({@link
-   * IdConstraints#isReserved(String)}) and no saga origin is bound, as {@code
-   * VirtualThreadCommandBus} does: only saga dispatch and {@link
-   * StreamRuneContext#continuing(EventEnvelope)} bind a reserved correlation id, and they bind the
-   * origin with it. A test that copies a saga-caused event's correlation id into a context of its
-   * own fails here as it would in production.
-   */
-  private static void requireNoForeignReservedCorrelationId() {
-    if (!StreamRuneContext.CURRENT.isBound()
-        || !IdConstraints.isReserved(StreamRuneContext.CURRENT.get().correlationId().value())) {
-      return;
-    }
-    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
-    if (cause == null || cause.sagaOrigin() == null) {
-      throw new IllegalArgumentException(
-          "the bound correlation id uses the reserved '"
-              + IdConstraints.RESERVED_PREFIX
-              + "' prefix; only a saga dispatch or StreamRuneContext.continuing binds it");
-    }
   }
 
   /**

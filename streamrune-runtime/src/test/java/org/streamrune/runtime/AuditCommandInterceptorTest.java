@@ -14,6 +14,7 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditOutcome;
 import org.streamrune.core.audit.AuditStore;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -128,6 +129,63 @@ class AuditCommandInterceptorTest {
             StreamRuneContext.CURRENT,
             new StreamRuneContext.RequestContext(
                 null, UserId.of("user-1"), correlationId, Instant.now(), null))
+        .run(
+            () -> {
+              interceptor.before(CTX_NO_RESULT);
+              interceptor.after(CTX_WITH_RESULT);
+            });
+
+    verify(store).save(argThat(entry -> correlationId.equals(entry.correlationId())));
+  }
+
+  /**
+   * The events of a command executed with a saga origin bound carry the origin's correlation id,
+   * whatever ordinary id the bound context holds, so the audit row records that id too: a row and
+   * the events of its command never name different correlation ids.
+   */
+  @Test
+  void after_savesTheBoundSagaOriginsCorrelationId_whateverTheContextHolds() {
+    SagaOrigin origin = SagaOrigins.of("order-saga-42");
+    var cause = new StreamRuneContext.DispatchCause(null, origin);
+    CorrelationId reserved = CorrelationId.of("streamrune:saga:order-saga-42");
+
+    // As saga dispatch binds it; an application's own context beside the origin; no context.
+    for (CorrelationId bound :
+        java.util.Arrays.asList(reserved, CorrelationId.of("app-own-correlation"), null)) {
+      AuditStore store = mock(AuditStore.class);
+      var interceptor = new AuditCommandInterceptor(store);
+      ScopedValue.Carrier bindings = ScopedValue.where(StreamRuneContext.CAUSE, cause);
+      if (bound != null) {
+        bindings =
+            bindings.where(
+                StreamRuneContext.CURRENT,
+                new StreamRuneContext.RequestContext(
+                    null, UserId.of("user-1"), bound, Instant.now(), null));
+      }
+
+      bindings.run(
+          () -> {
+            interceptor.before(CTX_NO_RESULT);
+            interceptor.after(CTX_WITH_RESULT);
+          });
+
+      verify(store).save(argThat(entry -> reserved.equals(entry.correlationId())));
+    }
+  }
+
+  @Test
+  void after_savesTheContextsCorrelationId_besideACauseWithoutAnOrigin() {
+    AuditStore store = mock(AuditStore.class);
+    var interceptor = new AuditCommandInterceptor(store);
+    CorrelationId correlationId = CorrelationId.of("client-corr-7");
+
+    ScopedValue.where(
+            StreamRuneContext.CURRENT,
+            new StreamRuneContext.RequestContext(null, null, correlationId, Instant.now(), null))
+        .where(
+            StreamRuneContext.CAUSE,
+            new StreamRuneContext.DispatchCause(
+                org.streamrune.core.types.CausationId.of("evt-1"), null))
         .run(
             () -> {
               interceptor.before(CTX_NO_RESULT);

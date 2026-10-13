@@ -35,6 +35,13 @@ import org.streamrune.core.types.UserId;
  * {@link Cacheable.Scope#GLOBAL} for answers that genuinely do not depend on the caller, which stay
  * cached in that case. {@link Cacheable.Scope#GLOBAL} queries are keyed by the query alone.
  *
+ * <p>A query dispatched under a correlation id with the reserved {@code streamrune:} prefix that is
+ * not the bound saga origin's is refused with a {@link
+ * org.streamrune.core.ReservedCorrelationIdException} before the authorizer, the cache or the
+ * delegate is consulted, as the command bus refuses such a command ({@link
+ * org.streamrune.core.StreamRuneContext#requireNoForeignReservedCorrelationId()}); the refusal is
+ * logged at {@code WARN}, without the bound value.
+ *
  * <p>Thread-safe. Obtain instances via {@link #builder()}.
  *
  * <pre>{@code
@@ -88,6 +95,9 @@ public final class CachingQueryBus implements QueryBus {
   @Override
   @SuppressWarnings("unchecked")
   public <R> R dispatch(Query<R> query) {
+    // The rule of the command bus, before the cache or the authorizer is consulted: a reserved
+    // correlation id that is not the bound saga origin's is refused.
+    BoundCorrelationId.refuseForeignReserved(LOG, "query", query.getClass());
     Class<?> type = query.getClass();
     Cacheable ann = resolveAnnotation(type);
     if (ann == NO_ANNOTATION) {
