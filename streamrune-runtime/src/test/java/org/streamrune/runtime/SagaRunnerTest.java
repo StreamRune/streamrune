@@ -288,6 +288,43 @@ class SagaRunnerTest {
   }
 
   /**
+   * The event of a command a listener dispatched inside {@code StreamRuneContext.continuing} for
+   * one of the saga's events carries the saga's origin a hop further and a causation id. The runner
+   * routes by the origin's saga type and saga id, so the event reaches the saga like the reply to
+   * its own command, at any hop.
+   */
+  @Test
+  void theEventOfAContinuation_reachesTheSagaItsOriginNames_atAnyHop() {
+    for (int hop : new int[] {1, 4}) {
+      SagaId sagaId = SagaId.of("saga-order-hop-" + hop);
+      sagaStore.create(
+          sagaId,
+          SagaType.fromClass(OrderState.class),
+          new OrderState(SagaStatus.RUNNING, "order-1"),
+          SagaStatus.RUNNING);
+      EventEnvelope reply =
+          SagaEnvelopes.causedBy(
+              OrderState.class,
+              sagaId,
+              hop,
+              StreamId.of(TYPE, AggregateId.of("test-stream")),
+              new OrderPaid("order-1"));
+      assertEquals(hop, reply.metadata().sagaOrigin().hop());
+      assertNotNull(reply.metadata().causationId());
+
+      runner.asEventListener().onEvents(List.of(reply));
+
+      assertEquals(
+          SagaStatus.COMPLETED,
+          sagaStore
+              .load(sagaId, SagaType.fromClass(OrderState.class), OrderState.class)
+              .orElseThrow()
+              .status(),
+          "hop " + hop);
+    }
+  }
+
+  /**
    * Wiring pin: {@code processCorrelatedEvent} is now a thin adapter that routes a live correlated
    * event through {@code SagaStepExecutor} (a {@code ForwardStep} trigger). This asserts the
    * executor path is wired to production — a correlated event evolves the loaded saga and

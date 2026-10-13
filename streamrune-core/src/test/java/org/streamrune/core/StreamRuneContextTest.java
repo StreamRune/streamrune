@@ -905,22 +905,12 @@ class StreamRuneContextTest {
 
   @Test
   void continuing_anEventAlreadyAFewHopsAway_addsOneHop() {
-    EventMetadata hopZero = sagaCausedEvent().metadata();
-    SagaOrigin atHopThree =
-        new SagaOrigin(hopZero.sagaOrigin().sagaType(), hopZero.sagaOrigin().sagaId(), 3);
     EventEnvelope event =
-        envelopeWith(
-            new EventMetadata(
-                hopZero.eventId(),
-                hopZero.commandId(),
-                null,
-                null,
-                hopZero.correlationId(),
-                CausationId.of("evt-hop-2"),
-                null,
-                NOW,
-                Map.of(),
-                atHopThree));
+        SagaEnvelopes.causedBy(
+            ShipmentState.class, SAGA_ID, 3, PAYMENT_STREAM, new PaymentInitiated("o-1"));
+    SagaOrigin atHopThree = event.metadata().sagaOrigin();
+    assertEquals(3, atHopThree.hop());
+    assertNotNull(event.metadata().causationId());
 
     StreamRuneContext.continuing(event)
         .run(

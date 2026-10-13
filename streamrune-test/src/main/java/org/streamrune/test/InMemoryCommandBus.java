@@ -262,6 +262,16 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
   }
 
   /**
+   * The metadata this bus writes for an event of a command executed under what is bound on the
+   * calling thread right now: {@link #buildMetadata} with {@link #correlationId()}. {@link
+   * SagaEnvelopes} builds a continuation's reply with it, so that a hand-built envelope and a
+   * stored one cannot drift apart.
+   */
+  static EventMetadata metadataUnderTheBoundDispatch(CommandId commandId) {
+    return buildMetadata(commandId, correlationId());
+  }
+
+  /**
    * Builds event metadata with the same topology as {@code VirtualThreadCommandBus}: one
    * correlation id per command (from {@link StreamRuneContext} when bound); the saga origin and the
    * causation id from the bound {@link StreamRuneContext#CAUSE} and from nowhere else (with no
