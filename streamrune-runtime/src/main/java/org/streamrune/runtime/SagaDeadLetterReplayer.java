@@ -1293,7 +1293,7 @@ public final class SagaDeadLetterReplayer {
    *
    * <p><b>No fallback .</b> Every write that enters {@code COMPENSATING} stamps the episode — the
    * claim writes and, for an evolved {@code SagaState.status()} of {@code COMPENSATING}, the
-   * forward path's own {@code applyEvent} / {@code createGenesisPending} (the episode stamp rule,
+   * forward path's own {@code applyEvent} after the step's forward loop (the episode stamp rule,
    * {@link SagaStore#claimCompensating}) — and a fault keeps the stamp, so a faulted compensation
    * episode without {@code episodeVersion} and {@code episodeClaimedAt} is a store contract
    * violation. The old {@code updatedAt} fallback measured such an episode from its last write —

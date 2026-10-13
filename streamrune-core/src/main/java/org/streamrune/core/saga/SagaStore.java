@@ -125,9 +125,9 @@ public interface SagaStore {
   /**
    * The executor's create-first write for a fresh saga: version 1, {@code genesis_applied = FALSE},
    * {@code pre_fault_status = NULL}, {@code dead_letter_pending} as given, no applied offsets,
-   * holding the genesis-EVOLVED state and status (so {@code findTimedOut} can see the saga during a
-   * start-path outage). {@link #create(SagaId, SagaType, SagaState, SagaStatus, boolean)} is the
-   * same insert with {@code genesis_applied = TRUE} — a complete row.
+   * holding the genesis-EVOLVED state and the status it is given (so {@code findTimedOut} can see
+   * the saga during a start-path outage). {@link #create(SagaId, SagaType, SagaState, SagaStatus,
+   * boolean)} is the same insert with {@code genesis_applied = TRUE} — a complete row.
    *
    * <p>{@code deadLetterPending} exists for the same reason as on {@code create}: the saga may
    * already own dead-letter entries (the row-less residual and its held correlated events), and a
@@ -136,11 +136,12 @@ public interface SagaStore {
    * live start; the flag rides in the one INSERT statement, so there is no crash point between "row
    * exists" and "row shielded".
    *
-   * <p>The saga runtime always passes a forward status here. A start event whose evolve yields
-   * {@code COMPENSATING} is inserted as {@code STARTED} with the evolved state, and the {@link
-   * #applyEvent} that follows its forward loop lands {@code COMPENSATING} and stamps the episode: a
-   * {@code COMPENSATING} row is a claimed episode to every path that reads it, so the row must not
-   * be one while the start event's forward commands are still being dispatched.
+   * <p>The saga runtime never passes {@code COMPENSATING} here. It passes the evolved status,
+   * except that a start event whose evolve yields {@code COMPENSATING} is inserted as {@code
+   * STARTED} with the evolved state, and the {@link #applyEvent} that follows its forward loop
+   * lands {@code COMPENSATING} and stamps the episode: a {@code COMPENSATING} row is a claimed
+   * episode to every path that reads it, so the row must not be one while the start event's forward
+   * commands are still being dispatched.
    *
    * <p>A store asked to insert at {@code COMPENSATING} all the same (tooling, tests) follows the
    * episode stamp rule, see {@link #claimCompensating}: the row is born stamped ({@code

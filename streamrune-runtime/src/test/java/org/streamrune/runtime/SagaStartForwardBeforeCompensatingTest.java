@@ -8,6 +8,9 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DynamicTest;
@@ -15,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaStatus;
@@ -50,9 +54,9 @@ import org.streamrune.runtime.SagaEpisodeStampReadFromRowTest.State;
  * as genesis-pending, the sweeper does not see the row; the stored events have every forward effect
  * before its compensation.
  *
- * <p>Uses the harness of {@link SagaEpisodeStampReadFromRowTest}. No thread, no clock wait: a
- * second path runs in a hook at a fixed point, and a process death is an {@link Error} thrown at a
- * fixed point of the delivery.
+ * <p>Uses the harness of {@link SagaEpisodeStampReadFromRowTest}. No clock wait: a second path runs
+ * in a hook at a fixed point (one case parks a second thread at such a point with latches), and a
+ * process death is an {@link Error} thrown at a fixed point of the delivery.
  */
 class SagaStartForwardBeforeCompensatingTest {
 
@@ -284,7 +288,7 @@ class SagaStartForwardBeforeCompensatingTest {
 
                         try {
                           h.deliver(opened[0]);
-                        } catch (org.streamrune.core.OptimisticLockException lostTheEventWrite) {
+                        } catch (OptimisticLockException lostTheEventWrite) {
                           // The second delivery landed the event write first: the redelivery
                           // routes on the row it finds.
                           h.deliver(opened[0]);
@@ -438,6 +442,102 @@ class SagaStartForwardBeforeCompensatingTest {
   }
 
   /**
+   * The process dies after the first forward command; on the redelivery the second forward command
+   * is rejected. The first command answers from the inbox, the claim is the stamping write, and the
+   * compensation follows the forward effect that was stored.
+   */
+  @Test
+  void theProcessDiesAfterTheFirstCommand_theSecondIsRejectedOnTheRedelivery_theClaimCompensates() {
+    try (var h = bornCompensating()) {
+      h.saga.startAlsoShips = true;
+      EventEnvelope opened = h.append(new Opened(ORDER));
+      h.bus.runOnceBefore(
+          Ship.class,
+          () -> {
+            throw new ProcessDeath();
+          });
+      assertThatThrownBy(() -> h.deliver(opened)).isInstanceOf(ProcessDeath.class);
+      assertGenesisPendingForwardRow(h.row());
+      h.ship.failure = () -> new IllegalArgumentException("address rejected");
+
+      h.deliver(opened);
+
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(h.row().episodeVersion()).as("the claim is the stamping write").isEqualTo(2L);
+      assertThat(h.row().episodeCauseEventId()).isEqualTo(opened.metadata().eventId());
+      assertThat(stored(h)).containsExactly("Reserved", "Released", "Refunded");
+      assertThat(h.bus.compensationKeys()).isEqualTo(h.keysOfTheRowsEpisode());
+    }
+  }
+
+  /**
+   * A twin delivery on a second thread loads the genesis-pending row and parks right before its
+   * forward command. The opening delivery finishes the forward loop and enters the episode, and the
+   * sweeper compensates it. The twin then continues: its forward command answers from the inbox,
+   * its event write is refused by the terminal row, and its redelivery is skipped. The forward
+   * effect is stored once, before its compensation. The threads are sequenced by latches at fixed
+   * points.
+   */
+  @Test
+  void aTwinDeliveryParkedBeforeItsForwardCommand_storesNothingAfterTheCompensation()
+      throws Exception {
+    try (var h = bornCompensating()) {
+      EventEnvelope opened = h.append(new Opened(ORDER));
+      CountDownLatch twinAtItsForwardCommand = new CountDownLatch(1);
+      CountDownLatch episodeCompensated = new CountDownLatch(1);
+      CountDownLatch twinDone = new CountDownLatch(1);
+      AtomicReference<Throwable> twinOutcome = new AtomicReference<>();
+      h.bus.runOnceBefore(
+          Reserve.class,
+          () -> {
+            h.bus.runOnceBefore(
+                Reserve.class,
+                () -> {
+                  twinAtItsForwardCommand.countDown();
+                  await(episodeCompensated);
+                });
+            Thread.ofPlatform()
+                .start(
+                    () -> {
+                      try {
+                        h.secondReplica.asEventListener().onEvents(List.of(opened));
+                      } catch (Throwable t) {
+                        twinOutcome.set(t);
+                      } finally {
+                        twinDone.countDown();
+                      }
+                    });
+            await(twinAtItsForwardCommand);
+          });
+
+      h.deliver(opened);
+      assertEpisodeEnteredByTheStartEvent(h.row(), opened);
+      sweep(h);
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
+      episodeCompensated.countDown();
+      await(twinDone);
+
+      assertThat(twinOutcome.get())
+          .as("the twin's event write meets a terminal row")
+          .isInstanceOf(OptimisticLockException.class);
+      h.secondReplica.asEventListener().onEvents(List.of(opened));
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(stored(h)).containsExactly("Reserved", "Released", "Refunded");
+    }
+  }
+
+  private static void await(CountDownLatch latch) {
+    try {
+      if (!latch.await(20, TimeUnit.SECONDS)) {
+        throw new IllegalStateException("the other thread did not reach its point");
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(e);
+    }
+  }
+
+  /**
    * The forward command of the born start is rejected: the claim is the write that stamps the
    * episode, with the start event as its cause, and the opening call and a resume present the keys
    * of that stamp.
@@ -498,9 +598,8 @@ class SagaStartForwardBeforeCompensatingTest {
   }
 
   /**
-   * A row that a store was asked to insert at COMPENSATING carries a stamp from birth (tooling, or
-   * a row written before the start path inserted a forward status). A delivery of the start event
-   * resumes that episode under the row's own stamp and cause.
+   * A row that a store was asked to insert at COMPENSATING carries a stamp from birth (tooling). A
+   * delivery of the start event resumes that episode under the row's own stamp and cause.
    */
   @Test
   void aRowStampedAtBirth_isResumedUnderItsOwnStamp() {

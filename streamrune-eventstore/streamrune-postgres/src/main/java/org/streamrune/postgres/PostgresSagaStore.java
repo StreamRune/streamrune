@@ -117,9 +117,10 @@ public final class PostgresSagaStore implements SagaStore {
   // SagaDeadLetterReplayer's SAGA_ROW_PENDING deferral both read this flag via LoadedSaga.
   // The shield (dead_letter_pending) is bound, not defaulted: a saga may already own dead-letter
   // entries before its row exists (the row-less residual), and the row must be born
-  // shielded then. Same on INSERT_NEW above. A genesis whose evolve yielded
-  // COMPENSATING is born stamped by the same statement (EPISODE_STAMP_VALUES): no crash point
-  // between "row is COMPENSATING" and "episode stamped".
+  // shielded then. Same on INSERT_NEW above. A row inserted at COMPENSATING (tooling; the saga
+  // runtime inserts a start event's row with a forward status) is born stamped by the same
+  // statement (EPISODE_STAMP_VALUES): no crash point between "row is COMPENSATING" and "episode
+  // stamped".
   private static final String INSERT_GENESIS_PENDING =
       "INSERT INTO saga_state (saga_id, saga_type, status, state_json, version, genesis_applied,"
           + " dead_letter_pending, episode_version, episode_claimed_at, episode_cause_event_id)"
