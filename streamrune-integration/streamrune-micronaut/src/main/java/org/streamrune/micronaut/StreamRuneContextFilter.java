@@ -111,12 +111,19 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * through {@link StreamRuneContext.RequestContext#fromRequest}, which refuses a value longer than
  * 255 characters, a value that holds a control character, and a correlation id that starts with
  * {@code streamrune:} — the prefix of the correlation ids the framework itself binds for a saga's
- * commands. The filter answers such a request with {@code 400 Bad Request} and the plain-text body
- * {@link RequestIdentityPolicy#REFUSED_REQUEST_CONTEXT} and does not proceed: no controller runs,
- * no context is bound or stored on the request, nothing is stored. The refused value is neither
- * echoed nor logged. Any other correlation id is bound exactly as the client sent it. The
- * correlation id, the trace id and the baggage are caller-supplied in every identity mode; nothing
- * may be addressed, authorized or deduplicated by them.
+ * commands. The filter answers such a request with status {@code 400 Bad Request}, content type
+ * {@code text/plain;charset=UTF-8} and the body {@link
+ * RequestIdentityPolicy#REFUSED_REQUEST_CONTEXT} — the answer of the Spring and Quarkus filters,
+ * byte for byte — and does not proceed: no controller runs, no context is bound or stored on the
+ * request, nothing is stored. The refused value is neither echoed nor logged. Any other correlation
+ * id is bound exactly as the client sent it.
+ *
+ * <p><b>A header sent more than once.</b> Of a repeated {@code X-Correlation-Id} or {@code
+ * X-Trace-Id} header the first value is the header ({@code HttpHeaders#get}), on the three
+ * integrations alike: a blank first value counts as an absent header and an id is generated,
+ * whatever follows it. One line that holds a comma is one value. The correlation id, the trace id
+ * and the baggage are caller-supplied in every identity mode; nothing may be addressed, authorized
+ * or deduplicated by them.
  *
  * <p><b>What a request cannot set.</b> This filter builds a request context and nothing else. It
  * does not bind {@link StreamRuneContext#CAUSE}, so no header and no baggage entry, allowlisted or
@@ -135,6 +142,9 @@ public class StreamRuneContextFilter implements Ordered {
   public static final String CONTEXT_ATTRIBUTE = "org.streamrune.micronaut.requestContext";
 
   private static final Logger logger = LoggerFactory.getLogger(StreamRuneContextFilter.class);
+
+  /** The content type of the answer to a refused request context, the same on the integrations. */
+  private static final MediaType REFUSAL_CONTENT_TYPE = MediaType.of("text/plain;charset=UTF-8");
 
   private final Set<String> extraAllowedBaggageKeys;
   private final RequestIdentityPolicy identityPolicy;
@@ -229,8 +239,11 @@ public class StreamRuneContextFilter implements Ordered {
       // reserved prefix. That is the client's error, answered here before the chain runs. The
       // message names the field and never the value; the value itself is not logged.
       logger.debug("Refusing the request with 400: {}", refused.getMessage());
+      // A principal the identity provider asserted and the door refuses is refused on every
+      // request of that user: reported once, at a level an operator sees.
+      identityPolicy.unacceptablePrincipalWarning(userId).ifPresent(logger::warn);
       return HttpResponse.badRequest(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT)
-          .contentType(MediaType.TEXT_PLAIN_TYPE);
+          .contentType(REFUSAL_CONTENT_TYPE);
     }
     ctx = withCapturedAuthority(ctx);
     request.setAttribute(CONTEXT_ATTRIBUTE, ctx);

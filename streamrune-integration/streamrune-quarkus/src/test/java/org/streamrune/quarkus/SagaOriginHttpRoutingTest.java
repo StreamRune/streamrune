@@ -10,16 +10,23 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestFactory;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.IdConstraints;
+import org.streamrune.core.types.UserId;
 import org.streamrune.integration.RequestIdentityPolicy;
 import org.streamrune.quarkus.SagaOriginHttpFixture.Confirm;
 import org.streamrune.quarkus.SagaOriginHttpFixture.Confirmed;
@@ -288,7 +295,8 @@ class SagaOriginHttpRoutingTest {
 
     assertThat(response.statusCode()).as("status for a refused %s", header).isEqualTo(400);
     assertThat(response.body()).isEqualTo(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
-    assertThat(response.headers().firstValue("Content-Type").orElse("")).startsWith("text/plain");
+    assertThat(response.headers().firstValue("Content-Type").orElse("").replace(" ", ""))
+        .isEqualToIgnoringCase("text/plain;charset=UTF-8");
     assertThat(fixture.endpointCalls()).as("the resource is not called").isEqualTo(callsBefore);
     assertThat(holder.context()).as("no request context is published").isNull();
     assertThat(fixture.stored()).as("nothing is stored").isEqualTo(storedBefore);
@@ -433,5 +441,204 @@ class SagaOriginHttpRoutingTest {
               assertThat(id).isNotBlank();
               assertThat(IdConstraints.isReserved(id)).isFalse();
             });
+  }
+
+  // ==== A header sent more than once ====
+
+  private EventEnvelope confirmedOf(String flow) {
+    return fixture.stored(Confirmed.class).stream()
+        .filter(confirmed -> confirmed.event().equals(new Confirmed(flow)))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private boolean nothingConfirmedFor(String flow) {
+    return fixture.stored(Confirmed.class).stream()
+        .noneMatch(confirmed -> confirmed.event().equals(new Confirmed(flow)));
+  }
+
+  @Test
+  void ofARepeatedCorrelationIdHeader_theFirstValueIsTaken() throws Exception {
+    fixture = new SagaOriginHttpFixture(Routing.BUILT_IN, false);
+    String reserved = reservedCorrelationIdOf(VICTIM);
+
+    try (var server = server()) {
+      RawHttp.Answer okFirst =
+          RawHttp.post(
+              server.port(),
+              "/flows/first/confirm",
+              List.of("X-Correlation-Id: ok", "X-Correlation-Id: " + reserved));
+      assertThat(okFirst.status()).isEqualTo(200);
+      assertThat(confirmedOf("first").metadata().correlationId().value()).isEqualTo("ok");
+
+      RawHttp.Answer reservedFirst =
+          RawHttp.post(
+              server.port(),
+              "/flows/second/confirm",
+              List.of("X-Correlation-Id: " + reserved, "X-Correlation-Id: ok"));
+      assertThat(reservedFirst.status()).isEqualTo(400);
+      assertThat(reservedFirst.body()).isEqualTo(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+      assertThat(reservedFirst.contentType()).isEqualTo("text/plain;charset=utf-8");
+      assertThat(nothingConfirmedFor("second")).isTrue();
+    }
+  }
+
+  @Test
+  void anEmptyFirstCorrelationIdHeader_isAnAbsentHeader_whateverFollows() throws Exception {
+    fixture = new SagaOriginHttpFixture(Routing.BUILT_IN, false);
+
+    try (var server = server()) {
+      RawHttp.Answer answer =
+          RawHttp.post(
+              server.port(),
+              "/flows/first/confirm",
+              List.of("X-Correlation-Id:", "X-Correlation-Id: " + reservedCorrelationIdOf(VICTIM)));
+      assertThat(answer.status()).isEqualTo(200);
+    }
+
+    assertThat(confirmedOf("first").metadata().correlationId().value())
+        .as("a generated id")
+        .isNotBlank()
+        .doesNotContain("streamrune:");
+  }
+
+  @Test
+  void aCommaJoinedCorrelationId_isOneValue() throws Exception {
+    fixture = new SagaOriginHttpFixture(Routing.BUILT_IN, false);
+    String reserved = reservedCorrelationIdOf(VICTIM);
+
+    try (var server = server()) {
+      assertThat(
+              RawHttp.post(
+                      server.port(),
+                      "/flows/first/confirm",
+                      List.of("X-Correlation-Id: ok," + reserved))
+                  .status())
+          .isEqualTo(200);
+      assertThat(
+              RawHttp.post(
+                      server.port(),
+                      "/flows/second/confirm",
+                      List.of("X-Correlation-Id: " + reserved + ",ok"))
+                  .status())
+          .isEqualTo(400);
+    }
+
+    assertThat(confirmedOf("first").metadata().correlationId().value()).isEqualTo("ok," + reserved);
+    assertThat(nothingConfirmedFor("second")).isTrue();
+  }
+
+  @Test
+  void ofARepeatedTraceIdHeader_theFirstValueIsTaken() throws Exception {
+    fixture = new SagaOriginHttpFixture(Routing.BUILT_IN, false);
+    String overlong = "a".repeat(256);
+
+    try (var server = server()) {
+      assertThat(
+              RawHttp.post(
+                      server.port(),
+                      "/flows/first/confirm",
+                      List.of("X-Trace-Id: trace-1", "X-Trace-Id: " + overlong))
+                  .status())
+          .isEqualTo(200);
+      assertThat(
+              RawHttp.post(
+                      server.port(),
+                      "/flows/second/confirm",
+                      List.of("X-Trace-Id: " + overlong, "X-Trace-Id: trace-1"))
+                  .status())
+          .isEqualTo(400);
+    }
+
+    assertThat(confirmedOf("first").metadata().traceId().value()).isEqualTo("trace-1");
+    assertThat(nothingConfirmedFor("second")).isTrue();
+  }
+
+  // ==== The refusals in the three identity modes ====
+
+  /**
+   * The refusals do not depend on who the caller is: in each identity mode a reserved correlation
+   * id, an over-long one and a control character in the trace id are answered {@code 400}, and an
+   * over-long {@code X-User-Id} is refused where a request supplies the user — behind a trusted
+   * gateway — and ignored in the two modes that do not read the header.
+   */
+  @TestFactory
+  Stream<DynamicTest> inEveryIdentityMode_aRefusedRequestContextIsAnswered400() {
+    Map<String, RequestIdentityPolicy> modes = new LinkedHashMap<>();
+    modes.put(
+        "an authenticated principal",
+        RequestIdentityPolicy.of(() -> Optional.of(UserId.of("mallory")), false));
+    modes.put("a trusted gateway", RequestIdentityPolicy.of(null, true));
+    modes.put("an anonymous request", RequestIdentityPolicy.of(null, false));
+    Map<String, String[]> refused = new LinkedHashMap<>();
+    refused.put(
+        "the reserved form of the victim's saga id",
+        new String[] {"X-Correlation-Id", reservedCorrelationIdOf(VICTIM)});
+    refused.put(
+        "a 256-character correlation id", new String[] {"X-Correlation-Id", "a".repeat(256)});
+    refused.put("a control character in the trace id", new String[] {"X-Trace-Id", "trace\tid"});
+    List<DynamicTest> cases = new ArrayList<>();
+    for (var mode : modes.entrySet()) {
+      for (var header : refused.entrySet()) {
+        cases.add(
+            DynamicTest.dynamicTest(
+                mode.getKey() + ", " + header.getKey(),
+                () ->
+                    assertRefusedIn(mode.getValue(), header.getValue()[0], header.getValue()[1])));
+      }
+      boolean readsTheHeader = mode.getValue().mode() == RequestIdentityPolicy.Mode.TRUSTED_GATEWAY;
+      cases.add(
+          DynamicTest.dynamicTest(
+              mode.getKey() + ", a 256-character X-User-Id",
+              () -> {
+                if (readsTheHeader) {
+                  assertRefusedIn(mode.getValue(), "X-User-Id", "u".repeat(256));
+                } else {
+                  assertAcceptedIn(mode.getValue(), "X-User-Id", "u".repeat(256));
+                }
+              }));
+    }
+    return cases.stream();
+  }
+
+  private void assertRefusedIn(RequestIdentityPolicy mode, String header, String value)
+      throws Exception {
+    var modeHolder = new StreamRuneRequestContextHolder();
+    try (var flows = new SagaOriginHttpFixture(Routing.EVENT_DATA_HOOK, false);
+        var server =
+            QuarkusRestTestServer.start(
+                new FlowResource(flows, modeHolder),
+                List.of(new StreamRuneRequestFilter(modeHolder, Set.of(), mode, null)))) {
+      flows.open(VICTIM);
+      flows.open(ATTACKER);
+      List<EventEnvelope> storedBefore = flows.stored();
+      LoadedSaga<FlowState> victim = flows.row(VICTIM);
+
+      HttpResponse<String> response =
+          post(server, "/flows/" + ATTACKER + "/confirm", Map.of(header, value));
+      flows.deliver();
+
+      assertThat(response.statusCode()).isEqualTo(400);
+      assertThat(response.body()).isEqualTo(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+      assertThat(flows.endpointCalls()).isZero();
+      assertThat(modeHolder.context()).isNull();
+      assertThat(flows.stored()).isEqualTo(storedBefore);
+      assertThat(flows.row(VICTIM)).isEqualTo(victim);
+    }
+  }
+
+  private void assertAcceptedIn(RequestIdentityPolicy mode, String header, String value)
+      throws Exception {
+    var modeHolder = new StreamRuneRequestContextHolder();
+    try (var flows = new SagaOriginHttpFixture(Routing.BUILT_IN, false);
+        var server =
+            QuarkusRestTestServer.start(
+                new FlowResource(flows, modeHolder),
+                List.of(new StreamRuneRequestFilter(modeHolder, Set.of(), mode, null)))) {
+      HttpResponse<String> response = post(server, "/flows/caller/confirm", Map.of(header, value));
+
+      assertThat(response.statusCode()).isEqualTo(200);
+      assertThat(flows.endpointCalls()).isEqualTo(1);
+    }
   }
 }

@@ -92,13 +92,21 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * through {@link StreamRuneContext.RequestContext#fromRequest}, which refuses a value longer than
  * 255 characters, a value that holds a control character, and a correlation id that starts with
  * {@code streamrune:} — the prefix of the correlation ids the framework itself binds for a saga's
- * commands. The filter answers such a request with {@code 400 Bad Request} ({@code sendError} with
- * the reason {@link RequestIdentityPolicy#REFUSED_REQUEST_CONTEXT}, rendered by the container's or
- * the application's error handling) and does not call the rest of the chain: no controller runs, no
- * command is executed, nothing is stored. The refused value is neither echoed nor logged. Any other
- * correlation id is bound exactly as the client sent it. The correlation id, the trace id and the
- * baggage are caller-supplied in every identity mode; nothing may be addressed, authorized or
- * deduplicated by them.
+ * commands. The filter answers such a request itself: status {@code 400 Bad Request}, content type
+ * {@code text/plain;charset=UTF-8}, and the body {@link
+ * RequestIdentityPolicy#REFUSED_REQUEST_CONTEXT} — the answer of the Quarkus and Micronaut filters,
+ * byte for byte. It does not call {@code sendError}: no error dispatch is started, so the
+ * container's error page, the application's error handling and a security filter chain's rule for
+ * the error path take no part, and the rest of the chain does not run — no controller, no command,
+ * nothing stored. The refused value is neither echoed nor logged. Any other correlation id is bound
+ * exactly as the client sent it.
+ *
+ * <p><b>A header sent more than once.</b> Of a repeated {@code X-Correlation-Id} or {@code
+ * X-Trace-Id} header the first value is the header ({@code getHeader}), on the three integrations
+ * alike: a blank first value counts as an absent header and an id is generated, whatever follows
+ * it. One line that holds a comma is one value. The correlation id, the trace id and the baggage
+ * are caller-supplied in every identity mode; nothing may be addressed, authorized or deduplicated
+ * by them.
  *
  * <p><b>What a request cannot set.</b> This filter binds a request context and nothing else. It
  * does not bind {@link StreamRuneContext#CAUSE}, so no header and no baggage entry, allowlisted or
@@ -108,6 +116,9 @@ import org.streamrune.integration.RequestIdentityPolicy;
 public class ScopedValueFilter implements Filter {
 
   private static final Logger logger = LoggerFactory.getLogger(ScopedValueFilter.class);
+
+  /** The content type of the answer to a refused request context, the same on the integrations. */
+  private static final String REFUSAL_CONTENT_TYPE = "text/plain;charset=UTF-8";
 
   private final Set<String> extraAllowedBaggageKeys;
   private final RequestIdentityPolicy identityPolicy;
@@ -203,9 +214,16 @@ public class ScopedValueFilter implements Filter {
       // reserved prefix. That is the client's error, answered here before the chain runs. The
       // message names the field and never the value; the value itself is not logged.
       logger.debug("Refusing the request with 400: {}", refused.getMessage());
-      ((HttpServletResponse) response)
-          .sendError(
-              HttpServletResponse.SC_BAD_REQUEST, RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+      // A principal the identity provider asserted and the door refuses is refused on every
+      // request of that user: reported once, at a level an operator sees.
+      identityPolicy.unacceptablePrincipalWarning(userId).ifPresent(logger::warn);
+      // Written here, not handed to sendError: an error dispatch gives the status line and the
+      // body to the application's error handling, and a security filter chain that does not admit
+      // the caller to the error path answers that dispatch itself (401 or 403 instead of 400).
+      var refusal = (HttpServletResponse) response;
+      refusal.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+      refusal.setContentType(REFUSAL_CONTENT_TYPE);
+      refusal.getWriter().write(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
       return;
     }
     // Resolve the caller's authorities HERE, while Spring

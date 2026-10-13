@@ -5,8 +5,11 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.streamrune.core.BaggageAllowlist;
+import org.streamrune.core.types.IdConstraints;
 import org.streamrune.core.types.UserId;
 
 /**
@@ -133,6 +136,9 @@ public final class RequestIdentityPolicy {
   private final Mode mode;
   private final AuthenticatedUserResolver resolver;
 
+  /** Whether {@link #unacceptablePrincipalWarning(UserId)} has handed out its one report. */
+  private final AtomicBoolean unacceptablePrincipalReported = new AtomicBoolean();
+
   private RequestIdentityPolicy(Mode mode, AuthenticatedUserResolver resolver) {
     this.mode = mode;
     this.resolver = resolver;
@@ -193,6 +199,50 @@ public final class RequestIdentityPolicy {
         yield principal;
       }
     };
+  }
+
+  /**
+   * The one-time report of an authenticated principal the request edge refuses.
+   *
+   * <p>In {@link Mode#AUTHENTICATED_PRINCIPAL} the user id is what the identity provider asserted.
+   * One that is longer than 255 characters or holds a control character is refused by {@code
+   * RequestContext.fromRequest} like a client's header, and the request filters answer {@code 400}
+   * with {@link #REFUSED_REQUEST_CONTEXT} — for every request of that user, who can do nothing
+   * about it. That is a fact about the identity provider, not about one request, so it is reported
+   * once per policy (one policy serves an application) at a level an operator sees: a request
+   * filter that refused a request context asks this method and logs what it returns at {@code
+   * WARN}. A report per request would let that user fill the log.
+   *
+   * <p>Nothing is reported in {@link Mode#TRUSTED_GATEWAY}, where the user id is the request's own
+   * header and its refusal is the client's error, nor in {@link Mode#ANONYMOUS}.
+   *
+   * @param userId the identity {@link #resolve(List, MismatchListener)} returned for the refused
+   *     request; {@code null} when it had none
+   * @return the message to log, the first time this policy is asked about a principal the request
+   *     edge refuses; empty for an acceptable or absent principal, in the other two modes, and
+   *     after the one report. The message names the resolver and the refused bound, never the value
+   */
+  public Optional<String> unacceptablePrincipalWarning(UserId userId) {
+    if (mode != Mode.AUTHENTICATED_PRINCIPAL || userId == null) {
+      return Optional.empty();
+    }
+    String refusal;
+    try {
+      IdConstraints.requireBoundedAndPrintable(userId.value(), "userId");
+      return Optional.empty();
+    } catch (IllegalArgumentException refused) {
+      refusal = refused.getMessage();
+    }
+    if (!unacceptablePrincipalReported.compareAndSet(false, true)) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        "The authenticated principal resolved by "
+            + resolver.getClass().getName()
+            + " is not an acceptable user id ("
+            + refusal
+            + "): every request of that principal is answered 400 Bad Request. Reported once; each"
+            + " refusal is logged at DEBUG.");
   }
 
   /**

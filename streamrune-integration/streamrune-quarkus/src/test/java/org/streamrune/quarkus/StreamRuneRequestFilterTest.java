@@ -6,7 +6,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import jakarta.ws.rs.container.ContainerRequestContext;
-import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.MultivaluedHashMap;
 import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.core.Response;
@@ -68,11 +67,58 @@ class StreamRuneRequestFilterTest {
         holder, Set.of(), RequestIdentityPolicy.of(Optional::empty, false), null);
   }
 
-  /** A request that carries one single-valued header. */
-  private static ContainerRequestContext requestWith(String header, String value) {
+  /**
+   * A request that carries {@code header} once per value, answered as Quarkus REST answers it:
+   * {@code getHeaders()} keeps every value as received, {@code getHeaderString} joins them with a
+   * comma.
+   */
+  private static ContainerRequestContext requestWith(String header, String... values) {
+    MultivaluedMap<String, String> headers = new MultivaluedHashMap<>();
+    for (String value : values) {
+      headers.add(header, value);
+    }
     ContainerRequestContext request = mock(ContainerRequestContext.class);
-    when(request.getHeaderString(header)).thenReturn(value);
+    when(request.getHeaders()).thenReturn(headers);
+    when(request.getHeaderString(header)).thenReturn(String.join(",", values));
     return request;
+  }
+
+  /**
+   * Of a repeated {@code X-Correlation-Id} or {@code X-Trace-Id} header the first value is the
+   * header, as on the servlet and Micronaut filters — not the comma-joined list {@code
+   * getHeaderString} returns, which would bind a value no client sent as one and would refuse a
+   * request whose first value is empty.
+   */
+  @Test
+  void ofARepeatedHeader_theFirstValueIsTaken() {
+    var holder = new StreamRuneRequestContextHolder();
+    anonymousFilter(holder)
+        .filter(requestWith("X-Correlation-Id", "ok", "streamrune:saga:order-saga-42"));
+    assertEquals("ok", holder.context().correlationId().value());
+
+    holder = new StreamRuneRequestContextHolder();
+    anonymousFilter(holder).filter(requestWith("X-Trace-Id", "trace-1", "t".repeat(256)));
+    assertEquals("trace-1", holder.context().traceId().value());
+
+    holder = new StreamRuneRequestContextHolder();
+    assertAnswered400(
+        anonymousFilter(holder),
+        holder,
+        requestWith("X-Correlation-Id", "streamrune:saga:order-saga-42", "ok"),
+        "streamrune:saga:order-saga-42");
+  }
+
+  @Test
+  void anEmptyFirstValue_isAnAbsentHeader_whateverFollows() {
+    var holder = new StreamRuneRequestContextHolder();
+    ContainerRequestContext request =
+        requestWith("X-Correlation-Id", "", "streamrune:saga:order-saga-42");
+
+    anonymousFilter(holder).filter(request);
+
+    verify(request, never()).abortWith(any());
+    assertFalse(holder.context().correlationId().value().isBlank());
+    assertFalse(holder.context().correlationId().value().startsWith("streamrune:"));
   }
 
   /**
@@ -91,7 +137,7 @@ class StreamRuneRequestFilterTest {
     verify(request).abortWith(answer.capture());
     assertEquals(400, answer.getValue().getStatus());
     assertEquals(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT, answer.getValue().getEntity());
-    assertEquals(MediaType.TEXT_PLAIN_TYPE, answer.getValue().getMediaType());
+    assertEquals("text/plain;charset=UTF-8", answer.getValue().getMediaType().toString());
     assertFalse(
         answer.getValue().getEntity().toString().contains(refusedValue), "the value is not echoed");
     verify(request, never()).setProperty(anyString(), any());
@@ -215,6 +261,39 @@ class StreamRuneRequestFilterTest {
     when(atBound.getHeaders()).thenReturn(TestRequestHeaders.userIdHeader("u".repeat(255)));
     headerFilter.filter(atBound);
     assertEquals(255, holder.context().userId().value().length());
+  }
+
+  /**
+   * A principal the identity provider asserted and the door refuses is refused on every request of
+   * that user. The filter asks the policy for its one report (logged at WARN); a refused header of
+   * a client uses up no report.
+   */
+  @Test
+  void anUnacceptableAuthenticatedPrincipal_isReportedByTheFilter_once() {
+    var holder = new StreamRuneRequestContextHolder();
+    AuthenticatedUserResolver oversizedPrincipal = () -> Optional.of(UserId.of("p".repeat(256)));
+    RequestIdentityPolicy policy = RequestIdentityPolicy.of(oversizedPrincipal, false);
+    RequestIdentityPolicy bobs =
+        RequestIdentityPolicy.of(() -> Optional.of(UserId.of("bob")), false);
+
+    assertAnswered400(
+        new StreamRuneRequestFilter(holder, Set.of(), bobs, null),
+        holder,
+        requestWith("X-Correlation-Id", "c".repeat(256)),
+        "ccc");
+    assertTrue(
+        bobs.unacceptablePrincipalWarning(UserId.of("p".repeat(256))).isPresent(),
+        "a client's refused header used up no report");
+
+    assertAnswered400(
+        new StreamRuneRequestFilter(holder, Set.of(), policy, null),
+        holder,
+        mock(ContainerRequestContext.class),
+        "ppp");
+    assertEquals(
+        Optional.empty(),
+        policy.unacceptablePrincipalWarning(UserId.of("p".repeat(256))),
+        "the filter took the one report");
   }
 
   /**
@@ -690,10 +769,10 @@ class StreamRuneRequestFilterTest {
     var filter = new StreamRuneRequestFilter(holder);
 
     ContainerRequestContext requestContext = mock(ContainerRequestContext.class);
-    when(requestContext.getHeaderString("X-Correlation-Id")).thenReturn("corr-1");
-    when(requestContext.getHeaderString("X-Trace-Id")).thenReturn("trace-1");
     var all = TestRequestHeaders.userIdHeader("user-1");
     all.add("X-User-Role", "admin");
+    all.add("X-Correlation-Id", "corr-1");
+    all.add("X-Trace-Id", "trace-1");
     when(requestContext.getHeaders()).thenReturn(all);
 
     filter.filter(requestContext);

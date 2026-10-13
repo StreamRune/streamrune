@@ -12,6 +12,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.catalina.Context;
@@ -26,27 +27,50 @@ import org.streamrune.core.StreamRuneContext;
 import org.streamrune.integration.RequestIdentityPolicy;
 
 /**
- * {@link ScopedValueFilter} in front of a servlet on an embedded Tomcat, over a socket: the status
- * a client receives for a correlation id or a trace id the request edge refuses. The filter answers
- * {@code 400 Bad Request} through {@code sendError}, so the body is the container's error page; the
- * servlet behind the filter is not called.
+ * {@link ScopedValueFilter} in front of a servlet on an embedded Tomcat, over a socket: what a
+ * client receives for a correlation id or a trace id the request edge refuses, and which value the
+ * filter binds when a header is sent more than once.
+ *
+ * <p>The filter writes the answer itself — {@code 400 Bad Request}, {@code text/plain}, the one
+ * fixed reason — and starts no error dispatch, so neither the container's error page nor an error
+ * handler of the application takes part; the servlet behind the filter is not called.
  */
 class ScopedValueFilterOverTomcatTest {
 
   private final AtomicInteger servletCalls = new AtomicInteger();
+  private final AtomicInteger errorDispatches = new AtomicInteger();
   private final HttpClient client =
       HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
   private Tomcat tomcat;
   private int port;
 
-  /** Answers with the correlation id the filter bound. */
+  /** Answers with the correlation id the filter bound; {@code /trace} with the trace id. */
   private final class EchoServlet extends HttpServlet {
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response)
         throws IOException {
       servletCalls.incrementAndGet();
+      StreamRuneContext.RequestContext bound = StreamRuneContext.CURRENT.get();
       response.setContentType("text/plain");
-      response.getWriter().write(StreamRuneContext.CURRENT.get().correlationId().value());
+      response
+          .getWriter()
+          .write(
+              request.getRequestURI().endsWith("/trace")
+                  ? bound.traceId().value()
+                  : bound.correlationId().value());
+    }
+  }
+
+  /** Counts the error dispatches of the container: a filter mapped to them alone. */
+  private final class ErrorDispatchCounter implements jakarta.servlet.Filter {
+    @Override
+    public void doFilter(
+        jakarta.servlet.ServletRequest request,
+        jakarta.servlet.ServletResponse response,
+        jakarta.servlet.FilterChain chain)
+        throws IOException, jakarta.servlet.ServletException {
+      errorDispatches.incrementAndGet();
+      chain.doFilter(request, response);
     }
   }
 
@@ -64,6 +88,15 @@ class ScopedValueFilterOverTomcatTest {
     mapping.setFilterName("streamrune");
     mapping.addURLPattern("/*");
     context.addFilterMap(mapping);
+    FilterDef errors = new FilterDef();
+    errors.setFilterName("error-dispatches");
+    errors.setFilter(new ErrorDispatchCounter());
+    context.addFilterDef(errors);
+    FilterMap errorMapping = new FilterMap();
+    errorMapping.setFilterName("error-dispatches");
+    errorMapping.addURLPattern("/*");
+    errorMapping.setDispatcher("ERROR");
+    context.addFilterMap(errorMapping);
     Tomcat.addServlet(context, "echo", new EchoServlet());
     context.addServletMappingDecoded("/*", "echo");
     tomcat.getConnector();
@@ -91,8 +124,13 @@ class ScopedValueFilterOverTomcatTest {
     HttpResponse<String> response = post(Map.of(header, value));
 
     assertThat(response.statusCode()).as("status for a refused %s", header).isEqualTo(400);
-    assertThat(response.body()).as("the refused value is not echoed").doesNotContain(value);
+    assertThat(response.body())
+        .as("the one fixed reason, and nothing of the refused value")
+        .isEqualTo(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+    assertThat(response.headers().firstValue("Content-Type").orElse("").replace(" ", ""))
+        .isEqualToIgnoringCase("text/plain;charset=UTF-8");
     assertThat(servletCalls).as("the servlet is not called").hasValue(0);
+    assertThat(errorDispatches).as("no error dispatch is started").hasValue(0);
   }
 
   @Test
@@ -111,14 +149,62 @@ class ScopedValueFilterOverTomcatTest {
     assertRefused("X-Trace-Id", "trace\tid");
   }
 
-  @Test
-  void theReasonIsTheContainersErrorMessage() throws Exception {
-    HttpResponse<String> response = post(Map.of("X-Correlation-Id", "a".repeat(256)));
+  // ==== A header sent more than once ====
 
-    assertThat(response.statusCode()).isEqualTo(400);
-    // Tomcat's error page prints the sendError message, HTML-escaped.
-    assertThat(response.body())
-        .contains(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT.replace("'", "&#39;"));
+  private static final String RESERVED = "streamrune:saga:order-saga-42";
+
+  @Test
+  void ofARepeatedCorrelationIdHeader_theFirstValueIsTaken() throws Exception {
+    RawHttp.Answer okFirst =
+        RawHttp.post(
+            port, "/commands", List.of("X-Correlation-Id: ok", "X-Correlation-Id: " + RESERVED));
+    assertThat(okFirst.status()).isEqualTo(200);
+    assertThat(okFirst.body()).isEqualTo("ok");
+
+    RawHttp.Answer reservedFirst =
+        RawHttp.post(
+            port, "/commands", List.of("X-Correlation-Id: " + RESERVED, "X-Correlation-Id: ok"));
+    assertThat(reservedFirst.status()).isEqualTo(400);
+    assertThat(reservedFirst.body()).isEqualTo(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+    assertThat(reservedFirst.contentType()).isEqualTo("text/plain;charset=utf-8");
+    assertThat(servletCalls).hasValue(1);
+  }
+
+  @Test
+  void anEmptyFirstCorrelationIdHeader_isAnAbsentHeader_whateverFollows() throws Exception {
+    RawHttp.Answer answer =
+        RawHttp.post(
+            port, "/commands", List.of("X-Correlation-Id:", "X-Correlation-Id: " + RESERVED));
+
+    assertThat(answer.status()).isEqualTo(200);
+    assertThat(answer.body()).as("a generated id").isNotBlank().doesNotContain("streamrune:");
+  }
+
+  @Test
+  void aCommaJoinedCorrelationId_isOneValue() throws Exception {
+    RawHttp.Answer okFirst =
+        RawHttp.post(port, "/commands", List.of("X-Correlation-Id: ok," + RESERVED));
+    assertThat(okFirst.status()).isEqualTo(200);
+    assertThat(okFirst.body()).isEqualTo("ok," + RESERVED);
+
+    assertThat(
+            RawHttp.post(port, "/commands", List.of("X-Correlation-Id: " + RESERVED + ",ok"))
+                .status())
+        .isEqualTo(400);
+  }
+
+  @Test
+  void ofARepeatedTraceIdHeader_theFirstValueIsTaken() throws Exception {
+    String overlong = "a".repeat(256);
+    RawHttp.Answer okFirst =
+        RawHttp.post(port, "/trace", List.of("X-Trace-Id: trace-1", "X-Trace-Id: " + overlong));
+    assertThat(okFirst.status()).isEqualTo(200);
+    assertThat(okFirst.body()).isEqualTo("trace-1");
+
+    assertThat(
+            RawHttp.post(port, "/trace", List.of("X-Trace-Id: " + overlong, "X-Trace-Id: trace-1"))
+                .status())
+        .isEqualTo(400);
   }
 
   @Test

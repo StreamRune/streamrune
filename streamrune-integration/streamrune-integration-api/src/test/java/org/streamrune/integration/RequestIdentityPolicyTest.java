@@ -318,6 +318,68 @@ class RequestIdentityPolicyTest {
     }
   }
 
+  // ---- an authenticated principal the request edge refuses
+  // ---------------------------------------
+
+  @Test
+  void anUnacceptablePrincipalIsReportedOnce_withoutItsValue() {
+    AuthenticatedUserResolver resolver = new NamedResolver();
+    RequestIdentityPolicy policy = RequestIdentityPolicy.of(resolver, false);
+    UserId overlong = UserId.of("p".repeat(300));
+
+    Optional<String> first = policy.unacceptablePrincipalWarning(overlong);
+
+    assertEquals(
+        "The authenticated principal resolved by "
+            + NamedResolver.class.getName()
+            + " is not an acceptable user id (userId must be at most 255 characters, got 300):"
+            + " every request of that principal is answered 400 Bad Request. Reported once; each"
+            + " refusal is logged at DEBUG.",
+        first.orElseThrow());
+    assertFalse(first.orElseThrow().contains("ppp"), "the value is not in the message");
+    assertEquals(Optional.empty(), policy.unacceptablePrincipalWarning(overlong), "reported once");
+    assertEquals(
+        Optional.empty(),
+        policy.unacceptablePrincipalWarning(UserId.of("alice\r\nadmin")),
+        "once per policy, whatever the next principal is");
+  }
+
+  @Test
+  void aControlCharacterInThePrincipalIsReportedToo() {
+    String warning =
+        RequestIdentityPolicy.of(BOB, false)
+            .unacceptablePrincipalWarning(UserId.of("alice\r\nadmin"))
+            .orElseThrow();
+
+    assertTrue(warning.contains("userId must not contain control characters"), warning);
+    assertFalse(warning.contains("admin"), warning);
+  }
+
+  @Test
+  void nothingIsReportedForAnAcceptablePrincipal_aMissingOne_orAHeaderIdentity() {
+    RequestIdentityPolicy principal = RequestIdentityPolicy.of(BOB, false);
+    assertEquals(Optional.empty(), principal.unacceptablePrincipalWarning(UserId.of("bob")));
+    assertEquals(Optional.empty(), principal.unacceptablePrincipalWarning(null));
+    assertEquals(
+        Optional.empty(),
+        principal.unacceptablePrincipalWarning(UserId.of("u".repeat(255))),
+        "the bound itself is acceptable");
+    assertTrue(
+        principal.unacceptablePrincipalWarning(UserId.of("u".repeat(256))).isPresent(),
+        "none of the calls above used up the one report");
+
+    // Behind a trusted gateway the user id is the request's header: a client's value, answered
+    // 400 like any other refused header and never reported as a principal.
+    assertEquals(
+        Optional.empty(),
+        RequestIdentityPolicy.of(null, true)
+            .unacceptablePrincipalWarning(UserId.of("u".repeat(256))));
+    assertEquals(
+        Optional.empty(),
+        RequestIdentityPolicy.of(null, false)
+            .unacceptablePrincipalWarning(UserId.of("u".repeat(256))));
+  }
+
   @Test
   void theReasonOfARefusedRequestContextNamesNoHeaderAndNoValue() {
     assertEquals(

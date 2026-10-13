@@ -7,7 +7,6 @@ import static org.mockito.Mockito.*;
 import io.micronaut.http.HttpHeaders;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpStatus;
-import io.micronaut.http.MediaType;
 import io.micronaut.http.MutableHttpResponse;
 import io.micronaut.http.filter.FilterContinuation;
 import java.util.ArrayList;
@@ -219,7 +218,7 @@ class StreamRuneContextFilterTest {
 
     assertEquals(HttpStatus.BAD_REQUEST, answer.getStatus());
     assertEquals(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT, answer.body());
-    assertEquals(MediaType.TEXT_PLAIN_TYPE, answer.getContentType().orElseThrow());
+    assertEquals("text/plain;charset=UTF-8", answer.getHeaders().get("Content-Type"));
     assertFalse(answer.body().toString().contains(refusedValue), "the value is not echoed");
     verify(continuation, never()).proceed();
     verify(request, never()).setAttribute(any(), any());
@@ -304,6 +303,49 @@ class StreamRuneContextFilterTest {
         filterWith(RequestIdentityPolicy.of(oversizedPrincipal, false)),
         request("trace-1", null, "corr-1", null),
         "p".repeat(256));
+  }
+
+  /**
+   * A principal the identity provider asserted and the door refuses is refused on every request of
+   * that user. The filter reports it once, at WARN and without the value; a refused header of a
+   * client is not reported.
+   */
+  @Test
+  void anUnacceptableAuthenticatedPrincipal_isReportedOnceAtWarn() {
+    AuthenticatedUserResolver oversizedPrincipal = () -> Optional.of(UserId.of("p".repeat(256)));
+    RequestIdentityPolicy policy = RequestIdentityPolicy.of(oversizedPrincipal, false);
+    var filter = filterWith(policy);
+    var logger =
+        (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(StreamRuneContextFilter.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    try {
+      assertAnswered400(filter, request("trace-1", null, "corr-1", null), "ppp");
+      assertAnswered400(filter, request("trace-1", null, "corr-1", null), "ppp");
+      // A client's refused header in the same mode is the client's error: not reported.
+      assertAnswered400(
+          filterWith(RequestIdentityPolicy.of(() -> Optional.of(UserId.of("bob")), false)),
+          request("trace-1", null, "c".repeat(256), null),
+          "ccc");
+    } finally {
+      logger.detachAppender(appender);
+      appender.stop();
+    }
+
+    List<String> warnings =
+        appender.list.stream()
+            .filter(event -> event.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.WARN))
+            .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+            .toList();
+    assertEquals(1, warnings.size(), warnings.toString());
+    assertTrue(
+        warnings.getFirst().contains("is not an acceptable user id (userId must be at most 255"),
+        warnings.getFirst());
+    assertFalse(warnings.getFirst().contains("ppp"));
+    assertEquals(Optional.empty(), policy.unacceptablePrincipalWarning(UserId.of("p".repeat(256))));
   }
 
   /**

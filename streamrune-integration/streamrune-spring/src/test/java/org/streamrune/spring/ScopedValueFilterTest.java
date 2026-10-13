@@ -67,8 +67,9 @@ class ScopedValueFilterTest {
   }
 
   /**
-   * {@code filter} answers {@code request} with {@code 400} and the shared reason, calls no chain
-   * and leaves nothing bound; the response repeats nothing of {@code refusedValue}.
+   * {@code filter} answers {@code request} with {@code 400} and the shared reason as a plain-text
+   * body, calls no chain and leaves nothing bound; the response repeats nothing of {@code
+   * refusedValue}.
    */
   private static void assertAnswered400(
       ScopedValueFilter filter, HttpServletRequest request, String refusedValue) throws Exception {
@@ -79,11 +80,13 @@ class ScopedValueFilterTest {
     filter.doFilter(request, response, chain);
 
     assertEquals(400, response.getStatus());
-    assertEquals(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT, response.getErrorMessage());
+    assertEquals(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT, response.getContentAsString());
+    assertEquals("text/plain;charset=UTF-8", response.getContentType());
+    assertNull(
+        response.getErrorMessage(), "the filter writes the answer; it asks for no error page");
     assertTrue(chainCalls.isEmpty(), "the chain is not called");
     assertFalse(StreamRuneContext.CURRENT.isBound());
-    assertFalse(response.getErrorMessage().contains(refusedValue), "the value is not echoed");
-    assertEquals("", response.getContentAsString());
+    assertFalse(response.getContentAsString().contains(refusedValue), "the value is not echoed");
   }
 
   @Test
@@ -184,6 +187,49 @@ class ScopedValueFilterTest {
     headerFilter.doFilter(
         requestWith("X-User-Id", "u".repeat(255)), new MockHttpServletResponse(), capturing);
     assertEquals(255, captured.get().userId().value().length());
+  }
+
+  /**
+   * A principal the identity provider asserted and the door refuses is refused on every request of
+   * that user. The filter reports it once, at WARN and without the value; a refused header of a
+   * client is not reported.
+   */
+  @Test
+  void anUnacceptableAuthenticatedPrincipal_isReportedOnceAtWarn() throws Exception {
+    AuthenticatedUserResolver oversizedPrincipal = () -> Optional.of(UserId.of("p".repeat(256)));
+    RequestIdentityPolicy policy = RequestIdentityPolicy.of(oversizedPrincipal, false);
+    var filter = new ScopedValueFilter(Set.of(), policy, null);
+    var logger =
+        (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ScopedValueFilter.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    try {
+      assertAnswered400(filter, new MockHttpServletRequest(), "ppp");
+      assertAnswered400(filter, new MockHttpServletRequest(), "ppp");
+      // A client's refused header in the same mode is the client's error: not reported.
+      assertAnswered400(
+          new ScopedValueFilter(
+              Set.of(), RequestIdentityPolicy.of(() -> Optional.of(UserId.of("bob")), false), null),
+          requestWith("X-Correlation-Id", "c".repeat(256)),
+          "ccc");
+    } finally {
+      logger.detachAppender(appender);
+      appender.stop();
+    }
+
+    List<String> warnings =
+        appender.list.stream()
+            .filter(event -> event.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.WARN))
+            .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+            .toList();
+    assertEquals(1, warnings.size(), warnings.toString());
+    assertTrue(
+        warnings.getFirst().contains("is not an acceptable user id (userId must be at most 255"),
+        warnings.getFirst());
+    assertFalse(warnings.getFirst().contains("ppp"));
+    assertEquals(Optional.empty(), policy.unacceptablePrincipalWarning(UserId.of("p".repeat(256))));
   }
 
   /**

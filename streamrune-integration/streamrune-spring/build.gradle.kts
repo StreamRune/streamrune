@@ -33,6 +33,10 @@ dependencies {
     // ProjectionAutoConfigTest boots a runner over real in-memory stores and awaits its delivery.
     testImplementation(libs.awaitility)
     testImplementation(libs.spring.security.core)
+    // ScopedValueFilterSpringBootTest runs the request filter behind a Spring Security filter chain
+    // whose rules deny /error: the answer to a refused request must not depend on an error dispatch.
+    testImplementation(libs.spring.security.web)
+    testImplementation(libs.spring.security.config)
     // streamrune-postgres is now an implementation dependency, so it is already on the test
     // classpath — no separate testImplementation needed.
     testImplementation(libs.spring.boot.starter.test)

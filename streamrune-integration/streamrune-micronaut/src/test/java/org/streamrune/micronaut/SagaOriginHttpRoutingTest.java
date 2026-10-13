@@ -14,6 +14,7 @@ import io.micronaut.http.annotation.Post;
 import io.micronaut.http.client.HttpClient;
 import io.micronaut.http.client.annotation.Client;
 import io.micronaut.http.client.exceptions.HttpClientResponseException;
+import io.micronaut.runtime.server.EmbeddedServer;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
@@ -64,6 +65,10 @@ class SagaOriginHttpRoutingTest {
   HttpClient client;
 
   @Inject FixtureSlot slot;
+
+  @Inject EmbeddedServer server;
+
+  @Inject RequestIdentityPolicy identityPolicy;
 
   private SagaOriginHttpFixture fixture;
 
@@ -300,7 +305,8 @@ class SagaOriginHttpRoutingTest {
     assertThat(response.code()).as("status for a refused %s", header).isEqualTo(400);
     assertThat(response.getBody(String.class).orElse(""))
         .isEqualTo(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
-    assertThat(response.getContentType().map(Object::toString).orElse("")).startsWith("text/plain");
+    assertThat(response.getHeaders().get("Content-Type").replace(" ", ""))
+        .isEqualToIgnoringCase("text/plain;charset=UTF-8");
     assertThat(fixture.endpointCalls()).as("the controller is not called").isEqualTo(callsBefore);
     assertThat(fixture.stored()).as("nothing is stored").isEqualTo(storedBefore);
     assertThat(fixture.row(VICTIM)).as("the victim's row").isEqualTo(victim);
@@ -440,5 +446,137 @@ class SagaOriginHttpRoutingTest {
               assertThat(id).isNotBlank();
               assertThat(IdConstraints.isReserved(id)).isFalse();
             });
+  }
+
+  // ==== A header sent more than once ====
+
+  private EventEnvelope confirmedOf(String flow) {
+    return fixture.stored(Confirmed.class).stream()
+        .filter(confirmed -> confirmed.event().equals(new Confirmed(flow)))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private boolean nothingConfirmedFor(String flow) {
+    return fixture.stored(Confirmed.class).stream()
+        .noneMatch(confirmed -> confirmed.event().equals(new Confirmed(flow)));
+  }
+
+  @Test
+  void ofARepeatedCorrelationIdHeader_theFirstValueIsTaken() throws Exception {
+    use(new SagaOriginHttpFixture(Routing.BUILT_IN, false));
+    String reserved = reservedCorrelationIdOf(VICTIM);
+
+    {
+      RawHttp.Answer okFirst =
+          RawHttp.post(
+              server.getPort(),
+              "/flows/first/confirm",
+              List.of("X-Correlation-Id: ok", "X-Correlation-Id: " + reserved));
+      assertThat(okFirst.status()).isEqualTo(200);
+      assertThat(confirmedOf("first").metadata().correlationId().value()).isEqualTo("ok");
+
+      RawHttp.Answer reservedFirst =
+          RawHttp.post(
+              server.getPort(),
+              "/flows/second/confirm",
+              List.of("X-Correlation-Id: " + reserved, "X-Correlation-Id: ok"));
+      assertThat(reservedFirst.status()).isEqualTo(400);
+      assertThat(reservedFirst.body()).isEqualTo(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+      assertThat(reservedFirst.contentType()).isEqualTo("text/plain;charset=utf-8");
+      assertThat(nothingConfirmedFor("second")).isTrue();
+    }
+  }
+
+  @Test
+  void anEmptyFirstCorrelationIdHeader_isAnAbsentHeader_whateverFollows() throws Exception {
+    use(new SagaOriginHttpFixture(Routing.BUILT_IN, false));
+
+    {
+      RawHttp.Answer answer =
+          RawHttp.post(
+              server.getPort(),
+              "/flows/first/confirm",
+              List.of("X-Correlation-Id:", "X-Correlation-Id: " + reservedCorrelationIdOf(VICTIM)));
+      assertThat(answer.status()).isEqualTo(200);
+    }
+
+    assertThat(confirmedOf("first").metadata().correlationId().value())
+        .as("a generated id")
+        .isNotBlank()
+        .doesNotContain("streamrune:");
+  }
+
+  @Test
+  void aCommaJoinedCorrelationId_isOneValue() throws Exception {
+    use(new SagaOriginHttpFixture(Routing.BUILT_IN, false));
+    String reserved = reservedCorrelationIdOf(VICTIM);
+
+    {
+      assertThat(
+              RawHttp.post(
+                      server.getPort(),
+                      "/flows/first/confirm",
+                      List.of("X-Correlation-Id: ok," + reserved))
+                  .status())
+          .isEqualTo(200);
+      assertThat(
+              RawHttp.post(
+                      server.getPort(),
+                      "/flows/second/confirm",
+                      List.of("X-Correlation-Id: " + reserved + ",ok"))
+                  .status())
+          .isEqualTo(400);
+    }
+
+    assertThat(confirmedOf("first").metadata().correlationId().value()).isEqualTo("ok," + reserved);
+    assertThat(nothingConfirmedFor("second")).isTrue();
+  }
+
+  @Test
+  void ofARepeatedTraceIdHeader_theFirstValueIsTaken() throws Exception {
+    use(new SagaOriginHttpFixture(Routing.BUILT_IN, false));
+    String overlong = "a".repeat(256);
+
+    {
+      assertThat(
+              RawHttp.post(
+                      server.getPort(),
+                      "/flows/first/confirm",
+                      List.of("X-Trace-Id: trace-1", "X-Trace-Id: " + overlong))
+                  .status())
+          .isEqualTo(200);
+      assertThat(
+              RawHttp.post(
+                      server.getPort(),
+                      "/flows/second/confirm",
+                      List.of("X-Trace-Id: " + overlong, "X-Trace-Id: trace-1"))
+                  .status())
+          .isEqualTo(400);
+    }
+
+    assertThat(confirmedOf("first").metadata().traceId().value()).isEqualTo("trace-1");
+    assertThat(nothingConfirmedFor("second")).isTrue();
+  }
+
+  // ==== The refusals in the identity mode of this application ====
+
+  /**
+   * An over-long {@code X-User-Id}: refused where the request supplies the user, behind a trusted
+   * gateway, and ignored in the two modes that do not read the header. {@link
+   * SagaOriginHttpRoutingTrustedGatewayTest} and {@link
+   * SagaOriginHttpRoutingAuthenticatedPrincipalTest} run this class in the other two modes.
+   */
+  @Test
+  void anOverlongUserIdHeader_isRefusedOnlyWhereTheRequestSuppliesTheUser() {
+    use(new SagaOriginHttpFixture(Routing.BUILT_IN, false));
+    victimAndAttackerWaitForConfirmed();
+
+    if (identityPolicy.mode() == RequestIdentityPolicy.Mode.TRUSTED_GATEWAY) {
+      assertRefused("X-User-Id", "u".repeat(256));
+    } else {
+      assertThat(post("/flows/caller/confirm", Map.of("X-User-Id", "u".repeat(256))).code())
+          .isEqualTo(200);
+    }
   }
 }

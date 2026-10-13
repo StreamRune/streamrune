@@ -327,7 +327,10 @@ class SagaOriginHttpRoutingTest {
     flows.deliver();
 
     assertThat(response.getStatus()).as("status for a refused %s", header).isEqualTo(400);
-    assertThat(response.getErrorMessage()).isEqualTo(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+    assertThat(response.getContentAsString())
+        .isEqualTo(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT);
+    assertThat(response.getContentType()).isEqualToIgnoringCase("text/plain;charset=UTF-8");
+    assertThat(response.getErrorMessage()).as("no error dispatch is asked for").isNull();
     assertThat(flows.endpointCalls()).as("the endpoint is not called").isEqualTo(callsBefore);
     assertThat(flows.stored()).as("nothing is stored").isEqualTo(storedBefore);
     assertThat(flows.row(VICTIM)).as("the victim's row").isEqualTo(victim);

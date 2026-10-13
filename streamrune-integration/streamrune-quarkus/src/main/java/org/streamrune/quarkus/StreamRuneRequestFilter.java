@@ -100,11 +100,18 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * through {@link StreamRuneContext.RequestContext#fromRequest}, which refuses a value longer than
  * 255 characters, a value that holds a control character, and a correlation id that starts with
  * {@code streamrune:} — the prefix of the correlation ids the framework itself binds for a saga's
- * commands. The filter aborts such a request with {@code 400 Bad Request} and the plain-text body
- * {@link RequestIdentityPolicy#REFUSED_REQUEST_CONTEXT}: the resource method does not run, and
- * neither the {@link StreamRuneRequestContextHolder} nor the {@link #CONTEXT_PROPERTY} is set. The
- * refused value is neither echoed nor logged. Any other correlation id is kept exactly as the
- * client sent it. The correlation id, the trace id and the baggage are caller-supplied in every
+ * commands. The filter aborts such a request with status {@code 400 Bad Request}, content type
+ * {@code text/plain;charset=UTF-8} and the body {@link
+ * RequestIdentityPolicy#REFUSED_REQUEST_CONTEXT} — the answer of the Spring and Micronaut filters,
+ * byte for byte: the resource method does not run, and neither the {@link
+ * StreamRuneRequestContextHolder} nor the {@link #CONTEXT_PROPERTY} is set. The refused value is
+ * neither echoed nor logged. Any other correlation id is kept exactly as the client sent it.
+ *
+ * <p><b>A header sent more than once.</b> Of a repeated {@code X-Correlation-Id} or {@code
+ * X-Trace-Id} header the first value is the header ({@code getHeaders().getFirst}, not the
+ * comma-joined {@code getHeaderString}), on the three integrations alike: a blank first value
+ * counts as an absent header and an id is generated, whatever follows it. One line that holds a
+ * comma is one value. The correlation id, the trace id and the baggage are caller-supplied in every
  * identity mode; nothing may be addressed, authorized or deduplicated by them.
  *
  * <p><b>What a request cannot set.</b> This filter builds a request context and nothing else. It
@@ -119,6 +126,10 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
   public static final String CONTEXT_PROPERTY = "org.streamrune.quarkus.requestContext";
 
   private static final Logger logger = LoggerFactory.getLogger(StreamRuneRequestFilter.class);
+
+  /** The content type of the answer to a refused request context, the same on the integrations. */
+  private static final MediaType REFUSAL_CONTENT_TYPE =
+      MediaType.TEXT_PLAIN_TYPE.withCharset("UTF-8");
 
   /** The policy of the static anonymous builders: no user, no role. */
   private static final RequestIdentityPolicy ANONYMOUS = RequestIdentityPolicy.of(null, false);
@@ -203,7 +214,7 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
             headerValues(requestContext, RequestIdentityPolicy.USER_ROLE_HEADER));
     StreamRuneContext.RequestContext ctx;
     try {
-      ctx = buildContext(requestContext::getHeaderString, baggage, userId);
+      ctx = buildContext(name -> firstHeaderValue(requestContext, name), baggage, userId);
     } catch (IllegalArgumentException refused) {
       // The ingress door refused an id: too long, a control character, or a correlation id with
       // the reserved prefix. That is the client's error, answered here before the resource method
@@ -211,9 +222,12 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
       // resolved above, outside this try, so a failure of theirs is not answered as a refusal. The
       // message names the field and never the value; the value itself is not logged.
       logger.debug("Refusing the request with 400: {}", refused.getMessage());
+      // A principal the identity provider asserted and the door refuses is refused on every
+      // request of that user: reported once, at a level an operator sees.
+      identityPolicy.unacceptablePrincipalWarning(userId).ifPresent(logger::warn);
       requestContext.abortWith(
           Response.status(Response.Status.BAD_REQUEST)
-              .type(MediaType.TEXT_PLAIN_TYPE)
+              .type(REFUSAL_CONTENT_TYPE)
               .entity(RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT)
               .build());
       return;
@@ -258,6 +272,18 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
     return headers == null ? null : headers.get(name);
   }
 
+  /**
+   * The first value of the named header the request carried, or {@code null} when it carried none —
+   * what the servlet API's {@code getHeader} and Micronaut's {@code HttpHeaders#get} return, so the
+   * three request filters bind the same value for a header sent more than once. Not {@code
+   * getHeaderString}, which joins repeated values with a comma: the joined text is a value no
+   * client sent as one, and a blank first value would turn an absent header into a refused one.
+   */
+  private static String firstHeaderValue(ContainerRequestContext requestContext, String name) {
+    var headers = requestContext.getHeaders();
+    return headers == null ? null : headers.getFirst(name);
+  }
+
   private static void logMismatch(UserId headerUserId, UserId principal) {
     // headerUserId is attacker-controlled (UserId performs no
     // charset/length validation beyond non-blank) and reaches this WARN unconditionally on every
@@ -275,7 +301,7 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
    * X-User-Id} nor {@code X-User-Role} is read: the identity and the role are only ever resolved by
    * the filter's {@link RequestIdentityPolicy}, so the context has no user and no {@code role}.
    *
-   * @param headers header lookup, e.g. {@code requestContext::getHeaderString}
+   * @param headers header lookup that answers one value per name: the first the request carried
    * @return the request context with no user, never {@code null}
    */
   static StreamRuneContext.RequestContext buildContext(Function<String, String> headers) {
@@ -287,7 +313,7 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
    * defaulting rules documented on this class. Neither {@code X-User-Id} nor {@code X-User-Role} is
    * read: the context has no user and no {@code role}.
    *
-   * @param headers header lookup, e.g. {@code requestContext::getHeaderString}
+   * @param headers header lookup that answers one value per name: the first the request carried
    * @param extraAllowedBaggageKeys the OTel baggage keys to allow (the framework's own {@link
    *     BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty)
    * @return the request context with no user and no role, never {@code null}
@@ -306,7 +332,7 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
    * already-resolved authorization identity and baggage. Used by the instance filter after its
    * {@link RequestIdentityPolicy} resolved the user and applied the role rule.
    *
-   * @param headers header lookup, e.g. {@code requestContext::getHeaderString}
+   * @param headers header lookup that answers one value per name: the first the request carried
    * @param baggage the request's baggage, already allow-listed and with the role rule applied
    * @param userId the resolved authorization identity, or {@code null} for anonymous
    * @return the request context, never {@code null}
