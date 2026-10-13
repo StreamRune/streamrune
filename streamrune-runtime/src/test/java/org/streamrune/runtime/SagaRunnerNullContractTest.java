@@ -7,7 +7,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +33,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
+import org.streamrune.test.SagaEnvelopes;
 
 /**
  * A {@code null} RETURN from an orchestrator pure-logic SPI method is the same deterministic
@@ -103,12 +103,6 @@ class SagaRunnerNullContractTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("saga-" + ((OrderCreated) event.event()).orderId());
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corrId = event.metadata().correlationId().value();
-      return corrId.startsWith("saga-") ? Optional.of(SagaId.of(corrId)) : Optional.empty();
     }
 
     /**
@@ -216,6 +210,18 @@ class SagaRunnerNullContractTest {
             .build();
   }
 
+  /** The reply to a command the saga dispatched itself: it carries that saga's origin. */
+  private EventEnvelope causedBySaga(DomainEvent event, String sagaId, long offset) {
+    EventEnvelope plain = envelope(event, sagaId, offset);
+    return new EventEnvelope(
+        plain.globalOffset(),
+        plain.streamId(),
+        plain.version(),
+        plain.eventType(),
+        plain.event(),
+        SagaEnvelopes.metadataCausedBy(OrderState.class, SagaId.of(sagaId)));
+  }
+
   private EventEnvelope envelope(DomainEvent event, String correlationId, long offset) {
     return new EventEnvelope(
         GlobalOffset.of(offset),
@@ -270,7 +276,7 @@ class SagaRunnerNullContractTest {
   void evolveReturnsNull_isQuarantined_batchContinues_sagaFaulted() {
     SagaId sagaId = seedRunningSaga("order-evolve");
     orchestrator.evolveReturnsNull = true;
-    var poison = envelope(new OrderPaid("order-evolve"), "saga-order-evolve", 100L);
+    var poison = causedBySaga(new OrderPaid("order-evolve"), "saga-order-evolve", 100L);
     var healthyFollowUp = envelope(new OrderPaid("order-unrelated"), "unrelated", 101L);
 
     assertThatCode(() -> runner.asEventListener().onEvents(List.of(poison, healthyFollowUp)))
@@ -284,7 +290,7 @@ class SagaRunnerNullContractTest {
   void evolveReturnsStateWithNullStatus_isQuarantined_batchContinues_sagaFaulted() {
     SagaId sagaId = seedRunningSaga("order-status");
     orchestrator.evolveReturnsNullStatus = true;
-    var poison = envelope(new OrderPaid("order-status"), "saga-order-status", 110L);
+    var poison = causedBySaga(new OrderPaid("order-status"), "saga-order-status", 110L);
 
     assertThatCode(() -> runner.asEventListener().onEvents(List.of(poison)))
         .as("a null SagaState.status() must not escape onEvents and wedge the subscription")
@@ -299,7 +305,7 @@ class SagaRunnerNullContractTest {
   void handleReturnsNull_isQuarantined_batchContinues_sagaFaulted() {
     SagaId sagaId = seedRunningSaga("order-handle");
     orchestrator.handleReturnsNull = true;
-    var poison = envelope(new OrderPaid("order-handle"), "saga-order-handle", 120L);
+    var poison = causedBySaga(new OrderPaid("order-handle"), "saga-order-handle", 120L);
 
     assertThatCode(() -> runner.asEventListener().onEvents(List.of(poison)))
         .as("a null handle() return must not escape onEvents and wedge the subscription")
@@ -313,7 +319,7 @@ class SagaRunnerNullContractTest {
   void handleReturnsListWithNullElement_isQuarantined_notMisclassifiedAsCommandFailure() {
     SagaId sagaId = seedRunningSaga("order-elem");
     orchestrator.handleReturnsNullElement = true;
-    var poison = envelope(new OrderPaid("order-elem"), "saga-order-elem", 130L);
+    var poison = causedBySaga(new OrderPaid("order-elem"), "saga-order-elem", 130L);
 
     assertThatCode(() -> runner.asEventListener().onEvents(List.of(poison)))
         .doesNotThrowAnyException();
@@ -336,7 +342,7 @@ class SagaRunnerNullContractTest {
     orchestrator.compensateReturnsNull = true;
     // Fail the forward command so the claim-first compensation path runs.
     commandBus.failNext(new RuntimeException("fulfillment service down"));
-    var poison = envelope(new OrderPaid("order-comp"), "saga-order-comp", 140L);
+    var poison = causedBySaga(new OrderPaid("order-comp"), "saga-order-comp", 140L);
 
     assertThatCode(() -> runner.asEventListener().onEvents(List.of(poison)))
         .as("a null compensate() return must not escape onEvents and wedge the subscription")
@@ -350,7 +356,7 @@ class SagaRunnerNullContractTest {
     SagaId sagaId = seedRunningSaga("order-comp-elem");
     orchestrator.compensateReturnsNullElement = true;
     commandBus.failNext(new RuntimeException("fulfillment service down"));
-    var poison = envelope(new OrderPaid("order-comp-elem"), "saga-order-comp-elem", 150L);
+    var poison = causedBySaga(new OrderPaid("order-comp-elem"), "saga-order-comp-elem", 150L);
 
     assertThatCode(() -> runner.asEventListener().onEvents(List.of(poison)))
         .doesNotThrowAnyException();

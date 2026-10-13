@@ -21,13 +21,13 @@ import org.streamrune.runtime.SagaStartFixtures.StartState;
  * poison-refresh setup — see the pointer comment there. The genesis-pending timeout ->
  * claimCompensating transition is NOT pinned anywhere with this Harness: {@code SagaTimeoutRunner}
  * requires a {@code SagaDecider}, a distinct interface from the {@code SagaOrchestrator} this
- * Harness's orchestrator implements (no start/correlate routing), and there is no adapter from
- * {@code SagaOrchestrator} to {@code SagaDecider} — only the reverse ({@code SagaDeciderAdapter},
- * used internally by {@code SagaTimeoutRunner}'s own crash-resume executor). Exercising it
- * faithfully needs a dedicated {@code SagaDecider} implementation, its own {@code
- * SagaTimeoutRunner} instance, and a deterministic single-poll trigger — a new integration seam
- * this test does not build; see {@code SagaTimeoutRunnerTest} / {@code SagaConcurrencyRaceTest} for
- * the general timeout -> claimCompensating mechanism (not the genesis-pending-specific nuance).
+ * Harness's orchestrator implements (no routing methods), and there is no adapter from {@code
+ * SagaOrchestrator} to {@code SagaDecider} — only the reverse ({@code SagaDeciderAdapter}, used
+ * internally by {@code SagaTimeoutRunner}'s own crash-resume executor). Exercising it faithfully
+ * needs a dedicated {@code SagaDecider} implementation, its own {@code SagaTimeoutRunner} instance,
+ * and a deterministic single-poll trigger — a new integration seam this test does not build; see
+ * {@code SagaTimeoutRunnerTest} / {@code SagaConcurrencyRaceTest} for the general timeout ->
+ * claimCompensating mechanism (not the genesis-pending-specific nuance).
  *
  * <p><b>Three transitions are pinned only PARTIALLY — named here so the list is not misread as
  * complete coverage.</b> ACTIVE forward step -> ACTIVE / COMPENSATING / DONE (per outcome) is

@@ -17,7 +17,6 @@ import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.Command;
@@ -64,11 +63,6 @@ class SagaCompensationRetryLifecycleTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("x");
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
     }
 
     @Override

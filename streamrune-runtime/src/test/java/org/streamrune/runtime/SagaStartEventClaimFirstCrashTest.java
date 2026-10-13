@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -42,6 +41,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
+import org.streamrune.test.SagaEnvelopes;
 
 /**
  * Regression (critical): the start-event path must CLAIM the compensation episode (write {@code
@@ -107,12 +107,6 @@ class SagaStartEventClaimFirstCrashTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("saga-" + ((Start) event.event()).id());
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corr = event.metadata().correlationId().value();
-      return corr.startsWith("saga-") ? Optional.of(SagaId.of(corr)) : Optional.empty();
     }
 
     @Override
@@ -351,22 +345,14 @@ class SagaStartEventClaimFirstCrashTest {
             Instant.now()));
   }
 
-  private EventEnvelope pokeEnvelope(String sagaCorrelation, long offset) {
+  private EventEnvelope pokeEnvelope(String sagaId, long offset) {
     return new EventEnvelope(
         GlobalOffset.of(offset),
         StreamId.of(TYPE, AggregateId.of("test-stream")),
         Version.initial(),
         new EventType("Poke"),
         new Poke("poke"),
-        new EventMetadata(
-            EventId.of("evt-" + UUID.randomUUID()),
-            CommandId.of("cmd-2"),
-            null,
-            null,
-            CorrelationId.of(sagaCorrelation),
-            null,
-            null,
-            Instant.now()));
+        SagaEnvelopes.metadataCausedBy(FakeSagaState.class, SagaId.of(sagaId)));
   }
 
   InMemorySagaStore backing;

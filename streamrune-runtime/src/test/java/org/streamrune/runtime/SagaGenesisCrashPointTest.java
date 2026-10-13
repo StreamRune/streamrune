@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.CircuitBreakerOpenException;
+import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.StreamRuneContext;
@@ -23,6 +24,7 @@ import org.streamrune.core.saga.SagaStore.AppliedEvent;
 import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.SagaType;
+import org.streamrune.core.types.StreamId;
 import org.streamrune.runtime.SagaStartFixtures.ScriptedBus;
 import org.streamrune.runtime.SagaStartFixtures.StartOrchestrator;
 import org.streamrune.runtime.SagaStartFixtures.StartState;
@@ -307,8 +309,8 @@ class SagaGenesisCrashPointTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return start.correlate(event);
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+      return start.correlateByEventData(streamId, event);
     }
 
     @Override

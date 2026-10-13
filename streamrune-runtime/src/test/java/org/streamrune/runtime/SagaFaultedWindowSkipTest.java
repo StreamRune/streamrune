@@ -5,15 +5,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
-import org.streamrune.core.EventMetadata;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
@@ -22,9 +19,6 @@ import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
-import org.streamrune.core.types.CommandId;
-import org.streamrune.core.types.CorrelationId;
-import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
@@ -33,6 +27,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
+import org.streamrune.test.SagaEnvelopes;
 
 /**
  * Correlated events delivered while a saga is FAULTED must leave a durable record, because the saga
@@ -91,12 +86,6 @@ class SagaFaultedWindowSkipTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("saga-" + ((OrderPlaced) event.event()).orderId());
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corrId = event.metadata().correlationId().value();
-      return corrId.startsWith("saga-") ? Optional.of(SagaId.of(corrId)) : Optional.empty();
     }
 
     @Override
@@ -210,15 +199,7 @@ class SagaFaultedWindowSkipTest {
         Version.initial(),
         new EventType(event.getClass().getSimpleName()),
         event,
-        new EventMetadata(
-            EventId.of("evt-" + UUID.randomUUID()),
-            CommandId.of("cmd-1"),
-            null,
-            null,
-            CorrelationId.of(SAGA.value()),
-            null,
-            null,
-            Instant.now()));
+        SagaEnvelopes.metadataCausedBy(OrderState.class, SAGA));
   }
 
   // ========== Tests ==========

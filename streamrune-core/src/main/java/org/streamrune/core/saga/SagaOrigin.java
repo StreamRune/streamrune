@@ -13,6 +13,9 @@ import org.streamrune.core.types.SagaType;
  * redelivery, a replay and a resume of the same saga all record the same origin; the value a
  * continuation binds is a function of the stored event it reacts to.
  *
+ * <p>A saga runner reads it: a non-start event whose origin names the runner's saga type, compared
+ * exactly, belongs to the saga the origin names. The hop count takes no part in that.
+ *
  * <p>An origin states who caused an event. It grants no authority.
  *
  * @param sagaType the type of the dispatching saga, as its runner derives it from the saga state

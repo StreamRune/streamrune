@@ -46,6 +46,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaStore;
 import org.streamrune.test.MutableClock;
+import org.streamrune.test.SagaEnvelopes;
 
 /**
  * Structural safety net: a single crash/interleave matrix asserting the SAME episode-integrity
@@ -694,12 +695,6 @@ class SagaStepInvariantTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corr = event.metadata().correlationId().value();
-      return corr.startsWith("saga-") ? Optional.of(SagaId.of(corr)) : Optional.empty();
-    }
-
-    @Override
     public FakeSagaState evolve(FakeSagaState state, EventEnvelope event) {
       if (event.event() instanceof Start s) {
         return new FakeSagaState(SagaStatus.RUNNING, "saga-" + s.id(), state.counter() + 1);
@@ -940,22 +935,14 @@ class SagaStepInvariantTest {
             Instant.now()));
   }
 
-  private static EventEnvelope pokeEnvelope(String sagaCorrelation, long offset) {
+  private static EventEnvelope pokeEnvelope(String sagaId, long offset) {
     return new EventEnvelope(
         GlobalOffset.of(offset),
         StreamId.of(TYPE, AggregateId.of("test-stream")),
         Version.initial(),
         new EventType("Poke"),
         new Poke("poke"),
-        new EventMetadata(
-            EventId.of("evt-" + UUID.randomUUID()),
-            CommandId.of("cmd-2"),
-            null,
-            null,
-            CorrelationId.of(sagaCorrelation),
-            null,
-            null,
-            Instant.now()));
+        SagaEnvelopes.metadataCausedBy(FakeSagaState.class, SagaId.of(sagaId)));
   }
 
   // ==== The compensation key is scoped to the DURABLE episode, on the resume paths ====

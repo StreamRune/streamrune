@@ -15,6 +15,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.streamrune.core.CircuitBreakerOpenException;
+import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
@@ -27,6 +28,7 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaUnstampedCompensationEpisodeException;
 import org.streamrune.core.types.SagaType;
+import org.streamrune.core.types.StreamId;
 import org.streamrune.runtime.SagaDeadLetterReplayer.ReplayOutcome;
 import org.streamrune.runtime.SagaDeadLetterReplayer.ResumeOutcome;
 import org.streamrune.runtime.SagaDeadLetterReplayerTest.Harness;
@@ -717,8 +719,8 @@ class SagaResumeFaultedTest {
       }
 
       @Override
-      public Optional<SagaId> correlate(EventEnvelope event) {
-        return inner.correlate(event);
+      public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+        return inner.correlateByEventData(streamId, event);
       }
 
       @Override

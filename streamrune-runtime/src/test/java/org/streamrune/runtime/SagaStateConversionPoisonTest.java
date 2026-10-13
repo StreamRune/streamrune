@@ -42,6 +42,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
+import org.streamrune.test.SagaEnvelopes;
 
 /**
  * {@code PostgresSagaStore} now raises {@link SagaStateSerializationException} instead of
@@ -87,12 +88,6 @@ class SagaStateConversionPoisonTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("saga-" + ((Start) event.event()).id());
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corrId = event.metadata().correlationId().value();
-      return corrId.startsWith("saga-") ? Optional.of(SagaId.of(corrId)) : Optional.empty();
     }
 
     @Override
@@ -311,8 +306,16 @@ class SagaStateConversionPoisonTest {
     return envelope(new Start(id), "some-correlation");
   }
 
+  /** The reply to a command the saga {@code sagaId} dispatched: it carries that saga's origin. */
   private EventEnvelope correlatedEnvelope(String sagaId, String id) {
-    return envelope(new Next(id), sagaId);
+    EventEnvelope plain = envelope(new Next(id), sagaId);
+    return new EventEnvelope(
+        plain.globalOffset(),
+        plain.streamId(),
+        plain.version(),
+        plain.eventType(),
+        plain.event(),
+        SagaEnvelopes.metadataCausedBy(FakeState.class, SagaId.of(sagaId)));
   }
 
   private EventEnvelope envelope(DomainEvent event, String correlationId) {

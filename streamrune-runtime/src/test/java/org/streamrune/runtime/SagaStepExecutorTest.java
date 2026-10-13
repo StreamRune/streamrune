@@ -35,6 +35,7 @@ import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaStore;
+import org.streamrune.test.SagaEnvelopes;
 
 class SagaStepExecutorTest {
 
@@ -459,12 +460,6 @@ class SagaStepExecutorTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corr = event.metadata().correlationId().value();
-      return corr.startsWith("saga-") ? Optional.of(SagaId.of(corr)) : Optional.empty();
-    }
-
-    @Override
     public FakeSagaState evolve(FakeSagaState state, EventEnvelope event) {
       if (event.event() instanceof Start s) {
         // Increment the prior state's counter so the evolve prior-state is observable:
@@ -561,21 +556,13 @@ class SagaStepExecutorTest {
             Instant.now()));
   }
 
-  private EventEnvelope pokeEnvelope(String sagaCorrelation, long offset) {
+  private EventEnvelope pokeEnvelope(String sagaId, long offset) {
     return new EventEnvelope(
         GlobalOffset.of(offset),
         StreamId.of(TYPE, AggregateId.of("test-stream")),
         Version.initial(),
         new EventType("Poke"),
         new Poke("poke"),
-        new EventMetadata(
-            EventId.of("evt-" + UUID.randomUUID()),
-            CommandId.of("cmd-2"),
-            null,
-            null,
-            CorrelationId.of(sagaCorrelation),
-            null,
-            null,
-            Instant.now()));
+        SagaEnvelopes.metadataCausedBy(FakeSagaState.class, SagaId.of(sagaId)));
   }
 }

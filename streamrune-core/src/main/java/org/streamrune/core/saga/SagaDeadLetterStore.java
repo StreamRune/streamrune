@@ -10,8 +10,8 @@ import org.streamrune.core.types.SagaType;
 
 /**
  * Persistence abstraction for poison saga events. Parallels the command {@code DeadLetterQueue} for
- * the saga-runner side: events that could not be processed by a saga (routing failure,
- * extract/correlate errors, decider exceptions) are quarantined here so they do not block the
+ * the saga-runner side: events that could not be processed by a saga (routing failure, errors of
+ * the routing methods, decider exceptions) are quarantined here so they do not block the
  * subscription and can be inspected. Replay is supported via the manual, operator-triggered {@code
  * org.streamrune.runtime.SagaDeadLetterReplayer} (invoked after the poison cause is fixed); there
  * is deliberately no automatic polling retry — poison failures are deterministic.
@@ -26,8 +26,8 @@ import org.streamrune.core.types.SagaType;
  *
  * <p>{@link #publish} is an idempotent upsert keyed by {@code (sagaId, eventOffset)} so
  * re-quarantine after an infra retry does not produce duplicate rows. When {@code sagaId} is {@code
- * null} (e.g. {@code extractSagaId} or {@code correlate} failed before a saga could be identified),
- * the key degenerates to {@code eventOffset} alone.
+ * null} (e.g. {@code extractSagaId} or {@code correlateByEventData} failed before a saga could be
+ * identified), the key degenerates to {@code eventOffset} alone.
  *
  * <p><b>A dead-letter store must READ AND WRITE the saga rows it shields</b> (normative for
  * implementations and for how a store is WIRED). Three of its operations are not entry-local at
@@ -143,11 +143,11 @@ public interface SagaDeadLetterStore {
    * <p><b>Why this exists.</b> The only way to resolve a null-saga entry used to be {@code
    * findAll(Integer.MAX_VALUE)} filtered in Java. The null-saga population is precisely the one
    * that grows without bound: PostgreSQL's {@code UNIQUE(saga_id, event_offset)} treats NULLs as
-   * distinct, so every re-quarantine INSERTs a fresh row, and a broken {@code correlate} on a 1000
-   * event/s stream produces tens of millions of rows inside one retention window. Scanning that
-   * table — twice per replay attempt, once to find the entry and again for the still-poison check —
-   * materialises every row as a {@link SagaDeadLetterEntry} on the heap and kills the JVM on
-   * exactly the recovery path the operator reaches for once the router is fixed.
+   * distinct, so every re-quarantine INSERTs a fresh row, and a broken {@code correlateByEventData}
+   * on a 1000 event/s stream produces tens of millions of rows inside one retention window.
+   * Scanning that table — twice per replay attempt, once to find the entry and again for the
+   * still-poison check — materialises every row as a {@link SagaDeadLetterEntry} on the heap and
+   * kills the JVM on exactly the recovery path the operator reaches for once the router is fixed.
    *
    * <p><b>Type scoping matches the replayer's own rule</b>: only an entry of {@code sagaType}
    * matches. There is no untyped lookup: a {@code null sagaType} is rejected, never read as "any
@@ -487,7 +487,8 @@ public interface SagaDeadLetterStore {
    * redacted/unreadable — that is the intended behavior, not a bug.
    *
    * @param sagaId the saga that faulted, or {@code null} when the saga could not be identified
-   *     (e.g. {@code extractSagaId} / {@code correlate} threw before a saga ID was resolved)
+   *     (e.g. {@code extractSagaId} / {@code correlateByEventData} threw before a saga ID was
+   *     resolved)
    * @param sagaType the saga type of the QUARANTINING runner (required) — stamped by the
    *     framework's {@code SagaRunner} on every entry, <b>including null-saga entries</b> (the
    *     runner's type is well-defined even when the saga id is not). Every type-scoped operation

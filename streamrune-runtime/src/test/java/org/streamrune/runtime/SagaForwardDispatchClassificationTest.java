@@ -738,8 +738,8 @@ class SagaForwardDispatchClassificationTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return event.event() instanceof OrderConfirmed oc
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+      return event instanceof OrderConfirmed oc
           ? Optional.of(SagaId.of("fulfil-" + oc.orderId()))
           : Optional.empty();
     }
@@ -790,7 +790,7 @@ class SagaForwardDispatchClassificationTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
       return Optional.of(SagaId.of("saga-1"));
     }
 

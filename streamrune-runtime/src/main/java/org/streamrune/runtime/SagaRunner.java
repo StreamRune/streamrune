@@ -4,11 +4,13 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandBus;
+import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.StreamRuneMetrics;
@@ -17,6 +19,7 @@ import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.saga.SagaDecider;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStateSerializationException;
 import org.streamrune.core.saga.SagaStatus;
@@ -24,6 +27,7 @@ import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
+import org.streamrune.core.types.StreamId;
 
 /**
  * Bridges a {@link SagaOrchestrator} to an {@link EventListener}.
@@ -31,8 +35,11 @@ import org.streamrune.core.types.SagaType;
  * <p>Call {@link #asEventListener()} to obtain an {@link EventListener} that can be registered with
  * any {@link org.streamrune.core.subscription.EventSubscription}. For each event received, the
  * runner routes exactly as {@link #resolveTarget} does — a start event ({@link
- * SagaOrchestrator#isStartEvent}) by {@link SagaOrchestrator#extractSagaId}, anything else by
- * {@link SagaOrchestrator#correlate} — and then:
+ * SagaOrchestrator#isStartEvent}) by {@link SagaOrchestrator#extractSagaId}; any other event that
+ * carries a saga origin ({@link org.streamrune.core.EventMetadata#sagaOrigin()}) of this runner's
+ * saga type to the saga that origin names, without asking the application; every other event by
+ * {@link SagaOrchestrator#correlateByEventData}, which sees the stream id and the payload only —
+ * and then:
  *
  * <ul>
  *   <li><b>Start event</b> → {@link SagaStepExecutor} with a live {@code ForwardStep(startPath =
@@ -79,18 +86,18 @@ import org.streamrune.core.types.SagaType;
  * </ul>
  *
  * <p><b>Poison-event isolation — the single poison handler.</b> Exceptions thrown by orchestrator
- * pure-logic methods ({@code isStartEvent}, {@code correlate}, {@code extractSagaId}, {@code
- * initialState}, {@code evolve}, {@code handle}, {@code compensate}) and their null returns are
- * poison: {@link #recordPoison} quarantines the offending event in the {@link SagaDeadLetterStore}
- * <em>by metadata only</em> (saga id/type, event offset/type, error details, fault time — the event
- * payload is never serialized or copied, so GDPR crypto-shredding stays authoritative in the event
- * store; inspect the event by reading {@code event_stream} at the entry's {@code eventOffset}) and
- * faults the saga, in one fixed order on every event path: row present → shield → entry → {@link
- * SagaStore#markFaulted} (the only fault write; no state write, it records {@code
- * pre_fault_status}); row absent and {@code initialState} succeeds → entry → {@link
- * SagaStore#createFaulted} (so no FAULTED row can ever exist without its entry); row absent and
- * {@code initialState} throws → entry only (the documented row-less residual). A fault write that
- * conflicts is retried once on a reload and otherwise left with a WARNING — the entry and the
+ * pure-logic methods ({@code isStartEvent}, {@code correlateByEventData}, {@code extractSagaId},
+ * {@code initialState}, {@code evolve}, {@code handle}, {@code compensate}) and their null returns
+ * are poison: {@link #recordPoison} quarantines the offending event in the {@link
+ * SagaDeadLetterStore} <em>by metadata only</em> (saga id/type, event offset/type, error details,
+ * fault time — the event payload is never serialized or copied, so GDPR crypto-shredding stays
+ * authoritative in the event store; inspect the event by reading {@code event_stream} at the
+ * entry's {@code eventOffset}) and faults the saga, in one fixed order on every event path: row
+ * present → shield → entry → {@link SagaStore#markFaulted} (the only fault write; no state write,
+ * it records {@code pre_fault_status}); row absent and {@code initialState} succeeds → entry →
+ * {@link SagaStore#createFaulted} (so no FAULTED row can ever exist without its entry); row absent
+ * and {@code initialState} throws → entry only (the documented row-less residual). A fault write
+ * that conflicts is retried once on a reload and otherwise left with a WARNING — the entry and the
  * shield ARE recorded, so live events are held and the next drain re-evaluates the saga. Processing
  * continues with the next event in the batch — no head-of-line blocking. {@link
  * SagaDeadLetterStore} is a <em>required</em> {@link Builder} field; {@link Builder#build()} throws
@@ -208,6 +215,13 @@ public final class SagaRunner<S extends SagaState> {
   private static final String SAGA_ID_REQUIRED = "sagaId is required";
 
   private final SagaOrchestrator<S> orchestrator;
+
+  /**
+   * This runner's saga type: the saga state's fully-qualified class name. An event's saga origin
+   * belongs to this runner only when its saga type equals this value exactly.
+   */
+  private final SagaType sagaType;
+
   private final SagaStore sagaStore;
   private final CommandBus commandBus;
   private final SagaDeadLetterStore sagaDeadLetterStore;
@@ -237,6 +251,7 @@ public final class SagaRunner<S extends SagaState> {
 
   private SagaRunner(Builder<S> builder) {
     this.orchestrator = builder.orchestrator;
+    this.sagaType = SagaType.fromClass(builder.orchestrator.stateType());
     this.sagaStore = builder.sagaStore;
     this.commandBus = builder.commandBus;
     this.sagaDeadLetterStore = builder.sagaDeadLetterStore;
@@ -298,13 +313,30 @@ public final class SagaRunner<S extends SagaState> {
   record ReplayTarget(SagaId sagaId, boolean startPath) {}
 
   /**
-   * Routes an event exactly as live delivery does: start events by {@code extractSagaId},
-   * correlated events by {@code correlate}. A throwing router is poison with no saga id.
+   * The one place an event is routed to a saga; live delivery and the dead-letter replayer both
+   * call it on the envelope read from the event store. In this order:
    *
-   * <p>A null RETURN from either router is the same deterministic contract violation as a throw and
-   * is rejected INSIDE the poison supplier, so it becomes a null-saga quarantine of the one event
-   * instead of an NPE that escapes the listener and wedges the subscription. {@code
-   * Optional.empty()} from {@code correlate} remains the legitimate, quarantine-free "not mine".
+   * <ol>
+   *   <li>a start event ({@code isStartEvent}) names its saga through {@code extractSagaId}; a saga
+   *       origin on a start event is ignored;
+   *   <li>any other event whose metadata carries a saga origin of this runner's saga type goes to
+   *       the saga that origin names. The saga types are compared exactly, before the origin's saga
+   *       id is used, and the application is not asked;
+   *   <li>every other event — no origin, or the origin of another saga type — is handed to {@code
+   *       correlateByEventData(streamId, payload)}; {@code Optional.empty()} means the event
+   *       belongs to no saga of this type.
+   * </ol>
+   *
+   * <p>The origin is written by the command bus in the transaction that appends the event, and
+   * nothing rewrites stored metadata, so every delivery and every replay of an event routes it to
+   * the same saga. The correlation id is not read: a request chooses it.
+   *
+   * <p>A throwing application method is poison with no saga id. A null RETURN from {@code
+   * extractSagaId} or {@code correlateByEventData} is the same deterministic contract violation as
+   * a throw and is rejected INSIDE the poison supplier, so it becomes a null-saga quarantine of the
+   * one event instead of an NPE that escapes the listener and wedges the subscription. {@code
+   * Optional.empty()} from {@code correlateByEventData} remains the legitimate, quarantine-free
+   * "not mine".
    */
   Optional<ReplayTarget> resolveTarget(EventEnvelope event) {
     boolean isStart = poison(null, () -> orchestrator.isStartEvent(event));
@@ -319,15 +351,20 @@ public final class SagaRunner<S extends SagaState> {
                           + " contract requires a non-null SagaId"));
       return Optional.of(new ReplayTarget(sagaId, true));
     }
-    Optional<SagaId> corr =
+    SagaOrigin origin = event.metadata().sagaOrigin();
+    if (origin != null && origin.sagaType().equals(sagaType)) {
+      return Optional.of(new ReplayTarget(origin.sagaId(), false));
+    }
+    Optional<SagaId> routed =
         poison(
             null,
             () ->
                 Objects.requireNonNull(
-                    orchestrator.correlate(event),
-                    "correlate returned null — the SagaOrchestrator contract requires a non-null"
-                        + " Optional (return Optional.empty() to ignore an event)"));
-    return corr.map(id -> new ReplayTarget(id, false));
+                    orchestrator.correlateByEventData(event.streamId(), event.event()),
+                    "correlateByEventData returned null — the SagaOrchestrator contract requires a"
+                        + " non-null Optional (return Optional.empty() for an event that belongs"
+                        + " to no saga of this type)"));
+    return routed.map(id -> new ReplayTarget(id, false));
   }
 
   /**
@@ -981,7 +1018,8 @@ public final class SagaRunner<S extends SagaState> {
     private SagaDecider<S> decider;
     private Predicate<EventEnvelope> startPredicate;
     private Function<EventEnvelope, SagaId> idExtractor;
-    private Function<EventEnvelope, Optional<SagaId>> correlator;
+    private BiFunction<StreamId, DomainEvent, Optional<SagaId>> eventDataRouter =
+        (streamId, event) -> Optional.empty();
     private SagaDeadLetterStore sagaDeadLetterStore;
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private Duration inboxRetentionMaxAge;
@@ -1017,8 +1055,25 @@ public final class SagaRunner<S extends SagaState> {
       return this;
     }
 
-    public Builder<S> correlateBy(Function<EventEnvelope, Optional<SagaId>> correlator) {
-      this.correlator = correlator;
+    /**
+     * Routes the events this saga type did not cause, when the runner is built from a {@link
+     * #decider}: the builder form of {@link SagaOrchestrator#correlateByEventData}. Optional; left
+     * unset, an event without an origin of this saga type belongs to no saga of this type.
+     *
+     * <p>The function receives the stream id and the payload of a non-start event that carries no
+     * saga origin of this runner's saga type, and returns the saga the event's own data names, or
+     * {@code Optional.empty()}. It does not receive the event's metadata. The replies to the saga's
+     * own commands are not handed to it: the runner routes them by their origin.
+     *
+     * <p>Ignored when the runner is built from an {@link #orchestrator}, which routes through its
+     * own {@link SagaOrchestrator#correlateByEventData}.
+     *
+     * @param eventDataRouter the routing function; must not be {@code null} and must not return
+     *     {@code null}
+     */
+    public Builder<S> correlateByEventData(
+        BiFunction<StreamId, DomainEvent, Optional<SagaId>> eventDataRouter) {
+      this.eventDataRouter = Objects.requireNonNull(eventDataRouter, "eventDataRouter is required");
       return this;
     }
 
@@ -1081,8 +1136,8 @@ public final class SagaRunner<S extends SagaState> {
       if (orchestrator == null && decider != null) {
         Objects.requireNonNull(startPredicate, "startWhen is required when using decider");
         Objects.requireNonNull(idExtractor, "extractSagaId is required when using decider");
-        Objects.requireNonNull(correlator, "correlateBy is required when using decider");
-        orchestrator = new SagaDeciderAdapter<>(decider, startPredicate, idExtractor, correlator);
+        orchestrator =
+            new SagaDeciderAdapter<>(decider, startPredicate, idExtractor, eventDataRouter);
       }
       if (orchestrator == null) throw new IllegalStateException("orchestrator is required");
       // Refuse a state class whose fully-qualified name the saga_type column cannot

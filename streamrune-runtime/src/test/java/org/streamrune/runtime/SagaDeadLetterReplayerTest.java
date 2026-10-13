@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.CircuitBreakerOpenException;
+import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
@@ -25,6 +26,7 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.SagaType;
+import org.streamrune.core.types.StreamId;
 import org.streamrune.runtime.SagaDeadLetterReplayer.ReplayOutcome;
 import org.streamrune.runtime.SagaStartFixtures.Advance;
 import org.streamrune.runtime.SagaStartFixtures.ScriptedBus;
@@ -48,7 +50,10 @@ class SagaDeadLetterReplayerTest {
     final Set<Long> routerPoison = ConcurrentHashMap.newKeySet();
     final List<Long> consumed = new ArrayList<>();
 
-    /** When set, {@code correlate} ignores {@link Advance} events (the router "moved on"). */
+    /**
+     * When set, {@code correlateByEventData} ignores {@link Advance} events (the router "moved
+     * on").
+     */
     volatile boolean ignoreAdvance;
 
     /**
@@ -88,11 +93,11 @@ class SagaDeadLetterReplayerTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
       if (ignoreAdvance) {
         return Optional.empty();
       }
-      return event.event() instanceof Advance ? Optional.of(SAGA) : Optional.empty();
+      return event instanceof Advance ? Optional.of(SAGA) : Optional.empty();
     }
 
     @Override
@@ -831,7 +836,7 @@ class SagaDeadLetterReplayerTest {
     h.orchestrator.evolvePoison.add(h.offset(corr));
     h.deliver(corr);
     h.orchestrator.evolvePoison.clear();
-    h.orchestrator.ignoreAdvance = true; // correlate() now returns empty for Advance
+    h.orchestrator.ignoreAdvance = true; // correlateByEventData() now returns empty for Advance
 
     assertThat(h.replayer.replayAll(SAGA)).containsExactly(ReplayOutcome.REPLAYED);
     assertThat(h.orchestrator.consumed)
@@ -1104,7 +1109,7 @@ class SagaDeadLetterReplayerTest {
     h.orchestrator.routerPoison.add(h.offset(bad));
     h.deliver(bad);
     h.orchestrator.routerPoison.clear();
-    h.orchestrator.ignoreAdvance = true; // correlate() now says "not mine"
+    h.orchestrator.ignoreAdvance = true; // correlateByEventData() now says "not mine"
 
     assertThat(h.replayer.replay(null, bad.globalOffset())).isEqualTo(ReplayOutcome.REPLAYED);
     assertThat(h.dlq.findNullSagaEntry(TYPE, bad.globalOffset())).isEmpty();

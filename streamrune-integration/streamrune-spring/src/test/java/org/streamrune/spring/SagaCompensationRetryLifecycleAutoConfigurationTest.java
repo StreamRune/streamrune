@@ -62,11 +62,6 @@ class SagaCompensationRetryLifecycleAutoConfigurationTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      return Optional.empty();
-    }
-
-    @Override
     public FakeState evolve(FakeState state, EventEnvelope event) {
       return state;
     }

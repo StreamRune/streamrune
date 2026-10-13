@@ -54,7 +54,7 @@ class SagaRunnerPoisonIsolationTest {
   /** Start event — triggers saga creation. */
   record Start(String id) implements DomainEvent {}
 
-  /** A non-start correlated event used to test correlate-poison. */
+  /** A non-start event no saga caused, used to test a throwing {@code correlateByEventData}. */
   record Stray(String correlationId) implements DomainEvent {}
 
   /** Command emitted by handle(). */
@@ -72,8 +72,8 @@ class SagaRunnerPoisonIsolationTest {
 
   /**
    * Orchestrator whose {@code handle()} can be configured to throw for a specific saga id. All
-   * other methods are well-behaved. {@code correlate()} throws for {@link Stray} events (to test
-   * correlate-poison path).
+   * other methods are well-behaved. {@code correlateByEventData()} throws for {@link Stray} events
+   * (to test the poison path of the routing hook).
    */
   static class FakeOrchestrator implements SagaOrchestrator<FakeState> {
 
@@ -83,8 +83,8 @@ class SagaRunnerPoisonIsolationTest {
     /** If non-null, initialState() throws for this saga id. */
     SagaId initialStateThrowsFor = null;
 
-    /** If true, correlate() throws for any Stray event. */
-    boolean correlateThrows = false;
+    /** If true, correlateByEventData() throws for any Stray event. */
+    boolean hookThrows = false;
 
     @Override
     public Class<FakeState> stateType() {
@@ -110,13 +110,10 @@ class SagaRunnerPoisonIsolationTest {
     }
 
     @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      if (correlateThrows && event.event() instanceof Stray) {
-        throw new RuntimeException("simulated correlate failure");
+    public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event) {
+      if (hookThrows && event instanceof Stray) {
+        throw new RuntimeException("simulated correlateByEventData failure");
       }
-      // Correlate via the event's correlationId metadata
-      String corrId = event.metadata().correlationId().value();
-      if (corrId.startsWith("saga-")) return Optional.of(SagaId.of(corrId));
       return Optional.empty();
     }
 
@@ -468,12 +465,12 @@ class SagaRunnerPoisonIsolationTest {
   }
 
   /**
-   * When {@code correlate()} throws for a non-start event, the entry is quarantined with a null
-   * sagaId (saga could not be identified). onEvents must not throw.
+   * When {@code correlateByEventData()} throws for a non-start event, the entry is quarantined with
+   * a null sagaId (saga could not be identified). onEvents must not throw.
    */
   @Test
-  void correlatePoison_quarantinesWithNullSaga() {
-    orchestrator.correlateThrows = true;
+  void correlateByEventDataPoison_quarantinesWithNullSaga() {
+    orchestrator.hookThrows = true;
 
     var runner = buildRunner();
     var strayEvent = strayEnvelope();

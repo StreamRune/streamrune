@@ -211,9 +211,9 @@ class SagaDispatchProvenanceTest {
             .decider(saga)
             .startWhen(e -> e.event() instanceof Opened)
             .extractSagaId(e -> SagaId.of("order-saga-" + ((Opened) e.event()).orderId()))
-            .correlateBy(
-                e ->
-                    e.event() instanceof Advanced advanced
+            .correlateByEventData(
+                (streamId, e) ->
+                    e instanceof Advanced advanced
                         ? Optional.of(SagaId.of("order-saga-" + advanced.orderId()))
                         : Optional.empty())
             .sagaStore(sagaStore)

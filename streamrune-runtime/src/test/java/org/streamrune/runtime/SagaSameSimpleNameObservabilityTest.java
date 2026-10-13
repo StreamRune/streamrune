@@ -170,7 +170,6 @@ class SagaSameSimpleNameObservabilityTest {
             .decider(new MinimalDecider<>(stateType))
             .startWhen(event -> false)
             .extractSagaId(event -> SagaId.of("unused"))
-            .correlateBy(event -> Optional.empty())
             .sagaStore(store)
             .commandBus(new UnusedCommandBus())
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(store))

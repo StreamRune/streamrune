@@ -148,10 +148,11 @@ class SagaDeciderAdapterTest {
             .commandBus(bus)
             .startWhen(e -> e.event() instanceof OrderCreated)
             .extractSagaId(e -> SagaId.of(((OrderCreated) e.event()).orderId()))
-            .correlateBy(
-                e ->
-                    Optional.ofNullable(e.metadata().correlationId())
-                        .map(c -> SagaId.of(c.value())))
+            .correlateByEventData(
+                (streamId, e) ->
+                    e instanceof PaymentReceived paid
+                        ? Optional.of(SagaId.of(paid.orderId()))
+                        : Optional.empty())
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(store))
             .build();
 
@@ -182,7 +183,7 @@ class SagaDeciderAdapterTest {
             decider,
             e -> e.event() instanceof OrderCreated,
             e -> SagaId.of("id"),
-            e -> Optional.empty());
+            (streamId, e) -> Optional.empty());
     assertEquals(OrderState.class, adapter.stateType());
   }
 
@@ -219,7 +220,8 @@ class SagaDeciderAdapterTest {
         };
 
     var adapter =
-        new SagaDeciderAdapter<>(decider, e -> false, e -> SagaId.of("id"), e -> Optional.empty());
+        new SagaDeciderAdapter<>(
+            decider, e -> false, e -> SagaId.of("id"), (streamId, e) -> Optional.empty());
 
     var result =
         adapter.compensate(
@@ -233,7 +235,8 @@ class SagaDeciderAdapterTest {
   @Test
   void compensationOnly_delegatesCompensate_butRoutersThrow() {
     // The timeout-path factory backs a SagaStepExecutor with the bare decider: compensate is
-    // delegated, but the forward routers (isStartEvent/extractSagaId/correlate) are never used on
+    // delegated, but the forward routers (isStartEvent/extractSagaId/correlateByEventData) are
+    // never used on
     // the timeout path and must throw if reached.
     var decider =
         new SagaDecider<OrderState>() {
@@ -279,8 +282,10 @@ class SagaDeciderAdapterTest {
         .isInstanceOf(UnsupportedOperationException.class);
     org.assertj.core.api.Assertions.assertThatThrownBy(() -> adapter.extractSagaId(event))
         .isInstanceOf(UnsupportedOperationException.class);
-    org.assertj.core.api.Assertions.assertThatThrownBy(() -> adapter.correlate(event))
-        .isInstanceOf(UnsupportedOperationException.class);
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> adapter.correlateByEventData(event.streamId(), event.event()))
+        .isInstanceOf(UnsupportedOperationException.class)
+        .hasMessage("timeout-path executor: no event-data routing");
   }
 
   @Test
@@ -293,7 +298,6 @@ class SagaDeciderAdapterTest {
                 .sagaStore(new InMemorySagaStore())
                 .commandBus(new CapturingCommandBus())
                 .extractSagaId(e -> SagaId.of("id"))
-                .correlateBy(e -> Optional.empty())
                 .build());
   }
 
@@ -307,21 +311,45 @@ class SagaDeciderAdapterTest {
                 .sagaStore(new InMemorySagaStore())
                 .commandBus(new CapturingCommandBus())
                 .startWhen(e -> true)
-                .correlateBy(e -> Optional.empty())
                 .build());
   }
 
+  /**
+   * The event-data router is optional: without one, a non-start event that carries no saga origin
+   * of this saga type belongs to no saga, whatever its correlation id says.
+   */
   @Test
-  void builderRejectsDeciderWithoutCorrelateBy() {
+  void builderBuildsADeciderRunnerWithoutAnEventDataRouter() {
+    var store = new InMemorySagaStore();
+    var bus = new CapturingCommandBus();
+    var runner =
+        SagaRunner.<OrderState>builder()
+            .decider(new OrderSagaDecider())
+            .sagaStore(store)
+            .commandBus(bus)
+            .startWhen(e -> e.event() instanceof OrderCreated)
+            .extractSagaId(e -> SagaId.of(((OrderCreated) e.event()).orderId()))
+            .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(store))
+            .build();
+    var listener = runner.asEventListener();
+    listener.onEvents(List.of(envelope(new OrderCreated("order-1"), "order-1")));
+
+    // The envelope's correlation id is the saga's id; the event has no origin.
+    listener.onEvents(List.of(envelope(new PaymentReceived("order-1"), "order-1", 2L)));
+
+    assertEquals(0, bus.dispatched.size());
+    assertEquals(
+        SagaStatus.STARTED,
+        store
+            .load(SagaId.of("order-1"), SagaType.fromClass(OrderState.class), OrderState.class)
+            .orElseThrow()
+            .status());
+  }
+
+  @Test
+  void builderRejectsANullEventDataRouter() {
     assertThrows(
         NullPointerException.class,
-        () ->
-            SagaRunner.<OrderState>builder()
-                .decider(new OrderSagaDecider())
-                .sagaStore(new InMemorySagaStore())
-                .commandBus(new CapturingCommandBus())
-                .startWhen(e -> true)
-                .extractSagaId(e -> SagaId.of("id"))
-                .build());
+        () -> SagaRunner.<OrderState>builder().correlateByEventData(null));
   }
 }

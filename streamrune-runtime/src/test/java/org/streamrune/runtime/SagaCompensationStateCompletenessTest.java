@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.Command;
@@ -31,6 +30,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
+import org.streamrune.test.SagaEnvelopes;
 
 /**
  * Compensation completeness contract.
@@ -101,12 +101,6 @@ class SagaCompensationStateCompletenessTest {
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
       return SagaId.of("saga-" + ((OrderCreated) event.event()).orderId());
-    }
-
-    @Override
-    public Optional<SagaId> correlate(EventEnvelope event) {
-      String corrId = event.metadata().correlationId().value();
-      return corrId.startsWith("saga-") ? Optional.of(SagaId.of(corrId)) : Optional.empty();
     }
 
     @Override
@@ -193,6 +187,18 @@ class SagaCompensationStateCompletenessTest {
     }
   }
 
+  /** The reply to a command the saga dispatched itself: it carries that saga's origin. */
+  private EventEnvelope causedBySaga(DomainEvent event, String sagaId) {
+    EventEnvelope plain = envelope(event, sagaId);
+    return new EventEnvelope(
+        plain.globalOffset(),
+        plain.streamId(),
+        plain.version(),
+        plain.eventType(),
+        plain.event(),
+        SagaEnvelopes.metadataCausedBy(PaymentSagaState.class, SagaId.of(sagaId)));
+  }
+
   private EventEnvelope envelope(DomainEvent event, String correlationId) {
     return new EventEnvelope(
         GlobalOffset.initial(),
@@ -233,7 +239,9 @@ class SagaCompensationStateCompletenessTest {
     var bus = new SelectiveFailBus(ReserveStock.class);
     var runner = runnerFor(saga, store, bus);
 
-    runner.asEventListener().onEvents(List.of(envelope(new OrderReady("order-1"), "saga-order-1")));
+    runner
+        .asEventListener()
+        .onEvents(List.of(causedBySaga(new OrderReady("order-1"), "saga-order-1")));
 
     // The first forward command ran; the second failed; compensation then ran.
     assertThat(bus.dispatched)
@@ -273,7 +281,9 @@ class SagaCompensationStateCompletenessTest {
     var bus = new SelectiveFailBus(ReserveStock.class);
     var runner = runnerFor(saga, store, bus);
 
-    runner.asEventListener().onEvents(List.of(envelope(new OrderReady("order-1"), "saga-order-1")));
+    runner
+        .asEventListener()
+        .onEvents(List.of(causedBySaga(new OrderReady("order-1"), "saga-order-1")));
 
     // The hazard: conditioning the refund on state.charged (false, because the confirmation
     // is in-flight) silently DROPS the CancelPayment — the customer stays charged for a cancelled
