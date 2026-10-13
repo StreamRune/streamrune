@@ -272,7 +272,8 @@ public final class SagaDeadLetterReplayer {
     /**
      * Nothing was dispatched: a concurrent writer moved the row between the load and the claim's
      * compare-and-swap, or the claim committed and the row was deleted before its episode stamp
-     * could be read. Read the row again before deciding again.
+     * could be read, or a step of the saga is in flight in this process and the claim was not made
+     * underneath it ({@link SagaStepLock}). Read the row again before deciding again.
      */
     CLAIM_LOST,
     /** No saga row of this replayer's type exists for the id; nothing to compensate. */
@@ -813,6 +814,15 @@ public final class SagaDeadLetterReplayer {
                 + " concurrently between the load and the claim and the claim lost its"
                 + " compare-and-swap, or the claim committed and the row was deleted before its"
                 + " episode stamp could be read. Read the row again before deciding again.",
+            id);
+        return CompensateOutcome.CLAIM_LOST;
+      }
+      case CLAIM_DEFERRED -> {
+        LOG.warn(
+            "compensateFaulted: nothing was read and nothing was written for saga {}: a step of it"
+                + " is in flight in this process — a replay feed, or a delivery that read the row"
+                + " before it was faulted — and the claim is not made underneath a step. Call"
+                + " again once that step has returned.",
             id);
         return CompensateOutcome.CLAIM_LOST;
       }

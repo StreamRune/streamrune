@@ -80,7 +80,7 @@ public final class SagaTypeOwnership {
   }
 
   /** Whether two stores are one instance, or say they keep the same rows. */
-  private static boolean keepTheSameRows(SagaStore first, SagaStore second) {
+  static boolean keepTheSameRows(SagaStore first, SagaStore second) {
     return first == second || storageOf(first).equals(storageOf(second));
   }
 

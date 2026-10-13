@@ -300,9 +300,10 @@ final class SagaStepExecutor<S extends SagaState> {
         if (loaded.isEmpty()) {
           yield StepOutcome.NOT_COMPENSATING;
         }
-        yield claimFreshEpisodeAndCompensate(sagaId, loaded.get(), ct.timeoutCause());
+        yield claimFreshEpisodeAndCompensate(
+            sagaId, loaded.get(), ct.timeoutCause(), ct.claimHold());
       }
-      case SagaTrigger.CompensateForwardFault _ -> {
+      case SagaTrigger.CompensateForwardFault cf -> {
         // The operator's compensateFaulted: a FAULTED row whose forward fault has nothing left to
         // drain. Only that shape is claimed. A live row belongs to the event path and the timeout
         // runner; a row that faulted inside a compensation episode keeps that episode's stamp and
@@ -314,7 +315,7 @@ final class SagaStepExecutor<S extends SagaState> {
           yield StepOutcome.NOT_COMPENSATING;
         }
         yield claimFreshEpisodeAndCompensate(
-            sagaId, loaded.get(), new SagaForwardFaultCompensationException());
+            sagaId, loaded.get(), new SagaForwardFaultCompensationException(), cf.claimHold());
       }
     };
   }
@@ -333,9 +334,20 @@ final class SagaStepExecutor<S extends SagaState> {
    * COMPENSATING}), never thrown. Neither trigger has an event in hand, so the episode is claimed
    * with no cause and, where this claim is the stamping write, its compensation commands carry no
    * causation id.
+   *
+   * <p><b>The step lock.</b> Neither trigger has a step of its own, so within one process the claim
+   * must not land underneath a step in flight on the saga ({@link SagaStepLock}). The adapter takes
+   * the claim's hold before it reads the row it hands in, and passes the hold with the trigger;
+   * this method releases it in the {@code finally} of the claim write. The hold therefore covers
+   * the adapter's read and this claim and nothing after them: the read-back of the stamp, {@code
+   * compensate()} and every compensation command run with the lock free, so a slow compensation
+   * keeps no delivery of the saga waiting, and a delivery that arrives meets a stamped {@code
+   * COMPENSATING} row and resumes the episode under the same keys.
+   *
+   * @param claimHold the adapter's hold of the saga's step lock, or {@code null} when it holds none
    */
   private StepOutcome claimFreshEpisodeAndCompensate(
-      SagaId sagaId, LoadedSaga<S> loaded, Throwable cause) {
+      SagaId sagaId, LoadedSaga<S> loaded, Throwable cause, SagaStepLock.Hold claimHold) {
     SagaType type = SagaType.fromClass(orchestrator.stateType());
     long baseVersion = loaded.version();
     S state = loaded.state();
@@ -350,6 +362,11 @@ final class SagaStepExecutor<S extends SagaState> {
           "Saga {} advanced concurrently; skip before claiming compensation",
           LogSanitizer.sanitizeForLog(sagaId.value()));
       return StepOutcome.CLAIM_LOST;
+    } finally {
+      // The claim is written or refused: nothing below waits for a step, and no step waits for it.
+      if (claimHold != null) {
+        claimHold.close();
+      }
     }
     long claimVersion = baseVersion + 1;
     Optional<EpisodeStamp> episode =
@@ -478,10 +495,11 @@ final class SagaStepExecutor<S extends SagaState> {
    *       applied to this row;
    *   <li>the compensation-retry sweeper: does not see the row;
    *   <li>the timeout runner: claims the row at the saga's deadline, as it claims any start whose
-   *       dispatch has not completed, and compensates the persisted evolved state. It does not wait
-   *       for the forward loop: commands not yet dispatched by a dead delivery are never
-   *       dispatched, and a command a live delivery is dispatching at that moment commits after the
-   *       timeout's compensation;
+   *       dispatch has not completed, and compensates the persisted evolved state. Commands not yet
+   *       dispatched by a dead delivery are never dispatched. Within one process the claim waits
+   *       for a delivery that is in its forward loop ({@link SagaStepLock}); a timeout runner of
+   *       another process does not, and a command a live delivery is dispatching at that moment
+   *       commits after that timeout's compensation;
    *   <li>a poison in {@code handle}: the fault of a genesis-pending forward row ({@code
    *       pre_fault_status} {@code NULL}); the replayed start entry re-evolves.
    * </ul>

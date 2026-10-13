@@ -16,6 +16,12 @@ enum StepOutcome {
   FAILED,
   FAULTED,
   CLAIM_LOST,
+  /**
+   * A claim with no event of its own — a timeout claim, an operator's compensation of a faulted
+   * forward step — was not made because a step of the saga is in flight in this process ({@link
+   * SagaStepLock}). Nothing was written and nothing was dispatched; the caller comes back.
+   */
+  CLAIM_DEFERRED,
   SKIPPED_HALTED,
   SKIPPED_DEDUP,
   /**

@@ -646,7 +646,7 @@ It is the claim the timeout runner would have made, taken from the faulted row: 
 | `TERMINAL` | Claimed and compensated. | `COMPENSATED` or `FAILED`. Verify downstream; a `WARNING` names `replayAll(sagaId)` if a live event was held behind the fault while the call ran. |
 | `COMPENSATING` | Claimed; a compensation failed transiently or was refused admission, or the terminal write lost a race. | A claimed `COMPENSATING` episode: the sweeper, the timeout runner and correlated events re-drive it under the same keys. Nothing to do. |
 | `POISON` | `compensate` threw on the new episode — or the claim could not convert the saga state, and nothing was written. | `FAULTED` inside the new episode with no entry — the give-up shape. Fix, deploy, then [`resumeFaulted(sagaId)`](#resume-a-give-up-fault). |
-| `CLAIM_LOST` | A concurrent writer moved the row first; nothing was dispatched. | Re-read the row before deciding again. |
+| `CLAIM_LOST` | A concurrent writer moved the row first, or a step of the saga is in flight in this process and the claim is not made underneath it; nothing was dispatched. | Re-read the row before deciding again. |
 | `SAGA_NOT_FOUND` | No saga row of this replayer's type. | — |
 | `NOT_FAULTED` | The row is live, `COMPENSATING` or terminal. | Unchanged. |
 | `COMPENSATION_FAULT` | The row faulted inside a compensation episode; a fresh claim would re-execute its committed compensations. | Unchanged. Use `resumeFaulted(sagaId)`. |

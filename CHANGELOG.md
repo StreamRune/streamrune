@@ -511,9 +511,25 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   dispatched again after a retry-later failure or a crash, before a second delivery, a correlated
   event or the compensation-retry sweeper can compensate: a second delivery re-drives the forward
   loop, a correlated event is held as genesis-pending, the sweeper does not see the row. The timeout
-  runner claims a start at its deadline, as it claims any start whose dispatch has not completed;
-  a forward command that a delivery is dispatching at that moment commits after the timeout's
-  compensation.
+  runner claims a start at its deadline, as it claims any start whose dispatch has not completed:
+  within one process after a delivery that is dispatching at that moment has written (the step
+  lock, below); from another node underneath it, so that the forward command commits after that
+  timeout's compensation.
+- Step lock, within one process: `SagaRunner` holds an in-memory lock per saga (`SagaStepLock`,
+  keyed by saga type and saga id) around every step — a live delivery and a replay feed, from before
+  the read of the row to after the write — and a claim that has no event of its own takes it around
+  its read and its claim: the timeout runner's claim (`SagaTimeoutRunner.Builder.sagaRunner`) and
+  `SagaDeadLetterReplayer.compensateFaulted`. While a step is in flight the claim is not made and
+  nothing is written; the timeout runner makes it on the first poll that finds the step ended,
+  waits for the step (5 s, in arrival order) once three polls in a row passed the saga over, and
+  logs a WARN per poll for a step that outlasts the wait. A forward command is therefore stored
+  before its saga's compensation, and two deliveries of one saga never overlap. The lock is
+  released before any compensation command; a delivery waits for it for at most 30 s and then
+  fails with `SagaStepLockException` and is redelivered. It writes nothing, needs no configuration
+  and reaches no other process: a timeout runner or a delivery on another node claims underneath a
+  step in flight, and the target aggregate's refusal of a forward command that arrives after its
+  cancel remains the protection there. A timeout runner built without `sagaRunner(...)` or
+  `stepLock(...)` shares its lock with nothing and says so when it starts.
 - Effectively-once dispatch: every saga command goes through `CommandBus.execute(command, key)` —
   forward commands keyed `saga:<sagaId>:<triggerOffset>:<index>`, every compensation command
   keyed `saga:<sagaId>:episode:<episodeVersion>:comp:<index>` — so a redelivery, a crash-resume

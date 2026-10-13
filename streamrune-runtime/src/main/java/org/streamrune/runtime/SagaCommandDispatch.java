@@ -284,6 +284,11 @@ final class SagaCommandDispatch {
    *             plain type and stays out of this set: misconfiguration is not a "later".
    *         <li>{@link OptimisticLockException} / {@link LockException} — the bus's own retry
    *             ladder calls both {@code transientFailure} and retries them before giving up.
+   *         <li>{@link SagaStepLockException} — a saga step did not get its saga's {@link
+   *             SagaStepLock} within the step bound, or was interrupted while it waited. It read
+   *             nothing and dispatched nothing. A step raises it before its forward loop, so it
+   *             reaches this classifier only when an application's listener plumbing delivers an
+   *             event inside a forward command's dispatch and lets the failure out through it.
    *         <li>{@link SQLException} — JDBC evidence: connection reset, pool exhaustion, statement
    *             timeout, failover. The same fail-safe marker {@link SagaStateConversion} and {@code
    *             ReadPoisonClassifier} key on.
@@ -316,6 +321,7 @@ final class SagaCommandDispatch {
           || c instanceof CommandBusOverloadedException
           || c instanceof OptimisticLockException
           || c instanceof LockException
+          || c instanceof SagaStepLockException
           || c instanceof SQLException
           || (c instanceof CryptoOperationException && !(c instanceof CryptoMappingException))) {
         sawRetryLater = true;
