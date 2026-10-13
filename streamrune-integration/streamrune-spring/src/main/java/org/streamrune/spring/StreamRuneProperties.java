@@ -210,12 +210,12 @@ public record StreamRuneProperties(
   public record Schema(@DefaultValue("true") boolean autoInitialize) {}
 
   /**
-   * @param baggageAllowlist additional OpenTelemetry baggage keys (beyond the framework-meaningful
-   *     default — the causation-id key) permitted to flow from client-supplied, unauthenticated
-   *     {@code baggage:} header entries into {@code RequestContext}/{@code EventMetadata} baggage,
-   *     and from there into the immutable, plaintext {@code event_stream.metadata} column. Every
-   *     other baggage key is dropped at the request filter. Listing {@code role} has no effect:
-   *     that key is the {@code X-User-Role} header in the trusted-gateway mode, and nothing else.
+   * @param baggageAllowlist the OpenTelemetry baggage keys (the framework allows none by default)
+   *     permitted to flow from client-supplied, unauthenticated {@code baggage:} header entries
+   *     into {@code RequestContext}/{@code EventMetadata} baggage, and from there into the
+   *     immutable, plaintext {@code event_stream.metadata} column. Every other baggage key is
+   *     dropped at the request filter. Listing {@code role} has no effect: that key is the {@code
+   *     X-User-Role} header in the trusted-gateway mode, and nothing else.
    */
   public record Metadata(@DefaultValue List<String> baggageAllowlist) {
 

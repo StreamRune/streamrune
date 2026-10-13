@@ -251,8 +251,8 @@ application that has not replaced the filter — including a context started wit
 server. See
 [Authorization](../../docs/guide/advanced/authorization.md#where-the-identity-comes-from-security).
 
-Only allowlisted OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist` on top of the
-framework defaults) reach the context, because baggage is written into every event's metadata.
+Only allowlisted OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist`; none by
+default) reach the context, because baggage is written into every event's metadata.
 
 ## Context Propagation
 

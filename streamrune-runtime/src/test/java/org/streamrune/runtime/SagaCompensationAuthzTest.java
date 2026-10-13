@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.AggregateState;
@@ -14,18 +15,25 @@ import org.streamrune.core.AuthorizationException;
 import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.RequireRole;
 import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.UserRoleResolver;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaState;
+import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.UserId;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.SagaEnvelopes;
 
 /**
  * End-to-end: a saga's {@code @RequireRole}-gated compensation command, dispatched via {@link
@@ -130,5 +138,61 @@ class SagaCompensationAuthzTest {
                 assertThrows(
                     AuthorizationException.class, () -> bus.execute(new RefundPayment("order-2"))));
     assertEquals(0, decider.decideCalls.get(), "the rejected command never reached its handler");
+  }
+
+  private record FulfillmentState(SagaStatus status) implements SagaState {}
+
+  /**
+   * A listener's continuation of an event a saga caused carries that saga's origin and none of its
+   * authority: the gated command is refused, on a plain thread and on the thread of a saga's own
+   * dispatch, where the same command executed directly runs as the system.
+   */
+  @Test
+  void aContinuationOfASagaCausedEvent_runsWithoutTheSagasAuthority() {
+    var decider = new RefundDecider();
+    var bus = buildBus(decider);
+    EventEnvelope reply =
+        SagaEnvelopes.causedBy(
+            FulfillmentState.class,
+            SagaId.of("saga-order-1"),
+            StreamId.of(TYPE, AggregateId.of("order-1")),
+            new PaymentRefunded("order-1"));
+
+    assertThrows(
+        AuthorizationException.class,
+        () ->
+            StreamRuneContext.continuing(reply)
+                .run(() -> bus.execute(new RefundPayment("order-3"))));
+    assertEquals(0, decider.decideCalls.get());
+
+    // The thread of a saga's dispatch, holding a user whose captured authority grants the role.
+    var privileged =
+        new StreamRuneContext.RequestContext(
+            null,
+            UserId.of("operator"),
+            CorrelationId.of("saga-order-1"),
+            Instant.now(),
+            Map.of("role", "payments:refund"),
+            new UserAuthority(Set.of("payments:refund"), Set.of()));
+    ScopedValue.where(StreamRuneContext.CURRENT, privileged)
+        .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
+        .run(
+            () -> {
+              // Control: directly on this thread the gated command passes.
+              bus.execute(new RefundPayment("order-4"));
+              assertEquals(1, decider.decideCalls.get());
+
+              assertThrows(
+                  AuthorizationException.class,
+                  () ->
+                      StreamRuneContext.continuing(reply)
+                          .run(
+                              () -> {
+                                assertEquals(1, StreamRuneContext.cause().sagaOrigin().hop());
+                                bus.execute(new RefundPayment("order-5"));
+                              }));
+            });
+    assertEquals(
+        1, decider.decideCalls.get(), "neither the saga flag nor the user reached the command");
   }
 }

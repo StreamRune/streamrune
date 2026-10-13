@@ -161,13 +161,31 @@ and trace id recorded on the entry, so the replayed events keep the original cor
 authorization check sees the original user. An entry for a command that ran with no context bound
 (a startup task, a background job) replays with no context bound.
 
+A replay restores those three values and nothing else. An entry has no place for a saga origin or
+for a causing event, and the runner binds neither, so the events of a replayed command carry no
+`sagaOrigin` and no `causationId`, whatever the entry's correlation id looks like. Two rules
+follow:
+
+- **A command that carries a saga origin is not dead-lettered.** That is every command a saga
+  dispatches, and every command a listener dispatches inside `StreamRuneContext.continuing(event)`
+  for an event a saga caused. A replay would run under the idempotency key of the caller's own
+  retry and store the reply without its origin, and whichever of the two reached the command inbox
+  first would decide what the event says. The caller retries instead: the saga subsystem for its
+  own commands, the subscription for a listener — so a listener must let a failed dispatch
+  propagate. A listener that catches the failure and returns loses the command.
+- **A continuation of an event no saga caused is dead-lettered like any other command.** Its replay
+  keeps the flow's correlation and trace ids and stores the command's events as causation roots
+  (`causationId` is `null`); the listener's redelivery under the same idempotency key then finds
+  the command committed.
+
 For an on-demand single retry (e.g. an operator clicking "Retry" in an admin UI), call
 `retry(CommandId)` — it re-dispatches that one entry immediately, bypassing the per-entry backoff
 window, and returns `true` if a matching entry was found. The replay runs on a fresh virtual thread
 that `retry` waits for, so it carries exactly what a scheduled replay carries. Nothing the calling
 thread has bound reaches it — not the admin request's user, correlation id, baggage or captured
-authorities, not a saga-dispatch marker, not an inheritable thread-local — so the replayed events and
-the audit row never name the operator as the actor of a command they did not issue. A failure to
+authorities, not a saga-dispatch marker or a dispatch cause, not an inheritable thread-local — so
+the replayed events and the audit row never name the operator as the actor of a command they did
+not issue. A failure to
 record the outcome on the entry is rethrown to the caller. Retrying an entry that already exhausted
 its retries and failing again logs a WARN; `streamrune.dlq.exhausted` and the terminal ERROR fire
 only once, when the entry first runs out of retries. The background loop is controlled with

@@ -56,7 +56,10 @@ import org.streamrune.core.types.GlobalOffset;
  * {@code null}, even when the event was appended by a saga's dispatch. A command the listener
  * executes is therefore not a saga dispatch and its events carry no saga origin, exactly as when
  * the same event reaches the listener through {@link #poll()}. When the appending thread has
- * nothing bound, nothing is bound for the listener either.
+ * nothing bound, nothing is bound for the listener either. A listener that continues an event's
+ * flow says so, as it does in production: it dispatches inside {@link
+ * StreamRuneContext#continuing(EventEnvelope)}, and the events of that command carry the event's id
+ * as their causation id and its saga origin one hop further.
  *
  * <p>Two differences from a production subscription remain, both because the listener shares the
  * appender's thread:

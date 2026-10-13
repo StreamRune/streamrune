@@ -80,11 +80,17 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * <p><b>Baggage allowlisting:</b> OpenTelemetry baggage is populated from the client-supplied,
  * unauthenticated W3C {@code baggage:} HTTP header, and every baggage entry ends up in every
  * produced event's immutable, plaintext {@code event_stream.metadata}. To prevent a caller from
- * smuggling arbitrary PII permanently into the event log, only {@link
- * BaggageAllowlist#DEFAULT_ALLOWED_KEYS} (the causation-id key) plus any keys configured via {@code
+ * smuggling arbitrary PII permanently into the event log, only the keys configured via {@code
  * streamrune.metadata.baggage-allowlist} are copied into the request context — see {@link
- * #ScopedValueFilter(Set)}. Non-allowlisted keys are dropped here, before they ever reach {@code
- * RequestContext} or {@code EventMetadata}; {@code role} is the role rule's alone (above).
+ * #ScopedValueFilter(Set)}; with none configured no baggage entry is ({@link
+ * BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty). Non-allowlisted keys are dropped here, before
+ * they ever reach {@code RequestContext} or {@code EventMetadata}; {@code role} is the role rule's
+ * alone (above).
+ *
+ * <p><b>What a request cannot set.</b> This filter binds a request context and nothing else. It
+ * does not bind {@link StreamRuneContext#CAUSE}, so no header and no baggage entry, allowlisted or
+ * not, reaches the saga origin or the causation id of an event: the command bus takes both from
+ * that binding alone.
  */
 public class ScopedValueFilter implements Filter {
 
@@ -95,18 +101,18 @@ public class ScopedValueFilter implements Filter {
   private final UserRoleResolver userRoleResolver;
 
   /**
-   * Creates a filter with no additional allowlisted baggage keys beyond the framework defaults. See
-   * {@link #ScopedValueFilter(Set)} for what it does not wire.
+   * Creates a filter that allowlists no baggage key. See {@link #ScopedValueFilter(Set)} for what
+   * it does not wire.
    */
   public ScopedValueFilter() {
     this(Set.of());
   }
 
   /**
-   * Creates a filter that additionally allowlists {@code extraAllowedBaggageKeys} baggage keys, on
-   * top of the framework defaults ({@link BaggageAllowlist#DEFAULT_ALLOWED_KEYS}). Its identity
-   * policy is {@link RequestIdentityPolicy.Mode#ANONYMOUS} — every request runs without a user or a
-   * role, and the {@code X-User-Id} and {@code X-User-Role} headers are ignored — and no {@link
+   * Creates a filter that allowlists the {@code extraAllowedBaggageKeys} baggage keys (the
+   * framework's own {@link BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty). Its identity policy is
+   * {@link RequestIdentityPolicy.Mode#ANONYMOUS} — every request runs without a user or a role, and
+   * the {@code X-User-Id} and {@code X-User-Role} headers are ignored — and no {@link
    * UserRoleResolver} is wired, so no authority is captured at the request edge. The
    * auto-configuration uses {@link #ScopedValueFilter(Set, RequestIdentityPolicy,
    * UserRoleResolver)}.

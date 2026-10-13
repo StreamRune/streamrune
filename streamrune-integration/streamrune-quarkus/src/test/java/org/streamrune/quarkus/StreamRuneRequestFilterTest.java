@@ -1,27 +1,49 @@
 package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.core.MultivaluedHashMap;
+import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.ext.Provider;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestFactory;
 import org.mockito.ArgumentCaptor;
 import org.streamrune.core.StreamRuneContext;
+import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.integration.AuthenticatedUserResolver;
 import org.streamrune.integration.RequestIdentityPolicy;
+import org.streamrune.runtime.LocalStripedLocker;
+import org.streamrune.runtime.VirtualThreadCommandBus;
+import org.streamrune.test.CommandBusProvenanceContract;
+import org.streamrune.test.InMemoryEventStore;
 
 /** Tests for {@link StreamRuneRequestFilter}. */
 class StreamRuneRequestFilterTest {
+
+  /** A W3C baggage key a client may send to name a causing event; the framework reads none. */
+  private static final String CAUSATION_KEY = "streamrune.causation-id";
+
+  /** A W3C baggage key a client may send to name a saga; the framework reads none. */
+  private static final String ORIGIN_KEY = "sagaOrigin";
 
   private static Function<String, String> headers(Map<String, String> values) {
     return values::get;
@@ -351,12 +373,11 @@ class StreamRuneRequestFilterTest {
 
   @Test
   void onlyAllowlistedKeysSurvive_defaultAllowlistDropsPiiAndTracking() {
-    // Scenario from the GDPR hardening spec: causationId + role survive, email/tracking dropped.
-    // The
-    // role is the X-User-Role header, so the filter runs behind a trusted gateway.
+    // The gateway's role survives; every W3C baggage entry is dropped, a causation entry included.
+    // The role is the X-User-Role header, so the filter runs behind a trusted gateway.
     io.opentelemetry.api.baggage.Baggage baggage =
         io.opentelemetry.api.baggage.Baggage.builder()
-            .put(org.streamrune.core.BaggageAllowlist.CAUSATION_ID_BAGGAGE_KEY, "evt-1")
+            .put(CAUSATION_KEY, "evt-1")
             .put("email", "pii@example.com")
             .put("tracking", "leak")
             .build();
@@ -368,9 +389,8 @@ class StreamRuneRequestFilterTest {
       ctx = boundBy(GATEWAY, Set.of(), "admin");
     }
 
-    assertEquals(
-        "evt-1", ctx.baggage().get(org.streamrune.core.BaggageAllowlist.CAUSATION_ID_BAGGAGE_KEY));
-    assertEquals("admin", ctx.baggage().get("role"));
+    assertEquals(Map.of("role", "admin"), ctx.baggage());
+    assertFalse(ctx.baggage().containsKey(CAUSATION_KEY), "no baggage key is kept by default");
     assertFalse(ctx.baggage().containsKey("email"));
     assertFalse(ctx.baggage().containsKey("tracking"));
   }
@@ -379,7 +399,7 @@ class StreamRuneRequestFilterTest {
   void configuredAllowlistKeepsTrackingButStillDropsEmail() {
     io.opentelemetry.api.baggage.Baggage baggage =
         io.opentelemetry.api.baggage.Baggage.builder()
-            .put(org.streamrune.core.BaggageAllowlist.CAUSATION_ID_BAGGAGE_KEY, "evt-1")
+            .put(CAUSATION_KEY, "evt-1")
             .put("email", "pii@example.com")
             .put("tracking", "leak")
             .build();
@@ -391,30 +411,149 @@ class StreamRuneRequestFilterTest {
       ctx = boundBy(GATEWAY, Set.of("tracking"), "admin");
     }
 
-    assertEquals(
-        "evt-1", ctx.baggage().get(org.streamrune.core.BaggageAllowlist.CAUSATION_ID_BAGGAGE_KEY));
+    assertFalse(ctx.baggage().containsKey(CAUSATION_KEY), "only the configured key is kept");
     assertEquals("admin", ctx.baggage().get("role"));
     assertEquals("leak", ctx.baggage().get("tracking"));
     assertFalse(ctx.baggage().containsKey("email"));
   }
 
   @Test
-  void causationIdSurvivesAllowlistAndPropagatesUnfiltered() {
+  void aCausationBaggageEntryIsDroppedUnlessTheApplicationAllowlistsIt() {
     io.opentelemetry.api.baggage.Baggage baggage =
-        io.opentelemetry.api.baggage.Baggage.builder()
-            .put(org.streamrune.core.BaggageAllowlist.CAUSATION_ID_BAGGAGE_KEY, "evt-trigger-1")
-            .build();
+        io.opentelemetry.api.baggage.Baggage.builder().put(CAUSATION_KEY, "evt-trigger-1").build();
     io.opentelemetry.context.Context otelCtx =
         io.opentelemetry.context.Context.current().with(baggage);
 
-    StreamRuneContext.RequestContext ctx;
     try (var _ = otelCtx.makeCurrent()) {
-      ctx = StreamRuneRequestFilter.buildContext(headers(Map.of()));
+      assertFalse(
+          StreamRuneRequestFilter.buildContext(headers(Map.of()))
+              .baggage()
+              .containsKey(CAUSATION_KEY),
+          "the default allowlist is empty");
+      // Allowlisted, it is an ordinary baggage entry; nothing reads it as a causation id.
+      assertEquals(
+          "evt-trigger-1",
+          StreamRuneRequestFilter.buildContext(headers(Map.of()), Set.of(CAUSATION_KEY))
+              .baggage()
+              .get(CAUSATION_KEY));
+    }
+  }
+
+  // ==== No header reaches an event's saga origin or causation id ====
+
+  /**
+   * In every identity mode, a request that carries every header a client can send — a correlation
+   * id (a random one, and the id of somebody else's saga), a trace id, a user, a role, invented
+   * provenance headers and W3C baggage naming a causing event and a saga — runs a command on the
+   * production bus, and the stored events carry no saga origin and no causation id. Run with the
+   * baggage keys dropped (the default) and allowlisted.
+   */
+  @TestFactory
+  Stream<DynamicTest> noHeaderSetsAnOriginOrACausationId() {
+    Map<String, RequestIdentityPolicy> modes = new LinkedHashMap<>();
+    modes.put(
+        "authenticated principal",
+        RequestIdentityPolicy.of(() -> Optional.of(UserId.of("bob")), false));
+    modes.put("trusted gateway", RequestIdentityPolicy.of(null, true));
+    modes.put("anonymous", RequestIdentityPolicy.of(null, false));
+
+    List<DynamicTest> tests = new ArrayList<>();
+    for (var mode : modes.entrySet()) {
+      for (String correlationId : List.of(UUID.randomUUID().toString(), "order-saga-42")) {
+        for (Set<String> allowlist : List.of(Set.<String>of(), Set.of(CAUSATION_KEY, ORIGIN_KEY))) {
+          tests.add(
+              DynamicTest.dynamicTest(
+                  mode.getKey()
+                      + ", X-Correlation-Id="
+                      + correlationId
+                      + ", allowlist="
+                      + allowlist,
+                  () ->
+                      assertNoHeaderSetsProvenance(
+                          mode.getKey(), mode.getValue(), correlationId, allowlist)));
+        }
+      }
+    }
+    return tests.stream();
+  }
+
+  private static void assertNoHeaderSetsProvenance(
+      String mode, RequestIdentityPolicy policy, String correlationId, Set<String> allowlist) {
+    MultivaluedMap<String, String> headers = new MultivaluedHashMap<>();
+    headers.add("X-Correlation-Id", correlationId);
+    headers.add("X-Trace-Id", "trace-1");
+    headers.add("X-User-Id", "mallory");
+    headers.add("X-User-Role", "ADMIN");
+    headers.add("X-Causation-Id", "evt-1");
+    headers.add("X-Saga-Origin", "{\"sagaType\":\"x.S\",\"sagaId\":\"order-saga-42\",\"hop\":0}");
+    ContainerRequestContext rc = mock(ContainerRequestContext.class);
+    when(rc.getHeaders()).thenReturn(headers);
+    when(rc.getHeaderString(anyString()))
+        .thenAnswer(invocation -> headers.getFirst(invocation.getArgument(0)));
+    io.opentelemetry.context.Context otelCtx =
+        io.opentelemetry.context.Context.current()
+            .with(
+                io.opentelemetry.api.baggage.Baggage.builder()
+                    .put(CAUSATION_KEY, "evt-1")
+                    .put(ORIGIN_KEY, "order-saga-42")
+                    .build());
+
+    var holder = new StreamRuneRequestContextHolder();
+    var eventStore = new InMemoryEventStore();
+    try (var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(eventStore)
+            .locker(new LocalStripedLocker(16))
+            .register(
+                CommandBusProvenanceContract.AGGREGATE_TYPE,
+                CommandBusProvenanceContract.Mark.class,
+                CommandBusProvenanceContract::aggregateIdOf,
+                CommandBusProvenanceContract.DECIDER)
+            .build()) {
+      try (var _ = otelCtx.makeCurrent()) {
+        new StreamRuneRequestFilter(holder, allowlist, policy, null).filter(rc);
+      }
+      // The resource method: it binds what the filter stored and executes its command.
+      StreamRuneRequestFilter.withContext(
+          holder.context(),
+          () -> {
+            assertNull(StreamRuneContext.cause(), "a request filter binds no dispatch cause");
+            assertFalse(StreamRuneContext.isSagaDispatch());
+            bus.execute(new CommandBusProvenanceContract.Mark("marked-1"));
+          });
     }
 
-    assertEquals(
-        "evt-trigger-1",
-        ctx.baggage().get(org.streamrune.core.BaggageAllowlist.CAUSATION_ID_BAGGAGE_KEY));
+    var stored =
+        eventStore
+            .load(
+                StreamId.of(
+                    CommandBusProvenanceContract.AGGREGATE_TYPE, AggregateId.of("marked-1")))
+            .events();
+    assertEquals(2, stored.size());
+    for (var envelope : stored) {
+      var metadata = envelope.metadata();
+      assertNull(metadata.sagaOrigin());
+      assertNull(metadata.causationId());
+      // The request's own values did arrive: what a client may set, it sets.
+      assertEquals(correlationId, metadata.correlationId().value());
+      assertEquals("trace-1", metadata.traceId().value());
+      switch (mode) {
+        case "authenticated principal" -> assertEquals("bob", metadata.userId().value());
+        case "trusted gateway" -> {
+          assertEquals("mallory", metadata.userId().value());
+          assertEquals("ADMIN", metadata.baggage().get("role"));
+        }
+        default -> assertNull(metadata.userId());
+      }
+      if (allowlist.isEmpty()) {
+        assertFalse(metadata.baggage().containsKey(CAUSATION_KEY));
+        assertFalse(metadata.baggage().containsKey(ORIGIN_KEY));
+      } else {
+        // Allowlisted, both are ordinary baggage entries and still decide nothing.
+        assertEquals("evt-1", metadata.baggage().get(CAUSATION_KEY));
+        assertEquals("order-saga-42", metadata.baggage().get(ORIGIN_KEY));
+      }
+    }
   }
 
   /**

@@ -43,22 +43,17 @@ import org.streamrune.core.types.Version;
  * <p>Event metadata follows the same topology as {@code VirtualThreadCommandBus}: all events of one
  * command share a single correlation id (taken from {@link StreamRuneContext} when bound, generated
  * otherwise), the saga origin and the causation id come from the bound {@link
- * StreamRuneContext#CAUSE} (with none bound, the causation id comes from the {@link
- * #CAUSATION_ID_BAGGAGE_KEY} baggage entry and there is no origin), and envelope versions match
- * what the store persists.
+ * StreamRuneContext#CAUSE} and from nowhere else (with none bound an event carries neither), and
+ * envelope versions match what the store persists.
+ *
+ * <p>This bus has no dead letter queue, so a failed command propagates to its caller and nothing
+ * else happens — for a command that carries a saga origin exactly what {@code
+ * VirtualThreadCommandBus} does, which publishes such a command to no dead letter queue.
  *
  * <p><strong>Note: This class is not thread-safe.</strong> Do not share a single instance across
  * threads. Use a separate {@link InMemoryCommandBus} per test thread.
  */
 public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
-
-  /**
-   * Baggage key carrying the id of the message that caused the current command; read only when no
-   * {@link StreamRuneContext#CAUSE} is bound. Mirrors {@code
-   * VirtualThreadCommandBus.CAUSATION_ID_BAGGAGE_KEY} (streamrune-runtime, which this module does
-   * not depend on) — the two values must stay identical.
-   */
-  public static final String CAUSATION_ID_BAGGAGE_KEY = "streamrune.causation-id";
 
   /**
    * Binds a command type to its decider, its aggregate type and its aggregate ID extractor.
@@ -250,21 +245,18 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
 
   /**
    * Builds event metadata with the same topology as {@code VirtualThreadCommandBus}: one
-   * correlation id per command (from {@link StreamRuneContext} when bound); the saga origin from
-   * the bound {@link StreamRuneContext#CAUSE} and from nowhere else; the causation id from that
-   * cause when one is bound, otherwise from the {@link #CAUSATION_ID_BAGGAGE_KEY} baggage entry
-   * (events are causation roots without it) — never the command's own id, which lives in {@link
+   * correlation id per command (from {@link StreamRuneContext} when bound); the saga origin and the
+   * causation id from the bound {@link StreamRuneContext#CAUSE} and from nowhere else (with no
+   * cause bound the event is a causation root) — never the command's own id, which lives in {@link
    * EventMetadata#commandId()}.
    */
   private static EventMetadata buildMetadata(CommandId commandId, CorrelationId correlationId) {
     EventId eventId = IdGenerator.generateEventId();
     StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
     SagaOrigin origin = cause == null ? null : cause.sagaOrigin();
+    CausationId causation = cause == null ? null : cause.causationId();
     if (StreamRuneContext.CURRENT.isBound()) {
       StreamRuneContext.RequestContext ctx = StreamRuneContext.CURRENT.get();
-      // A bound cause decides the causation id, a null one included; the baggage entry is read
-      // only with no cause bound.
-      CausationId causation = cause != null ? cause.causationId() : causationIdFrom(ctx);
       return new EventMetadata(
           eventId,
           commandId,
@@ -283,19 +275,11 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
         null,
         null,
         correlationId,
-        cause == null ? null : cause.causationId(),
+        causation,
         null,
         Instant.now(),
         null,
         origin);
-  }
-
-  private static CausationId causationIdFrom(StreamRuneContext.RequestContext ctx) {
-    String causingMessageId = ctx.baggage().get(CAUSATION_ID_BAGGAGE_KEY);
-    if (causingMessageId == null || causingMessageId.isBlank()) {
-      return null;
-    }
-    return CausationId.of(causingMessageId);
   }
 
   @Override

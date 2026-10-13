@@ -9,52 +9,74 @@ import org.junit.jupiter.api.Test;
 /** Tests for {@link BaggageAllowlist}. */
 class BaggageAllowlistTest {
 
-  private static final String CAUSATION = BaggageAllowlist.CAUSATION_ID_BAGGAGE_KEY;
+  /** A key an application allow-lists; the framework gives it no meaning. */
+  private static final String TENANT = "tenant";
+
+  /**
+   * A baggage key by which a client claims to name the event that caused its command. It is an
+   * ordinary key: not allow-listed by default, and read by nothing when an application allows it.
+   */
+  private static final String CAUSATION = "streamrune.causation-id";
 
   @Test
-  void defaultAllowlistIsTheCausationIdOnly() {
-    // `role` is not a default key. The request context's role is set by the request
+  void theDefaultAllowListIsEmpty() {
+    // `role` is not a default key either. The request context's role is set by the request
     // filters' role rule (the X-User-Role header, behind a trusted gateway only), never by a
     // client's W3C `baggage: role=` entry.
-    assertEquals(Set.of(CAUSATION), BaggageAllowlist.DEFAULT_ALLOWED_KEYS);
+    assertEquals(Set.of(), BaggageAllowlist.DEFAULT_ALLOWED_KEYS);
     assertEquals("role", BaggageAllowlist.ROLE_BAGGAGE_KEY);
   }
 
   @Test
-  void causationIdKeyMatchesRuntimeConstant() {
-    // Must stay in lockstep with VirtualThreadCommandBus.CAUSATION_ID_BAGGAGE_KEY /
-    // InMemoryCommandBus.CAUSATION_ID_BAGGAGE_KEY, which streamrune-core cannot depend on.
-    assertEquals("streamrune.causation-id", BaggageAllowlist.CAUSATION_ID_BAGGAGE_KEY);
+  void withNoKeyAllowedEveryEntryIsDropped() {
+    var raw =
+        Map.of(CAUSATION, "evt-1", "role", "admin", "email", "pii@example.com", "tracking", "leak");
+
+    assertEquals(Map.of(), BaggageAllowlist.filter(raw, Set.of()));
+    assertEquals(Map.of(), BaggageAllowlist.filter(raw, null));
   }
 
   @Test
-  void filtersOutNonAllowlistedKeysByDefault() {
-    var raw =
-        Map.of(
-            BaggageAllowlist.CAUSATION_ID_BAGGAGE_KEY,
-            "x",
-            "role",
-            "admin",
-            "email",
-            "pii@example.com",
-            "tracking",
-            "leak");
+  void aCausationEntryIsDroppedUnlessTheApplicationAllowsIt() {
+    var raw = Map.of(CAUSATION, "evt-1", TENANT, "acme");
 
-    var filtered = BaggageAllowlist.filter(raw, Set.of());
+    assertFalse(BaggageAllowlist.filter(raw, Set.of()).containsKey(CAUSATION));
+    assertFalse(BaggageAllowlist.filter(raw, Set.of(TENANT)).containsKey(CAUSATION));
+    assertEquals("evt-1", BaggageAllowlist.filter(raw, Set.of(CAUSATION)).get(CAUSATION));
+  }
 
-    assertEquals(Map.of(CAUSATION, "x"), filtered);
-    assertFalse(filtered.containsKey("role"), "a client's W3C role entry is not a default key");
-    assertFalse(filtered.containsKey("email"));
-    assertFalse(filtered.containsKey("tracking"));
+  @Test
+  void anAllowedCausationEntryIsOrdinaryBaggage() {
+    // Allowed, it is kept like any other key and goes through the same value policy; nothing in
+    // the request context treats it as a causation id.
+    var allowed = Set.of(CAUSATION, TENANT);
+
+    var filtered = BaggageAllowlist.filter(Map.of(CAUSATION, "evt\r\n-1", TENANT, "acme"), allowed);
+    assertEquals(Map.of(CAUSATION, "evt-1", TENANT, "acme"), filtered);
+
+    var oversized = "x".repeat(BaggageAllowlist.MAX_VALUE_LENGTH + 1);
+    assertFalse(
+        BaggageAllowlist.filter(Map.of(CAUSATION, oversized), allowed).containsKey(CAUSATION));
+
+    var context =
+        new StreamRuneContext.RequestContext(
+            null,
+            null,
+            org.streamrune.core.types.CorrelationId.of("corr-1"),
+            java.time.Instant.now(),
+            filtered);
+    assertEquals("evt-1", context.baggage().get(CAUSATION));
+    ScopedValue.where(StreamRuneContext.CURRENT, context)
+        .run(() -> assertNull(StreamRuneContext.cause(), "baggage binds no dispatch cause"));
   }
 
   @Test
   void additionalAllowedKeysAreKept() {
-    var raw = Map.of(CAUSATION, "admin", "email", "pii@example.com", "tracking", "leak");
+    var raw = Map.of(TENANT, "acme", "email", "pii@example.com", "tracking", "leak");
 
-    var filtered = BaggageAllowlist.filter(raw, Set.of("tracking"));
+    var filtered = BaggageAllowlist.filter(raw, Set.of(TENANT, "tracking"));
 
-    assertEquals("admin", filtered.get(CAUSATION));
+    assertEquals("acme", filtered.get(TENANT));
     assertEquals("leak", filtered.get("tracking"));
     assertFalse(filtered.containsKey("email"));
   }
@@ -62,18 +84,18 @@ class BaggageAllowlistTest {
   @Test
   void emptyRawBaggageReturnsEmptyMap() {
     assertTrue(BaggageAllowlist.filter(Map.of(), Set.of("tracking")).isEmpty());
+    assertTrue(BaggageAllowlist.filter(null, Set.of("tracking")).isEmpty());
   }
 
   @Test
   void nullExtraAllowedKeysTreatedAsEmpty() {
-    var raw = Map.of(CAUSATION, "admin", "email", "leak");
-    var filtered = BaggageAllowlist.filter(raw, null);
-    assertEquals(Map.of(CAUSATION, "admin"), filtered);
+    var raw = Map.of(TENANT, "acme", "email", "leak");
+    assertEquals(Map.of(), BaggageAllowlist.filter(raw, null));
   }
 
   @Test
   void resultIsImmutable() {
-    var filtered = BaggageAllowlist.filter(Map.of(CAUSATION, "admin"), Set.of());
+    var filtered = BaggageAllowlist.filter(Map.of(TENANT, "acme"), Set.of(TENANT));
     assertThrows(UnsupportedOperationException.class, () -> filtered.put("x", "y"));
   }
 
@@ -81,54 +103,54 @@ class BaggageAllowlistTest {
 
   @Test
   void anOversizedValueUnderAnAllowlistedKeyIsDropped() {
-    // A default-allowlisted key (`role` used to be one) let an unauthenticated caller send
-    // `baggage: role=<8 KB of a victim's medical notes>` and have its payload copied verbatim into
-    // the append-only, plaintext event_stream.metadata of every event the request produced —
-    // outside crypto-shredding's reach and with no API to rewrite or delete it. Article-17 erasure
-    // cannot remove it. The causation id is the default key now; the policy is the same.
+    // An allow-listed key lets an unauthenticated caller send
+    // `baggage: tenant=<8 KB of a victim's medical notes>` and, without a value policy, have the
+    // payload copied verbatim into the append-only, plaintext event_stream.metadata of every event
+    // the request produced — outside crypto-shredding's reach and with no API to rewrite or delete
+    // it. Article-17 erasure cannot remove it.
     var smuggled = "x".repeat(BaggageAllowlist.MAX_VALUE_LENGTH + 1);
 
-    var filtered = BaggageAllowlist.filter(Map.of(CAUSATION, smuggled), Set.of());
+    var filtered = BaggageAllowlist.filter(Map.of(TENANT, smuggled), Set.of(TENANT));
 
     assertFalse(
-        filtered.containsKey(CAUSATION),
+        filtered.containsKey(TENANT),
         "an over-cap value is dropped, not truncated — a truncated PII string is still PII");
   }
 
   @Test
   void aValueExactlyAtTheCapIsKept() {
     var atCap = "r".repeat(BaggageAllowlist.MAX_VALUE_LENGTH);
-    assertEquals(atCap, BaggageAllowlist.filter(Map.of(CAUSATION, atCap), Set.of()).get(CAUSATION));
+    assertEquals(atCap, BaggageAllowlist.filter(Map.of(TENANT, atCap), Set.of(TENANT)).get(TENANT));
   }
 
   @Test
   void controlCharactersAreStrippedFromRetainedValues() {
     // A NUL breaks the jsonb write outright; CR/LF forge log lines and JSON payload boundaries.
-    var filtered = BaggageAllowlist.filter(Map.of(CAUSATION, "admin\r\nX-Injected: 1"), Set.of());
+    var filtered =
+        BaggageAllowlist.filter(Map.of(TENANT, "admin\r\nX-Injected: 1"), Set.of(TENANT));
 
-    assertEquals("adminX-Injected: 1", filtered.get(CAUSATION));
+    assertEquals("adminX-Injected: 1", filtered.get(TENANT));
     assertTrue(
-        filtered.get(CAUSATION).chars().noneMatch(Character::isISOControl),
+        filtered.get(TENANT).chars().noneMatch(Character::isISOControl),
         "no control character may reach event metadata");
   }
 
   @Test
   void aValueThatIsOnlyControlCharactersIsDropped() {
     assertFalse(
-        BaggageAllowlist.filter(Map.of(CAUSATION, "\r\n\t"), Set.of()).containsKey(CAUSATION));
+        BaggageAllowlist.filter(Map.of(TENANT, "\r\n\t"), Set.of(TENANT)).containsKey(TENANT));
   }
 
   @Test
-  void theValuePolicyAppliesToConfiguredExtraKeysToo() {
-    var raw =
-        Map.of("tracking", "y".repeat(BaggageAllowlist.MAX_VALUE_LENGTH + 1), CAUSATION, "admin");
+  void theValuePolicyAppliesToEveryConfiguredKey() {
+    var raw = Map.of("tracking", "y".repeat(BaggageAllowlist.MAX_VALUE_LENGTH + 1), TENANT, "acme");
 
-    var filtered = BaggageAllowlist.filter(raw, Set.of("tracking"));
+    var filtered = BaggageAllowlist.filter(raw, Set.of("tracking", TENANT));
 
     assertFalse(
         filtered.containsKey("tracking"),
         "opting a key into the allowlist opts it into the value policy, not out of it");
-    assertEquals("admin", filtered.get(CAUSATION));
+    assertEquals("acme", filtered.get(TENANT));
   }
 
   @Test

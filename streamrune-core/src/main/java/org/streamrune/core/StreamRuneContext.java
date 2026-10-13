@@ -55,9 +55,9 @@ public final class StreamRuneContext {
    * What caused the command dispatch in progress: the causing event, the saga origin, or both.
    *
    * <p>The command bus copies both parts into the metadata of every event the command produces:
-   * {@link EventMetadata#causationId()} and {@link EventMetadata#sagaOrigin()}. A request context
-   * has no saga origin component, so nothing a request carries reaches {@link
-   * EventMetadata#sagaOrigin()}.
+   * {@link EventMetadata#causationId()} and {@link EventMetadata#sagaOrigin()}, and takes neither
+   * from anywhere else. A request context has no component for either, and the bus reads no baggage
+   * entry into a metadata field, so nothing a request carries reaches them.
    *
    * @param causationId the id of the event the dispatch reacts to, or {@code null} when it reacts
    *     to none
@@ -74,13 +74,16 @@ public final class StreamRuneContext {
   }
 
   /**
-   * The cause of the command dispatch in progress on this thread. Saga dispatch binds it around
-   * every command a saga sends ({@code SagaCommandDispatch}); {@code
-   * VirtualThreadCommandBus.executeAsync} and {@link #wrap(Runnable)} / {@link #wrap(Callable)}
-   * carry it onto another thread. Unbound for a command a request, a background job or a
-   * dead-letter replay dispatches: the events of such a command carry no saga origin.
+   * The cause of the command dispatch in progress on this thread. It has two binders: saga
+   * dispatch, around every command a saga sends ({@code SagaCommandDispatch}), and {@link
+   * #continuing(EventEnvelope)}, around the commands a listener dispatches in reaction to an event.
+   * {@code VirtualThreadCommandBus.executeAsync} and {@link #wrap(Runnable)} / {@link
+   * #wrap(Callable)} carry it onto another thread. Unbound for a command a request, a background
+   * job or a dead-letter replay dispatches: the events of such a command carry no saga origin and
+   * no causation id.
    *
-   * <p>Application code reads it through {@link #cause()} and does not bind it.
+   * <p>Application code reads it through {@link #cause()} and binds it only through {@link
+   * #continuing(EventEnvelope)}.
    */
   public static final ScopedValue<DispatchCause> CAUSE = ScopedValue.newInstance();
 
@@ -92,6 +95,72 @@ public final class StreamRuneContext {
    */
   public static DispatchCause cause() {
     return CAUSE.isBound() ? CAUSE.get() : null;
+  }
+
+  /**
+   * Bindings for commands dispatched in reaction to {@code cause}, an event read from the store. A
+   * listener that reacts to an event by sending a command (a process manager) runs the dispatch
+   * inside them:
+   *
+   * <pre>{@code
+   * StreamRuneContext.continuing(event).run(() -> commandBus.execute(command, key));
+   * }</pre>
+   *
+   * <p><b>What the command inherits from the event.</b> The command bus writes four values of the
+   * causing event into the metadata of every event the command produces:
+   *
+   * <ul>
+   *   <li>the correlation id and the trace id, unchanged: one business flow keeps one correlation
+   *       id and one trace;
+   *   <li>the causing event's id, as the causation id ({@link EventMetadata#causationId()});
+   *   <li>the causing event's saga origin, one hop further ({@link SagaOrigin#nextHop()}), or no
+   *       origin when the causing event carries none.
+   * </ul>
+   *
+   * <p><b>What it does not inherit.</b> A continuation runs like any command dispatched from a
+   * background thread with no user. The bound request context has no user, no captured authority
+   * and empty baggage, whatever the causing event's metadata and the calling thread's own context
+   * hold: the user who caused the first event did not issue this command, and a baggage {@code
+   * role} is authority too. {@link #SAGA_OWNED} is bound to {@code FALSE}, so {@link
+   * #isSagaDispatch()} is {@code false} even when the listener runs on the thread of a saga's
+   * dispatch, and no authorization interceptor treats the command as the system's. A saga origin
+   * states who caused an event; it grants nothing. An application whose continuation must pass an
+   * authorization gate decides that in its own policy, which can read {@link #cause()}.
+   *
+   * <p><b>A failure belongs to the caller.</b> Let a failed dispatch propagate out of the listener,
+   * so that its subscription delivers the causing event again. While the bound cause carries a saga
+   * origin, {@code VirtualThreadCommandBus} publishes a failed command to no dead letter queue: a
+   * dead-letter entry cannot hold the origin, and its replay would store the command's events
+   * without one. Redelivery is then the only way the command runs again, and a listener that
+   * swallows the failure loses the command. A failed continuation of an event without an origin is
+   * published to the dead letter queue like any other command; its replay stores events with no
+   * causation id.
+   *
+   * <p><b>Reruns.</b> Everything bound here except the context's timestamp is a function of the
+   * stored event, so a redelivery of that event binds the same saga origin and causation id. Give
+   * the command an idempotency key derived from the causing event: a redelivery after the command
+   * committed is then answered from the command inbox and stores no second event. Without a key
+   * each redelivery stores the command's events again, each with the same origin.
+   *
+   * @param cause the event the dispatched commands react to, as read from the event store
+   *     (required)
+   * @return the bindings to run the dispatch in
+   * @throws NullPointerException if {@code cause} is {@code null}
+   */
+  public static ScopedValue.Carrier continuing(EventEnvelope cause) {
+    Objects.requireNonNull(cause, "cause is required");
+    EventMetadata metadata = cause.metadata();
+    SagaOrigin origin = metadata.sagaOrigin();
+    RequestContext context =
+        new RequestContext(
+            metadata.traceId(), null, metadata.correlationId(), Instant.now(), Map.of(), null);
+    return ScopedValue.where(CURRENT, context)
+        .where(SAGA_OWNED, Boolean.FALSE)
+        .where(
+            CAUSE,
+            new DispatchCause(
+                CausationId.of(metadata.eventId().value()),
+                origin == null ? null : origin.nextHop()));
   }
 
   /**

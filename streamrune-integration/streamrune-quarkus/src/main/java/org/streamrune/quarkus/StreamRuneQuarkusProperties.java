@@ -445,13 +445,13 @@ public interface StreamRuneQuarkusProperties {
   interface MetadataConfig {
 
     /**
-     * Additional OpenTelemetry baggage keys (beyond the framework-meaningful default — the
-     * causation-id key) permitted to flow from client-supplied, unauthenticated {@code baggage:}
-     * header entries into {@code RequestContext}/{@code EventMetadata} baggage, and from there into
-     * the immutable, plaintext {@code event_stream.metadata} column. Every other baggage key is
-     * dropped at the request filter. Listing {@code role} has no effect: that key is the {@code
-     * X-User-Role} header in the trusted-gateway mode, and nothing else. Comma-separated, e.g.
-     * {@code streamrune.metadata.baggage-allowlist=tenant,region}. {@code Optional} (no
+     * The OpenTelemetry baggage keys (the framework allows none by default) permitted to flow from
+     * client-supplied, unauthenticated {@code baggage:} header entries into {@code
+     * RequestContext}/{@code EventMetadata} baggage, and from there into the immutable, plaintext
+     * {@code event_stream.metadata} column. Every other baggage key is dropped at the request
+     * filter. Listing {@code role} has no effect: that key is the {@code X-User-Role} header in the
+     * trusted-gateway mode, and nothing else. Comma-separated, e.g. {@code
+     * streamrune.metadata.baggage-allowlist=tenant,region}. {@code Optional} (no
      * {@code @WithDefault}) rather than defaulting to an empty string: SmallRye's collection
      * converter treats an empty-string default for a {@code List} property as invalid, not as an
      * empty list.

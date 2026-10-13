@@ -149,9 +149,19 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - `EventMetadata` on every envelope: `eventId`, `commandId`, `traceId`, `spanId`, `correlationId`,
   `causationId`, `userId`, `timestamp`, allow-listed W3C baggage and `sagaOrigin`, built by the
   command bus from the bound `StreamRuneContext`. `sagaOrigin` (`SagaOrigin`: saga type, saga id,
-  hop) names the saga whose dispatch caused the event and is `null` on every other event; the bus
-  copies it from the dispatch cause that saga dispatch binds (`StreamRuneContext.CAUSE`), never from
-  a request header or a baggage entry.
+  hop) names the saga whose dispatch caused the event and is `null` on every other event;
+  `causationId` names the event the command reacted to and is `null` on a causation root. The bus
+  copies both from the dispatch cause (`StreamRuneContext.CAUSE`) that saga dispatch and
+  `StreamRuneContext.continuing` bind, never from a request header or a baggage entry.
+- `StreamRuneContext.continuing(EventEnvelope)` returns the bindings for commands a listener
+  dispatches in reaction to a stored event (a process manager):
+  `StreamRuneContext.continuing(event).run(() -> commandBus.execute(command, key))`. The events of
+  such a command carry the causing event's id as `causationId`, its correlation and trace ids, and
+  its saga origin one hop further (`SagaOrigin.nextHop()`), or no origin when the causing event has
+  none. A continuation runs with no user, no captured authority, no baggage and without the saga
+  privileges (`StreamRuneContext.isSagaDispatch()` is `false`). A failed command that carries a saga
+  origin is not dead-lettered: the listener lets the failure propagate and its subscription delivers
+  the event again.
 - `PgAdvisoryLocker` — distributed per-stream pessimistic locking via `pg_advisory_xact_lock` over the
   typed stream, with `withDedicatedPool(...)` so lock connections never starve the application pool.
 - Typed identifiers: `StreamId`, `AggregateType`, `AggregateId`, `Version`, `GlobalOffset`, `EventId`,
@@ -238,7 +248,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   (sealed roots expand to every permitted class), refuses to replay an entry whose `@Encrypted`
   fields read `[REDACTED]`, is leadership-gated, and offers an on-demand `retry(CommandId)` that runs
   on its own virtual thread with the context recorded on the entry, never the operator's identity,
-  correlation, baggage or saga marker. `DeadLetterRetentionSweeper` prunes after
+  correlation, baggage, saga marker or dispatch cause. A replay restores user, correlation id and
+  trace id and never a saga origin or a causation id; a command that carries a saga origin (a
+  saga's own dispatch, or a `StreamRuneContext.continuing` reaction to an event a saga caused) is
+  not dead-lettered, its caller retries it. `DeadLetterRetentionSweeper` prunes after
   `streamrune.dead-letter.retention-max-age` (default 30 days; zero or negative disables pruning) and
   is registered for any `DeadLetterQueue` bean; `streamrune.dead-letter.enabled=false` switches off
   only the automatic retry runner.
@@ -692,9 +705,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `false` while a subscriber is registered; a publisher subclass that keeps subscribers of its own
   overrides it under that contract. The feed relies on `EventStore.lastGlobalOffset()` naming a
   head below which no event becomes readable later.
-- Only allow-listed OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist`) reach event
-  metadata. `LogSanitizer` strips control characters from every value the framework logs or persists
-  as free text.
+- Only allow-listed OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist`; the default
+  list is empty) reach event metadata, as plain entries: no baggage key sets a metadata field.
+  `LogSanitizer` strips control characters from every value the framework logs or persists as free
+  text.
 
 ### Audit
 
@@ -855,8 +869,9 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `InMemorySagaStore`, `InMemorySagaDeadLetterStore`.
 - Contract suites a custom store can extend: `SagaStoreContract`, `SagaDeadLetterStoreContract`,
   `OutboxStoreContract`, `AtomicBatchProcessorContract`; and `CommandBusProvenanceContract` for a
-  custom `CommandBus` (the saga origin comes from the bound dispatch cause only, and a bound cause
-  decides the causation id).
+  custom `CommandBus` (the saga origin and the causation id come from the bound dispatch cause and
+  from nowhere else, and a command executed inside `StreamRuneContext.continuing` stores what that
+  helper binds).
 - Every PostgreSQL-backed suite of the framework runs on PostgreSQL 18 in the default build and on 17
   in a second CI job (Testcontainers).
 

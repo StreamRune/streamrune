@@ -20,14 +20,26 @@ import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus.CommandResult;
 import org.streamrune.core.CommandBus.ShortCircuitReason;
 import org.streamrune.core.crypto.SubjectForgottenException;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.saga.SagaState;
+import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.EventId;
+import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.TraceId;
+import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
+import org.streamrune.test.InMemoryDeadLetterQueue;
+import org.streamrune.test.SagaEnvelopes;
 
 class VirtualThreadCommandBusTest {
 
@@ -1506,7 +1518,7 @@ class VirtualThreadCommandBusTest {
   }
 
   @Test
-  void causationIdComesFromCausingMessageInContextBaggage() {
+  void aCausationBaggageEntry_doesNotBecomeTheCausationId() {
     var store = new InMemoryEventStore();
     var bus = buildBus(store);
 
@@ -1516,19 +1528,187 @@ class VirtualThreadCommandBusTest {
             null,
             CorrelationId.of("corr-1"),
             Instant.now(),
-            Map.of(VirtualThreadCommandBus.CAUSATION_ID_BAGGAGE_KEY, "evt-trigger-42"));
+            Map.of("streamrune.causation-id", "evt-trigger-42"));
     ScopedValue.where(StreamRuneContext.CURRENT, ctx)
         .run(() -> bus.execute(new CounterCommand.Inc("counter-caus-2")));
 
     var events = store.eventsFor("counter:counter-caus-2");
     assertEquals(1, events.size());
     var metadata = events.getFirst().metadata();
-    assertNotNull(metadata.causationId());
+    assertNull(metadata.causationId(), "the bus reads no baggage entry into the causation id");
     assertEquals(
         "evt-trigger-42",
-        metadata.causationId().value(),
-        "causationId must reference the causing message id from context");
-    assertNotEquals(metadata.commandId().value(), metadata.causationId().value());
+        metadata.baggage().get("streamrune.causation-id"),
+        "the entry is ordinary baggage");
+  }
+
+  // === A command dispatched in reaction to an event (StreamRuneContext.continuing) ===
+
+  private record ReplyingSagaState(SagaStatus status) implements SagaState {}
+
+  private static final SagaId CONTINUED_SAGA = SagaId.of("order-saga-42");
+
+  /** The reply to a saga's own command, as a listener reads it from the store: origin at hop 0. */
+  private static EventEnvelope sagaCausedEvent() {
+    return SagaEnvelopes.causedBy(
+        ReplyingSagaState.class,
+        CONTINUED_SAGA,
+        StreamId.of(COUNTER, AggregateId.of("counter-reply")),
+        new CounterEvent.Incremented());
+  }
+
+  /** An event a user's request caused: a client's correlation id, a trace, a user; no origin. */
+  private static EventEnvelope requestCausedEvent() {
+    return new EventEnvelope(
+        GlobalOffset.of(3),
+        StreamId.of(COUNTER, AggregateId.of("counter-request")),
+        Version.initial(),
+        EventType.fromClass(CounterEvent.Incremented.class),
+        new CounterEvent.Incremented(),
+        new EventMetadata(
+            EventId.of("evt-request-1"),
+            CommandId.of("cmd-request-1"),
+            TraceId.of("trace-7"),
+            null,
+            CorrelationId.of("client-corr-7"),
+            null,
+            UserId.of("alice"),
+            Instant.now(),
+            Map.of("role", "ADMIN")));
+  }
+
+  private VirtualThreadCommandBus infraFailingBus(DeadLetterQueue dlq) {
+    return infraFailingBusBuilder(new InMemoryEventStore()).deadLetterQueue(dlq).build();
+  }
+
+  @Test
+  void aFailingCommandThatCarriesASagaOrigin_isNotDeadLettered() {
+    var dlq = new InMemoryDeadLetterQueue();
+    var bus = infraFailingBus(dlq);
+
+    // Control: the same failure with no cause bound is dead-lettered.
+    runWithContext(
+        () ->
+            assertThrows(
+                RuntimeException.class, () -> bus.execute(new FailingCommand.Fail("fail-root"))));
+    assertEquals(1, dlq.all().size());
+
+    // A listener's continuation of a saga-caused event: not a saga dispatch, and still not
+    // dead-lettered. The failure reaches the caller, which is its one retry channel.
+    var failure =
+        assertThrows(
+            RuntimeException.class,
+            () ->
+                StreamRuneContext.continuing(sagaCausedEvent())
+                    .run(
+                        () -> {
+                          assertFalse(StreamRuneContext.isSagaDispatch());
+                          bus.execute(new FailingCommand.Fail("fail-hop-1"));
+                        }));
+    assertEquals("simulated infra failure", failure.getMessage());
+    assertEquals(1, dlq.all().size(), "a command that carries a saga origin is not dead-lettered");
+
+    // The rule reads the bound cause, whoever bound it: an origin without a causing event too.
+    var originOnly =
+        new StreamRuneContext.DispatchCause(null, sagaCausedEvent().metadata().sagaOrigin());
+    assertThrows(
+        RuntimeException.class,
+        () ->
+            ScopedValue.where(StreamRuneContext.CAUSE, originOnly)
+                .where(StreamRuneContext.SAGA_OWNED, Boolean.FALSE)
+                .run(() -> bus.execute(new FailingCommand.Fail("fail-origin-only"))));
+    assertEquals(1, dlq.all().size());
+  }
+
+  @Test
+  void aFailingContinuationOfAnEventWithoutAnOrigin_isDeadLettered() {
+    var dlq = new InMemoryDeadLetterQueue();
+    var bus = infraFailingBus(dlq);
+
+    assertThrows(
+        RuntimeException.class,
+        () ->
+            StreamRuneContext.continuing(requestCausedEvent())
+                .run(() -> bus.execute(new FailingCommand.Fail("fail-hop-1"))));
+
+    assertEquals(1, dlq.all().size());
+    var entry = dlq.all().getFirst();
+    // The entry holds what a replay rebinds: the flow's correlation and trace ids and no user.
+    // It has no place for the causing event.
+    assertEquals(CorrelationId.of("client-corr-7"), entry.correlationId());
+    assertEquals(TraceId.of("trace-7"), entry.traceId());
+    assertNull(entry.userId());
+  }
+
+  @Test
+  void aFailingAsyncCommandThatCarriesASagaOrigin_isNotDeadLettered() {
+    var dlq = new InMemoryDeadLetterQueue();
+    var bus = infraFailingBus(dlq);
+
+    // The continuation's bindings end when call() returns; the command fails on the bus's own
+    // virtual thread, where only what executeAsync carried over is bound.
+    CompletableFuture<CommandResult> future =
+        StreamRuneContext.continuing(sagaCausedEvent())
+            .call(() -> bus.executeAsync(new FailingCommand.Fail("fail-async")));
+
+    var failure = assertThrows(java.util.concurrent.CompletionException.class, future::join);
+    assertEquals("simulated infra failure", failure.getCause().getMessage());
+    assertTrue(dlq.all().isEmpty(), "the origin crosses executeAsync, and with it the rule");
+
+    // Control: without an origin the asynchronous failure is dead-lettered.
+    CompletableFuture<CommandResult> originless =
+        StreamRuneContext.continuing(requestCausedEvent())
+            .call(() -> bus.executeAsync(new FailingCommand.Fail("fail-async-originless")));
+    assertThrows(java.util.concurrent.CompletionException.class, originless::join);
+    assertEquals(1, dlq.all().size());
+  }
+
+  @Test
+  void aFailingCommandInAWrappedTaskThatCarriesASagaOrigin_isNotDeadLettered() throws Exception {
+    var dlq = new InMemoryDeadLetterQueue();
+    var bus = infraFailingBus(dlq);
+    var failure = new AtomicReference<Throwable>();
+
+    Runnable wrapped =
+        StreamRuneContext.continuing(sagaCausedEvent())
+            .call(
+                () ->
+                    StreamRuneContext.wrap(
+                        () -> {
+                          try {
+                            bus.execute(new FailingCommand.Fail("fail-wrapped"));
+                          } catch (RuntimeException e) {
+                            failure.set(e);
+                          }
+                        }));
+    Thread thread = new Thread(wrapped);
+    thread.start();
+    thread.join();
+
+    assertEquals("simulated infra failure", failure.get().getMessage());
+    assertTrue(dlq.all().isEmpty(), "the origin crosses wrap, and with it the rule");
+  }
+
+  @Test
+  void executeAsync_insideContinuing_keepsTheCause() {
+    var store = new InMemoryEventStore();
+    var bus = buildBus(store);
+    EventEnvelope cause = sagaCausedEvent();
+
+    CompletableFuture<CommandResult> future =
+        StreamRuneContext.continuing(cause)
+            .call(() -> bus.executeAsync(new CounterCommand.Inc("counter-async-hop")));
+    future.join();
+
+    var events = store.eventsFor("counter:counter-async-hop");
+    assertEquals(1, events.size());
+    var metadata = events.getFirst().metadata();
+    assertEquals(
+        new SagaOrigin(SagaType.fromClass(ReplyingSagaState.class), CONTINUED_SAGA, 1),
+        metadata.sagaOrigin());
+    assertEquals(CausationId.of(cause.metadata().eventId().value()), metadata.causationId());
+    assertEquals(cause.metadata().correlationId(), metadata.correlationId());
+    assertNull(metadata.userId());
   }
 
   // === Post-commit failure tests (committed commands must report success) ===

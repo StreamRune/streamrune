@@ -39,6 +39,17 @@ class SagaOriginTest {
   }
 
   @Test
+  void nextHop_keepsTypeAndIdAndAddsOne() {
+    SagaOrigin direct = SagaOrigin.dispatchedBy(TYPE, ID);
+
+    SagaOrigin relayed = direct.nextHop();
+
+    assertEquals(new SagaOrigin(TYPE, ID, 1), relayed);
+    assertEquals(new SagaOrigin(TYPE, ID, 2), relayed.nextHop());
+    assertEquals(0, direct.hop(), "an origin is a value; taking the next hop changes nothing");
+  }
+
+  @Test
   void writesThreeJsonKeysAndReadsThemBack() throws Exception {
     ObjectMapper mapper = new ObjectMapper();
     SagaOrigin origin = SagaOrigin.dispatchedBy(TYPE, ID);

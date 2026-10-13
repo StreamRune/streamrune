@@ -98,9 +98,9 @@ public record StreamRuneMicronautProperties(
         @io.micronaut.context.annotation.Property(name = "streamrune.inbox.retention-max-age")
         Duration inboxRetentionMaxAge,
     // metadata.baggage-allowlist: matches Spring's streamrune.metadata.baggage-allowlist.
-    // Additional OTel baggage keys permitted into RequestContext/EventMetadata baggage, on top
-    // of the framework default (the causation-id key; `role` is the trusted-gateway X-User-Role
-    // header and nothing else, so listing it has no effect) — see BaggageAllowlist. @Nullable
+    // The OTel baggage keys permitted into RequestContext/EventMetadata baggage; the framework
+    // allows none by default (`role` is the trusted-gateway X-User-Role header and nothing else,
+    // so listing it has no effect) — see BaggageAllowlist. @Nullable
     // (rather than @Bindable(defaultValue = "")) so an unset property binds to null instead of a
     // single-element list containing ""; the compact constructor below normalizes null to
     // List.of().

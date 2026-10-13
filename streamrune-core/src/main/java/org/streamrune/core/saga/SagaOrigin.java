@@ -6,16 +6,20 @@ import org.streamrune.core.types.SagaType;
  * The saga whose dispatch caused an event, directly (hop 0) or through trusted continuations.
  *
  * <p>The command bus writes it into {@link org.streamrune.core.EventMetadata#sagaOrigin()} of every
- * event a command produces while a saga's dispatch is in progress. The value a saga dispatch binds
- * is a function of the saga type and the saga id alone, so a first attempt, a redelivery, a replay
- * and a resume of the same saga all record the same origin.
+ * event a command produces while a saga's dispatch is in progress, or while a listener continues
+ * such an event's flow through {@link
+ * org.streamrune.core.StreamRuneContext#continuing(org.streamrune.core.EventEnvelope)}. The value a
+ * saga dispatch binds is a function of the saga type and the saga id alone, so a first attempt, a
+ * redelivery, a replay and a resume of the same saga all record the same origin; the value a
+ * continuation binds is a function of the stored event it reacts to.
  *
  * <p>An origin states who caused an event. It grants no authority.
  *
  * @param sagaType the type of the dispatching saga, as its runner derives it from the saga state
  *     class (required)
  * @param sagaId the dispatching saga instance (required)
- * @param hop 0 for an event produced by a command the saga dispatched itself; never negative
+ * @param hop 0 for an event produced by a command the saga dispatched itself; n for an event
+ *     produced by the n-th continuation in a row after such an event; never negative
  */
 public record SagaOrigin(SagaType sagaType, SagaId sagaId, int hop) {
 
@@ -40,5 +44,17 @@ public record SagaOrigin(SagaType sagaType, SagaId sagaId, int hop) {
    */
   public static SagaOrigin dispatchedBy(SagaType sagaType, SagaId sagaId) {
     return new SagaOrigin(sagaType, sagaId, 0);
+  }
+
+  /**
+   * The origin of an event produced by a command that continues the flow of an event carrying this
+   * origin: the same saga, one hop further. {@link
+   * org.streamrune.core.StreamRuneContext#continuing(org.streamrune.core.EventEnvelope)} is its one
+   * caller.
+   *
+   * @return this origin with {@code hop + 1}
+   */
+  public SagaOrigin nextHop() {
+    return new SagaOrigin(sagaType, sagaId, hop + 1);
   }
 }
