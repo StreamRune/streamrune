@@ -219,10 +219,13 @@ captured authority, not baggage), and a W3C `baggage: role=` entry never reaches
 the trusted-gateway mode included; nothing may be addressed, authorized or deduplicated by them.
 A correlation id is kept exactly as sent, with one exception: the `streamrune:` prefix is reserved
 for the correlation ids the framework binds itself. `StreamRuneRequestFilter`
-aborts the request with `400 Bad Request` and the plain-text body `The request's correlation id,
-trace id or user id is not acceptable` for a correlation id with that prefix and for a correlation
-id, trace id or user id that is longer than 255 characters or holds a control character. The
-resource method does not run and `StreamRuneRequestContextHolder` stays empty. See
+aborts a request that carries a correlation id with that prefix, or a correlation id, trace id or
+user id that is longer than 255 characters or holds a control character, with status `400 Bad
+Request`, content type `text/plain;charset=UTF-8` and the body `The request's correlation id, trace
+id or user id is not acceptable` — the answer of the Spring and Micronaut filters, byte for byte.
+The resource method does not run and `StreamRuneRequestContextHolder` stays empty. Of an `X-Correlation-Id` or `X-Trace-Id` header sent more than once the first
+value is the header, as on the other two integrations; a blank first value counts as an absent
+header. An authenticated principal the request edge refuses is logged once at `WARN`. See
 [What a client controls in event metadata](../../docs/guide/production.md#what-a-client-controls-in-event-metadata).
 
 ```properties

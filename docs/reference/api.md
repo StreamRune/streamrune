@@ -268,16 +268,16 @@ command bus writes it too, and from one source: the triggering event under a sag
 causing event under `StreamRuneContext.continuing` (below). No request header or baggage entry
 sets it.
 
-The correlation id is the caller's: the `X-Correlation-Id` header of the request, kept exactly as
-sent and generated when absent. A client chooses it in every identity mode, so it is tracing data
+The correlation id is the caller's: the first value of the request's `X-Correlation-Id` header, kept
+exactly as sent and generated when absent or blank. A client chooses it in every identity mode, so it is tracing data
 and nothing is addressed, authorized or deduplicated by it. One form is the framework's own: an
 event that carries a saga origin carries the reserved correlation id `streamrune:saga:<sagaId>`,
 and no other event a shipped command bus stores carries a correlation id with the `streamrune:`
 prefix (`IdConstraints.RESERVED_PREFIX`; `IdConstraints.isReserved(String)` is the exact,
 case-sensitive prefix test). `RequestContext.fromRequest` refuses the prefix, the three request
-filters answer that refusal with `400 Bad Request`, and both command buses refuse a command bound
-to a reserved correlation id while no saga origin is bound. No API turns a correlation id back into
-a saga id. See
+filters answer that refusal with `400 Bad Request`, and the command and query buses refuse a
+dispatch bound to a reserved correlation id that is not the bound saga origin's
+(`ReservedCorrelationIdException`, below). No API turns a correlation id back into a saga id. See
 [What a client controls in event metadata](../guide/production.md#what-a-client-controls-in-event-metadata).
 
 ### SagaOrigin
@@ -344,7 +344,9 @@ command continues some stored event, and nothing about who wrote that event.
 from request data, carries whatever origin, causation id and correlation id its author wrote, and
 the framework vouches for none of it. One such envelope is refused later: for an event that holds a
 reserved correlation id and no origin — metadata no command bus writes — the continuation binds
-that id without an origin, and the command bus rejects its command with `IllegalArgumentException`.
+that id without an origin, and the command bus rejects its command with
+`ReservedCorrelationIdException`. For an event that holds an origin and another correlation id,
+the continuation binds the origin's correlation id.
 
 Failures:
 
@@ -367,6 +369,35 @@ Failures:
 Give the command an idempotency key derived from the causing event, so that a redelivery after the
 command committed stores nothing. `continuing` throws `IllegalStateException` for an event whose
 origin is at hop `Integer.MAX_VALUE`.
+
+### ReservedCorrelationIdException
+
+`final class ReservedCorrelationIdException extends RuntimeException` in `org.streamrune.core`
+
+```java
+static void requireNoForeignReservedCorrelationId()   // in org.streamrune.core.StreamRuneContext
+```
+
+Thrown when a command or a query is dispatched under a correlation id with the reserved
+`streamrune:` prefix that is not the bound saga origin's own: no origin is bound, or the origin of
+another saga. Saga dispatch and `StreamRuneContext.continuing` bind a reserved correlation id
+together with its origin, and `wrap` and `executeAsync` carry the two together, so nothing the
+framework binds is refused. What is refused was bound by other code: a request context built with
+the plain `RequestContext` constructor from a client's value, a listener that copied a saga-caused
+event's correlation id into a context of its own, a context captured with `capture()` and rebound
+on another thread without the cause.
+
+`VirtualThreadCommandBus`, `SimpleQueryBus`, `CachingQueryBus`, `AuditingQueryBus` and the
+in-memory buses of `streamrune-test` make the check first in every dispatch, before a handler is
+looked up and before any interceptor, authorizer, cache or audit store is reached; the production
+buses log the refusal at `WARN` with its fixed reason. Nothing of the dispatch is audited, retried,
+stored or dead-lettered. A command or query bus of your own calls
+`StreamRuneContext.requireNoForeignReservedCorrelationId()` at the same point.
+
+The exception is neither an `IllegalArgumentException` nor a `DomainException`: a `catch` written
+for a rejection by the domain does not swallow it. It is a permanent rejection for the dead letter
+queue and the circuit breaker (`CommandFailureClassification.isPermanentRejection`). Its message
+names the prefix and the two binders, never the bound value.
 
 ### AggregateState
 

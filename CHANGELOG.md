@@ -450,11 +450,17 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `streamrune:saga:<sagaId>` around a saga's commands and a continuation of a saga-caused event
   keeps it, so an event a shipped command bus stores carries a correlation id with the
   `streamrune:` prefix if and only if it carries a saga origin: the request edge refuses the
-  prefix from a client, and `VirtualThreadCommandBus` and `InMemoryCommandBus` refuse a command
-  bound to a reserved correlation id while no saga origin is bound (`IllegalArgumentException`
-  before any interceptor runs; not retried, not dead-lettered). A saga state class belongs to one saga: the three
-  integrations refuse, at startup, two `SagaRunner` beans that drive the same state class over the
-  same `SagaStore` (`SagaTypeOwnership.requireOneRunnerPerSagaType`).
+  prefix from a client, and the command buses and the query buses (`VirtualThreadCommandBus`,
+  `SimpleQueryBus`, `CachingQueryBus`, `AuditingQueryBus`, and the in-memory buses of
+  `streamrune-test`) refuse a dispatch bound to a reserved correlation id that is not the bound
+  saga origin's own, with `ReservedCorrelationIdException`
+  (`StreamRuneContext.requireNoForeignReservedCorrelationId()`): before any interceptor, authorizer
+  or audit store is reached, not retried, not dead-lettered, logged at `WARN`, and neither an
+  `IllegalArgumentException` nor a `DomainException`. The command audit and the query audit record
+  the correlation id the events of the dispatch carry, so an audit row has the reserved form only
+  for a dispatch that ran with that saga's origin bound. A saga state class belongs to one saga:
+  the three integrations refuse, at startup, two `SagaRunner` beans that drive the same state class
+  over the same `SagaStore` (`SagaTypeOwnership.requireOneRunnerPerSagaType`).
 - Saga origin: every event a saga-issued command produces carries `EventMetadata.sagaOrigin` — the
   saga's type and id at hop 0 — on the event path, the timeout runner, the compensation-retry sweeper
   and the dead-letter replayer alike; events of forward commands carry the triggering event's id as
@@ -758,14 +764,18 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `StreamRuneContext` from `X-Trace-Id`, `X-Correlation-Id`, the resolved identity and allow-listed
   baggage.
 - The request filters (`ScopedValueFilter`, `StreamRuneRequestFilter`, `StreamRuneContextFilter`)
-  answer `400 Bad Request` with one fixed reason (`RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT`:
-  the plain-text body on Quarkus and Micronaut, the `sendError` message on Spring) to a request
-  whose correlation id, trace id or user id `RequestContext.fromRequest` refuses — a value longer
-  than 255 characters, a control character, or a correlation id that starts with the reserved
-  `streamrune:` prefix (`IdConstraints.RESERVED_PREFIX`, `IdConstraints.isReserved`) — before any
-  controller, resource method or command runs. Every other correlation id is kept exactly as sent.
-  The correlation, trace and baggage headers are caller-supplied in every identity mode, the
-  trusted-gateway mode included; nothing may be addressed, authorized or deduplicated by them.
+  answer a request whose correlation id, trace id or user id `RequestContext.fromRequest` refuses —
+  a value longer than 255 characters, a control character, or a correlation id that starts with
+  the reserved `streamrune:` prefix (`IdConstraints.RESERVED_PREFIX`, `IdConstraints.isReserved`) —
+  with the same answer on the three integrations: status `400 Bad Request`, content type
+  `text/plain;charset=UTF-8` and the body `RequestIdentityPolicy.REFUSED_REQUEST_CONTEXT`, before
+  any controller, resource method or command runs. The Spring filter writes it without an error
+  dispatch, so error pages and a security rule for the error path take no part. Every other
+  correlation id is kept exactly as sent; of an `X-Correlation-Id` or `X-Trace-Id` header sent more
+  than once the first value is the header on the three integrations. The correlation, trace and
+  baggage headers are caller-supplied in every identity mode, the trusted-gateway mode included;
+  nothing may be addressed, authorized or deduplicated by them. An authenticated principal the
+  request edge refuses is logged once at `WARN`.
 - Deciders are registered as `DeciderRegistration` beans carrying their aggregate type;
   `@ProjectionConfig` beans are discovered into a `MultiProjectionRunner` (`CONTINUOUS`), a
   `ScheduledProjectionRunner` (`SCHEDULED`) and the `InlineProjectionInterceptor` (`INLINE`) while

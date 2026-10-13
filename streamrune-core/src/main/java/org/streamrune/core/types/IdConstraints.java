@@ -94,9 +94,11 @@ package org.streamrune.core.types;
  * SagaOrigin.correlationId()}) around every command a saga sends, and {@code
  * StreamRuneContext.continuing} inherits it from a saga-caused event. The ingress door refuses the
  * prefix in a correlation id ({@link #isReserved(String)}, beside the length and charset rules), so
- * a value in that form never comes from a request, and both shipped command buses refuse a command
- * whose bound correlation id is reserved while no saga origin is bound. Together: an event a
- * shipped bus wrote carries a reserved correlation id if and only if it carries a saga origin. The
+ * a value in that form never comes from a request, and the shipped command and query buses refuse a
+ * dispatch whose bound correlation id is reserved and is not the bound saga origin's own ({@code
+ * StreamRuneContext.requireNoForeignReservedCorrelationId()}, a {@code
+ * ReservedCorrelationIdException}). Together: an event or an audit row a shipped bus wrote carries
+ * a reserved correlation id if and only if a saga origin was bound, and then that origin's. The
  * check is on the correlation id alone — a trace id, a user id and a baggage value have no reserved
  * form — and, like the bound, it is a rule of the door: the constructors accept the prefix, because
  * saga dispatch and the read path build reserved ids through them. Nothing in the framework reads a

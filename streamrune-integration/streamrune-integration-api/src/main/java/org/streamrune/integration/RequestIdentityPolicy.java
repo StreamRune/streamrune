@@ -68,13 +68,17 @@ import org.streamrune.core.types.UserId;
  * X-Correlation-Id}, {@code X-Trace-Id} and the allow-listed W3C {@code baggage} entries are
  * caller-supplied in every mode, the trusted-gateway mode included — a gateway forwards its
  * caller's values or its own. They are tracing data, and nothing may be addressed, authorized or
- * deduplicated by them. The request filters keep a correlation id exactly as received, with one
+ * deduplicated by them. The request filters keep a correlation id exactly as received — of an
+ * {@code X-Correlation-Id} or {@code X-Trace-Id} header sent more than once the first value is the
+ * header, on the three integrations alike, and a blank first value is an absent header — with one
  * exception: a value that starts with {@code streamrune:} is the form of the correlation ids the
  * framework binds for a saga's commands, and a request that carries one is refused. A gateway or an
  * upstream service that forwards the correlation id of a saga-caused event it consumed is refused
  * too; it sends an id of its own. A refused request context — that prefix, a value longer than 255
  * characters, a control character, in the correlation id, the trace id or the user id — is answered
- * {@code 400 Bad Request} with the reason {@link #REFUSED_REQUEST_CONTEXT} before any command runs.
+ * by the filter itself, before any command runs and with the same answer on the three integrations:
+ * status {@code 400 Bad Request}, content type {@code text/plain;charset=UTF-8}, and the body
+ * {@link #REFUSED_REQUEST_CONTEXT}.
  *
  * <p><b>Startup rule.</b> An application whose command bus enforces authorization against the
  * request identity, but whose requests can never carry one, is misconfigured: every gated command
@@ -99,11 +103,12 @@ public final class RequestIdentityPolicy {
       "streamrune.security.trust-user-id-header";
 
   /**
-   * Reason the three request filters give with their {@code 400 Bad Request} answer to a refused
-   * request context: a correlation id, trace id or user id that {@code RequestContext.fromRequest}
-   * does not accept — longer than 255 characters, holding a control character, or, for the
-   * correlation id, starting with the reserved {@code streamrune:} prefix. One fixed text for every
-   * refusal and every integration; it names no header and echoes no value.
+   * The body of the answer the three request filters give to a refused request context: a
+   * correlation id, trace id or user id that {@code RequestContext.fromRequest} does not accept —
+   * longer than 255 characters, holding a control character, or, for the correlation id, starting
+   * with the reserved {@code streamrune:} prefix. The answer is status {@code 400 Bad Request},
+   * content type {@code text/plain;charset=UTF-8} and this text, the same on Spring, Quarkus and
+   * Micronaut. One fixed text for every refusal; it names no header and echoes no value.
    */
   public static final String REFUSED_REQUEST_CONTEXT =
       "The request's correlation id, trace id or user id is not acceptable";

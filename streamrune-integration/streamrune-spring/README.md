@@ -191,10 +191,15 @@ captured authority, not baggage), and a W3C `baggage: role=` entry never reaches
 the trusted-gateway mode included; nothing may be addressed, authorized or deduplicated by them.
 A correlation id is kept exactly as sent, with one exception: the `streamrune:` prefix is reserved
 for the correlation ids the framework binds itself. `ScopedValueFilter` answers
-`400 Bad Request` — `sendError` with the reason `The request's correlation id, trace id or user id
-is not acceptable`, rendered by the container's or your own error handling — to a correlation id
-with that prefix and to a correlation id, trace id or user id that is longer than 255 characters or
-holds a control character. The rest of the filter chain does not run. See
+a correlation id with that prefix, and a correlation id, trace id or user id that is longer than 255
+characters or holds a control character, with status `400 Bad Request`, content type
+`text/plain;charset=UTF-8` and the body `The request's correlation id, trace id or user id is not
+acceptable` — the answer of the Quarkus and Micronaut filters, byte for byte. It writes that answer
+itself and starts no error dispatch, so your error pages, your `@ControllerAdvice` and the rule
+your Spring Security filter chain has for `/error` take no part, and the rest of the filter chain
+does not run. Of an `X-Correlation-Id` or `X-Trace-Id` header sent more than once the first
+value is the header, as on the other two integrations; a blank first value counts as an absent
+header. An authenticated principal the request edge refuses is logged once at `WARN`. See
 [What a client controls in event metadata](../../docs/guide/production.md#what-a-client-controls-in-event-metadata).
 
 ```yaml

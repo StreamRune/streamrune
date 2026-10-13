@@ -560,8 +560,10 @@ domain events — as long as that path serializes with the `CryptoEngine`:
   they land in) and no control characters. An over-long or control-bearing id is
   **rejected**, because a truncated identifier is a wrong identifier. The same door refuses a
   correlation id that starts with `streamrune:`: that prefix is reserved for the correlation ids
-  the framework binds itself, and every other value is kept exactly as sent. The three request
-  filters answer each of these refusals with `400 Bad Request`, before any command runs —
+  the framework binds itself, and every other value is kept exactly as sent (of a header sent more
+  than once, the first value). The three request filters answer each of these refusals with the
+  same `400 Bad Request` — a `text/plain` body, written by the filter itself — before any command
+  runs;
   [What a client controls in event metadata](guide/production.md#what-a-client-controls-in-event-metadata)
   lists every metadata field and who can set it. *If you write your own edge
   filter, call `fromRequest` — not the constructor.* The bound is deliberately *not* enforced in

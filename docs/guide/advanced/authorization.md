@@ -39,7 +39,7 @@ The integration logs the mode once at startup. More than one `AuthenticatedUserR
 
 If any of them fails, any client can act as any user.
 
-**The contract covers the identity and the role, and no other header.** `X-Correlation-Id`, `X-Trace-Id` and the allow-listed W3C `baggage` entries are caller-supplied in every mode, this one included: a gateway forwards its caller's values or its own, and the framework treats them as tracing data. Never address, authorize or deduplicate anything by them. A correlation id is stored exactly as received, with one exception: a value that starts with `streamrune:` is the form of the correlation ids the framework binds for a saga's commands (`streamrune:saga:<sagaId>`), and the request filters answer `400 Bad Request` to a request that carries one — as they do to a correlation id, trace id or user id that is longer than 255 characters or holds a control character. A gateway or an upstream service that forwards the correlation id of a saga-caused event it consumed is refused as well; it sends an id of its own. [What a client controls in event metadata](../production.md#what-a-client-controls-in-event-metadata) lists every metadata field and who can set it.
+**The contract covers the identity and the role, and no other header.** `X-Correlation-Id`, `X-Trace-Id` and the allow-listed W3C `baggage` entries are caller-supplied in every mode, this one included: a gateway forwards its caller's values or its own, and the framework treats them as tracing data. Never address, authorize or deduplicate anything by them. A correlation id is stored exactly as received (of a repeated `X-Correlation-Id` or `X-Trace-Id` header the first value is the header, on the three integrations alike), with one exception: a value that starts with `streamrune:` is the form of the correlation ids the framework binds for a saga's commands (`streamrune:saga:<sagaId>`), and the request filters answer `400 Bad Request` — the same plain-text answer on Spring, Quarkus and Micronaut, written by the filter with no error dispatch — to a request that carries one — as they do to a correlation id, trace id or user id that is longer than 255 characters or holds a control character. A gateway or an upstream service that forwards the correlation id of a saga-caused event it consumed is refused as well; it sends an id of its own. [What a client controls in event metadata](../production.md#what-a-client-controls-in-event-metadata) lists every metadata field and who can set it.
 
 **A repeated `X-User-Id` is anonymous.** Every entry point — the request filter and the SSE endpoint, on all three integrations — hands the policy every `X-User-Id` value the request carried, as received (one value that contains a comma stays one value). In trusted-gateway mode a request with more than one value resolves to `null`, so a gateway that appends its value after the client's instead of replacing it fails closed instead of letting whichever value an API happens to return first become the identity. In authenticated-principal mode the principal still decides, and each disagreeing value is logged.
 
@@ -114,9 +114,10 @@ A context bound this way carries no captured authority, so `executeAsync` of an 
 fails closed — see [Commands that execute off the request thread](#commands-that-execute-off-the-request-thread).
 
 A context built with the plain constructor from request values is not checked at all. It must not
-carry a correlation id with the reserved `streamrune:` prefix: the command bus refuses a command
-bound to one while no saga origin is bound, with `IllegalArgumentException`, before any interceptor
-runs — the request then fails at its first command instead of at the edge.
+carry a correlation id with the reserved `streamrune:` prefix: the command and query buses refuse a
+dispatch bound to one that is not a bound saga origin's, with `ReservedCorrelationIdException`,
+before any interceptor, authorizer or audit store is reached — the request then fails at its first
+command or query instead of at the edge.
 
 Test utilities:
 

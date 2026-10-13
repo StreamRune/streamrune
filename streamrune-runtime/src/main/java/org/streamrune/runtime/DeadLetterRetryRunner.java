@@ -1019,8 +1019,8 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
    * correlation id with the reserved {@code streamrune:} prefix: a command bound to one carries a
    * saga origin, and a command that carries a saga origin is not dead-lettered. An entry written by
    * other means that holds one is rebound here like any other, with no saga origin — a replay binds
-   * no cause — and the command bus refuses the replayed command for it, so that entry fails every
-   * attempt of its ladder.
+   * no cause — and the command bus refuses the replayed command for it (a {@code
+   * ReservedCorrelationIdException}), so that entry fails every attempt of its ladder.
    */
   private static RequestContext replayContextFrom(DeadLetterQueue.DeadLetterEntry entry) {
     if (entry.correlationId() == null) {
