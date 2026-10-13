@@ -999,6 +999,17 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   }
 
   @Override
+  public void recordSagaCompensationUnderForwardStep(String sagaType) {
+    Counter.builder(meter(MetricNames.SAGA_COMPENSATION_UNDER_FORWARD_STEP))
+        .tag(MetricNames.TAG_SAGA_TYPE, sagaType)
+        .description(
+            "Compensation episodes opened underneath a forward saga step that executed a command"
+                + " (a command of the step is stored before the compensation or after it)")
+        .register(registry)
+        .increment();
+  }
+
+  @Override
   public void recordSagaCompensatingBacklog(String sagaType, long count) {
     sagaCompensatingBacklog
         .computeIfAbsent(

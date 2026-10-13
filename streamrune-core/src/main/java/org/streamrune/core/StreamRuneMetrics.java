@@ -513,6 +513,17 @@ public interface StreamRuneMetrics {
   default void recordSagaCasConflict(String sagaType) {}
 
   /**
+   * Records a compensation episode opened underneath a forward saga step that executed at least one
+   * command: a command of that step is stored either before the saga's compensation or after it,
+   * and one stored after it is undone by nothing. One call per such step. See {@link
+   * org.streamrune.core.metrics.MetricNames#SAGA_COMPENSATION_UNDER_FORWARD_STEP}.
+   *
+   * @param sagaType the saga type, {@link org.streamrune.core.types.SagaType#value()} — the saga
+   *     state's fully-qualified class name
+   */
+  default void recordSagaCompensationUnderForwardStep(String sagaType) {}
+
+  /**
    * Records the current {@code COMPENSATING} backlog for a saga type — sagas whose compensation has
    * not yet completed. Reported as the latest sampled value (the {@code
    * SagaCompensationRetrySweeper} samples it each cycle), so implementations should expose it as a

@@ -578,18 +578,18 @@ final class SagaStepExecutor<S extends SagaState> {
       }
     }
     if (evolvedStatus.isTerminal()) {
-      applyEvent(sagaId, type, state, evolvedStatus, rowVersion, fs);
+      applyEvent(sagaId, type, state, evolvedStatus, rowVersion, fs, /* executedCommands= */ 0);
       return evolvedStatus == SagaStatus.COMPLETED
           ? StepOutcome.COMPLETED
           : StepOutcome.FORWARD_PROGRESSED;
     }
     List<SagaCommand> commands =
         poisonCommands(sagaId, "handle", () -> orchestrator.handle(state, event));
-    StepOutcome compensated = dispatchForward(sagaId, type, state, rowVersion, fs, commands);
-    if (compensated != null) {
-      return compensated;
+    ForwardDispatch dispatched = dispatchForward(sagaId, type, state, rowVersion, fs, commands);
+    if (dispatched.compensated() != null) {
+      return dispatched.compensated();
     }
-    applyEvent(sagaId, type, state, evolvedStatus, rowVersion, fs);
+    applyEvent(sagaId, type, state, evolvedStatus, rowVersion, fs, dispatched.executedCommands());
     return StepOutcome.FORWARD_PROGRESSED;
   }
 
@@ -600,23 +600,25 @@ final class SagaStepExecutor<S extends SagaState> {
     S state = poison(sagaId, "evolve", () -> orchestrator.evolve(row.state(), event));
     SagaStatus evolvedStatus = poison(sagaId, "SagaState.status", state::status);
     if (evolvedStatus.isTerminal()) {
-      applyEvent(sagaId, type, state, evolvedStatus, row.version(), fs);
+      applyEvent(sagaId, type, state, evolvedStatus, row.version(), fs, /* executedCommands= */ 0);
       return evolvedStatus == SagaStatus.COMPLETED
           ? StepOutcome.COMPLETED
           : StepOutcome.FORWARD_PROGRESSED;
     }
     List<SagaCommand> commands =
         poisonCommands(sagaId, "handle", () -> orchestrator.handle(state, event));
-    StepOutcome compensated = dispatchForward(sagaId, type, state, row.version(), fs, commands);
-    if (compensated != null) {
-      return compensated;
+    ForwardDispatch dispatched = dispatchForward(sagaId, type, state, row.version(), fs, commands);
+    if (dispatched.compensated() != null) {
+      return dispatched.compensated();
     }
-    applyEvent(sagaId, type, state, evolvedStatus, row.version(), fs);
+    applyEvent(
+        sagaId, type, state, evolvedStatus, row.version(), fs, dispatched.executedCommands());
     return StepOutcome.FORWARD_PROGRESSED;
   }
 
   /**
-   * Dispatches in order; returns the compensation outcome on a deterministic failure, else null.
+   * Dispatches in order; the result carries the compensation outcome on a deterministic failure,
+   * else none, and how many of the commands this call executed.
    *
    * <p>A failed forward command is classified BEFORE any decision to undo the business flow. A
    * PROVEN retry-later failure never compensates ({@link #forwardRetryLater}); everything else (a
@@ -624,7 +626,7 @@ final class SagaStepExecutor<S extends SagaState> {
    * contract, so a deterministic non-business failure still terminalizes rather than wedging the
    * subscription on an unbounded batch retry.
    */
-  private StepOutcome dispatchForward(
+  private ForwardDispatch dispatchForward(
       SagaId sagaId,
       SagaType type,
       S state,
@@ -633,16 +635,21 @@ final class SagaStepExecutor<S extends SagaState> {
       List<SagaCommand> commands) {
     SagaOrigin origin = origin(sagaId);
     long triggerOffset = fs.event().globalOffset().value();
+    int executedCommands = 0;
     for (int i = 0; i < commands.size(); i++) {
       final int index = i;
       SagaCommand sagaCommand = commands.get(i);
       try {
-        SagaCommandDispatch.dispatch(
-            commandBus,
-            origin,
-            fs.event().metadata().eventId(),
-            sagaCommand.command(),
-            SagaCommandDispatch.forwardKey(sagaId, triggerOffset, index));
+        boolean executed =
+            SagaCommandDispatch.dispatch(
+                commandBus,
+                origin,
+                fs.event().metadata().eventId(),
+                sagaCommand.command(),
+                SagaCommandDispatch.forwardKey(sagaId, triggerOffset, index));
+        if (executed) {
+          executedCommands++;
+        }
       } catch (Exception primary) {
         if (SagaCommandDispatch.isRetryLater(primary)) {
           throw forwardRetryLater(sagaId, index, sagaCommand, primary);
@@ -660,19 +667,25 @@ final class SagaStepExecutor<S extends SagaState> {
                 + " prove transient, and terminalizing is preferred to retrying a batch that"
                 + " may never succeed — see SagaCommandDispatch.isRetryLater.",
             primary);
-        return claimFirstAndCompensate(
-            sagaId,
-            type,
-            state,
-            rowVersion,
-            fs.startPath(),
-            fs.event().metadata().eventId(),
-            primary,
-            sagaCommand);
+        return new ForwardDispatch(
+            claimFirstAndCompensate(
+                sagaId, type, state, rowVersion, fs, executedCommands, primary, sagaCommand),
+            executedCommands);
       }
     }
-    return null;
+    return new ForwardDispatch(null, executedCommands);
   }
+
+  /**
+   * What a step's forward loop did.
+   *
+   * @param compensated the outcome of the compensation the loop ended in after a rejected command;
+   *     {@code null} when every command was dispatched
+   * @param executedCommands how many forward commands this call executed. A command the inbox
+   *     answered with the outcome of an earlier execution is not counted: its events were stored by
+   *     that execution. A command that ran and stored no event is not counted either
+   */
+  private record ForwardDispatch(StepOutcome compensated, int executedCommands) {}
 
   /**
    * A forward command failed with PROVEN retry-later evidence ({@link
@@ -740,7 +753,11 @@ final class SagaStepExecutor<S extends SagaState> {
    * becomes poison (the adapter quarantines the triggering event); a transient one propagates. A
    * CAS conflict PROPAGATES for batch retry — the redelivery reloads and dedups on the recorded
    * offsets — on the start and the correlated path alike (with create-first there is no "swallow
-   * the concurrent create" case left here: the create happened in {@link #genesisStep}).
+   * the concurrent create" case left here: the create happened in {@link #genesisStep}). Before it
+   * propagates, a conflict that follows an executed forward command is checked for a compensation
+   * episode opened underneath the step ({@link #reportCompensationUnderForwardStep}).
+   *
+   * @param executedCommands how many forward commands the step's loop executed in this call
    */
   private void applyEvent(
       SagaId sagaId,
@@ -748,15 +765,133 @@ final class SagaStepExecutor<S extends SagaState> {
       S state,
       SagaStatus status,
       long rowVersion,
-      SagaTrigger.ForwardStep fs) {
+      SagaTrigger.ForwardStep fs,
+      int executedCommands) {
     try {
       sagaStore.applyEvent(sagaId, type, state, status, rowVersion, appliedEvent(fs));
     } catch (SagaStateSerializationException conversionFailed) {
       throw SagaStateConversion.classify(sagaId, conversionFailed);
     } catch (OptimisticLockException conflict) {
       recordCasConflict();
+      reportCompensationUnderForwardStep(
+          sagaId, type, fs, executedCommands, /* lostItsOwnClaim= */ false);
       throw conflict; // propagate: the redelivery reloads and dedups on the recorded offsets
     }
+  }
+
+  /**
+   * Reports a compensation episode opened underneath a forward step that executed a command: one
+   * WARN and one {@link StreamRuneMetrics#recordSagaCompensationUnderForwardStep} sample. Called
+   * where the step's write after its forward loop, or its own claim, is refused by the optimistic
+   * lock. It reports and changes nothing: the caller's outcome stands whatever happens here.
+   *
+   * <p><b>What is reported.</b> A step reads the saga row, dispatches its forward commands and
+   * writes the row; nothing it does between the read and the write is visible on the row. A
+   * compensation claim by another path in that window — a timeout claim the step lock does not hold
+   * back (a timeout runner of another node, or one given a lock of its own), a delivery of another
+   * node whose own command was rejected, a step nested on the thread of this one — succeeds at the
+   * version the step read, and the compensation is computed from a state that does not include the
+   * step. A forward command the step commits after that compensation is undone by nothing, and the
+   * redelivered event meets a row in its episode or a terminal row and is not applied. The step
+   * learns of the claim when its own write loses.
+   *
+   * <p><b>The condition</b>, all of it read from the row after the lost write:
+   *
+   * <ol>
+   *   <li>this call executed at least one forward command that stored events. A command the inbox
+   *       answered was committed by an earlier attempt, before this attempt read the row, so before
+   *       any claim this attempt can lose to; a command that stored nothing left nothing to undo;
+   *   <li>the row carries an episode stamp. A forward step never starts on a stamped row — a
+   *       stamped row is {@code COMPENSATING}, {@code FAULTED} out of it, or terminal, and {@link
+   *       #forwardStep} routes all three away before {@code evolve} — so a stamp found here was
+   *       written after this step read the row. No clock is compared;
+   *   <li>the row does not record this step's event as applied: the genesis is not applied for a
+   *       start event; {@code last_applied_offset} is below the event's offset for a live
+   *       correlated event; {@code last_replayed_offset} is not the event's offset for a replayed
+   *       one. A twin delivery of the same event that won the event write recorded the event, also
+   *       when that write is the one that stamped the episode; a claim records no event. A row that
+   *       records the event holds a state that includes this step's commands, dispatched by the
+   *       twin under the same keys;
+   *   <li>for a lost claim only: the stamp names another cause than this step's event. A twin
+   *       delivery of the same event that was rejected at the same command and claimed first
+   *       dispatched the commands before the rejected one under the same keys before its claim.
+   * </ol>
+   *
+   * <p><b>What the report means.</b> The framework sees that an episode was opened in the window
+   * and that the step executed commands in it. It does not see the order of each command's commit
+   * and the compensation: a command that committed before the compensation ran is the
+   * executed-but-unrecorded step a cancel/void compensation covers, one that committed after it
+   * stays. The report names the saga to inspect.
+   *
+   * <p><b>What it does not see.</b> Two cases. A step that does not reach a write: it fails with a
+   * retry-later failure at a later command, or the process dies, after an earlier command committed
+   * late; its redelivery meets a row in its episode or a terminal row and runs no forward step. And
+   * a step whose own claim loses to a twin delivery of the same event whose rejection does not
+   * repeat: the twin is rejected at an earlier command and claims, this step's earlier commands
+   * then succeed, a later one is rejected, and its claim loses to a stamp that names its own event
+   * (condition 4, which a twin rejected at the same command needs).
+   *
+   * <p>The reload is one read on a path that has already lost. A reload that fails — the store is
+   * unreachable, the state does not convert — is logged at DEBUG and nothing is reported.
+   *
+   * @param executedCommands how many forward commands this call executed
+   * @param lostItsOwnClaim {@code true} when the refused write is the step's claim after a rejected
+   *     command, {@code false} when it is the event write after the forward loop
+   */
+  private void reportCompensationUnderForwardStep(
+      SagaId sagaId,
+      SagaType type,
+      SagaTrigger.ForwardStep fs,
+      int executedCommands,
+      boolean lostItsOwnClaim) {
+    if (executedCommands == 0) {
+      return;
+    }
+    Optional<LoadedSaga<S>> reloaded;
+    try {
+      reloaded = sagaStore.load(sagaId, type, orchestrator.stateType());
+    } catch (RuntimeException reloadFailed) {
+      LOG.debug(
+          "Saga {} could not be read after a lost write; the check for a compensation episode"
+              + " opened underneath its forward step is skipped",
+          LogSanitizer.sanitizeForLog(sagaId.value()),
+          reloadFailed);
+      return;
+    }
+    if (reloaded.isEmpty()) {
+      return;
+    }
+    LoadedSaga<S> row = reloaded.get();
+    if (row.episodeVersion() == null || recordsAsApplied(row, fs)) {
+      return;
+    }
+    if (lostItsOwnClaim && fs.event().metadata().eventId().equals(row.episodeCauseEventId())) {
+      return;
+    }
+    LOG.warn(
+        "Saga {} {}: a compensation episode was opened underneath the forward step of the event at"
+            + " offset {}, which executed {} forward command(s) in this call. The compensation is"
+            + " computed from a state that does not include that step. A command the step"
+            + " committed before the compensation ran is what a cancel/void compensation covers;"
+            + " one it committed after it is undone by nothing, and the framework does not know"
+            + " which of the two happened. Inspect the target aggregates of this saga for an"
+            + " effect its compensation did not undo.",
+        // The saga type is a class name, written whole as the sweeper and the timeout runner
+        // write it; the saga id is a business id and is sanitised.
+        type.value(),
+        LogSanitizer.sanitizeForLog(sagaId.value()),
+        fs.event().globalOffset().value(),
+        executedCommands);
+    try {
+      metrics.recordSagaCompensationUnderForwardStep(sagaTypeTag());
+    } catch (RuntimeException e) {
+      LOG.warn("Metrics recording failed for recordSagaCompensationUnderForwardStep", e);
+    }
+  }
+
+  /** Whether {@code row} records the event of {@code fs} as applied, on that step's own path. */
+  private static boolean recordsAsApplied(LoadedSaga<?> row, SagaTrigger.ForwardStep fs) {
+    return fs.startPath() ? row.genesisApplied() : isRedelivery(row, fs);
   }
 
   /**
@@ -803,18 +938,25 @@ final class SagaStepExecutor<S extends SagaState> {
    * dispatched and the stale view propagates on both paths. The redelivered start event then finds
    * no row and starts the saga again; a redelivered correlated event finds no row and is dropped.
    *
-   * <p>{@code episodeCause} is the id of the event whose forward command failed, handed to the
-   * claim to be recorded with a stamp the claim writes.
+   * <p>The id of the event whose forward command failed is handed to the claim to be recorded with
+   * a stamp the claim writes. A lost claim that follows an executed forward command is checked for
+   * a compensation episode opened underneath the step by another cause ({@link
+   * #reportCompensationUnderForwardStep}) before it is swallowed or rethrown.
+   *
+   * @param executedCommands how many forward commands the step executed in this call before the
+   *     failed one
    */
   private StepOutcome claimFirstAndCompensate(
       SagaId sagaId,
       SagaType type,
       S state,
       long rowVersion,
-      boolean startPath,
-      EventId episodeCause,
+      SagaTrigger.ForwardStep fs,
+      int executedCommands,
       Exception primary,
       SagaCommand failedCommand) {
+    boolean startPath = fs.startPath();
+    EventId episodeCause = fs.event().metadata().eventId();
     try {
       // The row always exists.
       sagaStore.claimCompensating(sagaId, type, state, rowVersion, episodeCause);
@@ -824,6 +966,8 @@ final class SagaStepExecutor<S extends SagaState> {
       throw SagaStateConversion.classify(sagaId, conversionFailed);
     } catch (OptimisticLockException claimLost) {
       recordCasConflict();
+      reportCompensationUnderForwardStep(
+          sagaId, type, fs, executedCommands, /* lostItsOwnClaim= */ true);
       if (startPath) {
         LOG.debug(
             "Saga already claimed concurrently; skipping start-event compensation: {}",
