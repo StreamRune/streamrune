@@ -828,18 +828,18 @@ class ListenerContinuationTest {
                   assertThat(entry.status()).isEqualTo(SubscriptionHealth.Status.DEGRADED);
                   assertThat(entry.errorCount()).isGreaterThanOrEqualTo(3);
                 });
+        // The lines of this subscription's loop only: the logger is shared by every poll loop.
+        String loop = "Poll loop 'subscription '" + SUBSCRIPTION + "'' failed (";
         List<ILoggingEvent> errors =
-            List.copyOf(log.list).stream().filter(line -> line.getLevel() == Level.ERROR).toList();
+            List.copyOf(log.list).stream()
+                .filter(line -> line.getLevel() == Level.ERROR)
+                .filter(line -> line.getFormattedMessage().startsWith(loop))
+                .toList();
         assertThat(errors).hasSizeGreaterThanOrEqualTo(3);
         for (int attempt = 1; attempt <= 3; attempt++) {
           ILoggingEvent line = errors.get(attempt - 1);
           assertThat(line.getFormattedMessage())
-              .startsWith(
-                  "Poll loop 'subscription '"
-                      + SUBSCRIPTION
-                      + "'' failed ("
-                      + attempt
-                      + " consecutive failure(s)); retrying in ");
+              .startsWith(loop + attempt + " consecutive failure(s)); retrying in ");
           assertThat(line.getThrowableProxy().getMessage())
               .isEqualTo("payment provider unreachable");
         }
