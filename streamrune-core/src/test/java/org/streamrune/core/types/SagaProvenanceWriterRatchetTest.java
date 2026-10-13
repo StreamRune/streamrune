@@ -387,6 +387,35 @@ class SagaProvenanceWriterRatchetTest {
   private static final Pattern SPEAKS_OF_A_SAGA = Pattern.compile("(?i)\\bsagas?\\b");
 
   /**
+   * Prose that speaks of choosing something for an event: routing, correlating, finding, looking
+   * up, resolving, belonging, selecting, matching, identifying, extracting, deriving, delivering,
+   * addressing.
+   */
+  private static final Pattern SPEAKS_OF_CHOOSING =
+      Pattern.compile(
+          "(?i)\\b(?:rout(?:e|es|ed|ing|er|ers)|correlat(?:e|es|ed|ing)|find(?:s|ing)?|found"
+              + "|look(?:s|ed|ing)?\\s+up|lookup|resolv(?:e|es|ed|ing)|belong(?:s|ed|ing)?"
+              + "|select(?:s|ed|ing)?|pick(?:s|ed|ing)?|match(?:es|ed|ing)?"
+              + "|identif(?:y|ies|ied|ying)|extract(?:s|ed|ing)?|deriv(?:e|es|ed|ing)"
+              + "|deliver(?:s|ed|ing)?|address(?:es|ed|ing)?)\\b");
+
+  /** A verb that states what a field holds or what a row shows, and nothing a reader does. */
+  private static final String DESCRIBES = "(?:holds?|carr(?:y|ies)|shows?|records?|stores?)";
+
+  /**
+   * The correlation id named as the subject or the object of such a verb: "{@code
+   * EventMetadata.correlationId} holds …", "… shows {@code correlationId} …".
+   */
+  private static final Pattern CORRELATION_ID_DESCRIBED =
+      Pattern.compile(
+          "(?i)\\b"
+              + DESCRIBES
+              + "\\s+(?:(?:the|a|its)\\s+)?`?(?:\\b[A-Za-z_]+\\.)?correlationId\\b`?"
+              + "|`?(?:\\b[A-Za-z_]+\\.)?\\bcorrelationId\\b`?\\s+"
+              + DESCRIBES
+              + "\\b");
+
+  /**
    * The metadata fields a request supplies, or supplied before the command bus alone wrote them:
    * the correlation id and the trace id (headers, in every identity mode), the user id (the
    * request's identity), baggage (W3C baggage) and the causation id.
@@ -464,6 +493,57 @@ class SagaProvenanceWriterRatchetTest {
               + "\\b|\\{@(?:code|link|linkplain)\\s+"
               + ENVELOPE_ROUTER
               + "\\b");
+
+  /** The one form a text may name that method in: its signature, with no parameter name. */
+  private static final String ENVELOPE_ROUTER_SIGNATURE = ENVELOPE_ROUTER + "(EventEnvelope)";
+
+  /** A statement that nothing calls a method. */
+  private static final Pattern SAYS_IT_IS_NEVER_CALLED =
+      Pattern.compile("(?i)\\bnever\\s+calls?\\b|\\bnever\\s+called\\b");
+
+  /** The start of a line of a javadoc comment, and a blank line of a comment or of a guide. */
+  private static final Pattern COMMENT_MARGIN = Pattern.compile("(?m)^[ \\t]*\\*(?!/)[ \\t]?");
+
+  private static final Pattern BLANK_LINE = Pattern.compile("\\n[ \\t]*\\n");
+
+  /**
+   * The places of {@code source} that name the routing method that took an envelope, as offsets.
+   *
+   * <p>One naming is not counted: the method's signature without a parameter name, in a paragraph
+   * that says the runner never calls it. That is the warning a reader of the routing methods needs
+   * — a method of that name compiles on an orchestrator and is not part of the interface — and it
+   * is neither a sample nor a statement that the method exists. A declaration with a parameter
+   * name, a call, a member reference and the builder form are counted wherever they stand.
+   */
+  private static List<Integer> envelopeRouterNamings(String source) {
+    String text = COMMENT_MARGIN.matcher(source).replaceAll(m -> " ".repeat(m.group().length()));
+    List<Integer> namings = new ArrayList<>();
+    Matcher matcher = NAMES_AN_ENVELOPE_ROUTER.matcher(text);
+    while (matcher.find()) {
+      int name = text.indexOf(ENVELOPE_ROUTER, matcher.start());
+      boolean signatureOnly = text.startsWith(ENVELOPE_ROUTER_SIGNATURE, name);
+      if (!(signatureOnly && SAYS_IT_IS_NEVER_CALLED.matcher(paragraphAt(text, name)).find())) {
+        namings.add(matcher.start());
+      }
+    }
+    return namings;
+  }
+
+  /** The paragraph around {@code index}: the text between the blank lines on either side. */
+  private static String paragraphAt(String text, int index) {
+    int start = 0;
+    int end = text.length();
+    Matcher blank = BLANK_LINE.matcher(text);
+    while (blank.find()) {
+      if (blank.end() <= index) {
+        start = blank.end();
+      } else if (blank.start() >= index) {
+        end = blank.start();
+        break;
+      }
+    }
+    return text.substring(start, end);
+  }
 
   /** A javadoc comment together with the declaration it documents, up to its body or its end. */
   private static final Pattern JAVADOC_AND_DECLARATION =
@@ -593,8 +673,22 @@ class SagaProvenanceWriterRatchetTest {
    *   <li>it builds an idempotency key from the correlation id or the trace id in one statement.
    * </ul>
    *
-   * <p>A prose passage of a guide is one when it names a routing method, or speaks of a saga, and
-   * names the {@code correlationId} identifier other than in a list of the metadata fields.
+   * <p>A prose passage of a guide is one when it names the {@code correlationId} identifier, other
+   * than in a list of the metadata fields, and
+   *
+   * <ul>
+   *   <li>names a routing method, or
+   *   <li>speaks of a saga and of choosing — routing, correlating, finding, looking up, belonging,
+   *       matching and their kin ({@link #SPEAKS_OF_CHOOSING}), or
+   *   <li>speaks of a saga and names the identifier anywhere but as the subject or the object of a
+   *       verb that states what the field holds or what a row shows ({@link
+   *       #CORRELATION_ID_DESCRIBED}).
+   * </ul>
+   *
+   * <p>So a passage about a saga may say what the field holds — "for an event a saga caused, {@code
+   * EventMetadata.correlationId} holds the reserved form" — and what an audit row shows; it may not
+   * say, or leave open, that anything is chosen by it. A phrasing the scan does not know is
+   * rejected.
    *
    * <p><b>What is out of reach,</b> and stays the job of whoever writes and reads a guide ({@link
    * #theDocumentationScanRecognisesRoutingByRequestSuppliedMetadata()} holds one sample of each):
@@ -605,14 +699,15 @@ class SagaProvenanceWriterRatchetTest {
    *       data;
    *   <li>a helper declared in another document, or reached through a field or a lambda instead of
    *       a declared method, and a read hidden behind a local variable in another passage;
-   *   <li>prose that teaches it in other words ("the correlation identifier"), or with another
-   *       field than the correlation id;
+   *   <li>prose that teaches it in other words ("the correlation identifier"), with another field
+   *       than the correlation id, or with a describing verb and a word of choosing the scan does
+   *       not know ("{@code correlationId} holds the saga id; take the saga from there");
    *   <li>javadoc prose: a javadoc comment is read as code only.
    * </ul>
    *
    * <p>It also flags two kinds of harmless text, which are reworded when they occur: a sentence
    * that <em>denies</em> routing by {@code correlationId} with that identifier, and prose about a
-   * saga's audit rows that names it.
+   * saga that says its audit rows are <em>found</em> by it.
    */
   private static List<Passage> unsafePassages(List<Passage> document) {
     Set<String> helpers = helpersOfTheRoutingMethods(document);
@@ -628,11 +723,15 @@ class SagaProvenanceWriterRatchetTest {
                     && (ROUTING_METHOD.matcher(text).find()
                         || declaredIn(text).stream().anyMatch(helpers::contains)));
       } else {
+        String named = LISTED_AMONG_THE_METADATA_FIELDS.matcher(text).replaceAll("");
         hit =
-            (ROUTING_METHOD.matcher(text).find() || SPEAKS_OF_A_SAGA.matcher(text).find())
-                && CORRELATION_ID_IDENTIFIER
-                    .matcher(LISTED_AMONG_THE_METADATA_FIELDS.matcher(text).replaceAll(""))
-                    .find();
+            CORRELATION_ID_IDENTIFIER.matcher(named).find()
+                && (ROUTING_METHOD.matcher(text).find()
+                    || (SPEAKS_OF_A_SAGA.matcher(text).find()
+                        && (SPEAKS_OF_CHOOSING.matcher(text).find()
+                            || CORRELATION_ID_IDENTIFIER
+                                .matcher(CORRELATION_ID_DESCRIBED.matcher(named).replaceAll(""))
+                                .find())));
       }
       if (hit) {
         unsafe.add(passage);
@@ -785,7 +884,8 @@ class SagaProvenanceWriterRatchetTest {
    * No document names the routing method that took an event's envelope, or its builder form: an
    * application routes the events of others through {@code correlateByEventData(streamId, event)},
    * and a sample written against the other shape either does not compile (an {@code @Override}, the
-   * builder call) or declares a method the runner never calls.
+   * builder call) or declares a method the runner never calls. The warning that says exactly that
+   * is the one naming allowed ({@link #envelopeRouterNamings}).
    */
   @Test
   void noDocumentNamesARoutingMethodThatDoesNotExist() {
@@ -794,9 +894,8 @@ class SagaProvenanceWriterRatchetTest {
     files.addAll(filesMatching(rel -> rel.endsWith(".md")));
     for (Path file : files) {
       String source = read(file);
-      Matcher matcher = NAMES_AN_ENVELOPE_ROUTER.matcher(source);
-      while (matcher.find()) {
-        violations.add(relative(file) + ":" + lineOf(source, matcher.start()));
+      for (int naming : envelopeRouterNamings(source)) {
+        violations.add(relative(file) + ":" + lineOf(source, naming));
       }
     }
     if (!violations.isEmpty()) {
@@ -804,7 +903,9 @@ class SagaProvenanceWriterRatchetTest {
           violations.size()
               + " place(s) name a saga routing method that takes an event's envelope. The method"
               + " an application implements is correlateByEventData(StreamId, DomainEvent) (on the"
-              + " builder: correlateByEventData(BiFunction)). Offenders:\n  "
+              + " builder: correlateByEventData(BiFunction)). A text may name the signature "
+              + ENVELOPE_ROUTER_SIGNATURE
+              + " only in a paragraph that says the runner never calls it. Offenders:\n  "
               + String.join("\n  ", violations));
     }
   }
@@ -889,6 +990,15 @@ class SagaProvenanceWriterRatchetTest {
         "prose: find the saga",
         "To find the saga of a reply, read `event.metadata().correlationId()`.\n");
     rejected.put(
+        "prose: the saga whose id equals the field",
+        "The saga of a reply is the one whose id equals the event's `correlationId`.\n");
+    rejected.put(
+        "prose: a describing verb, then a router",
+        "For a saga's events `correlationId` holds the saga id, so a router returns it.\n");
+    rejected.put(
+        "prose: a describing verb for one mention, a read for the next",
+        "A saga's reply carries `correlationId`. Take the saga from `correlationId`.\n");
+    rejected.put(
         "isStartEvent decided by the correlation id through local variables",
         "```java\npublic boolean isStartEvent(EventEnvelope event) {\n"
             + "    var meta = event.metadata();\n    var corr = meta.correlationId();\n"
@@ -960,7 +1070,12 @@ class SagaProvenanceWriterRatchetTest {
             + "- A saga is driven by `SagaRunner` as an `EventListener`.\n"
             + "- `EventMetadata` on every envelope: `traceId`, `spanId`, `correlationId`,\n"
             + "  `causationId`, `userId` and `sagaOrigin`, which names the saga whose dispatch\n"
-            + "  caused the event.\n";
+            + "  caused the event.\n\n"
+            + "For an event a saga caused, `EventMetadata.correlationId` holds the reserved form"
+            + " `streamrune:saga:<sagaId>`.\n\n"
+            + "The audit row of a compensation shows `correlationId` next to the saga's"
+            + " commands.\n\n"
+            + "A saga dispatch stores its `correlationId` in every event of the command.\n";
     assertFalse(flagsMarkdown(routedByData), "must not flag: " + routedByData);
     String derivedFromData =
         "  /**\n   * Derive the saga id from the event's own data, never from its correlation id.\n"
@@ -987,6 +1102,9 @@ class SagaProvenanceWriterRatchetTest {
         "prose in other words",
         "A reply finds its saga through the correlation identifier of its metadata.\n");
     outOfReach.put(
+        "prose with a describing verb and a word of choosing the scan does not know",
+        "For a saga's events `correlationId` holds the saga id; take the saga from there.\n");
+    outOfReach.put(
         "prose with another field",
         "The saga of a cart is the one named by the event's `userId`.\n");
     outOfReach.forEach(
@@ -998,7 +1116,7 @@ class SagaProvenanceWriterRatchetTest {
         "a sentence that denies it with the identifier",
         "`correlateByEventData` does not receive `correlationId`.\n");
     harmlessButRejected.put(
-        "prose about a saga's audit rows",
+        "prose about finding a saga's audit rows",
         "Audit rows of a saga's commands are found by `correlationId`; routing does not use it.\n");
     harmlessButRejected.forEach(
         (what, text) -> assertTrue(flagsMarkdown(text), "accepted after all: " + what));
@@ -1025,6 +1143,39 @@ class SagaProvenanceWriterRatchetTest {
             "an operator can still " + router + " audit rows to the subject",
             "correlatedEvent(5L)")) {
       assertFalse(NAMES_AN_ENVELOPE_ROUTER.matcher(ordinary).find(), "must not flag: " + ordinary);
+    }
+
+    // The one naming allowed: the signature, in a paragraph that says nothing calls the method.
+    String signature = ENVELOPE_ROUTER_SIGNATURE;
+    for (String warning :
+        List.of(
+            "Intro.\n\nA method `"
+                + signature
+                + "` declared without `@Override` compiles, and\nthe runner never calls it.\n\n"
+                + "Next paragraph.\n",
+            "/**\n * Routing.\n *\n * <p>A method {@code "
+                + signature
+                + "} declared without {@code @Override}\n * compiles and is never\n * called.\n"
+                + " *\n * <p>Next.\n */\ninterface Saga {}")) {
+      assertTrue(envelopeRouterNamings(warning).isEmpty(), "must not flag: " + warning);
+    }
+    for (String named :
+        List.of(
+            // the signature, with nothing said about calls
+            "Implement `" + signature + "` to route the events of others.\n",
+            // the denial stands in another paragraph
+            "Implement `" + signature + "`.\n\nThe runner never calls a private method.\n",
+            "/**\n * Implement {@code "
+                + signature
+                + "}.\n *\n * <p>The runner never calls a private method.\n */\ninterface S {}",
+            // a declaration, a call, a member reference and the builder form, denial or not
+            "The runner never calls it:\n```java\nOptional<SagaId> "
+                + router
+                + "(EventEnvelope event) {\n```\n",
+            "The runner never calls `inner." + router + "(event)`.\n",
+            "The runner never calls {@link #" + router + "}.\n",
+            "The runner never calls `" + builderRouter + "`.\n")) {
+      assertFalse(envelopeRouterNamings(named).isEmpty(), "must reject: " + named);
     }
   }
 

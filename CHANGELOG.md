@@ -448,7 +448,13 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `StreamRuneContext.continuing`. A correlation id is tracing data a client chooses with
   `X-Correlation-Id`; it routes nothing. A saga state class belongs to one saga: the three
   integrations refuse, at startup, two `SagaRunner` beans that drive the same state class over the
-  same `SagaStore` (`SagaTypeOwnership.requireOneRunnerPerSagaType`).
+  same `SagaStore` (`SagaTypeOwnership.requireOneRunnerPerSagaType`), in their default wiring and
+  with a store of the application's own. One store is one instance, or two instances with equal
+  `SagaStore.storageIdentity()` — the store itself by default, the `DataSource` for
+  `PostgresSagaStore`; a custom store that shares rows between instances overrides it, and
+  `SagaStoreContract` requires the answer to be stable and non-null. An orchestrator method that
+  the interface does not declare is never called by the runner: mark the routing methods
+  `@Override`.
 - Saga origin: every event a saga-issued command produces carries `EventMetadata.sagaOrigin` — the
   saga's type and id at hop 0 — on the event path, the timeout runner, the compensation-retry sweeper
   and the dead-letter replayer alike; events of forward commands carry the triggering event's id as
