@@ -53,8 +53,17 @@ public record SagaOrigin(SagaType sagaType, SagaId sagaId, int hop) {
    * caller.
    *
    * @return this origin with {@code hop + 1}
+   * @throws IllegalStateException if this origin is at hop {@link Integer#MAX_VALUE}: the hop count
+   *     cannot grow, and an origin with a wrong hop is not written. No chain of continuations
+   *     through the framework reaches that hop; metadata written outside it can hold it
    */
   public SagaOrigin nextHop() {
+    if (hop == Integer.MAX_VALUE) {
+      throw new IllegalStateException(
+          "a saga origin at hop "
+              + hop
+              + " cannot be taken one hop further: the hop count is at its limit");
+    }
     return new SagaOrigin(sagaType, sagaId, hop + 1);
   }
 }

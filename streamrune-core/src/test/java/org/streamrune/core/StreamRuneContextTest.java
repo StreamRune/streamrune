@@ -712,6 +712,32 @@ class StreamRuneContextTest {
   }
 
   @Test
+  void continuing_anEventAtTheLargestHop_isRefusedAndBindsNothing() {
+    EventMetadata hopZero = sagaCausedEvent().metadata();
+    EventEnvelope event =
+        envelopeWith(
+            new EventMetadata(
+                hopZero.eventId(),
+                hopZero.commandId(),
+                null,
+                null,
+                hopZero.correlationId(),
+                null,
+                null,
+                NOW,
+                Map.of(),
+                new SagaOrigin(
+                    hopZero.sagaOrigin().sagaType(),
+                    hopZero.sagaOrigin().sagaId(),
+                    Integer.MAX_VALUE)));
+
+    var ex = assertThrows(IllegalStateException.class, () -> StreamRuneContext.continuing(event));
+
+    assertTrue(ex.getMessage().contains("hop 2147483647"), ex.getMessage());
+    assertNull(StreamRuneContext.cause());
+  }
+
+  @Test
   void continuing_anEventWithoutAnOrigin_bindsNoOrigin() {
     StreamRuneContext.continuing(requestCausedEvent())
         .run(

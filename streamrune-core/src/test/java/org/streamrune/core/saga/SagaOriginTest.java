@@ -50,6 +50,21 @@ class SagaOriginTest {
   }
 
   @Test
+  void nextHop_atTheLargestHop_isRefusedAndSaysWhy() {
+    SagaOrigin last = new SagaOrigin(TYPE, ID, Integer.MAX_VALUE);
+    assertEquals(
+        new SagaOrigin(TYPE, ID, Integer.MAX_VALUE),
+        new SagaOrigin(TYPE, ID, Integer.MAX_VALUE - 1).nextHop());
+
+    var ex = assertThrows(IllegalStateException.class, last::nextHop);
+
+    assertEquals(
+        "a saga origin at hop 2147483647 cannot be taken one hop further: the hop count is at its"
+            + " limit",
+        ex.getMessage());
+  }
+
+  @Test
   void writesThreeJsonKeysAndReadsThemBack() throws Exception {
     ObjectMapper mapper = new ObjectMapper();
     SagaOrigin origin = SagaOrigin.dispatchedBy(TYPE, ID);
