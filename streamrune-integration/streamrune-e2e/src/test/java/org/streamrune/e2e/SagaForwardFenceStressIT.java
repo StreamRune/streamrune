@@ -2,6 +2,7 @@ package org.streamrune.e2e;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.lang.System.Logger.Level;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -42,11 +43,20 @@ import org.streamrune.e2e.SagaForwardFenceInvariant.LateForwardCommand;
  * with a retry-later failure before it reaches the bus, and a delivery that fails is delivered
  * again, as a subscription does. Each node holds a connection pool of its own.
  *
+ * <p>Inside the load one saga, {@code <seed>-0} (never given a {@code Completed} event), is held at
+ * the window on purpose: on {@code node-a} its first {@code Ship} waits before the bus until
+ * another node's timeout runner has claimed the saga and stored its first compensation command. The
+ * other nodes deliver none of its events before the hold, and refuse its forward commands as
+ * retry-later until the hold ends; {@code node-a}'s own timeout runner cannot claim it (the step
+ * holds that node's step lock). So that one forward command reaches its commit after the
+ * compensation, however fast the machine runs the rest of the load.
+ *
  * <p>With the fence on, after the load has quiesced: the invariant query over {@code command_inbox}
  * returns no row, every saga row is terminal, each compensation is stored once, and in {@code
  * event_stream} no saga has a {@code Reserved} or {@code Shipped} after its first {@code Released}
- * or {@code Refunded}. With the fence off, the same load breaks the invariant for at least one saga
- * over the five seeds, which proves the load reaches the window the fence closes.
+ * or {@code Refunded}. With the fence off, the same load stores the held saga's {@code Ship} after
+ * its compensation, and the invariant query returns it: the proof that the test can fail does not
+ * rest on how often the seeded timing alone reaches the window.
  */
 @Timeout(600)
 class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
@@ -68,6 +78,9 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
   private static final int ONE_FORWARD_COMMAND_IN = 8;
   private static final int MAX_DELIVERIES_OF_AN_EVENT = 50;
 
+  private static final System.Logger LOG =
+      System.getLogger(SagaForwardFenceStressIT.class.getName());
+
   /** The pause source of the delivering thread; unset on every other thread. */
   private static final ThreadLocal<Random> PAUSES = new ThreadLocal<>();
 
@@ -88,6 +101,10 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
   void noForwardCommandIsStoredAfterItsSagasFirstCompensation_fenceOn(long seed) throws Exception {
     Load load = run(seed, true);
 
+    assertThat(load.fencedByNode().values().stream().mapToInt(Integer::intValue).sum())
+        .as("at least the held saga's Ship is refused")
+        .isPositive();
+
     assertThat(SagaForwardFenceInvariant.lateForwardCommands(dataSource)).isEmpty();
     assertThat(load.rowsByStatus().keySet())
         .as("every row is terminal")
@@ -103,13 +120,14 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
 
   @Test
   void theSameLoadWithTheFenceOff_breaksTheInvariant() throws Exception {
-    List<LateForwardCommand> late = new ArrayList<>();
-    for (long seed = 1; seed <= 5 && late.isEmpty(); seed++) {
-      run(seed, false);
-      late.addAll(SagaForwardFenceInvariant.lateForwardCommands(dataSource));
-    }
-    System.out.println("fence off: forward commands stored after a compensation: " + late);
-    assertThat(late).isNotEmpty();
+    long seed = 1;
+    run(seed, false);
+
+    List<LateForwardCommand> late = SagaForwardFenceInvariant.lateForwardCommands(dataSource);
+    LOG.log(Level.INFO, "fence off: forward commands stored after a compensation: {0}", late);
+    assertThat(SagaForwardFenceInvariant.forwardKeysOf(late))
+        .as("the held saga's Ship is stored after its compensation")
+        .anyMatch(key -> key.startsWith("saga:" + sagaOf(heldOrder(seed)).value() + ":"));
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -119,9 +137,14 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
     Random random = new Random(seed);
     List<Node> nodes = new ArrayList<>();
     Set<String> failedOnce = ConcurrentHashMap.newKeySet();
+    Held held = new Held(heldOrder(seed));
     for (String name : NODES) {
       Node node = pooledNode(name, fence, Clock.systemUTC(), DEADLINE);
-      node.bus.beforeEveryCommand = SagaForwardFenceStressIT::pauseBeforeAForwardCommand;
+      node.bus.beforeEveryCommand =
+          command -> {
+            held.beforeCommand(name, command);
+            pauseBeforeAForwardCommand(command);
+          };
       node.bus.failure =
           (command, key) ->
               isForward(command)
@@ -142,7 +165,9 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
       for (int advanced = 0; advanced < ADVANCED_EVENTS_PER_SAGA; advanced++) {
         triggers.add(new Advanced(order));
       }
-      if (random.nextBoolean()) {
+      boolean completes = random.nextBoolean();
+      if (completes && !order.equals(heldOrder(seed))) {
+        // the held saga ends by its deadline: a completion would leave nothing to claim
         triggers.add(new Completed(order));
       }
       List<EventEnvelope> appended = new ArrayList<>();
@@ -156,52 +181,62 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
     AtomicBoolean stop = new AtomicBoolean();
     AtomicInteger pollFailures = new AtomicInteger();
     List<CompletableFuture<Void>> pollers = new ArrayList<>();
-    for (Node node : nodes) {
-      pollers.add(
-          onAnotherThread(
-              () -> {
-                while (!stop.get()) {
-                  try {
-                    node.pollTimeouts();
-                  } catch (RuntimeException failed) {
-                    pollFailures.incrementAndGet();
-                    firstFailures.putIfAbsent("timeout poll", causeChain(failed));
-                  }
-                }
-              }));
-    }
-
     AtomicInteger redeliveries = new AtomicInteger();
     AtomicInteger abandoned = new AtomicInteger();
     Map<String, Integer> redeliveredOn = new ConcurrentHashMap<>();
-    List<CompletableFuture<Void>> deliverers = new ArrayList<>();
-    for (int n = 0; n < nodes.size(); n++) {
-      Node node = nodes.get(n);
-      for (int t = 0; t < DELIVERING_THREADS_PER_NODE; t++) {
-        List<EventEnvelope> plan = interleave(eventsBySaga, random);
-        long pauseSeed = random.nextLong();
-        deliverers.add(
+    Map<String, Integer> rowsByStatus;
+    try {
+      for (Node node : nodes) {
+        pollers.add(
             onAnotherThread(
                 () -> {
-                  PAUSES.set(new Random(pauseSeed));
-                  for (EventEnvelope event : plan) {
-                    if (!deliverUntilAccepted(
-                        node, event, redeliveries, redeliveredOn, firstFailures)) {
-                      abandoned.incrementAndGet();
+                  while (!stop.get()) {
+                    try {
+                      node.pollTimeouts();
+                    } catch (RuntimeException failed) {
+                      pollFailures.incrementAndGet();
+                      firstFailures.putIfAbsent("timeout poll", causeChain(failed));
                     }
                   }
                 }));
       }
-    }
-    for (CompletableFuture<Void> deliverer : deliverers) {
-      assertThat(outcomeOf(deliverer, 300)).as("a delivering thread").isNull();
-    }
 
-    Map<String, Integer> rowsByStatus = awaitEveryRowTerminal(seed);
-    stop.set(true);
+      List<CompletableFuture<Void>> deliverers = new ArrayList<>();
+      for (Node node : nodes) {
+        for (int t = 0; t < DELIVERING_THREADS_PER_NODE; t++) {
+          List<EventEnvelope> plan = interleave(eventsBySaga, random);
+          long pauseSeed = random.nextLong();
+          deliverers.add(
+              onAnotherThread(
+                  () -> {
+                    PAUSES.set(new Random(pauseSeed));
+                    for (EventEnvelope event : plan) {
+                      held.awaitTheHolderBefore(node.name, event);
+                      if (!deliverUntilAccepted(
+                          node, event, redeliveries, redeliveredOn, firstFailures)) {
+                        abandoned.incrementAndGet();
+                      }
+                    }
+                  }));
+        }
+      }
+      for (CompletableFuture<Void> deliverer : deliverers) {
+        assertThat(outcomeOf(deliverer, 300)).as("a delivering thread").isNull();
+      }
+      rowsByStatus = awaitEveryRowTerminal(seed);
+    } finally {
+      // Also when the load fails: the pollers stop before their nodes' pools close.
+      stop.set(true);
+      for (CompletableFuture<Void> poller : pollers) {
+        awaitQuietly(poller);
+      }
+    }
     for (CompletableFuture<Void> poller : pollers) {
       assertThat(outcomeOf(poller, PATIENCE_SECONDS)).as("a timeout poller").isNull();
     }
+    assertThat(held.outcome)
+        .as("the held Ship waited for the other node's compensation")
+        .isEqualTo(Held.RELEASED_AFTER_THE_COMPENSATION);
 
     Map<String, Integer> fencedByNode = new LinkedHashMap<>();
     nodes.forEach(node -> fencedByNode.put(node.name, node.fencedSamples.size()));
@@ -216,10 +251,119 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
             pollFailures.get(),
             rowsByStatus,
             new TreeMap<>(firstFailures));
-    System.out.println("saga forward fence load: " + load);
+    LOG.log(Level.INFO, "saga forward fence load: {0}", load);
     // The next seed's nodes open pools of their own; these give their connections back.
     nodes.forEach(this::close);
     return load;
+  }
+
+  /** The order whose first {@code Ship} is held at the window in the load of {@code seed}. */
+  private static String heldOrder(long seed) {
+    return seed + "-0";
+  }
+
+  /**
+   * The saga held at the window. On {@link #HOLDER}, the saga's first {@code Ship} waits before the
+   * bus until the saga's first compensation command is stored. The other nodes deliver none of the
+   * saga's events before that {@code Ship} is held — so the holder creates the saga's row and reads
+   * it in its forward phase — and every forward command of the saga they dispatch fails with a
+   * retry-later failure until the hold ends, so none of them stores the held command's key first
+   * and none keeps its node's step lock: their timeout runners claim the saga at its deadline.
+   */
+  private final class Held {
+    static final String HOLDER = "node-a";
+    static final String RELEASED_AFTER_THE_COMPENSATION = "released after the compensation";
+
+    private final String order;
+    private final AtomicBoolean taken = new AtomicBoolean();
+    private volatile boolean holding;
+    private volatile boolean released;
+    volatile String outcome = "never reached";
+
+    Held(String order) {
+      this.order = order;
+    }
+
+    /** On a delivering thread: the other nodes wait to deliver the saga's events until the hold. */
+    void awaitTheHolderBefore(String node, EventEnvelope event) {
+      if (HOLDER.equals(node) || !order.equals(orderOf(event)) || holding || released) {
+        return;
+      }
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(PATIENCE_SECONDS);
+      while (!holding && !released && System.nanoTime() < deadline) {
+        sleepMillis(5);
+      }
+    }
+
+    /** On the dispatching thread, before the bus. */
+    void beforeCommand(String node, Command command) {
+      if (!isForward(command) || !order.equals(orderOf(command))) {
+        return;
+      }
+      if (!HOLDER.equals(node)) {
+        if (!released) {
+          throw new CircuitBreakerOpenException("the held saga's forward commands wait");
+        }
+        return;
+      }
+      if (command instanceof Ship && taken.compareAndSet(false, true)) {
+        holding = true;
+        try {
+          outcome = awaitTheFirstCompensation();
+        } finally {
+          released = true;
+          holding = false;
+        }
+      }
+    }
+
+    private String awaitTheFirstCompensation() {
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(PATIENCE_SECONDS);
+      try (Connection conn = dataSource.getConnection();
+          PreparedStatement ps =
+              conn.prepareStatement(
+                  "SELECT count(*) FROM command_inbox WHERE idempotency_key LIKE ?")) {
+        ps.setString(1, "saga:" + sagaOf(order).value() + ":episode:%:comp:0");
+        while (System.nanoTime() < deadline) {
+          try (ResultSet rs = ps.executeQuery()) {
+            rs.next();
+            if (rs.getLong(1) > 0) {
+              return RELEASED_AFTER_THE_COMPENSATION;
+            }
+          }
+          sleepMillis(10);
+        }
+        return "released without a compensation after " + PATIENCE_SECONDS + " s";
+      } catch (SQLException failed) {
+        return "released on " + causeChain(failed);
+      }
+    }
+  }
+
+  private static String orderOf(EventEnvelope event) {
+    return switch (event.event()) {
+      case Opened opened -> opened.orderId();
+      case Advanced advanced -> advanced.orderId();
+      case Completed completed -> completed.orderId();
+      default -> null;
+    };
+  }
+
+  private static String orderOf(Command command) {
+    return switch (command) {
+      case Reserve reserve -> reserve.orderId();
+      case Ship ship -> ship.orderId();
+      default -> null;
+    };
+  }
+
+  private static void sleepMillis(long millis) {
+    try {
+      TimeUnit.MILLISECONDS.sleep(millis);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("interrupted while the load waits", interrupted);
+    }
   }
 
   /**
@@ -257,9 +401,29 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
         redeliveries.incrementAndGet();
         redeliveredOn.merge(failed.getClass().getSimpleName(), 1, Integer::sum);
         firstFailures.putIfAbsent(failed.getClass().getSimpleName(), causeChain(failed));
+        backOff(delivery);
       }
     }
     return false;
+  }
+
+  /** A subscription's pause before it delivers a failed event again: 1, 2, 4 … up to 32 ms. */
+  private static void backOff(int delivery) {
+    try {
+      TimeUnit.MILLISECONDS.sleep(Math.min(32, 1L << Math.min(delivery - 1, 5)));
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("interrupted before a redelivery", interrupted);
+    }
+  }
+
+  /** Waits a bounded time for a thread of the load to end, without failing the test here. */
+  private static void awaitQuietly(CompletableFuture<Void> thread) {
+    try {
+      thread.get(PATIENCE_SECONDS, TimeUnit.SECONDS);
+    } catch (Exception ended) {
+      // its outcome is asserted after the load when the load got that far
+    }
   }
 
   /** The failure and its causes, for the report line. */

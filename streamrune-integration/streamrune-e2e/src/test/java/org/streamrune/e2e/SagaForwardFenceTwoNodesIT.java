@@ -141,12 +141,7 @@ class SagaForwardFenceTwoNodesIT extends SagaForwardFenceNodes {
     freezer.commit();
 
     assertThat(outcomeOf(claim)).isNull();
-    Throwable delivered = outcomeOf(delivery);
-    if (delivered != null) {
-      // The step resumes the episode the claim opened while the other node runs it too; whichever
-      // writes the terminal row second loses its compare-and-swap, and the event is redelivered.
-      assertThat(delivered).isInstanceOf(OptimisticLockException.class);
-    }
+    assertThat(outcomeOf(delivery)).as("the step goes on from the refused command").isNull();
     assertThat(storedOrder(ORDER)).containsExactly("Reserved", "Released", "Refunded");
     assertThat(a.fencedSamples).as("the second forward command").containsExactly(TYPE.value());
     assertThat(row(ORDER).status()).isEqualTo(SagaStatus.COMPENSATED);
@@ -343,6 +338,9 @@ class SagaForwardFenceTwoNodesIT extends SagaForwardFenceNodes {
 
     assertThatThrownBy(() -> a.deliver(advanced)).isInstanceOf(OptimisticLockException.class);
 
+    assertThat(a.dispatched)
+        .as("the step dispatches Ship after B completed the saga")
+        .contains(Ship.class);
     assertThat(storedOrder(ORDER))
         .as("shipped after completion")
         .containsExactly("Reserved", "Shipped");

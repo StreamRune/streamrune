@@ -146,7 +146,7 @@ class SagaStateWriteRatchetTest {
   /**
    * Every write whose table the statement's text does not name, with the reason its table is never
    * {@code saga_state}. Keyed by {@code File.CONSTANT}, or for an unnamed statement by {@code File:
-   * <its text from the verb>} with {@code <value>} where the code supplies a value.
+   * VERB #n}, the n-th such write with that verb in the file.
    */
   private static final Map<String, String> COMPOSED_TARGETS =
       Map.of(
@@ -156,10 +156,10 @@ class SagaStateWriteRatchetTest {
           "a projection's read-model table: the projection's name plus _view",
           "JdbcProjectionRepository.DELETE",
           "a projection's read-model table: the projection's name plus _view",
-          "PostgresCryptoEngine.java: DELETE FROM <value> WHERE subject_id = ?",
+          "PostgresCryptoEngine.java: DELETE FROM #1",
           "the crypto engine's key table (streamrune.crypto.postgres.table-name, default"
               + " encryption_keys)",
-          "PostgresCryptoEngine.java: INSERT INTO <value> (subject_id, key_bytes, key_versio",
+          "PostgresCryptoEngine.java: INSERT INTO #1",
           "the crypto engine's key table (streamrune.crypto.postgres.table-name, default"
               + " encryption_keys)");
 
@@ -175,16 +175,19 @@ class SagaStateWriteRatchetTest {
   /**
    * A write whose verb is followed by a value the text does not show: a supplied value (a
    * concatenated constant, variable or call) or a format placeholder ({@code %s}, {@code %1$s},
-   * {@code {0}}), after a space or a quote. The verb starts a statement's text, or follows {@code
-   * ;}, a parenthesis or a supplied value: {@code FOR UPDATE}, {@code DO UPDATE}, a message such as
-   * {@code "saga update"} and a lone word {@code "update"} are not writes.
+   * {@code {0}}), after a space or a quote, alone or behind a literal schema ({@code UPDATE
+   * app.<value>}); {@code ONLY} may follow the verb. The verb starts a statement's text, or follows
+   * {@code ;}, an opening or closing parenthesis (a common table expression) or a supplied value:
+   * {@code FOR UPDATE}, {@code DO UPDATE}, a message such as {@code "saga update"} and a lone word
+   * {@code "update"} are not writes.
    */
   private static final Pattern COMPOSED_TARGET =
       Pattern.compile(
-          "(?i)(?:^|[;("
+          "(?i)(?:^|[;()"
               + SUPPLIED
-              + "])\\s*(insert\\s+into|update|delete\\s+from|merge\\s+into"
-              + "|truncate(?:\\s+table)?(?:\\s+only)?)(?:\\s+(?:\\\\?\")?|\\\\?\")\\s*(?:"
+              + "])\\s*(insert\\s+into|update(?:\\s+only)?|delete\\s+from(?:\\s+only)?"
+              + "|merge\\s+into|truncate(?:\\s+table)?(?:\\s+only)?)"
+              + "(?:\\s+(?:\\\\?\")?|\\\\?\")\\s*(?:(?:\\\\?\")?\\w+(?:\\\\?\")?\\.(?:\\\\?\")?)?(?:"
               + SUPPLIED
               + "|%(?:\\d+\\$)?s|\\{\\d*\\})");
 
@@ -409,14 +412,15 @@ class SagaStateWriteRatchetTest {
     Map<String, String> writes = new TreeMap<>();
     for (Path file : mainJavaSources()) {
       String name = file.getFileName().toString();
+      Map<String, Integer> unnamedByVerb = new TreeMap<>();
       for (Statement statement : Source.of(read(file)).statements()) {
         Matcher write = COMPOSED_TARGET.matcher(statement.shape());
         while (write.find()) {
+          String verb = write.group(1).toUpperCase(java.util.Locale.ROOT).replaceAll("\\s+", " ");
           String text =
               statement
                   .shape()
-                  .substring(
-                      write.start(1), Math.min(statement.shape().length(), write.start(1) + 48))
+                  .substring(write.start(1))
                   .replace(String.valueOf(SUPPLIED), "<value>")
                   .replaceAll("\\s+", " ")
                   .trim();
@@ -424,7 +428,7 @@ class SagaStateWriteRatchetTest {
           String key =
               declaration.find()
                   ? name.replace(".java", "") + "." + declaration.group(2)
-                  : name + ": " + text;
+                  : name + ": " + verb + " #" + unnamedByVerb.merge(verb, 1, Integer::sum);
           writes.put(key, text);
         }
       }

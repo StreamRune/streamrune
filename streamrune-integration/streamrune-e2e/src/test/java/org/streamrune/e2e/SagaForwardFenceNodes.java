@@ -395,6 +395,8 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
         config.setDataSource(physical);
         config.setPoolName(name);
         config.setMaximumPoolSize(POOL_SIZE);
+        // A saturated pool fails a use within seconds, inside every wait of the tests.
+        config.setConnectionTimeout(5_000);
         pool = new HikariDataSource(config);
         source = pool;
       } else {
@@ -679,10 +681,14 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
 
   // ---- threads ----
 
-  /** Runs {@code body} on a new platform thread; the future carries what it threw. */
+  /**
+   * Runs {@code body} on a new daemon platform thread; the future carries what it threw. A daemon:
+   * a thread a failed test leaves behind does not keep the test JVM alive.
+   */
   static CompletableFuture<Void> onAnotherThread(Runnable body) {
     CompletableFuture<Void> done = new CompletableFuture<>();
     Thread.ofPlatform()
+        .daemon(true)
         .start(
             () -> {
               try {
