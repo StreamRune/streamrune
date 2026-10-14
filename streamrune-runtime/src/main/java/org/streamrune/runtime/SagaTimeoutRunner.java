@@ -171,6 +171,14 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    */
   private final SagaStepLock stepLock;
 
+  /**
+   * The {@link SagaRunner} the builder named ({@link Builder#sagaRunner}), or {@code null} when it
+   * named a lock ({@link Builder#stepLock}). A claim that waited its bound for a step of this
+   * runner still in flight reads the runner's forward fence at that moment: on, the claim is made
+   * underneath the step; off, it is not.
+   */
+  private final SagaRunner<?> boundRunner;
+
   private final Duration claimWait;
 
   /**
@@ -209,8 +217,10 @@ public final class SagaTimeoutRunner<S extends SagaState> {
       Duration maxCompensatingDwell,
       Duration inboxRetentionMaxAge,
       SagaStepLock stepLock,
+      SagaRunner<?> boundRunner,
       Duration claimWait) {
     this.stepLock = stepLock;
+    this.boundRunner = boundRunner;
     this.claimWait = claimWait;
     this.decider = decider;
     this.sagaStore = sagaStore;
@@ -534,8 +544,12 @@ public final class SagaTimeoutRunner<S extends SagaState> {
       return false;
     }
     if (claimHold == null) {
-      claimDeferred(sagaId, wait);
-      return true;
+      if (wait.isZero() || boundRunner == null || !boundRunner.forwardFence()) {
+        claimDeferred(sagaId, wait);
+        return true;
+      }
+      claimUnderneathTheStep(sagaId, passedOver, cause);
+      return false;
     }
     LoadedSaga<S> claimedByAStep;
     try {
@@ -554,6 +568,41 @@ public final class SagaTimeoutRunner<S extends SagaState> {
     }
     resumeClaimedEpisode(sagaId, claimedByAStep, cause);
     return false;
+  }
+
+  /**
+   * The claim of a saga whose step is still in flight in this process after the poll waited its
+   * bound for it, made when the {@link SagaRunner} this runner was built from fences its forward
+   * commands. Each forward command of the step either commits before the claim, and the
+   * compensation covers it, or reaches its commit after the claim and is refused there; the step
+   * then reads the row the claim wrote and resumes the episode (or stops at a saga that has already
+   * finished). Nothing waits for the step any more, so a step that does not return delays the
+   * saga's deadline by the wait and no more.
+   *
+   * <p>No step lock is held: the row is read again — a step may have written since the read that
+   * routed the saga here — and routed as a re-pick would be: no row, or a halted row, is left
+   * alone; a {@code COMPENSATING} row resumes its episode; a forward row is claimed by the
+   * executor's compare-and-swap at the version read, which a write in between makes it lose.
+   */
+  private void claimUnderneathTheStep(SagaId sagaId, int passedOver, SagaTimeoutException cause) {
+    deferredClaims.remove(sagaId);
+    LOG.info(
+        "Saga {} is past its deadline, and a step of it has been in flight in this process for {}"
+            + " polls and the bounded wait of {}; the claim is made underneath it: the forward"
+            + " fence refuses the step's later forward commands, and the step resumes the"
+            + " episode.",
+        LogSanitizer.sanitizeForLog(sagaId.value()),
+        passedOver,
+        claimWait);
+    Optional<LoadedSaga<S>> current = sagaStore.load(sagaId, sagaType, decider.stateType());
+    if (current.isEmpty() || current.get().status().isHalted()) {
+      return;
+    }
+    if (current.get().status() == SagaStatus.COMPENSATING) {
+      resumeClaimedEpisode(sagaId, current.get(), cause);
+      return;
+    }
+    executor.execute(sagaId, current, new SagaTrigger.ClaimTimeout(cause));
   }
 
   /**
@@ -999,6 +1048,7 @@ public final class SagaTimeoutRunner<S extends SagaState> {
           maxCompensatingDwell,
           inboxRetentionMaxAge,
           claimLock,
+          sagaRunner,
           claimWait);
     }
   }

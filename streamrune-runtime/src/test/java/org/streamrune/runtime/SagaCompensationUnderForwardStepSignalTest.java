@@ -142,8 +142,9 @@ class SagaCompensationUnderForwardStepSignalTest {
   static final class Fixture implements AutoCloseable {
     final MutableClock clock = MutableClock.startingAt(Instant.parse("2026-01-01T00:00:00Z"));
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-    final InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
     final InMemorySagaStore rows = new InMemorySagaStore(clock);
+    final InMemoryEventStore eventStore =
+        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(rows);
     final HookedSagaStore sagaStore = new HookedSagaStore(rows);
     final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(rows);
     final OneEventDecider<Reserve> reserve = new OneEventDecider<>(c -> new Reserved(c.orderId()));
@@ -183,7 +184,15 @@ class SagaCompensationUnderForwardStepSignalTest {
 
     final SagaTimeoutRunner<State> timeoutRunner;
 
+    /** Whether the runners fence their forward commands at their commit. */
+    private final boolean forwardFence;
+
     Fixture(boolean bornCompensating) {
+      this(bornCompensating, false);
+    }
+
+    Fixture(boolean bornCompensating, boolean forwardFence) {
+      this.forwardFence = forwardFence;
       saga = new OrderSaga(bornCompensating);
       runner = newRunner(SAGA);
       otherNode = newRunner(SAGA);
@@ -216,8 +225,9 @@ class SagaCompensationUnderForwardStepSignalTest {
           .sagaDeadLetterStore(deadLetters)
           .clock(clock)
           .metrics(metrics)
-          // Pins the behaviour of a runner with the fence off.
-          .forwardFence(false)
+          // Off unless a case asks for it: the report's WARN is the behaviour of a runner with the
+          // fence off.
+          .forwardFence(forwardFence)
           .build();
     }
 
@@ -336,6 +346,53 @@ class SagaCompensationUnderForwardStepSignalTest {
   }
 
   // ---- reported: a compensation claim under a forward step that executed a command ----
+
+  /**
+   * With the fence on, the step's command was stored before the claim (a later one would have been
+   * refused at its commit), so the compensation covers it: the report is an INFO line that says so,
+   * and the sample is counted as with the fence off.
+   */
+  @Test
+  void withTheFenceOn_theReportIsAnInfoLine_andTheSampleIsCounted() {
+    try (var h = new Fixture(false, true)) {
+      EventEnvelope opened = h.append(new Opened(ORDER));
+      h.sagaStore.runOnceBeforeTheEventWrite(h::timeOut);
+
+      var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SagaStepExecutor.class);
+      Level before = logger.getLevel();
+      var appender = new ListAppender<ILoggingEvent>();
+      appender.start();
+      logger.setLevel(Level.DEBUG);
+      logger.addAppender(appender);
+      try {
+        assertThatThrownBy(() -> h.deliver(opened)).isInstanceOf(OptimisticLockException.class);
+      } finally {
+        logger.detachAppender(appender);
+        logger.setLevel(before);
+        appender.stop();
+      }
+
+      assertThat(h.storedOrder()).containsExactly("Reserved", "Released", "Refunded");
+      assertThat(h.metrics.reportedSagaTypes).containsExactly(TYPE.value());
+      List<ILoggingEvent> report =
+          appender.list.stream()
+              .filter(e -> e.getFormattedMessage().contains("underneath the forward step"))
+              .toList();
+      assertThat(report)
+          .singleElement()
+          .satisfies(
+              e -> {
+                assertThat(e.getLevel()).isEqualTo(Level.INFO);
+                assertThat(e.getFormattedMessage())
+                    .contains(TYPE.value())
+                    .contains(SAGA.value())
+                    .contains("offset " + opened.globalOffset().value())
+                    .contains("executed 1 forward command")
+                    .contains("With the forward fence on")
+                    .contains("compensate with cancel/void commands");
+              });
+    }
+  }
 
   @Test
   void theTimeoutRunnerClaimsUnderAStartStep_theStepsForwardCommandIsReported() {

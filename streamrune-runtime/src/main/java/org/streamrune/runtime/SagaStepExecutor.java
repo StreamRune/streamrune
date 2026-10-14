@@ -914,9 +914,10 @@ final class SagaStepExecutor<S extends SagaState> {
 
   /**
    * Reports a compensation episode opened underneath a forward step that executed a command: one
-   * WARN and one {@link StreamRuneMetrics#recordSagaCompensationUnderForwardStep} sample. Called
-   * where the step's write after its forward loop, or its own claim, is refused by the optimistic
-   * lock. It reports and changes nothing: the caller's outcome stands whatever happens here.
+   * log line and one {@link StreamRuneMetrics#recordSagaCompensationUnderForwardStep} sample — at
+   * INFO with the forward fence on, at WARN with it off. Called where the step's write after its
+   * forward loop, or its own claim, is refused by the optimistic lock. It reports and changes
+   * nothing: the caller's outcome stands whatever happens here.
    *
    * <p><b>What is reported.</b> A step reads the saga row, dispatches its forward commands and
    * writes the row; nothing it does between the read and the write is visible on the row. A
@@ -932,7 +933,8 @@ final class SagaStepExecutor<S extends SagaState> {
    * dispatches after the claim is refused at its commit and the step goes on from the row ({@link
    * #routeFencedStep}) without reaching this report. A sample then means only commands the step
    * stored before the episode opened — the executed-but-unrecorded step a cancel/void compensation
-   * covers.
+   * covers — and the line is an INFO that says so. With the fence off the line is a WARN: the
+   * framework cannot tell which of the two orders happened.
    *
    * <p><b>The condition</b>, all of it read from the row after the lost write:
    *
@@ -1007,20 +1009,33 @@ final class SagaStepExecutor<S extends SagaState> {
     if (lostItsOwnClaim && fs.event().metadata().eventId().equals(row.episodeCauseEventId())) {
       return;
     }
-    LOG.warn(
-        "Saga {} {}: a compensation episode was opened underneath the forward step of the event at"
-            + " offset {}, which executed {} forward command(s) in this call. The compensation is"
-            + " computed from a state that does not include that step. A command the step"
-            + " committed before the compensation ran is what a cancel/void compensation covers;"
-            + " one it committed after it is undone by nothing, and the framework does not know"
-            + " which of the two happened. Inspect the target aggregates of this saga for an"
-            + " effect its compensation did not undo.",
-        // The saga type is a class name, written whole as the sweeper and the timeout runner
-        // write it; the saga id is a business id and is sanitised.
-        type.value(),
-        LogSanitizer.sanitizeForLog(sagaId.value()),
-        fs.event().globalOffset().value(),
-        executedCommands);
+    // The saga type is a class name, written whole as the sweeper and the timeout runner write
+    // it; the saga id is a business id and is sanitised.
+    if (forwardFence) {
+      LOG.info(
+          "Saga {} {}: a compensation episode was opened underneath the forward step of the event"
+              + " at offset {}, which executed {} forward command(s) in this call. With the"
+              + " forward fence on, each of them was stored before the episode opened (a later"
+              + " one is refused), so the compensation has to cover it: compensate with"
+              + " cancel/void commands.",
+          type.value(),
+          LogSanitizer.sanitizeForLog(sagaId.value()),
+          fs.event().globalOffset().value(),
+          executedCommands);
+    } else {
+      LOG.warn(
+          "Saga {} {}: a compensation episode was opened underneath the forward step of the event"
+              + " at offset {}, which executed {} forward command(s) in this call. The"
+              + " compensation is computed from a state that does not include that step. A"
+              + " command the step committed before the compensation ran is what a cancel/void"
+              + " compensation covers; one it committed after it is undone by nothing, and the"
+              + " framework does not know which of the two happened. Inspect the target"
+              + " aggregates of this saga for an effect its compensation did not undo.",
+          type.value(),
+          LogSanitizer.sanitizeForLog(sagaId.value()),
+          fs.event().globalOffset().value(),
+          executedCommands);
+    }
     try {
       metrics.recordSagaCompensationUnderForwardStep(sagaTypeTag());
     } catch (RuntimeException e) {

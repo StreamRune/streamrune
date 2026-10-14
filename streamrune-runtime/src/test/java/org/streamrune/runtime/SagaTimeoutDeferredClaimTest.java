@@ -31,7 +31,9 @@ import org.streamrune.runtime.SagaStepLockFixture.State;
  * deadline and is selected by every poll. It takes no slot of the timeout runner's batch: other
  * sagas past their deadline are claimed in the same poll, however many deferred sagas come before
  * them, and the store's two populations keep their share. A deferred claim is counted, and the
- * runner's health component reads {@code DEGRADED} while a claim it waited for is still deferred.
+ * runner's health component reads {@code DEGRADED} while a claim it waited for is still deferred. A
+ * claim is deferred past its bounded wait only for a runner with the forward fence off; the cases
+ * that pin that use such a runner.
  *
  * <p>The steps that do not return are deliveries parked before their forward command by a latch;
  * the timeout runner polls on the test's thread.
@@ -89,7 +91,9 @@ class SagaTimeoutDeferredClaimTest {
   @Test
   void
       twoSagasInStepsThatDoNotReturnFillTheBatch_anIdleSagaPastItsDeadlineIsClaimedInTheSamePoll() {
-    try (var p = new SagaStepLockFixture()) {
+    // With the forward fence off: with it on, the claim is made once the wait has passed
+    // (SagaTimeoutRunnerFencedClaimTest), and nothing is deferred past it.
+    try (var p = new SagaStepLockFixture(false)) {
       SagaTimeoutRunner<State> timeouts = timeoutRunner(p, 2, Duration.ofMillis(20));
       var hung = new StepsThatDoNotReturn(p, "1", "2");
       p.deliver(p.append(new Opened("3")));
@@ -228,7 +232,9 @@ class SagaTimeoutDeferredClaimTest {
 
   @Test
   void everyDeferredClaimIsCounted_taggedWithTheSagaTypeOnly() {
-    try (var p = new SagaStepLockFixture()) {
+    // With the forward fence off: with it on, the claim is made once the wait has passed
+    // (SagaTimeoutRunnerFencedClaimTest), and nothing is deferred past it.
+    try (var p = new SagaStepLockFixture(false)) {
       SagaTimeoutRunner<State> timeouts = timeoutRunner(p, 10, Duration.ofMillis(20));
       var hung = new StepsThatDoNotReturn(p, "1");
       p.clock.advance(TIMEOUT.plusSeconds(1));
@@ -250,7 +256,9 @@ class SagaTimeoutDeferredClaimTest {
 
   @Test
   void theRunnersHealthIsDegradedWhileAClaimItWaitedForIsDeferred_andUpOnceItIsMade() {
-    try (var p = new SagaStepLockFixture()) {
+    // With the forward fence off: with it on, the claim is made once the wait has passed
+    // (SagaTimeoutRunnerFencedClaimTest), and nothing is deferred past it.
+    try (var p = new SagaStepLockFixture(false)) {
       SagaTimeoutRunner<State> timeouts =
           SagaTimeoutRunner.<State>builder()
               .decider(p.saga)
