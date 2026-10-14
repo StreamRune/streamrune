@@ -6,9 +6,12 @@ import io.micronaut.core.order.Ordered;
 import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.streamrune.integration.SagaForwardFenceSetting;
 import org.streamrune.runtime.SagaEventPathRetention;
+import org.streamrune.runtime.SagaForwardFenceDefault;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SagaTypeOwnership;
 
@@ -32,6 +35,12 @@ import org.streamrune.runtime.SagaTypeOwnership;
  * same rows, and each takes the replies to the other's commands for its own. One store is one
  * instance, or two instances that keep the same rows ({@code SagaStore.storageIdentity()}: two
  * {@code PostgresSagaStore}s over one {@code DataSource}).
+ *
+ * <p><b>Forward fence.</b> The same hook applies {@code streamrune.saga.forward-fence} to every
+ * runner whose builder named no forward fence ({@link SagaForwardFenceDefault}): {@code on} and
+ * {@code off} as written, {@code auto} (the default) as {@code
+ * streamrune.subscription.single-active-consumer.enabled} says. A runner that named its fence keeps
+ * it. An unknown value fails startup.
  *
  * <p>Deliberately not gated on {@code streamrune.saga.compensation-retry-enabled}: the event path
  * has no enable knob of its own, so the guard must not disappear with the sweeper. Mirrors the
@@ -68,7 +77,7 @@ public class SagaEventPathRetentionConfigurer
 
   /**
    * Package-private seam: refuses two of {@code runners} that share a saga type and a store, then
-   * applies the configured window to them.
+   * applies the configured window and forward fence to them.
    */
   void apply(List<SagaRunner<?>> runners) {
     SagaTypeOwnership.requireOneRunnerPerSagaType(runners);
@@ -80,6 +89,22 @@ public class SagaEventPathRetentionConfigurer
               + " compensation key-age bound on {} SagaRunner bean(s)",
           window,
           applied);
+    }
+    SagaForwardFenceSetting fence = SagaForwardFenceSetting.parse(properties.sagaForwardFence());
+    boolean singleActiveConsumer = properties.subscriptionSingleActiveConsumerEnabled();
+    boolean fenceOn = fence.enabled(singleActiveConsumer);
+    int fenced = SagaForwardFenceDefault.applyDefault(runners, fenceOn);
+    if (fenced > 0) {
+      LOG.info(
+          "StreamRune: saga forward fence {} on {} SagaRunner bean(s) that name none themselves"
+              + " (streamrune.saga.forward-fence={}{})",
+          fenceOn ? "on" : "off",
+          fenced,
+          fence.name().toLowerCase(Locale.ROOT),
+          fence == SagaForwardFenceSetting.AUTO
+              ? ", following streamrune.subscription.single-active-consumer.enabled="
+                  + singleActiveConsumer
+              : "");
     }
   }
 }

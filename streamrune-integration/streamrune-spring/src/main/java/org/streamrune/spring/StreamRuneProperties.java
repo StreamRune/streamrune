@@ -95,13 +95,18 @@ public record StreamRuneProperties(
    *     just-claimed compensation episode is not yet re-driven (so it does not race the event path)
    * @param compensationRetryGiveUpAfter how long a saga may stay {@code COMPENSATING} before the
    *     sweeper terminalizes it {@code FAULTED} (poison bound)
+   * @param forwardFence the forward fence of the {@code SagaRunner} beans whose builder named none:
+   *     {@code auto} (default) follows {@code streamrune.subscription.single-active-consumer
+   *     .enabled}, {@code on} fences, {@code off} does not. Bound as text so that an unquoted YAML
+   *     {@code on}/{@code off} (read as a boolean) means the same as the quoted word
    */
   public record Saga(
       @DefaultValue("true") boolean enabled,
       @DefaultValue("7d") Duration deadLetterRetentionMaxAge,
       @DefaultValue("true") boolean compensationRetryEnabled,
       @DefaultValue("60s") Duration compensationRetryInterval,
-      @DefaultValue("1h") Duration compensationRetryGiveUpAfter) {}
+      @DefaultValue("1h") Duration compensationRetryGiveUpAfter,
+      @DefaultValue("auto") String forwardFence) {}
 
   /**
    * @param enabled whether outbox polling is enabled (opt-in)

@@ -92,7 +92,8 @@ class StreamRuneConfigValidatorTest {
             // event-store.statement-timeout
             java.time.Duration.ofSeconds(30),
             // sse.polling-interval
-            Duration.ofSeconds(1));
+            Duration.ofSeconds(1),
+            "auto");
     var ctx = mock(ApplicationContext.class);
     var validator = new StreamRuneConfigValidator(props, ctx);
     var ex =
@@ -149,7 +150,8 @@ class StreamRuneConfigValidatorTest {
         // event-store.statement-timeout
         java.time.Duration.ofSeconds(30),
         // sse.polling-interval
-        Duration.ofSeconds(1));
+        Duration.ofSeconds(1),
+        "auto");
   }
 
   /**
@@ -255,7 +257,8 @@ class StreamRuneConfigValidatorTest {
             // event-store.statement-timeout
             java.time.Duration.ofSeconds(30),
             // sse.polling-interval
-            Duration.ofSeconds(1));
+            Duration.ofSeconds(1),
+            "auto");
     var ctx = mock(ApplicationContext.class);
     when(ctx.containsBean(org.streamrune.core.outbox.OutboxStore.class)).thenReturn(false);
     var validator = new StreamRuneConfigValidator(props, ctx);
@@ -316,7 +319,8 @@ class StreamRuneConfigValidatorTest {
         // event-store.statement-timeout
         java.time.Duration.ofSeconds(30),
         // sse.polling-interval
-        Duration.ofSeconds(1));
+        Duration.ofSeconds(1),
+        "auto");
   }
 
   @Test
@@ -487,6 +491,7 @@ class StreamRuneConfigValidatorTest {
         // event-store.statement-timeout
         Duration.ofSeconds(30),
         // sse.polling-interval
-        Duration.ofSeconds(1));
+        Duration.ofSeconds(1),
+        "auto");
   }
 }

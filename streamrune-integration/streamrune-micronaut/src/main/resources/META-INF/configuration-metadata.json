@@ -122,6 +122,12 @@
       "defaultValue": true
     },
     {
+      "name": "streamrune.saga.forward-fence",
+      "type": "java.lang.String",
+      "description": "The forward fence of the SagaRunner beans whose builder named none: auto follows streamrune.subscription.single-active-consumer.enabled, on fences, off does not. A runner's own forwardFence(...) wins. YAML: quote \"on\"/\"off\" or use true/false.",
+      "defaultValue": "auto"
+    },
+    {
       "name": "streamrune.outbox.enabled",
       "type": "java.lang.Boolean",
       "description": "Enable outbox polling (opt-in, requires message broker)",

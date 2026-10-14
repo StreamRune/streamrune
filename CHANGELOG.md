@@ -851,6 +851,11 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `OpenTelemetry` bean exists, the query cache, SSE, and the request filter that binds
   `StreamRuneContext` from `X-Trace-Id`, `X-Correlation-Id`, the resolved identity and allow-listed
   baggage.
+- `streamrune.saga.forward-fence` (`auto` / `on` / `off`, default `auto`) sets the forward fence of
+  every `SagaRunner` bean whose builder named none: `auto` follows
+  `streamrune.subscription.single-active-consumer.enabled`, `on` and `off` set it regardless, and
+  a runner's own `forwardFence(...)` wins. The boolean spellings (`true`/`false`, `yes`/`no`, …)
+  read as `on`/`off`, so an unquoted YAML `on` works; an unknown value fails startup.
 - The request filters (`ScopedValueFilter`, `StreamRuneRequestFilter`, `StreamRuneContextFilter`)
   answer a request whose correlation id, trace id or user id `RequestContext.fromRequest` refuses —
   a value longer than 255 characters, a control character, or a correlation id that starts with

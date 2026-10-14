@@ -24,6 +24,7 @@ class ConfigurationMetadataTest {
         .contains(
             "streamrune.snapshot-every-n-events",
             "streamrune.saga.enabled",
+            "streamrune.saga.forward-fence",
             "streamrune.outbox.enabled",
             "streamrune.dead-letter.enabled",
             "streamrune.metrics.enabled",

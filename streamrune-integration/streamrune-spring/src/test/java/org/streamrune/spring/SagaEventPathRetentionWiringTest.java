@@ -36,7 +36,10 @@ import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.SagaEventPathRetention;
+import org.streamrune.runtime.SagaForwardFenceDefault;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.test.InMemoryCommandInbox;
+import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
 import org.streamrune.test.SagaEnvelopes;
@@ -237,6 +240,117 @@ class SagaEventPathRetentionWiringTest {
               }
               assertEachRoutesAsItsSagaDeclares(withoutAHook, withAHook);
             });
+  }
+
+  /**
+   * A bus that, like the one over a fencing event store, answers the saga rows its forward commands
+   * are fenced against.
+   */
+  private static CommandBus fencingBus(InMemoryEventStore eventStore) {
+    return new CommandBus() {
+      @Override
+      public boolean supportsIdempotentExecution() {
+        return true;
+      }
+
+      @Override
+      public Object sagaFenceStorageIdentity() {
+        return eventStore.sagaFenceStorageIdentity();
+      }
+
+      @Override
+      public <C extends Command> CommandResult execute(C command) {
+        throw new UnsupportedOperationException();
+      }
+
+      @Override
+      public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+        throw new UnsupportedOperationException();
+      }
+    };
+  }
+
+  /** A runner over a store the event store fences against; {@code named} null names no fence. */
+  private static SagaRunner<FakeState> fencedRunner(Boolean named) {
+    var sagaStore = new InMemorySagaStore();
+    var eventStore =
+        new InMemoryEventStore()
+            .withCommandInbox(new InMemoryCommandInbox())
+            .withSagaStore(sagaStore);
+    var builder =
+        SagaRunner.<FakeState>builder()
+            .orchestrator(new FakeOrchestrator())
+            .sagaStore(sagaStore)
+            .commandBus(fencingBus(eventStore))
+            .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore));
+    if (named != null) {
+      builder.forwardFence(named);
+    }
+    return builder.build();
+  }
+
+  @Test
+  void auto_withSingleActiveConsumer_fencesARunnerThatNamedNothing() {
+    runner
+        .withBean("orderSagaRunner", SagaRunner.class, () -> fencedRunner(null))
+        .run(ctx -> assertThat(fenceOf(ctx.getBean("orderSagaRunner"))).isTrue());
+  }
+
+  @Test
+  void auto_withoutSingleActiveConsumer_switchesItOff() {
+    runner
+        .withPropertyValues("streamrune.subscription.single-active-consumer.enabled=false")
+        .withBean("orderSagaRunner", SagaRunner.class, () -> fencedRunner(null))
+        .run(ctx -> assertThat(fenceOf(ctx.getBean("orderSagaRunner"))).isFalse());
+  }
+
+  @Test
+  void on_fences() {
+    runner
+        .withPropertyValues(
+            "streamrune.subscription.single-active-consumer.enabled=false",
+            "streamrune.saga.forward-fence=on")
+        .withBean("orderSagaRunner", SagaRunner.class, () -> fencedRunner(null))
+        .run(ctx -> assertThat(fenceOf(ctx.getBean("orderSagaRunner"))).isTrue());
+  }
+
+  @Test
+  void off_switchesItOff() {
+    runner
+        .withPropertyValues("streamrune.saga.forward-fence=off")
+        .withBean("orderSagaRunner", SagaRunner.class, () -> fencedRunner(null))
+        .run(ctx -> assertThat(fenceOf(ctx.getBean("orderSagaRunner"))).isFalse());
+  }
+
+  @Test
+  void aRunnerThatNamedItsFenceKeepsIt() {
+    runner
+        .withPropertyValues("streamrune.saga.forward-fence=off")
+        .withBean("fencedRunner", SagaRunner.class, () -> fencedRunner(true))
+        .run(ctx -> assertThat(fenceOf(ctx.getBean("fencedRunner"))).isTrue());
+    runner
+        .withPropertyValues("streamrune.saga.forward-fence=on")
+        .withBean("unfencedRunner", SagaRunner.class, () -> fencedRunner(false))
+        .run(ctx -> assertThat(fenceOf(ctx.getBean("unfencedRunner"))).isFalse());
+  }
+
+  @Test
+  void anUnknownValueFailsStartup() {
+    runner
+        .withPropertyValues("streamrune.saga.forward-fence=maybe")
+        .withBean("orderSagaRunner", SagaRunner.class, () -> fencedRunner(null))
+        .run(
+            ctx ->
+                assertThat(ctx)
+                    .hasFailed()
+                    .getFailure()
+                    .hasStackTraceContaining(
+                        "streamrune.saga.forward-fence must be auto, on or off")
+                    .hasStackTraceContaining("got: 'maybe'"));
+  }
+
+  private static boolean fenceOf(Object sagaRunnerBean) {
+    return SagaForwardFenceDefault.effectiveOf((SagaRunner<?>) sagaRunnerBean);
   }
 
   /**
