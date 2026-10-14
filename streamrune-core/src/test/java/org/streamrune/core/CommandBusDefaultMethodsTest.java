@@ -41,4 +41,9 @@ class CommandBusDefaultMethodsTest {
         ex.getMessage().contains("idempotency"),
         "message should mention idempotency, got: " + ex.getMessage());
   }
+
+  @Test
+  void sagaFenceStorageIdentity_isNullByDefault() {
+    assertNull(new MinimalCommandBus().sagaFenceStorageIdentity());
+  }
 }

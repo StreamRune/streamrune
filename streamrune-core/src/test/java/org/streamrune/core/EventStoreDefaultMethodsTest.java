@@ -4,9 +4,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
@@ -213,5 +217,99 @@ class EventStoreDefaultMethodsTest {
                     org.streamrune.core.types.IdempotencyKey.of("test-key"),
                     "com.example.Cmd"));
     assertTrue(ex.getMessage().contains("command inbox"), ex.getMessage());
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The saga forward fence
+  // ---------------------------------------------------------------------------------------------
+
+  /** A keyed store that overrides only the five-argument append, as test doubles do. */
+  private static final class KeyedOnlyEventStore implements EventStore {
+
+    final List<IdempotencyKey> appendedKeys = new java.util.ArrayList<>();
+
+    @Override
+    public IdempotentAppendResult appendWithKey(
+        StreamId streamId,
+        List<EventEnvelope> events,
+        Version expectedVersion,
+        IdempotencyKey idempotencyKey,
+        String commandType) {
+      appendedKeys.add(idempotencyKey);
+      return new IdempotentAppendResult(List.of(), expectedVersion, false);
+    }
+
+    @Override
+    public AggregateHistory load(StreamId streamId) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public AppendResult append(
+        StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
+      return List.of();
+    }
+
+    @Override
+    public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
+      return List.of();
+    }
+  }
+
+  private static final SagaOrigin FORWARD_OF =
+      SagaOrigin.dispatchedBy(SagaType.of("orders.Fulfillment"), SagaId.of("saga-1"));
+
+  @Test
+  void appendWithKeyWithoutAForwardOrigin_delegatesToTheFiveArgumentMethod() {
+    var store = new KeyedOnlyEventStore();
+    var result =
+        store.appendWithKey(
+            StreamId.of(TYPE, AggregateId.of("s1")),
+            List.of(),
+            Version.initial(),
+            IdempotencyKey.of("k-1"),
+            "Cmd",
+            null);
+
+    assertEquals(List.of(IdempotencyKey.of("k-1")), store.appendedKeys);
+    assertFalse(result.alreadyApplied());
+  }
+
+  @Test
+  void appendWithKeyWithAForwardOrigin_isUnsupportedByDefault() {
+    var store = new KeyedOnlyEventStore();
+    var ex =
+        assertThrows(
+            UnsupportedOperationException.class,
+            () ->
+                store.appendWithKey(
+                    StreamId.of(TYPE, AggregateId.of("s1")),
+                    List.of(),
+                    Version.initial(),
+                    IdempotencyKey.of("k-1"),
+                    "Cmd",
+                    FORWARD_OF));
+    assertEquals(
+        KeyedOnlyEventStore.class.getName()
+            + " cannot fence a saga's forward command: it reports no saga rows to read"
+            + " (sagaFenceStorageIdentity() is null)",
+        ex.getMessage());
+    assertTrue(store.appendedKeys.isEmpty(), "nothing is appended unfenced");
+  }
+
+  @Test
+  void sagaFenceStorageIdentity_isNullByDefault() {
+    assertNull(new KeyedOnlyEventStore().sagaFenceStorageIdentity());
+    assertNull(new MinimalEventStore().sagaFenceStorageIdentity());
   }
 }

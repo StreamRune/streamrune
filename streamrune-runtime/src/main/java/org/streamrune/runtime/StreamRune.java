@@ -108,6 +108,11 @@ public final class StreamRune implements CommandBus, AutoCloseable {
     return commandBus.supportsIdempotentExecution();
   }
 
+  @Override
+  public Object sagaFenceStorageIdentity() {
+    return commandBus.sagaFenceStorageIdentity();
+  }
+
   /**
    * Returns the underlying command bus for direct access if needed.
    *

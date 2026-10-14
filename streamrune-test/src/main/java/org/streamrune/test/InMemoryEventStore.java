@@ -34,6 +34,7 @@ import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
@@ -136,6 +137,12 @@ public final class InMemoryEventStore implements EventStore {
 
   private volatile InMemoryCommandInbox commandInbox;
 
+  /** The saga rows a forward command is fenced against; null until {@link #withSagaStore}. */
+  private volatile InMemorySagaStore sagaStore;
+
+  /** Test seam: run once inside the forward fence, before the fenced append. */
+  private volatile Runnable afterFenceRead;
+
   /**
    * Registered snapshot migrations, applied on load to upgrade a stored snapshot to the expected
    * schema version before falling back to discard-and-replay. Empty by default. Validated once when
@@ -201,6 +208,40 @@ public final class InMemoryEventStore implements EventStore {
   public InMemoryEventStore withCommandInbox(InMemoryCommandInbox inbox) {
     this.commandInbox = inbox;
     return this;
+  }
+
+  /**
+   * Wires the saga rows a saga's forward command is fenced against, so {@link #appendWithKey(
+   * StreamId, List, Version, IdempotencyKey, String, SagaOrigin)} with a {@link SagaOrigin} refuses
+   * a command of a saga that has left its forward phase, as {@code PostgresEventStore} does. Wire
+   * the same {@link InMemorySagaStore} the saga runner keeps its rows in; {@link
+   * #sagaFenceStorageIdentity()} then equals that store's {@link
+   * InMemorySagaStore#storageIdentity()}. Tests call this after construction.
+   *
+   * @param sagaStore the saga store whose entries the fence reads (required)
+   * @return this store, for chaining
+   */
+  public InMemoryEventStore withSagaStore(InMemorySagaStore sagaStore) {
+    this.sagaStore = Objects.requireNonNull(sagaStore, "sagaStore is required");
+    return this;
+  }
+
+  /**
+   * The {@link InMemorySagaStore#storageIdentity()} of the store wired by {@link #withSagaStore};
+   * {@code null} (cannot fence) until one is wired.
+   */
+  @Override
+  public Object sagaFenceStorageIdentity() {
+    InMemorySagaStore rows = sagaStore;
+    return rows == null ? null : rows.storageIdentity();
+  }
+
+  /**
+   * Test seam: {@code hook} runs once, on the appending thread, inside the next forward fence —
+   * after the saga entry is checked and while its read lock is held, before the events are stored.
+   */
+  void afterFenceRead(Runnable hook) {
+    this.afterFenceRead = hook;
   }
 
   /**
@@ -416,6 +457,26 @@ public final class InMemoryEventStore implements EventStore {
       Version expectedVersion,
       IdempotencyKey idempotencyKey,
       String commandType) {
+    return appendWithKey(streamId, events, expectedVersion, idempotencyKey, commandType, null);
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Here the fence reads the entry of the {@link InMemorySagaStore} wired by {@link
+   * #withSagaStore} under that saga's read lock, taken after this store's append lock and held
+   * until the events and the inbox row are stored.
+   *
+   * @throws UnsupportedOperationException if {@code forwardOf} is given and no saga store is wired
+   */
+  @Override
+  public IdempotentAppendResult appendWithKey(
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      IdempotencyKey idempotencyKey,
+      String commandType,
+      SagaOrigin forwardOf) {
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
     Objects.requireNonNull(expectedVersion, "expectedVersion is required");
@@ -424,6 +485,11 @@ public final class InMemoryEventStore implements EventStore {
 
     if (commandInbox == null) {
       throw new IllegalStateException("No InMemoryCommandInbox wired; call withCommandInbox(...)");
+    }
+    InMemorySagaStore rows = sagaStore;
+    if (forwardOf != null && rows == null) {
+      throw new UnsupportedOperationException(
+          "No InMemorySagaStore wired; call withSagaStore(...)");
     }
 
     // In serializing mode, serialize payloads BEFORE taking the lock (same as append):
@@ -442,15 +508,22 @@ public final class InMemoryEventStore implements EventStore {
         r.requireBoundTo(commandType, streamId);
         return new IdempotentAppendResult(r.globalOffsets(), r.finalVersion(), true);
       }
-      result = appendLocked(streamId, toAppend, expectedVersion);
-      commandInbox.record(
-          new CommandInbox.InboxResult(
-              idempotencyKey,
-              commandType,
-              streamId,
-              result.finalVersion(),
-              result.globalOffsets(),
-              Instant.now()));
+      if (forwardOf == null) {
+        result = appendAndRecord(streamId, toAppend, expectedVersion, idempotencyKey, commandType);
+      } else {
+        result =
+            rows.underForwardFence(
+                forwardOf,
+                () -> {
+                  Runnable hook = afterFenceRead;
+                  if (hook != null) {
+                    afterFenceRead = null;
+                    hook.run();
+                  }
+                  return appendAndRecord(
+                      streamId, toAppend, expectedVersion, idempotencyKey, commandType);
+                });
+      }
     } finally {
       appendLock.unlock();
     }
@@ -467,6 +540,25 @@ public final class InMemoryEventStore implements EventStore {
       }
     }
     return new IdempotentAppendResult(result.globalOffsets(), result.finalVersion(), false);
+  }
+
+  /** Stores the events and records the key in the inbox; {@code appendLock} must be held. */
+  private AppendResult appendAndRecord(
+      StreamId streamId,
+      List<StoredEvent> toAppend,
+      Version expectedVersion,
+      IdempotencyKey idempotencyKey,
+      String commandType) {
+    AppendResult result = appendLocked(streamId, toAppend, expectedVersion);
+    commandInbox.record(
+        new CommandInbox.InboxResult(
+            idempotencyKey,
+            commandType,
+            streamId,
+            result.finalVersion(),
+            result.globalOffsets(),
+            Instant.now()));
+    return result;
   }
 
   /**

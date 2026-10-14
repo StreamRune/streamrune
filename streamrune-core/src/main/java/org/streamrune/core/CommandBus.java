@@ -75,6 +75,18 @@ public interface CommandBus {
   }
 
   /**
+   * The {@link EventStore#sagaFenceStorageIdentity()} of the event store behind this bus; {@code
+   * null} when it cannot fence a saga's forward command. A saga runner compares it with its saga
+   * store's {@link org.streamrune.core.saga.SagaStore#storageIdentity()} to learn whether the
+   * commands it dispatches are fenced against its own saga rows. Cheap, no I/O.
+   *
+   * <p>Defaults to {@code null}.
+   */
+  default Object sagaFenceStorageIdentity() {
+    return null;
+  }
+
+  /**
    * Why a {@link CommandResult} short-circuited — i.e. why the handler (decider) did not run this
    * call. These two cases are <b>semantically opposite</b> and must never be conflated:
    *

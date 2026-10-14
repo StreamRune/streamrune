@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
@@ -41,6 +42,8 @@ import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEventMapper;
+import org.streamrune.core.saga.SagaForwardFencedException;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
@@ -137,6 +140,21 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * application's own {@code statement_timeout} is back in force for the next borrower. A statement
  * that runs past the bound fails with SQLState {@code 57014}, surfaced as an {@link
  * EventStoreException}.
+ *
+ * <p><b>The saga forward fence.</b> {@link #appendWithKey(StreamId, List, Version, IdempotencyKey,
+ * String, SagaOrigin)} with a saga origin takes the saga's shared fence lock in the append
+ * transaction — right after the inbox claim, before the offset reservation — then reads the saga's
+ * {@code saga_state} row, and refuses the append ({@link SagaForwardFencedException}, transaction
+ * rolled back) when the row carries an episode stamp, is terminal, or is absent. Every write of
+ * {@code PostgresSagaStore} that can bring a row to one of those states takes the exclusive form of
+ * the lock before its statement, in its transaction ({@link SagaFenceLock}); the lock is held to
+ * commit on both sides, so the append commits wholly before such a write, or waits behind it, reads
+ * the written row and is refused. The read is a statement of its own, after the lock is granted, so
+ * READ COMMITTED gives it a snapshot that contains every write the lock waited for. The lock order
+ * of a fenced append is inbox key → saga fence lock (shared) → offset counter → commit, so no
+ * append waits for a saga while it holds the system-wide counter; a fence-changing write takes the
+ * saga fence lock (exclusive) and then the row. The rows are those of a {@code PostgresSagaStore}
+ * built over the same {@link DataSource} ({@link #sagaFenceStorageIdentity()}).
  */
 public final class PostgresEventStore implements EventStore {
 
@@ -197,6 +215,16 @@ public final class PostgresEventStore implements EventStore {
   // by Postgres's normal MVCC rollback, so the SAME offsets are handed out to the next append —
   // no permanent hole, unlike a sequence-backed default (consumed before the
   // UNIQUE (aggregate_type, aggregate_id, version) check, so every conflict would burn an offset).
+  // The saga forward fence's read, run inside a forward command's append transaction after the
+  // saga's shared fence lock is granted (SagaFenceLock), as a statement of its own so its snapshot
+  // contains every fence-changing write the lock waited for. No row, or forward = false, refuses
+  // the append. A stamp is never cleared and a terminal status never left, so the predicate only
+  // ever turns from true to false (a row created later turns it from false to true, which admits
+  // nothing that was refused).
+  private static final String FENCE_SAGA_FORWARD =
+      "SELECT episode_version IS NULL AND status NOT IN ('COMPLETED', 'COMPENSATED', 'FAILED')"
+          + " AS forward FROM saga_state WHERE saga_id = ? AND saga_type = ?";
+
   private static final String RESERVE_OFFSETS =
       "UPDATE global_offset_sequence SET next_value = next_value + ? WHERE id = 1 "
           + "RETURNING next_value";
@@ -1283,6 +1311,37 @@ public final class PostgresEventStore implements EventStore {
   /**
    * {@inheritDoc}
    *
+   * <p>The six-argument method with no saga origin: unfenced.
+   */
+  @Override
+  public IdempotentAppendResult appendWithKey(
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      IdempotencyKey idempotencyKey,
+      String commandType) {
+    return appendWithKey(streamId, events, expectedVersion, idempotencyKey, commandType, null);
+  }
+
+  /**
+   * The {@link DataSource} this store appends through: the fence reads the {@code saga_state} rows
+   * of a {@code PostgresSagaStore} built over the same object, whose {@code storageIdentity()} is
+   * that {@code DataSource}.
+   */
+  @Override
+  public Object sagaFenceStorageIdentity() {
+    return dataSource;
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Here the fence is the saga's shared fence lock and one primary-key read of its {@code
+   * saga_state} row, on the append's connection, right after the inbox claim and before the offset
+   * reservation (see the class javadoc). A claim the inbox loses is answered from the winner's row
+   * without reading the fence: the winner committed before. A refusal rolls back the inbox claim
+   * with the rest of the transaction.
+   *
    * <p>Implementation note: a claim conflict (another execution already holds this idempotency key)
    * releases this append's pooled connection BEFORE the lookback read of the winning inbox row, so
    * concurrent claim-losers never hold one connection while demanding a second — the pool cannot
@@ -1294,7 +1353,8 @@ public final class PostgresEventStore implements EventStore {
       List<EventEnvelope> events,
       Version expectedVersion,
       IdempotencyKey idempotencyKey,
-      String commandType) {
+      String commandType,
+      SagaOrigin forwardOf) {
     if (commandInbox == null) {
       throw new UnsupportedOperationException(
           "This PostgresEventStore was built without a command inbox");
@@ -1352,7 +1412,12 @@ public final class PostgresEventStore implements EventStore {
           // rollback point) before this connection is released for the fresh lookback read.
           claimLost = true;
         } else {
-          // (c) append events, backfill offsets, outbox/audit, commit, notify
+          // (c) fence a saga's forward command, then append events, backfill offsets,
+          // outbox/audit, commit, notify. A refusal throws here with committed == false, so the
+          // finally below rolls back the inbox claim.
+          if (forwardOf != null) {
+            requireSagaForward(conn, forwardOf);
+          }
           List<GlobalOffset> globalOffsets = insertEvents(conn, streamId, rows, expectedVersion);
           commandInbox.backfillOffsets(idempotencyKey, globalOffsets, conn);
           if (!outboxEntries.isEmpty()) outboxStore.saveAll(outboxEntries, conn);
@@ -1418,6 +1483,26 @@ public final class PostgresEventStore implements EventStore {
       return new IdempotentAppendResult(prior.globalOffsets(), prior.finalVersion(), true);
     }
     return result;
+  }
+
+  /**
+   * The fence of {@link #appendWithKey(StreamId, List, Version, IdempotencyKey, String,
+   * SagaOrigin)}: takes the saga's shared fence lock in the append's transaction, held to its end,
+   * then reads the saga's row and throws {@link SagaForwardFencedException} unless it is in its
+   * forward phase.
+   */
+  private static void requireSagaForward(Connection conn, SagaOrigin forwardOf)
+      throws SQLException {
+    SagaFenceLock.lockShared(conn, forwardOf.sagaType(), forwardOf.sagaId());
+    try (PreparedStatement ps = conn.prepareStatement(FENCE_SAGA_FORWARD)) {
+      ps.setString(1, forwardOf.sagaId().value());
+      ps.setString(2, forwardOf.sagaType().value());
+      try (ResultSet rs = ps.executeQuery()) {
+        if (!rs.next() || !rs.getBoolean(1)) {
+          throw new SagaForwardFencedException(forwardOf);
+        }
+      }
+    }
   }
 
   /**

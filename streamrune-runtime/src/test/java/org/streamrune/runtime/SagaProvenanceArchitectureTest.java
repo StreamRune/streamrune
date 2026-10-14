@@ -213,6 +213,27 @@ class SagaProvenanceArchitectureTest {
           .accessTargetWhere(
               callOrReferenceOf(SagaOrigin.class, "dispatchedBy", SagaType.class, SagaId.class));
 
+  /**
+   * The marker that fences a saga's forward command at its commit is bound by saga dispatch alone:
+   * a command dispatched anywhere else is never fenced on a saga's behalf.
+   */
+  @ArchTest
+  static final ArchRule onlySagaDispatchBindsTheSagaForward =
+      noClasses()
+          .that()
+          .doNotBelongToAnyOf(StreamRuneContext.class, SagaCommandDispatch.class)
+          .should()
+          .accessField(StreamRuneContext.class, "SAGA_FORWARD");
+
+  /** The bus alone asks which saga a keyed append is fenced against, and hands it to the store. */
+  @ArchTest
+  static final ArchRule onlyTheBusAsksWhichSagaToFence =
+      noClasses()
+          .that()
+          .doNotBelongToAnyOf(StreamRuneContext.class, VirtualThreadCommandBus.class)
+          .should()
+          .callMethod(StreamRuneContext.class, "sagaForwardOf", IdempotencyKey.class);
+
   @ArchTest
   static final ArchRule onlySagaOriginCallsItsConstructor =
       noClasses()

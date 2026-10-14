@@ -24,7 +24,7 @@ testImplementation("org.streamrune:streamrune-test:1.0.0-alpha-SNAPSHOT")
 
 ## InMemoryEventStore
 
-Thread-safe in-memory implementation of `EventStore` that mirrors `PostgresEventStore`'s observable semantics: strict optimistic locking, serialized global ordering, snapshots with schema versions (`withMigrations(...)` for snapshot migrations) and upcasting on read (`withUpcasters(...)`). `InMemoryEventStore.serializing(typeRegistry, cryptoEngine)` stores JSON instead of object references, so `@Encrypted` fields, crypto-shredding and type registration are exercised too. Use in unit tests — events are lost on JVM shutdown.
+Thread-safe in-memory implementation of `EventStore` that mirrors `PostgresEventStore`'s observable semantics: strict optimistic locking, serialized global ordering, snapshots with schema versions (`withMigrations(...)` for snapshot migrations) and upcasting on read (`withUpcasters(...)`). `InMemoryEventStore.serializing(typeRegistry, cryptoEngine)` stores JSON instead of object references, so `@Encrypted` fields, crypto-shredding and type registration are exercised too. Use in unit tests — events are lost on JVM shutdown. `withCommandInbox(inbox).withSagaStore(sagaStore)` wires the command inbox and the `InMemorySagaStore` whose entries a saga's forward command is fenced against, as `PostgresEventStore` fences it against `saga_state`: a keyed append with a saga origin is refused (`SagaForwardFencedException`, nothing stored, key unclaimed) once that saga's entry carries a compensation episode stamp, is terminal or is gone.
 
 ```java
 var store = new InMemoryEventStore();
