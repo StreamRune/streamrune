@@ -6,6 +6,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -318,8 +319,20 @@ public final class PostgresSagaStore implements SagaStore {
           + "ORDER BY updated_at ASC LIMIT ? "
           + "FOR UPDATE SKIP LOCKED";
 
+  /**
+   * How long one {@code saga_state} write may wait: for the saga's exclusive fence lock, then for
+   * the row. Five seconds.
+   */
+  static final Duration ROW_WRITE_TIMEOUT = Duration.ofSeconds(5);
+
   private final DataSource dataSource;
   private final ObjectMapper objectMapper;
+
+  /**
+   * The bound of every {@code UPDATE} and {@code DELETE} of {@code saga_state} and of the
+   * exclusive-lock statement before a fence-changing one, as each statement's JDBC query timeout.
+   */
+  private final StatementTimeout rowWriteTimeout;
 
   /**
    * Creates a store that serializes saga state with {@code objectMapper}.
@@ -335,10 +348,19 @@ public final class PostgresSagaStore implements SagaStore {
    * @param objectMapper the mapper used for saga-state (de)serialization (required)
    */
   public PostgresSagaStore(DataSource dataSource, ObjectMapper objectMapper) {
+    this(dataSource, objectMapper, ROW_WRITE_TIMEOUT);
+  }
+
+  /**
+   * A store whose saga-row writes wait at most {@code rowWriteTimeout}; for tests that reach the
+   * bound in less than {@link #ROW_WRITE_TIMEOUT}.
+   */
+  PostgresSagaStore(DataSource dataSource, ObjectMapper objectMapper, Duration rowWriteTimeout) {
     if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
     if (objectMapper == null) throw new IllegalArgumentException("objectMapper is required");
     this.dataSource = dataSource;
     this.objectMapper = objectMapper;
+    this.rowWriteTimeout = StatementTimeout.of(rowWriteTimeout);
   }
 
   /**
@@ -664,6 +686,7 @@ public final class PostgresSagaStore implements SagaStore {
       ps.setString(1, sagaId.value());
       ps.setString(2, sagaType.value());
       ps.setLong(3, expectedVersion);
+      rowWriteTimeout.applyTo(ps);
       return PostgresTransactions.commitIfManual(
           conn,
           "saga mark faulted",
@@ -696,6 +719,7 @@ public final class PostgresSagaStore implements SagaStore {
       ps.setBoolean(1, pending);
       ps.setString(2, sagaId.value());
       ps.setString(3, sagaType.value());
+      rowWriteTimeout.applyTo(ps);
       // 0 rows = absent row: the documented no-op
       PostgresTransactions.commitIfManual(conn, "saga dead-letter shield", c -> ps.executeUpdate());
     } catch (Exception e) {
@@ -789,6 +813,7 @@ public final class PostgresSagaStore implements SagaStore {
     try (Connection conn = dataSource.getConnection()) {
       if (!leavesForwardPhase) {
         try (PreparedStatement ps = conn.prepareStatement(write.sql())) {
+          rowWriteTimeout.applyTo(ps);
           return PostgresTransactions.commitIfManual(conn, transaction, c -> work.run(ps));
         }
       }
@@ -796,9 +821,10 @@ public final class PostgresSagaStore implements SagaStore {
       conn.setAutoCommit(false);
       boolean committed = false;
       try {
-        SagaFenceLock.lockExclusive(conn, sagaType, sagaId);
+        SagaFenceLock.lockExclusive(conn, sagaType, sagaId, rowWriteTimeout);
         T result;
         try (PreparedStatement ps = conn.prepareStatement(write.sql())) {
+          rowWriteTimeout.applyTo(ps);
           result = work.run(ps);
         }
         conn.commit();

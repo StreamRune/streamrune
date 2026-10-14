@@ -553,7 +553,7 @@ class SagaForwardFenceLockingIT {
         Future<Integer> written =
             pool.submit(
                 () -> {
-                  SagaFenceLock.lockExclusive(writer, TYPE, ID);
+                  SagaFenceLock.lockExclusive(writer, TYPE, ID, StatementTimeout.DISABLED);
                   return touchRow(writer);
                 });
         assertEquals(1, written.get(60, TimeUnit.SECONDS));

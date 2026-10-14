@@ -82,12 +82,17 @@ final class SagaFenceLock {
 
   /**
    * Pins {@code conn}'s open transaction to READ COMMITTED and takes the exclusive lock in it, in
-   * one round trip; waits for every holder. Must be the first statement of the transaction ({@code
-   * SET TRANSACTION} is refused after a query), so that the statements after it read the rows as
-   * they are once the lock is granted. The pin ends with the transaction.
+   * one round trip; waits for every holder, for at most {@code bound} (the statement's JDBC query
+   * timeout: a wait that outlasts it is cancelled with SQLState {@code 57014}). Must be the first
+   * statement of the transaction ({@code SET TRANSACTION} is refused after a query), so that the
+   * statements after it read the rows as they are once the lock is granted. The pin ends with the
+   * transaction.
    */
-  static void lockExclusive(Connection conn, SagaType sagaType, SagaId sagaId) throws SQLException {
+  static void lockExclusive(
+      Connection conn, SagaType sagaType, SagaId sagaId, StatementTimeout bound)
+      throws SQLException {
     try (Statement st = conn.createStatement()) {
+      bound.applyTo(st);
       st.execute(
           String.format(Locale.ROOT, PIN_AND_LOCK_EXCLUSIVE, CLASS_ID, objectId(sagaType, sagaId)));
     }
