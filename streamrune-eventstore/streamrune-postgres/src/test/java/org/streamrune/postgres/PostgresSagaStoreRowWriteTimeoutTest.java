@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -143,6 +145,52 @@ class PostgresSagaStoreRowWriteTimeoutTest {
     assertThat(row.episodeVersion()).isEqualTo(2L);
   }
 
+  /**
+   * A claimer that goes silent inside its transaction — after it took the saga's exclusive fence
+   * lock, before its write and its commit — is ended by the transaction's own idle bound (the
+   * row-write bound): the fence lock is free again within the bound, another claim is made, and the
+   * silent call fails with {@link EventStoreException} once it goes on. Its pooled connection is
+   * discarded: the next use of the pool works.
+   */
+  @Test
+  void aClaimerSilentInsideItsTransactionIsEndedAtTheBound_andItsConnectionIsDiscarded()
+      throws Exception {
+    PGSimpleDataSource physical = new PGSimpleDataSource();
+    physical.setUrl(PG.getJdbcUrl());
+    physical.setUser(PG.getUsername());
+    physical.setPassword(PG.getPassword());
+    physical.setApplicationName("silent-claimer");
+    HikariConfig config = new HikariConfig();
+    config.setDataSource(physical);
+    config.setMaximumPoolSize(1);
+    config.setConnectionTimeout(5_000);
+    try (HikariDataSource pool = new HikariDataSource(config)) {
+      PausingDataSource pausing = new PausingDataSource(pool);
+      PostgresSagaStore silent =
+          new PostgresSagaStore(pausing, mapper(), Duration.ofMillis(BOUND_MILLIS));
+      PausingDataSource.Pause pause = pausing.pauseBefore("UPDATE saga_state");
+      CompletableFuture<Void> claiming = CompletableFuture.runAsync(() -> claimThrough(silent));
+      pause.awaitPaused();
+      long idleSince = System.nanoTime();
+
+      awaitNoBackendNamed("silent-claimer", BOUND_MILLIS + SLACK_MILLIS, idleSince);
+      Connection append = holdTheSharedFenceLock();
+      append.rollback();
+      claim(1L);
+      assertThat(store.load(ID, TYPE, BoundState.class).orElseThrow().episodeVersion())
+          .as("the other claim is made")
+          .isEqualTo(2L);
+
+      pause.release();
+      Throwable thrown = catchFailure(claiming);
+      assertThat(thrown).isInstanceOf(EventStoreException.class);
+      assertThat(sqlStateOf(thrown)).as("the session was ended").matches("25P03|08.*");
+      assertThat(silent.load(ID, TYPE, BoundState.class))
+          .as("the pool hands out a working connection")
+          .isPresent();
+    }
+  }
+
   @Test
   void aWriteThatKeepsTheForwardPhaseFailsAtItsBoundBehindAHeldRow() throws Exception {
     holdTheRow();
@@ -239,6 +287,44 @@ class PostgresSagaStoreRowWriteTimeoutTest {
       return e.getCause();
     } catch (TimeoutException | InterruptedException e) {
       throw new AssertionError("the write was still waiting after ten seconds", e);
+    }
+  }
+
+  private static void claimThrough(PostgresSagaStore through) {
+    through.claimCompensating(ID, TYPE, new BoundState("claimed"), 1L, null);
+  }
+
+  private static Throwable catchFailure(CompletableFuture<Void> running) {
+    try {
+      running.get(30, TimeUnit.SECONDS);
+      return null;
+    } catch (ExecutionException e) {
+      return e.getCause();
+    } catch (TimeoutException | InterruptedException e) {
+      throw new AssertionError("the call did not end", e);
+    }
+  }
+
+  /** Waits until no backend carries {@code applicationName}, failing past {@code boundMillis}. */
+  static void awaitNoBackendNamed(String applicationName, long boundMillis, long since)
+      throws Exception {
+    while (true) {
+      try (Connection conn = dataSource.getConnection();
+          PreparedStatement ps =
+              conn.prepareStatement(
+                  "SELECT count(*) FROM pg_stat_activity WHERE application_name = ?")) {
+        ps.setString(1, applicationName);
+        try (ResultSet rs = ps.executeQuery()) {
+          rs.next();
+          if (rs.getInt(1) == 0) {
+            return;
+          }
+        }
+      }
+      assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - since))
+          .as("the backend of " + applicationName + " is ended within " + boundMillis + "ms")
+          .isLessThan(boundMillis);
+      TimeUnit.MILLISECONDS.sleep(20);
     }
   }
 

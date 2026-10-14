@@ -81,11 +81,16 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * (SQLState {@code 57014}, surfaced as {@link EventStoreException}, so the caller retries: the
  * timeout runner on its next poll, a delivery on its redelivery). A forward append that went silent
  * holds the fence lock for at most the event store's statement timeout (its transaction's idle
- * bound), so a claim behind it is made by a poll at most that long later. Behind a
- * transaction-pooling PgBouncer the cancel request is forwarded to the server connection the client
- * is linked to. Reads and inserts carry no bound of the store's own: {@code SELECT … FOR UPDATE
- * SKIP LOCKED} never waits, and an insert that does nothing on conflict waits only for an
- * uncommitted insert of the same id.
+ * bound), so a claim behind it is made by a poll at most that long later. A fence-changing write's
+ * own transaction carries the same five seconds as its idle bound ({@code SET LOCAL
+ * idle_in_transaction_session_timeout}, in the round trip of its lock statement): a writer that
+ * goes silent between its lock and its commit has its session ended by the server and releases the
+ * fence lock and the row. {@code PostgresSagaDeadLetterStore} bounds its {@code saga_state}
+ * statements and the transactions that hold a saga row the same way. Behind a transaction-pooling
+ * PgBouncer the cancel request is forwarded to the server connection the client is linked to. Reads
+ * and inserts carry no bound of the store's own: {@code SELECT … FOR UPDATE SKIP LOCKED} never
+ * waits, and an insert that does nothing on conflict waits only for an uncommitted insert of the
+ * same id.
  *
  * <p><b>Failure taxonomy.</b> Every write path converts the state to JSON <em>before</em> it
  * acquires a pooled connection, and every path reports the two failure classes distinctly:
@@ -808,6 +813,9 @@ public final class PostgresSagaStore implements SagaStore {
    * before the wait, which under a REPEATABLE READ default would report a stale view (or a
    * serialization failure) for a row another unfenced write touched meanwhile. The pin is
    * transaction-scoped, so the pooled connection's session keeps its own isolation.
+   *
+   * <p>The transaction's lock statement also sets its idle bound to the row-write bound, so a
+   * writer that goes silent before its commit is ended by the server and its locks released.
    *
    * <p>The transaction holds the fence lock, then the row's lock; it takes no other lock, so it
    * cannot close a cycle with a fenced append (inbox key, fence lock, offset counter). The row's
