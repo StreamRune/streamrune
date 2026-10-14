@@ -204,9 +204,10 @@ not share one checkpoint — see
 a live subscription that died), or when a started background relay's thread has died; otherwise it is `UP`.
 These are the conditions that do not clear on their own. Everything that is still running but
 behind or failing is `DEGRADED`: a subscription whose lag is at or above the lag threshold, one with
-a run of consecutive delivery errors, a paused one, one whose LISTEN/NOTIFY push path is dead, and a
-relay in backoff. `DEGRADED` shows in that component's own `status` detail and never changes the
-overall status, so alert on the details and on the metrics below as well as on the check.
+a run of consecutive delivery errors, a paused one, one whose LISTEN/NOTIFY push path is dead, a
+relay in backoff, and a replica whose crypto forget channel does not hear its peers' forgets.
+`DEGRADED` shows in that component's own `status` detail and never changes the overall status, so
+alert on the details and on the metrics below as well as on the check.
 
 **Lag never makes the check `DOWN`.** Lag is measured against the `projection_offset` checkpoint
 that every replica shares, so every replica reports the same value. A new projection replaying the
@@ -246,6 +247,7 @@ The details are:
 | `saga-compensation-retry:<saga type>` | one per `SagaRunner`, named after its saga type — the saga state's fully-qualified class name, e.g. `saga-compensation-retry:com.shop.fulfillment.OrderSagaState` (a nested class renders with `$`). Two saga-state classes that share a simple name in different packages are two saga types and report as two components. With `streamrune.saga.compensation-retry-enabled=false` the name carries a `:sampling-only` suffix — that sweeper re-drives nothing and only samples the saga backlog gauges. With the knob off **and** no `StreamRuneMetrics` wired, no sweeper is built at all and the component is **absent** — "not configured", not a failure |
 | `saga-timeout:<saga type>` | one per `SagaTimeoutRunner` bean, named after its saga type like the compensation-retry sweeper. Besides `DOWN` (its thread died) and `DEGRADED` on failing polls, it reads `DEGRADED` while a saga's timeout claim is deferred past the claim's wait: a step of that saga — a delivery dispatching its forward commands in this process — has not returned, and the claim is not made underneath it. The log names the saga (a `WARNING` per poll). A restart of the process ends such a step and frees its lock; the first poll afterwards claims |
 | `inbox-retention-sweeper`, `dead-letter-retention-sweeper`, `outbox-retention-sweeper`, `saga-dead-letter-retention-sweeper` | the framework's own retention sweepers. A sweeper whose retention is disabled never starts its thread and reads `UP` |
+| `crypto-forget-listen` | the crypto engine is a `CachedCryptoEngine` whose forget channel listens for peers' forgets — the PostgreSQL channel (`PostgresCryptoForgetSignal`) the integrations wire whenever the cache is enabled and a `DataSource` is present, for every backend. It reads `DEGRADED` while this replica does not hear them: before its first `LISTEN` takes effect, while its LISTEN connection is being re-established, or when no LISTEN connection can be opened at all (the `Crypto-forget LISTEN disabled` WARN). Meanwhile the replica serves cached plaintext that a peer may have forgotten; when it hears again it evicts its whole plaintext cache (see [GDPR erasure](advanced/gdpr-erasure.md)). Never `DOWN`: the write TTL still bounds what it serves. `alive` reads whether it listens. Absent without a crypto engine, with `streamrune.crypto.cache.enabled=false`, and without a `DataSource`. A `CachedCryptoEngine` of the application's own is reported when it is the `CryptoEngine` bean, or once the application calls `BackgroundRelayHealthContributor.registerCryptoForgetSignal(signal)` |
 | `sse-event-feed` | the Server-Sent Events endpoint is enabled (`streamrune.sse.enabled=true`) and the integration runs its feed (`SseEventFeed`); see the Server-Sent Events entry of the [Security checklist](#security-checklist) for what `DOWN` means there and how the feed is started again. A feed of the application's own is present once the application registers it |
 
 ## Metrics and tracing

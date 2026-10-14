@@ -251,6 +251,28 @@ multi-replica deployment, also wire a `CryptoForgetSignal` (e.g. `PostgresCrypto
 forgotten subject's cached plaintext on peer replicas, instead of relying solely on the TTL. The
 framework auto-configs wire this automatically for all four backends when a `DataSource` is present.
 
+**What a replica that cannot hear does.** A replica hears its peers' forgets only while its `LISTEN`
+is in effect. Before the first one takes effect, and while its LISTEN connection is lost and being
+re-established (it retries every second), a forget published by a peer never reaches it, and it
+keeps serving what it has cached. Each time its `LISTEN` takes effect — the first time and after
+every reconnect — it evicts its whole plaintext cache before it handles any forget, so every
+subject is read from the key store again and a subject forgotten meanwhile finds its key gone. A
+subject's plaintext therefore outlives a peer's forget on a replica that could not hear it for at
+most as long as that replica stays unable to hear, and never longer than the write TTL. The
+`LISTEN` comes first and the eviction second: evicting first would leave a moment in which a read
+caches a subject whose forget was published before the `LISTEN` and never arrives. A decrypt in
+flight while the cache is evicted does not leave its result cached either.
+`CryptoForgetSignal.isListening()` tells you whether the replica hears right now, and the framework
+health indicators report the `crypto-forget-listen` component `DEGRADED` while it does not (see
+[the production guide](../production.md#health-checks)).
+
+**What the TTL still bounds.** A replica whose `LISTEN` never takes effect (below) serves its cache
+until the write TTL. A forget delivered late — the notification is delayed between the database and
+a listening replica — is applied when it arrives, and that replica serves the subject from its cache
+until then. A LISTEN connection whose server vanished without closing it (a crashed host, an
+instance replaced behind a virtual IP) raises no error: the replica keeps reporting that it listens
+while it hears nothing, and serves what it misses until the write TTL.
+
 `PostgresCryptoForgetSignal` publishes on a connection borrowed from the `DataSource` and listens on
 one connection of its own: a dedicated pool of one connection per replica, never a slot of the
 application pool — size `max_connections` for it. It opens that pool from the `DataSource`'s

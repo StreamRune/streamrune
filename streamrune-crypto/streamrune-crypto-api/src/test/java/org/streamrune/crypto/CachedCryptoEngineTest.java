@@ -480,14 +480,160 @@ class CachedCryptoEngineTest {
     verify(delegateB, times(1)).decrypt(SubjectId.of("keep-me"), ciphertext);
   }
 
+  @Test
+  void aChannelThatStartsListeningEvictsEveryCachedPlaintext() {
+    byte[] ciphertext = "cipher".getBytes();
+    when(delegate.decrypt(SubjectId.of("one"), ciphertext)).thenReturn("first".getBytes());
+    when(delegate.decrypt(SubjectId.of("two"), ciphertext)).thenReturn("second".getBytes());
+    TestForgetSignal channel = new TestForgetSignal();
+    var listeningEngine =
+        CachedCryptoEngine.builder().delegate(delegate).forgetSignal(channel).build();
+    listeningEngine.decrypt(SubjectId.of("one"), ciphertext);
+    listeningEngine.decrypt(SubjectId.of("two"), ciphertext);
+
+    // A forget published before the channel could hear never arrives; when it starts hearing, the
+    // engine drops everything it cached until then.
+    channel.startListening();
+
+    listeningEngine.decrypt(SubjectId.of("one"), ciphertext);
+    listeningEngine.decrypt(SubjectId.of("two"), ciphertext);
+    verify(delegate, times(2)).decrypt(SubjectId.of("one"), ciphertext);
+    verify(delegate, times(2)).decrypt(SubjectId.of("two"), ciphertext);
+  }
+
+  @Test
+  void aDecryptInFlightWhenTheChannelStartsListeningDoesNotStayCached() throws Exception {
+    TestForgetSignal channel = new TestForgetSignal();
+    assertDecryptInFlightDoesNotStayCached(channel, channel::startListening);
+  }
+
+  @Test
+  void aDecryptInFlightWhenAPeerForgetsTheSubjectDoesNotStayCached() throws Exception {
+    TestForgetSignal channel = new TestForgetSignal();
+    var peer = CachedCryptoEngine.builder().delegate(delegate).forgetSignal(channel).build();
+    assertDecryptInFlightDoesNotStayCached(channel, () -> peer.deleteKey(IN_FLIGHT_SUBJECT));
+  }
+
+  private static final SubjectId IN_FLIGHT_SUBJECT = SubjectId.of("in-flight");
+
+  /**
+   * A decrypt is inside its delegate — it has read the key — when {@code eviction} runs on the
+   * signal's thread (here the test's); the decrypt then stores its result. The entry it stored must
+   * not survive: the next decrypt goes to the delegate again.
+   */
+  private static void assertDecryptInFlightDoesNotStayCached(
+      TestForgetSignal channel, Runnable eviction) throws Exception {
+    byte[] ciphertext = "cipher".getBytes();
+    CountDownLatch insideDelegate = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    java.util.concurrent.atomic.AtomicInteger calls =
+        new java.util.concurrent.atomic.AtomicInteger();
+    CryptoEngine slowDelegate =
+        new CryptoEngine() {
+          @Override
+          public byte[] encrypt(SubjectId s, byte[] p) {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public byte[] decrypt(SubjectId s, byte[] c) {
+            if (calls.incrementAndGet() == 1) {
+              insideDelegate.countDown();
+              try {
+                assertTrue(release.await(10, TimeUnit.SECONDS), "the decrypt was not released");
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+              }
+            }
+            return "secret".getBytes();
+          }
+
+          @Override
+          public void deleteKey(SubjectId s) {}
+
+          @Override
+          public boolean isKeyAvailable(SubjectId s) {
+            return true;
+          }
+        };
+    var engineUnderTest =
+        CachedCryptoEngine.builder().delegate(slowDelegate).forgetSignal(channel).build();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      var inFlight = executor.submit(() -> engineUnderTest.decrypt(IN_FLIGHT_SUBJECT, ciphertext));
+      assertTrue(insideDelegate.await(10, TimeUnit.SECONDS), "the decrypt never reached its key");
+
+      eviction.run();
+      release.countDown();
+      assertEquals("secret", new String(inFlight.get(10, TimeUnit.SECONDS)));
+
+      engineUnderTest.decrypt(IN_FLIGHT_SUBJECT, ciphertext);
+      assertEquals(
+          2,
+          calls.get(),
+          "the plaintext a decrypt in flight stored after the eviction was served from the cache");
+    } finally {
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  void aDecryptThatNoSignalInterruptedStaysCached() {
+    byte[] ciphertext = "cipher".getBytes();
+    when(delegate.decrypt(SubjectId.of("calm"), ciphertext)).thenReturn("calm".getBytes());
+    TestForgetSignal channel = new TestForgetSignal();
+    var listeningEngine =
+        CachedCryptoEngine.builder().delegate(delegate).forgetSignal(channel).build();
+    channel.startListening();
+
+    listeningEngine.decrypt(SubjectId.of("calm"), ciphertext);
+    listeningEngine.decrypt(SubjectId.of("calm"), ciphertext);
+    verify(delegate, times(1)).decrypt(SubjectId.of("calm"), ciphertext);
+  }
+
+  @Test
+  void forgetSignalReturnsTheConfiguredChannelOrNoop() {
+    TestForgetSignal channel = new TestForgetSignal();
+    assertSame(
+        channel,
+        CachedCryptoEngine.builder()
+            .delegate(delegate)
+            .forgetSignal(channel)
+            .build()
+            .forgetSignal());
+    assertSame(CryptoForgetSignal.NOOP, engine.forgetSignal());
+  }
+
+  @Test
+  void theNoopChannelNeitherListensNorIsSubscribed() {
+    CryptoForgetSignal.NOOP.subscribe(token -> fail("NOOP delivers nothing"));
+    assertFalse(CryptoForgetSignal.NOOP.isSubscribed());
+    assertFalse(CryptoForgetSignal.NOOP.isListening());
+  }
+
+  @Test
+  void theOneArgumentSubscribeDoesNothingWhenTheChannelStartsListening() {
+    TestForgetSignal channel = new TestForgetSignal();
+    java.util.List<String> heard = new java.util.ArrayList<>();
+    channel.subscribe(heard::add);
+    channel.startListening();
+    channel.publish("token");
+    assertEquals(java.util.List.of("token"), heard);
+    assertFalse(channel.isSubscribed(), "a channel that does not report a listening side");
+  }
+
   /**
    * In-memory {@link CryptoForgetSignal} standing in for a shared cross-replica channel: {@code
    * publish} synchronously fans the token out to every subscribed listener, so both engines wired
    * to the same instance see each other's forget signals — modelling the Postgres LISTEN/NOTIFY
-   * channel without a database.
+   * channel without a database. {@link #startListening()} runs every subscriber's {@code
+   * onListening}, as a channel does when its listening side takes effect.
    */
   private static final class TestForgetSignal implements CryptoForgetSignal {
     private final java.util.List<java.util.function.Consumer<String>> listeners =
+        new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final java.util.List<Runnable> onListening =
         new java.util.concurrent.CopyOnWriteArrayList<>();
 
     @Override
@@ -498,8 +644,13 @@ class CachedCryptoEngineTest {
     }
 
     @Override
-    public void subscribe(java.util.function.Consumer<String> listener) {
-      listeners.add(listener);
+    public void subscribe(java.util.function.Consumer<String> onForget, Runnable onListening) {
+      listeners.add(onForget);
+      this.onListening.add(onListening);
+    }
+
+    void startListening() {
+      onListening.forEach(Runnable::run);
     }
   }
 

@@ -245,6 +245,88 @@ class StreamRuneAutoConfigurationTest {
             });
   }
 
+  /** A forget channel whose listening side the test switches. */
+  static final class SwitchableForgetSignal implements org.streamrune.crypto.CryptoForgetSignal {
+    volatile boolean listening;
+
+    @Override
+    public void publish(String token) {}
+
+    @Override
+    public void subscribe(java.util.function.Consumer<String> onForget, Runnable onListening) {}
+
+    @Override
+    public boolean isSubscribed() {
+      return true;
+    }
+
+    @Override
+    public boolean isListening() {
+      return listening;
+    }
+  }
+
+  private static org.streamrune.core.crypto.CryptoEngine cachedEngine(
+      org.streamrune.crypto.CryptoForgetSignal signal) {
+    return org.streamrune.crypto.CachedCryptoEngine.builder()
+        .delegate(mock(org.streamrune.core.crypto.CryptoEngine.class))
+        .forgetSignal(signal)
+        .build();
+  }
+
+  /** A replica that does not hear peers' forgets reads DEGRADED until it does. */
+  @Test
+  void aListeningCryptoForgetChannelIsReportedByTheRelayHealthContributor() {
+    var signal = new SwitchableForgetSignal();
+    contextRunner
+        .withBean(org.streamrune.core.crypto.CryptoEngine.class, () -> cachedEngine(signal))
+        .run(
+            ctx -> {
+              var relayHealth =
+                  ctx.getBean(org.streamrune.runtime.BackgroundRelayHealthContributor.class);
+              assertThat(relayHealth.components())
+                  .filteredOn(component -> component.name().equals("crypto-forget-listen"))
+                  .singleElement()
+                  .satisfies(
+                      channel ->
+                          assertThat(channel.status())
+                              .isEqualTo(
+                                  org.streamrune.runtime.BackgroundRelayHealthContributor.Status
+                                      .DEGRADED));
+              signal.listening = true;
+              assertThat(relayHealth.components())
+                  .filteredOn(component -> component.name().equals("crypto-forget-listen"))
+                  .singleElement()
+                  .satisfies(
+                      channel ->
+                          assertThat(channel.status())
+                              .isEqualTo(
+                                  org.streamrune.runtime.BackgroundRelayHealthContributor.Status
+                                      .UP));
+            });
+  }
+
+  /** No crypto engine, or one whose channel does not listen: nothing new is reported. */
+  @Test
+  void noCryptoForgetComponentWithoutAListeningChannel() {
+    contextRunner.run(
+        ctx ->
+            assertThat(
+                    ctx.getBean(org.streamrune.runtime.BackgroundRelayHealthContributor.class)
+                        .components())
+                .noneMatch(component -> component.name().equals("crypto-forget-listen")));
+    contextRunner
+        .withBean(
+            org.streamrune.core.crypto.CryptoEngine.class,
+            () -> cachedEngine(org.streamrune.crypto.CryptoForgetSignal.NOOP))
+        .run(
+            ctx ->
+                assertThat(
+                        ctx.getBean(org.streamrune.runtime.BackgroundRelayHealthContributor.class)
+                            .components())
+                    .noneMatch(component -> component.name().equals("crypto-forget-listen")));
+  }
+
   /** The feed's polling thread is watched like the framework's other pollers. */
   @Test
   void sseEventFeedIsReportedByTheRelayHealthContributor() {

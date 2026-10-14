@@ -33,13 +33,32 @@ import org.streamrune.crypto.CryptoForgetSignal;
  *       per the SPI contract: a publish failure is logged and swallowed so it can never fail the
  *       originating {@code deleteKey} (the durable key deletion already succeeded, and peers are
  *       still bounded by the write-TTL ceiling).
- *   <li><b>Listen</b> ({@link #subscribe(Consumer)}) starts a single daemon virtual thread on a
- *       <b>dedicated</b> single-connection pool (never the app's main pool, so it consumes no
- *       shared connection) that issues {@code LISTEN streamrune_crypto_forget} on an auto-commit
- *       connection and dispatches each received token to every subscribed listener. It reconnects
- *       automatically if the connection drops, and a bounded {@code getNotifications} poll means
- *       {@link #close()} is honored within ~500ms.
+ *   <li><b>Listen</b> ({@link #subscribe(Consumer, Runnable)}) starts a single daemon virtual
+ *       thread on a <b>dedicated</b> single-connection pool (never the app's main pool, so it
+ *       consumes no shared connection) that issues {@code LISTEN streamrune_crypto_forget} on an
+ *       auto-commit connection and dispatches each received token to every subscribed listener. It
+ *       reconnects automatically if the connection drops, and a bounded {@code getNotifications}
+ *       poll means {@link #close()} is honored within ~500ms.
  * </ul>
+ *
+ * <h2>When the {@code LISTEN} takes effect</h2>
+ *
+ * <p>A forget published before this replica's {@code LISTEN} has taken effect — before the first
+ * one, or while the connection is lost and not yet re-established — is not delivered to it. Each
+ * time the {@code LISTEN} statement has returned on the auto-commit connection, it is committed and
+ * PostgreSQL queues for this session every notification committed from then on. Only then does the
+ * listen thread run every subscriber's {@code onListening} callback, mark the channel {@link
+ * #isListening() listening}, and start receiving; {@code CachedCryptoEngine} evicts its whole
+ * plaintext cache in that callback. In this order nothing is lost: a forget committed before the
+ * {@code LISTEN} deleted its key before the eviction, so the next read finds the key gone, and a
+ * forget committed after it is queued and delivered once the callbacks have run. Evicting first and
+ * listening after would leave a gap in which a read caches a subject whose forget is committed
+ * before the {@code LISTEN} and never arrives. A token that arrives while the callbacks run waits
+ * in the connection's queue until they return.
+ *
+ * <p>{@link #isSubscribed()} is {@code true} from the first {@link #subscribe(Consumer, Runnable)}
+ * until {@link #close()}, also when no LISTEN pool can be opened; {@link #isListening()} only while
+ * the replica hears. The framework health indicators report the difference as {@code DEGRADED}.
  *
  * <h2>Where the LISTEN connection comes from</h2>
  *
@@ -71,8 +90,15 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
 
   private final DataSource dataSource;
   private final Supplier<? extends DataSource> listenDataSourceFactory;
-  private final List<Consumer<String>> listeners = new CopyOnWriteArrayList<>();
+  private final List<Subscriber> subscribers = new CopyOnWriteArrayList<>();
   private final AtomicBoolean running = new AtomicBoolean(false);
+
+  /**
+   * {@code true} while the listen thread holds a connection whose {@code LISTEN} took effect and
+   * whose subscribers have run {@code onListening} since.
+   */
+  private volatile boolean listening;
+
   private final Object lifecycle = new Object();
   private DataSource listenDataSource;
   private Thread listenerThread;
@@ -93,7 +119,7 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
    * Creates a channel that publishes through {@code dataSource} and listens on a connection of the
    * {@code DataSource} that {@code listenDataSourceFactory} returns.
    *
-   * <p>The factory runs once, on the first {@link #subscribe(Consumer)}: a channel nobody
+   * <p>The factory runs once, on the first {@link #subscribe(Consumer, Runnable)}: a channel nobody
    * subscribes to — e.g. when the cache is disabled — opens nothing. The channel owns what the
    * factory returns and closes it in {@link #close()} when it is {@link AutoCloseable}. Return a
    * pool dedicated to this channel, holding at most one connection, that validates a connection
@@ -145,10 +171,13 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
     }
   }
 
+  private record Subscriber(Consumer<String> onForget, Runnable onListening) {}
+
   @Override
-  public void subscribe(Consumer<String> listener) {
-    if (listener == null) throw new IllegalArgumentException("listener must not be null");
-    listeners.add(listener);
+  public void subscribe(Consumer<String> onForget, Runnable onListening) {
+    if (onForget == null) throw new IllegalArgumentException("listener must not be null");
+    if (onListening == null) throw new IllegalArgumentException("onListening must not be null");
+    subscribers.add(new Subscriber(onForget, onListening));
     // Start the single LISTEN loop on the first subscription (subsequent subscribers just share
     // it). Opening the dedicated LISTEN pool is best-effort: a DataSource the channel cannot open
     // one from (a test double, a proxied/wrapped source) degrades to publish-only + the write-TTL
@@ -184,7 +213,32 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
     }
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>{@code true} from the first subscribe until {@link #close()}, also when no LISTEN pool could
+   * be opened.
+   */
+  @Override
+  public boolean isSubscribed() {
+    return running.get();
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>{@code true} while the listen thread holds a connection on which {@code LISTEN} took effect
+   * and that has not failed since, once every subscriber's {@code onListening} has run on it — not
+   * while it connects or reconnects, when no LISTEN pool could be opened, or after {@link
+   * #close()}.
+   */
+  @Override
+  public boolean isListening() {
+    return running.get() && listening;
+  }
+
   private void listenLoop(DataSource listenSource) {
+    boolean reconnecting = false;
     while (running.get()) {
       try (Connection conn = listenSource.getConnection()) {
         if (!conn.getAutoCommit()) {
@@ -195,6 +249,9 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
         try (var stmt = conn.createStatement()) {
           stmt.execute("LISTEN " + CHANNEL);
         }
+        // The LISTEN has committed: every forget committed from here on is queued for this
+        // session. Only now may subscribers drop what they hold (see the class javadoc).
+        startedListening(reconnecting);
         receiveUntilStopped(conn.unwrap(PGConnection.class));
       } catch (SQLException e) {
         if (running.get()) {
@@ -203,9 +260,33 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
               CHANNEL,
               RECONNECT_BACKOFF_MS,
               e);
+          reconnecting = true;
           sleep(RECONNECT_BACKOFF_MS);
         }
+      } finally {
+        listening = false;
       }
+    }
+  }
+
+  /**
+   * Runs every subscriber's {@code onListening} and then marks the channel listening. A callback
+   * that throws is logged and does not stop the others.
+   */
+  private void startedListening(boolean reconnecting) {
+    for (Subscriber subscriber : subscribers) {
+      try {
+        subscriber.onListening().run();
+      } catch (RuntimeException e) {
+        log.warn("A crypto-forget subscriber threw while the channel started listening", e);
+      }
+    }
+    listening = true;
+    if (reconnecting) {
+      log.info(
+          "Crypto-forget LISTEN on channel '{}' re-established; its subscribers dropped what they"
+              + " cached while it could not hear",
+          CHANNEL);
     }
   }
 
@@ -222,9 +303,9 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
   }
 
   private void dispatch(String token) {
-    for (Consumer<String> listener : listeners) {
+    for (Subscriber subscriber : subscribers) {
       try {
-        listener.accept(token);
+        subscriber.onForget().accept(token);
       } catch (RuntimeException e) {
         // One misbehaving listener must not stop the others or wedge the listen loop.
         log.warn("A crypto-forget listener threw while handling a token", e);

@@ -2,7 +2,9 @@ package org.streamrune.crypto.postgres;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.sql.Connection;
@@ -37,6 +39,29 @@ class PostgresCryptoForgetSignalTest {
   void subscribeRejectsNullListener() {
     var signal = new PostgresCryptoForgetSignal(new NoAccessorsDataSource());
     assertThrows(IllegalArgumentException.class, () -> signal.subscribe(null));
+  }
+
+  @Test
+  void subscribeRejectsNullOnListening() {
+    var signal = new PostgresCryptoForgetSignal(new NoAccessorsDataSource());
+    assertThrows(IllegalArgumentException.class, () -> signal.subscribe(token -> {}, null));
+  }
+
+  @Test
+  void aChannelWhoseListenPoolCannotBeOpenedIsSubscribedButNeverListening() {
+    var signal = new PostgresCryptoForgetSignal(new NoAccessorsDataSource());
+    assertFalse(signal.isSubscribed(), "nothing subscribed yet");
+    assertFalse(signal.isListening());
+
+    signal.subscribe(token -> fail("no LISTEN"), () -> fail("no LISTEN ever takes effect"));
+
+    // The replica is meant to hear peers' forgets and cannot: health reports it.
+    assertTrue(signal.isSubscribed());
+    assertFalse(signal.isListening());
+
+    signal.close();
+    assertFalse(signal.isSubscribed());
+    assertFalse(signal.isListening());
   }
 
   @Test
