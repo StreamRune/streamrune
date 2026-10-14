@@ -20,6 +20,10 @@ dependencies {
     testImplementation(libs.testcontainers.rabbitmq)
 
     testImplementation(libs.postgresql)
+    // The saga forward fence stress test gives each simulated process a connection pool, as a
+    // process has: a pool-less load opens and closes connections faster than the client's ephemeral
+    // ports leave TIME_WAIT.
+    testImplementation(libs.hikaricp)
     testImplementation(libs.bundles.testcontainers.pg)
     testImplementation(libs.assertj.core)
     testImplementation(libs.awaitility)
