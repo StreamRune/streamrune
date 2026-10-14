@@ -297,14 +297,14 @@ public interface EventStore {
    *
    * <p><b>The fence.</b> When {@code idempotencyKey} is not yet claimed, the store reads the row of
    * the saga {@code forwardOf} names inside the append's own transaction, under a lock that every
-   * write which stamps a compensation episode on that row or ends the saga conflicts with, and
-   * holds the lock until the transaction commits or rolls back. It refuses the append with {@link
-   * SagaForwardFencedException} when the row carries an episode stamp, is terminal ({@code
-   * COMPLETED}, {@code COMPENSATED}, {@code FAILED}), is of another saga type, or is gone. A
-   * refused append stores nothing: no event, no inbox row (the key stays unclaimed), no outbox or
-   * audit row. Every forward append of a saga therefore commits wholly before the write that opens
-   * its compensation episode, or is refused. An empty {@code events} list is fenced too: claiming
-   * the key is a durable effect.
+   * write which stamps a compensation episode on that row, ends the saga or removes the row
+   * conflicts with, and holds the lock until the transaction commits or rolls back. It refuses the
+   * append with {@link SagaForwardFencedException} when the row carries an episode stamp, is
+   * terminal ({@code COMPLETED}, {@code COMPENSATED}, {@code FAILED}), is of another saga type, or
+   * is gone. A refused append stores nothing: no event, no inbox row (the key stays unclaimed), no
+   * outbox or audit row. Every forward append of a saga therefore commits wholly before the write
+   * that opens its compensation episode, or is refused. An empty {@code events} list is fenced too:
+   * claiming the key is a durable effect.
    *
    * <p>A key that is already claimed is answered from the inbox before the fence is read, exactly
    * as the five-argument method answers it: the command it records committed earlier, and its

@@ -35,9 +35,11 @@ import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.saga.SagaStore.AppliedEvent;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
+import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
@@ -363,10 +365,15 @@ class SagaForwardFenceLockingIT {
     assertTrue(stamped(), "the claim stamped the episode after the forward command committed");
   }
 
-  /** A terminal write and a delete wait for a frozen fenced append like the claim does. */
+  /**
+   * The other fence-changing writes wait for a frozen fenced append like the claim does: a terminal
+   * update, an applied event that completes the saga or opens its episode (the event path's write),
+   * and a delete.
+   */
   @Test
   void theOtherFenceChangingWritesWaitForAFrozenFencedAppend() throws Exception {
-    for (String write : List.of("complete", "delete")) {
+    for (String write :
+        List.of("complete", "applyEventCompleted", "applyEventCompensating", "delete")) {
       resetTables();
       Connection freezer = transaction();
       int freezerPid = backendPid(freezer);
@@ -378,11 +385,27 @@ class SagaForwardFenceLockingIT {
       Future<?> written =
           pool.submit(
               () -> {
-                if (write.equals("complete")) {
-                  sagas.update(
-                      ID, TYPE, new FenceState(SagaStatus.COMPLETED), SagaStatus.COMPLETED, 1L);
-                } else {
-                  sagas.delete(ID, TYPE);
+                switch (write) {
+                  case "complete" ->
+                      sagas.update(
+                          ID, TYPE, new FenceState(SagaStatus.COMPLETED), SagaStatus.COMPLETED, 1L);
+                  case "applyEventCompleted" ->
+                      sagas.applyEvent(
+                          ID,
+                          TYPE,
+                          new FenceState(SagaStatus.COMPLETED),
+                          SagaStatus.COMPLETED,
+                          1L,
+                          AppliedEvent.live(GlobalOffset.of(42L)));
+                  case "applyEventCompensating" ->
+                      sagas.applyEvent(
+                          ID,
+                          TYPE,
+                          new FenceState(SagaStatus.COMPENSATING),
+                          SagaStatus.COMPENSATING,
+                          1L,
+                          AppliedEvent.live(GlobalOffset.of(42L)));
+                  default -> sagas.delete(ID, TYPE);
                 }
                 return null;
               });
@@ -393,6 +416,46 @@ class SagaForwardFenceLockingIT {
       assertFalse(appended.get(30, TimeUnit.SECONDS).alreadyApplied());
       written.get(30, TimeUnit.SECONDS);
     }
+  }
+
+  /**
+   * A fence-changing write reads the row as it is once its lock is granted, whatever isolation the
+   * pool's sessions default to: here the sessions default to SERIALIZABLE, and an unfenced write
+   * (the dead-letter shield) commits while the claim waits for a frozen fenced append. Without the
+   * transaction's READ COMMITTED pin the claim's snapshot predates that write and its update fails
+   * with a serialization failure.
+   */
+  @Test
+  void aFenceChangingWriteSeesTheRowAsItIsOnceTheLockIsGranted() throws Exception {
+    PGSimpleDataSource serializableSessions = new PGSimpleDataSource();
+    serializableSessions.setUrl(PG.getJdbcUrl());
+    serializableSessions.setUser(PG.getUsername());
+    serializableSessions.setPassword(PG.getPassword());
+    serializableSessions.setOptions("-c default_transaction_isolation=serializable");
+    var claimer =
+        new PostgresSagaStore(
+            serializableSessions, new ObjectMapper().registerModule(new JavaTimeModule()));
+
+    Connection freezer = transaction();
+    int freezerPid = backendPid(freezer);
+    freezeAppends(freezer);
+    Future<IdempotentAppendResult> appended =
+        pool.submit(() -> fencedAppend(TARGET, IdempotencyKey.of("fwd-serializable"), 0));
+    int appendPid = awaitAnyBlockedBy(freezerPid);
+    Future<?> claimed =
+        pool.submit(
+            () -> {
+              claimer.claimCompensating(ID, TYPE, new FenceState(SagaStatus.COMPENSATING), 1L);
+              return null;
+            });
+    awaitBlockedOn(appendPid, claimed);
+
+    sagas.setDeadLetterPending(ID, TYPE, true);
+    freezer.commit();
+    appended.get(30, TimeUnit.SECONDS);
+    claimed.get(30, TimeUnit.SECONDS);
+
+    assertTrue(stamped(), "the claim landed on the row the shield write left");
   }
 
   /** A write that cannot change the fence's verdict does not wait for a fenced append. */

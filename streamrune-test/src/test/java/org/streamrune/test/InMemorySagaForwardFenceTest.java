@@ -16,8 +16,10 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
+import org.streamrune.core.saga.SagaStore.AppliedEvent;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
@@ -122,7 +124,14 @@ class InMemorySagaForwardFenceTest extends SagaForwardFenceContract {
   /** The writes that end a saga or touch its row wait for a fenced append, like the claim. */
   @Test
   void everyRowWriteWaitsForAFencedAppendInFlight() throws Exception {
-    for (String write : List.of("markFaulted", "setDeadLetterPending", "delete", "update")) {
+    for (String write :
+        List.of(
+            "markFaulted",
+            "setDeadLetterPending",
+            "delete",
+            "update",
+            "applyEvent",
+            "claimCompensating")) {
       var sagaId = SagaId.of("fence-write-" + write);
       forwardRow(sagaId);
       var origin = forwardOf(sagaId);
@@ -143,6 +152,19 @@ class InMemorySagaForwardFenceTest extends SagaForwardFenceContract {
             case "markFaulted" -> () -> rows.markFaulted(sagaId, TYPE, 1L);
             case "setDeadLetterPending" -> () -> rows.setDeadLetterPending(sagaId, TYPE, true);
             case "delete" -> () -> rows.delete(sagaId, TYPE);
+            case "applyEvent" ->
+                () ->
+                    rows.applyEvent(
+                        sagaId,
+                        TYPE,
+                        new FenceState(SagaStatus.COMPLETED),
+                        SagaStatus.COMPLETED,
+                        1L,
+                        AppliedEvent.live(GlobalOffset.of(42L)));
+            case "claimCompensating" ->
+                () ->
+                    rows.claimCompensating(
+                        sagaId, TYPE, new FenceState(SagaStatus.COMPENSATING), 1L);
             default ->
                 () ->
                     rows.update(

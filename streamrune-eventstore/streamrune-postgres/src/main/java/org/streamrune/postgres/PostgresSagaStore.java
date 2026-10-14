@@ -765,9 +765,18 @@ public final class PostgresSagaStore implements SagaStore {
    * it is false the statement cannot change the fence's verdict and runs alone, as every other
    * write of this store does.
    *
+   * <p>The transaction is pinned to READ COMMITTED by its first statement, for the reason {@code
+   * PostgresEventStore} pins its append transaction: the compare-and-swap must evaluate {@code
+   * version = ?} against the row as it is once the lock is granted, not against a snapshot taken
+   * before the wait, which under a REPEATABLE READ default would report a stale view (or a
+   * serialization failure) for a row another unfenced write touched meanwhile. The pin is
+   * transaction-scoped, so the pooled connection's session keeps its own isolation.
+   *
    * <p>The transaction holds the fence lock, then the row's lock; it takes no other lock, so it
-   * cannot close a cycle with a fenced append (inbox key, fence lock, offset counter) or with any
-   * other single-row write.
+   * cannot close a cycle with a fenced append (inbox key, fence lock, offset counter). The row's
+   * lock may be held by a single-statement write of this store or by a dead-letter-store
+   * transaction (its dead-letter rows, then this row, {@code FOR UPDATE} or updated); neither takes
+   * a fence lock.
    */
   private <T> T fenceChangingWrite(
       FenceChangingWrite write,

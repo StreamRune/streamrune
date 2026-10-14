@@ -31,26 +31,35 @@ import org.junit.jupiter.api.Test;
  * compensation began.
  *
  * <p><b>How to classify a new write.</b> The test finds every statement whose SQL text contains
- * {@code INSERT INTO saga_state}, {@code UPDATE saga_state} or {@code DELETE FROM saga_state}
- * (comments are ignored; the statement's string literals are joined, so a split literal is found
- * too) and fails for one that is not in {@link #CLASSIFIED}. Ask of the new statement: can it turn
- * the fence's verdict from "forward" to "refused" — that is, can it leave a row carrying an episode
- * stamp it did not carry, at a terminal status ({@code COMPLETED}, {@code COMPENSATED}, {@code
- * FAILED}), or remove the row?
+ * {@code INSERT INTO saga_state}, {@code UPDATE saga_state}, {@code DELETE FROM saga_state}, {@code
+ * MERGE INTO saga_state} or {@code TRUNCATE saga_state} (comments are ignored; the statement's
+ * string literals are joined, so a split literal is found too) and fails for one that is not in
+ * {@link #CLASSIFIED}, or whose kind of statement ({@link Verb}) is not the classified one — an
+ * insert that gains {@code ON CONFLICT … DO UPDATE} is an upsert and is classified again, as an
+ * update of the existing row. Ask of the new statement: can it turn the fence's verdict from
+ * "forward" to "refused" — that is, can it leave a row carrying an episode stamp it did not carry,
+ * at a terminal status ({@code COMPLETED}, {@code COMPENSATED}, {@code FAILED}), or remove the row?
  *
  * <ul>
  *   <li>Yes, for some bind values: it is {@link Kind#FENCE_CHANGING}. Declare it in {@code
  *       PostgresSagaStore} as a {@code FenceChangingWrite} and run it through {@code
  *       fenceChangingWrite(...)}, passing {@code leavesForwardPhase} true for every call whose bind
  *       values can make that turn (when in doubt, true: the lock then only costs a wait).
- *   <li>No, for every bind value — an insert (the fence refuses an absent row, so a new row turns
- *       nothing to "refused"), a write of a non-terminal status other than {@code COMPENSATING}
- *       that keeps the stamp as it is, a write of a column the fence does not read: it is {@link
- *       Kind#KEEPS_FORWARD_PHASE}. Add it with the reason, as a plain {@code String} constant.
+ *   <li>No, for every bind value — a plain insert or an insert that does nothing on conflict (the
+ *       fence refuses an absent row, so a new row turns nothing to "refused"; an upsert updates the
+ *       existing row and is judged as an update), a write of a non-terminal status other than
+ *       {@code COMPENSATING} that keeps the stamp as it is, a write of a column the fence does not
+ *       read: it is {@link Kind#KEEPS_FORWARD_PHASE}. Add it with the reason, as a plain {@code
+ *       String} constant.
  * </ul>
  *
  * <p>An inline SQL string (not a constant) that writes {@code saga_state} is refused outright: name
- * it, then classify it.
+ * it, then classify it. A delete, a merge and a truncate are always fence-changing.
+ *
+ * <p>Each call of {@code fenceChangingWrite(...)} passes {@code leavesForwardPhase} as the literal
+ * {@code true} or as {@code leavesForwardPhase(<status>)}, so the one place the lock condition can
+ * be wrong is that method, which the behavioural tests of {@code SagaForwardFenceLockingIT} pin for
+ * every fence-changing write.
  */
 class SagaStateWriteRatchetTest {
 
@@ -59,7 +68,17 @@ class SagaStateWriteRatchetTest {
     KEEPS_FORWARD_PHASE
   }
 
-  private record Classified(Kind kind, String reason) {}
+  /** The kind of statement a write is; a classification holds for one kind only. */
+  enum Verb {
+    INSERT,
+    UPSERT,
+    UPDATE,
+    DELETE,
+    MERGE,
+    TRUNCATE
+  }
+
+  private record Classified(Verb verb, Kind kind, String reason) {}
 
   private static final String SAGA_STORE = "PostgresSagaStore.java";
 
@@ -68,38 +87,64 @@ class SagaStateWriteRatchetTest {
       Map.of(
           "PostgresSagaStore.UPDATE_CAS",
           new Classified(
+              Verb.UPDATE,
               Kind.FENCE_CHANGING,
               "update and claimCompensating: COMPENSATING stamps the episode, a terminal status"
                   + " ends the saga"),
           "PostgresSagaStore.APPLY_EVENT",
           new Classified(
+              Verb.UPDATE,
               Kind.FENCE_CHANGING,
               "an evolved COMPENSATING stamps the episode, an evolved terminal status ends the"
                   + " saga"),
           "PostgresSagaStore.DELETE_BY_TYPE",
-          new Classified(Kind.FENCE_CHANGING, "a forward command of a saga with no row is refused"),
+          new Classified(
+              Verb.DELETE,
+              Kind.FENCE_CHANGING,
+              "a forward command of a saga with no row is refused"),
           "PostgresSagaStore.INSERT_NEW",
           new Classified(
-              Kind.KEEPS_FORWARD_PHASE, "an insert: the fence refused the absent row before it"),
+              Verb.INSERT,
+              Kind.KEEPS_FORWARD_PHASE,
+              "an insert: the fence refused the absent row before it"),
           "PostgresSagaStore.INSERT_GENESIS_PENDING",
           new Classified(
-              Kind.KEEPS_FORWARD_PHASE, "an insert: the fence refused the absent row before it"),
+              Verb.INSERT,
+              Kind.KEEPS_FORWARD_PHASE,
+              "an insert: the fence refused the absent row before it"),
           "PostgresSagaStore.INSERT_FAULTED",
           new Classified(
-              Kind.KEEPS_FORWARD_PHASE, "an insert: the fence refused the absent row before it"),
+              Verb.INSERT,
+              Kind.KEEPS_FORWARD_PHASE,
+              "an insert: the fence refused the absent row before it"),
           "PostgresSagaStore.MARK_FAULTED",
           new Classified(
+              Verb.UPDATE,
               Kind.KEEPS_FORWARD_PHASE,
               "FAULTED is not terminal and the statement does not touch the stamp"),
           "PostgresSagaStore.SET_DEAD_LETTER_PENDING",
-          new Classified(Kind.KEEPS_FORWARD_PHASE, "the shield flag; the fence does not read it"),
+          new Classified(
+              Verb.UPDATE, Kind.KEEPS_FORWARD_PHASE, "the shield flag; the fence does not read it"),
           "PostgresSagaDeadLetterStore.CLEAR_SHIELD_IF_DRAINED",
-          new Classified(Kind.KEEPS_FORWARD_PHASE, "the shield flag; the fence does not read it"),
+          new Classified(
+              Verb.UPDATE, Kind.KEEPS_FORWARD_PHASE, "the shield flag; the fence does not read it"),
           "PostgresSagaDeadLetterStore.ASSERT_SHIELD",
-          new Classified(Kind.KEEPS_FORWARD_PHASE, "the shield flag; the fence does not read it"));
+          new Classified(
+              Verb.UPDATE,
+              Kind.KEEPS_FORWARD_PHASE,
+              "the shield flag; the fence does not read it"));
 
   private static final Pattern SAGA_STATE_WRITE =
-      Pattern.compile("(?i)\\b(insert\\s+into|update|delete\\s+from)\\s+saga_state\\b");
+      Pattern.compile(
+          "(?i)\\b(insert\\s+into|update|delete\\s+from|merge\\s+into"
+              + "|truncate(?:\\s+table)?(?:\\s+only)?)\\s+saga_state\\b");
+
+  private static final Pattern UPSERT =
+      Pattern.compile("(?is)\\bon\\s+conflict\\b.*\\bdo\\s+update\\b");
+
+  /** The fourth argument of a fenceChangingWrite call: the literal true or the status predicate. */
+  private static final Pattern LOCK_CONDITION =
+      Pattern.compile("true|leavesForwardPhase\\(\\s*[A-Za-z_]\\w*\\s*\\)");
 
   /** {@code [modifiers] Type NAME = ...} at the start of a statement. */
   private static final Pattern CONSTANT_DECLARATION =
@@ -136,7 +181,23 @@ class SagaStateWriteRatchetTest {
       if (write == null) {
         continue; // reported by everySagaStateWriteIsClassified
       }
-      if (entry.getValue().kind() == Kind.FENCE_CHANGING) {
+      Classified classified = entry.getValue();
+      assertEquals(
+          classified.verb(),
+          verbOf(write.sql()),
+          entry.getKey()
+              + " is not the kind of statement it is classified as: classify it again"
+              + " (see the class javadoc)");
+      if (Set.of(Verb.DELETE, Verb.MERGE, Verb.TRUNCATE).contains(classified.verb())) {
+        assertEquals(
+            Kind.FENCE_CHANGING,
+            classified.kind(),
+            entry.getKey()
+                + ": a "
+                + classified.verb()
+                + " of saga_state is always fence-changing");
+      }
+      if (classified.kind() == Kind.FENCE_CHANGING) {
         assertEquals(
             SAGA_STORE,
             write.file(),
@@ -197,7 +258,76 @@ class SagaStateWriteRatchetTest {
         lock < lastSqlRead, "the lock is taken before the statement that leaves the forward phase");
   }
 
+  /**
+   * Every call of {@code fenceChangingWrite(...)} passes the lock condition as the literal {@code
+   * true} or as {@code leavesForwardPhase(<status>)}: a constant {@code false} or another
+   * expression would leave a fence-changing write unlocked with the declared type still correct.
+   */
+  @Test
+  void everyFenceChangingWriteCallTakesTheLockOnTheStatusPredicateOrAlways() {
+    String code = Source.of(read(only(SAGA_STORE))).code();
+    int declaration = code.indexOf("T fenceChangingWrite(");
+    List<String> conditions = new ArrayList<>();
+    for (int at : indexesOf(code, "fenceChangingWrite(")) {
+      if (at == declaration + 2) {
+        continue;
+      }
+      List<String> arguments = arguments(code, at + "fenceChangingWrite(".length());
+      assertEquals(6, arguments.size(), "fenceChangingWrite takes six arguments: " + arguments);
+      conditions.add(arguments.get(3));
+    }
+    assertEquals(
+        3, conditions.size(), "the three fence-changing writes call fenceChangingWrite once each");
+    for (String condition : conditions) {
+      assertTrue(
+          LOCK_CONDITION.matcher(condition).matches(),
+          "a fenceChangingWrite call passes the lock condition `"
+              + condition
+              + "`; pass true or leavesForwardPhase(<status>)");
+    }
+  }
+
   // ---------------------------------------------------------------------------------------------
+
+  private static Verb verbOf(String sql) {
+    Matcher write = SAGA_STATE_WRITE.matcher(sql);
+    if (!write.find()) {
+      throw new IllegalStateException("not a saga_state write: " + sql);
+    }
+    String head = write.group(1).toLowerCase(java.util.Locale.ROOT);
+    if (head.startsWith("insert")) {
+      return UPSERT.matcher(sql).find() ? Verb.UPSERT : Verb.INSERT;
+    }
+    if (head.startsWith("update")) {
+      return Verb.UPDATE;
+    }
+    if (head.startsWith("delete")) {
+      return Verb.DELETE;
+    }
+    return head.startsWith("merge") ? Verb.MERGE : Verb.TRUNCATE;
+  }
+
+  /** The top-level arguments of the call whose argument list starts at {@code from}. */
+  private static List<String> arguments(String code, int from) {
+    List<String> arguments = new ArrayList<>();
+    int depth = 0;
+    int start = from;
+    for (int i = from; i < code.length(); i++) {
+      char c = code.charAt(i);
+      if (c == '(' || c == '{' || c == '[') {
+        depth++;
+      } else if ((c == ')' || c == '}' || c == ']') && depth > 0) {
+        depth--;
+      } else if (c == ')' && depth == 0) {
+        arguments.add(code.substring(start, i).trim());
+        return arguments;
+      } else if (c == ',' && depth == 0) {
+        arguments.add(code.substring(start, i).trim());
+        start = i + 1;
+      }
+    }
+    throw new IllegalStateException("unbalanced call from offset " + from);
+  }
 
   private record Write(String file, String constant, String declaredType, String sql) {}
 

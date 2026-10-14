@@ -5,6 +5,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.Locale;
 import java.util.zip.CRC32C;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.types.SagaType;
@@ -47,7 +49,12 @@ final class SagaFenceLock {
   static final int CLASS_ID = 0x53524746;
 
   private static final String LOCK_SHARED = "SELECT pg_advisory_xact_lock_shared(?, ?)";
-  private static final String LOCK_EXCLUSIVE = "SELECT pg_advisory_xact_lock(?, ?)";
+
+  /**
+   * The isolation pin and the exclusive lock; the two keys are {@code int}s, written as literals.
+   */
+  private static final String PIN_AND_LOCK_EXCLUSIVE =
+      "SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(%d, %d)";
 
   private SagaFenceLock() {}
 
@@ -63,23 +70,26 @@ final class SagaFenceLock {
    * behind an exclusive request queued before it.
    */
   static void lockShared(Connection conn, SagaType sagaType, SagaId sagaId) throws SQLException {
-    lock(conn, LOCK_SHARED, sagaType, sagaId);
-  }
-
-  /** Takes the exclusive lock in {@code conn}'s open transaction; waits for every holder. */
-  static void lockExclusive(Connection conn, SagaType sagaType, SagaId sagaId) throws SQLException {
-    lock(conn, LOCK_EXCLUSIVE, sagaType, sagaId);
-  }
-
-  private static void lock(Connection conn, String sql, SagaType sagaType, SagaId sagaId)
-      throws SQLException {
-    try (PreparedStatement ps = conn.prepareStatement(sql)) {
+    try (PreparedStatement ps = conn.prepareStatement(LOCK_SHARED)) {
       ps.setInt(1, CLASS_ID);
       ps.setInt(2, objectId(sagaType, sagaId));
       // executeQuery: the lock function returns one (void) row
       try (ResultSet rs = ps.executeQuery()) {
         rs.next();
       }
+    }
+  }
+
+  /**
+   * Pins {@code conn}'s open transaction to READ COMMITTED and takes the exclusive lock in it, in
+   * one round trip; waits for every holder. Must be the first statement of the transaction ({@code
+   * SET TRANSACTION} is refused after a query), so that the statements after it read the rows as
+   * they are once the lock is granted. The pin ends with the transaction.
+   */
+  static void lockExclusive(Connection conn, SagaType sagaType, SagaId sagaId) throws SQLException {
+    try (Statement st = conn.createStatement()) {
+      st.execute(
+          String.format(Locale.ROOT, PIN_AND_LOCK_EXCLUSIVE, CLASS_ID, objectId(sagaType, sagaId)));
     }
   }
 }
