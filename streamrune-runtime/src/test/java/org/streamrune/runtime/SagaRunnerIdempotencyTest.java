@@ -253,8 +253,8 @@ class SagaRunnerIdempotencyTest {
   @Test
   void redeliveredCorrelatedEvent_commandDispatchedOnce_noSpuriousCompensation() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
     var sagaStore = new InMemorySagaStore();
+    var store = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
 
     var bus =
         VirtualThreadCommandBus.builder()
@@ -318,8 +318,8 @@ class SagaRunnerIdempotencyTest {
   @Test
   void twoCommandStep_redelivery_eachCommandAppliedOnce() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
     var sagaStore = new InMemorySagaStore();
+    var store = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
 
     var bus =
         VirtualThreadCommandBus.builder()

@@ -122,7 +122,8 @@ class SagaProvenanceArchitectureTest {
                       SagaOrigin.class,
                       EventId.class,
                       Command.class,
-                      IdempotencyKey.class)
+                      IdempotencyKey.class,
+                      boolean.class)
                   || (unit.getOwner().isEquivalentTo(VirtualThreadCommandBus.class)
                       && unit.getName().equals("prepareAsyncTask")));
 
@@ -162,7 +163,7 @@ class SagaProvenanceArchitectureTest {
             "org.streamrune.runtime.SagaCommandDispatch.dispatch("
                 + "org.streamrune.core.CommandBus, org.streamrune.core.saga.SagaOrigin,"
                 + " org.streamrune.core.types.EventId, org.streamrune.core.Command,"
-                + " org.streamrune.core.types.IdempotencyKey)",
+                + " org.streamrune.core.types.IdempotencyKey, boolean)",
             "org.streamrune.runtime.VirtualThreadCommandBus.prepareAsyncTask("
                 + "org.streamrune.core.Command, java.util.concurrent.CompletableFuture,"
                 + " org.streamrune.runtime.VirtualThreadCommandBus$AdmissionSlot)"),

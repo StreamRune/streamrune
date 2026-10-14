@@ -470,6 +470,9 @@ class SagaResumeFaultedTest {
             .sagaDeadLetterStore(h.dlq)
             .metrics(metrics)
             .clock(h.clock)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     SagaEventPathRetention.applyDefault(List.of(runner), SagaDeadLetterReplayerTest.WINDOW);
     SagaDeadLetterReplayer replayer =

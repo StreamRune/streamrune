@@ -192,7 +192,8 @@ class SagaCommandDispatchDlqOwnershipTest {
                         SagaOrigins.of("saga-x"),
                         null,
                         new AlwaysFailingCommand.Blow("agg-1"),
-                        IdempotencyKey.of("saga:saga-x:1:0")),
+                        IdempotencyKey.of("saga:saga-x:1:0"),
+                        false),
                 "saga-dispatched command must propagate the original exception"));
 
     assertTrue(

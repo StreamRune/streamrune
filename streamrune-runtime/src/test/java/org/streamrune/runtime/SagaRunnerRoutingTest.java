@@ -183,6 +183,9 @@ class SagaRunnerRoutingTest {
         .sagaStore(sagaStore)
         .commandBus(new NoopBus())
         .sagaDeadLetterStore(deadLetters)
+        // The bus is a test double that stores nothing; the fence is tested in
+        // SagaForwardFence*Test.
+        .forwardFence(false)
         .build();
   }
 
@@ -427,6 +430,9 @@ class SagaRunnerRoutingTest {
             .sagaStore(sagaStore)
             .commandBus(new NoopBus())
             .sagaDeadLetterStore(deadLetters)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     start(runner, "a", 1L);
 
@@ -453,6 +459,9 @@ class SagaRunnerRoutingTest {
             .sagaStore(sagaStore)
             .commandBus(new NoopBus())
             .sagaDeadLetterStore(deadLetters)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     assertThat(runner.resolveTarget(envelope(2L, new Replied("b"), null)))

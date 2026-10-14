@@ -178,8 +178,9 @@ class SagaDispatchProvenanceTest {
   static final class Harness implements AutoCloseable {
     final MutableClock clock = MutableClock.startingAt(Instant.parse("2026-01-01T00:00:00Z"));
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-    final InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
     final InMemorySagaStore sagaStore = new InMemorySagaStore(clock);
+    final InMemoryEventStore eventStore =
+        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
     final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(sagaStore);
     final OneEventDecider<Reserve> reserve = new OneEventDecider<>(c -> new Reserved(c.orderId()));
     final OneEventDecider<Ship> ship = new OneEventDecider<>(c -> new Shipped(c.orderId()));

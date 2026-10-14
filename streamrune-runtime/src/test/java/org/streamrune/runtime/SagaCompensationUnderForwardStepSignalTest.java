@@ -216,6 +216,8 @@ class SagaCompensationUnderForwardStepSignalTest {
           .sagaDeadLetterStore(deadLetters)
           .clock(clock)
           .metrics(metrics)
+          // Pins the behaviour of a runner with the fence off.
+          .forwardFence(false)
           .build();
     }
 

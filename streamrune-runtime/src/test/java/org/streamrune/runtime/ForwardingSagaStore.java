@@ -52,6 +52,12 @@ class ForwardingSagaStore implements SagaStore {
     afterWrite.accept(method);
   }
 
+  /** The wrapped store's rows: a forwarding store keeps none of its own. */
+  @Override
+  public Object storageIdentity() {
+    return delegate.storageIdentity();
+  }
+
   @Override
   public void create(SagaId id, SagaType t, SagaState s, SagaStatus st, boolean deadLetterPending) {
     calls.add("create");

@@ -372,6 +372,9 @@ class SagaStartEventClaimFirstCrashTest {
             .sagaStore(sagaStore)
             .commandBus(bus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(backing))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     sagaId = SagaId.of("saga-x");
   }
@@ -478,6 +481,9 @@ class SagaStartEventClaimFirstCrashTest {
             .sagaStore(backing) // no crash decorator — we want the terminal write to succeed
             .commandBus(bus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(backing))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     // Seed the crashed state directly: COMPENSATING at v1, refund NOT yet executed.

@@ -207,6 +207,9 @@ class SagaRunnerNullContractTest {
             .sagaStore(sagaStore)
             .commandBus(commandBus)
             .sagaDeadLetterStore(dlq)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
   }
 

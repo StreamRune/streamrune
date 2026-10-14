@@ -77,20 +77,22 @@ import org.streamrune.core.types.SagaType;
  *
  * <p><b>The claim waits for a step in flight in this process.</b> A saga's deadline can pass while
  * a delivery is dispatching its forward commands. A claim made then compensates from a state that
- * does not include that step, and the step's forward command is stored after its compensation. A
- * runner built with {@link Builder#sagaRunner} shares the runner's {@link SagaStepLock} and takes
- * it around its read of the row and its claim: while a step of the saga holds the lock the claim is
- * not made, the row is left as it is, and the saga — still past its deadline, still selected — is
- * claimed on the first poll that finds the step ended. After {@value #DEFERRALS_BEFORE_WAITING}
- * polls in a row that passed a saga over, the claim waits for the step, for a bounded time and in
- * arrival order, so a delivery that arrives later does not go ahead of it. The claim is never made
- * underneath a step, however long the step lasts: a poll that waited and still found a step in
- * flight says so at WARN, counts {@link StreamRuneMetrics#recordSagaTimeoutClaimDeferred}, and the
- * runner reports {@link #claimsDeferredPastTheWait()} to the health check. The lock is released as
- * soon as the claim is written, before any compensation command. This holds within one process: a
- * timeout runner on another node shares nothing with this node's deliveries. {@link
- * Builder#build()} refuses a builder that names neither {@link Builder#sagaRunner} nor {@link
- * Builder#stepLock}.
+ * does not include that step; the step's next forward command is refused at its commit by a runner
+ * that fences its forward commands ({@link SagaRunner.Builder#forwardFence}, the default), and is
+ * stored after the compensation by one that does not. A runner built with {@link
+ * Builder#sagaRunner} shares the runner's {@link SagaStepLock} and takes it around its read of the
+ * row and its claim: while a step of the saga holds the lock the claim is not made, the row is left
+ * as it is, and the saga — still past its deadline, still selected — is claimed on the first poll
+ * that finds the step ended. After {@value #DEFERRALS_BEFORE_WAITING} polls in a row that passed a
+ * saga over, the claim waits for the step, for a bounded time and in arrival order, so a delivery
+ * that arrives later does not go ahead of it. The claim is never made underneath a step, however
+ * long the step lasts: a poll that waited and still found a step in flight says so at WARN, counts
+ * {@link StreamRuneMetrics#recordSagaTimeoutClaimDeferred}, and the runner reports {@link
+ * #claimsDeferredPastTheWait()} to the health check. The lock is released as soon as the claim is
+ * written, before any compensation command. This holds within one process: a timeout runner on
+ * another node shares nothing with this node's deliveries, and there the forward fence keeps a
+ * forward command from being stored after the claim's compensation. {@link Builder#build()} refuses
+ * a builder that names neither {@link Builder#sagaRunner} nor {@link Builder#stepLock}.
  *
  * <p><b>A saga whose claim is deferred takes no slot of the batch.</b> It stays a forward row past
  * its deadline and is selected again on every poll, so counted against {@code batchSize} it would
@@ -847,7 +849,9 @@ public final class SagaTimeoutRunner<S extends SagaState> {
      * Names the {@link SagaRunner} that delivers this saga type's events in this process, so that
      * this runner's claim at a saga's deadline waits for a delivery that is dispatching that saga's
      * forward commands ({@link SagaStepLock}). Without it the claim compensates underneath such a
-     * delivery, and the delivery's forward command is stored after its compensation.
+     * delivery from a state that does not include the step; the delivery's next forward command is
+     * then refused at its commit by a runner that fences its forward commands, and stored after the
+     * compensation by one that does not.
      *
      * <p>The timeout runner takes the runner's step lock and nothing else from it; the decider, the
      * store, the bus and the saga type are still this builder's. {@link #build()} refuses a runner
@@ -877,7 +881,8 @@ public final class SagaTimeoutRunner<S extends SagaState> {
      * way to say that nothing shares it: for a process that runs timeout runners and no {@code
      * SagaRunner} of the saga type, and for an application that wants the deadline to win over a
      * step in flight. Such a runner claims underneath a delivery that is dispatching, as a timeout
-     * runner on another node does.
+     * runner on another node does, and the delivery's forward fence refuses its next forward
+     * command.
      */
     public Builder<S> stepLock(SagaStepLock stepLock) {
       this.stepLock = Objects.requireNonNull(stepLock, "stepLock is required");
@@ -974,8 +979,10 @@ public final class SagaTimeoutRunner<S extends SagaState> {
                 + " a claim at a saga's deadline waits for a delivery that is dispatching that"
                 + " saga's forward commands. A timeout runner bound to nothing claims underneath"
                 + " such a delivery: the compensation is computed from a state that does not"
-                + " include that step, and the step's forward command is stored after its"
-                + " compensation with nothing to undo it. A process that runs no SagaRunner of"
+                + " include that step, and the step's next forward command is refused at its"
+                + " commit when the SagaRunner fences its forward commands, or stored after its"
+                + " compensation with nothing to undo it when it does not. A process that runs no"
+                + " SagaRunner of"
                 + " this saga type, or an application that wants the deadline to win over a step"
                 + " in flight, says so with stepLock(new SagaStepLock()).");
       }

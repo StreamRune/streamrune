@@ -261,6 +261,9 @@ class PostgresSagaEpisodeStampReadFromRowTest {
               .sagaStore(sagaStore)
               .commandBus(bus)
               .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+              // The rows live in another store than the event stream; the fence is tested in
+              // SagaForwardFence*Test.
+              .forwardFence(false)
               .build();
     }
 

@@ -139,7 +139,8 @@ class SagaDispatchOwnershipGuardTest {
                 SagaOrigins.of("saga-order-1"),
                 null,
                 new OrderCommand.ConfirmOrder("order-1"),
-                IdempotencyKey.of("saga:saga-order-1:0:0")));
+                IdempotencyKey.of("saga:saga-order-1:0:0"),
+                false));
 
     assertEquals(
         List.of(OrderEvent.OrderPlaced.class, OrderEvent.OrderConfirmed.class),
@@ -159,7 +160,8 @@ class SagaDispatchOwnershipGuardTest {
                     SagaOrigins.of("saga-order-2"),
                     null,
                     new OrderCommand.ChangeAddress("order-2"),
-                    IdempotencyKey.of("saga:saga-order-2:0:0")));
+                    IdempotencyKey.of("saga:saga-order-2:0:0"),
+                    false));
 
     assertTrue(
         denied.getMessage().contains("requireOwnerOrSaga"),

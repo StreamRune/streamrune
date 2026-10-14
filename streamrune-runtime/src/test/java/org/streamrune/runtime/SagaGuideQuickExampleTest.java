@@ -204,6 +204,9 @@ class SagaGuideQuickExampleTest {
         .sagaStore(sagaStore)
         .commandBus(bus)
         .sagaDeadLetterStore(deadLetters)
+        // The bus is a test double that stores nothing; the fence is tested in
+        // SagaForwardFence*Test.
+        .forwardFence(false)
         .build();
   }
 
@@ -228,6 +231,9 @@ class SagaGuideQuickExampleTest {
         .sagaStore(sagaStore)
         .commandBus(bus)
         .sagaDeadLetterStore(deadLetters)
+        // The bus is a test double that stores nothing; the fence is tested in
+        // SagaForwardFence*Test.
+        .forwardFence(false)
         .build();
   }
 
@@ -402,6 +408,9 @@ class SagaGuideQuickExampleTest {
             .sagaStore(sagaStore)
             .commandBus(bus)
             .sagaDeadLetterStore(deadLetters)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     List<EventEnvelope> cancellations = new ArrayList<>();
     for (int i = 0; i < 3; i++) {

@@ -115,7 +115,8 @@ class SagaCompensationAuthzTest {
                 SagaOrigins.of("saga-order-1"),
                 null,
                 new RefundPayment("order-1"),
-                IdempotencyKey.of("saga:saga-order-1:episode:1:comp:0")));
+                IdempotencyKey.of("saga:saga-order-1:episode:1:comp:0"),
+                false));
 
     assertEquals(
         1,

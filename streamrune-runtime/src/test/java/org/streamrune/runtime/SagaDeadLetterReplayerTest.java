@@ -187,7 +187,10 @@ class SagaDeadLetterReplayerTest {
               .commandBus(bus)
               .sagaDeadLetterStore(dlq)
               .metrics(metrics)
-              .clock(clock);
+              .clock(clock)
+              // The bus is a test double that stores nothing; the fence is tested in
+              // SagaForwardFence*Test.
+              .forwardFence(false);
       if (!autoConfigured) {
         builder.inboxRetentionMaxAge(window);
       }

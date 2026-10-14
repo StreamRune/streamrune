@@ -115,6 +115,7 @@ val postgresBackedModules =
         ":streamrune-crypto:streamrune-postgres-crypto",
         ":streamrune-integration:streamrune-spring",
         ":streamrune-integration:streamrune-quarkus",
+        ":streamrune-integration:streamrune-micronaut",
         ":streamrune-integration:streamrune-e2e")
 
 subprojects {

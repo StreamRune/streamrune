@@ -252,7 +252,8 @@ class SagaCommandVetoTest {
     // A REAL bus with a REAL veto interceptor: before() → false produces the exact VETOED
     // CommandResult shape the production bus returns (no stub drift).
     var inbox = new InMemoryCommandInbox();
-    EventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+    EventStore eventStore =
+        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
     var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)

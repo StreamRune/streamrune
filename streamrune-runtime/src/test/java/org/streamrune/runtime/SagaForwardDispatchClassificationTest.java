@@ -102,8 +102,8 @@ class SagaForwardDispatchClassificationTest {
             nanos::get);
 
     var inbox = new InMemoryCommandInbox();
-    var eventStore = new InMemoryEventStore().withCommandInbox(inbox);
     var sagaStore = new InMemorySagaStore();
+    var eventStore = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
     var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)

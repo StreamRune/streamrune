@@ -412,6 +412,11 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
     }
 
     @Override
+    public Object sagaFenceStorageIdentity() {
+      return delegate.sagaFenceStorageIdentity();
+    }
+
+    @Override
     public <C extends Command> CommandResult execute(C command) {
       return delegate.execute(command);
     }

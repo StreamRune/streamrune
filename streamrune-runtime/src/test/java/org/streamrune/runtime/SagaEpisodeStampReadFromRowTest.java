@@ -272,6 +272,11 @@ class SagaEpisodeStampReadFromRowTest {
     public boolean supportsIdempotentExecution() {
       return delegate.supportsIdempotentExecution();
     }
+
+    @Override
+    public Object sagaFenceStorageIdentity() {
+      return delegate.sagaFenceStorageIdentity();
+    }
   }
 
   /**
@@ -393,8 +398,9 @@ class SagaEpisodeStampReadFromRowTest {
   static final class Harness implements AutoCloseable {
     final MutableClock clock = MutableClock.startingAt(Instant.parse("2026-01-01T00:00:00Z"));
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-    final InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
     final InMemorySagaStore rows = new InMemorySagaStore(clock);
+    final InMemoryEventStore eventStore =
+        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(rows);
     final SeamedSagaStore sagaStore;
     final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(rows);
     final OneEventDecider<Reserve> reserve = new OneEventDecider<>(c -> new Reserved(c.orderId()));

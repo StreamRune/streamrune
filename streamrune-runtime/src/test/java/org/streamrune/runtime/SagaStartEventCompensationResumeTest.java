@@ -221,6 +221,9 @@ class SagaStartEventCompensationResumeTest {
             .sagaStore(sagaStore)
             .commandBus(bus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     sagaId = SagaId.of("saga-x");
   }

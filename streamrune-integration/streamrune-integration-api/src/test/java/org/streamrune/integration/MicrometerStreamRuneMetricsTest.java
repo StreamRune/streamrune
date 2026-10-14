@@ -493,6 +493,7 @@ class MicrometerStreamRuneMetricsTest {
     metrics.recordSagaCompensationRetry("OrderSaga");
     metrics.recordSagaCasConflict("OrderSaga");
     metrics.recordSagaCompensationUnderForwardStep("OrderSaga");
+    metrics.recordSagaForwardCommandFenced("OrderSaga");
     metrics.recordSagaCompensatingBacklog("OrderSaga", 2);
     metrics.recordSagaTimedOutBacklog("OrderSaga", 1);
     metrics.recordSagaFaultedRows("OrderSaga", 1);

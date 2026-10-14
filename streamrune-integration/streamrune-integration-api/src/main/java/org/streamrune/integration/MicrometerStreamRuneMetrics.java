@@ -1010,6 +1010,18 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   }
 
   @Override
+  public void recordSagaForwardCommandFenced(String sagaType) {
+    Counter.builder(meter(MetricNames.SAGA_FORWARD_COMMANDS_FENCED))
+        .tag(MetricNames.TAG_SAGA_TYPE, sagaType)
+        .description(
+            "Forward saga commands refused at their commit because the saga left its forward phase"
+                + " while the step was in flight (a compensation episode opened, or the saga"
+                + " ended)")
+        .register(registry)
+        .increment();
+  }
+
+  @Override
   public void recordSagaCompensatingBacklog(String sagaType, long count) {
     sagaCompensatingBacklog
         .computeIfAbsent(

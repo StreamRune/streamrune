@@ -162,6 +162,9 @@ class SagaTypeCollisionRunnerTest {
             .sagaStore(sagaStore)
             .commandBus(bus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     barRunner =
         SagaRunner.<BarState>builder()
@@ -169,6 +172,9 @@ class SagaTypeCollisionRunnerTest {
             .sagaStore(sagaStore)
             .commandBus(bus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
   }
 

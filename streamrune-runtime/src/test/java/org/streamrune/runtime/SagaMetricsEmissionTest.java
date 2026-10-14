@@ -274,6 +274,9 @@ class SagaMetricsEmissionTest {
         .commandBus(commandBus)
         .sagaDeadLetterStore(sagaDlq)
         .metrics(metrics)
+        // The bus is a test double that stores nothing; the fence is tested in
+        // SagaForwardFence*Test.
+        .forwardFence(false)
         .build();
   }
 
@@ -307,6 +310,9 @@ class SagaMetricsEmissionTest {
             .commandBus(commandBus)
             .sagaDeadLetterStore(sagaDlq)
             .metrics(new ThrowingMetrics())
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     // Batch: saga-A's poison event first, then saga-B's healthy event. A throwing metrics backend
@@ -385,6 +391,9 @@ class SagaMetricsEmissionTest {
             .commandBus(bus)
             .sagaDeadLetterStore(sagaDlq)
             .metrics(metrics)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     runner.asEventListener().onEvents(List.of(startEnvelope("A")));
@@ -435,6 +444,9 @@ class SagaMetricsEmissionTest {
             .commandBus(throwingCompensationBus)
             .sagaDeadLetterStore(sagaDlq)
             .metrics(metrics)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     runner.asEventListener().onEvents(List.of(startEnvelope("A")));
@@ -616,6 +628,9 @@ class SagaMetricsEmissionTest {
             .commandBus(commandBus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(underlying))
             .metrics(metrics)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var event =
@@ -646,6 +661,9 @@ class SagaMetricsEmissionTest {
             .commandBus(commandBus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(underlying))
             .metrics(new ThrowingMetrics())
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var event =

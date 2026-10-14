@@ -111,6 +111,9 @@ class SagaEventPathRetentionContainerWiringTest {
           .sagaStore(APP_SAGA_STORE)
           .commandBus(NOOP_BUS)
           .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(APP_SAGA_STORE))
+          // The bus is a test double that stores nothing; the fence is tested in
+          // SagaForwardFence*Test.
+          .forwardFence(false)
           .build();
 
   static final InMemorySagaStore EXPLICIT_SAGA_STORE = new InMemorySagaStore();
@@ -122,6 +125,9 @@ class SagaEventPathRetentionContainerWiringTest {
           .commandBus(NOOP_BUS)
           .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(EXPLICIT_SAGA_STORE))
           .inboxRetentionMaxAge(Duration.ofHours(2))
+          // The bus is a test double that stores nothing; the fence is tested in
+          // SagaForwardFence*Test.
+          .forwardFence(false)
           .build();
 
   /**

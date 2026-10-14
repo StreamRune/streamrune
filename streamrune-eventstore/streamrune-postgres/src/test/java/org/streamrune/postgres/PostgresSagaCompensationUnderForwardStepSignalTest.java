@@ -265,6 +265,9 @@ class PostgresSagaCompensationUnderForwardStepSignalTest {
               .commandBus(bus)
               .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
               .metrics(metrics)
+              // The rows live in another store than the event stream; the fence is tested in
+              // SagaForwardFence*Test.
+              .forwardFence(false)
               .build();
       // The row's created_at is the database's now(); the runner's clock is past its deadline.
       SagaTimeoutRunner<State> timeoutRunner =

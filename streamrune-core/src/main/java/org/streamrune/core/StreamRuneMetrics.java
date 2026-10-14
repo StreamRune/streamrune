@@ -524,6 +524,17 @@ public interface StreamRuneMetrics {
   default void recordSagaCompensationUnderForwardStep(String sagaType) {}
 
   /**
+   * Records a forward saga command the event store refused at its commit, because the saga left its
+   * forward phase while the step was in flight: a compensation episode opened, or the saga ended.
+   * The command stored nothing. One call per refused command. See {@link
+   * org.streamrune.core.metrics.MetricNames#SAGA_FORWARD_COMMANDS_FENCED}.
+   *
+   * @param sagaType the saga type, {@link org.streamrune.core.types.SagaType#value()} — the saga
+   *     state's fully-qualified class name
+   */
+  default void recordSagaForwardCommandFenced(String sagaType) {}
+
+  /**
    * Records the current {@code COMPENSATING} backlog for a saga type — sagas whose compensation has
    * not yet completed. Reported as the latest sampled value (the {@code
    * SagaCompensationRetrySweeper} samples it each cycle), so implementations should expose it as a

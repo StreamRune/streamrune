@@ -126,8 +126,9 @@ class SagaContinuationRoutingTest {
 
   static final class Harness implements AutoCloseable {
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-    final InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
     final InMemorySagaStore sagaStore = new InMemorySagaStore();
+    final InMemoryEventStore eventStore =
+        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
     final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(sagaStore);
     final ReserveThenAuditSaga saga = new ReserveThenAuditSaga();
     final VirtualThreadCommandBus bus =

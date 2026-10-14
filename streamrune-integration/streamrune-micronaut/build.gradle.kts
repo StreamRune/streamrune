@@ -68,4 +68,8 @@ dependencies {
     // it this module's tests bound slf4j to NOP. Test scope only — no main artifact gains a logging
     // backend. Quiet defaults in src/test/resources/logback-test.xml.
     testImplementation(libs.logback.classic)
+    // The context test that boots the default wiring over a real PostgreSQL database (the event
+    // store checks the server version and migrates the schema when it is built).
+    testImplementation(libs.postgresql)
+    testImplementation(libs.bundles.testcontainers.pg)
 }

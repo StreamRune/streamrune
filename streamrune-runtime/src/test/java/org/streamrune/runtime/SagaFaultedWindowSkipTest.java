@@ -189,6 +189,9 @@ class SagaFaultedWindowSkipTest {
             .commandBus(commandBus)
             .sagaDeadLetterStore(dlq)
             .metrics(metrics)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
   }
 
@@ -416,6 +419,9 @@ class SagaFaultedWindowSkipTest {
             .commandBus(commandBus)
             .sagaDeadLetterStore(dlq)
             .metrics(metrics)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     genesisPoisonRunner
         .asEventListener()
