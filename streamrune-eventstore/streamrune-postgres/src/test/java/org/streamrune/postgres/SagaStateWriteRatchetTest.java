@@ -56,6 +56,15 @@ import org.junit.jupiter.api.Test;
  * <p>An inline SQL string (not a constant) that writes {@code saga_state} is refused outright: name
  * it, then classify it. A delete, a merge and a truncate are always fence-changing.
  *
+ * <p><b>A table the text does not name.</b> The classification reads the table from the statement's
+ * text. A write that composes its table from a value the code supplies ({@code "UPDATE " + TABLE},
+ * {@code String.format("UPDATE %s ...", table)}) is found too and must be listed in {@link
+ * #COMPOSED_TARGETS} with the reason its table is never {@code saga_state}; and no literal may name
+ * {@code saga_state} alone — the piece such a write would be composed from — outside {@link
+ * #LITERAL_TABLE_NAMES}. The limit: the test does not follow a supplied value to where it is
+ * computed, so a listed write stays listed if the code feeding it changes; and the scan covers the
+ * repository's Java main sources and SQL resources, not SQL built at run time from other input.
+ *
  * <p>Each call of {@code fenceChangingWrite(...)} passes {@code leavesForwardPhase} as the literal
  * {@code true} or as {@code leavesForwardPhase(<status>)}, so the one place the lock condition can
  * be wrong is that method, which the behavioural tests of {@code SagaForwardFenceLockingIT} pin for
@@ -133,6 +142,63 @@ class SagaStateWriteRatchetTest {
               Verb.UPDATE,
               Kind.KEEPS_FORWARD_PHASE,
               "the shield flag; the fence does not read it"));
+
+  /**
+   * Every write whose table the statement's text does not name, with the reason its table is never
+   * {@code saga_state}. Keyed by {@code File.CONSTANT}, or for an unnamed statement by {@code File:
+   * VERB #n}, the n-th such write with that verb in the file.
+   */
+  private static final Map<String, String> COMPOSED_TARGETS =
+      Map.of(
+          "JdbcProjectionRepository.UPSERT",
+          "a projection's read-model table: the projection's name plus _view",
+          "JdbcProjectionRepository.VERSIONED_UPDATE",
+          "a projection's read-model table: the projection's name plus _view",
+          "JdbcProjectionRepository.DELETE",
+          "a projection's read-model table: the projection's name plus _view",
+          "PostgresCryptoEngine.java: DELETE FROM #1",
+          "the crypto engine's key table (streamrune.crypto.postgres.table-name, default"
+              + " encryption_keys)",
+          "PostgresCryptoEngine.java: INSERT INTO #1",
+          "the crypto engine's key table (streamrune.crypto.postgres.table-name, default"
+              + " encryption_keys)");
+
+  /** The files whose literals may name {@code saga_state} alone, with the reason. */
+  private static final Map<String, String> LITERAL_TABLE_NAMES =
+      Map.of(
+          "SchemaValidator.java",
+          "the tables the schema check expects to find; it reads the catalogue and writes nothing");
+
+  /** In a statement's shape: a value the code supplies between two literals. */
+  private static final char SUPPLIED = '\u0001';
+
+  /**
+   * A write whose verb is followed by a value the text does not show: a supplied value (a
+   * concatenated constant, variable or call) or a format placeholder ({@code %s}, {@code %1$s},
+   * {@code {0}}), after a space or a quote, alone or behind a literal schema ({@code UPDATE
+   * app.<value>}); {@code ONLY} may follow the verb. The verb starts a statement's text, or follows
+   * {@code ;}, an opening or closing parenthesis (a common table expression) or a supplied value:
+   * {@code FOR UPDATE}, {@code DO UPDATE}, a message such as {@code "saga update"} and a lone word
+   * {@code "update"} are not writes.
+   */
+  private static final Pattern COMPOSED_TARGET =
+      Pattern.compile(
+          "(?i)(?:^|[;()"
+              + SUPPLIED
+              + "])\\s*(insert\\s+into|update(?:\\s+only)?|delete\\s+from(?:\\s+only)?"
+              + "|merge\\s+into|truncate(?:\\s+table)?(?:\\s+only)?)"
+              + "(?:\\s+(?:\\\\?\")?|\\\\?\")\\s*(?:(?:\\\\?\")?\\w+(?:\\\\?\")?\\.(?:\\\\?\")?)?(?:"
+              + SUPPLIED
+              + "|%(?:\\d+\\$)?s|\\{\\d*\\})");
+
+  /**
+   * A literal that is the name of the {@code saga_state} table and nothing else (quoted, or
+   * qualified by a schema, or the qualified tail {@code .saga_state}): a name a statement could be
+   * composed from.
+   */
+  private static final Pattern NAMES_SAGA_STATE_ALONE =
+      Pattern.compile(
+          "(?i)\\s*(?:(?:\\\\?\")?\\w+(?:\\\\?\")?)?\\.?(?:\\\\?\")?saga_state(?:\\\\?\")?\\s*");
 
   private static final Pattern SAGA_STATE_WRITE =
       Pattern.compile(
@@ -287,7 +353,88 @@ class SagaStateWriteRatchetTest {
     }
   }
 
+  /**
+   * A write whose table the statement composes from a value the code supplies, or from a format
+   * placeholder, cannot be read here: each one is listed in {@link #COMPOSED_TARGETS} with the
+   * reason its table is never {@code saga_state}. A new one fails the build until it is listed.
+   */
+  @Test
+  void everyWriteToATableTheTextDoesNotNameIsListed() {
+    Map<String, String> found = composedTargetWrites();
+    Set<String> unlisted = new TreeSet<>(found.keySet());
+    unlisted.removeAll(COMPOSED_TARGETS.keySet());
+    Set<String> stale = new TreeSet<>(COMPOSED_TARGETS.keySet());
+    stale.removeAll(found.keySet());
+    if (!unlisted.isEmpty() || !stale.isEmpty()) {
+      fail(
+          "writes whose table the statement's text does not name, not listed in"
+              + " SagaStateWriteRatchetTest.COMPOSED_TARGETS: "
+              + unlisted
+              + "; listed but not found: "
+              + stale
+              + ". Name saga_state in the statement's text and classify it, or list the write with"
+              + " the reason its table is never saga_state.");
+    }
+  }
+
+  /**
+   * No literal of the main sources is the bare name of {@code saga_state} — the piece a statement
+   * would compose a {@code saga_state} write from — outside the files {@link #LITERAL_TABLE_NAMES}
+   * lists.
+   */
+  @Test
+  void noLiteralNamesTheSagaStateTableAlone() {
+    List<String> found = new ArrayList<>();
+    for (Path file : mainJavaSources()) {
+      String name = file.getFileName().toString();
+      if (LITERAL_TABLE_NAMES.containsKey(name)) {
+        continue;
+      }
+      for (Statement statement : Source.of(read(file)).statements()) {
+        for (String literal : statement.literalList()) {
+          if (NAMES_SAGA_STATE_ALONE.matcher(literal).matches()) {
+            found.add(name + ": \"" + literal + "\"");
+          }
+        }
+      }
+    }
+    assertTrue(
+        found.isEmpty(),
+        "a literal names saga_state alone; write the table's name in the statement's text, where"
+            + " the classification reads it: "
+            + found);
+  }
+
   // ---------------------------------------------------------------------------------------------
+
+  /** Every write of the main sources whose target the text does not name, by its key. */
+  private static Map<String, String> composedTargetWrites() {
+    Map<String, String> writes = new TreeMap<>();
+    for (Path file : mainJavaSources()) {
+      String name = file.getFileName().toString();
+      Map<String, Integer> unnamedByVerb = new TreeMap<>();
+      for (Statement statement : Source.of(read(file)).statements()) {
+        Matcher write = COMPOSED_TARGET.matcher(statement.shape());
+        while (write.find()) {
+          String verb = write.group(1).toUpperCase(java.util.Locale.ROOT).replaceAll("\\s+", " ");
+          String text =
+              statement
+                  .shape()
+                  .substring(write.start(1))
+                  .replace(String.valueOf(SUPPLIED), "<value>")
+                  .replaceAll("\\s+", " ")
+                  .trim();
+          Matcher declaration = CONSTANT_DECLARATION.matcher(statement.code());
+          String key =
+              declaration.find()
+                  ? name.replace(".java", "") + "." + declaration.group(2)
+                  : name + ": " + verb + " #" + unnamedByVerb.merge(verb, 1, Integer::sum);
+          writes.put(key, text);
+        }
+      }
+    }
+    return writes;
+  }
 
   private static Verb verbOf(String sql) {
     Matcher write = SAGA_STATE_WRITE.matcher(sql);
@@ -362,7 +509,12 @@ class SagaStateWriteRatchetTest {
     return writes;
   }
 
-  private record Statement(String code, String literals) {}
+  /**
+   * One statement: its code (literals blanked), its literals joined, its shape — the literals
+   * joined with a {@link #SUPPLIED} mark wherever code supplies a value between them — and each
+   * literal.
+   */
+  private record Statement(String code, String literals, String shape, List<String> literalList) {}
 
   /**
    * A Java source split into statements at {@code ;}, {@code {} and {@code }} outside literals and
@@ -375,6 +527,8 @@ class SagaStateWriteRatchetTest {
       List<Statement> statements = new ArrayList<>();
       StringBuilder stmtCode = new StringBuilder();
       StringBuilder stmtLiterals = new StringBuilder();
+      StringBuilder stmtShape = new StringBuilder();
+      List<String> stmtLiteralList = new ArrayList<>();
       int i = 0;
       int n = text.length();
       while (i < n) {
@@ -393,7 +547,10 @@ class SagaStateWriteRatchetTest {
         if (c == '"' && text.startsWith("\"\"\"", i)) {
           int end = text.indexOf("\"\"\"", i + 3);
           int stop = end < 0 ? n : end + 3;
-          stmtLiterals.append(text, i + 3, Math.max(i + 3, stop - 3));
+          String literal = text.substring(i + 3, Math.max(i + 3, stop - 3));
+          stmtLiterals.append(literal);
+          stmtShape.append(literal);
+          stmtLiteralList.add(literal);
           code.append("\"\"\"\"\"\"");
           stmtCode.append("\"\"");
           i = stop;
@@ -405,7 +562,12 @@ class SagaStateWriteRatchetTest {
             j += text.charAt(j) == '\\' ? 2 : 1;
           }
           if (c == '"') {
-            stmtLiterals.append(text, i + 1, Math.min(j, n));
+            String literal = text.substring(i + 1, Math.min(j, n));
+            stmtLiterals.append(literal);
+            stmtShape.append(literal);
+            stmtLiteralList.add(literal);
+          } else {
+            appendCode(stmtShape, c);
           }
           code.append(c).append(c);
           stmtCode.append(c).append(c);
@@ -414,16 +576,42 @@ class SagaStateWriteRatchetTest {
         }
         code.append(c);
         if (c == ';' || c == '{' || c == '}') {
-          statements.add(new Statement(stmtCode.toString(), stmtLiterals.toString()));
+          statements.add(
+              new Statement(
+                  stmtCode.toString(),
+                  stmtLiterals.toString(),
+                  stmtShape.toString(),
+                  List.copyOf(stmtLiteralList)));
           stmtCode.setLength(0);
           stmtLiterals.setLength(0);
+          stmtShape.setLength(0);
+          stmtLiteralList.clear();
         } else {
           stmtCode.append(c);
+          appendCode(stmtShape, c);
         }
         i++;
       }
-      statements.add(new Statement(stmtCode.toString(), stmtLiterals.toString()));
+      statements.add(
+          new Statement(
+              stmtCode.toString(),
+              stmtLiterals.toString(),
+              stmtShape.toString(),
+              List.copyOf(stmtLiteralList)));
       return new Source(code.toString(), statements);
+    }
+
+    /**
+     * Code between literals in a statement's shape: whitespace and {@code +} join two literals into
+     * one text; any other code is a value the text does not show, one {@link #SUPPLIED} mark.
+     */
+    private static void appendCode(StringBuilder shape, char c) {
+      if (Character.isWhitespace(c) || c == '+') {
+        return;
+      }
+      if (shape.isEmpty() || shape.charAt(shape.length() - 1) != SUPPLIED) {
+        shape.append(SUPPLIED);
+      }
     }
   }
 
@@ -504,10 +692,16 @@ class SagaStateWriteRatchetTest {
     return files;
   }
 
+  /**
+   * The repository's root build: the nearest directory with both a {@code settings.gradle.kts} and
+   * the Gradle wrapper. {@code streamrune-eventstore} has a {@code settings.gradle.kts} of its own
+   * and no wrapper; stopping there would confine the scan to the event-store modules.
+   */
   private static Path repositoryRoot() {
     Path dir = Path.of("").toAbsolutePath();
     while (dir != null) {
-      if (Files.exists(dir.resolve("settings.gradle.kts"))) {
+      if (Files.exists(dir.resolve("settings.gradle.kts"))
+          && Files.exists(dir.resolve("gradlew"))) {
         return dir;
       }
       dir = dir.getParent();

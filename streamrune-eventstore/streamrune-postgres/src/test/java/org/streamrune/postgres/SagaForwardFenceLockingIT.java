@@ -366,14 +366,20 @@ class SagaForwardFenceLockingIT {
   }
 
   /**
-   * The other fence-changing writes wait for a frozen fenced append like the claim does: a terminal
-   * update, an applied event that completes the saga or opens its episode (the event path's write),
-   * and a delete.
+   * The other fence-changing writes wait for a frozen fenced append like the claim does: an update
+   * to each terminal status, an applied event that completes the saga or opens its episode (the
+   * event path's write), and a delete.
    */
   @Test
   void theOtherFenceChangingWritesWaitForAFrozenFencedAppend() throws Exception {
     for (String write :
-        List.of("complete", "applyEventCompleted", "applyEventCompensating", "delete")) {
+        List.of(
+            "complete",
+            "compensated",
+            "failed",
+            "applyEventCompleted",
+            "applyEventCompensating",
+            "delete")) {
       resetTables();
       Connection freezer = transaction();
       int freezerPid = backendPid(freezer);
@@ -389,6 +395,16 @@ class SagaForwardFenceLockingIT {
                   case "complete" ->
                       sagas.update(
                           ID, TYPE, new FenceState(SagaStatus.COMPLETED), SagaStatus.COMPLETED, 1L);
+                  case "compensated" ->
+                      sagas.update(
+                          ID,
+                          TYPE,
+                          new FenceState(SagaStatus.COMPENSATED),
+                          SagaStatus.COMPENSATED,
+                          1L);
+                  case "failed" ->
+                      sagas.update(
+                          ID, TYPE, new FenceState(SagaStatus.FAILED), SagaStatus.FAILED, 1L);
                   case "applyEventCompleted" ->
                       sagas.applyEvent(
                           ID,
