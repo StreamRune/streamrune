@@ -32,6 +32,29 @@ class StreamRuneMicronautPropertiesTest {
   }
 
   @Test
+  void sagaForwardFenceDefaultsToAuto() {
+    assertEquals("auto", StreamRuneMicronautProperties.withDefaults().sagaForwardFence());
+    try (var ctx = io.micronaut.context.ApplicationContext.run()) {
+      assertEquals("auto", ctx.getBean(StreamRuneMicronautProperties.class).sagaForwardFence());
+    }
+  }
+
+  @Test
+  void sagaForwardFenceBindsAnUnquotedYamlOn() {
+    // YAML 1.1 reads an unquoted `on` as a boolean; the Micronaut YAML loader hands over a
+    // Boolean, which binds to the String "true". The setting reads it as on.
+    try (var ctx =
+        io.micronaut.context.ApplicationContext.run(
+            java.util.Map.of("streamrune.saga.forward-fence", Boolean.TRUE))) {
+      var bound = ctx.getBean(StreamRuneMicronautProperties.class).sagaForwardFence();
+      assertEquals("true", bound);
+      assertEquals(
+          org.streamrune.integration.SagaForwardFenceSetting.ON,
+          org.streamrune.integration.SagaForwardFenceSetting.parse(bound));
+    }
+  }
+
+  @Test
   void outboxSkippedRetentionMaxAgeCanBeDisabled() {
     // Zero disables the SKIPPED sweep — the sweeper treats <= 0 as "do not delete SKIPPED". FAILED
     // entries are never pruned in either case.
@@ -114,7 +137,8 @@ class StreamRuneMicronautPropertiesTest {
             // event-store.statement-timeout
             java.time.Duration.ofSeconds(30),
             // sse.polling-interval
-            Duration.ofSeconds(1));
+            Duration.ofSeconds(1),
+            "auto");
     assertEquals(10, p.snapshotEveryNEvents());
     assertEquals(1, p.retryMaxAttempts());
     assertEquals(1L, p.retryInitialDelayMs());

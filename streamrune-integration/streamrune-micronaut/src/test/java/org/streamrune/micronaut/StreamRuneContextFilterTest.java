@@ -770,7 +770,8 @@ class StreamRuneContextFilterTest {
         // event-store.statement-timeout
         java.time.Duration.ofSeconds(30),
         // sse.polling-interval
-        java.time.Duration.ofSeconds(1));
+        java.time.Duration.ofSeconds(1),
+        "auto");
   }
 
   @Test

@@ -164,6 +164,22 @@ class StreamRuneQuarkusPropertiesTest {
   }
 
   @Test
+  void sagaForwardFenceDefaultsToAuto() {
+    assertEquals("auto", TestProperties.defaults().saga().forwardFence());
+  }
+
+  @Test
+  void sagaForwardFenceBindsAnUnquotedYamlOn() {
+    // YAML 1.1 reads an unquoted `on` as a boolean; the Quarkus YAML source hands SmallRye the
+    // text "true". The mapping keeps the String, and the setting reads it as on.
+    var p = TestProperties.of(Map.of("streamrune.saga.forward-fence", "true"));
+    assertEquals("true", p.saga().forwardFence());
+    assertEquals(
+        org.streamrune.integration.SagaForwardFenceSetting.ON,
+        org.streamrune.integration.SagaForwardFenceSetting.parse(p.saga().forwardFence()));
+  }
+
+  @Test
   void sagaDeadLetterRetentionMaxAgeCanBeDisabled() {
     var p = TestProperties.of(Map.of("streamrune.saga.dead-letter-retention-max-age", "PT0S"));
     assertTrue(p.saga().deadLetterRetentionMaxAge().isZero());

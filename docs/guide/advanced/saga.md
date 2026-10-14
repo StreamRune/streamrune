@@ -711,6 +711,16 @@ Sagas need a `SagaStore` and a `SagaDeadLetterStore`; Spring, Quarkus, and Micro
 
 `SagaRunner` and `SagaTimeoutRunner` themselves are **not** auto-configured — they need an application-supplied `SagaOrchestrator`/`SagaDecider`, so you wire them explicitly (see [Full example](#full-example)) and register the resulting `EventListener`/poller with your own subscription and lifecycle management. Neither is `SagaDeadLetterReplayer` (see [Replaying quarantined events](#replaying-quarantined-events)); what the integrations do wire is one `SagaCompensationRetrySweeper` per `SagaRunner` bean (see [Automatic compensation recovery](#automatic-compensation-recovery)).
 
+The forward fence (see [Across processes: the forward fence](#timeout-driven-compensation-and-compensating)) is on for every `SagaRunner` whose builder does not name it, and one property sets the deployment's default for those runners. It takes the same values on all three frameworks:
+
+| Framework | Property | Default | Effect |
+|---|---|---|---|
+| Spring | `streamrune.saga.forward-fence` | `auto` | `auto` is on while `streamrune.subscription.single-active-consumer.enabled` is `true`, off when it is `false`; `on` and `off` set it regardless. |
+| Quarkus | `streamrune.saga.forward-fence` (via `StreamRuneQuarkusProperties.saga().forwardFence()`) | `auto` | Same. |
+| Micronaut | `streamrune.saga.forward-fence` | `auto` | Same. |
+
+The value is applied at startup to every `SagaRunner` bean that did not call `forwardFence(...)`; a runner that did keeps its value, and an unknown value fails startup. A runner over a store that cannot fence must say `forwardFence(false)` itself, whatever the property says: `build()` checks the wiring before the integration applies the property. In YAML, quote `"on"` / `"off"` or write `true` / `false`: an unquoted `on` or `off` is a boolean to YAML 1.1 parsers, and the integrations read that boolean as the same setting. With `auto`, disabling single-active-consumer leadership also turns the fence off for those runners; set `on` when more than one replica can run a saga step (rolling restarts included).
+
 Command-inbox retention (shared with all effectively-once command dispatch, including sagas) is auto-configured via `InboxRetentionSweeper`, swept hourly:
 
 | Framework | Property | Default |

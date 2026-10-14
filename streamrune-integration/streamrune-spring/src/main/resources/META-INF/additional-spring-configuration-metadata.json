@@ -32,6 +32,7 @@
     { "name": "streamrune.validation-enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether command validation interceptor is enabled." },
     { "name": "streamrune.startup-log", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether to log StreamRune banner at startup." },
     { "name": "streamrune.saga.enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Enable saga auto-configuration." },
+    { "name": "streamrune.saga.forward-fence", "type": "java.lang.String", "defaultValue": "auto", "description": "The forward fence of the SagaRunner beans whose builder named none: auto follows streamrune.subscription.single-active-consumer.enabled, on fences, off does not. With the fence on, the event store refuses a forward command of a saga whose compensation has begun or whose row is gone, in the transaction that would store it. A runner's own forwardFence(...) wins. YAML: quote \"on\"/\"off\" or use true/false." },
     { "name": "streamrune.outbox.enabled", "type": "java.lang.Boolean", "defaultValue": false, "description": "Enable outbox polling (opt-in, requires message broker)." },
     { "name": "streamrune.outbox.batch-size", "type": "java.lang.Integer", "defaultValue": 100, "description": "Max events per outbox poll cycle." },
     { "name": "streamrune.outbox.flush-interval-ms", "type": "java.lang.Long", "defaultValue": 5000, "description": "Outbox polling interval in milliseconds." },

@@ -1321,7 +1321,9 @@ public final class SagaRunner<S extends SagaState> {
      * themselves.
      *
      * <p>Named here, the value is final: a default an integration applies ({@link
-     * SagaForwardFenceDefault}) does not change it.
+     * SagaForwardFenceDefault}, from the property {@code streamrune.saga.forward-fence}) does not
+     * change it. A runner that names nothing is fenced from its build and takes that default at
+     * startup.
      */
     public Builder<S> forwardFence(boolean enabled) {
       this.forwardFence = enabled;

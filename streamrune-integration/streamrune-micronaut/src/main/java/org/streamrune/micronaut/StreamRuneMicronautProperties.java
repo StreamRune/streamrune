@@ -181,7 +181,14 @@ public record StreamRuneMicronautProperties(
     @Bindable(defaultValue = "1s")
         @io.micronaut.core.annotation.Nullable
         @io.micronaut.context.annotation.Property(name = "streamrune.sse.polling-interval")
-        Duration ssePollingInterval) {
+        Duration ssePollingInterval,
+    // saga.forward-fence: matches Spring/Quarkus. The forward fence of the SagaRunner beans whose
+    // builder named none: auto follows subscription.single-active-consumer.enabled, on fences, off
+    // does not. Bound as text so that an unquoted YAML on/off (read as a boolean) means the same as
+    // the quoted word. Appended at the end so the positional withDefaults() stays aligned.
+    @Bindable(defaultValue = "auto")
+        @io.micronaut.context.annotation.Property(name = "streamrune.saga.forward-fence")
+        String sagaForwardFence) {
 
   public StreamRuneMicronautProperties {
     metadataBaggageAllowlist =
@@ -243,6 +250,8 @@ public record StreamRuneMicronautProperties(
         // event-store.statement-timeout
         Duration.ofSeconds(30),
         // sse.polling-interval
-        Duration.ofSeconds(1));
+        Duration.ofSeconds(1),
+        // saga.forward-fence
+        "auto");
   }
 }

@@ -1,7 +1,9 @@
 package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.quarkus.runtime.StartupEvent;
@@ -24,7 +26,10 @@ import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.runtime.SagaEventPathRetention;
+import org.streamrune.runtime.SagaForwardFenceDefault;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.test.InMemoryCommandInbox;
+import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
 
@@ -192,5 +197,168 @@ class SagaEventPathRetentionContainerWiringTest {
           SagaEventPathRetention.effectiveWindowOf(EXPLICIT_RUNNER),
           "an application-supplied window is never overwritten");
     }
+  }
+
+  // ---- streamrune.saga.forward-fence --------------------------------------------------------
+
+  /** The property values and runners the {@link FenceBeans} producers hand to the container. */
+  static volatile Map<String, String> fenceProperties = Map.of();
+
+  static volatile SagaRunner<FakeState> namesNothing;
+  static volatile SagaRunner<FakeState> namesItsFence;
+
+  /**
+   * A bus that, like the one over a fencing event store, answers the saga rows its forward commands
+   * are fenced against.
+   */
+  private static CommandBus fencingBus(InMemoryEventStore eventStore) {
+    return new CommandBus() {
+      @Override
+      public boolean supportsIdempotentExecution() {
+        return true;
+      }
+
+      @Override
+      public Object sagaFenceStorageIdentity() {
+        return eventStore.sagaFenceStorageIdentity();
+      }
+
+      @Override
+      public <C extends Command> CommandResult execute(C command) {
+        throw new UnsupportedOperationException();
+      }
+
+      @Override
+      public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+        throw new UnsupportedOperationException();
+      }
+    };
+  }
+
+  /** A runner over a store the event store fences against; {@code named} null names no fence. */
+  private static SagaRunner<FakeState> fencedRunner(Boolean named) {
+    var sagaStore = new InMemorySagaStore();
+    var eventStore =
+        new InMemoryEventStore()
+            .withCommandInbox(new InMemoryCommandInbox())
+            .withSagaStore(sagaStore);
+    var builder =
+        SagaRunner.<FakeState>builder()
+            .orchestrator(new FakeOrchestrator())
+            .sagaStore(sagaStore)
+            .commandBus(fencingBus(eventStore))
+            .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore));
+    if (named != null) {
+      builder.forwardFence(named);
+    }
+    return builder.build();
+  }
+
+  /** Producers for the fence tests: the real mapping bound to {@link #fenceProperties}. */
+  public static class FenceBeans {
+    @Produces
+    @Singleton
+    public StreamRuneQuarkusProperties properties() {
+      SmallRyeConfig config =
+          new SmallRyeConfigBuilder()
+              .withMapping(StreamRuneQuarkusProperties.class)
+              .withConverter(
+                  Duration.class, 100, new io.quarkus.runtime.configuration.DurationConverter())
+              .withDefaultValues(fenceProperties)
+              .build();
+      return config.getConfigMapping(StreamRuneQuarkusProperties.class);
+    }
+
+    @Produces
+    @Singleton
+    @Named("namesNothing")
+    public SagaRunner<FakeState> namesNothing() {
+      return namesNothing;
+    }
+
+    @Produces
+    @Singleton
+    @Named("namesItsFence")
+    public SagaRunner<FakeState> namesItsFence() {
+      return namesItsFence;
+    }
+  }
+
+  /** Boots the container with {@code properties}, fires the startup event, returns the runners. */
+  private static void startWith(
+      Map<String, String> properties, Boolean theOtherRunnerNames, Runnable afterStartup)
+      throws Exception {
+    fenceProperties = properties;
+    namesNothing = fencedRunner(null);
+    namesItsFence = fencedRunner(theOtherRunnerNames);
+    try (var arc =
+        RealArcTestContainer.boot(
+            List.of(SagaEventPathRetentionConfigurer.class, FenceBeans.class))) {
+      arc.container().beanManager().getEvent().select(StartupEvent.class).fire(new StartupEvent());
+      afterStartup.run();
+    }
+  }
+
+  @Test
+  void auto_withSingleActiveConsumer_fencesARunnerThatNamedNothing() throws Exception {
+    startWith(Map.of(), false, () -> assertTrue(SagaForwardFenceDefault.effectiveOf(namesNothing)));
+  }
+
+  @Test
+  void auto_withoutSingleActiveConsumer_switchesItOff() throws Exception {
+    startWith(
+        Map.of("streamrune.subscription.single-active-consumer.enabled", "false"),
+        false,
+        () -> assertFalse(SagaForwardFenceDefault.effectiveOf(namesNothing)));
+  }
+
+  @Test
+  void on_fences() throws Exception {
+    startWith(
+        Map.of(
+            "streamrune.subscription.single-active-consumer.enabled", "false",
+            "streamrune.saga.forward-fence", "on"),
+        false,
+        () -> assertTrue(SagaForwardFenceDefault.effectiveOf(namesNothing)));
+  }
+
+  @Test
+  void off_switchesItOff() throws Exception {
+    startWith(
+        Map.of("streamrune.saga.forward-fence", "off"),
+        false,
+        () -> assertFalse(SagaForwardFenceDefault.effectiveOf(namesNothing)));
+  }
+
+  @Test
+  void aRunnerThatNamedItsFenceKeepsIt() throws Exception {
+    startWith(
+        Map.of("streamrune.saga.forward-fence", "off"),
+        true,
+        () -> assertTrue(SagaForwardFenceDefault.effectiveOf(namesItsFence)));
+    startWith(
+        Map.of("streamrune.saga.forward-fence", "on"),
+        false,
+        () -> assertFalse(SagaForwardFenceDefault.effectiveOf(namesItsFence)));
+  }
+
+  @Test
+  void anUnknownValueFailsStartup() {
+    var failure =
+        assertThrows(
+            Exception.class,
+            () -> startWith(Map.of("streamrune.saga.forward-fence", "maybe"), false, () -> {}));
+    Throwable cause = failure;
+    boolean found = false;
+    while (cause != null && !found) {
+      found =
+          cause.getMessage() != null
+              && cause
+                  .getMessage()
+                  .contains("streamrune.saga.forward-fence must be auto, on or off")
+              && cause.getMessage().contains("got: 'maybe'");
+      cause = cause.getCause();
+    }
+    assertTrue(found, "the startup failure names the property and the value: " + failure);
   }
 }

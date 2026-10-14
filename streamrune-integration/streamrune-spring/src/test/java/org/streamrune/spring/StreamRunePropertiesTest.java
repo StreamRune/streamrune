@@ -102,6 +102,40 @@ class StreamRunePropertiesTest {
   }
 
   @Test
+  void sagaForwardFenceDefaultsToAuto() {
+    assertThat(defaults().saga().forwardFence()).isEqualTo("auto");
+  }
+
+  @Test
+  void sagaForwardFenceBindsConfiguredValue() {
+    assertThat(bind(Map.of("streamrune.saga.forward-fence", "off")).saga().forwardFence())
+        .isEqualTo("off");
+  }
+
+  /**
+   * YAML 1.1 reads an unquoted {@code on} as a boolean, so the binder hands over the text {@code
+   * true}; the setting reads it as on.
+   */
+  @Test
+  void sagaForwardFenceBindsAnUnquotedYamlOn() throws Exception {
+    var yaml = new org.springframework.boot.env.YamlPropertySourceLoader();
+    var loaded =
+        yaml.load(
+            "application",
+            new org.springframework.core.io.ByteArrayResource(
+                "streamrune:\n  saga:\n    forward-fence: on\n".getBytes()));
+    var bound =
+        new Binder(
+                org.springframework.boot.context.properties.source.ConfigurationPropertySources
+                    .from(loaded.get(0)))
+            .bindOrCreate("streamrune", Bindable.of(StreamRuneProperties.class));
+    assertThat(bound.saga().forwardFence()).isEqualTo("true");
+    assertThat(
+            org.streamrune.integration.SagaForwardFenceSetting.parse(bound.saga().forwardFence()))
+        .isEqualTo(org.streamrune.integration.SagaForwardFenceSetting.ON);
+  }
+
+  @Test
   void defaultPropertiesShouldHaveOutboxDisabled() {
     var props = defaults();
     assertThat(props.outbox().enabled()).isFalse();

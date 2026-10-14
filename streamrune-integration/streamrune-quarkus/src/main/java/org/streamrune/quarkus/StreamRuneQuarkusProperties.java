@@ -202,6 +202,15 @@ public interface StreamRuneQuarkusProperties {
      */
     @WithDefault("PT1H")
     Duration compensationRetryGiveUpAfter();
+
+    /**
+     * The forward fence of the {@code SagaRunner} beans whose builder named none: {@code auto}
+     * follows {@code streamrune.subscription.single-active-consumer.enabled}, {@code on} fences,
+     * {@code off} does not. Bound as text so that an unquoted YAML {@code on}/{@code off} (read as
+     * a boolean) means the same as the quoted word.
+     */
+    @WithDefault("auto")
+    String forwardFence();
   }
 
   /** Outbox section, {@code streamrune.outbox.*}. */
