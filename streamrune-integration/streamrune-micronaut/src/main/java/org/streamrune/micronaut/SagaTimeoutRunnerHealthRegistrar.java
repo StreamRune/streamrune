@@ -37,7 +37,8 @@ import org.streamrune.runtime.SagaTimeoutRunner;
  * forward commands in this process (the builder refuses a timeout runner that names neither a
  * runner nor a step lock of its own). The component registered here reads {@code DEGRADED} while
  * such a claim has been waited for and is still deferred ({@link
- * SagaTimeoutRunner#claimsDeferredPastTheWait()}): a step of that saga has not returned.
+ * SagaTimeoutRunner#claimsDeferredPastTheWait()}): a step of that saga has not returned, and the
+ * forward fence of its runner is off.
  */
 @Singleton
 @Requires(beans = BackgroundRelayHealthContributor.class)

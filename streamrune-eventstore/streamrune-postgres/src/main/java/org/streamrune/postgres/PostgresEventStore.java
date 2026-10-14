@@ -139,7 +139,12 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * carries the bound as its JDBC query timeout. Neither changes the connection's session, so the
  * application's own {@code statement_timeout} is back in force for the next borrower. A statement
  * that runs past the bound fails with SQLState {@code 57014}, surfaced as an {@link
- * EventStoreException}.
+ * EventStoreException}. The append transaction also starts with {@code SET LOCAL
+ * idle_in_transaction_session_timeout}, the same number of milliseconds: a client that goes silent
+ * inside an append — a process paused, or cut off from the database — has its session ended by the
+ * server at the bound (SQLState {@code 25P03}), which releases the command's inbox key, a saga's
+ * shared fence lock and the global offset counter. So a saga-row write waiting behind a silent
+ * append waits for at most one statement timeout.
  *
  * <p><b>The saga forward fence.</b> {@link #appendWithKey(StreamId, List, Version, IdempotencyKey,
  * String, SagaOrigin)} with a saga origin takes the saga's shared fence lock in the append

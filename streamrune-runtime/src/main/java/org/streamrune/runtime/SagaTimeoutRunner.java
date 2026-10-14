@@ -85,14 +85,27 @@ import org.streamrune.core.types.SagaType;
  * as it is, and the saga — still past its deadline, still selected — is claimed on the first poll
  * that finds the step ended. After {@value #DEFERRALS_BEFORE_WAITING} polls in a row that passed a
  * saga over, the claim waits for the step, for a bounded time and in arrival order, so a delivery
- * that arrives later does not go ahead of it. The claim is never made underneath a step, however
- * long the step lasts: a poll that waited and still found a step in flight says so at WARN, counts
- * {@link StreamRuneMetrics#recordSagaTimeoutClaimDeferred}, and the runner reports {@link
- * #claimsDeferredPastTheWait()} to the health check. The lock is released as soon as the claim is
- * written, before any compensation command. This holds within one process: a timeout runner on
- * another node shares nothing with this node's deliveries, and there the forward fence keeps a
- * forward command from being stored after the claim's compensation. {@link Builder#build()} refuses
- * a builder that names neither {@link Builder#sagaRunner} nor {@link Builder#stepLock}.
+ * that arrives later does not go ahead of it. The lock is released as soon as the claim is written,
+ * before any compensation command. This holds within one process: a timeout runner on another node
+ * shares nothing with this node's deliveries, and there the forward fence keeps a forward command
+ * from being stored after the claim's compensation. {@link Builder#build()} refuses a builder that
+ * names neither {@link Builder#sagaRunner} nor {@link Builder#stepLock}.
+ *
+ * <p><b>A step still in flight after the wait.</b> What a poll does when its bounded wait passes
+ * with the step still in flight depends on the runner it was built from:
+ *
+ * <ul>
+ *   <li>built with {@link Builder#sagaRunner} from a runner whose forward fence is on (read at that
+ *       moment): the claim is made underneath the step, logged at INFO. Each forward command of the
+ *       step committed before the claim, and the compensation covers it, or reaches its commit
+ *       after the claim and is refused there; the step then resumes the episode. A step that does
+ *       not return delays the saga's deadline by the polls that passed it over and one bounded
+ *       wait, and no more;
+ *   <li>built from a runner with the fence off, or with {@link Builder#stepLock}: the claim is
+ *       never made underneath a step, however long the step lasts. The poll says so at WARN, counts
+ *       {@link StreamRuneMetrics#recordSagaTimeoutClaimDeferred}, and the runner reports {@link
+ *       #claimsDeferredPastTheWait()} to the health check.
+ * </ul>
  *
  * <p><b>A saga whose claim is deferred takes no slot of the batch.</b> It stays a forward row past
  * its deadline and is selected again on every poll, so counted against {@code batchSize} it would
@@ -342,11 +355,13 @@ public final class SagaTimeoutRunner<S extends SagaState> {
   /**
    * How many sagas past their deadline the latest poll waited for and still did not claim, because
    * a step of each was in flight in this process for the whole wait. {@code 0} when the latest poll
-   * claimed every saga it waited for, or waited for none. A nonzero value is a deadline that is not
-   * being enforced in this process: a forward command of that saga has not returned (or its
-   * attempts follow each other without a gap), the claim is not made underneath it, and it is made
-   * by the first poll that finds the step ended — a restart of the process ends such a step and
-   * frees its lock. The health check reports the runner {@code DEGRADED} while this is nonzero.
+   * claimed every saga it waited for, or waited for none — always, for a runner built from a {@link
+   * SagaRunner} whose forward fence is on: once the wait has passed its poll claims underneath the
+   * step. A nonzero value is a deadline that is not being enforced in this process: a forward
+   * command of that saga has not returned (or its attempts follow each other without a gap), the
+   * claim is not made underneath it, and it is made by the first poll that finds the step ended — a
+   * restart of the process ends such a step and frees its lock. The health check reports the runner
+   * {@code DEGRADED} while this is nonzero.
    */
   public int claimsDeferredPastTheWait() {
     return claimsDeferredPastTheWait;
@@ -467,7 +482,8 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    *       lock held, the row is read again and {@link SagaTrigger.ClaimTimeout} CAS-claims it to
    *       {@code COMPENSATING} at that version before any dispatch, then compensates from the claim
    *       version. A lost claim dispatches nothing (no orphaned compensation); while a step of the
-   *       saga is in flight in this process the claim is not made at all.
+   *       saga is in flight in this process the claim is not made, until a poll's bounded wait has
+   *       passed with the forward fence on.
    * </ul>
    *
    * <p>Package-private for testing — tests call this directly to exercise the halted-guard branch
@@ -513,7 +529,9 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    * #DEFERRALS_BEFORE_WAITING} such polls in a row the claim waits for the step, for at most the
    * claim wait and in arrival order: a delivery that arrives while the claim waits goes after it. A
    * step that lasts longer than the wait is not waited out: the claim is made by a poll that finds
-   * the lock free, or that sees the step end within its wait.
+   * the lock free, or that sees the step end within its wait — or, when the runner this one was
+   * built from fences its forward commands, by the poll whose wait passed, underneath the step
+   * ({@link #claimUnderneathTheStep}).
    *
    * <p>With the lock held the row is read again, because the read that routed the saga here is
    * older than the lock: a step may have written since. What the claim then finds:
@@ -610,9 +628,10 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    * made. Every such poll counts one {@link StreamRuneMetrics#recordSagaTimeoutClaimDeferred}
    * sample. The first polls are expected — a delivery at the deadline, an outage ending in a
    * redelivery — and logged at DEBUG. A poll that waited for the step and still found one in flight
-   * is logged at WARN on every occurrence: until a poll finds the saga free, its deadline is not
-   * enforced in this process. The poll cannot tell one forward command that does not return from
-   * attempts that follow each other without a gap long enough for the claim, and says so.
+   * — with the forward fence off, or for a runner built with a step lock alone — is logged at WARN
+   * on every occurrence: until a poll finds the saga free, its deadline is not enforced in this
+   * process. The poll cannot tell one forward command that does not return from attempts that
+   * follow each other without a gap long enough for the claim, and says so.
    */
   private void claimDeferred(SagaId sagaId, Duration waited) {
     int passedOver = deferredClaims.merge(sagaId, 1, Integer::sum);
@@ -901,6 +920,10 @@ public final class SagaTimeoutRunner<S extends SagaState> {
      * delivery from a state that does not include the step; the delivery's next forward command is
      * then refused at its commit by a runner that fences its forward commands, and stored after the
      * compensation by one that does not.
+     *
+     * <p>When the runner fences its forward commands, a claim that waited its bound for a step
+     * still in flight is made underneath it (the step's later forward commands are refused at their
+     * commit); when it does not, the claim is never made underneath a step.
      *
      * <p>The timeout runner takes the runner's step lock and nothing else from it; the decider, the
      * store, the bus and the saga type are still this builder's. {@link #build()} refuses a runner

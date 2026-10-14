@@ -199,7 +199,9 @@ public class BackgroundRelayHealthContributor {
    * A started, alive runner is reported DEGRADED while {@link
    * SagaTimeoutRunner#claimsDeferredPastTheWait()} is above zero: its latest poll waited for a step
    * of a saga past its deadline, the step was still in flight, and the claim is not made underneath
-   * it — that saga's deadline is not enforced in this process until the step returns.
+   * it — that saga's deadline is not enforced in this process until the step returns. That happens
+   * only for a runner whose forward fence is off, or a timeout runner built with a step lock alone:
+   * with the fence on the claim is made once the wait has passed.
    */
   public void registerSagaTimeoutRunner(SagaTimeoutRunner<?> runner) {
     if (runner == null) {

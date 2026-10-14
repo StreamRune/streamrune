@@ -74,6 +74,19 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * #markFaulted} keeps the stamp and is not terminal, and the dead-letter shield is not part of the
  * verdict.
  *
+ * <p><b>The row-write bound.</b> Every {@code UPDATE} and {@code DELETE} of {@code saga_state}, and
+ * the exclusive fence-lock statement before a fence-changing one, carries a JDBC query timeout of
+ * five seconds: a write waits at most that long for the saga's fence lock — held by a forward
+ * append in flight — and then for the row's lock. Past it the driver cancels the statement
+ * (SQLState {@code 57014}, surfaced as {@link EventStoreException}, so the caller retries: the
+ * timeout runner on its next poll, a delivery on its redelivery). A forward append that went silent
+ * holds the fence lock for at most the event store's statement timeout (its transaction's idle
+ * bound), so a claim behind it is made by a poll at most that long later. Behind a
+ * transaction-pooling PgBouncer the cancel request is forwarded to the server connection the client
+ * is linked to. Reads and inserts carry no bound of the store's own: {@code SELECT … FOR UPDATE
+ * SKIP LOCKED} never waits, and an insert that does nothing on conflict waits only for an
+ * uncommitted insert of the same id.
+ *
  * <p><b>Failure taxonomy.</b> Every write path converts the state to JSON <em>before</em> it
  * acquires a pooled connection, and every path reports the two failure classes distinctly:
  *
