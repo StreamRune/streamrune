@@ -18,7 +18,7 @@ micronaut-application = "4.2.1"
 jackson = "2.19.2"
 hikaricp = "6.2.1"
 dropwizard-metrics = "4.2.29"
-dropwizard-metrics5 = "5.0.0"
+dropwizard-metrics5 = "5.0.8"
 postgresql = "42.7.10"
 # 11.13.3+ (so 12.x and 13.x) accept PostgreSQL 18 without the "Flyway upgrade recommended: PostgreSQL 18.x is
 # newer than this version of Flyway" WARN that 10.22.0 logged on every migration against the 18 the suite runs on.
