@@ -90,6 +90,9 @@ final class SagaForwardFenceTwoNodeFixture implements AutoCloseable {
     /** The saga type of every compensation episode this node found opened under its step. */
     final List<String> underStepSamples = new CopyOnWriteArrayList<>();
 
+    /** The saga type of every live event this node held because its saga was faulted. */
+    final List<String> skippedWhileFaultedSamples = new CopyOnWriteArrayList<>();
+
     /** Every command that reached this node's bus, in order. */
     final List<Class<?>> dispatched = new CopyOnWriteArrayList<>();
 
@@ -103,6 +106,11 @@ final class SagaForwardFenceTwoNodeFixture implements AutoCloseable {
           @Override
           public void recordSagaCompensationUnderForwardStep(String sagaType) {
             underStepSamples.add(sagaType);
+          }
+
+          @Override
+          public void recordSagaSkippedWhileFaulted(String sagaType) {
+            skippedWhileFaultedSamples.add(sagaType);
           }
         };
 

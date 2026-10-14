@@ -183,6 +183,34 @@ class SagaForwardFenceBuilderTest {
   }
 
   @Test
+  void aBusWithoutAnInboxIsRefusedForTheInboxFirst() {
+    var neither =
+        new org.streamrune.core.CommandBus() {
+          @Override
+          public <C extends Command> CommandResult execute(C command) {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public <C extends Command> CommandResult execute(
+              C command, org.streamrune.core.types.IdempotencyKey key) {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public boolean supportsIdempotentExecution() {
+            return false;
+          }
+        };
+    var builder = runner(rows, neither);
+
+    assertThatThrownBy(builder::build)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("requires idempotent execution")
+        .hasMessageNotContaining("fences");
+  }
+
+  @Test
   void aBusFencingOtherRowsIsRefused() {
     var builder = runner(rows, busFencingAgainst(new InMemorySagaStore())).forwardFence(true);
 

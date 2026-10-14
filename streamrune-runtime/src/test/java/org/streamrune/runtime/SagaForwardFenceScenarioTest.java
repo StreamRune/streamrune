@@ -18,6 +18,8 @@ import org.streamrune.runtime.SagaDeadLetterReplayer.CompensateOutcome;
 import org.streamrune.runtime.SagaStepLockFixture.Advanced;
 import org.streamrune.runtime.SagaStepLockFixture.Completed;
 import org.streamrune.runtime.SagaStepLockFixture.Opened;
+import org.streamrune.runtime.SagaStepLockFixture.Refund;
+import org.streamrune.runtime.SagaStepLockFixture.Release;
 import org.streamrune.runtime.SagaStepLockFixture.Reserve;
 import org.streamrune.runtime.SagaStepLockFixture.Ship;
 import org.streamrune.runtime.SagaStepLockFixture.State;
@@ -295,6 +297,84 @@ class SagaForwardFenceScenarioTest {
           .as("shipped after completion")
           .containsExactly("Reserved", "Shipped");
       assertThat(f.row(ORDER).status()).isEqualTo(SagaStatus.COMPLETED);
+    }
+  }
+
+  // ---- the other node's episode is still open when the command is refused ----
+
+  @Test
+  void theOtherNodesEpisodeIsStillOpenWhenTheCommandIsRefused_fenceOn() {
+    try (var f = new SagaForwardFenceTwoNodeFixture(true)) {
+      EventEnvelope opened = f.append(new Opened(ORDER));
+      // The other node's refund fails on infrastructure once: its episode stays COMPENSATING.
+      f.b.refund.failure = once(() -> new IllegalStateException("connection reset"));
+      f.a.bus.runOnceBefore(Ship.class, f.b::timeOut);
+
+      f.a.deliver(opened);
+
+      assertThat(f.storedOrder(ORDER)).containsExactly("Reserved", "Released", "Refunded");
+      assertThat(f.row(ORDER).status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(f.b.dispatched).containsExactly(Release.class, Refund.class);
+      assertThat(f.a.dispatched)
+          .as("the step resumes the episode: the release answers from the inbox")
+          .containsExactly(Reserve.class, Ship.class, Release.class, Refund.class);
+      assertThat(f.a.fencedSamples).containsExactly(TYPE.value());
+      assertThat(f.a.underStepSamples).isEmpty();
+      assertTheFenceHeld(f);
+    }
+  }
+
+  // ---- the other node faults the saga inside its episode under the step ----
+
+  /** What the other node writes: it claims the episode, and its compensation faults. */
+  private static Runnable theOtherNodeClaimsAndFaults(SagaForwardFenceTwoNodeFixture f) {
+    return () -> {
+      var row = f.row(ORDER);
+      f.rows.claimCompensating(sagaOf(ORDER), TYPE, row.state(), row.version(), null);
+      f.rows.markFaulted(sagaOf(ORDER), TYPE, row.version() + 1);
+    };
+  }
+
+  @Test
+  void theSagaFaultsInsideTheOtherNodesEpisodeUnderTheStep_theEventIsHeld_fenceOn() {
+    try (var f = new SagaForwardFenceTwoNodeFixture(true)) {
+      f.a.saga.startAlsoShips = false;
+      f.a.deliver(f.append(new Opened(ORDER)));
+      EventEnvelope advanced = f.append(new Advanced(ORDER));
+      f.a.bus.runOnceBefore(Ship.class, theOtherNodeClaimsAndFaults(f));
+
+      f.a.deliver(advanced);
+
+      assertThat(f.storedOrder(ORDER)).containsExactly("Reserved");
+      assertThat(f.row(ORDER).status()).isEqualTo(SagaStatus.FAULTED);
+      assertThat(f.row(ORDER).preFaultStatus()).isEqualTo(SagaStatus.COMPENSATING);
+      assertThat(f.deadLetters.findBySaga(sagaOf(ORDER)))
+          .as("held, as the delivery after the fault holds it")
+          .singleElement()
+          .satisfies(entry -> assertThat(entry.eventOffset()).isEqualTo(advanced.globalOffset()));
+      assertThat(f.a.skippedWhileFaultedSamples).containsExactly(TYPE.value());
+      assertThat(f.a.fencedSamples).containsExactly(TYPE.value());
+    }
+  }
+
+  @Test
+  void theSagaFaultsInsideTheOtherNodesEpisodeUnderTheStep_theEventIsHeld_fenceOff() {
+    try (var f = new SagaForwardFenceTwoNodeFixture(false)) {
+      f.a.saga.startAlsoShips = false;
+      f.a.deliver(f.append(new Opened(ORDER)));
+      EventEnvelope advanced = f.append(new Advanced(ORDER));
+      f.a.bus.runOnceBefore(Ship.class, theOtherNodeClaimsAndFaults(f));
+
+      assertThatThrownBy(() -> f.a.deliver(advanced)).isInstanceOf(OptimisticLockException.class);
+      f.a.deliver(advanced); // the redelivery
+
+      assertThat(f.storedOrder(ORDER))
+          .as("shipped under the episode")
+          .containsExactly("Reserved", "Shipped");
+      assertThat(f.deadLetters.findBySaga(sagaOf(ORDER)))
+          .singleElement()
+          .satisfies(entry -> assertThat(entry.eventOffset()).isEqualTo(advanced.globalOffset()));
+      assertThat(f.a.skippedWhileFaultedSamples).containsExactly(TYPE.value());
     }
   }
 

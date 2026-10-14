@@ -127,6 +127,11 @@ public final class StreamRuneContext {
    * {@code VirtualThreadCommandBus.executeAsync} do not carry it, and it answers only for the key
    * it names, so a keyed command dispatched inside the forward command (by an interceptor or an
    * inline projection) is not fenced on the saga's behalf.
+   *
+   * <p>A {@code CommandBus} decorator that runs the command on another thread, or binds the scoped
+   * values itself, leaves the marker behind on the dispatching thread: the event store then
+   * receives no saga to fence, and the runner's wiring check cannot see it. A decorator in front of
+   * a fencing bus calls it on the calling thread.
    */
   public static final ScopedValue<SagaForward> SAGA_FORWARD = ScopedValue.newInstance();
 

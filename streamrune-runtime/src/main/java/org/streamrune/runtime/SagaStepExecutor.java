@@ -729,13 +729,19 @@ final class SagaStepExecutor<S extends SagaState> {
    *   <li>no row, or a row whose version is below the one this step read (the saga was deleted, and
    *       perhaps started again): the stale view propagates as {@link OptimisticLockException}, the
    *       exit a deleted row takes on every path; nothing more is dispatched;
-   *   <li>a row in its forward phase — no episode stamp, not terminal: the store refused a command
-   *       it had no reason to refuse, so it does not keep the fence contract. The event is
-   *       quarantined ({@link SagaPoisonException}): nothing is compensated, nothing loops;
+   *   <li>a row that is neither terminal nor in its compensation episode ({@link
+   *       LoadedSaga#effectiveStatus()} is a forward status): with no episode stamp the store
+   *       refused a command it had no reason to refuse, so it does not keep the fence contract;
+   *       with a stamp, the row was written outside the saga store's contract (a stamp on a forward
+   *       status), and the store refuses every forward command of it. Either way the event is
+   *       quarantined ({@link SagaPoisonException}): nothing is compensated, and the forward loop
+   *       is not run again;
    *   <li>otherwise the row is routed as a fresh delivery of the event routes it ({@link
    *       #forwardStep}): a stamped {@code COMPENSATING} row — or one faulted inside its episode,
    *       on a replay feed — resumes the episode under its stamp; a terminal row, or a {@code
-   *       FAULTED} row on a live event, is {@code SKIPPED_HALTED}.
+   *       FAULTED} row on a live event, is {@code SKIPPED_HALTED}. {@link #forwardStep} runs no
+   *       forward loop for any of them, so the routing never comes back here: one refusal is routed
+   *       once.
    * </ul>
    *
    * <p>The step claims nothing of its own and is not retried: the refusal is a fact about the row,
@@ -776,15 +782,28 @@ final class SagaStepExecutor<S extends SagaState> {
               + " was removed while its forward step was in flight; nothing more was dispatched");
     }
     LoadedSaga<S> row = reloaded.get();
-    if (row.episodeVersion() == null && !row.status().isTerminal()) {
+    // Only a row on which no forward step can run goes on to forwardStep: a terminal row
+    // (skipped there) or a row in its compensation episode, also when it faulted inside it
+    // (resumed on a replay feed, skipped on a live event). forwardStep runs no forward loop for
+    // either, so a routed step never dispatches a forward command again and never comes back here.
+    if (!row.status().isTerminal() && row.effectiveStatus() != SagaStatus.COMPENSATING) {
       throw new SagaPoisonException(
           sagaId,
           new IllegalStateException(
-              "The event store refused a forward command of saga "
-                  + sanitized
-                  + " as fenced, and the saga row is in its forward phase (status "
-                  + row.status()
-                  + ", no episode stamp): the store does not keep the fence contract"));
+              row.episodeVersion() == null
+                  ? "The event store refused a forward command of saga "
+                      + sanitized
+                      + " as fenced, and the saga row is in its forward phase (status "
+                      + row.status()
+                      + ", no episode stamp): the store does not keep the fence contract"
+                  : "The event store refused a forward command of saga "
+                      + sanitized
+                      + " as fenced, and the saga row is neither in a compensation episode the"
+                      + " step can resume nor ended (status "
+                      + row.status()
+                      + ", episode stamp "
+                      + row.episodeVersion()
+                      + "): the row was written outside the saga store's contract"));
     }
     return forwardStep(sagaId, reloaded, fs);
   }

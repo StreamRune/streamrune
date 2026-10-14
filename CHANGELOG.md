@@ -544,8 +544,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   transaction that would store it once the saga row carries a compensation episode, is terminal or
   is gone — so no forward command of a saga is stored after its compensation opened, or after it
   ended, whatever runs the claim and however long the step takes. The refused step goes on from the
-  row: it resumes the open episode under its stamp, stops at an ended saga (`SKIPPED_HALTED`), or
-  reports a stale view for a row that is gone; it claims nothing of its own and is not retried.
+  row: it resumes the open episode under its stamp, stops at an ended saga (`SKIPPED_HALTED`; a
+  live correlated event of a saga that faulted inside its episode is held), reports a stale view
+  for a row that is gone, and quarantines the event when the row is in a forward status; it claims
+  nothing of its own, is not retried and never runs its forward loop again.
   Each refusal logs one INFO line and counts one `saga.forward_commands_fenced` sample.
   Compensation commands are not fenced. On by default: `SagaRunner.Builder.forwardFence(false)`
   switches it off, and `build()` refuses a runner whose command bus cannot fence, or fences against

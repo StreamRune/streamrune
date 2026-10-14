@@ -181,11 +181,17 @@ class SagaForwardFenceRoutingTest {
   final CountingStore store = new CountingStore(rows);
   final RefusingBus bus = new RefusingBus();
   final List<String> fencedSamples = new CopyOnWriteArrayList<>();
+  final List<String> casConflictSamples = new CopyOnWriteArrayList<>();
   final StreamRuneMetrics metrics =
       new StreamRuneMetrics() {
         @Override
         public void recordSagaForwardCommandFenced(String sagaType) {
           fencedSamples.add(sagaType);
+        }
+
+        @Override
+        public void recordSagaCasConflict(String sagaType) {
+          casConflictSamples.add(sagaType);
         }
       };
   final SagaStepExecutor<State> executor =
@@ -289,6 +295,7 @@ class SagaForwardFenceRoutingTest {
                 + " dispatched");
     assertThat(bus.of(Release.class)).isEmpty();
     assertThat(store.claims).hasValue(0);
+    assertThat(casConflictSamples).as("a stale view is a conflict").containsExactly(TYPE.value());
   }
 
   @Test
@@ -327,6 +334,78 @@ class SagaForwardFenceRoutingTest {
     assertThat(bus.of(Release.class)).as("never compensated").isEmpty();
     assertThat(store.claims).hasValue(0);
     assertThat(row().version()).isEqualTo(1L);
+  }
+
+  /**
+   * A stamp on a row in a forward status (a row written outside the saga store's contract, by a
+   * tool or by SQL of an application's own). The store refuses every forward command of it, so the
+   * step must not run its forward loop again: it quarantines the event after one refusal.
+   */
+  private Runnable aToolStampsTheRowAndPutsItBackForward(long version, SagaStatus forward) {
+    return () -> {
+      rows.claimCompensating(SAGA, TYPE, new State(SagaStatus.RUNNING, ORDER), version, null);
+      rows.update(SAGA, TYPE, new State(forward, ORDER), forward, version + 1);
+    };
+  }
+
+  private void assertQuarantinedAfterOneRefusal(Runnable step, String status) {
+    assertThatThrownBy(step::run)
+        .isInstanceOf(SagaPoisonException.class)
+        .cause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(
+            "The event store refused a forward command of saga order-saga-7 as fenced, and the"
+                + " saga row is neither in a compensation episode the step can resume nor ended"
+                + " (status "
+                + status
+                + ", episode stamp 2): the row was written outside the saga store's contract");
+    assertThat(bus.of(Ship.class)).as("the forward loop is not run again").hasSize(1);
+    assertThat(bus.of(Reserve.class)).hasSize(1);
+    assertThat(bus.of(Release.class)).as("never compensated").isEmpty();
+    assertThat(fencedSamples).containsExactly(TYPE.value());
+    assertThat(store.claims).hasValue(0);
+  }
+
+  @Test
+  void aRefusalOverAStampedRunningRow_isPoison_andDispatchesNothingMore() {
+    var loaded = runningRowAt(1);
+    bus.refuse(Ship.class, aToolStampsTheRowAndPutsItBackForward(1, SagaStatus.RUNNING), false);
+
+    assertQuarantinedAfterOneRefusal(() -> deliverAdvanced(loaded), "RUNNING");
+    assertThat(row().version()).as("nothing written").isEqualTo(3L);
+  }
+
+  @Test
+  void aRefusalOverAStampedStartedRow_isPoison_andDispatchesNothingMore() {
+    rows.createGenesisPending(
+        SAGA, TYPE, new State(SagaStatus.STARTED, ORDER), SagaStatus.STARTED, false);
+    var loaded = rows.load(SAGA, TYPE, State.class);
+    bus.refuse(Ship.class, aToolStampsTheRowAndPutsItBackForward(1, SagaStatus.STARTED), false);
+
+    assertQuarantinedAfterOneRefusal(
+        () ->
+            executor.execute(
+                SAGA, loaded, new SagaTrigger.ForwardStep(advanced(), true, false, false, false)),
+        "STARTED");
+  }
+
+  @Test
+  void aRefusalOverARowFaultedInAForwardStatusWithAStamp_isPoisonOnAReplayFeed() {
+    var loaded = runningRowAt(1);
+    bus.refuse(
+        Ship.class,
+        () -> {
+          aToolStampsTheRowAndPutsItBackForward(1, SagaStatus.RUNNING).run();
+          rows.markFaulted(SAGA, TYPE, 3);
+        },
+        false);
+
+    assertQuarantinedAfterOneRefusal(
+        () ->
+            executor.execute(
+                SAGA, loaded, new SagaTrigger.ForwardStep(advanced(), false, true, true, false)),
+        "FAULTED");
+    assertThat(row().preFaultStatus()).isEqualTo(SagaStatus.RUNNING);
   }
 
   @Test

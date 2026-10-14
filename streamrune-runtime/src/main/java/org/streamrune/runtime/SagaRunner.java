@@ -619,7 +619,26 @@ public final class SagaRunner<S extends SagaState> {
       hold(sagaId, event, SagaEventHeldException.HoldReason.BACKLOG_PENDING);
       return;
     }
-    executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, false, false));
+    StepOutcome outcome =
+        executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, false, false));
+    if (outcome == StepOutcome.SKIPPED_HALTED) {
+      holdIfFaultedUnderTheStep(sagaId, event);
+    }
+  }
+
+  /**
+   * A live step over a forward row ends {@code SKIPPED_HALTED} only when one of its forward
+   * commands was refused at its commit and the row it read again was terminal or {@code FAULTED}:
+   * another path ended the saga, or faulted it inside the compensation episode it opened, while the
+   * step was in flight. A terminal saga drops the event, as a delivery that finds it terminal does.
+   * A {@code FAULTED} saga holds it ({@link #holdWhileFaulted}), as the delivery of the event after
+   * the fault would: the event is not applied, and it is not lost either.
+   */
+  private void holdIfFaultedUnderTheStep(SagaId sagaId, EventEnvelope event) {
+    Optional<LoadedSaga<S>> reread = loadForDelivery(sagaId);
+    if (reread.isPresent() && reread.get().status() == SagaStatus.FAULTED) {
+      holdWhileFaulted(sagaId, event);
+    }
   }
 
   /**
@@ -1301,8 +1320,8 @@ public final class SagaRunner<S extends SagaState> {
      * claimed, and nothing undoes it: the target aggregates have to refuse such a command
      * themselves.
      *
-     * <p>Named here, the value is final: an integration's {@code streamrune.saga.forward-fence}
-     * default ({@link SagaForwardFenceDefault}) does not change it.
+     * <p>Named here, the value is final: a default an integration applies ({@link
+     * SagaForwardFenceDefault}) does not change it.
      */
     public Builder<S> forwardFence(boolean enabled) {
       this.forwardFence = enabled;
