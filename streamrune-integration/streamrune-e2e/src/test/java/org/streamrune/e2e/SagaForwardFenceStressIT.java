@@ -46,10 +46,10 @@ import org.streamrune.e2e.SagaForwardFenceInvariant.LateForwardCommand;
  * <p>Inside the load one saga, {@code <seed>-0} (never given a {@code Completed} event), is held at
  * the window on purpose: on {@code node-a} its first {@code Ship} waits before the bus until
  * another node's timeout runner has claimed the saga and stored its first compensation command. The
- * other nodes deliver none of its events before the hold, and refuse its forward commands as
- * retry-later until the hold ends; {@code node-a}'s own timeout runner cannot claim it (the step
- * holds that node's step lock). So that one forward command reaches its commit after the
- * compensation, however fast the machine runs the rest of the load.
+ * other nodes deliver none of its events until the hold ends (their timeout runners claim without a
+ * delivery); {@code node-a}'s own timeout runner cannot claim it (the step holds that node's step
+ * lock); the seeded retry-later failures skip the saga's commands. So that one forward command
+ * reaches its commit after the compensation, however fast the machine runs the rest of the load.
  *
  * <p>With the fence on, after the load has quiesced: the invariant query over {@code command_inbox}
  * returns no row, every saga row is terminal, each compensation is stored once, and in {@code
@@ -101,8 +101,8 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
   void noForwardCommandIsStoredAfterItsSagasFirstCompensation_fenceOn(long seed) throws Exception {
     Load load = run(seed, true);
 
-    assertThat(load.fencedByNode().values().stream().mapToInt(Integer::intValue).sum())
-        .as("at least the held saga's Ship is refused")
+    assertThat(load.fencedByNode().get(Held.HOLDER))
+        .as("the held Ship reaches its commit after the compensation: the fence refuses it")
         .isPositive();
 
     assertThat(SagaForwardFenceInvariant.lateForwardCommands(dataSource)).isEmpty();
@@ -148,6 +148,7 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
       node.bus.failure =
           (command, key) ->
               isForward(command)
+                      && !held.covers(command)
                       && Math.floorMod(
                               (seed + ":" + key.value()).hashCode(), ONE_FORWARD_COMMAND_IN)
                           == 0
@@ -265,10 +266,9 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
   /**
    * The saga held at the window. On {@link #HOLDER}, the saga's first {@code Ship} waits before the
    * bus until the saga's first compensation command is stored. The other nodes deliver none of the
-   * saga's events before that {@code Ship} is held — so the holder creates the saga's row and reads
-   * it in its forward phase — and every forward command of the saga they dispatch fails with a
-   * retry-later failure until the hold ends, so none of them stores the held command's key first
-   * and none keeps its node's step lock: their timeout runners claim the saga at its deadline.
+   * saga's events until that hold ends — so the holder creates the saga's row and reads it in its
+   * forward phase, no other node stores the held command's key first, and no other node keeps its
+   * step lock on the saga: their timeout runners claim it at its deadline.
    */
   private final class Held {
     static final String HOLDER = "node-a";
@@ -276,7 +276,6 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
 
     private final String order;
     private final AtomicBoolean taken = new AtomicBoolean();
-    private volatile boolean holding;
     private volatile boolean released;
     volatile String outcome = "never reached";
 
@@ -284,35 +283,47 @@ class SagaForwardFenceStressIT extends SagaForwardFenceNodes {
       this.order = order;
     }
 
-    /** On a delivering thread: the other nodes wait to deliver the saga's events until the hold. */
+    /** Whether {@code command} is a forward command of the held saga. */
+    boolean covers(Command command) {
+      return isForward(command) && order.equals(orderOf(command));
+    }
+
+    /**
+     * On a delivering thread: a node other than the holder delivers the saga's events only after
+     * the hold ends; it fails the delivering thread if the hold has not ended within the patience.
+     */
     void awaitTheHolderBefore(String node, EventEnvelope event) {
-      if (HOLDER.equals(node) || !order.equals(orderOf(event)) || holding || released) {
+      if (HOLDER.equals(node) || !order.equals(orderOf(event)) || released) {
         return;
       }
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(PATIENCE_SECONDS);
-      while (!holding && !released && System.nanoTime() < deadline) {
+      while (!released) {
+        if (System.nanoTime() > deadline) {
+          throw new AssertionError(
+              node
+                  + " waited "
+                  + PATIENCE_SECONDS
+                  + " s for the hold of saga "
+                  + order
+                  + " on "
+                  + HOLDER
+                  + " to end; the hold: "
+                  + outcome);
+        }
         sleepMillis(5);
       }
     }
 
-    /** On the dispatching thread, before the bus. */
+    /** On the holder's dispatching thread, before the bus: holds the saga's first {@code Ship}. */
     void beforeCommand(String node, Command command) {
-      if (!isForward(command) || !order.equals(orderOf(command))) {
-        return;
-      }
-      if (!HOLDER.equals(node)) {
-        if (!released) {
-          throw new CircuitBreakerOpenException("the held saga's forward commands wait");
-        }
-        return;
-      }
-      if (command instanceof Ship && taken.compareAndSet(false, true)) {
-        holding = true;
+      if (HOLDER.equals(node)
+          && covers(command)
+          && command instanceof Ship
+          && taken.compareAndSet(false, true)) {
         try {
           outcome = awaitTheFirstCompensation();
         } finally {
           released = true;
-          holding = false;
         }
       }
     }
