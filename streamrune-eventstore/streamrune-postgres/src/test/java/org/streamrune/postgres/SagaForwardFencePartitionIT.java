@@ -7,6 +7,7 @@ import static org.streamrune.postgres.SagaFenceNodes.outcomeOf;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -92,12 +93,16 @@ class SagaForwardFencePartitionIT {
     peer.silenceOpenConnections();
     pause.release();
 
+    // The moment B's claim returned, before its compensation commands.
+    AtomicLong claimedAt = new AtomicLong();
+    b.afterTheNextClaim.set(() -> claimedAt.set(System.nanoTime()));
     nodes.timeOut(b);
-    long claimedAfter = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - idleSince);
+    long claimedAfter = TimeUnit.NANOSECONDS.toMillis(claimedAt.get() - idleSince);
 
     System.out.printf(
-        "B's claim returned %d ms after A's append went idle (statement timeout %d ms)%n",
+        "B's claim was written %d ms after A's append went idle (statement timeout %d ms)%n",
         claimedAfter, STATEMENT_TIMEOUT.toMillis());
+    assertThat(claimedAt.get()).as("B's claim returned").isNotZero();
     assertThat(nodes.row(ORDER).orElseThrow().episodeVersion()).as("B claimed").isNotNull();
     assertThat(claimedAfter)
         .as("B's claim waits for A's silent append at most A's statement timeout")

@@ -600,18 +600,11 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    * <p>No step lock is held: the row is read again — a step may have written since the read that
    * routed the saga here — and routed as a re-pick would be: no row, or a halted row, is left
    * alone; a {@code COMPENSATING} row resumes its episode; a forward row is claimed by the
-   * executor's compare-and-swap at the version read, which a write in between makes it lose.
+   * executor's compare-and-swap at the version read, which a write in between makes it lose. The
+   * INFO line is written only for that claim.
    */
   private void claimUnderneathTheStep(SagaId sagaId, int passedOver, SagaTimeoutException cause) {
     deferredClaims.remove(sagaId);
-    LOG.info(
-        "Saga {} is past its deadline, and a step of it has been in flight in this process for {}"
-            + " polls and the bounded wait of {}; the claim is made underneath it: the forward"
-            + " fence refuses the step's later forward commands, and the step resumes the"
-            + " episode.",
-        LogSanitizer.sanitizeForLog(sagaId.value()),
-        passedOver,
-        claimWait);
     Optional<LoadedSaga<S>> current = sagaStore.load(sagaId, sagaType, decider.stateType());
     if (current.isEmpty() || current.get().status().isHalted()) {
       return;
@@ -620,6 +613,14 @@ public final class SagaTimeoutRunner<S extends SagaState> {
       resumeClaimedEpisode(sagaId, current.get(), cause);
       return;
     }
+    LOG.info(
+        "Saga {} is past its deadline, and a step of it has been in flight in this process for {}"
+            + " polls and the bounded wait of {}; the claim is made underneath it: the forward"
+            + " fence refuses the step's later forward commands, and the step resumes the"
+            + " episode.",
+        LogSanitizer.sanitizeForLog(sagaId.value()),
+        passedOver,
+        claimWait);
     executor.execute(sagaId, current, new SagaTrigger.ClaimTimeout(cause));
   }
 

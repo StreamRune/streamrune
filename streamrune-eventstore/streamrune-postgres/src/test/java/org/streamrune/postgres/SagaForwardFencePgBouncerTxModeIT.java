@@ -19,6 +19,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -178,6 +179,13 @@ class SagaForwardFencePgBouncerTxModeIT {
    * the cancel request can reach the pooler after the statement ended. The next statement through
    * the writer's client, and a statement of another client running on the shared server
    * connections, are not cancelled.
+   *
+   * <p>This is timing-dependent evidence, not a proof: the window in which a late cancel could
+   * still meet the next statement on the same server connection is real but small (the server
+   * processes a cancel after the pooler relinked the connection and the next statement started),
+   * and this test's own sequencing adds milliseconds after the writer's commit. A failure here
+   * would be that documented race, which the driver's query timeout carries everywhere it is used,
+   * not a regression of the store.
    */
   @Test
   void aCancelArrivingAfterItsStatementCancelsNothingElse_throughPgBouncer() throws Exception {
@@ -321,11 +329,15 @@ class SagaForwardFencePgBouncerTxModeIT {
     long idleSince = System.nanoTime();
     int appendPid = nodes.idleInTransaction("node-a");
 
+    // The moment B's claim returned, before its compensation commands.
+    AtomicLong claimedAt = new AtomicLong();
+    b.afterTheNextClaim.set(() -> claimedAt.set(System.nanoTime()));
     nodes.timeOut(b);
-    long claimedAfter = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - idleSince);
+    long claimedAfter = TimeUnit.NANOSECONDS.toMillis(claimedAt.get() - idleSince);
 
     assertThat(nodes.row(ORDER).orElseThrow().episodeVersion()).as("B claimed").isNotNull();
-    assertThat(claimedAfter).isLessThan(statementTimeout.toMillis() + SLACK_MILLIS + 500);
+    assertThat(claimedAt.get()).as("B's claim returned").isNotZero();
+    assertThat(claimedAfter).isLessThan(statementTimeout.toMillis() + SLACK_MILLIS);
     nodes.awaitGone(appendPid);
 
     pause.release();

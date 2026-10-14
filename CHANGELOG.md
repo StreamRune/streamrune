@@ -132,7 +132,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   that goes silent inside an append — paused, or cut off from the database without its connection
   closing — has its session ended by the server at the bound, which releases the command's inbox
   key, a saga's shared fence lock and the global offset counter. Transaction-scoped, so it works
-  behind a transaction-pooling PgBouncer.
+  behind a transaction-pooling PgBouncer. A statement bound of `0` sets neither bound.
 - Store writes commit correctly on a pool configured with `auto-commit=false` as well as with the
   default: the store commits after its statement and rolls back on failure, leaving the pool's
   setting untouched. This covers the outbox, offsets, snapshots, dead letters, saga state, leases,
@@ -561,9 +561,14 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   entry point through which an integration applies a default to runners that named none. The
   in-memory stores fence when the `InMemorySagaStore` is wired into the `InMemoryEventStore` with
   `withSagaStore`.
-- Saga-row write bound: every `UPDATE` and `DELETE` of `saga_state` by `PostgresSagaStore`, and the
-  exclusive fence-lock statement before a fence-changing one, carries a 5-second JDBC query timeout
-  (SQLState `57014` past it, an `EventStoreException` its caller retries). A claim behind a forward
+- Saga-row write bound: every `UPDATE` and `DELETE` of `saga_state` by `PostgresSagaStore`, the
+  exclusive fence-lock statement before a fence-changing one, and the `saga_state` statements of
+  `PostgresSagaDeadLetterStore` (the shield writes and the row lock of the shield clear) carry a
+  5-second JDBC query timeout (SQLState `57014` past it, an `EventStoreException` its caller
+  retries). The transactions that hold a saga row across statements — a write that stamps, ends or
+  deletes a saga, and the dead-letter store's two shield transactions — set `SET LOCAL
+  idle_in_transaction_session_timeout` to the same 5 s, so a writer that goes silent before its
+  commit releases the fence lock and the row within 5 s. A claim behind a forward
   append that went silent waits at most 5 s and is made by a later poll once the append's idle bound
   ended it, so a saga's deadline is late by at most one statement timeout plus one poll interval on
   any number of processes. Behind PgBouncer in transaction mode the cancel is forwarded to the

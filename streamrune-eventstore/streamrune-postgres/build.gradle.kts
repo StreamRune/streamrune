@@ -48,10 +48,6 @@ dependencies {
     // a real PostgresCryptoEngine + its crypto-migration resources.
     testImplementation(project(":streamrune-crypto:streamrune-postgres-crypto"))
     testImplementation(libs.bundles.testcontainers.pg)
-    // Toxiproxy in front of PostgreSQL to prove a black-holed leadership connection
-    // steps the leader down within the socket-timeout bound and frees connectionLock (behaviour,
-    // not just configuration).
-    testImplementation(libs.testcontainers.toxiproxy)
     testImplementation(libs.assertj.core)
     testImplementation(libs.mockito.core)
     // Crash tests drive a ContinuousProjectionRunner on a virtual thread and wait for its checkpoint.
