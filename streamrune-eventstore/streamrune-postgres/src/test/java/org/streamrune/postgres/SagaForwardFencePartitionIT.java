@@ -32,8 +32,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * — its backend idle in transaction, holding the saga's shared fence lock and the command's inbox
  * key — and the peer goes silent. Node B, on a direct connection, claims the saga at its deadline:
  * its exclusive fence lock waits until the append transaction's idle bound (A's statement timeout,
- * two seconds) ends A's session, and no longer. When A's socket times out its delivery fails, and
- * its redelivery, over a new connection, resumes the compensation episode B opened.
+ * two seconds) ends A's session, and not a moment longer. When A's socket times out its delivery
+ * fails, and its redelivery, over a new connection, resumes the compensation episode B opened.
  */
 @Testcontainers
 @Timeout(120)
@@ -100,7 +100,7 @@ class SagaForwardFencePartitionIT {
         claimedAfter, STATEMENT_TIMEOUT.toMillis());
     assertThat(nodes.row(ORDER).orElseThrow().episodeVersion()).as("B claimed").isNotNull();
     assertThat(claimedAfter)
-        .as("B's claim waits for A's silent append no longer than A's statement timeout")
+        .as("B's claim waits for A's silent append at most A's statement timeout")
         .isLessThan(STATEMENT_TIMEOUT.toMillis() + SLACK_MILLIS);
     nodes.awaitGone(appendPid);
     assertThat(nodes.backendsNamed("node-a")).as("A's session is gone").isZero();
