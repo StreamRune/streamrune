@@ -131,12 +131,14 @@ class SagaStepLockWiringTest {
 
   /**
    * What a timeout runner on another node does, and what an application asks for when it gives the
-   * timeout runner a lock of its own: the claim lands under the step, and the step's forward
-   * command is stored after its compensation.
+   * timeout runner a lock of its own: the claim lands under the step. With the fence off, the
+   * step's forward command is then stored after its compensation; {@code
+   * SagaForwardFenceScenarioTest} has the same schedule with the fence on.
    */
   @Test
   void aTimeoutRunnerWithALockOfItsOwn_claimsUnderAStepInFlight() {
-    try (var p = new SagaStepLockFixture()) {
+    // Pins the behaviour of a runner with the fence off.
+    try (var p = new SagaStepLockFixture(false)) {
       EventEnvelope opened = p.append(new Opened(ORDER));
       SagaTimeoutRunner<State> timeouts = timeoutRunnerOf(p).stepLock(new SagaStepLock()).build();
       p.bus.runOnceBefore(

@@ -133,6 +133,9 @@ abstract class SagaRunnerHoldTest {
                 casConflicts.incrementAndGet();
               }
             })
+        // The bus is a test double that stores nothing; the fence is tested in
+        // SagaForwardFence*Test.
+        .forwardFence(false)
         .build();
   }
 
@@ -400,6 +403,9 @@ abstract class SagaRunnerHoldTest {
             .sagaStore(store)
             .commandBus(bus)
             .sagaDeadLetterStore(clearBetweenShieldAndPublish)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     deliver(runner, correlatedEvent(5L)); // T -> [C] -> entry+shield
@@ -446,6 +452,9 @@ abstract class SagaRunnerHoldTest {
             .sagaStore(store)
             .commandBus(bus)
             .sagaDeadLetterStore(clearBetweenShieldAndPublish)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     Throwable crash = catchThrowable(() -> deliver(runner, correlatedEvent(9L)));
@@ -521,6 +530,9 @@ abstract class SagaRunnerHoldTest {
             .sagaStore(racing)
             .commandBus(bus)
             .sagaDeadLetterStore(dlq)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     deliver(runner, startEvent(3L));
@@ -570,6 +582,9 @@ abstract class SagaRunnerHoldTest {
             .sagaStore(alwaysConflicting)
             .commandBus(bus)
             .sagaDeadLetterStore(dlq)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     deliver(runner, correlatedEvent(5L));

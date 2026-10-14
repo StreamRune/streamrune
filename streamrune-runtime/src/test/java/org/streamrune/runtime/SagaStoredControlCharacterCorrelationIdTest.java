@@ -164,7 +164,8 @@ class SagaStoredControlCharacterCorrelationIdTest {
                     SagaOrigins.of(CONTROL_CHAR_SAGA_ID),
                     null,
                     new ReserveStock("step-1"),
-                    IdempotencyKey.of("saga:control-char:1:0")))
+                    IdempotencyKey.of("saga:control-char:1:0"),
+                    false))
         .doesNotThrowAnyException();
     assertThat(captured.get())
         .as("the stored id is carried verbatim after the reserved prefix")
@@ -199,7 +200,8 @@ class SagaStoredControlCharacterCorrelationIdTest {
                     SagaOrigins.of(longest),
                     null,
                     new ReserveStock("step-1"),
-                    IdempotencyKey.of("saga:longest:1:0")))
+                    IdempotencyKey.of("saga:longest:1:0"),
+                    false))
         .doesNotThrowAnyException();
     assertThat(captured.get().value()).isEqualTo("streamrune:saga:" + longest).hasSize(271);
     assertThat(bus.count("step-1")).isEqualTo(1);
@@ -246,7 +248,8 @@ class SagaStoredControlCharacterCorrelationIdTest {
                                 SagaOrigins.of(CONTROL_CHAR_SAGA_ID),
                                 null,
                                 new ReserveStock("step-1"),
-                                IdempotencyKey.of("saga:control-char:1:0"))))
+                                IdempotencyKey.of("saga:control-char:1:0"),
+                                false)))
         .doesNotThrowAnyException();
     assertThat(bus.count("step-1")).isEqualTo(1);
   }

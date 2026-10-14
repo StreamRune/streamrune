@@ -233,6 +233,11 @@ final class SagaStepLockFixture implements AutoCloseable {
     public boolean supportsIdempotentExecution() {
       return delegate.supportsIdempotentExecution();
     }
+
+    @Override
+    public Object sagaFenceStorageIdentity() {
+      return delegate.sagaFenceStorageIdentity();
+    }
   }
 
   /**
@@ -310,8 +315,9 @@ final class SagaStepLockFixture implements AutoCloseable {
 
   final MutableClock clock = MutableClock.startingAt(Instant.parse("2026-01-01T00:00:00Z"));
   final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-  final InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
   final InMemorySagaStore rows = new InMemorySagaStore(clock);
+  final InMemoryEventStore eventStore =
+      new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(rows);
   final HookedSagaStore sagaStore = new HookedSagaStore(rows);
   final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(rows);
   final OneEventDecider<Reserve> reserve = new OneEventDecider<>(c -> new Reserved(c.orderId()));
@@ -364,11 +370,25 @@ final class SagaStepLockFixture implements AutoCloseable {
     this(new SagaStepLock(), SagaTimeoutRunner.DEFAULT_CLAIM_WAIT);
   }
 
+  /** A process whose runner fences its forward commands, or not. */
+  SagaStepLockFixture(boolean forwardFence) {
+    this(new SagaStepLock(), SagaTimeoutRunner.DEFAULT_CLAIM_WAIT, forwardFence);
+  }
+
   /**
    * @param lock the step lock of the runner (a test of the step bound passes a short one)
    * @param claimWait how long the timeout runner's claim waits once it waits
    */
   SagaStepLockFixture(SagaStepLock lock, Duration claimWait) {
+    this(lock, claimWait, true);
+  }
+
+  /**
+   * @param lock the step lock of the runner (a test of the step bound passes a short one)
+   * @param claimWait how long the timeout runner's claim waits once it waits
+   * @param forwardFence whether the runner fences its forward commands at their commit
+   */
+  SagaStepLockFixture(SagaStepLock lock, Duration claimWait, boolean forwardFence) {
     this.lock = lock;
     runner =
         SagaRunner.<State>builder()
@@ -387,6 +407,7 @@ final class SagaStepLockFixture implements AutoCloseable {
             .sagaDeadLetterStore(deadLetters)
             .clock(clock)
             .stepLock(lock)
+            .forwardFence(forwardFence)
             .build();
     timeoutRunner =
         SagaTimeoutRunner.<State>builder()

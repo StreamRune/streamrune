@@ -75,7 +75,8 @@ class SagaCommandDispatchTest {
         origin("saga-corr-x"),
         EventId.of("evt-7"),
         new Cmd("c"),
-        IdempotencyKey.of("saga:x:1:0"));
+        IdempotencyKey.of("saga:x:1:0"),
+        false);
 
     assertThat(bound.get().correlationId())
         .isEqualTo(CorrelationId.of("streamrune:saga:saga-corr-x"));
@@ -96,7 +97,8 @@ class SagaCommandDispatchTest {
         origin("saga-corr-x"),
         null,
         new Cmd("c"),
-        IdempotencyKey.of("saga:x:1:0"));
+        IdempotencyKey.of("saga:x:1:0"),
+        false);
 
     assertThat(bound.get().cause())
         .isEqualTo(new StreamRuneContext.DispatchCause(null, origin("saga-corr-x")));
@@ -113,7 +115,8 @@ class SagaCommandDispatchTest {
                     null,
                     EventId.of("evt-7"),
                     new Cmd("c"),
-                    IdempotencyKey.of("saga:x:1:0")))
+                    IdempotencyKey.of("saga:x:1:0"),
+                    false))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("origin is required");
     assertThat(bound.get()).as("the command never reached the bus").isNull();
@@ -309,7 +312,12 @@ class SagaCommandDispatchTest {
     assertThatThrownBy(
             () ->
                 SagaCommandDispatch.dispatch(
-                    bus, origin("saga-1"), null, new Cmd("c"), IdempotencyKey.of("saga:x:1:0")))
+                    bus,
+                    origin("saga-1"),
+                    null,
+                    new Cmd("c"),
+                    IdempotencyKey.of("saga:x:1:0"),
+                    false))
         .isInstanceOf(SagaCommandVetoedException.class)
         // Classification contract: a veto is deliberately NOT a DomainException. It
         // refuses to ADMIT the command, so the domain never gave an answer to record permanently —
@@ -334,7 +342,12 @@ class SagaCommandDispatchTest {
     assertThatCode(
             () ->
                 SagaCommandDispatch.dispatch(
-                    bus, origin("saga-1"), null, new Cmd("c"), IdempotencyKey.of("saga:x:1:0")))
+                    bus,
+                    origin("saga-1"),
+                    null,
+                    new Cmd("c"),
+                    IdempotencyKey.of("saga:x:1:0"),
+                    false))
         .doesNotThrowAnyException();
   }
 
@@ -355,22 +368,27 @@ class SagaCommandDispatchTest {
 
     assertThat(
             SagaCommandDispatch.dispatch(
-                busReturning(executedResult), origin("saga-1"), null, new Cmd("c"), key))
+                busReturning(executedResult), origin("saga-1"), null, new Cmd("c"), key, false))
         .as("the command ran in this call and stored an event")
         .isTrue();
     assertThat(
             SagaCommandDispatch.dispatch(
-                busReturning(storedNothing), origin("saga-1"), null, new Cmd("c"), key))
+                busReturning(storedNothing), origin("saga-1"), null, new Cmd("c"), key, false))
         .as("the command ran and stored nothing: there is nothing of it to undo")
         .isFalse();
     assertThat(
             SagaCommandDispatch.dispatch(
-                busReturning(idempotentReplayResult()), origin("saga-1"), null, new Cmd("c"), key))
+                busReturning(idempotentReplayResult()),
+                origin("saga-1"),
+                null,
+                new Cmd("c"),
+                key,
+                false))
         .as("the inbox answered with the outcome of an earlier execution")
         .isFalse();
     assertThat(
             SagaCommandDispatch.dispatch(
-                busReturning(null), origin("saga-1"), null, new Cmd("c"), key))
+                busReturning(null), origin("saga-1"), null, new Cmd("c"), key, false))
         .as("a bus that returns no result is taken to have executed the command")
         .isTrue();
   }

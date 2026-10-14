@@ -20,6 +20,7 @@ import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.saga.SagaCommand;
+import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaStatus;
@@ -119,8 +120,17 @@ final class SagaCommandDispatch {
    *     forward command, the event that opened the episode of a compensation command; {@code null}
    *     for a compensation command of an episode opened with no event in hand (a timeout claim, an
    *     operator's compensation of a faulted forward step)
+   *     <p><b>The forward fence.</b> With {@code forwardFenced}, the dispatch also binds {@link
+   *     StreamRuneContext#SAGA_FORWARD} to {@code origin} and {@code key}: the command bus hands
+   *     the origin to the event store with the command's keyed append, and the store refuses the
+   *     append ({@link SagaForwardFencedException}) once the saga row carries a compensation
+   *     episode, is terminal or is gone, in the same transaction that would store the command's
+   *     events. Only a forward command of a runner whose fence is on is dispatched so; a
+   *     compensation command never is ({@link #compensateAndClassify}).
    * @param command the saga-issued command
    * @param key the command's idempotency key
+   * @param forwardFenced whether the command is a forward command that the event store fences
+   *     against the saga row
    * @return {@code true} when this call executed the command and the command stored events; {@code
    *     false} when the command inbox answered it with the outcome of an earlier execution under
    *     the same key ({@link CommandBus.CommandResult#idempotentReplay()}), whose events were
@@ -128,13 +138,16 @@ final class SagaCommandDispatch {
    *     no result is taken to have executed the command
    * @throws NullPointerException when {@code origin} is {@code null}; the bus is not called
    * @throws SagaCommandVetoedException when an interceptor vetoed the command (it never executed)
+   * @throws SagaForwardFencedException when the event store refused a fenced forward command; it
+   *     stored nothing
    */
   static boolean dispatch(
       CommandBus commandBus,
       SagaOrigin origin,
       EventId causingEvent,
       Command command,
-      IdempotencyKey key) {
+      IdempotencyKey key,
+      boolean forwardFenced) {
     Objects.requireNonNull(origin, "origin is required");
     StreamRuneContext.RequestContext ambient = StreamRuneContext.capture();
     StreamRuneContext.RequestContext ctx =
@@ -152,14 +165,19 @@ final class SagaCommandDispatch {
             // the very path where the caller IS authenticated. Null on every background entry point
             // (subscription poll, timeout runner, compensation sweeper), where ambient is null too.
             ambient != null ? ambient.authority() : null);
-    CommandBus.CommandResult result =
+    ScopedValue.Carrier carrier =
         ScopedValue.where(StreamRuneContext.CURRENT, ctx)
             .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
             .where(
                 StreamRuneContext.CAUSE,
                 new StreamRuneContext.DispatchCause(
-                    causingEvent == null ? null : CausationId.of(causingEvent.value()), origin))
-            .call(() -> commandBus.execute(command, key));
+                    causingEvent == null ? null : CausationId.of(causingEvent.value()), origin));
+    if (forwardFenced) {
+      carrier =
+          carrier.where(
+              StreamRuneContext.SAGA_FORWARD, new StreamRuneContext.SagaForward(origin, key));
+    }
+    CommandBus.CommandResult result = carrier.call(() -> commandBus.execute(command, key));
     // Null-tolerant like DeadLetterRetryRunner.processEntry: a third-party bus returning null is
     // treated as an executed command, never as a veto.
     if (result != null && result.vetoed()) {
@@ -212,6 +230,26 @@ final class SagaCommandDispatch {
     // The decode door, as forwardKey explains.
     return new IdempotencyKey(
         "saga:" + sagaId.value() + ":episode:" + episodeVersion + ":comp:" + index);
+  }
+
+  /**
+   * Whether {@code failure} is the event store's refusal of a fenced forward command: a {@link
+   * SagaForwardFencedException} anywhere in the cause chain (bounded, so a cyclic chain cannot
+   * loop). The command bus throws it unwrapped; an interceptor or a bus double may wrap it. The
+   * step executor asks this before any other classification of a failed forward command: the
+   * refusal is a fact about the saga row, not about the command, so it is neither a business
+   * rejection to compensate nor a failure to retry.
+   *
+   * @param failure the exception a forward saga command dispatch threw (never null)
+   */
+  static boolean isForwardFenced(Throwable failure) {
+    Throwable c = failure;
+    for (int depth = 0; c != null && depth < MAX_CAUSE_DEPTH; depth++, c = c.getCause()) {
+      if (c instanceof SagaForwardFencedException) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -429,8 +467,14 @@ final class SagaCommandDispatch {
     boolean hadAttemptedTransientFailure = false;
     for (int i = 0; i < compensations.size(); i++) {
       try {
+        // A compensation command is never fenced: it is the command the fence makes room for.
         dispatch(
-            commandBus, origin, causingEvent, compensations.get(i).command(), keyForIndex.apply(i));
+            commandBus,
+            origin,
+            causingEvent,
+            compensations.get(i).command(),
+            keyForIndex.apply(i),
+            /* forwardFenced= */ false);
       } catch (Exception e) {
         // Reuse the bus's DLQ-eligibility split: a business rejection
         // (DomainException/IllegalArgumentException) is deterministic and can never succeed on

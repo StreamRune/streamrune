@@ -244,6 +244,9 @@ class SagaRunnerTest {
             .sagaStore(sagaStore)
             .commandBus(commandBus)
             .sagaDeadLetterStore(dlq)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
   }
 
@@ -515,6 +518,9 @@ class SagaRunnerTest {
             .sagaStore(sagaStore)
             .commandBus(failingBus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var event = envelope(new OrderCreated("order-5"), "some-correlation");
@@ -607,6 +613,9 @@ class SagaRunnerTest {
             .sagaStore(sagaStore)
             .commandBus(commandBus)
             .sagaDeadLetterStore(sagaDlq)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var poisonEvent = envelope(new OrderCreated("order-null-id"), "some-correlation");
@@ -648,6 +657,9 @@ class SagaRunnerTest {
             .sagaStore(sagaStore)
             .commandBus(commandBus)
             .sagaDeadLetterStore(sagaDlq)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     // OrderPaid is not a start event and this envelope carries no saga origin, so it routes
@@ -680,6 +692,9 @@ class SagaRunnerTest {
             .sagaStore(sagaStore)
             .commandBus(commandBus)
             .sagaDeadLetterStore(sagaDlq)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var event = envelope(new OrderPaid("order-empty"), "unrelated-correlation");
@@ -815,6 +830,9 @@ class SagaRunnerTest {
             .sagaStore(concurrentlyCreatedStore)
             .commandBus(commandBus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(concurrentlyCreatedStore))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var event = envelope(new OrderCreated("order-concurrent"), "some-correlation");
@@ -944,6 +962,9 @@ class SagaRunnerTest {
             .sagaStore(staleStore)
             .commandBus(commandBus)
             .sagaDeadLetterStore(sagaDlq)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     // Correlated event for the existing running saga
@@ -961,7 +982,14 @@ class SagaRunnerTest {
   void builder_rejects_missing_orchestrator() {
     assertThrows(
         IllegalStateException.class,
-        () -> SagaRunner.<OrderState>builder().sagaStore(sagaStore).commandBus(commandBus).build());
+        () ->
+            SagaRunner.<OrderState>builder()
+                .sagaStore(sagaStore)
+                .commandBus(commandBus)
+                // The bus is a test double that stores nothing; the fence is tested in
+                // SagaForwardFence*Test.
+                .forwardFence(false)
+                .build());
   }
 
   @Test
@@ -972,6 +1000,9 @@ class SagaRunnerTest {
             SagaRunner.<OrderState>builder()
                 .orchestrator(new OrderFulfillmentSaga())
                 .commandBus(commandBus)
+                // The bus is a test double that stores nothing; the fence is tested in
+                // SagaForwardFence*Test.
+                .forwardFence(false)
                 .build());
   }
 
@@ -983,6 +1014,9 @@ class SagaRunnerTest {
             SagaRunner.<OrderState>builder()
                 .orchestrator(new OrderFulfillmentSaga())
                 .sagaStore(sagaStore)
+                // The bus is a test double that stores nothing; the fence is tested in
+                // SagaForwardFence*Test.
+                .forwardFence(false)
                 .build());
   }
 
@@ -1015,6 +1049,9 @@ class SagaRunnerTest {
                     .sagaStore(sagaStore)
                     .commandBus(noInboxBus)
                     .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+                    // The bus is a test double that stores nothing; the fence is tested in
+                    // SagaForwardFence*Test.
+                    .forwardFence(false)
                     .build())
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("idempotent");
@@ -1047,6 +1084,9 @@ class SagaRunnerTest {
                     .sagaStore(sagaStore)
                     .commandBus(commandBus)
                     .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+                    // The bus is a test double that stores nothing; the fence is tested in
+                    // SagaForwardFence*Test.
+                    .forwardFence(false)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("at most 255");
@@ -1063,6 +1103,9 @@ class SagaRunnerTest {
             .sagaStore(sagaStore)
             .commandBus(capturingBus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var event = envelope(new OrderCreated("order-1"), "some-correlation");
@@ -1084,6 +1127,9 @@ class SagaRunnerTest {
             .sagaStore(sagaStore)
             .commandBus(capturingBus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var ambient =
@@ -1122,6 +1168,9 @@ class SagaRunnerTest {
             .sagaStore(sagaStore)
             .commandBus(capturingBus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var event = envelope(new OrderCreated("order-8"), "some-correlation");

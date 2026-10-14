@@ -17,17 +17,22 @@ import org.streamrune.core.types.SagaType;
  * and writes the row; nothing it does between the read and the write is visible on the row. A claim
  * that opens a compensation episode at the version the step read — the timeout runner at the saga's
  * deadline, an operator's compensation of a faulted saga, another delivery whose own command was
- * rejected — therefore succeeds underneath the step, compensates from a state that does not include
- * it, and a forward command the step commits afterwards is stored after its compensation with
- * nothing to undo it. With this lock, in one process, exactly one of two things happens: the step
- * reads a row the claim has already written, and resumes the episode without dispatching a forward
- * command; or the claim runs after the step's write, and compensates from a state that includes the
- * step.
+ * rejected — therefore succeeds underneath the step and compensates from a state that does not
+ * include it. The step's next forward command is then refused at its commit when its runner fences
+ * its forward commands ({@link SagaRunner.Builder#forwardFence}, the default), and the step resumes
+ * the episode; without the fence it is stored after its compensation with nothing to undo it. With
+ * this lock, in one process, exactly one of two things happens: the step reads a row the claim has
+ * already written, and resumes the episode without dispatching a forward command; or the claim runs
+ * after the step's write, and compensates from a state that includes the step.
  *
  * <p><b>It is a lock of one process.</b> It writes nothing and no other process sees it. A timeout
  * runner on another node, and a delivery on another node, claim underneath a step in flight on this
- * one exactly as they do without it. The target aggregate's refusal of a forward command that
- * arrives after its cancel remains the protection across processes.
+ * one exactly as they do without it. Across processes the forward fence keeps the order: the event
+ * store refuses a forward command of a saga that has left its forward phase, in the transaction
+ * that would store the command, so each forward command is stored wholly before such a claim or not
+ * at all. With the fence on, this lock keeps a claim from undoing a step it could have waited for
+ * and two deliveries of one saga from doing the same work twice; the fence, not this lock, keeps a
+ * forward command from following its compensation.
  *
  * <p><b>The rules.</b>
  *
@@ -60,11 +65,12 @@ import org.streamrune.core.types.SagaType;
  *       already inside a step of that saga — an event delivered synchronously inside the first
  *       step's command dispatch — enters without waiting, since a thread cannot wait for itself,
  *       and runs as it does without the lock: a claim that nested step makes after a rejected
- *       command lands under the outer step. None of the framework's subscriptions nests a delivery
- *       — the production ones deliver on their own thread, and the test module's in-memory
- *       subscription queues an append made inside its listener — so this is listener plumbing of an
- *       application. A claim without an event attempted on a thread that is inside a step of that
- *       saga is refused like any claim under a step in flight.
+ *       command lands under the outer step, whose next forward command the fence then refuses. None
+ *       of the framework's subscriptions nests a delivery — the production ones deliver on their
+ *       own thread, and the test module's in-memory subscription queues an append made inside its
+ *       listener — so this is listener plumbing of an application. A claim without an event
+ *       attempted on a thread that is inside a step of that saga is refused like any claim under a
+ *       step in flight.
  *   <li><b>Lock order.</b> A step takes the lock of its own saga and of no other, and a claim holds
  *       nothing else while it holds one. The framework's subscriptions deliver one event at a time
  *       per listener and release the lock before the next event, so no thread holds two saga locks.

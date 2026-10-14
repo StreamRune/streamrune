@@ -575,7 +575,8 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
             ORIGIN,
             EventId.of("evt-trigger"),
             new Mark("outer-1"),
-            new IdempotencyKey("saga:order-saga-42:7:0"));
+            new IdempotencyKey("saga:order-saga-42:7:0"),
+            false);
       }
       return new NestedRun(
           eventStore.load(StreamId.of(AGGREGATE_TYPE, AggregateId.of("outer-1"))).events(),
@@ -678,7 +679,8 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
           ORIGIN,
           EventId.of("evt-trigger"),
           new Mark("outer-2"),
-          new IdempotencyKey("saga:order-saga-42:8:0"));
+          new IdempotencyKey("saga:order-saga-42:8:0"),
+          false);
     }
 
     Throwable[] failures = new Throwable[2];

@@ -154,6 +154,9 @@ class SagaDeciderAdapterTest {
                         ? Optional.of(SagaId.of(paid.orderId()))
                         : Optional.empty())
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(store))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var listener = runner.asEventListener();
@@ -298,6 +301,9 @@ class SagaDeciderAdapterTest {
                 .sagaStore(new InMemorySagaStore())
                 .commandBus(new CapturingCommandBus())
                 .extractSagaId(e -> SagaId.of("id"))
+                // The bus is a test double that stores nothing; the fence is tested in
+                // SagaForwardFence*Test.
+                .forwardFence(false)
                 .build());
   }
 
@@ -311,6 +317,9 @@ class SagaDeciderAdapterTest {
                 .sagaStore(new InMemorySagaStore())
                 .commandBus(new CapturingCommandBus())
                 .startWhen(e -> true)
+                // The bus is a test double that stores nothing; the fence is tested in
+                // SagaForwardFence*Test.
+                .forwardFence(false)
                 .build());
   }
 
@@ -330,6 +339,9 @@ class SagaDeciderAdapterTest {
             .startWhen(e -> e.event() instanceof OrderCreated)
             .extractSagaId(e -> SagaId.of(((OrderCreated) e.event()).orderId()))
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(store))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     var listener = runner.asEventListener();
     listener.onEvents(List.of(envelope(new OrderCreated("order-1"), "order-1")));

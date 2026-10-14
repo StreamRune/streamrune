@@ -247,6 +247,9 @@ class SagaRunnerPoisonIsolationTest {
         .sagaStore(sagaStore)
         .commandBus(commandBus)
         .sagaDeadLetterStore(sagaDlq)
+        // The bus is a test double that stores nothing; the fence is tested in
+        // SagaForwardFence*Test.
+        .forwardFence(false)
         .build();
   }
 
@@ -455,6 +458,9 @@ class SagaRunnerPoisonIsolationTest {
             .sagaStore(failingStore)
             .commandBus(commandBus)
             .sagaDeadLetterStore(dlq)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     assertThatThrownBy(() -> runner.asEventListener().onEvents(List.of(startA)))
@@ -534,6 +540,9 @@ class SagaRunnerPoisonIsolationTest {
             .sagaStore(sagaStore)
             .commandBus(throwingBus)
             .sagaDeadLetterStore(sagaDlq)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     // Batch: saga-A's poison event first, then saga-B's healthy event

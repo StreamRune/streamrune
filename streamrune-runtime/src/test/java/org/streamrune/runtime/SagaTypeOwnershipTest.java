@@ -158,6 +158,9 @@ class SagaTypeOwnershipTest {
         .sagaStore(store)
         .commandBus(KEYED_BUS)
         .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(store))
+        // The bus is a test double that stores nothing; the fence is tested in
+        // SagaForwardFence*Test.
+        .forwardFence(false)
         .build();
   }
 
@@ -169,6 +172,9 @@ class SagaTypeOwnershipTest {
         .sagaStore(store)
         .commandBus(KEYED_BUS)
         .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(store))
+        // The bus is a test double that stores nothing; the fence is tested in
+        // SagaForwardFence*Test.
+        .forwardFence(false)
         .build();
   }
 

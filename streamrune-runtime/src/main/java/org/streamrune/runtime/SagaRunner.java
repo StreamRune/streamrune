@@ -143,10 +143,15 @@ import org.streamrune.core.types.StreamId;
  * at all: each delivery and each replay feed holds the saga's {@link SagaStepLock} from before its
  * read of the row to after its write, and a claim that has no event of its own — the timeout
  * runner's, the operator's compensation of a faulted forward step — is not made while a step holds
- * it. That lock is memory and reaches no other process; between processes the compare-and-swaps and
- * the inbox carry everything said here. A throwing {@code compensate()} is treated as a poison
- * event: the triggering event is quarantined and the saga is marked {@code FAULTED}. The event path
- * does not advance a claimed compensation: once a saga is {@code COMPENSATING} (claimed by {@code
+ * it. That lock is memory and reaches no other process; between processes the compare-and-swaps,
+ * the inbox and the forward fence carry everything said here. With the fence on ({@link
+ * Builder#forwardFence}, the default) each forward command is dispatched with the saga named as its
+ * {@code SagaForward}, and the event store refuses it in the transaction that would store it once
+ * the saga row carries a compensation episode, is terminal or is gone; the refused step goes on
+ * from the row. No forward command is therefore stored after a compensation another process
+ * claimed, or after the saga ended. A throwing {@code compensate()} is treated as a poison event:
+ * the triggering event is quarantined and the saga is marked {@code FAULTED}. The event path does
+ * not advance a claimed compensation: once a saga is {@code COMPENSATING} (claimed by {@code
  * SagaTimeoutRunner} or by a prior event-path delivery), correlated events never re-run forward
  * {@code evolve}/{@code handle}. They do, however, <em>resume</em> the compensation episode when
  * its owner crashed before the terminal write — re-driving compensation at the existing version
@@ -267,6 +272,12 @@ public final class SagaRunner<S extends SagaState> {
    */
   private final boolean inboxRetentionMaxAgeConfigured;
 
+  /**
+   * Whether the application named {@link Builder#forwardFence(boolean)} itself. When it did, its
+   * value stands and {@link SagaForwardFenceDefault#applyDefault} leaves this runner alone.
+   */
+  private final boolean forwardFenceConfigured;
+
   private SagaRunner(Builder<S> builder) {
     this.orchestrator = builder.orchestrator;
     this.sagaType = SagaType.fromClass(builder.orchestrator.stateType());
@@ -285,6 +296,32 @@ public final class SagaRunner<S extends SagaState> {
             metrics,
             builder.inboxRetentionMaxAge,
             builder.clock);
+    this.forwardFenceConfigured = builder.forwardFence != null;
+    this.executor.forwardFence(!Boolean.FALSE.equals(builder.forwardFence));
+  }
+
+  /**
+   * Whether this runner's next forward command is fenced at its commit. Package-private; read
+   * through {@link SagaForwardFenceDefault#effectiveOf}. The executor holds the value, so a default
+   * applied after the build reaches the next dispatch.
+   */
+  boolean forwardFence() {
+    return executor.forwardFence();
+  }
+
+  /**
+   * Supplies {@code enabled} as this runner's fence unless the application named one on the
+   * builder. Package-private; driven by {@link SagaForwardFenceDefault#applyDefault} from the
+   * integrations' startup hook.
+   *
+   * @return {@code true} when this runner took the default
+   */
+  boolean applyForwardFenceDefault(boolean enabled) {
+    if (forwardFenceConfigured) {
+      return false;
+    }
+    executor.forwardFence(enabled);
+    return true;
   }
 
   /**
@@ -582,7 +619,26 @@ public final class SagaRunner<S extends SagaState> {
       hold(sagaId, event, SagaEventHeldException.HoldReason.BACKLOG_PENDING);
       return;
     }
-    executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, false, false));
+    StepOutcome outcome =
+        executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, false, false));
+    if (outcome == StepOutcome.SKIPPED_HALTED) {
+      holdIfFaultedUnderTheStep(sagaId, event);
+    }
+  }
+
+  /**
+   * A live step over a forward row ends {@code SKIPPED_HALTED} only when one of its forward
+   * commands was refused at its commit and the row it read again was terminal or {@code FAULTED}:
+   * another path ended the saga, or faulted it inside the compensation episode it opened, while the
+   * step was in flight. A terminal saga drops the event, as a delivery that finds it terminal does.
+   * A {@code FAULTED} saga holds it ({@link #holdWhileFaulted}), as the delivery of the event after
+   * the fault would: the event is not applied, and it is not lost either.
+   */
+  private void holdIfFaultedUnderTheStep(SagaId sagaId, EventEnvelope event) {
+    Optional<LoadedSaga<S>> reread = loadForDelivery(sagaId);
+    if (reread.isPresent() && reread.get().status() == SagaStatus.FAULTED) {
+      holdWhileFaulted(sagaId, event);
+    }
   }
 
   /**
@@ -1103,6 +1159,9 @@ public final class SagaRunner<S extends SagaState> {
     private Clock clock = Clock.systemUTC();
     private SagaStepLock stepLock;
 
+    /** {@code null}: not named, which {@link #build()} treats as on. */
+    private Boolean forwardFence;
+
     public Builder<S> orchestrator(SagaOrchestrator<S> orchestrator) {
       this.orchestrator = orchestrator;
       return this;
@@ -1229,6 +1288,46 @@ public final class SagaRunner<S extends SagaState> {
       return this;
     }
 
+    /**
+     * Whether this runner fences its forward commands at their commit. On unless switched off here.
+     *
+     * <p><b>What the fence does.</b> Each forward command is dispatched with the saga named as its
+     * {@code StreamRuneContext.SagaForward}, and the event store reads the saga row in the
+     * transaction that would store the command's events: once the row carries a compensation
+     * episode, is terminal or is gone, the store refuses the command ({@code
+     * SagaForwardFencedException}) and stores nothing — no event, no inbox key. Every write that
+     * opens an episode, ends the saga or deletes its row waits for an append in flight, so each
+     * forward command is stored wholly before such a write or not at all, on any number of
+     * processes. A refused step goes on from the row: it resumes the open episode, or stops at a
+     * saga that has ended. So no forward command of a saga is stored after its compensation was
+     * computed, whatever runs the claim — a timeout runner of another process, a delivery of
+     * another process whose own command was rejected, an operator — and however long the step
+     * takes.
+     *
+     * <p><b>What it needs.</b> The command bus's event store must read the rows this runner's
+     * {@link SagaStore} keeps: {@link CommandBus#sagaFenceStorageIdentity()} must equal {@link
+     * SagaStore#storageIdentity()}. With PostgreSQL, build the {@code PostgresEventStore} and the
+     * {@code PostgresSagaStore} over the same {@code DataSource} object; in tests, wire the {@code
+     * InMemorySagaStore} into the {@code InMemoryEventStore} with {@code withSagaStore}. {@link
+     * #build()} refuses a runner whose bus cannot fence against its rows.
+     *
+     * <p><b>What it costs.</b> One lock and one read of the saga row per forward command, inside
+     * the command's append; no write. Compensation commands are not fenced.
+     *
+     * <p><b>Who switches it off.</b> A runner whose saga rows live in another database than the
+     * event stream, or whose bus cannot fence (a custom event store). Without the fence, a forward
+     * command a step is still dispatching can be stored after a compensation another process
+     * claimed, and nothing undoes it: the target aggregates have to refuse such a command
+     * themselves.
+     *
+     * <p>Named here, the value is final: a default an integration applies ({@link
+     * SagaForwardFenceDefault}) does not change it.
+     */
+    public Builder<S> forwardFence(boolean enabled) {
+      this.forwardFence = enabled;
+      return this;
+    }
+
     public SagaRunner<S> build() {
       if (orchestrator == null && decider != null) {
         Objects.requireNonNull(startPredicate, "startWhen is required when using decider");
@@ -1255,8 +1354,47 @@ public final class SagaRunner<S extends SagaState> {
             "saga command dispatch requires idempotent execution — configure a CommandInbox on the"
                 + " CommandBus (VirtualThreadCommandBus.builder().commandInbox(...))");
       }
+      if (!Boolean.FALSE.equals(forwardFence)) {
+        requireAFencingBus(SagaType.fromClass(orchestrator.stateType()).value());
+      }
       Objects.requireNonNull(sagaDeadLetterStore, "sagaDeadLetterStore is required");
       return new SagaRunner<>(this);
+    }
+
+    /**
+     * Refuses a bus that cannot fence this runner's forward commands against the rows its saga
+     * store keeps ({@link #forwardFence(boolean)}). The check is made here, before an integration
+     * can apply its default: a runner over such a bus switches the fence off itself.
+     */
+    private void requireAFencingBus(String type) {
+      Object fence = commandBus.sagaFenceStorageIdentity();
+      if (fence == null) {
+        throw new IllegalStateException(
+            "The SagaRunner for '"
+                + type
+                + "' fences its forward commands at their commit, and its command bus cannot: "
+                + commandBus.getClass().getName()
+                + " reports no saga rows to fence against (CommandBus.sagaFenceStorageIdentity()"
+                + " is null). Without the fence a forward command of a saga can be stored after a"
+                + " compensation that another process claimed, and nothing undoes it. Build the"
+                + " bus over an event store that fences (PostgresEventStore; in tests"
+                + " InMemoryEventStore.withSagaStore(theSagaStore)), or switch the fence off for"
+                + " this runner with SagaRunner.Builder.forwardFence(false).");
+      }
+      if (!fence.equals(sagaStore.storageIdentity())) {
+        throw new IllegalStateException(
+            "The SagaRunner for '"
+                + type
+                + "' fences its forward commands at their commit, and its command bus fences"
+                + " against other saga rows than its SagaStore keeps"
+                + " (CommandBus.sagaFenceStorageIdentity() does not equal"
+                + " SagaStore.storageIdentity()). The saga row is read in the transaction of the"
+                + " forward command's append: keep the saga rows in the database of the event"
+                + " stream and build the PostgresSagaStore and the PostgresEventStore over the"
+                + " same DataSource object (in tests InMemoryEventStore.withSagaStore("
+                + "theSagaStore)), or switch the fence off for this runner with"
+                + " SagaRunner.Builder.forwardFence(false).");
+      }
     }
   }
 }

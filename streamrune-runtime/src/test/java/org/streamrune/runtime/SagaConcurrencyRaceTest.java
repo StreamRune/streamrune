@@ -227,6 +227,12 @@ class SagaConcurrencyRaceTest {
       this.underlying = underlying;
     }
 
+    /** The underlying store's rows: this store keeps none of its own. */
+    @Override
+    public Object storageIdentity() {
+      return underlying.storageIdentity();
+    }
+
     /** Sets a one-shot hook to run after the next {@link #load} call. */
     void afterLoadHook(Runnable action) {
       hook.set(action);
@@ -488,7 +494,7 @@ class SagaConcurrencyRaceTest {
   @Test
   void startEvent_concurrentCreator_atomicDedup_singleSagaRow() {
     var inbox = new InMemoryCommandInbox();
-    var eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+    var eventStore = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(underlying);
 
     var bus =
         VirtualThreadCommandBus.builder()
@@ -559,7 +565,7 @@ class SagaConcurrencyRaceTest {
   @Test
   void correlatedConflict_thenRedelivery_isRetrySafe_endToEnd() {
     var inbox = new InMemoryCommandInbox();
-    var eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+    var eventStore = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(underlying);
 
     var bus =
         VirtualThreadCommandBus.builder()
@@ -763,6 +769,9 @@ class SagaConcurrencyRaceTest {
             .sagaStore(interleaving)
             .commandBus(bus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(underlying))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     // Hook: after the event path loads v1 (RUNNING) but before its claim CAS, a timeout runner
@@ -825,6 +834,9 @@ class SagaConcurrencyRaceTest {
             .sagaStore(underlying) // no interleave: the event path wins its own claim
             .commandBus(bus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(underlying))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var shipped = makeEnvelope(new OrderShipped("race-order-1"), 77L, "fulfill-race-order-1");
@@ -936,6 +948,9 @@ class SagaConcurrencyRaceTest {
             .sagaStore(underlying)
             .commandBus(bus)
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(underlying))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
 
     var shipped = makeEnvelope(new OrderShipped("race-order-1"), 77L, "fulfill-race-order-1");

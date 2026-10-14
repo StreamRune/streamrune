@@ -366,6 +366,18 @@ public final class MetricNames {
       "streamrune.saga.compensation_under_forward_step";
 
   /**
+   * Forward saga commands refused at their commit, tagged by {@link #TAG_SAGA_TYPE}: the event
+   * store read the saga row in the command's append and found a compensation episode open, the saga
+   * ended or its row gone, so the command stored nothing and the step went on from the row
+   * (resuming the episode, or stopping at the ended saga). One sample per refused command. A
+   * refused command leaves nothing to undo, so no sample needs an action; a rate that climbs means
+   * compensations open while forward steps are still running — most often saga deadlines shorter
+   * than the steps they bound.
+   */
+  public static final String SAGA_FORWARD_COMMANDS_FENCED =
+      "streamrune.saga.forward_commands_fenced";
+
+  /**
    * Current {@code COMPENSATING} saga backlog — sagas whose compensation (refund / stock release)
    * has not yet completed. Reported as a gauge, sampled each cycle by the {@code
    * SagaCompensationRetrySweeper} (the saga analog of {@link #OUTBOX_PENDING}/{@link

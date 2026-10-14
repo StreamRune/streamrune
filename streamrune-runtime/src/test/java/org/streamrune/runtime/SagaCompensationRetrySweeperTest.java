@@ -334,6 +334,9 @@ class SagaCompensationRetrySweeperTest {
             .commandBus(bus)
             .sagaDeadLetterStore(deadLetterStore)
             .metrics(metrics)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     sagaId = SagaId.of("saga-x");
   }
@@ -714,6 +717,9 @@ class SagaCompensationRetrySweeperTest {
             .commandBus(bus)
             .sagaDeadLetterStore(deadLetterStore)
             .metrics(metrics)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     bus.failTransientlyNTimes("do-1", 1);
     bus.refuseAdmissionForever("undo-2");

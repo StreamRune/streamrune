@@ -174,6 +174,9 @@ class SagaSameSimpleNameObservabilityTest {
             .sagaStore(store)
             .commandBus(new UnusedCommandBus())
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(store))
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     return SagaCompensationRetrySweeper.<S>builder()
         .sagaRunner(runner)

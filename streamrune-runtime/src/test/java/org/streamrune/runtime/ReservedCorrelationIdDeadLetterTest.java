@@ -152,7 +152,8 @@ class ReservedCorrelationIdDeadLetterTest {
                   origin,
                   EventId.of("evt-trigger"),
                   new Charge("pay-1"),
-                  new IdempotencyKey("saga:" + sagaId.value() + ":7:0")));
+                  new IdempotencyKey("saga:" + sagaId.value() + ":7:0"),
+                  false));
     }
 
     assertThat(deadLetters.all()).isEmpty();

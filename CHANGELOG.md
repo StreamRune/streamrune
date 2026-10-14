@@ -103,6 +103,17 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   (idempotency key committed with the events), `saveSnapshot`, `readStream`, `readGlobalStream`,
   `lastGlobalOffset`. `AppendResult` returns the store-assigned `GlobalOffset`s and the final
   `Version`.
+- Saga forward fence in the append: `appendWithKey(…, SagaOrigin forwardOf)` reads the named saga's
+  row in the append transaction — after the command inbox claims the key, before any event is
+  written — and refuses the append with `SagaForwardFencedException` (nothing stored: no event, no
+  inbox key, no outbox or audit row) once the row carries a compensation episode, is terminal or is
+  gone. The read takes a transaction-scoped lock that every `PostgresSagaStore` write which stamps
+  an episode, ends the saga or deletes its row also takes, so a forward append lands wholly before
+  such a write or reads its result. `EventStore.sagaFenceStorageIdentity()` (and
+  `CommandBus.sagaFenceStorageIdentity()`) names the saga rows a store fences against —
+  `PostgresEventStore` answers its `DataSource`, which equals a `PostgresSagaStore`'s
+  `storageIdentity()` over the same object; `null` means the store cannot fence. The command bus
+  hands the origin to the store only for the forward command saga dispatch names.
 - `PostgresEventStore` / `PostgresEventStoreFactory`: JSONB payload and metadata columns, the unique
   constraint `event_stream_stream_version_key` on `(aggregate_type, aggregate_id, version)` for
   optimistic locking (`OptimisticLockException` on conflict), and gap-free, commit-ordered global
@@ -513,8 +524,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   loop, a correlated event is held as genesis-pending, the sweeper does not see the row. The timeout
   runner claims a start at its deadline, as it claims any start whose dispatch has not completed:
   within one process after a delivery that is dispatching at that moment has written (the step
-  lock, below); from another node underneath it, so that the forward command commits after that
-  timeout's compensation.
+  lock, below); from another node underneath it, and the forward fence (below) refuses the
+  delivery's next forward command.
 - Step lock, within one process: `SagaRunner` holds an in-memory lock per saga (`SagaStepLock`,
   keyed by saga type and saga id) around every step — a live delivery and a replay feed, from before
   the read of the row to after the write — and a claim that has no event of its own takes it around
@@ -526,8 +537,24 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   that way. The lock is released before any compensation command; a delivery waits for it for at
   most 30 s and then fails with `SagaStepLockException` and is redelivered. It writes nothing,
   needs no configuration and reaches no other process: a timeout runner or a delivery on another
-  node claims underneath a step in flight, and the target aggregate's refusal of a forward command
-  that arrives after its cancel remains the protection there.
+  node claims underneath a step in flight, and the forward fence (below) refuses that step's next
+  forward command.
+- Forward fence, on any number of processes: `SagaRunner` dispatches each forward command with its
+  saga named (`StreamRuneContext.SagaForward`), and the event store refuses the command in the
+  transaction that would store it once the saga row carries a compensation episode, is terminal or
+  is gone — so no forward command of a saga is stored after its compensation opened, or after it
+  ended, whatever runs the claim and however long the step takes. The refused step goes on from the
+  row: it resumes the open episode under its stamp, stops at an ended saga (`SKIPPED_HALTED`; a
+  live correlated event of a saga that faulted inside its episode is held), reports a stale view
+  for a row that is gone, and quarantines the event when the row is in a forward status; it claims
+  nothing of its own, is not retried and never runs its forward loop again.
+  Each refusal logs one INFO line and counts one `saga.forward_commands_fenced` sample.
+  Compensation commands are not fenced. On by default: `SagaRunner.Builder.forwardFence(false)`
+  switches it off, and `build()` refuses a runner whose command bus cannot fence, or fences against
+  other saga rows than its `SagaStore` keeps, naming that opt-out. `SagaForwardFenceDefault` is the
+  entry point through which an integration applies a default to runners that named none. The
+  in-memory stores fence when the `InMemorySagaStore` is wired into the `InMemoryEventStore` with
+  `withSagaStore`.
 - `SagaTimeoutRunner` names its step lock: `Builder.sagaRunner(runner)` shares the runner's, and
   `build()` refuses a builder that names neither `sagaRunner(...)` nor `stepLock(...)`. A lock of
   its own, `stepLock(new SagaStepLock())`, is the explicit choice of a timeout runner that claims
@@ -548,7 +575,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   node, and a step nested on the thread of the step that loses. The report does not know the order
   in which the step's command and the compensation were stored — before it, which a cancel/void
   compensation covers, or after it, which nothing undoes — so each sample is a saga whose target
-  aggregates are to be inspected. A twin delivery that lost an ordinary race and a later event that
+  aggregates are to be inspected. With the forward fence on, a command dispatched after the claim
+  is refused, so a sample means commands stored before the compensation. A twin delivery that lost an ordinary race and a later event that
   opens no episode are not reported; neither is a step that never reaches a write after a late
   command, nor a step whose own claim loses to a twin of the same event whose rejection did not
   repeat. The report changes no outcome and reads the row once, on a path that has already lost
@@ -906,6 +934,7 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   - sagas (tagged `saga.type`): `saga.quarantined`, `saga.faulted`, `saga.skipped_while_faulted`,
     `saga.event_held{hold.reason}`, `saga.replay_deferred`, `saga.compensation{outcome}`,
     `saga.compensation_retries`, `saga.cas_conflicts`, `saga.compensation_under_forward_step`,
+    `saga.forward_commands_fenced`,
     `saga.compensating`, `saga.timed_out`, `saga.timeout_claims_deferred`, `saga.faulted_backlog`, `saga.faulted_rows`, `saga.replayed{outcome}`,
     `saga.forced_stale_resume`, `saga.resume_faulted{outcome}`, `saga.compensate_faulted`,
     `saga.dead_letters_swept`

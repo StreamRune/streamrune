@@ -368,6 +368,9 @@ class PostgresNullSagaDeadLetterReplayTest {
             .sagaStore(sagaStore)
             .commandBus(bus)
             .sagaDeadLetterStore(dlq)
+            // The rows live in another store than the event stream; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     clock = MutableClock.startingAt(Instant.parse("2026-07-01T00:00:00Z"));
   }

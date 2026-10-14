@@ -168,6 +168,9 @@ class SagaTwoTypesRoutingTest {
             .sagaStore(paymentStore)
             .commandBus(new NoopBus())
             .sagaDeadLetterStore(deadLetters)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     shippingRunner =
         SagaRunner.<ShippingState>builder()
@@ -175,6 +178,9 @@ class SagaTwoTypesRoutingTest {
             .sagaStore(shippingStore)
             .commandBus(new NoopBus())
             .sagaDeadLetterStore(deadLetters)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     deliverToBoth(
         envelope(1L, new PaymentStarted(PAYMENT_SAGA.value()), null),

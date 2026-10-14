@@ -287,6 +287,9 @@ class SagaStateConversionPoisonTest {
             .sagaStore(store)
             .commandBus(new NoopCommandBus())
             .sagaDeadLetterStore(deadLetters)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
             .build();
     listener = runner.asEventListener();
   }

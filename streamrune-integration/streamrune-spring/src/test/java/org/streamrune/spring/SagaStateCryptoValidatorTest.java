@@ -76,6 +76,9 @@ class SagaStateCryptoValidatorTest {
         .sagaStore(mock(SagaStore.class))
         .commandBus(commandBus)
         .sagaDeadLetterStore(mock(SagaDeadLetterStore.class))
+        // The bus is a test double that stores nothing; the fence is tested in
+        // SagaForwardFence*Test.
+        .forwardFence(false)
         .build();
   }
 

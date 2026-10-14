@@ -12,6 +12,7 @@ import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.streamrune.core.CommandBus;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
@@ -21,6 +22,7 @@ import org.streamrune.core.IdGenerator;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.Encrypted;
+import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
@@ -188,6 +190,32 @@ class SpringPostgresWiringIntegrationTest {
                         assertThat(leaderB.tryAcquire(consumer)).isPresent();
                         leaderB.resign(consumer);
                       });
+            });
+  }
+
+  /**
+   * The auto-configured event store reads the saga rows of the auto-configured saga store in its
+   * forward fence: both are built over the one {@code DataSource} bean, so the identities a {@code
+   * SagaRunner} compares at {@code build()} are equal, and the command bus reports the same one.
+   */
+  @Test
+  void theEventStoreFencesAgainstTheSagaStoresRows() {
+    new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(DataSource.class, () -> dataSource)
+        .withBean(EventTypeRegistry.class, () -> typeRegistry)
+        .withBean(CryptoEngine.class, InMemoryCryptoEngine::new)
+        .withPropertyValues("streamrune.saga.compensation-retry-enabled=false")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              EventStore eventStore = ctx.getBean(EventStore.class);
+              SagaStore sagaStore = ctx.getBean(SagaStore.class);
+              assertThat(eventStore.sagaFenceStorageIdentity()).isNotNull();
+              assertThat(eventStore.sagaFenceStorageIdentity())
+                  .isEqualTo(sagaStore.storageIdentity());
+              assertThat(ctx.getBean(CommandBus.class).sagaFenceStorageIdentity())
+                  .isEqualTo(sagaStore.storageIdentity());
             });
   }
 

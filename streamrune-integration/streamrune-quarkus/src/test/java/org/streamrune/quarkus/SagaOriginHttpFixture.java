@@ -18,7 +18,6 @@ import org.streamrune.core.saga.SagaOrchestrator;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
-import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.GlobalOffset;
@@ -196,8 +195,9 @@ final class SagaOriginHttpFixture implements AutoCloseable {
   }
 
   private final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-  private final InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
-  private final SagaStore sagaStore = new InMemorySagaStore();
+  private final InMemorySagaStore sagaStore = new InMemorySagaStore();
+  private final InMemoryEventStore eventStore =
+      new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
   final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(sagaStore);
   private final VirtualThreadCommandBus bus;
   private final FlowSaga saga;

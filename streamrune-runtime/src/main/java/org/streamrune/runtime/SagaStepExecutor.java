@@ -57,6 +57,13 @@ import org.streamrune.core.types.SagaType;
  * before()} refusing, by throwing and by returning {@code false}), and they are now treated alike.
  * Neither decides anything about the business, so neither may trigger an undo.
  *
+ * <p><b>The forward fence.</b> With {@link #forwardFence()} on, every forward command is dispatched
+ * fenced ({@link SagaCommandDispatch#dispatch}): the event store refuses it, storing nothing, once
+ * the saga row carries a compensation episode, is terminal or is gone. A refusal is routed before
+ * any other classification of a failed forward command ({@link #routeFencedStep}): the step reads
+ * the row again and goes on from it — it resumes the open episode under its stamp, or stops at a
+ * saga that has ended — and claims nothing of its own. A compensation command is never fenced.
+ *
  * <p><b>Create-first genesis.</b> A fresh start event evolves from {@code initialState}; the
  * executor then writes the genesis-pending row ({@link SagaStore#createGenesisPending}: version 1,
  * {@code genesis_applied = FALSE}) BEFORE the first forward command is dispatched, dispatches, and
@@ -196,6 +203,17 @@ final class SagaStepExecutor<S extends SagaState> {
   private final Clock clock;
 
   /**
+   * Whether this executor's forward commands are fenced at their commit: {@link
+   * SagaCommandDispatch#dispatch} binds the saga as the forward command's {@code SagaForward}, and
+   * the event store refuses the command once the saga has left its forward phase. Mutable and
+   * {@code volatile} because {@link SagaRunner} keeps it in step with its own value, which an
+   * integration's startup hook may set after the runner is built ({@link SagaForwardFenceDefault});
+   * a dispatch reads it when it hands the command to the bus. {@code false} on an executor that
+   * never routes a {@code ForwardStep} (the timeout runner's).
+   */
+  private volatile boolean forwardFence;
+
+  /**
    * Constructor for the paths that never route a {@code ForwardStep} — {@code SagaTimeoutRunner}
    * drives only {@code ResumeCompensation}/{@code ClaimTimeout}, both of which enforce their own
    * key-age bound in the adapter. Leaves the ForwardStep guard disabled.
@@ -247,6 +265,16 @@ final class SagaStepExecutor<S extends SagaState> {
   /** Supplies the ForwardStep key-age window after construction — see the field javadoc. */
   void inboxRetentionMaxAge(Duration window) {
     this.inboxRetentionMaxAge = normalizeRetentionWindow(window);
+  }
+
+  /** Whether the next forward command is fenced at its commit (see the field javadoc). */
+  boolean forwardFence() {
+    return forwardFence;
+  }
+
+  /** Sets whether the next forward command is fenced at its commit (see the field javadoc). */
+  void forwardFence(boolean enabled) {
+    this.forwardFence = enabled;
   }
 
   StepOutcome execute(SagaId sagaId, Optional<LoadedSaga<S>> loaded, SagaTrigger trigger) {
@@ -498,8 +526,10 @@ final class SagaStepExecutor<S extends SagaState> {
    *       dispatch has not completed, and compensates the persisted evolved state. Commands not yet
    *       dispatched by a dead delivery are never dispatched. Within one process the claim waits
    *       for a delivery that is in its forward loop ({@link SagaStepLock}); a timeout runner of
-   *       another process does not, and a command a live delivery is dispatching at that moment
-   *       commits after that timeout's compensation;
+   *       another process does not, and a command a live delivery is dispatching at that moment is
+   *       refused at its commit when the runner fences its forward commands — the delivery then
+   *       resumes the episode ({@link #routeFencedStep}) — and commits after that timeout's
+   *       compensation when it does not;
    *   <li>a poison in {@code handle}: the fault of a genesis-pending forward row ({@code
    *       pre_fault_status} {@code NULL}); the replayed start entry re-evolves.
    * </ul>
@@ -617,10 +647,13 @@ final class SagaStepExecutor<S extends SagaState> {
   }
 
   /**
-   * Dispatches in order; the result carries the compensation outcome on a deterministic failure,
-   * else none, and how many of the commands this call executed.
+   * Dispatches in order; the result carries the outcome the step ends in when a command failed —
+   * the compensation after a deterministic failure, or the routing of a command the event store
+   * refused at its commit — else none, and how many of the commands this call executed.
    *
    * <p>A failed forward command is classified BEFORE any decision to undo the business flow. A
+   * command the event store refused because the saga left its forward phase is routed on the saga
+   * row first ({@link #routeFencedStep}); it is neither a rejection nor a retry-later failure. A
    * PROVEN retry-later failure never compensates ({@link #forwardRetryLater}); everything else (a
    * business rejection, and any failure that cannot be proven retriable) keeps the claim-first
    * contract, so a deterministic non-business failure still terminalizes rather than wedging the
@@ -646,11 +679,17 @@ final class SagaStepExecutor<S extends SagaState> {
                 origin,
                 fs.event().metadata().eventId(),
                 sagaCommand.command(),
-                SagaCommandDispatch.forwardKey(sagaId, triggerOffset, index));
+                SagaCommandDispatch.forwardKey(sagaId, triggerOffset, index),
+                forwardFence);
         if (executed) {
           executedCommands++;
         }
       } catch (Exception primary) {
+        if (SagaCommandDispatch.isForwardFenced(primary)) {
+          return new ForwardDispatch(
+              routeFencedStep(sagaId, type, rowVersion, fs, index, sagaCommand, executedCommands),
+              executedCommands);
+        }
         if (SagaCommandDispatch.isRetryLater(primary)) {
           throw forwardRetryLater(sagaId, index, sagaCommand, primary);
         }
@@ -677,10 +716,104 @@ final class SagaStepExecutor<S extends SagaState> {
   }
 
   /**
+   * A forward command of this step was refused at its commit: the event store read the saga row in
+   * the command's append and found it in a compensation episode, terminal or gone, so the command
+   * stored nothing. Another path opened the episode or ended the saga while this step was in flight
+   * — a timeout claim of another process, a delivery of another process whose own command was
+   * rejected, an operator, a step nested on this thread. The commands before it were stored before
+   * that write, which is the order a compensation computed from the row covers.
+   *
+   * <p>The step goes on from the row, read once more:
+   *
+   * <ul>
+   *   <li>no row, or a row whose version is below the one this step read (the saga was deleted, and
+   *       perhaps started again): the stale view propagates as {@link OptimisticLockException}, the
+   *       exit a deleted row takes on every path; nothing more is dispatched;
+   *   <li>a row that is neither terminal nor in its compensation episode ({@link
+   *       LoadedSaga#effectiveStatus()} is a forward status): with no episode stamp the store
+   *       refused a command it had no reason to refuse, so it does not keep the fence contract;
+   *       with a stamp, the row was written outside the saga store's contract (a stamp on a forward
+   *       status), and the store refuses every forward command of it. Either way the event is
+   *       quarantined ({@link SagaPoisonException}): nothing is compensated, and the forward loop
+   *       is not run again;
+   *   <li>otherwise the row is routed as a fresh delivery of the event routes it ({@link
+   *       #forwardStep}): a stamped {@code COMPENSATING} row — or one faulted inside its episode,
+   *       on a replay feed — resumes the episode under its stamp; a terminal row, or a {@code
+   *       FAULTED} row on a live event, is {@code SKIPPED_HALTED}. {@link #forwardStep} runs no
+   *       forward loop for any of them, so the routing never comes back here: one refusal is routed
+   *       once.
+   * </ul>
+   *
+   * <p>The step claims nothing of its own and is not retried: the refusal is a fact about the row,
+   * and a stamp or a terminal status never goes back to the forward phase.
+   */
+  private StepOutcome routeFencedStep(
+      SagaId sagaId,
+      SagaType type,
+      long rowVersion,
+      SagaTrigger.ForwardStep fs,
+      int index,
+      SagaCommand refusedCommand,
+      int executedCommands) {
+    String sanitized = LogSanitizer.sanitizeForLog(sagaId.value());
+    LOG.info(
+        "Saga {} {}: forward command {} (index {}) of the event at offset {} was refused at its"
+            + " commit: the saga left its forward phase while this step was in flight. {} earlier"
+            + " command(s) of the step were stored before that. The step goes on from the saga"
+            + " row: it resumes the open compensation episode, or stops at a saga that has ended.",
+        // The saga type is a class name, written whole; the saga id is a business id.
+        type.value(),
+        sanitized,
+        refusedCommand.command().getClass().getSimpleName(),
+        index,
+        fs.event().globalOffset().value(),
+        executedCommands);
+    try {
+      metrics.recordSagaForwardCommandFenced(sagaTypeTag());
+    } catch (RuntimeException e) {
+      LOG.warn("Metrics recording failed for recordSagaForwardCommandFenced", e);
+    }
+    Optional<LoadedSaga<S>> reloaded = reload(sagaId, type);
+    if (reloaded.isEmpty() || reloaded.get().version() < rowVersion) {
+      recordCasConflict();
+      throw new OptimisticLockException(
+          "Saga "
+              + sanitized
+              + " was removed while its forward step was in flight; nothing more was dispatched");
+    }
+    LoadedSaga<S> row = reloaded.get();
+    // Only a row on which no forward step can run goes on to forwardStep: a terminal row
+    // (skipped there) or a row in its compensation episode, also when it faulted inside it
+    // (resumed on a replay feed, skipped on a live event). forwardStep runs no forward loop for
+    // either, so a routed step never dispatches a forward command again and never comes back here.
+    if (!row.status().isTerminal() && row.effectiveStatus() != SagaStatus.COMPENSATING) {
+      throw new SagaPoisonException(
+          sagaId,
+          new IllegalStateException(
+              row.episodeVersion() == null
+                  ? "The event store refused a forward command of saga "
+                      + sanitized
+                      + " as fenced, and the saga row is in its forward phase (status "
+                      + row.status()
+                      + ", no episode stamp): the store does not keep the fence contract"
+                  : "The event store refused a forward command of saga "
+                      + sanitized
+                      + " as fenced, and the saga row is neither in a compensation episode the"
+                      + " step can resume nor ended (status "
+                      + row.status()
+                      + ", episode stamp "
+                      + row.episodeVersion()
+                      + "): the row was written outside the saga store's contract"));
+    }
+    return forwardStep(sagaId, reloaded, fs);
+  }
+
+  /**
    * What a step's forward loop did.
    *
-   * @param compensated the outcome of the compensation the loop ended in after a rejected command;
-   *     {@code null} when every command was dispatched
+   * @param compensated the outcome the loop ended in after a failed command: the compensation after
+   *     a rejected command, or the routing of a command refused at its commit; {@code null} when
+   *     every command was dispatched
    * @param executedCommands how many forward commands this call executed. A command the inbox
    *     answered with the outcome of an earlier execution is not counted: its events were stored by
    *     that execution. A command that ran and stored no event is not counted either
@@ -791,9 +924,15 @@ final class SagaStepExecutor<S extends SagaState> {
    * back (a timeout runner of another node, or one given a lock of its own), a delivery of another
    * node whose own command was rejected, a step nested on the thread of this one — succeeds at the
    * version the step read, and the compensation is computed from a state that does not include the
-   * step. A forward command the step commits after that compensation is undone by nothing, and the
-   * redelivered event meets a row in its episode or a terminal row and is not applied. The step
-   * learns of the claim when its own write loses.
+   * step. With the forward fence off, a forward command the step commits after that compensation is
+   * undone by nothing, and the redelivered event meets a row in its episode or a terminal row and
+   * is not applied. The step learns of the claim when its own write loses.
+   *
+   * <p><b>With the forward fence on</b> ({@link #forwardFence()}), a forward command the step
+   * dispatches after the claim is refused at its commit and the step goes on from the row ({@link
+   * #routeFencedStep}) without reaching this report. A sample then means only commands the step
+   * stored before the episode opened — the executed-but-unrecorded step a cancel/void compensation
+   * covers.
    *
    * <p><b>The condition</b>, all of it read from the row after the lost write:
    *
