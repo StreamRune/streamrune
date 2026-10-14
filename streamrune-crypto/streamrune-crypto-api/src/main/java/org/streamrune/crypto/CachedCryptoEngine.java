@@ -8,6 +8,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.HexFormat;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +54,34 @@ import org.streamrune.core.types.SubjectId;
  * is unavailable. Wire a real channel (e.g. the Postgres {@code LISTEN/NOTIFY} implementation) via
  * {@link Builder#forgetSignal(CryptoForgetSignal)} where a shared transport is available.
  *
+ * <p><b>What was cached while the replica could not hear is dropped once it can.</b> A forget a
+ * peer publishes while this replica's channel is not listening — before its first {@code LISTEN}
+ * takes effect, or while its connection is lost — never arrives here. Each time the channel starts
+ * hearing, after it can hear and before it delivers anything, it tells this engine, and the engine
+ * evicts its whole plaintext cache: every subject is read from the key store again, and a subject
+ * forgotten in that window finds its key gone. Until then the cache keeps serving, bounded by the
+ * write-TTL ceiling.
+ *
+ * <p><b>An eviction is not undone by a decrypt in flight.</b> Every eviction a signal triggers — of
+ * one subject, or of everything — advances an eviction counter before it removes anything. A
+ * cache-miss decrypt reads the counter before it calls the delegate and, after it has stored its
+ * result, removes that entry again if the counter moved. For a decrypt that read the counter before
+ * an eviction advanced it, either its check comes before that advance, so its entry was stored
+ * before the eviction removed entries and is removed by it, or its check sees the counter moved and
+ * it removes its own entry. A decrypt that read the counter after the advance read the key after
+ * the forget that caused the eviction had deleted it (a peer publishes a forget after its key
+ * deletion committed, and a channel starts hearing before the engine evicts), so it finds the key
+ * gone. A decrypt that read the key just before a peer's forget therefore cannot leave the
+ * plaintext cached after the eviction that forget caused.
+ *
+ * <p>That argument assumes two things of the delegate, which the shipped engines (PostgreSQL,
+ * filesystem, Vault, AWS KMS) meet: it holds no cache of key material of its own, and each decrypt
+ * reads the key, or the subject's tombstone, afresh and sees every deletion committed before the
+ * read — a new statement under {@code READ COMMITTED}, a file read, a remote call. A delegate that
+ * caches keys, or whose reads join an application transaction at {@code REPEATABLE READ} or {@code
+ * SERIALIZABLE} that began before the forget, can still find the key after the eviction and cache
+ * the plaintext again; the write-TTL ceiling then bounds it.
+ *
  * <p><b>Decrypt/deleteKey race (crypto-shredding must not resurrect plaintext).</b> The cache-miss
  * path in {@link #decrypt} is check-cache -&gt; call delegate -&gt; populate cache; without
  * coordination, a {@link #deleteKey(SubjectId)} racing between the delegate call and the cache
@@ -93,6 +122,11 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
    */
   private final ReentrantLock[] stripes;
 
+  /**
+   * Advanced before every eviction a {@link CryptoForgetSignal} triggers; see the class javadoc.
+   */
+  private final AtomicLong signalEvictions = new AtomicLong();
+
   /** Cache key: subject id plus SHA-256 hex of the ciphertext being decrypted. */
   private record CacheKey(SubjectId subjectId, String ciphertextHash) {}
 
@@ -124,9 +158,10 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
     this.forgetSignal = builder.forgetSignal;
     // Subscribe to cross-instance forget signals: when a peer replica crypto-shreds a subject,
     // evict that subject's cached plaintext here too, promptly (rather than waiting out the
-    // write-TTL). The NOOP channel never invokes the listener, so a default engine starts no
-    // background listener.
-    this.forgetSignal.subscribe(this::invalidateByToken);
+    // write-TTL), and each time the channel starts hearing, evict everything cached while it could
+    // not. The NOOP channel never invokes either, so a default engine starts no background
+    // listener.
+    this.forgetSignal.subscribe(this::invalidateByToken, this::invalidateAllCached);
   }
 
   public static Builder builder() {
@@ -164,9 +199,16 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
       if (recheck != null) {
         return recheck.clone();
       }
+      long evictionsBefore = signalEvictions.get();
       byte[] result = delegate.decrypt(subjectId, ciphertext);
       // Store a private copy: callers receive distinct arrays and cannot mutate the cached one.
-      cache.put(key, result.clone());
+      byte[] stored = result.clone();
+      cache.put(key, stored);
+      if (signalEvictions.get() != evictionsBefore) {
+        // A signal evicted since the delegate read the key: the eviction may have swept past
+        // before this entry was stored, so it is removed here (see the class javadoc).
+        cache.asMap().remove(key, stored);
+      }
       return result;
     } finally {
       lock.unlock();
@@ -212,16 +254,34 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
 
   /**
    * Evicts every cached entry whose subject matches the opaque token published by a peer replica's
-   * {@link #deleteKey}. Lock-free: this is a pure removal on the concurrent cache map. A decrypt
-   * for the same subject that is in flight at this exact instant could re-cache it — but that
-   * residual window is itself bounded by the write-TTL ceiling, so cross-replica staleness stays
-   * bounded.
+   * {@link #deleteKey}. Lock-free: this is a pure removal on the concurrent cache map, after the
+   * eviction counter advanced, so a decrypt in flight does not leave the subject cached behind it.
    */
   private void invalidateByToken(String token) {
     if (token == null) {
       return;
     }
+    signalEvictions.incrementAndGet();
     cache.asMap().keySet().removeIf(key -> subjectToken(key.subjectId()).equals(token));
+  }
+
+  /**
+   * Evicts every cached plaintext: the channel started hearing, and a forget published before that
+   * did not reach this replica. The eviction counter advances first, as for one subject.
+   */
+  private void invalidateAllCached() {
+    signalEvictions.incrementAndGet();
+    cache.invalidateAll();
+  }
+
+  /**
+   * The channel this engine publishes its forgets on and hears peers' forgets from; {@link
+   * CryptoForgetSignal#NOOP} when none was configured. Health reporting reads whether it listens.
+   *
+   * @return the configured forget channel
+   */
+  public CryptoForgetSignal forgetSignal() {
+    return forgetSignal;
   }
 
   /**

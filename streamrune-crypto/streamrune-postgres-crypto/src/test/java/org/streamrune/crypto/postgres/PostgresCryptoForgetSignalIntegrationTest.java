@@ -170,6 +170,13 @@ class PostgresCryptoForgetSignalIntegrationTest {
   }
 
   @Test
+  void theListenPoolItOpensTurnsOnTcpKeepAlive() {
+    try (HikariDataSource pool = PostgresCryptoForgetSignal.createListenDataSource(dataSource)) {
+      assertEquals("true", pool.getDataSourceProperties().getProperty("tcpKeepAlive"));
+    }
+  }
+
+  @Test
   void subscribeUsesHikariAccessorsDirectlyWhenTheAppDataSourceIsHikari() throws Exception {
     // Exercises the `dataSource instanceof HikariDataSource` branch of createListenDataSource: the
     // app's own DataSource is itself Hikari-backed, so its jdbcUrl/username/password are read via
@@ -261,7 +268,7 @@ class PostgresCryptoForgetSignalIntegrationTest {
    * eviction is best effort, and the cache's write TTL is what bounds a signal that is missed. A
    * test that publishes once therefore waits for the session first. The session shows the LISTEN as
    * its last statement and is idle once that statement is committed; the channel sends nothing else
-   * on it.
+   * on it before its first liveness probe, after 30 s of silence — longer than this waits.
    */
   private static void awaitListening(String applicationName) throws Exception {
     long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();

@@ -1,0 +1,113 @@
+package org.streamrune.quarkus;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import jakarta.enterprise.inject.Instance;
+import java.util.List;
+import java.util.function.Consumer;
+import org.junit.jupiter.api.Test;
+import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.crypto.CachedCryptoEngine;
+import org.streamrune.crypto.CryptoForgetSignal;
+import org.streamrune.runtime.BackgroundRelayHealthContributor;
+import org.streamrune.runtime.BackgroundRelayHealthContributor.Status;
+
+/**
+ * The forget channel of a cached crypto engine that listens for peers' forgets is reported as
+ * {@code crypto-forget-listen}: DEGRADED while the replica does not hear them, UP while it does.
+ * Without such an engine nothing new is reported.
+ */
+class CryptoForgetListenHealthRegistrarTest {
+
+  /** A forget channel whose listening side the test switches. */
+  static final class SwitchableForgetSignal implements CryptoForgetSignal {
+    volatile boolean listening;
+
+    @Override
+    public void publish(String token) {}
+
+    @Override
+    public void subscribe(Consumer<String> onForget, Runnable onListening) {}
+
+    @Override
+    public boolean isSubscribed() {
+      return true;
+    }
+
+    @Override
+    public boolean isListening() {
+      return listening;
+    }
+  }
+
+  private static CryptoEngine cachedEngine(CryptoForgetSignal signal) {
+    return CachedCryptoEngine.builder()
+        .delegate(mock(CryptoEngine.class))
+        .forgetSignal(signal)
+        .build();
+  }
+
+  @Test
+  void aListeningChannelReadsDegradedUntilTheReplicaHearsPeersForgets() {
+    var signal = new SwitchableForgetSignal();
+    var engine = cachedEngine(signal);
+    var contributor = new BackgroundRelayHealthContributor();
+
+    new CryptoForgetListenHealthRegistrar(instanceOf(engine), relayHealth(contributor))
+        .registerCryptoForgetListenHealth();
+
+    var component = contributor.components().getFirst();
+    assertEquals("crypto-forget-listen", component.name());
+    assertEquals(Status.DEGRADED, component.status());
+    signal.listening = true;
+    assertEquals(Status.UP, contributor.components().getFirst().status());
+  }
+
+  @Test
+  void nothingIsReportedWithoutACryptoEngine() {
+    var contributor = new BackgroundRelayHealthContributor();
+    new CryptoForgetListenHealthRegistrar(instanceOf(), relayHealth(contributor))
+        .registerCryptoForgetListenHealth();
+    assertTrue(contributor.components().isEmpty());
+  }
+
+  @Test
+  void nothingIsReportedForAnEngineWhoseChannelDoesNotListen() {
+    var contributor = new BackgroundRelayHealthContributor();
+    new CryptoForgetListenHealthRegistrar(
+            instanceOf(cachedEngine(CryptoForgetSignal.NOOP), mock(CryptoEngine.class)),
+            relayHealth(contributor))
+        .registerCryptoForgetListenHealth();
+    assertTrue(contributor.components().isEmpty());
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Instance<CryptoEngine> instanceOf(CryptoEngine... engines) {
+    Instance<CryptoEngine> instance = mock(Instance.class);
+    when(instance.iterator()).thenAnswer(invocation -> List.of(engines).iterator());
+    return instance;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Instance<BackgroundRelayHealthContributor> relayHealth(
+      BackgroundRelayHealthContributor contributor) {
+    Instance<BackgroundRelayHealthContributor> instance = mock(Instance.class);
+    when(instance.isUnsatisfied()).thenReturn(false);
+    when(instance.get()).thenReturn(contributor);
+    return instance;
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void registersNothingWithoutAHealthContributor() {
+    Instance<BackgroundRelayHealthContributor> none = mock(Instance.class);
+    when(none.isUnsatisfied()).thenReturn(true);
+    var registrar =
+        new CryptoForgetListenHealthRegistrar(
+            instanceOf(cachedEngine(new SwitchableForgetSignal())), none);
+    registrar.registerCryptoForgetListenHealth();
+  }
+}

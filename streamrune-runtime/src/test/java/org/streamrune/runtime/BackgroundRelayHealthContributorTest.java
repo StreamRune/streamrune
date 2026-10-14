@@ -3,7 +3,11 @@ package org.streamrune.runtime;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.crypto.CachedCryptoEngine;
+import org.streamrune.crypto.CryptoForgetSignal;
 import org.streamrune.runtime.BackgroundRelayHealthContributor.Status;
 
 class BackgroundRelayHealthContributorTest {
@@ -408,6 +412,75 @@ class BackgroundRelayHealthContributorTest {
     assertTrue(
         contributor.components().stream()
             .noneMatch(BackgroundRelayHealthContributor.ComponentHealth::started));
+    assertEquals(Status.UP, contributor.overallStatus());
+  }
+
+  /** A forget channel whose listening side the test switches. */
+  private static final class FakeForgetSignal implements CryptoForgetSignal {
+    volatile boolean subscribed;
+    volatile boolean listening;
+
+    @Override
+    public void publish(String token) {}
+
+    @Override
+    public void subscribe(Consumer<String> onForget, Runnable onListening) {
+      subscribed = true;
+    }
+
+    @Override
+    public boolean isSubscribed() {
+      return subscribed;
+    }
+
+    @Override
+    public boolean isListening() {
+      return listening;
+    }
+  }
+
+  private static CachedCryptoEngine cachedEngine(CryptoForgetSignal signal) {
+    return CachedCryptoEngine.builder()
+        .delegate(mock(CryptoEngine.class))
+        .forgetSignal(signal)
+        .build();
+  }
+
+  @Test
+  void aCryptoForgetChannelReadsDegradedWhileItDoesNotHearAndUpWhileItDoes() {
+    var signal = new FakeForgetSignal();
+    var contributor = new BackgroundRelayHealthContributor();
+    contributor.registerCryptoEngine(cachedEngine(signal));
+
+    var notYet = contributor.components();
+    assertEquals(1, notYet.size());
+    assertEquals("crypto-forget-listen", notYet.getFirst().name());
+    assertEquals(Status.DEGRADED, notYet.getFirst().status());
+    assertTrue(notYet.getFirst().started());
+    assertFalse(notYet.getFirst().alive());
+    assertEquals(Status.DEGRADED, contributor.overallStatus(), "never DOWN");
+
+    signal.listening = true;
+    var listening = contributor.components().getFirst();
+    assertEquals(Status.UP, listening.status());
+    assertTrue(listening.alive());
+
+    signal.listening = false; // the LISTEN connection is lost
+    assertEquals(Status.DEGRADED, contributor.components().getFirst().status());
+
+    signal.subscribed = false; // closed
+    assertEquals(Status.UP, contributor.components().getFirst().status());
+  }
+
+  @Test
+  void nothingIsReportedForAnEngineWithoutAListeningForgetChannel() {
+    var contributor = new BackgroundRelayHealthContributor();
+    contributor.registerCryptoEngine(null);
+    contributor.registerCryptoEngine(mock(CryptoEngine.class)); // no plaintext cache
+    contributor.registerCryptoEngine(cachedEngine(CryptoForgetSignal.NOOP));
+    contributor.registerCryptoForgetSignal(null);
+    contributor.registerCryptoForgetSignal(new FakeForgetSignal()); // nobody subscribed
+    assertTrue(contributor.components().isEmpty());
     assertEquals(Status.UP, contributor.overallStatus());
   }
 }

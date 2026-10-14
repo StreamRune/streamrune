@@ -701,7 +701,18 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - `CachedCryptoEngine` caches decrypts with a mandatory bounded TTL (`streamrune.crypto.cache.expire-after-write`,
   default 5 minutes) and a `CryptoForgetSignal` (`PostgresCryptoForgetSignal`, LISTEN/NOTIFY) so a
   `deleteKey` on one replica evicts its peers — on Quarkus through a one-connection Agroal pool.
-  `streamrune.crypto.cache.enabled=false` skips the cache.
+  Each time a replica's `LISTEN` takes effect — the first time and after every reconnect — it
+  evicts its whole plaintext cache, so a subject a peer forgot while that replica could not hear is
+  read from the key store again; a decrypt in flight across an eviction does not stay cached.
+  `CryptoForgetSignal.isListening()` says whether the replica hears, and the `crypto-forget-listen`
+  health component reads `DEGRADED` while it does not. A LISTEN connection that stops answering
+  (its server vanished without closing it) is found by a liveness probe after 30 s of silence and
+  replaced. `streamrune.crypto.cache.enabled=false` skips the cache.
+- `CryptoForgetSignal` SPI: `subscribe(Consumer<String> onForget, Runnable onListening)` is the one
+  method to implement besides `publish` — `onListening` runs each time the channel starts hearing,
+  before any token heard from then on, and the one-argument `subscribe(onForget)` is a default that
+  passes a no-op. `isSubscribed()` and `isListening()` report the listening side (both default to
+  `false`); a custom channel is reported by `crypto-forget-listen` only when it implements them.
 - `ForgetSubjectService.forget(subjectId, requestedBy)` deletes the key first, then runs every
   registered `SubjectDataPurger` (a failing purger is audited and counted on
   `streamrune.gdpr.purge_failed`, the rest still run), then evicts the query cache (a failed
@@ -844,7 +855,8 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `streamrune` (`StreamRuneHealthCheck`, always listed in `/q/health/ready`), Micronaut `streamrune`
   (`StreamRuneHealthIndicator`): `DOWN` when the database refuses a connection, when any subscription
   is `DOWN`, or when a started background relay's thread died; `subscription.<name>` and
-  `relay.<component>` details.
+  `relay.<component>` details (`relay.crypto-forget-listen` where a cached crypto engine listens on
+  the PostgreSQL forget channel).
 - **Spring Boot**: `StreamRuneAutoConfiguration`, `StreamRuneProperties` (immutable records bound
   through their constructors), `@StreamRuneComponent` stereotype, `StreamRuneFailureAnalyzer`,
   `SmartLifecycle` runners, `streamrune.validation-enabled` (Jakarta Validation interceptor, default

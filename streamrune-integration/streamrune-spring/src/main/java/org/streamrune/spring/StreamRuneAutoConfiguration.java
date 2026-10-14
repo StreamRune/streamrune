@@ -1747,6 +1747,21 @@ public class StreamRuneAutoConfiguration {
   }
 
   /**
+   * Registers the forget channel of the {@link org.streamrune.core.crypto.CryptoEngine} bean, when
+   * it listens for peers' forgets, with the {@link
+   * org.streamrune.runtime.BackgroundRelayHealthContributor} as {@code crypto-forget-listen}. An
+   * application without such an engine registers nothing.
+   */
+  @Bean
+  @ConditionalOnMissingBean(CryptoForgetListenHealthRegistrar.class)
+  @ConditionalOnBean(org.streamrune.runtime.BackgroundRelayHealthContributor.class)
+  public CryptoForgetListenHealthRegistrar streamRuneCryptoForgetListenHealthRegistrar(
+      ObjectProvider<org.streamrune.core.crypto.CryptoEngine> cryptoEngines,
+      org.streamrune.runtime.BackgroundRelayHealthContributor relayHealth) {
+    return new CryptoForgetListenHealthRegistrar(cryptoEngines, relayHealth);
+  }
+
+  /**
    * Registers every application-declared {@link org.streamrune.runtime.SagaTimeoutRunner} bean with
    * the {@link org.streamrune.runtime.BackgroundRelayHealthContributor} for liveness, from a path
    * that is NOT gated on {@code streamrune.saga.compensation-retry-enabled}. When the compensation

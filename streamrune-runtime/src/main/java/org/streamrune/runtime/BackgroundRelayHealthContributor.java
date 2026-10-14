@@ -3,12 +3,16 @@ package org.streamrune.runtime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.crypto.CachedCryptoEngine;
+import org.streamrune.crypto.CryptoForgetSignal;
 
 /**
  * Aggregates the liveness/degradation of the background relay threads — the outbox relay ({@link
  * OutboxPoller}), the command dead-letter retry runner ({@link DeadLetterRetryRunner}), the saga
- * drivers, the four retention sweepers ({@link RetentionSweeper}) and the feed of the Server-Sent
- * Events endpoint ({@link SseEventFeed}) — into a single health signal.
+ * drivers, the four retention sweepers ({@link RetentionSweeper}), the feed of the Server-Sent
+ * Events endpoint ({@link SseEventFeed}) and the listening side of the crypto-shredding forget
+ * channel ({@link CryptoForgetSignal}) — into a single health signal.
  *
  * <p>Each relay keeps its own thread alive, logs a failed cycle at ERROR and exposes {@code
  * consecutiveFailures()}/{@code isRunning()}; this contributor is what reads them. The framework
@@ -24,7 +28,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *   <li><b>DOWN</b> — started but the poll thread is no longer alive/running (died unexpectedly).
  *   <li><b>DEGRADED</b> — running but with one or more consecutive poll-cycle failures (in
  *       backoff-retry: store/broker unreachable); or, for a saga timeout runner, running while a
- *       saga's deadline is not enforced because a step of that saga has not returned.
+ *       saga's deadline is not enforced because a step of that saga has not returned; or, for the
+ *       crypto forget channel, subscribed while this replica does not hear peers' forgets.
  *   <li><b>UP</b> — running with no consecutive failures, or not started (nothing to be unhealthy
  *       about).
  * </ul>
@@ -72,6 +77,12 @@ public class BackgroundRelayHealthContributor {
      */
     default boolean leavingWorkUndone() {
       return false;
+    }
+
+    /** The component's status from its readings; see the class javadoc. */
+    default Status status(boolean started, boolean alive, int consecutiveFailures) {
+      Status status = statusFor(started, alive, consecutiveFailures);
+      return status == Status.UP && started && leavingWorkUndone() ? Status.DEGRADED : status;
     }
   }
 
@@ -295,6 +306,63 @@ public class BackgroundRelayHealthContributor {
         });
   }
 
+  /**
+   * Registers the forget channel of {@code engine} to be reported on, when {@code engine} is a
+   * {@link CachedCryptoEngine} whose channel has a listening side that was started ({@link
+   * CryptoForgetSignal#isSubscribed()}); otherwise — a {@code null}, an engine without a plaintext
+   * cache, a channel without a listening side such as {@link CryptoForgetSignal#NOOP} — nothing is
+   * registered. See {@link #registerCryptoForgetSignal(CryptoForgetSignal)}.
+   */
+  public void registerCryptoEngine(CryptoEngine engine) {
+    if (engine instanceof CachedCryptoEngine cached) {
+      registerCryptoForgetSignal(cached.forgetSignal());
+    }
+  }
+
+  /**
+   * Registers a crypto forget channel to be reported on as {@code crypto-forget-listen}, when its
+   * listening side was started ({@link CryptoForgetSignal#isSubscribed()}); a {@code null} or a
+   * channel without one is ignored. The component reads {@code DEGRADED} while the channel is
+   * subscribed and does not hear peers' forgets ({@link CryptoForgetSignal#isListening()} is {@code
+   * false}): before its listening side first takes effect, while it reconnects, or when it cannot
+   * be opened at all. Meanwhile the replica serves cached plaintext of subjects a peer may have
+   * forgotten; once it hears again the engine drops that cache. It is never {@code DOWN}: the
+   * replica keeps serving, bounded by the cache's write-TTL. {@code alive} reads whether it
+   * listens; {@code consecutiveFailures} is always {@code 0}.
+   */
+  public void registerCryptoForgetSignal(CryptoForgetSignal signal) {
+    if (signal == null || !signal.isSubscribed()) {
+      return;
+    }
+    register(
+        new RelayStatusSource() {
+          @Override
+          public String name() {
+            return "crypto-forget-listen";
+          }
+
+          @Override
+          public boolean started() {
+            return signal.isSubscribed();
+          }
+
+          @Override
+          public boolean alive() {
+            return signal.isListening();
+          }
+
+          @Override
+          public int consecutiveFailures() {
+            return 0;
+          }
+
+          @Override
+          public Status status(boolean started, boolean alive, int consecutiveFailures) {
+            return started && !alive ? Status.DEGRADED : Status.UP;
+          }
+        });
+  }
+
   /** Package-private registration hook for tests and the typed register* methods above. */
   void register(RelayStatusSource source) {
     sources.add(source);
@@ -307,10 +375,7 @@ public class BackgroundRelayHealthContributor {
       boolean started = s.started();
       boolean alive = s.alive();
       int failures = s.consecutiveFailures();
-      Status status = statusFor(started, alive, failures);
-      if (status == Status.UP && started && s.leavingWorkUndone()) {
-        status = Status.DEGRADED;
-      }
+      Status status = s.status(started, alive, failures);
       components.add(new ComponentHealth(s.name(), status, started, alive, failures));
     }
     return components;

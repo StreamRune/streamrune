@@ -33,13 +33,44 @@ import org.streamrune.crypto.CryptoForgetSignal;
  *       per the SPI contract: a publish failure is logged and swallowed so it can never fail the
  *       originating {@code deleteKey} (the durable key deletion already succeeded, and peers are
  *       still bounded by the write-TTL ceiling).
- *   <li><b>Listen</b> ({@link #subscribe(Consumer)}) starts a single daemon virtual thread on a
- *       <b>dedicated</b> single-connection pool (never the app's main pool, so it consumes no
- *       shared connection) that issues {@code LISTEN streamrune_crypto_forget} on an auto-commit
- *       connection and dispatches each received token to every subscribed listener. It reconnects
- *       automatically if the connection drops, and a bounded {@code getNotifications} poll means
- *       {@link #close()} is honored within ~500ms.
+ *   <li><b>Listen</b> ({@link #subscribe(Consumer, Runnable)}) starts a single daemon virtual
+ *       thread on a <b>dedicated</b> single-connection pool (never the app's main pool, so it
+ *       consumes no shared connection) that issues {@code LISTEN streamrune_crypto_forget} on an
+ *       auto-commit connection and dispatches each received token to every subscribed listener. It
+ *       reconnects automatically if the connection drops, and a bounded {@code getNotifications}
+ *       poll means {@link #close()} is honored within ~500ms.
  * </ul>
+ *
+ * <p><b>A connection that dies silently is detected.</b> When the database host vanishes without
+ * closing the connection — a crashed node, an instance replaced behind a virtual IP or a DNS name —
+ * no error ever reaches the listen thread: the connection only reads, its socket stays open, and
+ * every wait for notifications returns nothing. So after 30 s without a notification the thread
+ * asks the connection to prove itself alive ({@link Connection#isValid(int)}, answered within 5 s).
+ * A connection that does not answer is aborted and replaced like a dropped one — the replica stops
+ * reporting that it listens, re-issues its {@code LISTEN} on a new connection and evicts again — so
+ * a silent loss is noticed within about 35 s. A channel that keeps delivering is never probed.
+ *
+ * <p>A subscriber callback that throws, an {@link Error} included, is logged and stops neither the
+ * other subscribers nor the listen thread.
+ *
+ * <h2>When the {@code LISTEN} takes effect</h2>
+ *
+ * <p>A forget published before this replica's {@code LISTEN} has taken effect — before the first
+ * one, or while the connection is lost and not yet re-established — is not delivered to it. Each
+ * time the {@code LISTEN} statement has returned on the auto-commit connection, it is committed and
+ * PostgreSQL queues for this session every notification committed from then on. Only then does the
+ * listen thread run every subscriber's {@code onListening} callback, mark the channel {@link
+ * #isListening() listening}, and start receiving; {@code CachedCryptoEngine} evicts its whole
+ * plaintext cache in that callback. In this order nothing is lost: a forget committed before the
+ * {@code LISTEN} deleted its key before the eviction, so the next read finds the key gone, and a
+ * forget committed after it is queued and delivered once the callbacks have run. Evicting first and
+ * listening after would leave a gap in which a read caches a subject whose forget is committed
+ * before the {@code LISTEN} and never arrives. A token that arrives while the callbacks run waits
+ * in the connection's queue until they return.
+ *
+ * <p>{@link #isSubscribed()} is {@code true} from the first {@link #subscribe(Consumer, Runnable)}
+ * until {@link #close()}, also when no LISTEN pool can be opened; {@link #isListening()} only while
+ * the replica hears. The framework health indicators report the difference as {@code DEGRADED}.
  *
  * <h2>Where the LISTEN connection comes from</h2>
  *
@@ -67,12 +98,29 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
   static final String CHANNEL = "streamrune_crypto_forget";
 
   private static final int GET_NOTIFICATIONS_TIMEOUT_MS = 500;
-  private static final long RECONNECT_BACKOFF_MS = 1000;
+
+  /** Silence after which the LISTEN connection is probed; see the class javadoc. */
+  static final long DEFAULT_LIVENESS_PROBE_INTERVAL_MS = 30_000;
+
+  /** How long a liveness probe may wait for the server's answer, in seconds. */
+  private static final int LIVENESS_PROBE_TIMEOUT_SECONDS = 5;
+
+  /** How long the listen loop waits before it borrows a connection again after one failed. */
+  static final long DEFAULT_RECONNECT_BACKOFF_MS = 1000;
 
   private final DataSource dataSource;
   private final Supplier<? extends DataSource> listenDataSourceFactory;
-  private final List<Consumer<String>> listeners = new CopyOnWriteArrayList<>();
+  private final long livenessProbeIntervalNanos;
+  private final long reconnectBackoffMs;
+  private final List<Subscriber> subscribers = new CopyOnWriteArrayList<>();
   private final AtomicBoolean running = new AtomicBoolean(false);
+
+  /**
+   * {@code true} while the listen thread holds a connection whose {@code LISTEN} took effect and
+   * whose subscribers have run {@code onListening} since.
+   */
+  private volatile boolean listening;
+
   private final Object lifecycle = new Object();
   private DataSource listenDataSource;
   private Thread listenerThread;
@@ -93,7 +141,7 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
    * Creates a channel that publishes through {@code dataSource} and listens on a connection of the
    * {@code DataSource} that {@code listenDataSourceFactory} returns.
    *
-   * <p>The factory runs once, on the first {@link #subscribe(Consumer)}: a channel nobody
+   * <p>The factory runs once, on the first {@link #subscribe(Consumer, Runnable)}: a channel nobody
    * subscribes to — e.g. when the cache is disabled — opens nothing. The channel owns what the
    * factory returns and closes it in {@link #close()} when it is {@link AutoCloseable}. Return a
    * pool dedicated to this channel, holding at most one connection, that validates a connection
@@ -111,13 +159,42 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
    */
   public PostgresCryptoForgetSignal(
       DataSource dataSource, Supplier<? extends DataSource> listenDataSourceFactory) {
+    this(
+        dataSource,
+        listenDataSourceFactory,
+        DEFAULT_LIVENESS_PROBE_INTERVAL_MS,
+        DEFAULT_RECONNECT_BACKOFF_MS);
+  }
+
+  /**
+   * As {@link #PostgresCryptoForgetSignal(DataSource, Supplier)}, with the silence after which the
+   * LISTEN connection is probed and the wait before a failed connection is replaced.
+   * Package-private: production uses 30 s and 1 s; tests shorten or lengthen them.
+   *
+   * @throws IllegalArgumentException if an argument is null or a duration is not positive
+   */
+  PostgresCryptoForgetSignal(
+      DataSource dataSource,
+      Supplier<? extends DataSource> listenDataSourceFactory,
+      long livenessProbeIntervalMs,
+      long reconnectBackoffMs) {
     if (listenDataSourceFactory == null) {
       throw new IllegalArgumentException("listenDataSourceFactory must not be null");
+    }
+    if (livenessProbeIntervalMs <= 0 || reconnectBackoffMs <= 0) {
+      throw new IllegalArgumentException(
+          "the liveness probe interval and the reconnect backoff must be positive, got "
+              + livenessProbeIntervalMs
+              + " ms and "
+              + reconnectBackoffMs
+              + " ms");
     }
     // Publish uses only the shared DataSource; the dedicated LISTEN pool is opened lazily on the
     // first subscribe, so merely constructing an unused channel allocates no connection.
     this.dataSource = requireDataSource(dataSource);
     this.listenDataSourceFactory = listenDataSourceFactory;
+    this.livenessProbeIntervalNanos = livenessProbeIntervalMs * 1_000_000L;
+    this.reconnectBackoffMs = reconnectBackoffMs;
   }
 
   private static DataSource requireDataSource(DataSource dataSource) {
@@ -145,10 +222,13 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
     }
   }
 
+  private record Subscriber(Consumer<String> onForget, Runnable onListening) {}
+
   @Override
-  public void subscribe(Consumer<String> listener) {
-    if (listener == null) throw new IllegalArgumentException("listener must not be null");
-    listeners.add(listener);
+  public void subscribe(Consumer<String> onForget, Runnable onListening) {
+    if (onForget == null) throw new IllegalArgumentException("listener must not be null");
+    if (onListening == null) throw new IllegalArgumentException("onListening must not be null");
+    subscribers.add(new Subscriber(onForget, onListening));
     // Start the single LISTEN loop on the first subscription (subsequent subscribers just share
     // it). Opening the dedicated LISTEN pool is best-effort: a DataSource the channel cannot open
     // one from (a test double, a proxied/wrapped source) degrades to publish-only + the write-TTL
@@ -184,7 +264,34 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
     }
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>{@code true} from the first subscribe until {@link #close()}, also when no LISTEN pool could
+   * be opened.
+   */
+  @Override
+  public boolean isSubscribed() {
+    return running.get();
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>{@code true} while the listen thread holds a connection on which {@code LISTEN} took effect
+   * and that has not failed since, once every subscriber's {@code onListening} has run on it — not
+   * while it connects or reconnects (from the moment the connection failed, or failed its liveness
+   * probe, through the wait before the next attempt), when no LISTEN pool could be opened, or after
+   * {@link #close()}. A connection whose server vanished silently counts as listening until its
+   * liveness probe fails (see the class javadoc).
+   */
+  @Override
+  public boolean isListening() {
+    return running.get() && listening;
+  }
+
   private void listenLoop(DataSource listenSource) {
+    boolean reconnecting = false;
     while (running.get()) {
       try (Connection conn = listenSource.getConnection()) {
         if (!conn.getAutoCommit()) {
@@ -195,38 +302,108 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
         try (var stmt = conn.createStatement()) {
           stmt.execute("LISTEN " + CHANNEL);
         }
-        receiveUntilStopped(conn.unwrap(PGConnection.class));
-      } catch (SQLException e) {
+        // The LISTEN has committed: every forget committed from here on is queued for this
+        // session. Only now may subscribers drop what they hold (see the class javadoc).
+        startedListening(reconnecting);
+        receiveUntilStopped(conn);
+      } catch (SQLException | RuntimeException e) {
+        // Not listening from the moment the connection failed: the backoff below is part of the
+        // time this replica cannot hear.
+        listening = false;
         if (running.get()) {
           log.warn(
               "Crypto-forget LISTEN connection on channel '{}' failed; reconnecting in {} ms",
               CHANNEL,
-              RECONNECT_BACKOFF_MS,
+              reconnectBackoffMs,
               e);
-          sleep(RECONNECT_BACKOFF_MS);
+          reconnecting = true;
+          sleep(reconnectBackoffMs);
         }
+      } finally {
+        listening = false;
       }
     }
   }
 
-  /** Dispatches every notification the LISTEN connection receives until the signal is closed. */
-  private void receiveUntilStopped(PGConnection pgConn) throws SQLException {
+  /**
+   * Runs every subscriber's {@code onListening} and then marks the channel listening. A callback
+   * that throws — an {@link Error} as well — is logged and stops neither the others nor the listen
+   * thread.
+   */
+  private void startedListening(boolean reconnecting) {
+    for (Subscriber subscriber : subscribers) {
+      try {
+        subscriber.onListening().run();
+      } catch (Throwable e) {
+        // An escaping Error would end the listen thread for good: the replica would stay deaf,
+        // never reconnect and never evict again.
+        log.warn("A crypto-forget subscriber threw while the channel started listening", e);
+      }
+    }
+    listening = true;
+    if (reconnecting) {
+      log.info(
+          "Crypto-forget LISTEN on channel '{}' re-established; its subscribers dropped what they"
+              + " cached while it could not hear",
+          CHANNEL);
+    }
+  }
+
+  /**
+   * Dispatches every notification the LISTEN connection receives until the signal is closed, and
+   * probes the connection after each {@link #DEFAULT_LIVENESS_PROBE_INTERVAL_MS probe interval} in
+   * which it delivered nothing.
+   *
+   * @throws SQLException when the connection fails, or fails its liveness probe
+   */
+  private void receiveUntilStopped(Connection conn) throws SQLException {
+    PGConnection pgConn = conn.unwrap(PGConnection.class);
+    long lastHeardNanos = System.nanoTime();
     while (running.get()) {
       PGNotification[] notifications = pgConn.getNotifications(GET_NOTIFICATIONS_TIMEOUT_MS);
-      if (notifications != null) {
+      if (notifications != null && notifications.length > 0) {
+        lastHeardNanos = System.nanoTime();
         for (PGNotification n : notifications) {
           dispatch(n.getParameter());
         }
+      } else if (System.nanoTime() - lastHeardNanos >= livenessProbeIntervalNanos) {
+        probe(conn);
+        lastHeardNanos = System.nanoTime();
       }
     }
   }
 
+  /**
+   * Proves a quiet LISTEN connection alive: a connection whose server vanished without closing it
+   * returns nothing from every wait for notifications and raises no error, so only a round trip
+   * that needs an answer can tell. A NOTIFY that arrives during the round trip is kept by the
+   * driver and returned by the next wait.
+   *
+   * @throws SQLException if the connection did not answer within the probe timeout; the connection
+   *     has been aborted, so its pool does not hand it out again
+   */
+  private void probe(Connection conn) throws SQLException {
+    if (conn.isValid(LIVENESS_PROBE_TIMEOUT_SECONDS)) {
+      return;
+    }
+    try {
+      conn.abort(Runnable::run);
+    } catch (SQLException | RuntimeException e) {
+      log.debug("Could not abort the crypto-forget LISTEN connection that failed its probe", e);
+    }
+    throw new SQLException(
+        "the crypto-forget LISTEN connection did not answer its liveness probe within "
+            + LIVENESS_PROBE_TIMEOUT_SECONDS
+            + " s",
+        "08006");
+  }
+
   private void dispatch(String token) {
-    for (Consumer<String> listener : listeners) {
+    for (Subscriber subscriber : subscribers) {
       try {
-        listener.accept(token);
-      } catch (RuntimeException e) {
-        // One misbehaving listener must not stop the others or wedge the listen loop.
+        subscriber.onForget().accept(token);
+      } catch (Throwable e) {
+        // One misbehaving listener must not stop the others or end the listen thread.
         log.warn("A crypto-forget listener threw while handling a token", e);
       }
     }
@@ -266,9 +443,11 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
    * would silently consume a slot). Tolerant of the common {@link DataSource} shapes — {@code
    * HikariDataSource}, {@code PGSimpleDataSource}, and other beans exposing the usual accessors.
    * Hikari validates a connection that sat idle when it is borrowed, so a broken LISTEN connection
-   * is replaced on the loop's next borrow.
+   * is replaced on the loop's next borrow. The driver's {@code tcpKeepAlive} is on (a {@code
+   * tcpKeepAlive} parameter in the JDBC URL takes precedence); the liveness probe is what finds a
+   * dead connection within seconds, the operating system's keepalive only after its own idle time.
    */
-  private static HikariDataSource createListenDataSource(DataSource dataSource) {
+  static HikariDataSource createListenDataSource(DataSource dataSource) {
     String jdbcUrl;
     String username = null;
     String password = null;
@@ -299,6 +478,7 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
     config.setConnectionTimeout(5000);
     config.setIdleTimeout(0); // never idle-close the LISTEN connection
     config.setMaxLifetime(0); // never recycle the LISTEN connection
+    config.addDataSourceProperty("tcpKeepAlive", "true");
     return new HikariDataSource(config);
   }
 
