@@ -84,7 +84,7 @@ spotless = "7.1.0"
 jmh-plugin = "0.7.3"
 graalvm = "0.10.6"
 versions-plugin = "0.54.0"
-version-catalog-update = "0.8.4"
+version-catalog-update = "1.1.1"
 
 [libraries]
 # Jackson
