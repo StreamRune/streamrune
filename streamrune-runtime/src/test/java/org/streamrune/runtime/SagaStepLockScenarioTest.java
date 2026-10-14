@@ -764,6 +764,10 @@ class SagaStepLockScenarioTest {
       p.bus.beforeEveryCommand =
           command -> {
             if (Thread.currentThread() == pollThread.get()) {
+              // The step unlocks the saga before it takes itself off the saga's entry, and the
+              // poll may claim and dispatch in between. Once the step has returned, the entry
+              // counts the poll alone.
+              assertThat(outcomeOf(step)).isNull();
               heldWhileThePollDispatches.add(p.lock.sagasInFlight());
             }
           };
