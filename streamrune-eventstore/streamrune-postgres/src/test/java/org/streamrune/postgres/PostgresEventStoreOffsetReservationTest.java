@@ -192,11 +192,13 @@ class PostgresEventStoreOffsetReservationTest {
 
     var order = org.mockito.Mockito.inOrder(conn, pinStmt, reservePs);
     order.verify(conn).setAutoCommit(false);
-    // The statement bound rides on the same round trip, transaction-scoped as well.
+    // The statement bound and the idle bound ride on the same round trip, transaction-scoped as
+    // well.
     order
         .verify(pinStmt)
         .execute(
-            "SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SET LOCAL statement_timeout = 30000");
+            "SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SET LOCAL statement_timeout = 30000;"
+                + " SET LOCAL idle_in_transaction_session_timeout = 30000");
     order.verify(reservePs).executeQuery();
     verify(conn, never()).setTransactionIsolation(org.mockito.ArgumentMatchers.anyInt());
   }

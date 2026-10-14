@@ -1004,7 +1004,8 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
         .tag(MetricNames.TAG_SAGA_TYPE, sagaType)
         .description(
             "Compensation episodes opened underneath a forward saga step that executed a command"
-                + " (a command of the step is stored before the compensation or after it)")
+                + " (with the forward fence on, each such command was stored before the episode"
+                + " opened; with it off, before the compensation or after it)")
         .register(registry)
         .increment();
   }
@@ -1059,7 +1060,8 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
         .tag(MetricNames.TAG_SAGA_TYPE, sagaType)
         .description(
             "Timeout claims not made because a step of the saga was in flight in the process,"
-                + " one per saga past its deadline that a poll passes over")
+                + " one per saga past its deadline that a poll passes over (with the forward fence"
+                + " on, until the poll's bounded wait has passed)")
         .register(registry)
         .increment();
   }

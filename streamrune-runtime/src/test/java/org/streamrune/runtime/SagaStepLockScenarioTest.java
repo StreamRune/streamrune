@@ -594,7 +594,9 @@ class SagaStepLockScenarioTest {
 
   @Test
   void aStepThatDoesNotReturn_theClaimWaitsItsBoundOnEveryPoll_warns_andIsNeverMadeUnderIt() {
-    try (var p = new SagaStepLockFixture(new SagaStepLock(), Duration.ofMillis(20))) {
+    // With the forward fence off; with it on the claim is made after the wait
+    // (SagaTimeoutRunnerFencedClaimTest).
+    try (var p = new SagaStepLockFixture(new SagaStepLock(), Duration.ofMillis(20), false)) {
       EventEnvelope opened = p.append(new Opened(ORDER));
       var stepAtItsCommand = new CountDownLatch(1);
       var letTheStepGo = new CountDownLatch(1);

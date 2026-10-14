@@ -96,6 +96,18 @@ final class StatementTimeout {
   }
 
   /**
+   * The statement that bounds how long the current transaction may sit idle between two statements:
+   * the same number of milliseconds, as {@code idle_in_transaction_session_timeout}. A transaction
+   * whose client goes silent past it is ended by the server, together with its session (SQLState
+   * {@code 25P03}), and everything it holds — row locks, advisory locks, an uncommitted inbox key —
+   * is released. Transaction-scoped like {@link #setLocalSql()}. Only meaningful when {@link
+   * #enabled()}.
+   */
+  String idleInTransactionSql() {
+    return "SET LOCAL idle_in_transaction_session_timeout = " + millis;
+  }
+
+  /**
    * Gives {@code statement} the bound as its JDBC query timeout; no-op when disabled. The driver's
    * own statement takes it in milliseconds; a statement that cannot be unwrapped to it (a proxy
    * that hides the driver) gets the standard whole-second timeout, rounded up so it is never

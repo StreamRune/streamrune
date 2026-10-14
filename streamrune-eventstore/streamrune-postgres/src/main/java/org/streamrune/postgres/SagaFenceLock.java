@@ -50,11 +50,11 @@ final class SagaFenceLock {
 
   private static final String LOCK_SHARED = "SELECT pg_advisory_xact_lock_shared(?, ?)";
 
-  /**
-   * The isolation pin and the exclusive lock; the two keys are {@code int}s, written as literals.
-   */
-  private static final String PIN_AND_LOCK_EXCLUSIVE =
-      "SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(%d, %d)";
+  /** The isolation pin; the first statement of a fence-changing write's transaction. */
+  private static final String PIN_READ_COMMITTED = "SET TRANSACTION ISOLATION LEVEL READ COMMITTED";
+
+  /** The exclusive lock; the two keys are {@code int}s, written as literals. */
+  private static final String LOCK_EXCLUSIVE = "SELECT pg_advisory_xact_lock(%d, %d)";
 
   private SagaFenceLock() {}
 
@@ -81,15 +81,28 @@ final class SagaFenceLock {
   }
 
   /**
-   * Pins {@code conn}'s open transaction to READ COMMITTED and takes the exclusive lock in it, in
-   * one round trip; waits for every holder. Must be the first statement of the transaction ({@code
-   * SET TRANSACTION} is refused after a query), so that the statements after it read the rows as
-   * they are once the lock is granted. The pin ends with the transaction.
+   * Pins {@code conn}'s open transaction to READ COMMITTED, bounds how long it may sit idle, and
+   * takes the exclusive lock in it, in one round trip; waits for every holder, for at most {@code
+   * bound} (the statement's JDBC query timeout: a wait that outlasts it is cancelled with SQLState
+   * {@code 57014}). The idle bound is {@code SET LOCAL idle_in_transaction_session_timeout}, the
+   * same number of milliseconds: a client that goes silent between this statement and its commit —
+   * holding the exclusive lock and, after its write, the row — has its session ended by the server
+   * (SQLState {@code 25P03}), which releases both. Must be the first statement of the transaction
+   * ({@code SET TRANSACTION} is refused after a query), so that the statements after it read the
+   * rows as they are once the lock is granted. The pin and the idle bound end with the transaction;
+   * a disabled {@code bound} sets neither bound.
    */
-  static void lockExclusive(Connection conn, SagaType sagaType, SagaId sagaId) throws SQLException {
+  static void lockExclusive(
+      Connection conn, SagaType sagaType, SagaId sagaId, StatementTimeout bound)
+      throws SQLException {
     try (Statement st = conn.createStatement()) {
+      bound.applyTo(st);
+      String lock =
+          String.format(Locale.ROOT, LOCK_EXCLUSIVE, CLASS_ID, objectId(sagaType, sagaId));
       st.execute(
-          String.format(Locale.ROOT, PIN_AND_LOCK_EXCLUSIVE, CLASS_ID, objectId(sagaType, sagaId)));
+          bound.enabled()
+              ? PIN_READ_COMMITTED + "; " + bound.idleInTransactionSql() + "; " + lock
+              : PIN_READ_COMMITTED + "; " + lock);
     }
   }
 }

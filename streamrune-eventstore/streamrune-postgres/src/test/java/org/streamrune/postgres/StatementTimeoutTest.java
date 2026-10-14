@@ -68,6 +68,13 @@ class StatementTimeoutTest {
   }
 
   @Test
+  void idleInTransactionSql_isTheSameBound() {
+    assertEquals(
+        "SET LOCAL idle_in_transaction_session_timeout = 1500",
+        StatementTimeout.of(Duration.ofMillis(1500)).idleInTransactionSql());
+  }
+
+  @Test
   void theDriversStatementTakesTheBoundInMilliseconds() throws Exception {
     PreparedStatement statement = mock(PreparedStatement.class);
     PgStatement driverStatement = mock(PgStatement.class);

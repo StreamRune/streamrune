@@ -6,6 +6,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -278,9 +279,25 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
 
   private final DataSource dataSource;
 
+  /**
+   * The bound of the {@code saga_state} statements and of the transactions that touch a saga row:
+   * {@link PostgresSagaStore#ROW_WRITE_TIMEOUT} unless a test names another.
+   */
+  private final StatementTimeout rowWriteTimeout;
+
   public PostgresSagaDeadLetterStore(DataSource dataSource) {
+    this(dataSource, PostgresSagaStore.ROW_WRITE_TIMEOUT);
+  }
+
+  /**
+   * A store whose {@code saga_state} statements and saga-row transactions wait at most {@code
+   * rowWriteTimeout}; for tests that reach the bound in less than {@link
+   * PostgresSagaStore#ROW_WRITE_TIMEOUT}.
+   */
+  PostgresSagaDeadLetterStore(DataSource dataSource, Duration rowWriteTimeout) {
     if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
     this.dataSource = dataSource;
+    this.rowWriteTimeout = StatementTimeout.of(rowWriteTimeout);
   }
 
   /**
@@ -336,6 +353,7 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
           c -> {
             upsertNamed(c, entry);
             try (var ps = c.prepareStatement(ASSERT_SHIELD)) {
+              rowWriteTimeout.applyTo(ps);
               ps.setString(1, entry.sagaId().value());
               ps.setString(2, entry.sagaType().value());
               ps.executeUpdate(); // 0 rows = absent row: the documented no-op
@@ -377,12 +395,23 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    * Error} from the rollback propagates once the connection is aborted. After a successful commit a
    * failing restore is reported, as before: the writes are durable and idempotent, so a rerun
    * converges.
+   *
+   * <p>The transaction's first statement bounds how long it may sit idle: {@code SET LOCAL
+   * idle_in_transaction_session_timeout}, the saga-row write bound. Both transactions of this store
+   * hold a saga row from their {@code saga_state} statement to their commit; a client that goes
+   * silent in between has its session ended by the server (SQLState {@code 25P03}), which releases
+   * the row, instead of holding it for as long as its connection lives.
    */
-  private static <T> T inTransaction(Connection conn, TransactionWork<T> work) throws SQLException {
+  private <T> T inTransaction(Connection conn, TransactionWork<T> work) throws SQLException {
     boolean autoCommit = conn.getAutoCommit();
     conn.setAutoCommit(false);
     boolean committed = false;
     try {
+      if (rowWriteTimeout.enabled()) {
+        try (var st = conn.createStatement()) {
+          st.execute(rowWriteTimeout.idleInTransactionSql());
+        }
+      }
       T result = work.run(conn);
       conn.commit();
       committed = true;
@@ -678,6 +707,7 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
           conn,
           c -> {
             try (var lock = c.prepareStatement(LOCK_SAGA_ROW)) {
+              rowWriteTimeout.applyTo(lock);
               lock.setString(1, sagaId.value());
               lock.setString(2, sagaType.value());
               try (var rs = lock.executeQuery()) {
@@ -689,6 +719,7 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
               }
             }
             try (var ps = c.prepareStatement(CLEAR_SHIELD_IF_DRAINED)) {
+              rowWriteTimeout.applyTo(ps);
               ps.setString(1, sagaId.value());
               ps.setString(2, sagaType.value());
               return ps.executeUpdate() > 0;

@@ -127,6 +127,12 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `streamrune.event-store.statement-timeout`, 30 seconds by default, `0` for none — per transaction
   (`SET LOCAL statement_timeout`) or per statement (the JDBC query timeout), never on the pooled
   session.
+- **Idle bound of an append.** An append transaction also sets `SET LOCAL
+  idle_in_transaction_session_timeout` to the statement bound, in the same round trip: a client
+  that goes silent inside an append — paused, or cut off from the database without its connection
+  closing — has its session ended by the server at the bound, which releases the command's inbox
+  key, a saga's shared fence lock and the global offset counter. Transaction-scoped, so it works
+  behind a transaction-pooling PgBouncer. A statement bound of `0` sets neither bound.
 - Store writes commit correctly on a pool configured with `auto-commit=false` as well as with the
   default: the store commits after its statement and rolls back on failure, leaving the pool's
   setting untouched. This covers the outbox, offsets, snapshots, dead letters, saga state, leases,
@@ -555,28 +561,46 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   entry point through which an integration applies a default to runners that named none. The
   in-memory stores fence when the `InMemorySagaStore` is wired into the `InMemoryEventStore` with
   `withSagaStore`.
+- Saga-row write bound: every `UPDATE` and `DELETE` of `saga_state` by `PostgresSagaStore`, the
+  exclusive fence-lock statement before a fence-changing one, and the `saga_state` statements of
+  `PostgresSagaDeadLetterStore` (the shield writes and the row lock of the shield clear) carry a
+  5-second JDBC query timeout (SQLState `57014` past it, an `EventStoreException` its caller
+  retries). The transactions that hold a saga row across statements — a write that stamps, ends or
+  deletes a saga, and the dead-letter store's two shield transactions — set `SET LOCAL
+  idle_in_transaction_session_timeout` to the same 5 s, so a writer that goes silent before its
+  commit releases the fence lock and the row within 5 s. On a pool that hands out `autoCommit=false`
+  connections every single-statement saga write, inserts included, sets the same idle bound as its
+  transaction's first statement. A claim behind a forward
+  append that went silent waits at most 5 s and is made by a later poll once the append's idle bound
+  ended it, so a saga's deadline is late by at most one statement timeout plus one poll interval on
+  any number of processes. Behind PgBouncer in transaction mode the cancel is forwarded to the
+  linked server connection.
 - `SagaTimeoutRunner` names its step lock: `Builder.sagaRunner(runner)` shares the runner's, and
   `build()` refuses a builder that names neither `sagaRunner(...)` nor `stepLock(...)`. A lock of
   its own, `stepLock(new SagaStepLock())`, is the explicit choice of a timeout runner that claims
   underneath a step in flight (no `SagaRunner` of the saga type in the process, or the deadline is
-  to win). A bound runner makes a deferred claim on the first poll that finds the saga free, waits
-  for the step (5 s, in arrival order) once three polls in a row passed the saga over, and never
-  claims underneath a step that does not return: each such poll logs a WARN and counts
-  `saga.timeout_claims_deferred`, and the `saga-timeout:<saga type>` health component reads
-  `DEGRADED`. A deferred saga takes no slot of the batch — the poll reads two more ids for each one,
+  to win). A bound runner makes a deferred claim on the first poll that finds the saga free, and
+  waits for the step (5 s, in arrival order) once three polls in a row passed the saga over. When
+  the wait passes with the step still in flight, a runner bound to a `SagaRunner` whose forward
+  fence is on makes the claim underneath the step, at INFO: the step's later forward commands are
+  refused at their commit and the step resumes the episode. With the fence off, or a lock wired
+  with `stepLock(...)`, it never claims underneath a step that does not return: each such poll logs
+  a WARN and counts `saga.timeout_claims_deferred`, and the `saga-timeout:<saga type>` health
+  component reads `DEGRADED`. A deferred saga takes no slot of the batch — the poll reads two more ids for each one,
   up to three times `batchSize` — so other sagas past their deadline are claimed in the same poll.
 - A compensation episode opened underneath a forward step that executed a command is reported. A
   step that executed at least one forward command that stored events in a call (a command the inbox
   answered is not counted), whose write after the forward loop or whose own claim is then refused,
   and whose row carries a compensation episode without recording the step's event as applied, logs
-  one WARN — saga type, saga id, event offset, number of commands executed — and counts one
+  one line — saga type, saga id, event offset, number of commands executed — and counts one
   `saga.compensation_under_forward_step` sample. This covers the claims the step lock does not hold
   back: a timeout runner on another node or one given a lock of its own, a delivery on another
   node, and a step nested on the thread of the step that loses. The report does not know the order
   in which the step's command and the compensation were stored — before it, which a cancel/void
   compensation covers, or after it, which nothing undoes — so each sample is a saga whose target
   aggregates are to be inspected. With the forward fence on, a command dispatched after the claim
-  is refused, so a sample means commands stored before the compensation. A twin delivery that lost an ordinary race and a later event that
+  is refused, so a sample means commands stored before the episode opened, and the line is an INFO
+  that says the compensation has to cover them; the WARN is kept for a runner with the fence off. A twin delivery that lost an ordinary race and a later event that
   opens no episode are not reported; neither is a step that never reaches a write after a late
   command, nor a step whose own claim loses to a twin of the same event whose rejection did not
   repeat. The report changes no outcome and reads the row once, on a path that has already lost

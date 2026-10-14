@@ -353,14 +353,19 @@ public final class MetricNames {
    * the write (a timeout claim the step lock does not hold back — a timeout runner on another node,
    * or one given a lock of its own —, a delivery on another node whose own command was rejected, a
    * step nested on the thread of that step) makes that write lose its compare-and-swap. The
-   * compensation is computed from a state that does not include the step. The sample says that this
-   * happened and that the step executed commands in that window; it does not say in which order a
-   * command and the compensation were stored. A command stored before the compensation ran is what
-   * a cancel/void compensation covers; one stored after it is undone by nothing. Counted when the
-   * step executed at least one forward command that stored events in that call (a command the inbox
+   * compensation is computed from a state that does not include the step. Counted when the step
+   * executed at least one forward command that stored events in that call (a command the inbox
    * answered is not counted), its write or its own claim was refused, and the row then carries an
-   * episode stamp and does not record the step's event as applied. Each sample names a saga whose
-   * target aggregates should be inspected for an effect its compensation did not undo.
+   * episode stamp and does not record the step's event as applied.
+   *
+   * <p>With the runner's forward fence on, each command the sample counts was stored before the
+   * episode opened — a later one is refused at its commit ({@link #SAGA_FORWARD_COMMANDS_FENCED}) —
+   * so the compensation has to cover it, as a cancel/void compensation does; the step's report is
+   * an INFO line and the sample needs no action. With the fence off the sample does not say in
+   * which order a command and the compensation were stored: one stored after the compensation ran
+   * is undone by nothing, the report is a WARN, and each sample names a saga whose target
+   * aggregates should be inspected for an effect its compensation did not undo — alert on it for
+   * those runners.
    */
   public static final String SAGA_COMPENSATION_UNDER_FORWARD_STEP =
       "streamrune.saga.compensation_under_forward_step";
@@ -407,12 +412,15 @@ public final class MetricNames {
    * Timeout claims the {@code SagaTimeoutRunner} did not make because a step of the saga was in
    * flight in its process: one sample for each saga past its deadline that a poll passes over,
    * tagged by {@link #TAG_SAGA_TYPE}. A claim at a deadline is not made underneath a delivery that
-   * is dispatching that saga's forward commands; the saga stays selected and is claimed by the
-   * first poll that finds it free. A few samples around a deadline are a delivery that happened to
-   * be in flight. A rate that persists is a step that has not returned — one forward command that
-   * hangs, or attempts that follow each other without a gap — and a deadline that is not enforced
-   * in that process meanwhile; the runner's health component reads {@code DEGRADED} then. A restart
-   * of the process ends such a step and frees its lock.
+   * is dispatching that saga's forward commands while the poll has not yet waited its bounded wait
+   * for it; the saga stays selected and is claimed by the first poll that finds it free. A few
+   * samples around a deadline are a delivery that happened to be in flight. With the forward fence
+   * of the saga's runner on, the samples of one saga stop at the bounded wait: the poll that waited
+   * claims underneath the step. With the fence off, or for a timeout runner built with a step lock
+   * alone, a rate that persists is a step that has not returned — one forward command that hangs,
+   * or attempts that follow each other without a gap — and a deadline that is not enforced in that
+   * process meanwhile; the runner's health component reads {@code DEGRADED} then. A restart of the
+   * process ends such a step and frees its lock.
    */
   public static final String SAGA_TIMEOUT_CLAIMS_DEFERRED =
       "streamrune.saga.timeout_claims_deferred";
