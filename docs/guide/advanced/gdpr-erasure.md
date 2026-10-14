@@ -266,12 +266,29 @@ flight while the cache is evicted does not leave its result cached either.
 health indicators report the `crypto-forget-listen` component `DEGRADED` while it does not (see
 [the production guide](../production.md#health-checks)).
 
+A LISTEN connection whose server vanished without closing it (a crashed host, an instance replaced
+behind a virtual IP) raises no error: it only stops delivering. So after 30 seconds without a
+notification the replica asks its LISTEN connection to answer, and waits at most 5 seconds. A
+connection that does not answer is closed and replaced like a lost one: the replica reports
+`DEGRADED`, listens again on a new connection and evicts its whole cache. Until that probe fails —
+about 35 seconds after the last thing it heard — the replica still reports that it listens and
+serves what it cached; the eviction when it listens again ends that.
+
+Every time the LISTEN connection comes back, the whole plaintext cache goes. A connection that keeps
+dropping and reconnecting (it retries every second) therefore also keeps the cache cold: every
+decrypt goes to the key store. A `crypto-forget-listen` component that keeps switching between
+`DEGRADED` and `UP` is worth investigating for that reason too.
+
 **What the TTL still bounds.** A replica whose `LISTEN` never takes effect (below) serves its cache
 until the write TTL. A forget delivered late — the notification is delayed between the database and
 a listening replica — is applied when it arrives, and that replica serves the subject from its cache
-until then. A LISTEN connection whose server vanished without closing it (a crashed host, an
-instance replaced behind a virtual IP) raises no error: the replica keeps reporting that it listens
-while it hears nothing, and serves what it misses until the write TTL.
+until then. A LISTEN connection through a transaction-pooling proxy (PgBouncer in transaction mode)
+is the case the replica cannot see: its `LISTEN` returns normally and its probe is answered, but the
+proxy hands each statement to whichever server connection is free, so the notifications never reach
+it. The replica reports that it listens, `crypto-forget-listen` reads `UP`, and it serves what peers
+forget until the write TTL. The LISTEN connection must reach PostgreSQL directly or through a
+session-pooling proxy; when the application's `DataSource` goes through a transaction pooler, hand
+the signal a LISTEN pool of its own that does not (below).
 
 `PostgresCryptoForgetSignal` publishes on a connection borrowed from the `DataSource` and listens on
 one connection of its own: a dedicated pool of one connection per replica, never a slot of the

@@ -74,6 +74,14 @@ import org.streamrune.core.types.SubjectId;
  * gone. A decrypt that read the key just before a peer's forget therefore cannot leave the
  * plaintext cached after the eviction that forget caused.
  *
+ * <p>That argument assumes two things of the delegate, which the shipped engines (PostgreSQL,
+ * filesystem, Vault, AWS KMS) meet: it holds no cache of key material of its own, and each decrypt
+ * reads the key, or the subject's tombstone, afresh and sees every deletion committed before the
+ * read — a new statement under {@code READ COMMITTED}, a file read, a remote call. A delegate that
+ * caches keys, or whose reads join an application transaction at {@code REPEATABLE READ} or {@code
+ * SERIALIZABLE} that began before the forget, can still find the key after the eviction and cache
+ * the plaintext again; the write-TTL ceiling then bounds it.
+ *
  * <p><b>Decrypt/deleteKey race (crypto-shredding must not resurrect plaintext).</b> The cache-miss
  * path in {@link #decrypt} is check-cache -&gt; call delegate -&gt; populate cache; without
  * coordination, a {@link #deleteKey(SubjectId)} racing between the delegate call and the cache

@@ -705,8 +705,14 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   evicts its whole plaintext cache, so a subject a peer forgot while that replica could not hear is
   read from the key store again; a decrypt in flight across an eviction does not stay cached.
   `CryptoForgetSignal.isListening()` says whether the replica hears, and the `crypto-forget-listen`
-  health component reads `DEGRADED` while it does not. `streamrune.crypto.cache.enabled=false` skips
-  the cache.
+  health component reads `DEGRADED` while it does not. A LISTEN connection that stops answering
+  (its server vanished without closing it) is found by a liveness probe after 30 s of silence and
+  replaced. `streamrune.crypto.cache.enabled=false` skips the cache.
+- `CryptoForgetSignal` SPI: `subscribe(Consumer<String> onForget, Runnable onListening)` is the one
+  method to implement besides `publish` — `onListening` runs each time the channel starts hearing,
+  before any token heard from then on, and the one-argument `subscribe(onForget)` is a default that
+  passes a no-op. `isSubscribed()` and `isListening()` report the listening side (both default to
+  `false`); a custom channel is reported by `crypto-forget-listen` only when it implements them.
 - `ForgetSubjectService.forget(subjectId, requestedBy)` deletes the key first, then runs every
   registered `SubjectDataPurger` (a failing purger is audited and counted on
   `streamrune.gdpr.purge_failed`, the rest still run), then evicts the query cache (a failed

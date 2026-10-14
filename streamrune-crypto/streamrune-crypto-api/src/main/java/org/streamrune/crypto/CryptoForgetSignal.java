@@ -80,7 +80,9 @@ public interface CryptoForgetSignal extends AutoCloseable {
    * Whether this channel has a listening side on this replica that a subscriber started: {@code
    * true} from the first {@link #subscribe(Consumer, Runnable)} until {@link #close()}, also while
    * that side cannot hear. {@code false} for a channel without one, such as {@link #NOOP}. Health
-   * reporting covers a channel for which this is {@code true}.
+   * reporting covers a channel for which this is {@code true}, and only such a channel: an
+   * implementation with a listening side must override this method and {@link #isListening()}, or
+   * the framework health indicators never report it.
    *
    * @return whether a listening side was started and not closed
    */
