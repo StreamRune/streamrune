@@ -1,6 +1,8 @@
 package org.streamrune.core;
 
 import java.util.List;
+import org.streamrune.core.saga.SagaForwardFencedException;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
@@ -287,6 +289,65 @@ public interface EventStore {
       String commandType) {
     throw new UnsupportedOperationException(
         "This EventStore does not support idempotent append (command inbox)");
+  }
+
+  /**
+   * {@link #appendWithKey(StreamId, List, Version, IdempotencyKey, String)} for a saga's forward
+   * command, fenced against the saga's row when {@code forwardOf} is not {@code null}.
+   *
+   * <p><b>The fence.</b> When {@code idempotencyKey} is not yet claimed, the store reads the row of
+   * the saga {@code forwardOf} names inside the append's own transaction, under a lock that every
+   * write which stamps a compensation episode on that row, ends the saga or removes the row
+   * conflicts with, and holds the lock until the transaction commits or rolls back. It refuses the
+   * append with {@link SagaForwardFencedException} when the row carries an episode stamp, is
+   * terminal ({@code COMPLETED}, {@code COMPENSATED}, {@code FAILED}), is of another saga type, or
+   * is gone. A refused append stores nothing: no event, no inbox row (the key stays unclaimed), no
+   * outbox or audit row. Every forward append of a saga therefore commits wholly before the write
+   * that opens its compensation episode, or is refused. An empty {@code events} list is fenced too:
+   * claiming the key is a durable effect.
+   *
+   * <p>A key that is already claimed is answered from the inbox before the fence is read, exactly
+   * as the five-argument method answers it: the command it records committed earlier, and its
+   * result stands.
+   *
+   * <p>With {@code forwardOf == null} this is the five-argument method, unfenced.
+   *
+   * <p>The default delegates to the five-argument method when {@code forwardOf} is {@code null} and
+   * throws {@link UnsupportedOperationException} otherwise: a store that reports no saga rows
+   * ({@link #sagaFenceStorageIdentity()} is {@code null}) cannot fence, and must not append
+   * unfenced on a fenced call.
+   *
+   * @param forwardOf the saga whose forward command this append stores, or {@code null} for an
+   *     unfenced append
+   * @throws SagaForwardFencedException if the saga has left its forward phase
+   * @throws UnsupportedOperationException if {@code forwardOf} is given and the store cannot fence
+   */
+  default IdempotentAppendResult appendWithKey(
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      IdempotencyKey idempotencyKey,
+      String commandType,
+      SagaOrigin forwardOf) {
+    if (forwardOf == null) {
+      return appendWithKey(streamId, events, expectedVersion, idempotencyKey, commandType);
+    }
+    throw new UnsupportedOperationException(
+        getClass().getName()
+            + " cannot fence a saga's forward command: it reports no saga rows"
+            + " to read (sagaFenceStorageIdentity() is null)");
+  }
+
+  /**
+   * Identity of the saga rows this store fences a saga's forward command against (see {@link
+   * #appendWithKey(StreamId, List, Version, IdempotencyKey, String, SagaOrigin)}), compared with
+   * {@link org.streamrune.core.saga.SagaStore#storageIdentity()}: equal values mean the store reads
+   * the rows that saga store writes. {@code null} when the store cannot fence. Cheap, no I/O.
+   *
+   * <p>Defaults to {@code null}.
+   */
+  default Object sagaFenceStorageIdentity() {
+    return null;
   }
 
   /**

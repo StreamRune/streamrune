@@ -5,6 +5,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,6 +61,17 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * in {@code V001__streamrune_baseline.sql} refuses any row that is {@code COMPENSATING}, or {@code
  * FAULTED} out of {@code COMPENSATING}, without both halves of the stamp, and any row that names a
  * cause without a stamp.
+ *
+ * <p><b>The forward fence.</b> {@code PostgresEventStore} refuses a saga's forward command once the
+ * saga's row carries an episode stamp, is terminal or is gone, reading the row after taking the
+ * saga's shared fence lock ({@link SagaFenceLock}). Every write here that can bring a row to one of
+ * those states — {@link #update}, {@link #applyEvent} and {@link #claimCompensating} landing at
+ * {@code COMPENSATING} or a terminal status, and {@link #delete} — takes the saga's exclusive fence
+ * lock in the same transaction before its statement, so each forward append of the saga commits
+ * wholly before the write or reads what it wrote. The other writes cannot change the fence's
+ * verdict and stay single statements: an insert creates a row the fence refused as absent, {@link
+ * #markFaulted} keeps the stamp and is not terminal, and the dead-letter shield is not part of the
+ * verdict.
  *
  * <p><b>Failure taxonomy.</b> Every write path converts the state to JSON <em>before</em> it
  * acquires a pooled connection, and every path reports the two failure classes distinctly:
@@ -170,28 +182,31 @@ public final class PostgresSagaStore implements SagaStore {
   // pre_fault_status = NULL on every plain CAS write -- a completed write means the
   // row no longer resumes from a fault. claimCompensating is this statement with status =
   // COMPENSATING: the stamp rides in EPISODE_STAMP_SET.
-  private static final String UPDATE_CAS =
-      "UPDATE saga_state SET status = ?, state_json = ?::jsonb, "
-          + "version = saga_state.version + 1, updated_at = NOW(), "
-          + "pre_fault_status = NULL, "
-          + EPISODE_STAMP_SET
-          + "WHERE saga_id = ? AND saga_type = ? AND version = ?"
-          + TERMINAL_FILTER;
+  private static final FenceChangingWrite UPDATE_CAS =
+      new FenceChangingWrite(
+          "UPDATE saga_state SET status = ?, state_json = ?::jsonb, "
+              + "version = saga_state.version + 1, updated_at = NOW(), "
+              + "pre_fault_status = NULL, "
+              + EPISODE_STAMP_SET
+              + "WHERE saga_id = ? AND saga_type = ? AND version = ?"
+              + TERMINAL_FILTER);
 
   // The event CAS -- like UPDATE_CAS but also maintains the three live/replay
   // recovery facts: genesis_applied (OR'd with startPath, never cleared), last_applied_offset
   // (a running maximum -- the live redelivery dedup), and last_replayed_offset (set exactly, not
   // maxed, only when replayRedrive -- the replay drain's feed->discard crash dedup).
-  private static final String APPLY_EVENT =
-      "UPDATE saga_state SET status = ?, state_json = ?::jsonb, "
-          + "version = saga_state.version + 1, updated_at = NOW(), "
-          + "pre_fault_status = NULL, "
-          + "genesis_applied = saga_state.genesis_applied OR ?, "
-          + "last_applied_offset = GREATEST(COALESCE(saga_state.last_applied_offset, -1), ?), "
-          + "last_replayed_offset = CASE WHEN ? THEN ? ELSE saga_state.last_replayed_offset END, "
-          + EPISODE_STAMP_SET
-          + "WHERE saga_id = ? AND saga_type = ? AND version = ?"
-          + TERMINAL_FILTER;
+  private static final FenceChangingWrite APPLY_EVENT =
+      new FenceChangingWrite(
+          "UPDATE saga_state SET status = ?, state_json = ?::jsonb, "
+              + "version = saga_state.version + 1, updated_at = NOW(), "
+              + "pre_fault_status = NULL, "
+              + "genesis_applied = saga_state.genesis_applied OR ?, "
+              + "last_applied_offset = GREATEST(COALESCE(saga_state.last_applied_offset, -1), ?), "
+              + "last_replayed_offset = CASE WHEN ? THEN ? ELSE saga_state.last_replayed_offset"
+              + " END, "
+              + EPISODE_STAMP_SET
+              + "WHERE saga_id = ? AND saga_type = ? AND version = ?"
+              + TERMINAL_FILTER);
 
   // One statement: the CTE snapshots the prior status under FOR UPDATE so the RETURNING clause
   // can report whether this write TRANSITIONED into FAULTED (prior <> 'FAULTED') or merely
@@ -234,9 +249,10 @@ public final class PostgresSagaStore implements SagaStore {
   private static final String SELECT_TYPE = "SELECT saga_type FROM saga_state WHERE saga_id = ?";
 
   // Type-scoped delete. A row owned by a different saga_type is NOT removed, so a
-  // cross-type SagaId collision cannot delete another type's state.
-  private static final String DELETE_BY_TYPE =
-      "DELETE FROM saga_state WHERE saga_id = ? AND saga_type = ?";
+  // cross-type SagaId collision cannot delete another type's state. A fence-changing write: a
+  // forward command of a saga whose row is gone is refused.
+  private static final FenceChangingWrite DELETE_BY_TYPE =
+      new FenceChangingWrite("DELETE FROM saga_state WHERE saga_id = ? AND saga_type = ?");
 
   // The timeout scan serves two populations, each in its own deadline order (see
   // SagaStore#findTimedOut):
@@ -555,18 +571,26 @@ public final class PostgresSagaStore implements SagaStore {
     String json = serialize(sagaId, state);
     boolean entersEpisode = status == SagaStatus.COMPENSATING;
     int updated;
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(UPDATE_CAS)) {
-      ps.setString(1, status.name());
-      ps.setString(2, json);
-      ps.setBoolean(3, entersEpisode);
-      ps.setBoolean(4, entersEpisode);
-      ps.setBoolean(5, entersEpisode);
-      ps.setString(6, causeValue(episodeCause));
-      ps.setString(7, sagaId.value());
-      ps.setString(8, sagaType.value());
-      ps.setLong(9, expectedVersion);
-      updated = PostgresTransactions.commitIfManual(conn, "saga update", c -> ps.executeUpdate());
+    try {
+      updated =
+          fenceChangingWrite(
+              UPDATE_CAS,
+              sagaId,
+              sagaType,
+              leavesForwardPhase(status),
+              "saga update",
+              ps -> {
+                ps.setString(1, status.name());
+                ps.setString(2, json);
+                ps.setBoolean(3, entersEpisode);
+                ps.setBoolean(4, entersEpisode);
+                ps.setBoolean(5, entersEpisode);
+                ps.setString(6, causeValue(episodeCause));
+                ps.setString(7, sagaId.value());
+                ps.setString(8, sagaType.value());
+                ps.setLong(9, expectedVersion);
+                return ps.executeUpdate();
+              });
     } catch (Exception e) {
       throw new EventStoreException(failureMessage + forLog(sagaId), e);
     }
@@ -594,24 +618,31 @@ public final class PostgresSagaStore implements SagaStore {
     String json = serialize(sagaId, state);
     boolean entersEpisode = status == SagaStatus.COMPENSATING; // the episode stamp rule
     int updated;
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(APPLY_EVENT)) {
-      ps.setString(1, status.name());
-      ps.setString(2, json);
-      ps.setBoolean(3, applied.startPath());
-      ps.setLong(4, eventOffset);
-      ps.setBoolean(5, applied.replayRedrive());
-      ps.setLong(6, eventOffset);
-      ps.setBoolean(7, entersEpisode);
-      ps.setBoolean(8, entersEpisode);
-      ps.setBoolean(9, entersEpisode);
-      // The applied event is the cause of an episode this write opens.
-      ps.setString(10, causeValue(applied.eventId()));
-      ps.setString(11, sagaId.value());
-      ps.setString(12, sagaType.value());
-      ps.setLong(13, expectedVersion);
+    try {
       updated =
-          PostgresTransactions.commitIfManual(conn, "saga apply event", c -> ps.executeUpdate());
+          fenceChangingWrite(
+              APPLY_EVENT,
+              sagaId,
+              sagaType,
+              leavesForwardPhase(status),
+              "saga apply event",
+              ps -> {
+                ps.setString(1, status.name());
+                ps.setString(2, json);
+                ps.setBoolean(3, applied.startPath());
+                ps.setLong(4, eventOffset);
+                ps.setBoolean(5, applied.replayRedrive());
+                ps.setLong(6, eventOffset);
+                ps.setBoolean(7, entersEpisode);
+                ps.setBoolean(8, entersEpisode);
+                ps.setBoolean(9, entersEpisode);
+                // The applied event is the cause of an episode this write opens.
+                ps.setString(10, causeValue(applied.eventId()));
+                ps.setString(11, sagaId.value());
+                ps.setString(12, sagaType.value());
+                ps.setLong(13, expectedVersion);
+                return ps.executeUpdate();
+              });
     } catch (Exception e) {
       throw new EventStoreException("Failed to apply event to saga state: " + forLog(sagaId), e);
     }
@@ -698,6 +729,100 @@ public final class PostgresSagaStore implements SagaStore {
         expectedVersion,
         episodeCause,
         "Failed to claim compensating saga: ");
+  }
+
+  /**
+   * A {@code saga_state} write that can take a saga out of its forward phase: stamp a compensation
+   * episode, land a terminal status, or delete the row. It runs only through {@link
+   * #fenceChangingWrite}, which takes the saga's exclusive fence lock first; {@code
+   * SagaStateWriteRatchetTest} fails the build for a {@code saga_state} write that can do any of
+   * the three and is declared otherwise.
+   */
+  private record FenceChangingWrite(String sql) {}
+
+  /** Binds and executes the prepared statement of a {@link FenceChangingWrite}. */
+  @FunctionalInterface
+  private interface StatementWork<T> {
+    T run(PreparedStatement ps) throws SQLException;
+  }
+
+  /**
+   * Whether a write landing the row at {@code status} can take the saga out of its forward phase:
+   * {@code COMPENSATING} stamps the episode (unless the row already carries a stamp), a terminal
+   * status ends the saga. Every other status leaves the fence's verdict as it is.
+   */
+  private static boolean leavesForwardPhase(SagaStatus status) {
+    return status == SagaStatus.COMPENSATING || status.isTerminal();
+  }
+
+  /**
+   * The one path of every {@link FenceChangingWrite}. When {@code leavesForwardPhase} is true the
+   * statement runs in a transaction that first takes the saga's exclusive fence lock ({@link
+   * SagaFenceLock#lockExclusive}): it waits for every forward append of the saga in flight (each
+   * holds the shared lock from before its read of the row until its commit), and every forward
+   * append that arrives later waits for this transaction and then reads the row it wrote. Each
+   * forward append of the saga therefore commits wholly before this write or reads its result. When
+   * it is false the statement cannot change the fence's verdict and runs alone, as every other
+   * write of this store does.
+   *
+   * <p>The transaction is pinned to READ COMMITTED by its first statement, for the reason {@code
+   * PostgresEventStore} pins its append transaction: the compare-and-swap must evaluate {@code
+   * version = ?} against the row as it is once the lock is granted, not against a snapshot taken
+   * before the wait, which under a REPEATABLE READ default would report a stale view (or a
+   * serialization failure) for a row another unfenced write touched meanwhile. The pin is
+   * transaction-scoped, so the pooled connection's session keeps its own isolation.
+   *
+   * <p>The transaction holds the fence lock, then the row's lock; it takes no other lock, so it
+   * cannot close a cycle with a fenced append (inbox key, fence lock, offset counter). The row's
+   * lock may be held by a single-statement write of this store or by a dead-letter-store
+   * transaction (its dead-letter rows, then this row, {@code FOR UPDATE} or updated); neither takes
+   * a fence lock.
+   */
+  private <T> T fenceChangingWrite(
+      FenceChangingWrite write,
+      SagaId sagaId,
+      SagaType sagaType,
+      boolean leavesForwardPhase,
+      String transaction,
+      StatementWork<T> work)
+      throws SQLException {
+    try (Connection conn = dataSource.getConnection()) {
+      if (!leavesForwardPhase) {
+        try (PreparedStatement ps = conn.prepareStatement(write.sql())) {
+          return PostgresTransactions.commitIfManual(conn, transaction, c -> work.run(ps));
+        }
+      }
+      boolean autoCommit = conn.getAutoCommit();
+      conn.setAutoCommit(false);
+      boolean committed = false;
+      try {
+        SagaFenceLock.lockExclusive(conn, sagaType, sagaId);
+        T result;
+        try (PreparedStatement ps = conn.prepareStatement(write.sql())) {
+          result = work.run(ps);
+        }
+        conn.commit();
+        committed = true;
+        return result;
+      } finally {
+        // The single rollback point, BEFORE autoCommit is restored: pgjdbc's setAutoCommit(true)
+        // commits an open transaction. A failed rollback aborts the physical connection.
+        if (committed) {
+          conn.setAutoCommit(autoCommit);
+        } else if (PostgresTransactions.rollbackOrAbort(conn, transaction)) {
+          restoreAutoCommitQuietly(conn, autoCommit);
+        }
+      }
+    }
+  }
+
+  /** Restores autoCommit after a rollback, without replacing the exception in flight. */
+  private static void restoreAutoCommitQuietly(Connection conn, boolean autoCommit) {
+    try {
+      conn.setAutoCommit(autoCommit);
+    } catch (SQLException | RuntimeException restoreFailure) {
+      // the pool resets autoCommit on return; the exception in flight is what matters
+    }
   }
 
   /** The bind value of an episode cause: the event id's text, or SQL {@code NULL} for none. */
@@ -813,11 +938,18 @@ public final class PostgresSagaStore implements SagaStore {
   @Override
   public void delete(SagaId sagaId, SagaType sagaType) {
     requireKey(sagaId, sagaType);
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(DELETE_BY_TYPE)) {
-      ps.setString(1, sagaId.value());
-      ps.setString(2, sagaType.value());
-      PostgresTransactions.commitIfManual(conn, "saga delete", c -> ps.executeUpdate());
+    try {
+      fenceChangingWrite(
+          DELETE_BY_TYPE,
+          sagaId,
+          sagaType,
+          true,
+          "saga delete",
+          ps -> {
+            ps.setString(1, sagaId.value());
+            ps.setString(2, sagaType.value());
+            return ps.executeUpdate();
+          });
     } catch (Exception e) {
       throw new EventStoreException("Failed to delete saga state: " + forLog(sagaId), e);
     }

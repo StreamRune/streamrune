@@ -8,6 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.crypto.SubjectForgottenException;
+import org.streamrune.core.saga.SagaForwardFencedException;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.types.SagaType;
 
 /**
  * The one classifier both the dead letter queue and the circuit breaker derive from. Its whole
@@ -53,6 +57,22 @@ class CommandFailureClassificationTest {
     assertTrue(CommandFailureClassification.isPermanentRejection(refusal));
     assertFalse(CommandFailureClassification.DLQ_ELIGIBLE.test(refusal));
     assertFalse(CommandFailureClassification.BREAKER_ELIGIBLE.test(refusal));
+  }
+
+  @Test
+  void aFencedForwardCommandIsAPermanentRejection() {
+    // The saga row left its forward phase: the episode stamp and a terminal status are absorbing,
+    // so the same command is refused on every retry and every replay.
+    var refusal =
+        new SagaForwardFencedException(
+            SagaOrigin.dispatchedBy(SagaType.of("orders.Fulfillment"), SagaId.of("saga-1")));
+
+    assertTrue(CommandFailureClassification.PERMANENT_REJECTION.test(refusal));
+    assertFalse(CommandFailureClassification.DLQ_ELIGIBLE.test(refusal));
+    assertFalse(CommandFailureClassification.BREAKER_ELIGIBLE.test(refusal));
+    assertFalse(
+        CommandFailureClassification.isPermanentRejection(new EventStoreException("x", refusal)),
+        "top level only, like the other rejections a store or the bus raises itself");
   }
 
   @Test

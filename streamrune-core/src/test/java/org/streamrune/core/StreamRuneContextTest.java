@@ -21,6 +21,7 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.TraceId;
@@ -1126,5 +1127,74 @@ class StreamRuneContextTest {
         observedCause.get());
     assertEquals(event.metadata().correlationId(), observedContext.get().correlationId());
     assertNull(observedContext.get().userId());
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The forward command of a saga in dispatch
+  // ---------------------------------------------------------------------------------------------
+
+  private static final IdempotencyKey FORWARD_KEY = IdempotencyKey.of("saga:fwd-1:cmd:0");
+
+  @Test
+  void sagaForwardOf_isNullWhenNothingIsBound() {
+    assertFalse(StreamRuneContext.SAGA_FORWARD.isBound());
+    assertNull(StreamRuneContext.sagaForwardOf(FORWARD_KEY));
+  }
+
+  @Test
+  void sagaForwardOf_answersOnlyForTheBoundKey() {
+    ScopedValue.where(
+            StreamRuneContext.SAGA_FORWARD, new StreamRuneContext.SagaForward(ORIGIN, FORWARD_KEY))
+        .run(
+            () -> {
+              assertSame(ORIGIN, StreamRuneContext.sagaForwardOf(FORWARD_KEY));
+              assertSame(
+                  ORIGIN,
+                  StreamRuneContext.sagaForwardOf(IdempotencyKey.of(FORWARD_KEY.value())),
+                  "keys compare by value");
+              assertNull(
+                  StreamRuneContext.sagaForwardOf(IdempotencyKey.of("nested-command-key")),
+                  "a nested keyed command does not inherit the fence of the forward command");
+            });
+    ScopedValue.where(StreamRuneContext.SAGA_FORWARD, null)
+        .run(() -> assertNull(StreamRuneContext.sagaForwardOf(FORWARD_KEY)));
+  }
+
+  @Test
+  void sagaForwardOf_isNullForANullKey() {
+    ScopedValue.where(
+            StreamRuneContext.SAGA_FORWARD, new StreamRuneContext.SagaForward(ORIGIN, FORWARD_KEY))
+        .run(() -> assertNull(StreamRuneContext.sagaForwardOf(null)));
+  }
+
+  @Test
+  void aSagaForwardNeedsAnOriginAndAKey() {
+    var noOrigin =
+        assertThrows(
+            NullPointerException.class, () -> new StreamRuneContext.SagaForward(null, FORWARD_KEY));
+    assertEquals("origin is required", noOrigin.getMessage());
+    var noKey =
+        assertThrows(
+            NullPointerException.class, () -> new StreamRuneContext.SagaForward(ORIGIN, null));
+    assertEquals("key is required", noKey.getMessage());
+  }
+
+  @Test
+  void wrap_doesNotCarryTheSagaForward() throws Exception {
+    AtomicReference<Object> observed = new AtomicReference<>("unset");
+    Runnable wrapped =
+        ScopedValue.where(StreamRuneContext.CAUSE, BOUND_CAUSE)
+            .where(
+                StreamRuneContext.SAGA_FORWARD,
+                new StreamRuneContext.SagaForward(ORIGIN, FORWARD_KEY))
+            .call(
+                () ->
+                    StreamRuneContext.wrap(
+                        () -> observed.set(StreamRuneContext.sagaForwardOf(FORWARD_KEY))));
+    Thread thread = new Thread(wrapped);
+    thread.start();
+    thread.join();
+
+    assertNull(observed.get(), "the marker names one dispatch on one thread");
   }
 }

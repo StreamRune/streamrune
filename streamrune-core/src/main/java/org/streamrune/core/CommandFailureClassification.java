@@ -2,6 +2,7 @@ package org.streamrune.core;
 
 import java.util.function.Predicate;
 import org.streamrune.core.crypto.SubjectForgottenException;
+import org.streamrune.core.saga.SagaForwardFencedException;
 
 /**
  * The single answer to "what does this command failure say about the system?" — split along two
@@ -24,7 +25,8 @@ import org.streamrune.core.crypto.SubjectForgottenException;
  *   <tr><th>family</th><th>DLQ-eligible</th><th>breaker-eligible</th><th>caller sees</th></tr>
  *   <tr><td>permanent rejection ({@link #isPermanentRejection}: {@link DomainException},
  *       top-level {@link IllegalArgumentException}, top-level {@link
- *       ReservedCorrelationIdException}, {@link SubjectForgottenException} anywhere)
+ *       ReservedCorrelationIdException}, top-level {@link SagaForwardFencedException}, {@link
+ *       SubjectForgottenException} anywhere)
  *       </td><td>no</td><td>no</td><td>the typed rejection</td></tr>
  *   <tr><td>deterministic per-aggregate stored-data failure ({@link #isDeterministicPerAggregate}:
  *       {@link EventDeserializationException} / {@link UnknownEventTypeException} anywhere)</td>
@@ -66,6 +68,11 @@ import org.streamrune.core.crypto.SubjectForgottenException;
  *   <li>top-level {@link ReservedCorrelationIdException} — the dispatch ran under a reserved
  *       correlation id that is not its saga origin's, a wiring error of the code that bound the
  *       context. A retry or a replay under the same bindings is refused again;
+ *   <li>top-level {@link SagaForwardFencedException} — the event store refused a saga's forward
+ *       command because the saga left its forward phase: its row carries a compensation episode
+ *       stamp, is terminal, or is gone. Each is final for that row (a stamp is never cleared, a
+ *       terminal saga never resumes), so a retry or a replay is refused again, and the refusal says
+ *       nothing about the health of the infrastructure;
  *   <li>{@link SubjectForgottenException} anywhere in the cause chain — the subject's key was
  *       crypto-shredded by a GDPR erasure and the engine refuses to re-encrypt. No retry can ever
  *       succeed, and dead-lettering it would persist the subject's identifier in {@code
@@ -112,6 +119,7 @@ public final class CommandFailureClassification {
     return error instanceof DomainException
         || error instanceof IllegalArgumentException
         || error instanceof ReservedCorrelationIdException
+        || error instanceof SagaForwardFencedException
         || hasSubjectForgottenCause(error);
   }
 

@@ -243,6 +243,18 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     return commandInbox != null;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>The event store's {@link EventStore#sagaFenceStorageIdentity()}: this bus hands every keyed
+   * append the saga origin of the forward command it stores ({@link
+   * StreamRuneContext#sagaForwardOf}), and the event store fences it.
+   */
+  @Override
+  public Object sagaFenceStorageIdentity() {
+    return eventStore.sagaFenceStorageIdentity();
+  }
+
   @Override
   public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
     Objects.requireNonNull(key, "idempotencyKey is required");
@@ -1127,7 +1139,15 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       String commandType) {
     long startNanos = System.nanoTime();
     try {
-      return eventStore.appendWithKey(streamId, envelopes, expectedVersion, key, commandType);
+      // The saga to fence this append against: set only for the key of the saga forward command
+      // whose dispatch bound it, so a keyed command nested inside that command is not fenced.
+      return eventStore.appendWithKey(
+          streamId,
+          envelopes,
+          expectedVersion,
+          key,
+          commandType,
+          StreamRuneContext.sagaForwardOf(key));
     } finally {
       recordAppendDuration(envelopes, startNanos);
     }

@@ -8,6 +8,7 @@ import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.IdConstraints;
+import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
 
@@ -99,6 +100,51 @@ public final class StreamRuneContext {
    */
   public static DispatchCause cause() {
     return CAUSE.isBound() ? CAUSE.get() : null;
+  }
+
+  /**
+   * A saga's forward command in dispatch: the saga, and the idempotency key of that one command.
+   *
+   * @param origin the saga whose forward command is dispatched
+   * @param key the idempotency key the command is executed under
+   */
+  public record SagaForward(SagaOrigin origin, IdempotencyKey key) {
+
+    public SagaForward {
+      Objects.requireNonNull(origin, "origin is required");
+      Objects.requireNonNull(key, "key is required");
+    }
+  }
+
+  /**
+   * Bound by saga dispatch around a saga's forward command, and around no other command: not around
+   * a compensation command, not by {@link #continuing(EventEnvelope)}. The command bus asks it,
+   * through {@link #sagaForwardOf(IdempotencyKey)}, which saga to fence the keyed append of that
+   * command against: the event store then refuses the append once the saga has left its forward
+   * phase (see {@code EventStore.appendWithKey} with a {@link SagaOrigin}).
+   *
+   * <p>It names one command on one thread: {@link #wrap(Runnable)}, {@link #wrap(Callable)} and
+   * {@code VirtualThreadCommandBus.executeAsync} do not carry it, and it answers only for the key
+   * it names, so a keyed command dispatched inside the forward command (by an interceptor or an
+   * inline projection) is not fenced on the saga's behalf.
+   */
+  public static final ScopedValue<SagaForward> SAGA_FORWARD = ScopedValue.newInstance();
+
+  /**
+   * The saga to fence the keyed append of {@code key} against, or {@code null}: answers only for
+   * the bound key.
+   *
+   * @param key the idempotency key of the command whose append is about to run
+   * @return the bound {@link SagaForward#origin()} when {@link #SAGA_FORWARD} is bound to a value
+   *     whose key equals {@code key}; {@code null} when {@code key} is {@code null}, nothing (or
+   *     {@code null}) is bound, or the bound marker names another key
+   */
+  public static SagaOrigin sagaForwardOf(IdempotencyKey key) {
+    if (key == null || !SAGA_FORWARD.isBound()) {
+      return null;
+    }
+    SagaForward forward = SAGA_FORWARD.get();
+    return forward != null && forward.key().equals(key) ? forward.origin() : null;
   }
 
   /**

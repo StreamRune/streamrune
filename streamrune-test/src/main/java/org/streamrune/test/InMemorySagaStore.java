@@ -10,10 +10,15 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.saga.LoadedSaga;
+import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
@@ -41,6 +46,18 @@ import org.streamrune.core.types.SagaType;
  * unless the entry already carries a stamp; {@link #claimCompensating} is the CAS with that status.
  * The write that stamps the episode also records the cause it is given ({@code
  * episodeCauseEventId}); every other write copies the recorded cause unchanged.
+ *
+ * <p><b>The forward fence.</b> An {@link InMemoryEventStore} wired with {@link
+ * InMemoryEventStore#withSagaStore(InMemorySagaStore)} fences a saga's forward command against this
+ * store's entries, as {@code PostgresEventStore} fences it against {@code saga_state}. Each saga id
+ * has a fair read-write lock: the fenced append holds the read lock from its check of the entry
+ * until its events and inbox row are stored; every write of an existing entry — {@link #update},
+ * {@link #applyEvent}, {@link #claimCompensating}, {@link #markFaulted}, {@link
+ * #setDeadLetterPending}, {@link #delete} — takes the write lock (a superset of the writes {@code
+ * PostgresSagaStore} fences: those that can stamp an episode, end the saga or delete its row). A
+ * claim therefore lands wholly before or wholly after a fenced append, and, the lock being fair, a
+ * queued claim is not overtaken by later fenced appends. Lock order: the event store's append lock,
+ * then a saga's read lock; a write here takes only the saga's write lock.
  */
 public final class InMemorySagaStore implements SagaStore {
 
@@ -78,6 +95,10 @@ public final class InMemorySagaStore implements SagaStore {
   }
 
   private final Map<SagaId, SagaEntry> store = new ConcurrentHashMap<>();
+
+  /** One fair read-write lock per saga id, created on first use and never removed. */
+  private final Map<SagaId, ReentrantReadWriteLock> rowLocks = new ConcurrentHashMap<>();
+
   private final Clock clock;
 
   /** Creates a store reading time from {@link Clock#systemUTC()}. */
@@ -210,6 +231,23 @@ public final class InMemorySagaStore implements SagaStore {
       AppliedEvent applied,
       EventId episodeCause) {
     requireArgs(sagaId, sagaType, state, status);
+    Lock writeLock = rowLock(sagaId).writeLock();
+    writeLock.lock();
+    try {
+      casUpdateLocked(sagaId, sagaType, state, status, expectedVersion, applied, episodeCause);
+    } finally {
+      writeLock.unlock();
+    }
+  }
+
+  private void casUpdateLocked(
+      SagaId sagaId,
+      SagaType sagaType,
+      SagaState state,
+      SagaStatus status,
+      long expectedVersion,
+      AppliedEvent applied,
+      EventId episodeCause) {
     store.compute(
         sagaId,
         (id, entry) -> {
@@ -257,6 +295,16 @@ public final class InMemorySagaStore implements SagaStore {
   @Override
   public boolean markFaulted(SagaId sagaId, SagaType sagaType, long expectedVersion) {
     requireKey(sagaId, sagaType);
+    Lock writeLock = rowLock(sagaId).writeLock();
+    writeLock.lock();
+    try {
+      return markFaultedLocked(sagaId, sagaType, expectedVersion);
+    } finally {
+      writeLock.unlock();
+    }
+  }
+
+  private boolean markFaultedLocked(SagaId sagaId, SagaType sagaType, long expectedVersion) {
     boolean[] transitioned = new boolean[1];
     store.compute(
         sagaId,
@@ -303,6 +351,16 @@ public final class InMemorySagaStore implements SagaStore {
   @Override
   public void setDeadLetterPending(SagaId sagaId, SagaType sagaType, boolean pending) {
     requireKey(sagaId, sagaType);
+    Lock writeLock = rowLock(sagaId).writeLock();
+    writeLock.lock();
+    try {
+      setDeadLetterPendingLocked(sagaId, sagaType, pending);
+    } finally {
+      writeLock.unlock();
+    }
+  }
+
+  private void setDeadLetterPendingLocked(SagaId sagaId, SagaType sagaType, boolean pending) {
     store.computeIfPresent(
         sagaId,
         (id, entry) ->
@@ -343,7 +401,45 @@ public final class InMemorySagaStore implements SagaStore {
     requireKey(sagaId, sagaType);
     // Only remove the row if this saga type owns it, so a cross-type SagaId collision
     // cannot delete another type's state.
-    store.computeIfPresent(sagaId, (id, entry) -> entry.sagaType().equals(sagaType) ? null : entry);
+    Lock writeLock = rowLock(sagaId).writeLock();
+    writeLock.lock();
+    try {
+      store.computeIfPresent(
+          sagaId, (id, entry) -> entry.sagaType().equals(sagaType) ? null : entry);
+    } finally {
+      writeLock.unlock();
+    }
+  }
+
+  /**
+   * Runs {@code append} under the read lock of the saga {@code forwardOf} names, after checking
+   * that the saga is in its forward phase: the in-memory counterpart of the fence read {@code
+   * PostgresEventStore} runs inside a forward command's append transaction. The read lock is held
+   * until {@code append} returns or throws, so a write that stamps an episode or ends the saga
+   * waits for it.
+   *
+   * @throws SagaForwardFencedException when the entry is absent, of another saga type, carries an
+   *     episode stamp, or is terminal; {@code append} is not run then
+   */
+  <T> T underForwardFence(SagaOrigin forwardOf, Supplier<T> append) {
+    Lock readLock = rowLock(forwardOf.sagaId()).readLock();
+    readLock.lock();
+    try {
+      SagaEntry entry = store.get(forwardOf.sagaId());
+      if (entry == null
+          || !entry.sagaType().equals(forwardOf.sagaType())
+          || entry.episodeVersion() != null
+          || entry.status().isTerminal()) {
+        throw new SagaForwardFencedException(forwardOf);
+      }
+      return append.get();
+    } finally {
+      readLock.unlock();
+    }
+  }
+
+  private ReentrantReadWriteLock rowLock(SagaId sagaId) {
+    return rowLocks.computeIfAbsent(sagaId, id -> new ReentrantReadWriteLock(true));
   }
 
   @Override
