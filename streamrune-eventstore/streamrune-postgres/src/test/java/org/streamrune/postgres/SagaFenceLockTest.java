@@ -3,11 +3,18 @@ package org.streamrune.postgres;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.Statement;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -32,6 +39,35 @@ class SagaFenceLockTest {
         SagaFenceLock.objectId(SagaType.of("fence.Saga"), SagaId.of("saga-1")),
         SagaFenceLock.objectId(SagaType.of("fence.Other"), SagaId.of("saga-1")),
         "the type is part of the key");
+  }
+
+  /**
+   * The exclusive lock's statement, as the saga store sends it: the isolation pin first, the
+   * transaction's idle bound when the row-write bound is set, the lock last — one round trip.
+   */
+  @Test
+  void theExclusiveLockStatementPinsTheIsolationBoundsTheIdleTimeAndLocks() throws Exception {
+    SagaType type = SagaType.of("fence.Saga");
+    SagaId id = SagaId.of("saga-1");
+    String lock = "SELECT pg_advisory_xact_lock(1397901126, 1173324710)";
+
+    Connection bounded = mock(Connection.class);
+    Statement boundedStatement = mock(Statement.class);
+    when(bounded.createStatement()).thenReturn(boundedStatement);
+    SagaFenceLock.lockExclusive(bounded, type, id, StatementTimeout.of(Duration.ofMillis(5000)));
+    verify(boundedStatement)
+        .execute(
+            "SET TRANSACTION ISOLATION LEVEL READ COMMITTED;"
+                + " SET LOCAL idle_in_transaction_session_timeout = 5000; "
+                + lock);
+    verify(boundedStatement).setQueryTimeout(5);
+
+    Connection unbounded = mock(Connection.class);
+    Statement unboundedStatement = mock(Statement.class);
+    when(unbounded.createStatement()).thenReturn(unboundedStatement);
+    SagaFenceLock.lockExclusive(unbounded, type, id, StatementTimeout.DISABLED);
+    verify(unboundedStatement).execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED; " + lock);
+    verify(unboundedStatement, never()).setQueryTimeout(org.mockito.ArgumentMatchers.anyInt());
   }
 
   /**

@@ -191,6 +191,90 @@ class PostgresSagaStoreRowWriteTimeoutTest {
     }
   }
 
+  /**
+   * On a pool that hands out {@code autoCommit=false} connections a single-statement write runs in
+   * a transaction the driver opens implicitly and the store commits one round trip later. A writer
+   * that goes silent in that gap — its update written, its commit not sent — is ended by the
+   * transaction's idle bound: the row is free again within the bound, a claim of the saga lands,
+   * the silent call fails, and the pool hands out a working connection.
+   */
+  @Test
+  void aWriterSilentBeforeItsCommitOnAManualCommitPoolIsEndedAtTheBound() throws Exception {
+    try (HikariDataSource pool = manualCommitPool("silent-writer")) {
+      PausingDataSource pausing = new PausingDataSource(pool);
+      PostgresSagaStore silent =
+          new PostgresSagaStore(pausing, mapper(), Duration.ofMillis(BOUND_MILLIS));
+      PausingDataSource.Pause pause = pausing.pauseBeforeCommit();
+      CompletableFuture<Void> writing =
+          CompletableFuture.runAsync(
+              () -> silent.update(ID, TYPE, new BoundState("next"), SagaStatus.RUNNING, 1L));
+      pause.awaitPaused();
+      long idleSince = System.nanoTime();
+
+      awaitNoBackendNamed("silent-writer", BOUND_MILLIS + SLACK_MILLIS, idleSince);
+      claim(1L);
+      assertThat(store.load(ID, TYPE, BoundState.class).orElseThrow().episodeVersion())
+          .as("the claim lands on the row the silent write did not commit")
+          .isEqualTo(2L);
+
+      pause.release();
+      assertThat(catchFailure(writing)).isInstanceOf(EventStoreException.class);
+      assertThat(silent.load(ID, TYPE, BoundState.class))
+          .as("the pool hands out a working connection")
+          .isPresent();
+    }
+  }
+
+  /**
+   * A start event is delivered by every replica: on a manual-commit pool, a replica silent between
+   * its genesis insert and its commit holds the new row's id; another replica's insert of the same
+   * saga waits for it at most the bound, then inserts.
+   */
+  @Test
+  void anInsertBehindASilentUncommittedInsertOnAManualCommitPoolWaitsAtMostTheBound()
+      throws Exception {
+    SagaId twin = SagaId.of("bounded-saga-twin");
+    try (HikariDataSource pool = manualCommitPool("silent-insert")) {
+      PausingDataSource pausing = new PausingDataSource(pool);
+      PostgresSagaStore silent =
+          new PostgresSagaStore(pausing, mapper(), Duration.ofMillis(BOUND_MILLIS));
+      PausingDataSource.Pause pause = pausing.pauseBeforeCommit();
+      CompletableFuture<Void> inserting =
+          CompletableFuture.runAsync(
+              () ->
+                  silent.createGenesisPending(
+                      twin, TYPE, new BoundState("s"), SagaStatus.STARTED, false, null));
+      pause.awaitPaused();
+      long idleSince = System.nanoTime();
+
+      Throwable twinsInsert =
+          failureWithinCap(
+              () ->
+                  store.createGenesisPending(
+                      twin, TYPE, new BoundState("s"), SagaStatus.STARTED, false, null));
+      long waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - idleSince);
+      assertThat(twinsInsert).as("the other replica's insert lands").isNull();
+      assertThat(waited).isLessThan(BOUND_MILLIS + SLACK_MILLIS);
+
+      pause.release();
+      assertThat(catchFailure(inserting)).isInstanceOf(EventStoreException.class);
+    }
+  }
+
+  private static HikariDataSource manualCommitPool(String applicationName) {
+    PGSimpleDataSource physical = new PGSimpleDataSource();
+    physical.setUrl(PG.getJdbcUrl());
+    physical.setUser(PG.getUsername());
+    physical.setPassword(PG.getPassword());
+    physical.setApplicationName(applicationName);
+    HikariConfig config = new HikariConfig();
+    config.setDataSource(physical);
+    config.setMaximumPoolSize(1);
+    config.setConnectionTimeout(5_000);
+    config.setAutoCommit(false);
+    return new HikariDataSource(config);
+  }
+
   @Test
   void aWriteThatKeepsTheForwardPhaseFailsAtItsBoundBehindAHeldRow() throws Exception {
     holdTheRow();
@@ -384,7 +468,7 @@ class PostgresSagaStoreRowWriteTimeoutTest {
   }
 
   /** Records every statement its connections execute; the statements stay the driver's own. */
-  private static DataSource recording(DataSource delegate, List<Executed> executed) {
+  static DataSource recording(DataSource delegate, List<Executed> executed) {
     return (DataSource)
         Proxy.newProxyInstance(
             DataSource.class.getClassLoader(),

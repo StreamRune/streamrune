@@ -568,7 +568,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   retries). The transactions that hold a saga row across statements — a write that stamps, ends or
   deletes a saga, and the dead-letter store's two shield transactions — set `SET LOCAL
   idle_in_transaction_session_timeout` to the same 5 s, so a writer that goes silent before its
-  commit releases the fence lock and the row within 5 s. A claim behind a forward
+  commit releases the fence lock and the row within 5 s. On a pool that hands out `autoCommit=false`
+  connections every single-statement saga write, inserts included, sets the same idle bound as its
+  transaction's first statement. A claim behind a forward
   append that went silent waits at most 5 s and is made by a later poll once the append's idle bound
   ended it, so a saga's deadline is late by at most one statement timeout plus one poll interval on
   any number of processes. Behind PgBouncer in transaction mode the cancel is forwarded to the

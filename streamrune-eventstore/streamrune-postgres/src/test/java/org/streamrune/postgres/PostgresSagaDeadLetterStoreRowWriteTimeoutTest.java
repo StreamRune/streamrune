@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -165,6 +166,52 @@ class PostgresSagaDeadLetterStoreRowWriteTimeoutTest {
     pause.release();
     Throwable thrown = catchFailure(clearing);
     assertThat(thrown).isInstanceOf(EventStoreException.class);
+  }
+
+  /**
+   * Which statements carry the bound, read from the driver's own statement as it executes: the
+   * shield writes and the row lock of the clear — every statement of this store that updates or
+   * locks a {@code saga_state} row — and none of the entry writes and reads.
+   */
+  @Test
+  void theSagaRowStatementsCarryTheBound_theEntryStatementsDoNot() {
+    List<PostgresSagaStoreRowWriteTimeoutTest.Executed> executed = new CopyOnWriteArrayList<>();
+    PostgresSagaDeadLetterStore recorded =
+        new PostgresSagaDeadLetterStore(
+            PostgresSagaStoreRowWriteTimeoutTest.recording(dataSource, executed),
+            Duration.ofMillis(BOUND_MILLIS));
+
+    recorded.publishShielded(entry(1));
+    recorded.publish(entry(2));
+    recorded.findBySaga(ID);
+    recorded.clearShieldIfDrained(ID, TYPE);
+    recorded.discard(ID, TYPE, GlobalOffset.of(1));
+    recorded.discard(ID, TYPE, GlobalOffset.of(2));
+    assertThat(recorded.clearShieldIfDrained(ID, TYPE)).isTrue();
+
+    List<String> bounded =
+        executed.stream()
+            .filter(e -> e.timeoutMillis() == BOUND_MILLIS)
+            .map(PostgresSagaStoreRowWriteTimeoutTest.Executed::sql)
+            .toList();
+    List<String> unbounded =
+        executed.stream()
+            .filter(e -> e.timeoutMillis() == 0)
+            .map(PostgresSagaStoreRowWriteTimeoutTest.Executed::sql)
+            .toList();
+    assertThat(bounded.size() + unbounded.size()).isEqualTo(executed.size());
+    assertThat(bounded)
+        .as("the shield write, and the row lock and the conditional clear, twice")
+        .hasSize(5)
+        .allMatch(sql -> sql.contains("saga_state"))
+        .anyMatch(sql -> sql.startsWith("UPDATE saga_state SET dead_letter_pending = TRUE"))
+        .anyMatch(sql -> sql.startsWith("UPDATE saga_state SET dead_letter_pending = FALSE"))
+        .anyMatch(sql -> sql.endsWith("FOR UPDATE"));
+    assertThat(unbounded)
+        .as("entry writes, reads, and the idle bound itself")
+        .isNotEmpty()
+        .noneMatch(sql -> sql.contains("UPDATE saga_state"))
+        .noneMatch(sql -> sql.contains("FROM saga_state") && sql.endsWith("FOR UPDATE"));
   }
 
   // ---------------------------------------------------------------------------------------------

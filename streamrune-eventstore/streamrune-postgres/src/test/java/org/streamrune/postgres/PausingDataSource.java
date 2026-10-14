@@ -22,6 +22,9 @@ import javax.sql.DataSource;
  *       connections whose SQL starts with the prefix parks its calling thread before the driver
  *       sees the statement, until {@link Pause#release()}. The transaction's backend is then
  *       <em>idle in transaction</em>, holding everything its earlier statements took.
+ *   <li>{@link #pauseBeforeCommit()}: the next {@code commit()} on any of the wrapper's connections
+ *       parks its calling thread before the driver sends it, until {@link Pause#release()}; the
+ *       transaction's backend is then idle in transaction, holding what its statements took.
  *   <li>{@link #failCommitAfterDelegating(String)}: the first {@code commit()} of a transaction
  *       that prepared a statement starting with the prefix is delegated — the transaction commits —
  *       and then throws a {@link SQLException} with SQLState {@code 08006}, as a connection lost
@@ -72,6 +75,7 @@ final class PausingDataSource implements DataSource {
   private final DataSource delegate;
   private final AtomicReference<Pause> armedPause = new AtomicReference<>();
   private final AtomicReference<String> commitFailurePrefix = new AtomicReference<>();
+  private final AtomicReference<Pause> armedCommitPause = new AtomicReference<>();
 
   PausingDataSource(DataSource delegate) {
     this.delegate = delegate;
@@ -81,6 +85,13 @@ final class PausingDataSource implements DataSource {
   Pause pauseBefore(String sqlPrefix) {
     Pause pause = new Pause(sqlPrefix);
     armedPause.set(pause);
+    return pause;
+  }
+
+  /** Arms a one-shot pause before the next commit of any of the wrapper's connections. */
+  Pause pauseBeforeCommit() {
+    Pause pause = new Pause("COMMIT");
+    armedCommitPause.set(pause);
     return pause;
   }
 
@@ -139,6 +150,10 @@ final class PausingDataSource implements DataSource {
         transactionSql.setLength(0);
       }
       if (name.equals("commit")) {
+        Pause commitPause = armedCommitPause.getAndSet(null);
+        if (commitPause != null) {
+          commitPause.park();
+        }
         Object result = call(method, args);
         String prefix = commitFailurePrefix.get();
         boolean fail =

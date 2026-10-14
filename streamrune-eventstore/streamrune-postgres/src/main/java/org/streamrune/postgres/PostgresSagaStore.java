@@ -6,6 +6,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -85,12 +86,14 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * own transaction carries the same five seconds as its idle bound ({@code SET LOCAL
  * idle_in_transaction_session_timeout}, in the round trip of its lock statement): a writer that
  * goes silent between its lock and its commit has its session ended by the server and releases the
- * fence lock and the row. {@code PostgresSagaDeadLetterStore} bounds its {@code saga_state}
- * statements and the transactions that hold a saga row the same way. Behind a transaction-pooling
- * PgBouncer the cancel request is forwarded to the server connection the client is linked to. Reads
- * and inserts carry no bound of the store's own: {@code SELECT … FOR UPDATE SKIP LOCKED} never
- * waits, and an insert that does nothing on conflict waits only for an uncommitted insert of the
- * same id.
+ * fence lock and the row. On a pool that hands out {@code autoCommit=false} connections every
+ * single-statement write — an insert included — runs in a transaction the store commits one round
+ * trip after the statement, and that transaction sets the same idle bound first. {@code
+ * PostgresSagaDeadLetterStore} bounds its {@code saga_state} statements and the transactions that
+ * hold a saga row the same way. Behind a transaction-pooling PgBouncer the cancel request is
+ * forwarded to the server connection the client is linked to. Reads and inserts carry no bound of
+ * the store's own: {@code SELECT … FOR UPDATE SKIP LOCKED} never waits, and an insert that does
+ * nothing on conflict waits only for an uncommitted insert of the same id.
  *
  * <p><b>Failure taxonomy.</b> Every write path converts the state to JSON <em>before</em> it
  * acquires a pooled connection, and every path reports the two failure classes distinctly:
@@ -554,7 +557,13 @@ public final class PostgresSagaStore implements SagaStore {
           ps.setString(9, causeValue(episodeCause)); // written only when the row is born stamped
         }
         inserted =
-            PostgresTransactions.commitIfManual(conn, "saga create", c -> ps.executeUpdate());
+            PostgresTransactions.commitIfManual(
+                conn,
+                "saga create",
+                c -> {
+                  boundIdleIfManual(c);
+                  return ps.executeUpdate();
+                });
       }
       if (inserted == 0) {
         // ON CONFLICT DO NOTHING → a row already exists. Read its type: a DIFFERENT type is a
@@ -709,6 +718,7 @@ public final class PostgresSagaStore implements SagaStore {
           conn,
           "saga mark faulted",
           c -> {
+            boundIdleIfManual(c);
             try (ResultSet rs = ps.executeQuery()) {
               if (!rs.next()) {
                 throw staleView(sagaId, expectedVersion);
@@ -739,7 +749,13 @@ public final class PostgresSagaStore implements SagaStore {
       ps.setString(3, sagaType.value());
       rowWriteTimeout.applyTo(ps);
       // 0 rows = absent row: the documented no-op
-      PostgresTransactions.commitIfManual(conn, "saga dead-letter shield", c -> ps.executeUpdate());
+      PostgresTransactions.commitIfManual(
+          conn,
+          "saga dead-letter shield",
+          c -> {
+            boundIdleIfManual(c);
+            return ps.executeUpdate();
+          });
     } catch (Exception e) {
       throw new EventStoreException("Failed to set saga dead-letter shield: " + forLog(sagaId), e);
     }
@@ -835,7 +851,13 @@ public final class PostgresSagaStore implements SagaStore {
       if (!leavesForwardPhase) {
         try (PreparedStatement ps = conn.prepareStatement(write.sql())) {
           rowWriteTimeout.applyTo(ps);
-          return PostgresTransactions.commitIfManual(conn, transaction, c -> work.run(ps));
+          return PostgresTransactions.commitIfManual(
+              conn,
+              transaction,
+              c -> {
+                boundIdleIfManual(c);
+                return work.run(ps);
+              });
         }
       }
       boolean autoCommit = conn.getAutoCommit();
@@ -860,6 +882,26 @@ public final class PostgresSagaStore implements SagaStore {
           restoreAutoCommitQuietly(conn, autoCommit);
         }
       }
+    }
+  }
+
+  /**
+   * The idle bound of a single-statement write on a connection the pool hands out with {@code
+   * autoCommit=false}: there the driver opens a transaction implicitly on the statement and {@link
+   * PostgresTransactions#commitIfManual} commits it one round trip later, so the row (or a new
+   * row's id) is held from the statement to the commit. The transaction's first statement sets
+   * {@code SET LOCAL idle_in_transaction_session_timeout} to the row-write bound, so a writer that
+   * goes silent in that gap has its session ended by the server and releases the row. Nothing is
+   * sent on an {@code autoCommit=true} connection, where the statement commits itself, or when the
+   * bound is disabled. Run inside the work of {@code commitIfManual}, so a failure of it is rolled
+   * back like a failure of the write.
+   */
+  private void boundIdleIfManual(Connection conn) throws SQLException {
+    if (conn.getAutoCommit() || !rowWriteTimeout.enabled()) {
+      return;
+    }
+    try (Statement st = conn.createStatement()) {
+      st.execute(rowWriteTimeout.idleInTransactionSql());
     }
   }
 
