@@ -27,6 +27,7 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
@@ -149,6 +150,9 @@ final class SagaStepLockFixture implements AutoCloseable {
   static final class OrderSaga implements SagaDecider<State> {
     volatile boolean startAlsoShips;
 
+    /** While set, {@code evolve} throws: the event is poison on its next evolve. */
+    volatile boolean evolveThrows;
+
     @Override
     public Class<State> stateType() {
       return State.class;
@@ -161,6 +165,9 @@ final class SagaStepLockFixture implements AutoCloseable {
 
     @Override
     public State evolve(State state, EventEnvelope event) {
+      if (evolveThrows) {
+        throw new IllegalStateException("evolve fails on purpose");
+      }
       return new State(
           event.event() instanceof Completed ? SagaStatus.COMPLETED : SagaStatus.RUNNING,
           state.orderId());
@@ -249,6 +256,9 @@ final class SagaStepLockFixture implements AutoCloseable {
     private final AtomicReference<Runnable> beforeClaim = new AtomicReference<>();
     private final AtomicReference<Runnable> beforeEventWrite = new AtomicReference<>();
     private final AtomicInteger readsUntilAFailure = new AtomicInteger();
+    private final AtomicInteger eventWritesToLose = new AtomicInteger();
+    private final AtomicInteger eventWriteAttempts = new AtomicInteger();
+    private final AtomicInteger genesisCreatesToLose = new AtomicInteger();
 
     /** The {@code limit} of every {@code findTimedOut} call, in call order. */
     final List<Integer> timeoutQueryLimits = new CopyOnWriteArrayList<>();
@@ -260,6 +270,41 @@ final class SagaStepLockFixture implements AutoCloseable {
     /** Runs once, on the writing thread, after the step's read and before its event write. */
     void runOnceBeforeTheEventWrite(Runnable action) {
       beforeEventWrite.set(action);
+    }
+
+    /**
+     * Makes the next {@code n} event writes lose their compare-and-swap: each throws before it
+     * reaches the delegate, so the row is untouched.
+     */
+    void conflictOnTheNextEventWrites(int n) {
+      eventWritesToLose.set(n);
+    }
+
+    /**
+     * Makes the next genesis create lose its compare-and-swap without writing a row: the saga was
+     * created and removed by other writers before the loser read it again.
+     */
+    void loseTheNextGenesisCreate() {
+      genesisCreatesToLose.set(1);
+    }
+
+    @Override
+    public void createGenesisPending(
+        SagaId id,
+        SagaType type,
+        SagaState state,
+        SagaStatus status,
+        boolean deadLetterPending,
+        EventId episodeCause) {
+      if (genesisCreatesToLose.getAndSet(0) > 0) {
+        throw new OptimisticLockException("Saga already exists (test)");
+      }
+      super.createGenesisPending(id, type, state, status, deadLetterPending, episodeCause);
+    }
+
+    /** How many event writes reached this store, the ones that lost included. */
+    int eventWriteAttempts() {
+      return eventWriteAttempts.get();
     }
 
     /** Makes the {@code n}-th read of a row from here on throw; the reads around it succeed. */
@@ -278,6 +323,10 @@ final class SagaStepLockFixture implements AutoCloseable {
       Runnable once = beforeEventWrite.getAndSet(null);
       if (once != null) {
         once.run();
+      }
+      eventWriteAttempts.incrementAndGet();
+      if (eventWritesToLose.getAndUpdate(left -> left > 0 ? left - 1 : 0) > 0) {
+        throw new OptimisticLockException("Stale view of saga (test)");
       }
       super.applyEvent(id, type, state, status, version, applied);
     }
@@ -329,11 +378,19 @@ final class SagaStepLockFixture implements AutoCloseable {
   /** The saga type of every deferred timeout claim the timeout runner counted. */
   final List<String> deferredClaimSamples = new CopyOnWriteArrayList<>();
 
+  /** The saga type of every step the runner ran again after a lost compare-and-swap. */
+  final List<String> deliveryRetriedSamples = new CopyOnWriteArrayList<>();
+
   final StreamRuneMetrics metrics =
       new StreamRuneMetrics() {
         @Override
         public void recordSagaTimeoutClaimDeferred(String sagaType) {
           deferredClaimSamples.add(sagaType);
+        }
+
+        @Override
+        public void recordSagaDeliveryRetried(String sagaType) {
+          deliveryRetriedSamples.add(sagaType);
         }
       };
   private final AtomicInteger triggerIds = new AtomicInteger();
@@ -407,6 +464,7 @@ final class SagaStepLockFixture implements AutoCloseable {
             .sagaDeadLetterStore(deadLetters)
             .clock(clock)
             .stepLock(lock)
+            .metrics(metrics)
             .forwardFence(forwardFence)
             .build();
     timeoutRunner =

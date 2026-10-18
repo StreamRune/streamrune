@@ -145,6 +145,25 @@ class MicrometerStreamRuneMetricsSagaTest {
   }
 
   @Test
+  void recordSagaDeliveryRetriedIncrementsACounterTaggedWithTheSagaTypeOnly() {
+    var registry = new SimpleMeterRegistry();
+    var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
+
+    metrics.recordSagaDeliveryRetried("OrderFulfillmentSaga");
+    metrics.recordSagaDeliveryRetried("OrderFulfillmentSaga");
+
+    var counter =
+        registry
+            .find("streamrune.saga.delivery_retried")
+            .tag("saga.type", "OrderFulfillmentSaga")
+            .counter();
+    assertEquals(2.0, counter.count());
+    assertEquals(
+        java.util.List.of("saga.type"),
+        counter.getId().getTags().stream().map(io.micrometer.core.instrument.Tag::getKey).toList());
+  }
+
+  @Test
   void recordSagaForcedStaleResumeIncrementsTaggedCounter() {
     // A forced resume past the executor's key-age guard is an operator
     // override of a double-execution guard, so it gets a series of its own.

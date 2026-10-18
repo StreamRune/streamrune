@@ -474,9 +474,9 @@ class SagaStartForwardBeforeCompensatingTest {
    * A twin delivery on a second thread loads the genesis-pending row and parks right before its
    * forward command. The opening delivery finishes the forward loop and enters the episode, and the
    * sweeper compensates it. The twin then continues: its forward command answers from the inbox,
-   * its event write is refused by the terminal row, and its redelivery is skipped. The forward
-   * effect is stored once, before its compensation. The threads are sequenced by latches at fixed
-   * points.
+   * its event write is refused by the terminal row, the runner runs the step again and drops the
+   * event, and its redelivery is skipped. The forward effect is stored once, before its
+   * compensation. The threads are sequenced by latches at fixed points.
    */
   @Test
   void aTwinDeliveryParkedBeforeItsForwardCommand_storesNothingAfterTheCompensation()
@@ -518,8 +518,8 @@ class SagaStartForwardBeforeCompensatingTest {
       await(twinDone);
 
       assertThat(twinOutcome.get())
-          .as("the twin's event write meets a terminal row")
-          .isInstanceOf(OptimisticLockException.class);
+          .as("the twin's event write meets a terminal row; its step is run again and returns")
+          .isNull();
       h.secondReplica.asEventListener().onEvents(List.of(opened));
       assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
       assertThat(stored(h)).containsExactly("Reserved", "Released", "Refunded");

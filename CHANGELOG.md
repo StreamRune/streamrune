@@ -649,6 +649,17 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - Retention: `SagaDeadLetterRetentionSweeper` prunes entries after
   `streamrune.saga.dead-letter-retention-max-age` (default 7 days), never a recovery handle.
   `SagaRetentionValidator` refuses startup when that window exceeds the inbox window.
+- Lost saga-row write, run again in place: a delivery or a replay feed whose write of the saga row
+  loses its compare-and-swap to another writer — a twin delivery, a deadline claim, another process —
+  reads the row that won and routes the event on it again, up to three attempts in all, holding the
+  saga's step lock throughout, with no backoff and without the subscription redelivering the page.
+  The router decides what the run again does (a twin that applied the event makes it a redelivery,
+  a claim that won is resumed, an ended saga drops the event, a `FAULTED` saga holds it, a removed
+  row drops a correlated event and a start event creates it again). On the third conflict in a row
+  the runner logs one WARN and the conflict takes the path of any infrastructure failure: the
+  subscription redelivers the page, and the replay call fails. A forward command's own version
+  conflict is a retry-later failure and is not run again. Counts one `saga.delivery_retried` sample
+  per run again.
 - Saga-dispatched commands run as the saga system principal: both authorization interceptors skip the
   per-user check for a saga dispatch (every skip is logged); `Decider.guard` admits one through
   `Authorization.requireOwnerOrSaga`. Other interceptors still apply, and a veto decides nothing: the
@@ -963,7 +974,7 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   - sagas (tagged `saga.type`): `saga.quarantined`, `saga.faulted`, `saga.skipped_while_faulted`,
     `saga.event_held{hold.reason}`, `saga.replay_deferred`, `saga.compensation{outcome}`,
     `saga.compensation_retries`, `saga.cas_conflicts`, `saga.compensation_under_forward_step`,
-    `saga.forward_commands_fenced`,
+    `saga.forward_commands_fenced`, `saga.delivery_retried`,
     `saga.compensating`, `saga.timed_out`, `saga.timeout_claims_deferred`, `saga.faulted_backlog`, `saga.faulted_rows`, `saga.replayed{outcome}`,
     `saga.forced_stale_resume`, `saga.resume_faulted{outcome}`, `saga.compensate_faulted`,
     `saga.dead_letters_swept`

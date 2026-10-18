@@ -535,6 +535,17 @@ public interface StreamRuneMetrics {
   default void recordSagaForwardCommandFenced(String sagaType) {}
 
   /**
+   * Records a saga step run again in place because its write of the saga row lost the
+   * compare-and-swap to another writer (a twin delivery, a deadline claim, another process). One
+   * call per re-run; the conflict itself is counted by {@link #recordSagaCasConflict}. See {@link
+   * org.streamrune.core.metrics.MetricNames#SAGA_DELIVERY_RETRIED}.
+   *
+   * @param sagaType the saga type, {@link org.streamrune.core.types.SagaType#value()} — the saga
+   *     state's fully-qualified class name
+   */
+  default void recordSagaDeliveryRetried(String sagaType) {}
+
+  /**
    * Records the current {@code COMPENSATING} backlog for a saga type — sagas whose compensation has
    * not yet completed. Reported as the latest sampled value (the {@code
    * SagaCompensationRetrySweeper} samples it each cycle), so implementations should expose it as a

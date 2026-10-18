@@ -557,10 +557,10 @@ class SagaConcurrencyRaceTest {
    * path existed.
    *
    * <p>With CAS: the correlated-event update is a CAS. If the hook advances the saga (v1→v2)
-   * between load and update, the runner's update throws OLE which propagates out of {@code
-   * onEvents} — the subscription retries. On retry (hook cleared, fresh load of v2), the runner
-   * processes cleanly. The command inbox deduplicates by (event offset, command index), so the
-   * {@link AdvanceOrder} command's events are appended exactly once across both deliveries.
+   * between load and update, the runner's update loses and the runner runs the step again in place
+   * (hook cleared, fresh load of v2). The command inbox deduplicates by (event offset, command
+   * index), so the {@link AdvanceOrder} command's events are appended exactly once across the
+   * attempts and a redelivery of the same event.
    */
   @Test
   void correlatedConflict_thenRedelivery_isRetrySafe_endToEnd() {
@@ -607,26 +607,22 @@ class SagaConcurrencyRaceTest {
                 SagaStatus.RUNNING,
                 1L)); // concurrent advance → v2
 
-    // Must throw OLE — correlated-event conflict propagates so the subscription can retry.
-    assertThatThrownBy(() -> runner.asEventListener().onEvents(List.of(shippedEvent)))
-        .as(
-            "correlated-event CAS conflict must propagate as OptimisticLockException"
-                + " so the subscription retries on fresh state")
-        .isInstanceOf(OptimisticLockException.class);
+    // The conflict is run again in place: the runner reads the bumped row (v2) and routes the event
+    // on it, so the delivery returns.
+    runner.asEventListener().onEvents(List.of(shippedEvent));
 
     // The (successful) forward command dispatch happens BEFORE the saga-store CAS update in the
-    // runner's pipeline: evolve → handle → dispatch forward command → sagaStore.update (throws
-    // OLE).
-    // So the command event IS appended on the first delivery, then OLE propagates.
-    // On retry the inbox dedup finds the key already recorded and short-circuits.
+    // runner's pipeline: evolve → handle → dispatch forward command → sagaStore.update (loses).
+    // The command event IS appended by the first attempt; the run again finds the key already
+    // recorded in the inbox and short-circuits.
     var aggregateStream = StreamId.of(TYPE, AggregateId.of("race-order-1"));
     var afterFirst = eventStore.readStream(aggregateStream, Version.initial(), 100);
     assertThat(afterFirst)
-        .as("first delivery dispatched the command (event appended) before the saga-store OLE")
+        .as("the first attempt dispatched the command once; the run again did not repeat it")
         .hasSize(1);
 
     // ---- Second delivery (subscription retry — same event, same globalOffset) ----
-    // Hook is already cleared (was one-shot). The runner now loads v2 cleanly.
+    // The row records the event, so the redelivery drops it.
     runner.asEventListener().onEvents(List.of(shippedEvent));
 
     // Exactly one OrderAdvanced event in the aggregate stream — no duplicate from redelivery.
@@ -746,8 +742,8 @@ class SagaConcurrencyRaceTest {
    * Headline (fail-first): a timeout claim wins the compensation-episode CAS after the event path
    * has decided to compensate. The event path must claim-first — CAS to COMPENSATING at its loaded
    * version BEFORE dispatching any compensation — so losing that CAS means it dispatches ZERO
-   * compensation commands and abandons (OLE → batch retry), leaving compensation to the sole owner
-   * (the timeout runner).
+   * compensation commands and abandons the attempt; the runner then runs the step again on the row
+   * that won and resumes the episode under the shared episode-scoped key.
    *
    * <p>Pre-fix (double-compensation bug): the event path dispatched compensation ({@link Refund})
    * BEFORE its terminal CAS, so this interleave dispatched Refund once under the disjoint
@@ -788,24 +784,23 @@ class SagaConcurrencyRaceTest {
 
     var shipped = makeEnvelope(new OrderShipped("race-order-1"), 77L, "fulfill-race-order-1");
 
-    assertThatThrownBy(() -> runner.asEventListener().onEvents(List.of(shipped)))
-        .as("losing the COMPENSATING claim must propagate OLE (batch retry)")
-        .isInstanceOf(OptimisticLockException.class);
+    runner.asEventListener().onEvents(List.of(shipped));
 
-    assertThat(bus.compensationsDispatched)
+    assertThat(bus.compensationKeys)
         .as(
-            "event path must dispatch ZERO compensation after losing the claim — otherwise it"
-                + " double-compensates with the timeout path under a disjoint key")
-        .isEmpty();
+            "the attempt that lost the claim dispatches no compensation under the disjoint"
+                + " offset-based key; the run again resumes the timeout runner's episode under"
+                + " the shared episode-scoped key, so the side effect is keyed once")
+        .containsExactly(SagaCommandDispatch.episodeCompensationKey(sagaId, 2L, 0));
 
     var after =
         underlying
             .load(sagaId, SagaType.fromClass(FulfillState.class), FulfillState.class)
             .orElseThrow();
     assertThat(after.status())
-        .as("the timeout runner's COMPENSATING claim must survive untouched")
-        .isEqualTo(SagaStatus.COMPENSATING);
-    assertThat(after.version()).isEqualTo(2L);
+        .as("the resumed episode ends at the terminal write")
+        .isEqualTo(SagaStatus.COMPENSATED);
+    assertThat(after.version()).isEqualTo(3L);
   }
 
   /**

@@ -25,7 +25,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventEnvelope;
-import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.runtime.SagaDeadLetterReplayer.CompensateOutcome;
@@ -298,9 +297,11 @@ class SagaStepLockScenarioTest {
       // A thread cannot wait for itself: with a one-millisecond bound a wait would fail here.
       p.bus.runOnceBefore(Reserve.class, () -> p.deliver(opened));
 
-      assertThatThrownBy(() -> p.deliver(opened))
-          .as("the nested delivery wrote first; the outer one loses its write, as without the lock")
-          .isInstanceOf(OptimisticLockException.class);
+      // the nested delivery wrote first; the outer one loses its write, as without the lock, and
+      // is run again on the row the nested one wrote
+      p.deliver(opened);
+
+      assertThat(p.deliveryRetriedSamples).containsExactly(TYPE.value());
 
       assertThat(p.storedOrder(ORDER)).containsExactly("Reserved");
       assertThat(p.row(ORDER).genesisApplied()).isTrue();
