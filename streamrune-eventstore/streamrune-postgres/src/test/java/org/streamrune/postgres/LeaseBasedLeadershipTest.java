@@ -322,6 +322,38 @@ class LeaseBasedLeadershipTest {
   }
 
   @Test
+  void anAcquireEndedByTheCallersOwnInterrupt_failsClosedWithoutAWarning() throws Exception {
+    var a = leadership(Duration.ofSeconds(30));
+    var logger =
+        (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(LeaseBasedLeadership.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    var acquired = new java.util.concurrent.atomic.AtomicReference<Optional<Lease>>();
+    try {
+      // A subscription that stops interrupts its poll thread; on a virtual thread the interrupt
+      // fails the statement in flight.
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                Thread.currentThread().interrupt();
+                acquired.set(a.tryAcquire("p-interrupted"));
+              })
+          .join();
+    } finally {
+      logger.detachAppender(appender);
+    }
+
+    assertTrue(acquired.get().isEmpty(), "an interrupted acquire fails closed");
+    assertTrue(
+        appender.list.stream()
+            .noneMatch(e -> e.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.WARN)),
+        "the caller's own stop is not reported as a failure: " + appender.list);
+  }
+
+  @Test
   void transientAcquireFailureDoesNotDropHeldLiveLease() throws Exception {
     // Repro: runners call tryAcquire on EVERY tick while already the healthy leader. A
     // transient SQLException (momentary pool exhaustion) historically ran held.remove(...)

@@ -573,7 +573,86 @@ class PollingEventSubscriptionLeaseTest {
     assertThat(leadership.resigns(NAME)).isEqualTo(1);
   }
 
+  @Test
+  void aCloseFromInsideTheListenerOnAWakeUpThread_resignsWhenThePollThreadExits() {
+    leadership.grant(NAME);
+    PollingEventSubscription[] self = new PollingEventSubscription[1];
+    self[0] =
+        leased(
+            b ->
+                b.config(SubscriptionConfig.pollingOnly(Duration.ofHours(1)))
+                    .listener(
+                        events -> {
+                          delivered.addAll(events);
+                          self[0].close();
+                        }));
+    idleLeaderOnItsPollThread(self[0]);
+    append(1);
+
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(5),
+        () -> {
+          CompletableFuture<Void> wakeUp =
+              SagaStepLockFixture.onAnotherThread(self[0]::triggerImmediatePoll);
+          assertThat(wakeUp.get(4, TimeUnit.SECONDS)).isNull();
+          await().atMost(4, TimeUnit.SECONDS).until(() -> leadership.resigns(NAME) == 1);
+        });
+
+    assertThat(self[0].state()).isEqualTo(SubscriptionLifecycleState.STOPPED);
+    InOrder order = inOrder(offsetStore, leadership);
+    order.verify(offsetStore).saveOffset(eq(CHECKPOINT), eq(GlobalOffset.of(1)));
+    order.verify(leadership).resign(NAME);
+    assertThat(leadership.resigns(NAME)).isEqualTo(1);
+  }
+
+  @Test
+  void aPauseThenResumeFromInsideTheListenerOnAWakeUpThread_keepsOneAnchor() {
+    leadership.grant(NAME);
+    PollingEventSubscription[] self = new PollingEventSubscription[1];
+    self[0] =
+        leased(
+            b ->
+                b.config(SubscriptionConfig.pollingOnly(Duration.ofHours(1)))
+                    .listener(
+                        events -> {
+                          boolean first = delivered.isEmpty();
+                          delivered.addAll(events);
+                          if (first) {
+                            self[0].pause();
+                            self[0].resume();
+                          }
+                        }));
+    idleLeaderOnItsPollThread(self[0]);
+    append(1);
+
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(5),
+        () -> {
+          CompletableFuture<Void> wakeUp =
+              SagaStepLockFixture.onAnotherThread(self[0]::triggerImmediatePoll);
+          assertThat(wakeUp.get(4, TimeUnit.SECONDS)).isNull();
+        });
+
+    await().atMost(5, TimeUnit.SECONDS).until(() -> leadership.tryAcquires(NAME) == 2);
+    append(1);
+    self[0].triggerImmediatePoll();
+    await().atMost(5, TimeUnit.SECONDS).until(() -> delivered.size() == 2);
+    assertThat(self[0].state()).isEqualTo(SubscriptionLifecycleState.RUNNING);
+    assertThat(self[0].lease().isLeadingHere()).isTrue();
+    assertThatThrownBy(self[0].lease()::anchor).isInstanceOf(IllegalStateException.class);
+    assertThat(leadership.resigns(NAME)).isEqualTo(1);
+  }
+
   // ---- helpers ----
+
+  /** Starts {@code subscription} and waits until its poll thread led, read nothing and sleeps. */
+  private void idleLeaderOnItsPollThread(PollingEventSubscription subscription) {
+    subscription.start();
+    await().atMost(5, TimeUnit.SECONDS).until(() -> subscription.lease().isLeadingHere());
+    await()
+        .atMost(5, TimeUnit.SECONDS)
+        .untilAsserted(() -> verify(eventStore).readGlobalStream(any(), anyInt()));
+  }
 
   /** Delivers into {@link #delivered}; the first page parks until {@link #release} opens. */
   private EventListener parkingOnce(CountDownLatch parked) {

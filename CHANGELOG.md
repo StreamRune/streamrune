@@ -456,7 +456,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   lease before every checkpoint read, at most once per polling interval however many notifications
   wake it; a standby reads and saves nothing. A lease lost during a drain ends it after the page in
   flight; pause, close and a terminal exit resign only after the poll thread left its page, and
-  `resume()` waits for that page before it takes the lease again. `LeaseRole` (`NOT_REPORTED`,
+  `resume()` waits for that page before it takes the lease again (a `resume()` from inside the
+  listener cannot, and resigns before that page's checkpoint is saved). `LeaseRole` (`NOT_REPORTED`,
   `UNGATED`, `LEADING`, `STANDBY`) names the role a subscription plays under its lease.
 
 ### Sagas

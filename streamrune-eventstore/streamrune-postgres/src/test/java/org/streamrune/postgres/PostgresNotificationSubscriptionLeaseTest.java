@@ -236,6 +236,30 @@ class PostgresNotificationSubscriptionLeaseTest {
   }
 
   @Test
+  void aCloseFromInsideTheListener_resignsWhenTheListenThreadExits() {
+    leadership.grant(NAME);
+    append(1);
+    PostgresNotificationSubscription[] self = new PostgresNotificationSubscription[1];
+    self[0] =
+        leased(
+            SLOW,
+            10,
+            events -> {
+              received.addAll(events);
+              self[0].close();
+            });
+
+    self[0].start();
+
+    await().atMost(10, TimeUnit.SECONDS).until(() -> leadership.resigns(NAME) == 1);
+    assertThat(self[0].isRunning()).isFalse();
+    InOrder order = inOrder(offsets, leadership);
+    order.verify(offsets).saveOffset(eq(ProjectionName.of(NAME)), eq(GlobalOffset.of(1)));
+    order.verify(leadership).resign(NAME);
+    assertThat(leadership.resigns(NAME)).isEqualTo(1);
+  }
+
+  @Test
   void aSecondStartAfterAnErrorExitAnchorsAgain() {
     leadership.grant(NAME);
     append(1);

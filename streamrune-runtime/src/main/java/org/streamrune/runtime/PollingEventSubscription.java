@@ -41,8 +41,9 @@ import org.streamrune.core.types.SubscriptionName;
  * checkpoint past events no replica processed. The anchor is closed — the lease resigned — only
  * after the poll thread has left the page in flight and after a wake-up drain on another thread has
  * saved its page: on {@link #pause()}, on {@link #close()} and on a terminal exit of the poll
- * thread. {@link #resume()} waits for the paused thread's page before it opens a new anchor. A
- * subscription without a lease takes none of these steps.
+ * thread. {@link #resume()} waits for the paused thread's page before it opens a new anchor —
+ * except when it is called from inside the listener, which closes the paused anchor before that
+ * page's checkpoint is saved. A subscription without a lease takes none of these steps.
  */
 public final class PollingEventSubscription implements SubscriptionLifecycle, ReadPoisonAware {
 
@@ -280,9 +281,13 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
       PollThread previous = pollThread;
       if (previous != null) {
         // The paused thread closes its anchor when it leaves its page; one anchor per lease, so
-        // wait for that (bounded) and close it here too when the wait ends first. A leased
-        // subscription therefore has no such overlap: the new thread starts after the old one.
-        if (previous.thread() != Thread.currentThread()) {
+        // wait for that (bounded) and close it here too when the wait ends first: the new thread
+        // starts after the old one. Called from the listener — on the paused thread itself, or
+        // on a wake-up drain's thread, which holds pollLock the paused thread needs to close its
+        // anchor — no wait is possible: the old anchor is closed here, before the checkpoint of
+        // the page in flight is saved, and the lease is taken again at once. A wake-up recorded
+        // during that page may let the old thread drain once more before it exits.
+        if (previous.thread() != Thread.currentThread() && !pollLock.isHeldByCurrentThread()) {
           try {
             previous.thread().join(CLOSE_JOIN_TIMEOUT_MS);
           } catch (InterruptedException _) {
@@ -343,6 +348,12 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     if (t == Thread.currentThread()) {
       return;
     }
+    if (current.anchor() != null && pollLock.isHeldByCurrentThread()) {
+      // Called from the listener of a wake-up drain on this thread: the poll thread closes its
+      // anchor only once it holds pollLock, which this thread holds until its page is saved, so a
+      // join here would wait for itself. The poll thread resigns when this page is done.
+      return;
+    }
     try {
       t.join(CLOSE_JOIN_TIMEOUT_MS);
     } catch (InterruptedException _) {
@@ -351,8 +362,13 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     }
     if (t.isAlive()) {
       logger.warn(
-          "Subscription '{}' polling thread did not stop within {} ms after close() — the"
-              + " in-flight batch is still processing and may save its offset after this call",
+          current.anchor() != null
+              ? "Subscription '{}' polling thread did not stop within {} ms after close() — the"
+                  + " in-flight batch is still processing and may save its offset after this"
+                  + " call, or the thread is still resigning the subscription's lease (a"
+                  + " leadership database that does not answer)"
+              : "Subscription '{}' polling thread did not stop within {} ms after close() — the"
+                  + " in-flight batch is still processing and may save its offset after this call",
           subscriptionName.value(),
           CLOSE_JOIN_TIMEOUT_MS);
     }

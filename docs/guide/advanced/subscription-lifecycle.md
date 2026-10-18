@@ -142,7 +142,7 @@ All three integrations bind the **same** keys — `StreamRuneQuarkusProperties`'
 ## Caveats
 
 - At-least-once delivery: one extra batch may be delivered after `pause()` returns. Listeners must be idempotent.
-- After `resume()`, there is a brief window where both old and new threads may deliver duplicate events. A leased subscription (below) has no such window: its `resume()` waits for the paused thread to leave its page (up to 30 seconds) before it takes the lease again and starts a new thread.
+- After `resume()`, there is a brief window where both old and new threads may deliver duplicate events. A leased subscription (below) has no such window: its `resume()` waits for the paused thread to leave its page (up to 30 seconds) before it takes the lease again and starts a new thread. The exception is a `resume()` called from inside the listener: it cannot wait for the page it runs in, so it resigns the lease before that page's checkpoint is saved and takes it again at once.
 - A leased subscription's `pause()` hands its lease over after the page in flight: the lease is resigned once the poll thread has saved that page's checkpoint, so a standby on another replica takes over the delivery while this one is paused.
 - `close()` is terminal — create a new instance if you need to restart.
 - Calling `pause()` when not `RUNNING`, or `resume()` when not `PAUSED`, throws `IllegalStateException`.

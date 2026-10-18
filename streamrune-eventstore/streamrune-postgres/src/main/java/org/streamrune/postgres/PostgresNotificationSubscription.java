@@ -477,9 +477,14 @@ public final class PostgresNotificationSubscription implements EventSubscription
           t.join(CLOSE_JOIN_TIMEOUT_MS);
           if (t.isAlive()) {
             log.warn(
-                "Subscription '{}' listen thread did not stop within {} ms after close() — the"
-                    + " in-flight batch is still processing and may save its offset after this"
-                    + " call",
+                lease.isGated()
+                    ? "Subscription '{}' listen thread did not stop within {} ms after close() —"
+                        + " the in-flight batch is still processing and may save its offset after"
+                        + " this call, or the thread is still resigning the subscription's lease"
+                        + " (a leadership database that does not answer)"
+                    : "Subscription '{}' listen thread did not stop within {} ms after close() —"
+                        + " the in-flight batch is still processing and may save its offset after"
+                        + " this call",
                 subscriptionName.value(),
                 CLOSE_JOIN_TIMEOUT_MS);
           }
@@ -489,8 +494,10 @@ public final class PostgresNotificationSubscription implements EventSubscription
       }
     }
     // The listen thread closed its anchor when it left; this closes it when the join ended first.
+    // Called from the listener on the listen thread itself, the anchor is left to that thread's
+    // exit, after the page in flight is saved.
     SubscriptionLease.Anchor current = anchor;
-    if (current != null) {
+    if (current != null && t != Thread.currentThread()) {
       current.close();
     }
     if (listenDataSource instanceof AutoCloseable closeable) {

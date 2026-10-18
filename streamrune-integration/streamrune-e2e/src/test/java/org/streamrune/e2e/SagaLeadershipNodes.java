@@ -164,6 +164,34 @@ abstract class SagaLeadershipNodes extends SagaForwardFenceNodes {
     clock.advance(sinceTheClocksStart.plus(TIMEOUT).plusSeconds(1));
   }
 
+  /** Whether the database's clock is before the instant the lease row of {@code lease} expires. */
+  boolean leaseRowStillLive(String lease, java.sql.Timestamp leaseUntil) throws SQLException {
+    try (var conn = dataSource.getConnection();
+        var ps = conn.prepareStatement("SELECT clock_timestamp() < ?")) {
+      ps.setTimestamp(1, leaseUntil);
+      try (var rs = ps.executeQuery()) {
+        rs.next();
+        return rs.getBoolean(1);
+      }
+    }
+  }
+
+  /** When the lease row of {@code lease} expires, as the database stores it. */
+  java.sql.Timestamp leaseUntil(String lease) throws SQLException {
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "SELECT lease_until FROM subscription_leases WHERE consumer_name = ?")) {
+      ps.setString(1, lease);
+      try (var rs = ps.executeQuery()) {
+        if (!rs.next()) {
+          throw new AssertionError("no lease row for " + lease);
+        }
+        return rs.getTimestamp(1);
+      }
+    }
+  }
+
   /** Whether the order's saga has a row with {@code status}. */
   boolean isRow(String orderId, SagaStatus status) {
     return probeRows

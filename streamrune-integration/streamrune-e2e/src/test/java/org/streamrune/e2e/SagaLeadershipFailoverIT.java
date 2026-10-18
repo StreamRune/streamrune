@@ -18,8 +18,11 @@ import org.streamrune.core.subscription.LeaseRole;
  */
 class SagaLeadershipFailoverIT extends SagaLeadershipNodes {
 
-  /** The scheduling slack allowed on top of each bound. */
-  private static final Duration SLACK = Duration.ofSeconds(1);
+  /**
+   * The slack of the clean stop's bound, wide for a loaded runner: the lease row's expiry, read
+   * before the stop, is what proves the handover did not wait out the lease.
+   */
+  private static final Duration CLEAN_STOP_SLACK = Duration.ofSeconds(3);
 
   @Test
   void exactlyOneNodeDeliversTheSagaType() throws Exception {
@@ -63,6 +66,8 @@ class SagaLeadershipFailoverIT extends SagaLeadershipNodes {
         .atMost(Duration.ofSeconds(20))
         .until(() -> orders.stream().allMatch(o -> isRow(o, SagaStatus.RUNNING)));
 
+    String lease = a.node.runner.lease().name();
+    java.sql.Timestamp heldUntil = leaseUntil(lease);
     long t0 = System.nanoTime();
     // The stop runs beside the watch: the handover is measured from the stop's start to the
     // standby leading, not to the end of the stopping process's own teardown.
@@ -74,9 +79,14 @@ class SagaLeadershipFailoverIT extends SagaLeadershipNodes {
     Duration handover = Duration.ofNanos(System.nanoTime() - t0);
     assertThat(outcomeOf(stopping)).isNull();
 
+    // The standby took the lease while the stopped leader's last renewal was still live: the stop
+    // resigned it, and the handover did not wait for it to expire.
+    assertThat(leaseRowStillLive(lease, heldUntil))
+        .as("the standby leads before the stopped leader's lease would have expired")
+        .isTrue();
     assertThat(handover)
         .as("one standby attempt interval, its jitter and the slack")
-        .isLessThanOrEqualTo(POLLING.plus(POLLING.dividedBy(5)).plus(SLACK));
+        .isLessThanOrEqualTo(POLLING.plus(POLLING.dividedBy(5)).plus(CLEAN_STOP_SLACK));
     for (String order : orders) {
       append(new Advanced(order));
       append(new Completed(order));
