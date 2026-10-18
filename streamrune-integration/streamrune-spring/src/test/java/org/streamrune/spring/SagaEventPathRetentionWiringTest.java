@@ -4,12 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mock;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.streamrune.core.Command;
@@ -26,6 +31,7 @@ import org.streamrune.core.saga.SagaOrchestrator;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
@@ -37,6 +43,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
+import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
@@ -347,6 +354,83 @@ class SagaEventPathRetentionWiringTest {
                     .hasStackTraceContaining(
                         "streamrune.saga.forward-fence must be auto, on or off")
                     .hasStackTraceContaining("got: 'maybe'"));
+  }
+
+  /**
+   * A runner built without a lease, next to a real leadership bean, delivers its saga type on every
+   * replica: the startup hook says so, once per such runner.
+   */
+  @Test
+  void anUngatedRunnerUnderRealLeadershipIsReported() {
+    var log = (Logger) LoggerFactory.getLogger(SagaLeaseWiring.class);
+    var appender = new ListAppender<ILoggingEvent>();
+    appender.start();
+    log.addAppender(appender);
+    try {
+      runner
+          .withBean(SubscriptionLeadership.class, SagaEventPathRetentionWiringTest::aLeadership)
+          .withBean(
+              "orderSagaRunner", SagaRunner.class, SagaEventPathRetentionWiringTest::sagaRunner)
+          .run(
+              ctx -> {
+                assertThat(ctx).hasNotFailed();
+                assertThat(appender.list)
+                    .filteredOn(e -> e.getLevel() == Level.WARN)
+                    .singleElement()
+                    .satisfies(
+                        e ->
+                            assertThat(e.getFormattedMessage())
+                                .contains(FakeState.class.getName())
+                                .contains("is delivered on every replica"));
+              });
+    } finally {
+      log.detachAppender(appender);
+    }
+  }
+
+  @Test
+  void nothingIsReportedWithoutLeadership() {
+    var log = (Logger) LoggerFactory.getLogger(SagaLeaseWiring.class);
+    var appender = new ListAppender<ILoggingEvent>();
+    appender.start();
+    log.addAppender(appender);
+    try {
+      runner
+          .withPropertyValues("streamrune.subscription.single-active-consumer.enabled=false")
+          .withBean(
+              "orderSagaRunner", SagaRunner.class, SagaEventPathRetentionWiringTest::sagaRunner)
+          .run(
+              ctx -> {
+                assertThat(ctx).hasNotFailed();
+                assertThat(ctx).doesNotHaveBean(SubscriptionLeadership.class);
+                assertThat(appender.list).isEmpty();
+              });
+    } finally {
+      log.detachAppender(appender);
+    }
+  }
+
+  /**
+   * A leadership that is not {@link SubscriptionLeadership#NOOP}: holds nothing, grants nothing.
+   */
+  private static SubscriptionLeadership aLeadership() {
+    return new SubscriptionLeadership() {
+      @Override
+      public Optional<Lease> tryAcquire(String consumerName) {
+        return Optional.empty();
+      }
+
+      @Override
+      public Optional<Lease> current(String consumerName) {
+        return Optional.empty();
+      }
+
+      @Override
+      public void resign(String consumerName) {}
+
+      @Override
+      public void close() {}
+    };
   }
 
   private static boolean fenceOf(Object sagaRunnerBean) {

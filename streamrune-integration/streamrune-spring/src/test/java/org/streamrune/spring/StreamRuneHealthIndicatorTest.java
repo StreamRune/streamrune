@@ -13,11 +13,13 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import javax.sql.DataSource;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.Status;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.projection.OffsetStore;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
@@ -149,7 +151,8 @@ class StreamRuneHealthIndicatorTest {
                     SubscriptionLifecycleState.RUNNING,
                     5,
                     0,
-                    SubscriptionHealth.Status.UP)));
+                    SubscriptionHealth.Status.UP,
+                    LeaseRole.NOT_REPORTED)));
     when(contributor.overallStatus()).thenReturn(SubscriptionHealth.Status.UP);
 
     var indicator = new StreamRuneHealthIndicator(ds, contributor);
@@ -157,6 +160,40 @@ class StreamRuneHealthIndicatorTest {
 
     assertThat(health.getStatus()).isEqualTo(Status.UP);
     assertThat(health.getDetails()).containsKey("subscription.orders");
+  }
+
+  @Test
+  void rendersTheRoleOfEachSubscription() throws SQLException {
+    DataSource ds = validDataSource();
+    stubEmptyEventStream(ds);
+    var contributor = mock(SubscriptionHealthContributor.class);
+    when(contributor.health())
+        .thenReturn(
+            List.of(
+                new SubscriptionHealth(
+                    "orders-saga",
+                    SubscriptionLifecycleState.RUNNING,
+                    5,
+                    0,
+                    SubscriptionHealth.Status.UP,
+                    LeaseRole.LEADING),
+                new SubscriptionHealth(
+                    "orders",
+                    SubscriptionLifecycleState.RUNNING,
+                    5,
+                    0,
+                    SubscriptionHealth.Status.UP,
+                    LeaseRole.NOT_REPORTED)));
+    when(contributor.overallStatus()).thenReturn(SubscriptionHealth.Status.UP);
+
+    Health health = new StreamRuneHealthIndicator(ds, contributor).health();
+
+    assertThat(health.getDetails().get("subscription.orders-saga"))
+        .asInstanceOf(InstanceOfAssertFactories.MAP)
+        .containsEntry("role", "LEADING");
+    assertThat(health.getDetails().get("subscription.orders"))
+        .asInstanceOf(InstanceOfAssertFactories.MAP)
+        .containsEntry("role", "NOT_REPORTED");
   }
 
   @Test
@@ -173,7 +210,8 @@ class StreamRuneHealthIndicatorTest {
                     SubscriptionLifecycleState.STOPPED,
                     0,
                     0,
-                    SubscriptionHealth.Status.DOWN)));
+                    SubscriptionHealth.Status.DOWN,
+                    LeaseRole.NOT_REPORTED)));
     when(contributor.overallStatus()).thenReturn(SubscriptionHealth.Status.DOWN);
 
     var indicator = new StreamRuneHealthIndicator(ds, contributor);
@@ -250,7 +288,8 @@ class StreamRuneHealthIndicatorTest {
                     SubscriptionLifecycleState.STOPPED,
                     0,
                     0,
-                    SubscriptionHealth.Status.DOWN)));
+                    SubscriptionHealth.Status.DOWN,
+                    LeaseRole.NOT_REPORTED)));
     when(contributor.overallStatus()).thenReturn(SubscriptionHealth.Status.UP);
 
     Health health = new StreamRuneHealthIndicator(ds, contributor).health();

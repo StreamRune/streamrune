@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.runtime.BackgroundRelayHealthContributor.Status;
 import org.streamrune.runtime.SagaStepLockFixture.Opened;
 import org.streamrune.runtime.SagaStepLockFixture.State;
@@ -181,6 +182,76 @@ class SagaCompensationRetrySweeperFollowerTest {
           .isInstanceOf(NullPointerException.class)
           .hasMessage("anchorGrace is required");
     }
+  }
+
+  @Test
+  void closingALeadingSweeper_logsInfoNotWarn() {
+    leadership.grant(LEASE);
+    try (var p = new SagaStepLockFixture(leadership, Duration.ZERO)) {
+      SubscriptionLease.Anchor anchor = p.runner.lease().anchor();
+      assertThat(anchor.lead(Duration.ZERO)).isTrue();
+      p.sweeper.start();
+
+      p.sweeper.close();
+
+      assertThat(closeLines(Level.INFO))
+          .singleElement()
+          .satisfies(
+              line ->
+                  assertThat(line)
+                      .contains(SagaStepLockFixture.TYPE.value())
+                      .contains("closes while this process leads that saga type")
+                      .contains("no replica retries its compensations"));
+      assertThat(closeLines(Level.WARN)).isEmpty();
+      anchor.close();
+    }
+  }
+
+  @Test
+  void closingAStandbySweeper_logsNothing() {
+    try (var p = new SagaStepLockFixture(leadership, Duration.ZERO)) {
+      SubscriptionLease.Anchor anchor = p.runner.lease().anchor();
+      assertThat(anchor.lead(Duration.ZERO)).isFalse();
+      p.sweeper.start();
+
+      p.sweeper.close();
+
+      assertThat(closeLines(Level.INFO)).isEmpty();
+      assertThat(closeLines(Level.WARN)).isEmpty();
+      anchor.close();
+    }
+  }
+
+  @Test
+  void closingASamplingOnlySweeper_doesNotWarn() {
+    leadership.grant(LEASE);
+    try (var p = new SagaStepLockFixture(leadership, Duration.ZERO)) {
+      SubscriptionLease.Anchor anchor = p.runner.lease().anchor();
+      assertThat(anchor.lead(Duration.ZERO)).isTrue();
+      SagaCompensationRetrySweeper<State> sampling =
+          SagaCompensationRetrySweeper.<State>builder()
+              .sagaRunner(p.runner)
+              .sagaStore(p.sagaStore)
+              .leadership(SubscriptionLeadership.NOOP)
+              .compensationRetryEnabled(false)
+              .clock(p.clock)
+              .build();
+      sampling.start();
+
+      sampling.close();
+
+      assertThat(closeLines(Level.INFO)).isEmpty();
+      assertThat(closeLines(Level.WARN)).isEmpty();
+      anchor.close();
+    }
+  }
+
+  private List<String> closeLines(Level level) {
+    return appender.list.stream()
+        .filter(e -> e.getLevel() == level)
+        .map(ILoggingEvent::getFormattedMessage)
+        .filter(m -> m.contains("closes while this process leads"))
+        .toList();
   }
 
   // ---- helpers ----

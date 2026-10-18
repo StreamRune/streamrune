@@ -322,8 +322,18 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    * Stops polling. Interrupts the poll thread and resets the started guard so {@link #start()} can
    * be called again on the same instance — matches the restartable lifecycle contract (actuator
    * restart, context refresh).
+   *
+   * <p>A started runner that follows a lease this process holds logs a WARN: while its subscription
+   * keeps the lease, no replica claims the deadlines of the saga type.
    */
   public void stop() {
+    if (started.get() && lease.isGated() && lease.isLeadingHere()) {
+      LOG.warn(
+          "The timeout runner of saga type {} stops while this process leads that saga type: no"
+              + " replica claims its deadlines until the runner is started again or this process"
+              + " stops leading the saga type (its subscription paused or closed)",
+          sagaType.value());
+    }
     running = false;
     Thread t = pollThread;
     pollThread = null;

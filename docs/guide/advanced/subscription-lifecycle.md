@@ -179,6 +179,8 @@ A leased subscription opens the lease's anchor on `start()` and asks for the lea
 
 The gate sits in the subscription and not in the listener for a reason: the checkpoint is shared by every replica. A listener that returned without processing on a standby would let the subscription save the checkpoint past events no replica processed, and those events would be lost; a listener that threw instead would put every standby into error backoff, which would then delay the takeover.
 
+**Health and the role.** `PollingEventSubscription` and `HybridEventSubscription` implement `LeaseRoleAware`, so the health view reports their `role` under the lease: `UNGATED` without a lease, `LEADING` while this replica holds it, `STANDBY` otherwise. A subscription you build yourself is not discovered by the integrations; register it with `.healthContributor(contributor)` on its builder (the `SubscriptionHealthContributor` bean of your integration, or one you build), and it appears in the health details from `start()` until `close()` — a paused subscription stays listed. A hybrid subscription registers itself, so a dead push path still reads `DEGRADED`. A standby is `RUNNING`, has no delivery errors and shares the leader's lag (see [Health checks](../production.md#health-checks)).
+
 Unlike a projection runner, a leased event subscription fences nothing by epoch: its listener's own idempotency carries the overlap of a handover, when a deposed leader may finish a page the new leader redelivers. A deposed leader's checkpoint save is either a no-op (the monotonic guard) or an offset whose events it fully processed.
 
 ## Related guides

@@ -128,6 +128,7 @@ public class StreamRuneHealthCheck implements HealthCheck {
         builder.withData("subscription." + sub.name() + ".lag", sub.lag());
         builder.withData("subscription." + sub.name() + ".errorCount", sub.errorCount());
         builder.withData("subscription." + sub.name() + ".status", sub.status().name());
+        builder.withData("subscription." + sub.name() + ".role", sub.role().name());
       }
     } else {
       builder.up();

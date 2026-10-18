@@ -295,7 +295,7 @@ class SagaTypeOwnershipContainerWiringTest {
    */
   @Test
   void theRefusalRunsAheadOfTheListenersThatStartRunners() {
-    int refusal = new SagaEventPathRetentionConfigurer(List.of(), null).getOrder();
+    int refusal = new SagaEventPathRetentionConfigurer(List.of(), null, null).getOrder();
     int runnerStarter =
         new StreamRuneLifecycle(null, null, null, null, null, null, null, null, null).getOrder();
     int sweeperStarter =

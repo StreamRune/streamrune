@@ -7,16 +7,19 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.EventListener;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
 import org.streamrune.core.types.SubscriptionName;
+import org.streamrune.runtime.LeaseRoleAware;
 import org.streamrune.runtime.PollingEventSubscription;
 import org.streamrune.runtime.ProjectionReadPoisonException;
 import org.streamrune.runtime.PushHealthAware;
 import org.streamrune.runtime.ReadPoisonAware;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.SubscriptionHealthContributor;
 import org.streamrune.runtime.SubscriptionLease;
 
 /**
@@ -45,7 +48,7 @@ import org.streamrune.runtime.SubscriptionLease;
  * <p>This is the recommended subscription for production use with PostgreSQL.
  */
 public final class HybridEventSubscription
-    implements SubscriptionLifecycle, ReadPoisonAware, PushHealthAware {
+    implements SubscriptionLifecycle, ReadPoisonAware, PushHealthAware, LeaseRoleAware {
 
   private static final org.slf4j.Logger logger =
       org.slf4j.LoggerFactory.getLogger(HybridEventSubscription.class);
@@ -53,6 +56,11 @@ public final class HybridEventSubscription
   private final SubscriptionName subscriptionName;
   private final PollingEventSubscription pollingSubscription;
   private final PgNotificationListener notificationListener;
+
+  // The contributor this subscription registers itself with on start() and leaves on close(); null
+  // registers nothing. The Hybrid registers itself, not the polling subscription inside it, so the
+  // contributor reads the push-path health from the Hybrid.
+  private final SubscriptionHealthContributor healthContributor;
 
   public HybridEventSubscription(
       SubscriptionName subscriptionName,
@@ -167,7 +175,7 @@ public final class HybridEventSubscription
    * The constructor with the push-path tuning plus the {@code lease} the polling subscription
    * inside delivers under; the builder resolves it from {@link Builder#lease}, {@link
    * Builder#leadership} or {@link Builder#sagaRunner}. A notification then reaches the same gate as
-   * a poll.
+   * a poll. Registers nothing with a health contributor.
    */
   HybridEventSubscription(
       SubscriptionName subscriptionName,
@@ -181,6 +189,38 @@ public final class HybridEventSubscription
       int readPoisonBound,
       UnaryOperator<PgNotificationListener.Builder> listenerTuning,
       SubscriptionLease lease) {
+    this(
+        subscriptionName,
+        dataSource,
+        eventStore,
+        offsetStore,
+        listener,
+        config,
+        fetchSize,
+        metrics,
+        readPoisonBound,
+        listenerTuning,
+        lease,
+        null);
+  }
+
+  /**
+   * The full constructor plus the {@code healthContributor} this subscription registers itself with
+   * on {@link #start()} and leaves on {@link #close()} ({@code null} = none).
+   */
+  HybridEventSubscription(
+      SubscriptionName subscriptionName,
+      DataSource dataSource,
+      EventStore eventStore,
+      OffsetStore offsetStore,
+      EventListener listener,
+      SubscriptionConfig config,
+      int fetchSize,
+      StreamRuneMetrics metrics,
+      int readPoisonBound,
+      UnaryOperator<PgNotificationListener.Builder> listenerTuning,
+      SubscriptionLease lease,
+      SubscriptionHealthContributor healthContributor) {
 
     if (subscriptionName == null) {
       throw new IllegalArgumentException("subscriptionName is required");
@@ -202,6 +242,7 @@ public final class HybridEventSubscription
     }
 
     this.subscriptionName = subscriptionName;
+    this.healthContributor = healthContributor;
     this.pollingSubscription =
         PollingEventSubscription.builder()
             .subscriptionName(subscriptionName.value())
@@ -286,6 +327,9 @@ public final class HybridEventSubscription
       }
       throw e;
     }
+    if (healthContributor != null) {
+      healthContributor.register(subscriptionName.value(), this);
+    }
   }
 
   @Override
@@ -301,6 +345,12 @@ public final class HybridEventSubscription
     // Delegates state CAS (PAUSED → RUNNING) to pollingSubscription.
     // Throws IllegalStateException if not PAUSED.
     pollingSubscription.resume();
+  }
+
+  /** The role of the polling subscription inside: its lease's role. */
+  @Override
+  public LeaseRole leaseRole() {
+    return pollingSubscription.leaseRole();
   }
 
   @Override
@@ -383,6 +433,9 @@ public final class HybridEventSubscription
     if (notificationListener != null) {
       notificationListener.close();
     }
+    if (healthContributor != null) {
+      healthContributor.unregister(subscriptionName.value());
+    }
   }
 
   // Builder
@@ -403,6 +456,7 @@ public final class HybridEventSubscription
     private SubscriptionLease lease;
     private SubscriptionLeadership leadership;
     private SagaRunner<?> sagaRunner;
+    private SubscriptionHealthContributor healthContributor;
 
     /**
      * Sets the stable subscription name (required). The name is the durable offset key in the
@@ -507,6 +561,17 @@ public final class HybridEventSubscription
     }
 
     /**
+     * Registers this subscription with {@code contributor} under its name on {@link #start()} and
+     * unregisters it on {@link #close()}, so health reports its state, lag, errors, push path and
+     * lease role. Optional; {@code null} registers nothing. The integrations cannot find a
+     * subscription the application builds itself.
+     */
+    public Builder healthContributor(SubscriptionHealthContributor contributor) {
+      this.healthContributor = contributor;
+      return this;
+    }
+
+    /**
      * Builds the {@link HybridEventSubscription}. Requires {@code subscriptionName}, {@code
      * dataSource}, {@code eventStore}, {@code offsetStore}, and {@code listener} or {@code
      * sagaRunner}. A leased subscription's standby attempts are spaced by the polling interval of
@@ -535,7 +600,8 @@ public final class HybridEventSubscription
           metrics,
           readPoisonBound,
           UnaryOperator.identity(),
-          resolvedLease());
+          resolvedLease(),
+          healthContributor);
     }
 
     /** Refuses one setting named twice: a saga runner sets the listener and the lease. */

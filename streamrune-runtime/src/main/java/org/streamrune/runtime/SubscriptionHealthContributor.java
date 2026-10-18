@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.OffsetStore;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
@@ -387,12 +388,20 @@ public final class SubscriptionHealthContributor {
           entry.subscription() != null
               ? entry.subscription().state()
               : SubscriptionLifecycleState.STOPPED;
-      return new SubscriptionHealth(name, state, lag, errors, SubscriptionHealth.Status.DOWN);
+      return new SubscriptionHealth(
+          name, state, lag, errors, SubscriptionHealth.Status.DOWN, roleOf(entry.subscription()));
     }
     SubscriptionLifecycleState state = entry.subscription().state();
     SubscriptionHealth.Status status = determineStatus(state, sample, errors);
     status = applyPushPathHealth(name, entry, state, status);
-    return new SubscriptionHealth(name, state, lag, errors, status);
+    return new SubscriptionHealth(name, state, lag, errors, status, roleOf(entry.subscription()));
+  }
+
+  /** The role a registration reports; {@code NOT_REPORTED} for one that is not role-aware. */
+  private static LeaseRole roleOf(SubscriptionLifecycle subscription) {
+    return subscription instanceof LeaseRoleAware aware
+        ? aware.leaseRole()
+        : LeaseRole.NOT_REPORTED;
   }
 
   /**

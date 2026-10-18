@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mockStatic;
 
 import io.quarkus.runtime.StartupEvent;
 import io.smallrye.config.SmallRyeConfig;
@@ -15,6 +16,7 @@ import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
@@ -24,9 +26,11 @@ import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
+import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
@@ -197,6 +201,105 @@ class SagaEventPathRetentionContainerWiringTest {
           SagaEventPathRetention.effectiveWindowOf(EXPLICIT_RUNNER),
           "an application-supplied window is never overwritten");
     }
+  }
+
+  /**
+   * Producers of two runners built for the startup report alone: the runners of {@link
+   * ApplicationBeans} are shared by the test that watches their window before and after startup.
+   */
+  public static class UngatedRunnerBeans {
+    @Produces
+    @Singleton
+    public StreamRuneQuarkusProperties properties() {
+      SmallRyeConfig config =
+          new SmallRyeConfigBuilder()
+              .withMapping(StreamRuneQuarkusProperties.class)
+              .withConverter(
+                  Duration.class, 100, new io.quarkus.runtime.configuration.DurationConverter())
+              .build();
+      return config.getConfigMapping(StreamRuneQuarkusProperties.class);
+    }
+
+    @Produces
+    @Singleton
+    @Named("firstRunner")
+    public SagaRunner<FakeState> firstRunner() {
+      return fencedRunner(null);
+    }
+
+    @Produces
+    @Singleton
+    @Named("secondRunner")
+    public SagaRunner<FakeState> secondRunner() {
+      return fencedRunner(null);
+    }
+  }
+
+  /** A leadership bean that is not {@link SubscriptionLeadership#NOOP}. */
+  public static class LeadershipBeans {
+    @Produces
+    @Singleton
+    public SubscriptionLeadership leadership() {
+      return new SubscriptionLeadership() {
+        @Override
+        public Optional<Lease> tryAcquire(String consumerName) {
+          return Optional.empty();
+        }
+
+        @Override
+        public Optional<Lease> current(String consumerName) {
+          return Optional.empty();
+        }
+
+        @Override
+        public void resign(String consumerName) {}
+
+        @Override
+        public void close() {}
+      };
+    }
+  }
+
+  /**
+   * This module binds SLF4J to JBoss Logging, so the startup report is observed at the call that
+   * writes it: how many runners {@link SagaLeaseWiring#warnUngatedUnderLeadership} reported.
+   */
+  private static List<Object> reportsWhileStarting(List<Class<?>> beans) throws Exception {
+    List<Object> reports = new java.util.ArrayList<>();
+    try (var arc = RealArcTestContainer.boot(beans);
+        var mocked =
+            mockStatic(
+                SagaLeaseWiring.class,
+                invocation -> {
+                  Object reported = invocation.callRealMethod();
+                  reports.add(reported);
+                  return reported;
+                })) {
+      arc.container().beanManager().getEvent().select(StartupEvent.class).fire(new StartupEvent());
+    }
+    return reports;
+  }
+
+  @Test
+  void realContainer_anUngatedRunnerUnderRealLeadershipIsReported() throws Exception {
+    var reports =
+        reportsWhileStarting(
+            List.of(
+                SagaEventPathRetentionConfigurer.class,
+                UngatedRunnerBeans.class,
+                LeadershipBeans.class));
+
+    assertEquals(
+        List.of(2), reports, "the two application runners carry no lease: both are reported");
+  }
+
+  @Test
+  void realContainer_nothingIsReportedWithoutALeadershipBean() throws Exception {
+    var reports =
+        reportsWhileStarting(
+            List.of(SagaEventPathRetentionConfigurer.class, UngatedRunnerBeans.class));
+
+    assertEquals(List.of(0), reports);
   }
 
   // ---- streamrune.saga.forward-fence --------------------------------------------------------

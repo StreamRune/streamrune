@@ -289,9 +289,25 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
   /**
    * Stops the sweep loop, resigns leadership so a standby can take over immediately, and resets the
    * started guard so {@link #start()} can be called again (restartable lifecycle).
+   *
+   * <p>A started sweeper that re-drives under a lease this process holds logs an INFO: while its
+   * subscription keeps the lease, no replica retries the compensations of the saga type.
    */
   @Override
   public void close() {
+    // INFO, not WARN: the integration closes the sweeper in an order, relative to the
+    // application's saga subscription, that the application does not control, so on a normal
+    // shutdown it usually closes while the subscription still anchors the lease.
+    if (started.get()
+        && compensationRetryEnabled
+        && follower != null
+        && sagaRunner.lease().isLeadingHere()) {
+      LOG.info(
+          "The compensation-retry sweeper of saga type {} closes while this process leads that saga"
+              + " type: no replica retries its compensations until the sweeper is started again or"
+              + " this process stops leading the saga type",
+          sagaTypeName);
+    }
     running = false;
     Thread t = thread;
     thread = null;

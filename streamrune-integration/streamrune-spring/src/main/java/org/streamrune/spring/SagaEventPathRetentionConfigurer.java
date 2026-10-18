@@ -7,9 +7,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.integration.SagaForwardFenceSetting;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
+import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SagaTypeOwnership;
 
@@ -40,6 +42,11 @@ import org.streamrune.runtime.SagaTypeOwnership;
  * streamrune.subscription.single-active-consumer.enabled} says. A runner that named its fence keeps
  * it. An unknown value fails startup.
  *
+ * <p><b>Leadership.</b> With a real {@link SubscriptionLeadership} bean (not the always-leading
+ * {@code NOOP}), the same hook logs one WARN per {@link SagaRunner} that carries no lease: its saga
+ * type is delivered on every replica ({@link SagaLeaseWiring#warnUngatedUnderLeadership}). The
+ * runner is reported, not refused.
+ *
  * <p>Runs after all singletons are instantiated so every {@link SagaRunner} bean is visible, and
  * before {@code SmartLifecycle} starts any subscription — the same hook, for the same reason, as
  * {@link SagaStateCryptoValidator}.
@@ -51,17 +58,22 @@ public class SagaEventPathRetentionConfigurer implements SmartInitializingSingle
 
   private final ObjectProvider<SagaRunner<?>> sagaRunnerProvider;
   private final StreamRuneProperties properties;
+  private final ObjectProvider<SubscriptionLeadership> leadershipProvider;
 
   public SagaEventPathRetentionConfigurer(
-      ObjectProvider<SagaRunner<?>> sagaRunnerProvider, StreamRuneProperties properties) {
+      ObjectProvider<SagaRunner<?>> sagaRunnerProvider,
+      StreamRuneProperties properties,
+      ObjectProvider<SubscriptionLeadership> leadershipProvider) {
     this.sagaRunnerProvider = sagaRunnerProvider;
     this.properties = properties;
+    this.leadershipProvider = leadershipProvider;
   }
 
   @Override
   public void afterSingletonsInstantiated() {
     List<SagaRunner<?>> sagaRunners = sagaRunnerProvider.orderedStream().toList();
     SagaTypeOwnership.requireOneRunnerPerSagaType(sagaRunners);
+    SagaLeaseWiring.warnUngatedUnderLeadership(sagaRunners, leadershipProvider.getIfAvailable());
     Duration window = properties.inbox().retentionMaxAge();
     int applied = SagaEventPathRetention.applyDefault(sagaRunners, window);
     if (applied > 0) {
