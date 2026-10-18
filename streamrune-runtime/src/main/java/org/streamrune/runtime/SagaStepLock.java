@@ -34,6 +34,12 @@ import org.streamrune.core.types.SagaType;
  * and two deliveries of one saga from doing the same work twice; the fence, not this lock, keeps a
  * forward command from following its compensation.
  *
+ * <p>In production with more than one replica the lock orders deadline claims when the runner
+ * carries a lease ({@link SagaRunner.Builder#leadership}): the timeout runner built from the runner
+ * then claims only in the process whose subscription delivers the saga type, where this lock holds
+ * every step. During a handover the deposed leader's step can still be in flight in its own
+ * process; there the fence holds.
+ *
  * <p><b>The rules.</b>
  *
  * <ul>

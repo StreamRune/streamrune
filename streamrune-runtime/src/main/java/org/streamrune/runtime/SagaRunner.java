@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -25,6 +26,7 @@ import org.streamrune.core.saga.SagaStateSerializationException;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.subscription.EventListener;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
@@ -146,27 +148,31 @@ import org.streamrune.core.types.StreamId;
  * key up again under the aggregate lock and once more when a keyed decider rejects, so a
  * lock-serialized duplicate of a succeeded step is answered with the recorded outcome, never
  * classified as a business rejection and compensated. As a result, concurrent listeners are safe —
- * no leadership gate is required for correctness, and neither {@code PollingEventSubscription} nor
- * {@code HybridEventSubscription} has one — but a single subscription per saga type remains the
- * recommended and most efficient topology. Within one process the steps of one saga do not overlap
- * at all: each delivery and each replay feed holds the saga's {@link SagaStepLock} from before its
- * read of the row to after its write, and a claim that has no event of its own — the timeout
- * runner's, the operator's compensation of a faulted forward step — is not made while a step holds
- * it. That lock is memory and reaches no other process; between processes the compare-and-swaps,
- * the inbox and the forward fence carry everything said here. With the fence on ({@link
- * Builder#forwardFence}, the default) each forward command is dispatched with the saga named as its
- * {@code SagaForward}, and the event store refuses it in the transaction that would store it once
- * the saga row carries a compensation episode, is terminal or is gone; the refused step goes on
- * from the row. No forward command is therefore stored after a compensation another process
- * claimed, or after the saga ended. A throwing {@code compensate()} is treated as a poison event:
- * the triggering event is quarantined and the saga is marked {@code FAULTED}. The event path does
- * not advance a claimed compensation: once a saga is {@code COMPENSATING} (claimed by {@code
- * SagaTimeoutRunner} or by a prior event-path delivery), correlated events never re-run forward
- * {@code evolve}/{@code handle}. They do, however, <em>resume</em> the compensation episode when
- * its owner crashed before the terminal write — re-driving compensation at the existing version
- * under the shared episode key, so a saga with no timeout runner still reaches a terminal status;
- * the resume is driven by {@link SagaStepExecutor} (routed from {@link #processCorrelatedEvent})
- * and, out of band, by {@link #sweepCompensation}. See {@link SagaStatus#COMPENSATING}.
+ * no leadership gate is required for correctness — but a single subscription per saga type remains
+ * the recommended and most efficient topology. A runner built with {@link Builder#leadership}
+ * carries the saga type's lease ({@link #lease()}): the subscription built with {@code
+ * sagaRunner(runner)} delivers only on the replica that holds it, and the timeout runner and the
+ * compensation-retry sweeper built from the runner act there only. A handover between replicas can
+ * still overlap a step in flight on the deposed leader; everything said here holds then too. Within
+ * one process the steps of one saga do not overlap at all: each delivery and each replay feed holds
+ * the saga's {@link SagaStepLock} from before its read of the row to after its write, and a claim
+ * that has no event of its own — the timeout runner's, the operator's compensation of a faulted
+ * forward step — is not made while a step holds it. That lock is memory and reaches no other
+ * process; between processes the compare-and-swaps, the inbox and the forward fence carry
+ * everything said here. With the fence on ({@link Builder#forwardFence}, the default) each forward
+ * command is dispatched with the saga named as its {@code SagaForward}, and the event store refuses
+ * it in the transaction that would store it once the saga row carries a compensation episode, is
+ * terminal or is gone; the refused step goes on from the row. No forward command is therefore
+ * stored after a compensation another process claimed, or after the saga ended. A throwing {@code
+ * compensate()} is treated as a poison event: the triggering event is quarantined and the saga is
+ * marked {@code FAULTED}. The event path does not advance a claimed compensation: once a saga is
+ * {@code COMPENSATING} (claimed by {@code SagaTimeoutRunner} or by a prior event-path delivery),
+ * correlated events never re-run forward {@code evolve}/{@code handle}. They do, however,
+ * <em>resume</em> the compensation episode when its owner crashed before the terminal write —
+ * re-driving compensation at the existing version under the shared episode key, so a saga with no
+ * timeout runner still reaches a terminal status; the resume is driven by {@link SagaStepExecutor}
+ * (routed from {@link #processCorrelatedEvent}) and, out of band, by {@link #sweepCompensation}.
+ * See {@link SagaStatus#COMPENSATING}.
  *
  * <p><b>Forward-command failures are classified before anything is undone.</b> A failed forward
  * command does <em>not</em> automatically mean "undo the business flow". {@link
@@ -239,6 +245,11 @@ public final class SagaRunner<S extends SagaState> {
    */
   static final int MAX_DELIVERY_ATTEMPTS = 3;
 
+  /**
+   * The prefix of a saga runner's lease name; the saga type ({@link SagaType#value()}) follows it.
+   */
+  public static final String LEASE_NAME_PREFIX = "saga:";
+
   private final SagaOrchestrator<S> orchestrator;
 
   /**
@@ -293,6 +304,15 @@ public final class SagaRunner<S extends SagaState> {
    */
   private final boolean forwardFenceConfigured;
 
+  /**
+   * The lease this saga type is delivered under ({@link #lease()}): gated over the leadership the
+   * builder named, ungated otherwise. Named {@code "saga:" + sagaType} either way.
+   */
+  private final SubscriptionLease lease;
+
+  /** Set once the WARN of a gated listener delivering without its anchor has been written. */
+  private final AtomicBoolean unanchoredDeliveryWarned = new AtomicBoolean();
+
   private SagaRunner(Builder<S> builder) {
     this.orchestrator = builder.orchestrator;
     this.sagaType = SagaType.fromClass(builder.orchestrator.stateType());
@@ -313,6 +333,20 @@ public final class SagaRunner<S extends SagaState> {
             builder.clock);
     this.forwardFenceConfigured = builder.forwardFence != null;
     this.executor.forwardFence(!Boolean.FALSE.equals(builder.forwardFence));
+    this.lease =
+        SubscriptionLease.of(
+            builder.leadership != null ? builder.leadership : SubscriptionLeadership.NOOP,
+            LEASE_NAME_PREFIX + sagaType.value());
+  }
+
+  /**
+   * The lease this runner's saga type is delivered under; ungated unless the builder named a
+   * leadership ({@link Builder#leadership}). A subscription built with {@code sagaRunner(runner)}
+   * anchors it; the {@link SagaTimeoutRunner} and the {@link SagaCompensationRetrySweeper} built
+   * from this runner follow it.
+   */
+  public SubscriptionLease lease() {
+    return lease;
   }
 
   /**
@@ -476,6 +510,7 @@ public final class SagaRunner<S extends SagaState> {
    */
   public EventListener asEventListener() {
     return events -> {
+      warnIfDeliveringWithoutAnAnchor();
       for (EventEnvelope event : events) {
         try {
           resolveTarget(event).ifPresent(target -> deliver(target, event));
@@ -496,6 +531,24 @@ public final class SagaRunner<S extends SagaState> {
         // onEvents, the subscription does not advance the offset, and the batch is retried.
       }
     };
+  }
+
+  /**
+   * Writes one WARN when a runner that carries a lease delivers while no subscription of this
+   * process has ever anchored that lease: its subscription was built with {@code
+   * listener(runner.asEventListener())} instead of {@code sagaRunner(runner)}.
+   */
+  private void warnIfDeliveringWithoutAnAnchor() {
+    if (lease.isGated()
+        && !lease.everAnchored()
+        && unanchoredDeliveryWarned.compareAndSet(false, true)) {
+      LOG.warn(
+          "Saga type {} delivers without the anchor of its lease '{}': build the subscription with"
+              + " .sagaRunner(runner). Its events are delivered on every replica that runs this"
+              + " listener, and its timeout runner and compensation-retry sweeper act on none.",
+          sagaType.value(),
+          lease.name());
+    }
   }
 
   /**
@@ -1238,6 +1291,7 @@ public final class SagaRunner<S extends SagaState> {
     private Duration inboxRetentionMaxAge;
     private Clock clock = Clock.systemUTC();
     private SagaStepLock stepLock;
+    private SubscriptionLeadership leadership;
 
     /** {@code null}: not named, which {@link #build()} treats as on. */
     private Boolean forwardFence;
@@ -1365,6 +1419,22 @@ public final class SagaRunner<S extends SagaState> {
      */
     public Builder<S> stepLock(SagaStepLock stepLock) {
       this.stepLock = Objects.requireNonNull(stepLock, "stepLock is required");
+      return this;
+    }
+
+    /**
+     * The single-active-consumer leadership this saga type is delivered under: pass the
+     * application's {@link SubscriptionLeadership} bean, and build the saga's subscription with
+     * {@code sagaRunner(runner)} ({@code PollingEventSubscription}, {@code
+     * HybridEventSubscription}, {@code PostgresNotificationSubscription}). One replica then
+     * delivers the saga type, and the {@link SagaTimeoutRunner} and the {@link
+     * SagaCompensationRetrySweeper} built from this runner act on that replica only. Absent, {@code
+     * null} or {@link SubscriptionLeadership#NOOP}: ungated, every replica that runs the
+     * subscription delivers — correct too: the saga row's compare-and-swap, the command inbox and
+     * the forward fence carry correctness either way.
+     */
+    public Builder<S> leadership(SubscriptionLeadership leadership) {
+      this.leadership = leadership;
       return this;
     }
 

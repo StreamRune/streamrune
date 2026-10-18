@@ -447,6 +447,17 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   rejects any checkpoint commit whose epoch is below the stamped one. `single-active-consumer.enabled=false`
   selects `SubscriptionLeadership.NOOP` (always leader, epoch 0, unfenced) for single-instance
   deployments. The same leadership gates `DeadLetterRetryRunner` and the saga sweepers.
+- Leased event subscriptions: `PollingEventSubscription`, `HybridEventSubscription` and
+  `PostgresNotificationSubscription` take `.lease(SubscriptionLease)`, `.leadership(SubscriptionLeadership)`
+  (a lease named after the subscription) or `.sagaRunner(runner)` (the runner's listener and lease);
+  `build()` refuses two of them that name one thing. A `SubscriptionLease` is a named lease over a
+  `SubscriptionLeadership` with one anchor per process — the subscription, which alone acquires and
+  resigns — and followers that act only while the anchor leads. A leased subscription asks for the
+  lease before every checkpoint read, at most once per polling interval however many notifications
+  wake it; a standby reads and saves nothing. A lease lost during a drain ends it after the page in
+  flight; pause, close and a terminal exit resign only after the poll thread left its page, and
+  `resume()` waits for that page before it takes the lease again. `LeaseRole` (`NOT_REPORTED`,
+  `UNGATED`, `LEADING`, `STANDBY`) names the role a subscription plays under its lease.
 
 ### Sagas
 
@@ -660,6 +671,19 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   subscription redelivers the page, and the replay call fails. A forward command's own version
   conflict is a retry-later failure and is not run again. Counts one `saga.delivery_retried` sample
   per run again.
+- Saga leadership: `SagaRunner.Builder.leadership(bean)` gives the runner the lease
+  `"saga:" + saga type` (`SagaRunner.lease()`). The saga's subscription built with
+  `.sagaRunner(runner)` anchors it; the `SagaTimeoutRunner` built with `.sagaRunner(runner)` and the
+  `SagaCompensationRetrySweeper` built from the runner follow it — they act only on the replica that
+  leads and never acquire or resign. With N replicas one delivers the saga type, claims its deadlines
+  and retries its compensations; the others take over within one attempt interval of a clean stop and
+  within the lease TTL of a crash. Correctness does not rest on it: the saga row's compare-and-swap,
+  the command inbox and the forward fence hold during a handover overlap. A runner without
+  leadership (absent, `null` or `NOOP`) delivers on every replica. A follower whose lease no
+  subscription of its process anchored logs one INFO within 15 s of its start and one WARN past it,
+  and its relay health reads `DEGRADED`; a runner with a lease delivering through
+  `listener(runner.asEventListener())` logs one WARN. A sweeper of a runner without a lease keeps its
+  own lease, `"saga-compensation-retry:" + saga type`.
 - A replay feed of a correlated event is never applied over a row whose start step is not applied
   yet: the drain defers such an entry (`SAGA_ROW_PENDING`) before the feed, and the step executor
   refuses the feed itself (`SKIPPED_GENESIS_PENDING`). A row deleted and inserted again for the saga

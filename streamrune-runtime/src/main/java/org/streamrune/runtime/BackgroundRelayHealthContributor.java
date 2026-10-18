@@ -28,8 +28,10 @@ import org.streamrune.crypto.CryptoForgetSignal;
  *   <li><b>DOWN</b> — started but the poll thread is no longer alive/running (died unexpectedly).
  *   <li><b>DEGRADED</b> — running but with one or more consecutive poll-cycle failures (in
  *       backoff-retry: store/broker unreachable); or, for a saga timeout runner, running while a
- *       saga's deadline is not enforced because a step of that saga has not returned; or, for the
- *       crypto forget channel, subscribed while this replica does not hear peers' forgets.
+ *       saga's deadline is not enforced because a step of that saga has not returned; or, for a
+ *       saga timeout runner or compensation-retry sweeper that follows its runner's lease, running
+ *       past the anchor grace in a process where no subscription ever anchored that lease; or, for
+ *       the crypto forget channel, subscribed while this replica does not hear peers' forgets.
  *   <li><b>UP</b> — running with no consecutive failures, or not started (nothing to be unhealthy
  *       about).
  * </ul>
@@ -72,8 +74,9 @@ public class BackgroundRelayHealthContributor {
 
     /**
      * Whether the relay, alive and with no failed cycle, is leaving work undone that it reports
-     * itself. Only the saga timeout runner has such a state: a deadline it does not enforce because
-     * a step of that saga has not returned.
+     * itself: a saga timeout runner's deadline it does not enforce because a step of that saga has
+     * not returned, and a saga timeout runner's or compensation-retry sweeper's lease that no
+     * subscription of this process anchored ({@code leaseUnanchored()}).
      */
     default boolean leavingWorkUndone() {
       return false;
@@ -158,7 +161,9 @@ public class BackgroundRelayHealthContributor {
    * "relay." + name} — showed only one of them, so one saga's dead driver could hide. A dead
    * sweeper thread ({@code isStarted() && !isAlive()}) is reported DOWN — the exact
    * operator-blindness this contributor was built to prevent, now applied to the business-critical
-   * saga drivers that strand refunds/stock when they die.
+   * saga drivers that strand refunds/stock when they die. A started, alive sweeper is reported
+   * DEGRADED while {@link SagaCompensationRetrySweeper#leaseUnanchored()}: it follows its runner's
+   * lease and no subscription of this process has anchored it, so it re-drives nothing here.
    */
   public void registerSagaCompensationRetrySweeper(SagaCompensationRetrySweeper<?> sweeper) {
     if (sweeper == null) {
@@ -187,6 +192,11 @@ public class BackgroundRelayHealthContributor {
           public int consecutiveFailures() {
             return sweeper.consecutiveFailures();
           }
+
+          @Override
+          public boolean leavingWorkUndone() {
+            return sweeper.leaseUnanchored();
+          }
         });
   }
 
@@ -201,7 +211,9 @@ public class BackgroundRelayHealthContributor {
    * of a saga past its deadline, the step was still in flight, and the claim is not made underneath
    * it — that saga's deadline is not enforced in this process until the step returns. That happens
    * only for a runner whose forward fence is off, or a timeout runner built with a step lock alone:
-   * with the fence on the claim is made once the wait has passed.
+   * with the fence on the claim is made once the wait has passed. It is reported DEGRADED too while
+   * {@link SagaTimeoutRunner#leaseUnanchored()}: it follows its runner's lease and no subscription
+   * of this process has anchored it, so it claims no deadline here.
    */
   public void registerSagaTimeoutRunner(SagaTimeoutRunner<?> runner) {
     if (runner == null) {
@@ -231,7 +243,7 @@ public class BackgroundRelayHealthContributor {
 
           @Override
           public boolean leavingWorkUndone() {
-            return runner.claimsDeferredPastTheWait() > 0;
+            return runner.claimsDeferredPastTheWait() > 0 || runner.leaseUnanchored();
           }
         });
   }

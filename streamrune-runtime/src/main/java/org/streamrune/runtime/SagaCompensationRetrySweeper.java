@@ -94,12 +94,18 @@ import org.streamrune.core.types.SagaType;
  * either, such a sweeper would neither re-drive nor sample anything, so the integrations do not
  * build it at all.
  *
- * <p><b>Single-active-consumer.</b> Like {@link DeadLetterRetryRunner}, the sweep is leadership
- * -gated: only the instance holding leadership for {@code "saga-compensation-retry:<sagaType>"}
- * polls; a non-leader returns before reading a single row. The default is {@link
- * SubscriptionLeadership#NOOP} (always leader), so single-instance behavior is unchanged. This is
- * defense-in-depth on top of the shared-episode-key + terminal-CAS invariant, which already makes
- * even a concurrent double-drive safe.
+ * <p><b>Single-active-consumer.</b> A sweeper of a runner that carries a lease ({@link
+ * SagaRunner#lease()}) follows that lease: it re-drives only while a subscription of this process
+ * anchors it and leads — the replica that delivers the saga type — and never acquires or resigns
+ * it, so its {@link #close()} leaves the lease alone. In a process where no subscription ever
+ * anchored the lease it re-drives nothing: one INFO within the anchor grace after its start, one
+ * WARN past it, and {@link #leaseUnanchored()} turns its health {@code DEGRADED}. A sweeper of a
+ * runner without a lease is gated like {@link DeadLetterRetryRunner}: only the instance holding
+ * leadership for {@code "saga-compensation-retry:<sagaType>"} polls; a non-leader returns before
+ * reading a single row. That default is {@link SubscriptionLeadership#NOOP} (always leader), so
+ * single-instance behavior is unchanged. Either gate is defense-in-depth on top of the
+ * shared-episode-key + terminal-CAS invariant, which already makes even a concurrent double-drive
+ * safe. The backlog gauges are sampled on every replica either way.
  *
  * @param <S> the saga state type
  */
@@ -139,6 +145,14 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
    * every cycle but never takes the lease or re-drives compensation.
    */
   private final boolean compensationRetryEnabled;
+
+  /**
+   * The follower of the runner's lease when the runner carries one ({@link SagaRunner#lease()}):
+   * the sweep then re-drives only while a subscription of this process anchors that lease and
+   * leads, and never acquires or resigns. {@code null} for a runner without a lease: the sweep then
+   * takes its own lease ({@link #CONSUMER_NAME_PREFIX}) over {@link #leadership}.
+   */
+  private final LeaseFollower follower;
 
   private final ResilientPollLoop pollLoop;
   private final AtomicBoolean started = new AtomicBoolean(false);
@@ -189,6 +203,18 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     this.sagaTypeName = sagaType.value();
     this.consumerName = CONSUMER_NAME_PREFIX + sagaType.value();
     this.leadership = b.leadership != null ? b.leadership : SubscriptionLeadership.NOOP;
+    SubscriptionLease runnerLease = b.sagaRunner.lease();
+    this.follower =
+        runnerLease.isGated()
+            ? new LeaseFollower(
+                runnerLease,
+                LOG,
+                "compensation-retry sweeper",
+                sagaTypeName,
+                "compensation retries are run",
+                b.anchorGrace,
+                System::nanoTime)
+            : null;
     this.retryInterval = b.retryInterval;
     this.giveUpAfter = b.giveUpAfter;
     // zero/negative means the inbox retention sweeper is DISABLED (keys are never
@@ -227,6 +253,9 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
               + " first");
     }
     running = true;
+    if (follower != null) {
+      follower.started();
+    }
     if (!compensationRetryEnabled) {
       // Worded by mode — with no metrics wired this loop is a pure idle no-op (still
       // health-registered, so a dead thread would still surface DOWN), so the log must not claim
@@ -295,7 +324,9 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     // lease to give back. Resigning anyway was a harmless no-op UPDATE per saga type per replica
     // on every shutdown — or, if the DB is already gone by then, a misleading "resign(...) failed;
     // lease will expire naturally" WARN for a lease this instance never took.
-    if (compensationRetryEnabled) {
+    // A follower of the runner's lease never took a lease of its own, and the lease it follows is
+    // its subscription's to resign.
+    if (compensationRetryEnabled && follower == null) {
       try {
         leadership.resign(consumerName);
       } catch (RuntimeException resignFailure) {
@@ -375,6 +406,16 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     return sagaTypeName;
   }
 
+  /**
+   * Whether this sweeper follows a saga runner's lease that no subscription of this process has
+   * anchored since its start, past the anchor grace: it re-drives nothing here, and the health
+   * check reports it {@code DEGRADED}. Always {@code false} for a sweeper of a runner without a
+   * lease.
+   */
+  public boolean leaseUnanchored() {
+    return follower != null && follower.unanchoredPastGrace();
+  }
+
   /** Package-private for testing — the single-active-consumer coordinator the sweep gates on. */
   SubscriptionLeadership leadership() {
     return leadership;
@@ -401,7 +442,15 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     // replicas never all re-drive the same episode. NOOP (single-instance default) always hands out
     // a lease. Re-drives are command-inbox idempotent, so no fencing epoch is threaded — the lease
     // gate alone suffices.
-    if (leadership.tryAcquire(consumerName).isEmpty()) {
+    //
+    // A sweeper of a runner that carries a lease follows that lease instead: it re-drives only
+    // while a subscription of this process anchors the lease and leads, so the replica that
+    // delivers the saga type is the one that retries its compensations.
+    if (follower != null) {
+      if (!follower.mayAct()) {
+        return;
+      }
+    } else if (leadership.tryAcquire(consumerName).isEmpty()) {
       return;
     }
     Instant now = clock.instant();
@@ -656,6 +705,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     private Clock clock = Clock.systemUTC();
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private boolean compensationRetryEnabled = true;
+    private Duration anchorGrace = LeaseFollower.DEFAULT_ANCHOR_GRACE;
 
     /** The saga runner whose compensation logic (and saga type) this sweeper re-drives. */
     public Builder<S> sagaRunner(SagaRunner<S> sagaRunner) {
@@ -764,6 +814,15 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
      */
     public Builder<S> compensationRetryEnabled(boolean enabled) {
       this.compensationRetryEnabled = enabled;
+      return this;
+    }
+
+    /**
+     * How long after {@link SagaCompensationRetrySweeper#start()} a lease no subscription of this
+     * process has anchored is still expected to be; for tests.
+     */
+    Builder<S> anchorGrace(Duration anchorGrace) {
+      this.anchorGrace = Objects.requireNonNull(anchorGrace, "anchorGrace is required");
       return this;
     }
 

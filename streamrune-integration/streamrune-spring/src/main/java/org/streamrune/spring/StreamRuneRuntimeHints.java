@@ -44,6 +44,7 @@ import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
@@ -181,9 +182,10 @@ public class StreamRuneRuntimeHints implements RuntimeHintsRegistrar {
           // Core records — org.streamrune.core.subscription (2)
           SubscriptionConfig.class,
           SubscriptionHealth.class,
-          // Core enums — org.streamrune.core.subscription (2)
+          // Core enums — org.streamrune.core.subscription (3)
           SubscriptionHealth.Status.class,
           SubscriptionLifecycleState.class,
+          LeaseRole.class,
           // Top-level core enums/records that the exhaustive classpath scan in
           // NativeReflectionTypes now demands. They were unregistered in all three registries and
           // no test flagged them, because the expected set was seeded from the registry itself;

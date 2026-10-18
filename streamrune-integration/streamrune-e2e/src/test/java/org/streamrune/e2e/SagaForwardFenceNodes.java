@@ -50,6 +50,7 @@ import org.streamrune.core.saga.SagaDecider;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -356,6 +357,12 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
     /** Every command that reached this node's bus, in order. */
     final List<Class<?>> dispatched = new CopyOnWriteArrayList<>();
 
+    /** The saga type of every step this node's runner ran again after a lost compare-and-swap. */
+    final List<String> deliveryRetriedSamples = new CopyOnWriteArrayList<>();
+
+    /** The saga type of every compare-and-swap of a saga row this node lost. */
+    final List<String> casConflictSamples = new CopyOnWriteArrayList<>();
+
     final StreamRuneMetrics metrics =
         new StreamRuneMetrics() {
           @Override
@@ -366,6 +373,16 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
           @Override
           public void recordSagaCompensationUnderForwardStep(String sagaType) {
             underStepSamples.add(sagaType);
+          }
+
+          @Override
+          public void recordSagaDeliveryRetried(String sagaType) {
+            deliveryRetriedSamples.add(sagaType);
+          }
+
+          @Override
+          public void recordSagaCasConflict(String sagaType) {
+            casConflictSamples.add(sagaType);
           }
         };
 
@@ -384,6 +401,23 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
      *     does; without one every use opens a physical connection
      */
     Node(String name, boolean forwardFence, Clock clock, Duration timeout, boolean pooled) {
+      this(name, forwardFence, clock, timeout, pooled, null, null);
+    }
+
+    /**
+     * @param leadership the leadership the node's runner delivers its saga type under; {@code null}
+     *     for none
+     * @param timeoutPollInterval the pause between two polls of the node's timeout runner; {@code
+     *     null} for the timeout runner's default
+     */
+    Node(
+        String name,
+        boolean forwardFence,
+        Clock clock,
+        Duration timeout,
+        boolean pooled,
+        SubscriptionLeadership leadership,
+        Duration timeoutPollInterval) {
       this.name = name;
       PGSimpleDataSource physical = new PGSimpleDataSource();
       physical.setUrl(POSTGRES.getJdbcUrl());
@@ -458,8 +492,9 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
               .clock(clock)
               .metrics(metrics)
               .forwardFence(forwardFence)
+              .leadership(leadership)
               .build();
-      timeoutRunner =
+      SagaTimeoutRunner.Builder<State> timeouts =
           SagaTimeoutRunner.<State>builder()
               .decider(saga)
               .sagaStore(rows)
@@ -468,8 +503,11 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
               .clock(clock)
               .sagaRunner(runner)
               .batchSize(1_000)
-              .metrics(metrics)
-              .build();
+              .metrics(metrics);
+      if (timeoutPollInterval != null) {
+        timeouts.pollInterval(timeoutPollInterval);
+      }
+      timeoutRunner = timeouts.build();
       replayer =
           SagaDeadLetterReplayer.builder()
               .sagaDeadLetterStore(deadLetters)

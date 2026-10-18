@@ -75,6 +75,18 @@ import org.streamrune.core.types.SagaType;
  * SagaStepExecutor} marks the saga {@code FAULTED} (halted — excluded from future polls) using the
  * post-claim episode version and WARN-logs the cause before the CAS-FAULT write.
  *
+ * <p><b>It follows the runner's lease.</b> A runner built with {@link Builder#sagaRunner} from a
+ * {@link SagaRunner} that carries a lease ({@link SagaRunner.Builder#leadership}) polls only while
+ * that lease is held through a subscription of this process that anchors it ({@link
+ * SubscriptionLease#isLeadingHere()}): one replica claims a saga type's deadlines — the one that
+ * delivers its events, where its steps run under the step lock. A poll that does not lead reads and
+ * writes nothing and forgets the claims it was deferring. The runner never acquires or resigns the
+ * lease; {@link #start()} and {@link #stop()} leave it alone. In a process where no subscription
+ * ever anchored the lease the runner claims nothing: it logs one INFO within the anchor grace after
+ * its start and one WARN past it, and {@link #leaseUnanchored()} turns its health {@code DEGRADED}.
+ * A runner built with {@link Builder#stepLock}, or from a runner without a lease, polls wherever it
+ * runs.
+ *
  * <p><b>The claim waits for a step in flight in this process.</b> A saga's deadline can pass while
  * a delivery is dispatching its forward commands. A claim made then compensates from a state that
  * does not include that step; the step's next forward command is refused at its commit by a runner
@@ -195,6 +207,16 @@ public final class SagaTimeoutRunner<S extends SagaState> {
   private final Duration claimWait;
 
   /**
+   * The lease this runner follows: the {@link SagaRunner}'s when the builder named the runner,
+   * otherwise none ({@link SubscriptionLease#ungated()}). The runner claims only while a
+   * subscription of this process anchors the lease and leads; it never acquires or resigns it.
+   */
+  private final SubscriptionLease lease;
+
+  /** Whether this runner may act on a poll, and its lines for a lease no subscription anchored. */
+  private final LeaseFollower follower;
+
+  /**
    * The sagas whose claim the last polls passed over because a step was in flight, with the number
    * of polls in a row. An entry is removed when the saga's claim gets the lock and when the saga
    * leaves the selection (its step wrote a terminal status, or the row is gone), so the map holds
@@ -231,10 +253,21 @@ public final class SagaTimeoutRunner<S extends SagaState> {
       Duration inboxRetentionMaxAge,
       SagaStepLock stepLock,
       SagaRunner<?> boundRunner,
-      Duration claimWait) {
+      Duration claimWait,
+      Duration anchorGrace) {
     this.stepLock = stepLock;
     this.boundRunner = boundRunner;
     this.claimWait = claimWait;
+    this.lease = boundRunner != null ? boundRunner.lease() : SubscriptionLease.ungated();
+    this.follower =
+        new LeaseFollower(
+            lease,
+            LOG,
+            "timeout runner",
+            sagaType.value(),
+            "deadlines are claimed",
+            anchorGrace,
+            System::nanoTime);
     this.decider = decider;
     this.sagaStore = sagaStore;
     this.sagaType = sagaType;
@@ -278,6 +311,7 @@ public final class SagaTimeoutRunner<S extends SagaState> {
           "SagaTimeoutRunner already started — call start() exactly once, or stop() first");
     }
     running = true;
+    follower.started();
     pollThread =
         Thread.ofVirtual()
             .name("saga-timeout-" + sagaType.value())
@@ -387,10 +421,26 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    * poll with a fixed clock and assert the cutoff deterministically.
    */
   void pollOnce() {
+    if (!follower.mayAct()) {
+      // Not leading here: read nothing, write nothing. A new leadership period counts deferrals
+      // from zero.
+      deferredClaims.clear();
+      claimsDeferredPastTheWait = 0;
+      return;
+    }
     Duration timeout =
         decider.timeout().orElseThrow(() -> new IllegalStateException("No timeout configured"));
     Instant cutoff = clock.instant().minus(timeout);
     processBatch(cutoff);
+  }
+
+  /**
+   * Whether this runner follows a saga runner's lease that no subscription of this process has
+   * anchored since its start, past the anchor grace: it claims no deadline here, and the health
+   * check reports it {@code DEGRADED}.
+   */
+  public boolean leaseUnanchored() {
+    return follower.unanchoredPastGrace();
   }
 
   /**
@@ -804,6 +854,7 @@ public final class SagaTimeoutRunner<S extends SagaState> {
     private SagaRunner<?> sagaRunner;
     private SagaStepLock stepLock;
     private Duration claimWait = DEFAULT_CLAIM_WAIT;
+    private Duration anchorGrace = LeaseFollower.DEFAULT_ANCHOR_GRACE;
 
     public Builder<S> decider(SagaDecider<S> decider) {
       this.decider = decider;
@@ -939,6 +990,12 @@ public final class SagaTimeoutRunner<S extends SagaState> {
      * nothing with this node's deliveries. An application that hand-wires two {@code SagaRunner}s
      * of one saga type has two locks; the claims of a timeout runner built from one of them do not
      * wait for the other's steps (a saga type has one runner — {@link SagaTypeOwnership}).
+     *
+     * <p>The timeout runner also follows the runner's lease ({@link SagaRunner#lease()}): built
+     * from a runner that carries one, it claims only while a subscription of this process built
+     * with {@code sagaRunner(runner)} leads; in a process that runs no such subscription it claims
+     * nothing. A process meant to claim deadlines without the saga's subscription builds the
+     * timeout runner with {@code stepLock(new SagaStepLock())} instead.
      */
     public Builder<S> sagaRunner(SagaRunner<?> sagaRunner) {
       this.sagaRunner = Objects.requireNonNull(sagaRunner, "sagaRunner is required");
@@ -959,6 +1016,15 @@ public final class SagaTimeoutRunner<S extends SagaState> {
      */
     public Builder<S> stepLock(SagaStepLock stepLock) {
       this.stepLock = Objects.requireNonNull(stepLock, "stepLock is required");
+      return this;
+    }
+
+    /**
+     * How long after {@link SagaTimeoutRunner#start()} a lease no subscription of this process has
+     * anchored is still expected to be; for tests.
+     */
+    Builder<S> anchorGrace(Duration anchorGrace) {
+      this.anchorGrace = Objects.requireNonNull(anchorGrace, "anchorGrace is required");
       return this;
     }
 
@@ -1073,7 +1139,8 @@ public final class SagaTimeoutRunner<S extends SagaState> {
           inboxRetentionMaxAge,
           claimLock,
           sagaRunner,
-          claimWait);
+          claimWait,
+          anchorGrace);
     }
   }
 }

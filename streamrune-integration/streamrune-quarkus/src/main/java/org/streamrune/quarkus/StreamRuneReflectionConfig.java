@@ -38,6 +38,7 @@ import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
@@ -146,9 +147,10 @@ import org.streamrune.core.types.Version;
       // Core records — org.streamrune.core.subscription (2)
       SubscriptionConfig.class,
       SubscriptionHealth.class,
-      // Core enums — org.streamrune.core.subscription (2)
+      // Core enums — org.streamrune.core.subscription (3)
       SubscriptionHealth.Status.class,
       SubscriptionLifecycleState.class,
+      LeaseRole.class,
       // Top-level core enums/records the exhaustive scan now demands; the
       // ProjectionDeliveryMode @ProjectionConfig declares joins them (8)
       LockMode.class,
