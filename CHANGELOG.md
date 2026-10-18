@@ -662,10 +662,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   per run again.
 - A replay feed of a correlated event is never applied over a row whose start step is not applied
   yet: the drain defers such an entry (`SAGA_ROW_PENDING`) before the feed, and the step executor
-  refuses the feed itself (`SKIPPED_GENESIS_PENDING`), so a row deleted and inserted again for the
-  saga id between the drain's read and the feed's, or between the attempts of a step run again, no
-  longer lets the event be applied ahead of the genesis and its entry discarded. The refusal
-  dispatches and writes nothing; the entry stays. A claimed compensation episode is still resumed.
+  refuses the feed itself (`SKIPPED_GENESIS_PENDING`). A row deleted and inserted again for the saga
+  id between the drain's read and the feed's, or between the attempts of a step run again, therefore
+  keeps its entry deferred, and the event is applied after the genesis. The refusal dispatches and
+  writes nothing; the entry stays. A claimed compensation episode is still resumed.
 - Saga-dispatched commands run as the saga system principal: both authorization interceptors skip the
   per-user check for a saga dispatch (every skip is logged); `Decider.guard` admits one through
   `Authorization.requireOwnerOrSaga`. Other interceptors still apply, and a veto decides nothing: the
