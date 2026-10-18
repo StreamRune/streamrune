@@ -104,7 +104,9 @@ import org.streamrune.core.types.StreamId;
  * {@link NullPointerException} when it is absent. Infrastructure failures ({@link SagaStore}
  * load/create/update/CAS) are NOT caught; they propagate out of {@code onEvents} so the
  * subscription can retry — every write here is a single durable statement, and every crash point
- * between two of them converges on the rerun.
+ * between two of them converges on the rerun. The one such failure that is not propagated at once
+ * is a lost compare-and-swap of the step's own saga-row write: the step is run again in place first
+ * (see <b>Concurrency</b>).
  *
  * <p><b>State-conversion failures are the one exception.</b> A {@link
  * SagaStateSerializationException} means the store could not convert the state to or from its
@@ -129,10 +131,17 @@ import org.streamrune.core.types.StreamId;
  * {@link SagaStore#applyEvent}, {@link SagaStore#claimCompensating}, {@link SagaStore#update},
  * {@link SagaStore#markFaulted}) — concurrent writers cannot silently lose updates. Start-event
  * deduplication is atomic: if two listeners race on the same start event, one wins the create and
- * the other reloads and routes on the recorded facts. A conflict on a correlated event propagates
- * out of {@code onEvents} like an infrastructure failure; the subscription retries the batch on
- * fresh state, the recorded {@code last_applied_offset} dedups the state advance, and any command
- * already dispatched in the losing attempt is deduplicated by the command inbox. That dedup holds
+ * the other reloads and routes on the recorded facts. A step whose write of the saga row loses its
+ * compare-and-swap to another writer is run again in place, up to three attempts in all: the runner
+ * reads the row that won and routes the event on it, with no backoff and without the subscription
+ * redelivering the page. The router decides what the run again does — a twin that applied the event
+ * makes it a redelivery that is dropped, a claim that won resumes the episode, an ended saga drops
+ * it, a faulted saga holds it, a removed row drops a correlated event or is created again by a
+ * start event. Any command already dispatched in the losing attempt is deduplicated by the command
+ * inbox. A forward command's own version conflict is a retry-later failure and is not run again
+ * here. After the third conflict in a row the conflict propagates out of {@code onEvents} like an
+ * infrastructure failure, after one WARN line; the subscription retries the batch on fresh state
+ * and the recorded {@code last_applied_offset} dedups the state advance. The commands' dedup holds
  * even when the duplicate dispatch overlaps the original: {@link VirtualThreadCommandBus} looks the
  * key up again under the aggregate lock and once more when a keyed decider rejects, so a
  * lock-serialized duplicate of a succeeded step is answered with the recorded outcome, never
@@ -223,6 +232,12 @@ public final class SagaRunner<S extends SagaState> {
   private static final Logger LOG = LoggerFactory.getLogger(SagaRunner.class);
 
   private static final String SAGA_ID_REQUIRED = "sagaId is required";
+
+  /**
+   * How many times a delivery or a replay feed runs its step for one event: the first attempt and
+   * two re-runs.
+   */
+  static final int MAX_DELIVERY_ATTEMPTS = 3;
 
   private final SagaOrchestrator<S> orchestrator;
 
@@ -454,8 +469,10 @@ public final class SagaRunner<S extends SagaState> {
   /**
    * Returns an {@link EventListener} backed by this runner. The listener processes events
    * sequentially within each batch. Poison events (orchestrator logic exceptions, deterministic
-   * state-conversion failures) are recorded by {@link #recordPoison} — the batch continues.
-   * Infrastructure failures (store I/O, CAS conflicts) propagate so the subscription retries.
+   * state-conversion failures) are recorded by {@link #recordPoison} — the batch continues. A step
+   * that loses the compare-and-swap of its saga row is run again in place, up to three attempts in
+   * all. Infrastructure failures (store I/O) and a conflict that survives the third attempt
+   * propagate so the subscription retries.
    */
   public EventListener asEventListener() {
     return events -> {
@@ -489,16 +506,28 @@ public final class SagaRunner<S extends SagaState> {
    * throws — a poison, a retry-later failure, a lost compare-and-swap, an {@link Error} — and the
    * poison handler of {@link #asEventListener} runs after it.
    *
+   * <p>A step whose write of the saga row loses the compare-and-swap is run again on the row that
+   * won, up to {@value #MAX_DELIVERY_ATTEMPTS} attempts in all, while the lock stays held: the lock
+   * is taken once, so no claim without an event lands between two attempts. The conflict of the
+   * last attempt propagates.
+   *
    * @throws SagaStepLockException when another step of the saga stays in flight past the step
    *     bound, or this thread is interrupted while it waits; nothing was read, and the failure
    *     leaves the listener so the event is delivered again
    */
   private void deliver(ReplayTarget target, EventEnvelope event) {
     try (SagaStepLock.Hold _ = stepLock.enterStep(sagaType, target.sagaId())) {
-      if (target.startPath()) {
-        processStartEvent(target.sagaId(), event);
-      } else {
-        processCorrelatedEvent(target.sagaId(), event);
+      for (int attempt = 1; ; attempt++) {
+        try {
+          if (target.startPath()) {
+            processStartEvent(target.sagaId(), event);
+          } else {
+            processCorrelatedEvent(target.sagaId(), event);
+          }
+          return;
+        } catch (SagaRowConflictException conflict) {
+          rerunOrPropagate(target.sagaId(), event, attempt, conflict, /* replay= */ false);
+        }
       }
     }
   }
@@ -509,7 +538,10 @@ public final class SagaRunner<S extends SagaState> {
    * single poison handler and reported as {@link StepOutcome#FAULTED}; a retry-later failure and
    * every infrastructure failure propagate to the replayer. A feed is a step of its saga and holds
    * the saga's step lock as a live delivery does ({@link #deliver}); a wait for it that ends
-   * without the lock propagates as {@link SagaStepLockException}.
+   * without the lock propagates as {@link SagaStepLockException}. A feed whose write of the saga
+   * row loses the compare-and-swap is run again as a live delivery is, up to {@value
+   * #MAX_DELIVERY_ATTEMPTS} attempts in all, inside the poison handling below; the conflict of the
+   * last attempt reaches the caller.
    *
    * @param operatorForced the operator's {@code force} on {@link SagaDeadLetterReplayer#replay(
    *     SagaId, org.streamrune.core.types.GlobalOffset, boolean)} / {@link
@@ -522,11 +554,19 @@ public final class SagaRunner<S extends SagaState> {
       SagaId sagaId, EventEnvelope event, boolean startPath, boolean operatorForced) {
     Objects.requireNonNull(sagaId, SAGA_ID_REQUIRED);
     try (SagaStepLock.Hold _ = stepLock.enterStep(sagaType, sagaId)) {
-      // a deterministic conversion poison on the load lands in the catch below
-      Optional<LoadedSaga<S>> row = loadForDelivery(sagaId);
-      // the entry being fed exists, so a row the feed creates is born shielded
-      return executor.execute(
-          sagaId, row, new SagaTrigger.ForwardStep(event, startPath, true, true, operatorForced));
+      for (int attempt = 1; ; attempt++) {
+        try {
+          // a deterministic conversion poison on the load lands in the catch below
+          Optional<LoadedSaga<S>> row = loadForDelivery(sagaId);
+          // the entry being fed exists, so a row the feed creates is born shielded
+          return executor.execute(
+              sagaId,
+              row,
+              new SagaTrigger.ForwardStep(event, startPath, true, true, operatorForced));
+        } catch (SagaRowConflictException conflict) {
+          rerunOrPropagate(sagaId, event, attempt, conflict, /* replay= */ true);
+        }
+      }
     } catch (SagaPoisonException poison) {
       recordPoison(sagaId, event, poison.getCause());
       LOG.warn(
@@ -538,6 +578,46 @@ public final class SagaRunner<S extends SagaState> {
           poison.getCause());
       return StepOutcome.FAULTED;
     }
+  }
+
+  /**
+   * After a lost compare-and-swap of the saga row: returns, so that the caller runs the step again
+   * on the row that won, or — on the last attempt — logs one WARN and rethrows the conflict, which
+   * then takes the path of any other failure of the step (the subscription delivers the page again;
+   * the replay call fails).
+   */
+  private void rerunOrPropagate(
+      SagaId sagaId,
+      EventEnvelope event,
+      int attempt,
+      SagaRowConflictException conflict,
+      boolean replay) {
+    String sanitized = LogSanitizer.sanitizeForLog(sagaId.value());
+    long offset = event.globalOffset().value();
+    if (attempt >= MAX_DELIVERY_ATTEMPTS) {
+      LOG.warn(
+          "Saga {} {} lost its compare-and-swap on {} attempts in a row for the {}event at offset"
+              + " {}; {}",
+          sagaType.value(),
+          sanitized,
+          MAX_DELIVERY_ATTEMPTS,
+          replay ? "replayed " : "",
+          offset,
+          replay
+              ? "the replay call fails with the conflict"
+              : "the subscription delivers the page again");
+      throw conflict;
+    }
+    recordMetric(
+        () -> metrics.recordSagaDeliveryRetried(sagaTypeTag()), "recordSagaDeliveryRetried");
+    LOG.debug(
+        "Saga {} {}: the step for the event at offset {} lost its compare-and-swap to another"
+            + " writer; attempt {} of {} runs it again on the row that won",
+        sagaType.value(),
+        sanitized,
+        offset,
+        attempt + 1,
+        MAX_DELIVERY_ATTEMPTS);
   }
 
   /** Runs an orchestrator pure-logic step, converting any thrown exception to a poison signal. */

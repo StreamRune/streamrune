@@ -14,7 +14,6 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventEnvelope;
-import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
 import org.streamrune.core.saga.SagaId;
@@ -148,7 +147,7 @@ class SagaStepLockWiringTest {
             timeouts.pollOnce();
           });
 
-      assertThatThrownBy(() -> p.deliver(opened)).isInstanceOf(OptimisticLockException.class);
+      p.deliver(opened);
 
       assertThat(timeouts.deferralsOf(sagaOf(ORDER))).isZero();
       assertThat(p.storedOrder(ORDER)).containsExactly("Released", "Refunded", "Reserved");

@@ -26,7 +26,8 @@ enum StepOutcome {
   SKIPPED_DEDUP,
   /**
    * A correlated {@code ForwardStep} on an absent row — the executor never creates rows for
-   * correlated events; the runner holds or drops such events before they reach it.
+   * correlated events; the runner holds or drops such events before they reach it, and the replayer
+   * defers the entry of a replay feed that meets it.
    */
   SKIPPED_NO_ROW,
   NOT_COMPENSATING

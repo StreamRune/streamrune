@@ -31,8 +31,8 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
-import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
@@ -481,6 +481,9 @@ class SagaEpisodeStampReadFromRowTest {
               .build();
     }
 
+    /** The saga type of every step the runner ran again after a lost compare-and-swap. */
+    final List<String> deliveryRetriedSamples = new java.util.concurrent.CopyOnWriteArrayList<>();
+
     private SagaRunner<State> newRunner() {
       return SagaRunner.<State>builder()
           .decider(saga)
@@ -496,6 +499,13 @@ class SagaEpisodeStampReadFromRowTest {
           .sagaDeadLetterStore(deadLetters)
           .inboxRetentionMaxAge(WINDOW)
           .clock(clock)
+          .metrics(
+              new StreamRuneMetrics() {
+                @Override
+                public void recordSagaDeliveryRetried(String sagaType) {
+                  deliveryRetriedSamples.add(sagaType);
+                }
+              })
           .build();
     }
 
@@ -1016,25 +1026,22 @@ class SagaEpisodeStampReadFromRowTest {
 
   /**
    * The row is deleted between the claim and the read. There is no stamp, so nothing is dispatched.
-   * A delivery reports a stale view; the redelivered start event then finds no row and starts the
-   * saga from its recorded facts.
+   * A delivery reports a stale view and the runner runs the step again: the start event finds no
+   * row and starts the saga from its recorded facts.
    */
   @Test
-  void theRowIsGoneAfterTheClaim_onADelivery_nothingIsDispatched_andTheStaleViewPropagates() {
+  void theRowIsGoneAfterTheClaim_onADelivery_nothingIsDispatched_andTheStepIsRunAgain() {
     try (var h = new Harness(true, SHIFTED)) {
       h.sagaStore.runOnceAfterTheClaim(() -> h.rows.delete(SAGA, TYPE));
       h.reserve.failure = () -> new IllegalArgumentException("out of stock");
       EventEnvelope opened = h.append(new Opened(ORDER));
 
-      assertThatThrownBy(() -> h.deliver(opened)).isInstanceOf(OptimisticLockException.class);
-
-      assertThat(h.bus.compensationKeys()).isEmpty();
-      assertThat(h.rows.load(SAGA, TYPE, State.class)).isEmpty();
-
       h.deliver(opened);
 
       assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
-      assertThat(h.bus.compensationKeys()).isEqualTo(h.keysOfTheRowsEpisode());
+      assertThat(h.bus.compensationKeys())
+          .as("the deleted row's claim dispatched nothing: one compensation of the new row")
+          .isEqualTo(h.keysOfTheRowsEpisode());
       h.assertEachCompensationStoredOnce();
     }
   }
@@ -1055,20 +1062,20 @@ class SagaEpisodeStampReadFromRowTest {
   }
 
   /**
-   * The same on a correlated event. The redelivered event finds no row and is dropped: nothing
+   * The same on a correlated event. The run again finds no row and drops the event: nothing
    * re-creates a deleted saga for a correlated event, so the forward effects the deleted saga had
    * committed stay as they are — what deleting a live saga's row means on any path.
    */
   @Test
-  void theRowIsGoneAfterTheClaim_onACorrelatedEvent_theRedeliveryFindsNoRow() {
+  void theRowIsGoneAfterTheClaim_onACorrelatedEvent_theRunAgainFindsNoRow() {
     try (var h = new Harness(false, 0)) {
       h.deliver(h.append(new Opened(ORDER)));
       h.ship.failure = () -> new IllegalArgumentException("address rejected");
       h.sagaStore.runOnceAfterTheClaim(() -> h.rows.delete(SAGA, TYPE));
       EventEnvelope advanced = h.append(new Advanced(ORDER));
 
-      assertThatThrownBy(() -> h.deliver(advanced)).isInstanceOf(OptimisticLockException.class);
       h.deliver(advanced);
+      h.deliver(advanced); // the redelivery
 
       assertThat(h.bus.compensationKeys()).isEmpty();
       assertThat(h.rows.load(SAGA, TYPE, State.class)).isEmpty();
@@ -1076,9 +1083,13 @@ class SagaEpisodeStampReadFromRowTest {
     }
   }
 
-  /** The same on a dead-letter replay feed: the stale view leaves the drain and the entry stays. */
+  /**
+   * The same on a dead-letter replay feed: the stale view is run again, the run again finds no row,
+   * and the drain defers the correlated entry as it does for any entry whose saga row is gone
+   * ({@code SAGA_ROW_PENDING}): the entry stays for the operator to discard.
+   */
   @Test
-  void theRowIsGoneAfterTheClaim_onAReplayFeed_theEntryStays() {
+  void theRowIsGoneAfterTheClaim_onAReplayFeed_theEntryIsDeferredAndKept() {
     try (var h = new Harness(false, 0)) {
       h.deliver(h.append(new Opened(ORDER)));
       h.saga.poisonAdvanced = true;
@@ -1088,38 +1099,74 @@ class SagaEpisodeStampReadFromRowTest {
       h.ship.failure = () -> new IllegalArgumentException("address rejected");
       h.sagaStore.runOnceAfterTheClaim(() -> h.rows.delete(SAGA, TYPE));
 
-      assertThatThrownBy(() -> h.replayer.replayAll(SAGA))
-          .isInstanceOf(OptimisticLockException.class);
+      assertThat(h.replayer.replayAll(SAGA))
+          .containsExactly(SagaDeadLetterReplayer.ReplayOutcome.SAGA_ROW_PENDING);
 
       assertThat(h.bus.compensationKeys()).isEmpty();
+      assertThat(h.rows.load(SAGA, TYPE, State.class)).isEmpty();
       assertThat(h.deadLetters.findBySaga(SAGA)).hasSize(1);
+      assertThat(h.deliveryRetriedSamples).containsExactly(TYPE.value());
     }
   }
 
   /**
+   * A row inserted for the saga id after the claimed row was deleted, and what the run again does.
+   */
+  private record Replacement(Consumer<Harness> insert, Consumer<Harness> assertTheRunAgain) {}
+
+  /**
    * The row is deleted and a start event inserts a row for the same saga id again, between the
    * claim and the read. The row the read finds is not the row the claim wrote: it is below the
-   * claim's version. The executor treats it as it treats no row — nothing is dispatched, the new
-   * row is not touched, and the stale view propagates.
+   * claim's version. The executor treats it as it treats no row — nothing is dispatched for the
+   * claimed row and the stale view is reported; the runner runs the step again, and the router
+   * decides on the new row as it does for any delivery to it: a correlated event over a row whose
+   * start step has not committed is held, and a row that is already in its compensation episode is
+   * resumed under its own stamp.
    */
   @TestFactory
-  Stream<DynamicTest> theRowIsReplacedByAnotherRowAfterTheClaim_nothingIsDispatched() {
-    Map<String, Consumer<Harness>> replacements = new LinkedHashMap<>();
+  Stream<DynamicTest> theRowIsReplacedByAnotherRowAfterTheClaim_theRunAgainRoutesOnTheNewRow() {
+    Map<String, Replacement> replacements = new LinkedHashMap<>();
     replacements.put(
         "aRunningRow",
-        h ->
-            h.rows.createGenesisPending(
-                SAGA, TYPE, new State(SagaStatus.RUNNING, ORDER), SagaStatus.RUNNING, false, null));
+        new Replacement(
+            h ->
+                h.rows.createGenesisPending(
+                    SAGA,
+                    TYPE,
+                    new State(SagaStatus.RUNNING, ORDER),
+                    SagaStatus.RUNNING,
+                    false,
+                    null),
+            h -> {
+              assertThat(h.bus.compensationKeys()).isEmpty();
+              assertThat(h.row().version()).as("the other row is untouched").isEqualTo(1L);
+              assertThat(h.row().status()).isEqualTo(SagaStatus.RUNNING);
+              assertThat(h.deadLetters.findBySaga(SAGA))
+                  .singleElement()
+                  .satisfies(
+                      entry ->
+                          assertThat(entry.errorType())
+                              .isEqualTo(SagaEventHeldException.class.getName()));
+            }));
     replacements.put(
         "aRowBornCompensating",
-        h ->
-            h.rows.createGenesisPending(
-                SAGA,
-                TYPE,
-                new State(SagaStatus.COMPENSATING, ORDER),
-                SagaStatus.COMPENSATING,
-                false,
-                EventId.of("evt-of-the-other-row")));
+        new Replacement(
+            h ->
+                h.rows.createGenesisPending(
+                    SAGA,
+                    TYPE,
+                    new State(SagaStatus.COMPENSATING, ORDER),
+                    SagaStatus.COMPENSATING,
+                    false,
+                    EventId.of("evt-of-the-other-row")),
+            h -> {
+              assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
+              assertThat(h.bus.compensationKeys())
+                  .as("the new row's own episode, once; none for the deleted row's claim")
+                  .isEqualTo(h.keysOfTheRowsEpisode());
+              h.assertEachCompensationStoredOnce();
+              assertThat(h.deadLetters.findBySaga(SAGA)).isEmpty();
+            }));
     return replacements.entrySet().stream()
         .map(
             replacement ->
@@ -1132,21 +1179,13 @@ class SagaEpisodeStampReadFromRowTest {
                         h.sagaStore.runOnceAfterTheClaim(
                             () -> {
                               h.rows.delete(SAGA, TYPE);
-                              replacement.getValue().accept(h);
+                              replacement.getValue().insert().accept(h);
                             });
-                        LoadedSaga<State> replaced;
                         EventEnvelope advanced = h.append(new Advanced(ORDER));
 
-                        assertThatThrownBy(() -> h.deliver(advanced))
-                            .isInstanceOf(OptimisticLockException.class);
+                        h.deliver(advanced);
 
-                        replaced = h.row();
-                        assertThat(h.bus.compensationKeys()).isEmpty();
-                        assertThat(replaced.version())
-                            .as("the other row is untouched")
-                            .isEqualTo(1L);
-                        assertThat(replaced.status()).isNotEqualTo(SagaStatus.FAULTED);
-                        assertThat(h.deadLetters.findBySaga(SAGA)).isEmpty();
+                        replacement.getValue().assertTheRunAgain().accept(h);
                       }
                     }));
   }

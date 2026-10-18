@@ -138,11 +138,12 @@ import org.streamrune.core.types.SagaType;
  *       committed commands in the inbox;
  *   <li>no row — the application deleted it: there is no stamp, so nothing is dispatched. A claim
  *       with no event in hand ends as {@code CLAIM_LOST}. A delivery or a replay feed reports a
- *       stale view ({@link OptimisticLockException}); what follows is what a deleted saga gets on
- *       any path: a redelivered start event finds no row and starts the saga again (its forward
- *       keys dedup), a redelivered correlated event finds no row and is dropped (or held when the
- *       saga id still owns a dead-letter record), and a replay leaves the drain with its entry
- *       kept;
+ *       stale view (a {@link SagaRowConflictException}, which {@link SagaRunner} runs the step
+ *       again on); what follows is what a deleted saga gets on any path: a start event finds no row
+ *       and starts the saga again (its forward keys dedup), a correlated event finds no row and is
+ *       dropped (or held when the saga id still owns a dead-letter record), and a replay feed
+ *       answers {@code SKIPPED_NO_ROW}, which the replayer defers ({@code SAGA_ROW_PENDING}) with
+ *       its entry kept;
  *   <li>another row — the application deleted the row and a start event inserted one for the same
  *       saga id again, all between the claim and the read: the argument above holds for one row,
  *       and this is not that row. A row's version only grows and an inserted row starts at 1, below
@@ -602,7 +603,8 @@ final class SagaStepExecutor<S extends SagaState> {
         recordCasConflict();
         Optional<LoadedSaga<S>> reloaded = reload(sagaId, type);
         if (reloaded.isEmpty()) {
-          throw concurrentlyCreated; // created and deleted underneath us: let the redelivery retry
+          // created and deleted underneath us: the runner runs the step again
+          throw new SagaRowConflictException(concurrentlyCreated);
         }
         return forwardStep(sagaId, reloaded, fs); // route on the recorded facts
       }
@@ -727,8 +729,8 @@ final class SagaStepExecutor<S extends SagaState> {
    *
    * <ul>
    *   <li>no row, or a row whose version is below the one this step read (the saga was deleted, and
-   *       perhaps started again): the stale view propagates as {@link OptimisticLockException}, the
-   *       exit a deleted row takes on every path; nothing more is dispatched;
+   *       perhaps started again): the stale view propagates as {@link SagaRowConflictException},
+   *       the exit a deleted row takes on every path; nothing more is dispatched;
    *   <li>a row that is neither terminal nor in its compensation episode ({@link
    *       LoadedSaga#effectiveStatus()} is a forward status): with no episode stamp the store
    *       refused a command it had no reason to refuse, so it does not keep the fence contract;
@@ -776,7 +778,7 @@ final class SagaStepExecutor<S extends SagaState> {
     Optional<LoadedSaga<S>> reloaded = reload(sagaId, type);
     if (reloaded.isEmpty() || reloaded.get().version() < rowVersion) {
       recordCasConflict();
-      throw new OptimisticLockException(
+      throw new SagaRowConflictException(
           "Saga "
               + sanitized
               + " was removed while its forward step was in flight; nothing more was dispatched");
@@ -884,11 +886,12 @@ final class SagaStepExecutor<S extends SagaState> {
    * last_applied_offset = GREATEST(old, offset)}, {@code genesis_applied} when {@code startPath},
    * {@code last_replayed_offset} when {@code replayRedrive}. A deterministic conversion failure
    * becomes poison (the adapter quarantines the triggering event); a transient one propagates. A
-   * CAS conflict PROPAGATES for batch retry — the redelivery reloads and dedups on the recorded
-   * offsets — on the start and the correlated path alike (with create-first there is no "swallow
-   * the concurrent create" case left here: the create happened in {@link #genesisStep}). Before it
-   * propagates, a conflict that follows an executed forward command is checked for a compensation
-   * episode opened underneath the step ({@link #reportCompensationUnderForwardStep}).
+   * CAS conflict PROPAGATES as a {@link SagaRowConflictException}, which {@link SagaRunner} runs
+   * the step again on — the run again reloads and dedups on the recorded offsets — on the start and
+   * the correlated path alike (with create-first there is no "swallow the concurrent create" case
+   * left here: the create happened in {@link #genesisStep}). Before it propagates, a conflict that
+   * follows an executed forward command is checked for a compensation episode opened underneath the
+   * step ({@link #reportCompensationUnderForwardStep}).
    *
    * @param executedCommands how many forward commands the step's loop executed in this call
    */
@@ -908,7 +911,8 @@ final class SagaStepExecutor<S extends SagaState> {
       recordCasConflict();
       reportCompensationUnderForwardStep(
           sagaId, type, fs, executedCommands, /* lostItsOwnClaim= */ false);
-      throw conflict; // propagate: the redelivery reloads and dedups on the recorded offsets
+      // the runner runs the step again: the reload dedups on the recorded offsets
+      throw new SagaRowConflictException(conflict);
     }
   }
 
@@ -1079,8 +1083,8 @@ final class SagaStepExecutor<S extends SagaState> {
    * (the genesis-pending row precedes the first dispatch), so both paths CAS-claim with {@link
    * SagaStore#claimCompensating} at the row version. Start path: a lost claim is SWALLOWED ->
    * {@code CLAIM_LOST} (no orphaned refund — claim-first). Correlated path: a lost claim is
-   * RETHROWN (batch retry). Claim COMPENSATING BEFORE invoking compensate() or dispatching any
-   * compensation command.
+   * RETHROWN as a {@link SagaRowConflictException} (the runner runs the step again). Claim
+   * COMPENSATING BEFORE invoking compensate() or dispatching any compensation command.
    *
    * <p>The claim lands the row at {@code rowVersion + 1}; that number is the optimistic-lock token
    * of the terminal write and nothing more. The episode's stamp — the version that scopes the
@@ -1089,8 +1093,8 @@ final class SagaStepExecutor<S extends SagaState> {
    * case for every row this executor wrote, a start event's genesis-pending row included. On a row
    * that already carries one (a row a tool wrote) the claim keeps it, and the commands are keyed
    * with the stamp the row carries. A row deleted since the claim has no stamp: nothing is
-   * dispatched and the stale view propagates on both paths. The redelivered start event then finds
-   * no row and starts the saga again; a redelivered correlated event finds no row and is dropped.
+   * dispatched and the stale view propagates on both paths. The run again of a start event then
+   * finds no row and starts the saga again; that of a correlated event finds no row and is dropped.
    *
    * <p>The id of the event whose forward command failed is handed to the claim to be recorded with
    * a stamp the claim writes. A lost claim that follows an executed forward command is checked for
@@ -1128,7 +1132,7 @@ final class SagaStepExecutor<S extends SagaState> {
             LogSanitizer.sanitizeForLog(sagaId.value()));
         return StepOutcome.CLAIM_LOST; // start: SWALLOW (dedup) — no orphaned refund (claim-first)
       }
-      throw claimLost; // correlated: PROPAGATE (batch retry)
+      throw new SagaRowConflictException(claimLost); // correlated: the runner runs the step again
     }
     long claimVersion = rowVersion + 1;
     EpisodeStamp episode =
@@ -1136,7 +1140,7 @@ final class SagaStepExecutor<S extends SagaState> {
             .orElseThrow(
                 () -> {
                   recordCasConflict();
-                  return new OptimisticLockException(
+                  return new SagaRowConflictException(
                       "Saga "
                           + LogSanitizer.sanitizeForLog(sagaId.value())
                           + " was removed after its compensation claim; nothing dispatched");

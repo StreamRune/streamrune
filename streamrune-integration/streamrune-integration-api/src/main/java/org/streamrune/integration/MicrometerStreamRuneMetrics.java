@@ -1023,6 +1023,17 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   }
 
   @Override
+  public void recordSagaDeliveryRetried(String sagaType) {
+    Counter.builder(meter(MetricNames.SAGA_DELIVERY_RETRIED))
+        .tag(MetricNames.TAG_SAGA_TYPE, sagaType)
+        .description(
+            "Saga steps run again in place after the saga row's compare-and-swap was lost to"
+                + " another writer")
+        .register(registry)
+        .increment();
+  }
+
+  @Override
   public void recordSagaCompensatingBacklog(String sagaType, long count) {
     sagaCompensatingBacklog
         .computeIfAbsent(

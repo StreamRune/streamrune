@@ -20,7 +20,6 @@ import org.slf4j.LoggerFactory;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
-import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
@@ -63,8 +62,9 @@ import org.streamrune.test.MutableClock;
  * The executor reports a compensation episode opened underneath a forward step that executed a
  * command: one WARN and one {@code streamrune.saga.compensation_under_forward_step} sample per
  * step. It reports that the episode was opened in the step's window, not the order in which the
- * step's command and the compensation were stored. The report changes no outcome; each case asserts
- * the stored order and the delivery's result beside the report.
+ * step's command and the compensation were stored. The report changes no outcome: the step that
+ * lost its write is run again in place on the row that won, so each delivery returns; each case
+ * asserts the stored order and the row beside the report.
  *
  * <p>A second path — the timeout runner, or another node's delivery (a second {@link SagaRunner}
  * over the same stores) — runs inside a hook, on the delivery's thread, right before a chosen
@@ -98,7 +98,9 @@ class SagaCompensationUnderForwardStepSignalTest {
     }
   }
 
-  /** A forwarding store with a hook before the event write and a switch that fails every load. */
+  /**
+   * A forwarding store with a hook before the event write and a switch that fails the next load.
+   */
   static final class HookedSagaStore extends ForwardingSagaStore {
     private Runnable beforeEventWrite;
     volatile RuntimeException loadFailure;
@@ -133,6 +135,7 @@ class SagaCompensationUnderForwardStepSignalTest {
         SagaId id, SagaType type, Class<S> stateType) {
       RuntimeException failure = loadFailure;
       if (failure != null) {
+        loadFailure = null;
         throw failure;
       }
       return super.load(id, type, stateType);
@@ -365,7 +368,7 @@ class SagaCompensationUnderForwardStepSignalTest {
       logger.setLevel(Level.DEBUG);
       logger.addAppender(appender);
       try {
-        assertThatThrownBy(() -> h.deliver(opened)).isInstanceOf(OptimisticLockException.class);
+        h.deliver(opened);
       } finally {
         logger.detachAppender(appender);
         logger.setLevel(before);
@@ -400,12 +403,7 @@ class SagaCompensationUnderForwardStepSignalTest {
       EventEnvelope opened = h.append(new Opened(ORDER));
       h.bus.runOnceBefore(Reserve.class, h::timeOut);
 
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(opened))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(opened));
 
       assertThat(h.storedOrder()).containsExactly("Released", "Refunded", "Reserved");
       assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
@@ -419,12 +417,7 @@ class SagaCompensationUnderForwardStepSignalTest {
       EventEnvelope opened = h.append(new Opened(ORDER));
       h.bus.runOnceBefore(Reserve.class, h::timeOut);
 
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(opened))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(opened));
 
       assertThat(h.storedOrder()).containsExactly("Released", "Refunded", "Reserved");
       assertReportedOnce(h, warnings, opened, 1);
@@ -438,12 +431,7 @@ class SagaCompensationUnderForwardStepSignalTest {
       EventEnvelope advanced = h.append(new Advanced(ORDER));
       h.bus.runOnceBefore(Ship.class, h::timeOut);
 
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(advanced))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(advanced));
 
       assertThat(h.storedOrder()).containsExactly("Reserved", "Released", "Refunded", "Shipped");
       assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
@@ -467,12 +455,7 @@ class SagaCompensationUnderForwardStepSignalTest {
 
       h.reserve.failure = null;
       h.bus.runOnceBefore(Reserve.class, h::timeOut);
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(opened))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(opened));
 
       assertThat(h.storedOrder()).containsExactly("Released", "Refunded", "Reserved");
       assertReportedOnce(h, warnings, opened, 1);
@@ -492,12 +475,7 @@ class SagaCompensationUnderForwardStepSignalTest {
             h.reserve.failure = null;
           });
 
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(opened))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(opened));
 
       assertThat(h.storedOrder()).containsExactly("Released", "Refunded", "Reserved");
       assertThat(h.row().genesisApplied()).isFalse();
@@ -531,12 +509,7 @@ class SagaCompensationUnderForwardStepSignalTest {
       EventEnvelope opened = h.append(new Opened(ORDER));
       h.bus.runOnceBefore(Ship.class, () -> h.deliverOnTheOtherNode(opened));
 
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(opened))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(opened));
 
       assertThat(h.storedOrder()).containsExactly("Reserved", "Shipped");
       assertThat(h.row().genesisApplied()).isTrue();
@@ -551,15 +524,11 @@ class SagaCompensationUnderForwardStepSignalTest {
       EventEnvelope opened = h.append(new Opened(ORDER));
       h.bus.runOnceBefore(Ship.class, () -> h.deliverOnTheOtherNode(opened));
 
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(opened))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(opened));
 
-      // The row carries a stamp, written by the twin's event write, and records the event.
-      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATING);
+      // The row carries a stamp, written by the twin's event write, and records the event; the
+      // run again resumes the episode the twin opened and ends it.
+      assertThat(h.row().status()).isEqualTo(SagaStatus.COMPENSATED);
       assertThat(h.row().episodeVersion()).isNotNull();
       assertThat(h.row().genesisApplied()).isTrue();
       assertSilent(h, warnings);
@@ -579,12 +548,7 @@ class SagaCompensationUnderForwardStepSignalTest {
       EventEnvelope nudged = h.append(new Nudged(ORDER));
       h.bus.runOnceBefore(Ship.class, () -> h.deliverOnTheOtherNode(nudged));
 
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(advanced))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(advanced));
 
       assertThat(h.storedOrder()).containsExactly("Reserved", "Shipped");
       assertThat(h.row().status()).isEqualTo(SagaStatus.RUNNING);
@@ -606,12 +570,7 @@ class SagaCompensationUnderForwardStepSignalTest {
       h.bus.runOnceBefore(
           Ship.class, () -> assertThat(h.rows.markFaulted(SAGA, TYPE, h.row().version())).isTrue());
 
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(advanced))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(advanced));
 
       assertThat(h.storedOrder()).containsExactly("Reserved", "Shipped");
       assertThat(h.row().status()).isEqualTo(SagaStatus.FAULTED);
@@ -636,12 +595,7 @@ class SagaCompensationUnderForwardStepSignalTest {
 
       // The redelivery executes nothing: the inbox answers for the command of the dead attempt.
       h.bus.runOnceBefore(Reserve.class, h::timeOut);
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(opened))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(opened));
 
       assertThat(h.storedOrder()).containsExactly("Reserved", "Released", "Refunded");
       assertSilent(h, warnings);
@@ -684,10 +638,10 @@ class SagaCompensationUnderForwardStepSignalTest {
     }
   }
 
-  // ---- the report never changes the outcome ----
+  // ---- the report never changes what the runner does with the lost write ----
 
   @Test
-  void theReloadFails_theLostWriteStaysTheOutcome_andTheFailureIsLoggedAtDebug() {
+  void theReloadFails_theLostWriteIsRunAgainRegardless_andTheFailureIsLoggedAtDebug() {
     try (var h = new Fixture(false)) {
       EventEnvelope opened = h.append(new Opened(ORDER));
       h.bus.runOnceBefore(
@@ -697,12 +651,7 @@ class SagaCompensationUnderForwardStepSignalTest {
             h.sagaStore.loadFailure = new IllegalStateException("the saga store is unreachable");
           });
 
-      List<String> debug =
-          executorLinesDuring(
-              Level.DEBUG,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(opened))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> debug = executorLinesDuring(Level.DEBUG, () -> h.deliver(opened));
 
       assertThat(h.storedOrder()).containsExactly("Released", "Refunded", "Reserved");
       assertThat(h.metrics.reportedSagaTypes).isEmpty();
@@ -717,18 +666,13 @@ class SagaCompensationUnderForwardStepSignalTest {
   }
 
   @Test
-  void theMetricsBackendThrows_theWarnIsWrittenAndTheLostWriteStaysTheOutcome() {
+  void theMetricsBackendThrows_theWarnIsWrittenAndTheLostWriteIsRunAgainRegardless() {
     try (var h = new Fixture(false)) {
       EventEnvelope opened = h.append(new Opened(ORDER));
       h.metrics.failing = true;
       h.bus.runOnceBefore(Reserve.class, h::timeOut);
 
-      List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> h.deliver(opened))
-                      .isInstanceOf(OptimisticLockException.class));
+      List<String> warnings = executorLinesDuring(Level.WARN, () -> h.deliver(opened));
 
       assertThat(reportLines(warnings)).hasSize(1);
     }
@@ -744,11 +688,7 @@ class SagaCompensationUnderForwardStepSignalTest {
       h.bus.runOnceBefore(Reserve.class, h::timeOut);
 
       List<String> warnings =
-          executorLinesDuring(
-              Level.WARN,
-              () ->
-                  assertThatThrownBy(() -> runner.asEventListener().onEvents(List.of(opened)))
-                      .isInstanceOf(OptimisticLockException.class));
+          executorLinesDuring(Level.WARN, () -> runner.asEventListener().onEvents(List.of(opened)));
 
       assertThat(reportLines(warnings))
           .singleElement()

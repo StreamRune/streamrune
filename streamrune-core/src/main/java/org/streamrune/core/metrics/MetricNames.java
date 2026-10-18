@@ -383,6 +383,15 @@ public final class MetricNames {
       "streamrune.saga.forward_commands_fenced";
 
   /**
+   * Saga steps run again in place, tagged by {@link #TAG_SAGA_TYPE}: the step's write of the saga
+   * row lost its compare-and-swap, and the delivery (or replay feed) read the row again and routed
+   * the event on it, without a backoff and without redelivering the page. One sample per re-run, at
+   * most two per event. A steady rate means several writers meet on the same sagas — replicas that
+   * all deliver the saga type, or deadlines that fall inside steps.
+   */
+  public static final String SAGA_DELIVERY_RETRIED = "streamrune.saga.delivery_retried";
+
+  /**
    * Current {@code COMPENSATING} saga backlog — sagas whose compensation (refund / stock release)
    * has not yet completed. Reported as a gauge, sampled each cycle by the {@code
    * SagaCompensationRetrySweeper} (the saga analog of {@link #OUTBOX_PENDING}/{@link

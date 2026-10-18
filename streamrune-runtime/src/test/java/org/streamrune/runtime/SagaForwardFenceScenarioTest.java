@@ -12,7 +12,6 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.CircuitBreakerOpenException;
 import org.streamrune.core.DomainException;
 import org.streamrune.core.EventEnvelope;
-import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.runtime.SagaDeadLetterReplayer.CompensateOutcome;
 import org.streamrune.runtime.SagaStepLockFixture.Advanced;
@@ -116,7 +115,7 @@ class SagaForwardFenceScenarioTest {
       EventEnvelope opened = f.append(new Opened(ORDER));
       f.a.bus.runOnceBefore(Reserve.class, f.b::timeOut);
 
-      assertThatThrownBy(() -> f.a.deliver(opened)).isInstanceOf(OptimisticLockException.class);
+      f.a.deliver(opened);
 
       assertThat(f.storedOrder(ORDER))
           .containsExactly("Released", "Refunded", "Reserved", "Shipped");
@@ -146,7 +145,7 @@ class SagaForwardFenceScenarioTest {
       EventEnvelope opened = f.append(new Opened(ORDER));
       f.a.bus.runOnceBefore(Ship.class, f.b::timeOut);
 
-      assertThatThrownBy(() -> f.a.deliver(opened)).isInstanceOf(OptimisticLockException.class);
+      f.a.deliver(opened);
 
       assertThat(f.storedOrder(ORDER))
           .containsExactly("Reserved", "Released", "Refunded", "Shipped");
@@ -179,7 +178,7 @@ class SagaForwardFenceScenarioTest {
       f.b.reserve.failure = once(Rejected::new);
       f.a.bus.runOnceBefore(Reserve.class, () -> f.b.deliver(opened));
 
-      assertThatThrownBy(() -> f.a.deliver(opened)).isInstanceOf(OptimisticLockException.class);
+      f.a.deliver(opened);
 
       assertThat(f.storedOrder(ORDER))
           .containsExactly("Released", "Refunded", "Reserved", "Shipped");
@@ -221,8 +220,8 @@ class SagaForwardFenceScenarioTest {
               assertThat(f.b.replayer.compensateFaulted(sagaOf(ORDER)))
                   .isEqualTo(CompensateOutcome.TERMINAL));
 
-      assertThatThrownBy(() -> f.a.runner.feedReplay(sagaOf(ORDER), opened, true, false))
-          .isInstanceOf(OptimisticLockException.class);
+      assertThat(f.a.runner.feedReplay(sagaOf(ORDER), opened, true, false))
+          .isEqualTo(StepOutcome.SKIPPED_HALTED);
 
       assertAForwardCommandLandedAfterTheCompensation(f);
     }
@@ -291,7 +290,7 @@ class SagaForwardFenceScenarioTest {
       EventEnvelope completed = f.append(new Completed(ORDER));
       f.a.bus.runOnceBefore(Ship.class, () -> f.b.deliver(completed));
 
-      assertThatThrownBy(() -> f.a.deliver(advanced)).isInstanceOf(OptimisticLockException.class);
+      f.a.deliver(advanced);
 
       assertThat(f.storedOrder(ORDER))
           .as("shipped after completion")
@@ -365,8 +364,7 @@ class SagaForwardFenceScenarioTest {
       EventEnvelope advanced = f.append(new Advanced(ORDER));
       f.a.bus.runOnceBefore(Ship.class, theOtherNodeClaimsAndFaults(f));
 
-      assertThatThrownBy(() -> f.a.deliver(advanced)).isInstanceOf(OptimisticLockException.class);
-      f.a.deliver(advanced); // the redelivery
+      f.a.deliver(advanced);
 
       assertThat(f.storedOrder(ORDER))
           .as("shipped under the episode")
@@ -404,7 +402,7 @@ class SagaForwardFenceScenarioTest {
       EventEnvelope second = p.append(new Advanced(ORDER));
       p.bus.runOnceBefore(Ship.class, () -> nestedRejectedDelivery(p, second));
 
-      assertThatThrownBy(() -> p.deliver(first)).isInstanceOf(OptimisticLockException.class);
+      p.deliver(first);
 
       assertThat(p.storedOrder(ORDER))
           .containsExactly("Reserved", "Released", "Refunded", "Shipped");
@@ -452,7 +450,7 @@ class SagaForwardFenceScenarioTest {
             ownLock.pollOnce();
           });
 
-      assertThatThrownBy(() -> p.deliver(opened)).isInstanceOf(OptimisticLockException.class);
+      p.deliver(opened);
 
       assertThat(p.storedOrder(ORDER)).containsExactly("Released", "Refunded", "Reserved");
     }

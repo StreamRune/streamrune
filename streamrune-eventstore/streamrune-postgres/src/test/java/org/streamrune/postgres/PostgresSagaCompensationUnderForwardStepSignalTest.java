@@ -1,7 +1,6 @@
 package org.streamrune.postgres;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -28,7 +27,6 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventTypeRegistry;
-import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
@@ -285,10 +283,7 @@ class PostgresSagaCompensationUnderForwardStepSignalTest {
       bus.runOnceBeforeReserve(() -> SagaTimeoutRunnerTestAccess.pollOnce(timeoutRunner));
 
       List<String> warnings =
-          executorWarningsDuring(
-              () ->
-                  assertThatThrownBy(() -> runner.asEventListener().onEvents(List.of(opened)))
-                      .isInstanceOf(OptimisticLockException.class));
+          executorWarningsDuring(() -> runner.asEventListener().onEvents(List.of(opened)));
 
       assertThat(storedOrder(eventStore)).containsExactly("Released", "Refunded", "Reserved");
       LoadedSaga<State> row = sagaStore.load(sagaId, TYPE, State.class).orElseThrow();

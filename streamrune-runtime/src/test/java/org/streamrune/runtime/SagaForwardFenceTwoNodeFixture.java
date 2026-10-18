@@ -84,6 +84,16 @@ final class SagaForwardFenceTwoNodeFixture implements AutoCloseable {
     final OneEventDecider<Refund> refund = new OneEventDecider<>(c -> new Refunded(c.orderId()));
     final OrderSaga saga = new OrderSaga();
 
+    /** This node's view of the shared rows: the hooks and the lost writes of a test are its own. */
+    final SagaStepLockFixture.HookedSagaStore sagaStore =
+        new SagaStepLockFixture.HookedSagaStore(rows);
+
+    /** The saga type of every step this node ran again after a lost compare-and-swap. */
+    final List<String> deliveryRetriedSamples = new CopyOnWriteArrayList<>();
+
+    /** The saga type of every lost compare-and-swap of a saga row this node's steps counted. */
+    final List<String> casConflictSamples = new CopyOnWriteArrayList<>();
+
     /** The saga type of every forward command this node's steps saw refused at the commit. */
     final List<String> fencedSamples = new CopyOnWriteArrayList<>();
 
@@ -111,6 +121,16 @@ final class SagaForwardFenceTwoNodeFixture implements AutoCloseable {
           @Override
           public void recordSagaSkippedWhileFaulted(String sagaType) {
             skippedWhileFaultedSamples.add(sagaType);
+          }
+
+          @Override
+          public void recordSagaDeliveryRetried(String sagaType) {
+            deliveryRetriedSamples.add(sagaType);
+          }
+
+          @Override
+          public void recordSagaCasConflict(String sagaType) {
+            casConflictSamples.add(sagaType);
           }
         };
 
@@ -158,7 +178,7 @@ final class SagaForwardFenceTwoNodeFixture implements AutoCloseable {
                             Optional.of(SagaStepLockFixture.sagaOf(completed.orderId()));
                         default -> Optional.empty();
                       })
-              .sagaStore(rows)
+              .sagaStore(sagaStore)
               .commandBus(bus)
               .sagaDeadLetterStore(deadLetters)
               .clock(clock)
@@ -168,7 +188,7 @@ final class SagaForwardFenceTwoNodeFixture implements AutoCloseable {
       timeoutRunner =
           SagaTimeoutRunner.<State>builder()
               .decider(saga)
-              .sagaStore(rows)
+              .sagaStore(sagaStore)
               .commandBus(bus)
               .sagaType(SagaStepLockFixture.TYPE)
               .clock(clock)

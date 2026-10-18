@@ -12,7 +12,6 @@ import org.junit.jupiter.api.Timeout;
 import org.streamrune.core.CircuitBreakerOpenException;
 import org.streamrune.core.DomainException;
 import org.streamrune.core.EventEnvelope;
-import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.runtime.SagaDeadLetterReplayer.CompensateOutcome;
 import org.streamrune.runtime.SagaRunnerTestAccess;
@@ -105,7 +104,7 @@ class SagaForwardFenceTwoNodesIT extends SagaForwardFenceNodes {
     EventEnvelope opened = append(new Opened(ORDER));
     a.bus.runOnceBefore(Reserve.class, () -> timeOut(b));
 
-    assertThatThrownBy(() -> a.deliver(opened)).isInstanceOf(OptimisticLockException.class);
+    a.deliver(opened);
 
     assertThat(storedOrder(ORDER)).containsExactly("Released", "Refunded", "Reserved", "Shipped");
     assertThat(a.fencedSamples).isEmpty();
@@ -172,7 +171,7 @@ class SagaForwardFenceTwoNodesIT extends SagaForwardFenceNodes {
     EventEnvelope opened = append(new Opened(ORDER));
     a.bus.runOnceBefore(Ship.class, () -> timeOut(b));
 
-    assertThatThrownBy(() -> a.deliver(opened)).isInstanceOf(OptimisticLockException.class);
+    a.deliver(opened);
 
     assertThat(storedOrder(ORDER)).containsExactly("Reserved", "Released", "Refunded", "Shipped");
     assertStoredAfterTheCompensation(forwardKey(ORDER, opened, 1));
@@ -212,7 +211,7 @@ class SagaForwardFenceTwoNodesIT extends SagaForwardFenceNodes {
         });
     a.bus.runOnceBefore(Reserve.class, () -> b.deliver(opened));
 
-    assertThatThrownBy(() -> a.deliver(opened)).isInstanceOf(OptimisticLockException.class);
+    a.deliver(opened);
 
     assertThat(storedOrder(ORDER)).containsExactly("Released", "Refunded", "Reserved", "Shipped");
     assertStoredAfterTheCompensation(forwardKey(ORDER, opened, 0), forwardKey(ORDER, opened, 1));
@@ -254,8 +253,9 @@ class SagaForwardFenceTwoNodesIT extends SagaForwardFenceNodes {
             assertThat(b.replayer.compensateFaulted(sagaOf(ORDER)))
                 .isEqualTo(CompensateOutcome.TERMINAL));
 
-    assertThatThrownBy(() -> SagaRunnerTestAccess.feedReplay(a.runner, sagaOf(ORDER), opened, true))
-        .isInstanceOf(OptimisticLockException.class);
+    assertThat(SagaRunnerTestAccess.feedReplay(a.runner, sagaOf(ORDER), opened, true))
+        .as("the run again meets the terminal row")
+        .isEqualTo("SKIPPED_HALTED");
 
     assertThat(storedOrder(ORDER)).containsExactly("Released", "Refunded", "Reserved", "Shipped");
     assertStoredAfterTheCompensation(forwardKey(ORDER, opened, 0), forwardKey(ORDER, opened, 1));
@@ -336,7 +336,7 @@ class SagaForwardFenceTwoNodesIT extends SagaForwardFenceNodes {
     EventEnvelope completed = append(new Completed(ORDER));
     a.bus.runOnceBefore(Ship.class, () -> b.deliver(completed));
 
-    assertThatThrownBy(() -> a.deliver(advanced)).isInstanceOf(OptimisticLockException.class);
+    a.deliver(advanced);
 
     assertThat(a.dispatched)
         .as("the step dispatches Ship after B completed the saga")

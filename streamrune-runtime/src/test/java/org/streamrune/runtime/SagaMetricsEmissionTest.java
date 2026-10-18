@@ -640,7 +640,9 @@ class SagaMetricsEmissionTest {
         .isInstanceOf(OptimisticLockException.class);
 
     assertThat(metrics.sagaCasConflict)
-        .containsExactly(SagaType.fromClass(FakeState.class).value());
+        .as("one sample per attempt: the conflict is counted where it happens")
+        .hasSize(SagaRunner.MAX_DELIVERY_ATTEMPTS)
+        .containsOnly(SagaType.fromClass(FakeState.class).value());
   }
 
   @Test
