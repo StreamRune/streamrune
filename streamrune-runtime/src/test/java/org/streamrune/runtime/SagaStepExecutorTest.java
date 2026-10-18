@@ -68,6 +68,8 @@ class SagaStepExecutorTest {
             StepOutcome.SKIPPED_HALTED,
             StepOutcome.SKIPPED_DEDUP,
             StepOutcome.SKIPPED_NO_ROW, // a correlated event on an absent row
+            StepOutcome
+                .SKIPPED_GENESIS_PENDING, // a correlated replay feed on a genesis-pending row
             StepOutcome.NOT_COMPENSATING);
   }
 
@@ -269,6 +271,63 @@ class SagaStepExecutorTest {
                     new SagaTrigger.ForwardStep(startEnvelope("x", 5L), false, false)))
         .isInstanceOf(org.streamrune.core.OptimisticLockException.class);
     assertThat(bus.execCount("undo-1")).as("lost claim dispatches ZERO compensation").isZero();
+  }
+
+  // ---- a correlated replay feed over a genesis-pending row ----------------------------
+
+  @Test
+  void forwardStep_correlatedReplayFeed_overAGenesisPendingRunningRow_isSkippedAndWritesNothing() {
+    var store = new InMemorySagaStore();
+    var bus = new DedupingCommandBus();
+    var exec = newExecutor(store, bus);
+    var sagaId = SagaId.of("saga-x");
+    var type = SagaType.fromClass(FakeSagaState.class);
+    store.createGenesisPending(
+        sagaId,
+        type,
+        new FakeSagaState(SagaStatus.RUNNING, sagaId.value()),
+        SagaStatus.RUNNING,
+        true);
+    var before = store.load(sagaId, type, FakeSagaState.class);
+
+    StepOutcome outcome =
+        exec.execute(
+            sagaId, before, new SagaTrigger.ForwardStep(startEnvelope("x", 5L), false, true));
+
+    assertThat(outcome).isEqualTo(StepOutcome.SKIPPED_GENESIS_PENDING);
+    assertThat(bus.execCount("do-1")).as("nothing dispatched").isZero();
+    assertThat(bus.execCount("do-2")).isZero();
+    var after = store.load(sagaId, type, FakeSagaState.class);
+    assertThat(after).as("the row is as it was").isEqualTo(before);
+    assertThat(after.orElseThrow().version()).isEqualTo(1L);
+    assertThat(after.orElseThrow().genesisApplied()).isFalse();
+    assertThat(after.orElseThrow().lastAppliedOffset()).isNull();
+    assertThat(after.orElseThrow().lastReplayedOffset()).isNull();
+  }
+
+  @Test
+  void forwardStep_correlatedReplayFeed_overAGenesisPendingCompensatingRow_resumesTheEpisode() {
+    var store = new InMemorySagaStore();
+    var bus = new DedupingCommandBus();
+    var exec = newExecutor(store, bus);
+    var sagaId = SagaId.of("saga-x");
+    var type = SagaType.fromClass(FakeSagaState.class);
+    store.createGenesisPending(
+        sagaId,
+        type,
+        new FakeSagaState(SagaStatus.RUNNING, sagaId.value()),
+        SagaStatus.COMPENSATING,
+        true);
+
+    StepOutcome outcome =
+        exec.execute(
+            sagaId,
+            store.load(sagaId, type, FakeSagaState.class),
+            new SagaTrigger.ForwardStep(startEnvelope("x", 5L), false, true));
+
+    assertThat(outcome).isEqualTo(StepOutcome.COMPENSATED);
+    assertThat(bus.execCount("undo-1")).isEqualTo(1);
+    assertThat(bus.execCount("do-1")).as("forward never re-ran").isZero();
   }
 
   // ---- explicit ResumeCompensation trigger -------------------------------------------

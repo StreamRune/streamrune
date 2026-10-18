@@ -255,6 +255,7 @@ final class SagaStepLockFixture implements AutoCloseable {
   static final class HookedSagaStore extends ForwardingSagaStore {
     private final AtomicReference<Runnable> beforeClaim = new AtomicReference<>();
     private final AtomicReference<Runnable> beforeEventWrite = new AtomicReference<>();
+    private final AtomicReference<Runnable> beforeLoad = new AtomicReference<>();
     private final AtomicInteger readsUntilAFailure = new AtomicInteger();
     private final AtomicInteger eventWritesToLose = new AtomicInteger();
     private final AtomicInteger eventWriteAttempts = new AtomicInteger();
@@ -270,6 +271,11 @@ final class SagaStepLockFixture implements AutoCloseable {
     /** Runs once, on the writing thread, after the step's read and before its event write. */
     void runOnceBeforeTheEventWrite(Runnable action) {
       beforeEventWrite.set(action);
+    }
+
+    /** Runs once, on the reading thread, right before the next read of a row from this store. */
+    void runOnceBeforeTheNextLoad(Runnable action) {
+      beforeLoad.set(action);
     }
 
     /**
@@ -334,6 +340,10 @@ final class SagaStepLockFixture implements AutoCloseable {
     @Override
     public <S extends SagaState> Optional<LoadedSaga<S>> load(
         SagaId id, SagaType type, Class<S> stateType) {
+      Runnable once = beforeLoad.getAndSet(null);
+      if (once != null) {
+        once.run();
+      }
       if (readsUntilAFailure.get() > 0 && readsUntilAFailure.decrementAndGet() == 0) {
         throw new IllegalStateException("the saga store is unreachable");
       }

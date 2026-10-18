@@ -74,15 +74,17 @@ import org.streamrune.core.types.SagaType;
  * over an applied genesis it is {@code SKIPPED_DEDUP}. A start whose evolve is already terminal is
  * written complete with {@link SagaStore#create} (nothing to dispatch). A correlated event on an
  * absent row is {@code SKIPPED_NO_ROW} — the executor never creates rows for correlated events; a
- * correlated redelivery at or below {@code last_applied_offset} (live) or equal to {@code
- * last_replayed_offset} (replay) is {@code SKIPPED_DEDUP}. Both genesis-path creates carry {@code
- * ForwardStep.sagaOwnsDeadLetterRecord} as the row's initial shield: a saga that already owns
- * dead-letter entries (the row-less residual, and the correlated events held behind it) must not
- * get an unshielded row when its genesis finally lands. A live event never revives a FAULTED saga;
- * a replay re-drive routes on {@link LoadedSaga#effectiveStatus()} — the recorded pre-fault status
- * — so a faulted COMPENSATING episode resumes and a faulted genesis-pending row re-evolves. The
- * single fault write is {@link SagaStore#markFaulted} (no state write; it records {@code
- * pre_fault_status}).
+ * correlated replay feed over a genesis-pending row that is not a claimed compensation episode is
+ * {@code SKIPPED_GENESIS_PENDING} (nothing dispatched, nothing written — the live path holds such
+ * an event, and a drain defers it); a correlated redelivery at or below {@code last_applied_offset}
+ * (live) or equal to {@code last_replayed_offset} (replay) is {@code SKIPPED_DEDUP}. Both
+ * genesis-path creates carry {@code ForwardStep.sagaOwnsDeadLetterRecord} as the row's initial
+ * shield: a saga that already owns dead-letter entries (the row-less residual, and the correlated
+ * events held behind it) must not get an unshielded row when its genesis finally lands. A live
+ * event never revives a FAULTED saga; a replay re-drive routes on {@link
+ * LoadedSaga#effectiveStatus()} — the recorded pre-fault status — so a faulted COMPENSATING episode
+ * resumes and a faulted genesis-pending row re-evolves. The single fault write is {@link
+ * SagaStore#markFaulted} (no state write; it records {@code pre_fault_status}).
  *
  * <p><b>Every compensation episode is stamped .</b> A forward step whose {@code evolve()} yields a
  * state with {@code status() == COMPENSATING} enters the compensation episode through the event
@@ -465,6 +467,14 @@ final class SagaStepExecutor<S extends SagaState> {
             new SagaCompensationResumeException(),
             null,
             /* catchPoison= */ false);
+      }
+      if (fs.replayRedrive() && !fs.startPath() && !row.genesisApplied()) {
+        // A correlated event is never applied before the genesis: the live path holds it
+        // (GENESIS_PENDING) and a drain defers the entry. The drain's check and this read are two
+        // reads, and a step run again reads the row afresh, so the row can be another one by now (a
+        // row deleted and inserted again for the saga id). A claimed episode returned above.
+        // Nothing is dispatched or written; the replayer keeps the entry.
+        return StepOutcome.SKIPPED_GENESIS_PENDING;
       }
       if (fs.startPath() && row.genesisApplied()) {
         return StepOutcome.SKIPPED_DEDUP; // start dedup: the genesis is recorded as applied

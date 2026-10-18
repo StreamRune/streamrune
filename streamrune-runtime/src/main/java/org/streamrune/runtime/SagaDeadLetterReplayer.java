@@ -42,7 +42,11 @@ import org.streamrune.core.types.SagaType;
  * {@code replayRedrive = true}: a FAULTED row routes on {@link LoadedSaga#effectiveStatus()} (a
  * faulted COMPENSATING episode resumes, a faulted genesis-pending row re-evolves), an applied
  * genesis dedups a start feed, and a correlated feed at exactly the recorded {@code
- * last_replayed_offset} dedups — which is what makes every rerun converge.
+ * last_replayed_offset} dedups — which is what makes every rerun converge. A correlated feed over a
+ * genesis-pending row that is not a claimed compensation episode is refused by the executor itself
+ * ({@code SKIPPED_GENESIS_PENDING}, nothing dispatched or written) and the entry is deferred like
+ * the drain's own check below: that check and the feed's read are two reads, and the row can be
+ * another one by the second (deleted and inserted again for the saga id).
  *
  * <p><b>Drain ({@link #replayAll}).</b> The saga's named entries ({@link
  * SagaDeadLetterStore#findBySaga}) and the null-saga entries durably RESOLVED to it ({@link
@@ -1253,9 +1257,12 @@ public final class SagaDeadLetterReplayer {
     if (fed == StepOutcome.FAULTED) {
       return new Drained(record(ReplayOutcome.STILL_POISON), startPath, sagaId);
     }
-    if (fed == StepOutcome.SKIPPED_NO_ROW) {
-      // The saga row went away under the feed and the step was run again on what was left: the
-      // drain's rule for a correlated entry with no saga row, kept for the operator to discard.
+    if (fed == StepOutcome.SKIPPED_NO_ROW || fed == StepOutcome.SKIPPED_GENESIS_PENDING) {
+      // The saga row went away under the feed and the step was run again on what was left, or the
+      // row the feed read is a genesis-pending one that is not the row the pre-check above saw (a
+      // row deleted and inserted again for the saga id): the drain's rule for a correlated entry
+      // with no saga row or a genesis-pending one, kept for the operator to discard or for the
+      // genesis to land.
       recordDeferred();
       return new Drained(ReplayOutcome.SAGA_ROW_PENDING, false, sagaId);
     }
