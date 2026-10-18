@@ -1253,6 +1253,12 @@ public final class SagaDeadLetterReplayer {
     if (fed == StepOutcome.FAULTED) {
       return new Drained(record(ReplayOutcome.STILL_POISON), startPath, sagaId);
     }
+    if (fed == StepOutcome.SKIPPED_NO_ROW) {
+      // The saga row went away under the feed and the step was run again on what was left: the
+      // drain's rule for a correlated entry with no saga row, kept for the operator to discard.
+      recordDeferred();
+      return new Drained(ReplayOutcome.SAGA_ROW_PENDING, false, sagaId);
+    }
     if (fed == StepOutcome.SKIPPED_DEDUP || fed == StepOutcome.SKIPPED_HALTED) {
       // A moot feed (the genesis is already applied, the exact replay offset
       // already committed, or the row went terminal underneath) can never make progress, whatever

@@ -141,8 +141,9 @@ import org.streamrune.core.types.SagaType;
  *       stale view (a {@link SagaRowConflictException}, which {@link SagaRunner} runs the step
  *       again on); what follows is what a deleted saga gets on any path: a start event finds no row
  *       and starts the saga again (its forward keys dedup), a correlated event finds no row and is
- *       dropped (or held when the saga id still owns a dead-letter record), and a replay leaves the
- *       drain with its entry kept;
+ *       dropped (or held when the saga id still owns a dead-letter record), and a replay feed
+ *       answers {@code SKIPPED_NO_ROW}, which the replayer defers ({@code SAGA_ROW_PENDING}) with
+ *       its entry kept;
  *   <li>another row — the application deleted the row and a start event inserted one for the same
  *       saga id again, all between the claim and the read: the argument above holds for one row,
  *       and this is not that row. A row's version only grows and an inserted row starts at 1, below

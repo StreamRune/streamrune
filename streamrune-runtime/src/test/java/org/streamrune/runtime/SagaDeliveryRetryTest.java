@@ -184,6 +184,24 @@ class SagaDeliveryRetryTest {
   }
 
   @Test
+  void aRowGoneUnderAFencedStep_dropsACorrelatedEventInPlace() {
+    try (var f = new SagaForwardFenceTwoNodeFixture(true)) {
+      f.a.deliver(f.append(new Opened(ORDER)));
+      EventEnvelope advanced = f.append(new Advanced(ORDER));
+      // the fenced commit finds no row: the store refuses the command and the step reports it
+      f.a.bus.runOnceBefore(Ship.class, () -> f.rows.delete(sagaOf(ORDER), TYPE));
+
+      f.a.deliver(advanced);
+
+      assertThat(f.rows.load(sagaOf(ORDER), TYPE, State.class)).isEmpty();
+      assertThat(f.deadLetters.findBySaga(sagaOf(ORDER))).isEmpty();
+      assertThat(f.a.fencedSamples).containsExactly(TYPE.value());
+      assertThat(f.a.deliveryRetriedSamples).containsExactly(TYPE.value());
+      assertThat(f.a.casConflictSamples).hasSize(1);
+    }
+  }
+
+  @Test
   void aRowDeletedUnderTheStartStep_isCreatedAgainInPlace() {
     try (var f = new SagaForwardFenceTwoNodeFixture(true)) {
       EventEnvelope opened = f.append(new Opened(ORDER));
@@ -366,6 +384,23 @@ class SagaDeliveryRetryTest {
                   assertThat(warning.getFormattedMessage())
                       .contains("replayed event")
                       .contains("the replay call fails"));
+    }
+  }
+
+  @Test
+  void aRowDeletedUnderTheFedStep_defersTheReplayedEntryAndKeepsIt() {
+    try (var f = new SagaForwardFenceTwoNodeFixture(true)) {
+      EventEnvelope advanced = aHeldEvent(f);
+      f.a.sagaStore.runOnceBeforeTheEventWrite(() -> f.rows.delete(sagaOf(ORDER), TYPE));
+
+      assertThat(f.a.replayer.replayAll(sagaOf(ORDER)))
+          .containsExactly(SagaDeadLetterReplayer.ReplayOutcome.SAGA_ROW_PENDING);
+
+      assertThat(f.rows.load(sagaOf(ORDER), TYPE, State.class)).isEmpty();
+      assertThat(f.deadLetters.findBySaga(sagaOf(ORDER)))
+          .singleElement()
+          .satisfies(entry -> assertThat(entry.eventOffset()).isEqualTo(advanced.globalOffset()));
+      assertThat(f.a.deliveryRetriedSamples).containsExactly(TYPE.value());
     }
   }
 

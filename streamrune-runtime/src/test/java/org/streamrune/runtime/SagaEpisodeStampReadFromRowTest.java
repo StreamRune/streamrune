@@ -32,6 +32,7 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
@@ -480,6 +481,9 @@ class SagaEpisodeStampReadFromRowTest {
               .build();
     }
 
+    /** The saga type of every step the runner ran again after a lost compare-and-swap. */
+    final List<String> deliveryRetriedSamples = new java.util.concurrent.CopyOnWriteArrayList<>();
+
     private SagaRunner<State> newRunner() {
       return SagaRunner.<State>builder()
           .decider(saga)
@@ -495,6 +499,13 @@ class SagaEpisodeStampReadFromRowTest {
           .sagaDeadLetterStore(deadLetters)
           .inboxRetentionMaxAge(WINDOW)
           .clock(clock)
+          .metrics(
+              new StreamRuneMetrics() {
+                @Override
+                public void recordSagaDeliveryRetried(String sagaType) {
+                  deliveryRetriedSamples.add(sagaType);
+                }
+              })
           .build();
     }
 
@@ -1074,11 +1085,11 @@ class SagaEpisodeStampReadFromRowTest {
 
   /**
    * The same on a dead-letter replay feed: the stale view is run again, the run again finds no row,
-   * and the entry is discarded with the saga it belonged to, as a replay that finds no row always
-   * is.
+   * and the drain defers the correlated entry as it does for any entry whose saga row is gone
+   * ({@code SAGA_ROW_PENDING}): the entry stays for the operator to discard.
    */
   @Test
-  void theRowIsGoneAfterTheClaim_onAReplayFeed_theEntryIsDiscardedWithTheRow() {
+  void theRowIsGoneAfterTheClaim_onAReplayFeed_theEntryIsDeferredAndKept() {
     try (var h = new Harness(false, 0)) {
       h.deliver(h.append(new Opened(ORDER)));
       h.saga.poisonAdvanced = true;
@@ -1088,11 +1099,13 @@ class SagaEpisodeStampReadFromRowTest {
       h.ship.failure = () -> new IllegalArgumentException("address rejected");
       h.sagaStore.runOnceAfterTheClaim(() -> h.rows.delete(SAGA, TYPE));
 
-      h.replayer.replayAll(SAGA);
+      assertThat(h.replayer.replayAll(SAGA))
+          .containsExactly(SagaDeadLetterReplayer.ReplayOutcome.SAGA_ROW_PENDING);
 
       assertThat(h.bus.compensationKeys()).isEmpty();
       assertThat(h.rows.load(SAGA, TYPE, State.class)).isEmpty();
-      assertThat(h.deadLetters.findBySaga(SAGA)).isEmpty();
+      assertThat(h.deadLetters.findBySaga(SAGA)).hasSize(1);
+      assertThat(h.deliveryRetriedSamples).containsExactly(TYPE.value());
     }
   }
 

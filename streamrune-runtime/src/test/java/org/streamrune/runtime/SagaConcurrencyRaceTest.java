@@ -751,7 +751,8 @@ class SagaConcurrencyRaceTest {
    * silent double refund. Pre-fix this assertion sees exactly one dispatched Refund and FAILS.
    */
   @Test
-  void eventPath_losesClaimToTimeout_dispatchesZeroCompensation() {
+  void
+      eventPath_losesClaimToTimeout_dispatchesNothingUnderItsOwnKey_thenResumesTheTimeoutsEpisode() {
     underlying.create(
         sagaId,
         FULFILL_TYPE,
