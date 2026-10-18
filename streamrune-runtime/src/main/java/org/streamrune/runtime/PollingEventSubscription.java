@@ -323,8 +323,12 @@ public final class PollingEventSubscription
         // starts after the old one. Called from the listener — on the paused thread itself, or
         // on a wake-up drain's thread, which holds pollLock the paused thread needs to close its
         // anchor — no wait is possible: the old anchor is closed here, before the checkpoint of
-        // the page in flight is saved, and the lease is taken again at once. A wake-up recorded
-        // during that page may let the old thread drain once more before it exits.
+        // the page in flight is saved, and the lease is taken again at once. The drain in flight
+        // (the paused poll thread's own, or the wake-up thread's) began under the old anchor and
+        // ends after that page, since the anchor it checks is closed; a wake-up recorded during
+        // the page lets that same thread drain once more under the new anchor before it releases
+        // pollLock. The paused poll thread itself exits once its cycle ends: its stop request
+        // from pause() is still pending.
         if (previous.thread() != Thread.currentThread() && !pollLock.isHeldByCurrentThread()) {
           try {
             previous.thread().join(CLOSE_JOIN_TIMEOUT_MS);
@@ -364,9 +368,11 @@ public final class PollingEventSubscription
    *
    * <p>Waits up to {@value #CLOSE_JOIN_TIMEOUT_MS} ms; if the thread is still alive after that
    * (e.g. a stuck listener), a warning is logged and close() returns anyway. Calling close() from
-   * the listener itself (i.e. on the polling thread) only signals and returns — joining the current
-   * thread would deadlock. If the closing thread is interrupted while waiting, the wait is
-   * abandoned and the interrupt flag restored.
+   * the listener — on the polling thread, or on a wake-up drain's thread ({@link
+   * #triggerImmediatePoll()}, which a notification drives) — only signals and returns: joining the
+   * thread that is inside the page would deadlock. The page in flight is then saved, and the
+   * subscription's lease resigned, after close() returns. If the closing thread is interrupted
+   * while waiting, the wait is abandoned and the interrupt flag restored.
    *
    * <p>A subscription built with {@link Builder#healthContributor} unregisters from it as the last
    * step.
