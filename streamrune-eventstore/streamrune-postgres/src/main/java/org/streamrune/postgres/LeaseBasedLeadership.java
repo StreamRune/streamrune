@@ -257,6 +257,15 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
       // terminal-DOWN health. standDownTerminally stays heartbeat-only — a caller-thread Error
       // does not prove the heartbeat singleton is broken, and closing the shared instance here
       // would strand every other runner on this replica.
+      if (Thread.currentThread().isInterrupted()) {
+        // The caller is being stopped (a subscription's pause or close interrupts its poll
+        // thread), and on a virtual thread the interrupt fails the statement in flight: an
+        // ordinary stop, not a failure to report.
+        LOG.debug(
+            "tryAcquire('{}') ended by an interrupt of the calling thread; skipping this tick",
+            consumerName);
+        return Optional.empty();
+      }
       LOG.warn("tryAcquire('{}') failed; skipping this tick", consumerName, e);
       return Optional.empty();
     }

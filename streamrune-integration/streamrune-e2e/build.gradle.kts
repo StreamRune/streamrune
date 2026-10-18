@@ -29,6 +29,10 @@ dependencies {
     testImplementation(libs.awaitility)
     testImplementation(libs.jackson.databind)
     testImplementation(libs.jackson.datatype.jsr310)
+    // The saga leadership overlap test asserts that no poll-loop ERROR line is written, which is
+    // observable only as the log line itself: a real slf4j binding whose events a test can capture
+    // (logback ListAppender). Quiet defaults in src/test/resources/logback-test.xml.
+    testImplementation(libs.logback.classic)
 
     // junit-bom + junit-jupiter (testImplementation) and junit-platform-launcher
     // (testRuntimeOnly) are contributed to every subproject by the root build's

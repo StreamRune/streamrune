@@ -142,7 +142,8 @@ All three integrations bind the **same** keys — `StreamRuneQuarkusProperties`'
 ## Caveats
 
 - At-least-once delivery: one extra batch may be delivered after `pause()` returns. Listeners must be idempotent.
-- After `resume()`, there is a brief window where both old and new threads may deliver duplicate events.
+- After `resume()`, there is a brief window where both old and new threads may deliver duplicate events. A leased subscription (below) has no such window: its `resume()` waits for the paused thread to leave its page (up to 30 seconds) before it takes the lease again and starts a new thread. The exception is a `resume()` called from inside the listener: it cannot wait for the page it runs in, so it resigns the lease before that page's checkpoint is saved and takes it again at once.
+- A leased subscription's `pause()` hands its lease over after the page in flight: the lease is resigned once the poll thread has saved that page's checkpoint, so a standby on another replica takes over the delivery while this one is paused.
 - `close()` is terminal — create a new instance if you need to restart.
 - Calling `pause()` when not `RUNNING`, or `resume()` when not `PAUSED`, throws `IllegalStateException`.
 - The LISTEN/NOTIFY hybrid mode is the default. Use `SubscriptionConfig.pollingOnly()` only if `pg_notify` is not available (e.g., PgBouncer in transaction pooling mode) — it disables push and falls back to polling. `pollingOnly()` addresses only the push path; there is nothing else to fix here, since single-active-consumer leadership does not depend on a session-stable route to Postgres — it is a DB-clocked lease (not a session-scoped advisory lock) and is correct under any pooling mode, including PgBouncer transaction mode. See the [Multi-replica leadership](#multi-replica-leadership-and-standby) section and the production guide, whose PgBouncer note also covers the pooler settings that are not about leadership (prepared statements, session-level settings, schema migration).
@@ -163,6 +164,22 @@ Leadership is acquired and re-checked at multiple points, not just once at start
 If any of these re-checks finds leadership lost, the runner abandons the in-flight batch **without committing** and drops to `STANDBY` — the next leader re-reads from the last committed checkpoint, safe under the framework's at-least-once contract. With the default `SubscriptionLeadership.NOOP` (single-instance deployments, or `streamrune.subscription.single-active-consumer.enabled=false`), every leadership check trivially succeeds, so this adds no behavior change for a single instance.
 
 See [Multi-replica deployment](../production.md#multi-replica-deployment) in the production guide for the DB-clocked lease and epoch-fencing mechanics, the `lease-ttl` failover bound, and how to disable it.
+
+### Leased event subscriptions
+
+`PollingEventSubscription`, `HybridEventSubscription` and `PostgresNotificationSubscription` take a lease of their own on their builders, so a plain event subscription can be single-active-consumer too:
+
+- `.lease(SubscriptionLease)` — the lease the subscription delivers under (`SubscriptionLease.of(leadership, name)`);
+- `.leadership(SubscriptionLeadership)` — the same as `.lease(SubscriptionLease.of(leadership, subscriptionName))`;
+- `.sagaRunner(runner)` — delivers to `runner.asEventListener()` under `runner.lease()`, the saga type's lease (see [Saga leadership](saga.md#saga-leadership)).
+
+`build()` refuses two of them that name one thing (`.sagaRunner` with `.listener`, `.lease` or `.leadership`; `.lease` with `.leadership`) with an `IllegalArgumentException` naming both. Without any of them the subscription takes no lease and delivers on every replica that runs it.
+
+A leased subscription opens the lease's anchor on `start()` and asks for the lease at the top of every drain, **before it reads its checkpoint**. A standby reads neither the checkpoint nor the stream and saves nothing; its poll loop sees an ordinary empty cycle. It asks at most once per polling interval, however many notifications wake it (for a `HybridEventSubscription` that is its fallback polling interval, so keep it short on a leased subscription). A lease lost during a drain ends the drain after the page in flight. The lease is resigned only after the poll thread has left its page — on `pause()`, on `close()` and on a terminal exit — and after a notification-driven drain on another thread has saved its page.
+
+The gate sits in the subscription and not in the listener for a reason: the checkpoint is shared by every replica. A listener that returned without processing on a standby would let the subscription save the checkpoint past events no replica processed, and those events would be lost; a listener that threw instead would put every standby into error backoff, which would then delay the takeover.
+
+Unlike a projection runner, a leased event subscription fences nothing by epoch: its listener's own idempotency carries the overlap of a handover, when a deposed leader may finish a page the new leader redelivers. A deposed leader's checkpoint save is either a no-op (the monotonic guard) or an offset whose events it fully processed.
 
 ## Related guides
 

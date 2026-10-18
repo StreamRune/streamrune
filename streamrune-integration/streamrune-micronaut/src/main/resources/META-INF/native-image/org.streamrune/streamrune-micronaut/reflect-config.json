@@ -50,6 +50,7 @@
   {"name": "org.streamrune.core.subscription.SubscriptionHealth", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.subscription.SubscriptionHealth$Status", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.subscription.SubscriptionLifecycleState", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
+  {"name": "org.streamrune.core.subscription.LeaseRole", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.LockMode", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.gdpr.GdprAction", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.projection.LateDataPolicy", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},

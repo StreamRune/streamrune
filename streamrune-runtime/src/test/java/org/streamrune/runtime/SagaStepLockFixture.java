@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -456,6 +457,29 @@ final class SagaStepLockFixture implements AutoCloseable {
    * @param forwardFence whether the runner fences its forward commands at their commit
    */
   SagaStepLockFixture(SagaStepLock lock, Duration claimWait, boolean forwardFence) {
+    this(lock, claimWait, forwardFence, null, Duration.ofSeconds(15));
+  }
+
+  /**
+   * A process whose runner carries the lease of {@code leadership}, and whose timeout runner and
+   * compensation-retry sweeper follow that lease, expecting its anchor within {@code anchorGrace}
+   * of their start.
+   */
+  SagaStepLockFixture(SubscriptionLeadership leadership, Duration anchorGrace) {
+    this(
+        new SagaStepLock(),
+        SagaTimeoutRunner.DEFAULT_CLAIM_WAIT,
+        true,
+        Objects.requireNonNull(leadership, "leadership is required"),
+        anchorGrace);
+  }
+
+  private SagaStepLockFixture(
+      SagaStepLock lock,
+      Duration claimWait,
+      boolean forwardFence,
+      SubscriptionLeadership leadership,
+      Duration anchorGrace) {
     this.lock = lock;
     runner =
         SagaRunner.<State>builder()
@@ -476,6 +500,7 @@ final class SagaStepLockFixture implements AutoCloseable {
             .stepLock(lock)
             .metrics(metrics)
             .forwardFence(forwardFence)
+            .leadership(leadership)
             .build();
     timeoutRunner =
         SagaTimeoutRunner.<State>builder()
@@ -488,6 +513,7 @@ final class SagaStepLockFixture implements AutoCloseable {
             .claimWait(claimWait)
             .batchSize(1_000)
             .metrics(metrics)
+            .anchorGrace(anchorGrace)
             .build();
     sweeper =
         SagaCompensationRetrySweeper.<State>builder()
@@ -497,6 +523,7 @@ final class SagaStepLockFixture implements AutoCloseable {
             .retryInterval(Duration.ofSeconds(30))
             .giveUpAfter(Duration.ofHours(1))
             .clock(clock)
+            .anchorGrace(anchorGrace)
             .build();
     replayer =
         SagaDeadLetterReplayer.builder()

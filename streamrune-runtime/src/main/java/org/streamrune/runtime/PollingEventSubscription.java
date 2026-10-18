@@ -14,6 +14,7 @@ import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.SubscriptionConfig;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
 import org.streamrune.core.types.GlobalOffset;
@@ -28,6 +29,21 @@ import org.streamrune.core.types.SubscriptionName;
  * <p>Implements {@link SubscriptionLifecycle}: supports {@link #pause()} and {@link #resume()}.
  * Position is stored via {@link OffsetStore} on every batch, so resume continues from the last
  * committed offset automatically.
+ *
+ * <p><b>A leased subscription.</b> Built with {@link Builder#lease}, {@link Builder#leadership} or
+ * {@link Builder#sagaRunner}, the subscription delivers only while this process holds its {@link
+ * SubscriptionLease}: {@link #start()} opens the lease's anchor, every drain asks for the lease
+ * before it reads the checkpoint (one acquisition attempt per polling interval at most, however
+ * many wake-ups arrive), and a drain whose lease left during a page stops after that page. A
+ * standby reads neither the checkpoint nor the stream and saves nothing; its poll loop sees an
+ * ordinary empty cycle. The gate sits here, in front of the shared checkpoint, never in the
+ * listener: a listener that skipped events on a standby would let the subscription save the
+ * checkpoint past events no replica processed. The anchor is closed — the lease resigned — only
+ * after the poll thread has left the page in flight and after a wake-up drain on another thread has
+ * saved its page: on {@link #pause()}, on {@link #close()} and on a terminal exit of the poll
+ * thread. {@link #resume()} waits for the paused thread's page before it opens a new anchor —
+ * except when it is called from inside the listener, which closes the paused anchor before that
+ * page's checkpoint is saved. A subscription without a lease takes none of these steps.
  */
 public final class PollingEventSubscription implements SubscriptionLifecycle, ReadPoisonAware {
 
@@ -67,8 +83,19 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
   private final AtomicBoolean pollRequested = new AtomicBoolean();
   private volatile PollThread pollThread;
 
-  /** A started polling thread and the interrupt deferral pause() and close() stop it through. */
-  private record PollThread(Thread thread, InterruptDeferral interrupts) {}
+  /**
+   * The lease this subscription delivers under; {@link SubscriptionLease#ungated()} for a
+   * subscription that takes none.
+   */
+  private final SubscriptionLease lease;
+
+  /**
+   * A started polling thread, the interrupt deferral pause() and close() stop it through, and the
+   * anchor of the lease it delivers under ({@code null} when the subscription takes no lease). The
+   * thread closes its anchor when it exits.
+   */
+  private record PollThread(
+      Thread thread, InterruptDeferral interrupts, SubscriptionLease.Anchor anchor) {}
 
   /**
    * Creates a new polling subscription.
@@ -122,6 +149,32 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
       int fetchSize,
       StreamRuneMetrics metrics,
       int readPoisonBound) {
+    this(
+        subscriptionName,
+        eventStore,
+        offsetStore,
+        listener,
+        config,
+        fetchSize,
+        metrics,
+        readPoisonBound,
+        SubscriptionLease.ungated());
+  }
+
+  /**
+   * Full constructor with a lease. Package-private: the builder resolves the lease from {@link
+   * Builder#lease}, {@link Builder#leadership} or {@link Builder#sagaRunner}.
+   */
+  PollingEventSubscription(
+      SubscriptionName subscriptionName,
+      EventStore eventStore,
+      OffsetStore offsetStore,
+      EventListener listener,
+      SubscriptionConfig config,
+      int fetchSize,
+      StreamRuneMetrics metrics,
+      int readPoisonBound,
+      SubscriptionLease lease) {
     if (subscriptionName == null) {
       throw new IllegalArgumentException("subscriptionName is required");
     }
@@ -140,6 +193,10 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     if (fetchSize <= 0) {
       throw new IllegalArgumentException("fetchSize must be positive");
     }
+    if (lease == null) {
+      throw new IllegalArgumentException("lease is required");
+    }
+    this.lease = lease;
     this.subscriptionName = subscriptionName;
     this.eventStore = eventStore;
     this.offsetStore = offsetStore;
@@ -170,16 +227,23 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
       throw new IllegalStateException(
           "Cannot start subscription in state: " + lifecycleState.get());
     }
-    startPollThread();
+    SubscriptionLease.Anchor anchor;
+    try {
+      anchor = lease.isGated() ? lease.anchor() : null;
+    } catch (IllegalStateException anotherAnchor) {
+      lifecycleState.set(SubscriptionLifecycleState.CREATED); // never ran
+      throw anotherAnchor;
+    }
+    startPollThread(anchor);
   }
 
-  /** Publishes the new polling thread with its deferral before starting it. */
-  private void startPollThread() {
+  /** Publishes the new polling thread with its deferral and its anchor before starting it. */
+  private void startPollThread(SubscriptionLease.Anchor anchor) {
     Thread t =
         Thread.ofVirtual()
             .name("streamrune-poll-" + subscriptionName.value())
-            .unstarted(this::runPollLoop);
-    pollThread = new PollThread(t, new InterruptDeferral());
+            .unstarted(() -> runPollLoop(anchor));
+    pollThread = new PollThread(t, new InterruptDeferral(), anchor);
     t.start();
   }
 
@@ -212,7 +276,36 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     // threads read the same offset and deliver the same batch is possible. This is intentional:
     // PollingEventSubscription provides at-least-once delivery, and the second delivery will
     // be a duplicate the listener must tolerate or deduplicate.
-    startPollThread();
+    SubscriptionLease.Anchor anchor = null;
+    if (lease.isGated()) {
+      PollThread previous = pollThread;
+      if (previous != null) {
+        // The paused thread closes its anchor when it leaves its page; one anchor per lease, so
+        // wait for that (bounded) and close it here too when the wait ends first: the new thread
+        // starts after the old one. Called from the listener — on the paused thread itself, or
+        // on a wake-up drain's thread, which holds pollLock the paused thread needs to close its
+        // anchor — no wait is possible: the old anchor is closed here, before the checkpoint of
+        // the page in flight is saved, and the lease is taken again at once. A wake-up recorded
+        // during that page may let the old thread drain once more before it exits.
+        if (previous.thread() != Thread.currentThread() && !pollLock.isHeldByCurrentThread()) {
+          try {
+            previous.thread().join(CLOSE_JOIN_TIMEOUT_MS);
+          } catch (InterruptedException _) {
+            Thread.currentThread().interrupt();
+          }
+        }
+        if (previous.anchor() != null) {
+          previous.anchor().close();
+        }
+      }
+      try {
+        anchor = lease.anchor();
+      } catch (IllegalStateException anotherAnchor) {
+        lifecycleState.set(SubscriptionLifecycleState.PAUSED);
+        throw anotherAnchor;
+      }
+    }
+    startPollThread(anchor);
   }
 
   @Override
@@ -255,6 +348,12 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     if (t == Thread.currentThread()) {
       return;
     }
+    if (current.anchor() != null && pollLock.isHeldByCurrentThread()) {
+      // Called from the listener of a wake-up drain on this thread: the poll thread closes its
+      // anchor only once it holds pollLock, which this thread holds until its page is saved, so a
+      // join here would wait for itself. The poll thread resigns when this page is done.
+      return;
+    }
     try {
       t.join(CLOSE_JOIN_TIMEOUT_MS);
     } catch (InterruptedException _) {
@@ -263,10 +362,19 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     }
     if (t.isAlive()) {
       logger.warn(
-          "Subscription '{}' polling thread did not stop within {} ms after close() — the"
-              + " in-flight batch is still processing and may save its offset after this call",
+          current.anchor() != null
+              ? "Subscription '{}' polling thread did not stop within {} ms after close() — the"
+                  + " in-flight batch is still processing and may save its offset after this"
+                  + " call, or the thread is still resigning the subscription's lease (a"
+                  + " leadership database that does not answer)"
+              : "Subscription '{}' polling thread did not stop within {} ms after close() — the"
+                  + " in-flight batch is still processing and may save its offset after this call",
           subscriptionName.value(),
           CLOSE_JOIN_TIMEOUT_MS);
+    }
+    // The poll thread closed its anchor when it left; this closes it when the join ended first.
+    if (current.anchor() != null) {
+      current.anchor().close();
     }
   }
 
@@ -362,8 +470,16 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     }
   }
 
-  /** One drain to the head of the global stream; the caller holds {@code pollLock}. */
+  /**
+   * One drain to the head of the global stream; the caller holds {@code pollLock}. A leased
+   * subscription asks for its lease first and reads nothing when it does not lead, and stops after
+   * a page when the lease left during it.
+   */
   private int drainToHead() {
+    SubscriptionLease.Anchor anchor = currentAnchor();
+    if (lease.isGated() && (anchor == null || !anchor.lead(config.pollingInterval()))) {
+      return 0; // a standby reads no checkpoint, no event, saves nothing: an ordinary empty cycle
+    }
     ProjectionName name = ProjectionName.of(subscriptionName.value());
     int drained = 0;
     while (true) {
@@ -391,7 +507,21 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
       if (!mayContinueDraining()) {
         return drained;
       }
+      if (anchor != null && !anchor.stillLeads()) {
+        return drained; // the lease left during the page: that page is done, no further one
+      }
     }
+  }
+
+  /** The anchor of the current poll thread; {@code null} before the first start or ungated. */
+  private SubscriptionLease.Anchor currentAnchor() {
+    PollThread current = pollThread;
+    return current == null ? null : current.anchor();
+  }
+
+  /** The lease this subscription delivers under; for tests. */
+  SubscriptionLease lease() {
+    return lease;
   }
 
   /**
@@ -511,7 +641,7 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     return pollLoop.consecutiveFailures();
   }
 
-  private void runPollLoop() {
+  private void runPollLoop(SubscriptionLease.Anchor anchor) {
     // ResilientPollLoop logs failures and retries with capped exponential backoff. The loop only
     // exits when the lifecycle leaves RUNNING (pause/close) or the thread is interrupted — a
     // transient event-store or listener error never silently kills the subscription.
@@ -544,6 +674,23 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
           t);
       lifecycleState.compareAndSet(
           SubscriptionLifecycleState.RUNNING, SubscriptionLifecycleState.STOPPED);
+    } finally {
+      if (anchor != null) {
+        // After the page in flight, and after a wake-up drain on another thread: both hold
+        // pollLock, so the lease is resigned only once no page of this subscription is open. The
+        // stop that ended the loop interrupted this thread, and on a virtual thread an interrupt
+        // fails the resign's statement: hold it back for the resign, then restore it.
+        boolean interrupted = Thread.interrupted();
+        pollLock.lock();
+        try {
+          anchor.close();
+        } finally {
+          pollLock.unlock();
+          if (interrupted) {
+            Thread.currentThread().interrupt();
+          }
+        }
+      }
     }
   }
 
@@ -568,6 +715,9 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     private int fetchSize = 100;
     private StreamRuneMetrics metrics;
     private int readPoisonBound;
+    private SubscriptionLease lease;
+    private SubscriptionLeadership leadership;
+    private SagaRunner<?> sagaRunner;
 
     /** Sets the unique subscription name (required). Accepts String for convenience. */
     public Builder subscriptionName(String name) {
@@ -630,19 +780,105 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     }
 
     /**
+     * The lease this subscription delivers under: it delivers only while this process holds it, and
+     * anchors it ({@link SubscriptionLease#anchor()}) from {@link #start()} to its close. Optional;
+     * without a lease, a leadership or a saga runner the subscription delivers on every replica
+     * that runs it. Not together with {@link #leadership} or {@link #sagaRunner}.
+     */
+    public Builder lease(SubscriptionLease lease) {
+      this.lease = lease;
+      return this;
+    }
+
+    /**
+     * Delivers under the lease named after this subscription over {@code leadership}: the same as
+     * {@code lease(SubscriptionLease.of(leadership, subscriptionName))}. One replica then delivers
+     * this subscription's events; the others stand by and take over when it stops or dies. {@link
+     * SubscriptionLeadership#NOOP} delivers everywhere. Not together with {@link #lease} or {@link
+     * #sagaRunner}.
+     */
+    public Builder leadership(SubscriptionLeadership leadership) {
+      this.leadership = leadership;
+      return this;
+    }
+
+    /**
+     * Delivers a saga type's events to {@code sagaRunner}: the same as {@code
+     * listener(sagaRunner.asEventListener())} together with {@code lease(sagaRunner.lease())}. This
+     * subscription is then the anchor of the saga type's lease in this process, and the runner's
+     * timeout runner and compensation-retry sweeper act while it leads. Build a saga's subscription
+     * this way: with {@code listener(runner.asEventListener())} a runner that carries a lease is
+     * never anchored, and its timeout runner and sweeper act nowhere. Not together with {@link
+     * #listener}, {@link #lease} or {@link #leadership}.
+     */
+    public Builder sagaRunner(SagaRunner<?> sagaRunner) {
+      this.sagaRunner = sagaRunner;
+      return this;
+    }
+
+    /**
      * Builds the {@link PollingEventSubscription}. Requires {@code subscriptionName}, {@code
-     * eventStore}, {@code offsetStore}, and {@code listener}.
+     * eventStore}, {@code offsetStore}, and {@code listener} or {@code sagaRunner}.
+     *
+     * @throws IllegalArgumentException when two of the settings name one thing: {@code sagaRunner}
+     *     with {@code listener}, {@code lease} or {@code leadership}; {@code lease} with {@code
+     *     leadership}
      */
     public PollingEventSubscription build() {
+      refuseTwoSources("PollingEventSubscription.Builder");
+      EventListener resolvedListener = sagaRunner != null ? sagaRunner.asEventListener() : listener;
       return new PollingEventSubscription(
           subscriptionName,
           eventStore,
           offsetStore,
-          listener,
+          resolvedListener,
           config,
           fetchSize,
           metrics,
-          readPoisonBound);
+          readPoisonBound,
+          resolvedLease());
+    }
+
+    /** Refuses one setting named twice: a saga runner sets the listener and the lease. */
+    private void refuseTwoSources(String prefix) {
+      if (sagaRunner != null && listener != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": sagaRunner(...) and listener(...) are both set — sagaRunner(runner) delivers"
+                + " to runner.asEventListener(); name one of them");
+      }
+      if (sagaRunner != null && lease != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": sagaRunner(...) and lease(...) are both set — sagaRunner(runner) takes"
+                + " runner.lease(); name one of them");
+      }
+      if (sagaRunner != null && leadership != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": sagaRunner(...) and leadership(...) are both set — sagaRunner(runner) takes"
+                + " runner.lease(); name one of them");
+      }
+      if (lease != null && leadership != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": lease(...) and leadership(...) are both set — leadership(l) is"
+                + " lease(SubscriptionLease.of(l, subscriptionName)); name one of them");
+      }
+    }
+
+    /** The saga runner's lease, else the one named, else one over the leadership, else none. */
+    private SubscriptionLease resolvedLease() {
+      if (sagaRunner != null) {
+        return sagaRunner.lease();
+      }
+      if (lease != null) {
+        return lease;
+      }
+      if (leadership != null && subscriptionName != null) {
+        return SubscriptionLease.of(leadership, subscriptionName.value());
+      }
+      return SubscriptionLease.ungated();
     }
   }
 }

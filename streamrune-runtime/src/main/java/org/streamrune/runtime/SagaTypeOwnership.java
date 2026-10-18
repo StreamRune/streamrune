@@ -25,7 +25,9 @@ import org.streamrune.core.saga.SagaStore;
  * startup. A hand-wired application calls the method itself, or keeps the rule: a saga state class
  * belongs to one saga. Two runners of one saga type also have two step locks ({@link
  * SagaStepLock}): the steps of one are not excluded from the other's, and a timeout runner built
- * from one of them does not wait for the other's deliveries.
+ * from one of them does not wait for the other's deliveries. Two such runners given a leadership
+ * also carry two lease objects for one lease name ({@link SagaRunner#lease()}): each anchors its
+ * own, both are granted under the process's one holder, and both deliver.
  *
  * <p><b>The same store.</b> Two runners share their rows when their stores are one instance, or
  * when the two instances say they keep the same rows ({@link SagaStore#storageIdentity()}): two

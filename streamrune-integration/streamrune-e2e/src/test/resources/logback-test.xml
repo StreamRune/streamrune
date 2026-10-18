@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Test-only logging config. logback-classic is on the test classpath solely so log-assertion
+     tests can capture events with a ListAppender: the saga leadership overlap test asserts that no
+     poll loop writes an ERROR line, which is observable only as the log line itself.
+
+     The root stays at WARN: quiet enough to keep the container start-up and the failure-path
+     scenarios from flooding the build log, while the warnings a failing test's own subsystem emits
+     on the way down still reach it. -->
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <root level="WARN">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

@@ -8,6 +8,7 @@ import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.SubscriptionConfig;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
 import org.streamrune.core.types.SubscriptionName;
@@ -15,6 +16,8 @@ import org.streamrune.runtime.PollingEventSubscription;
 import org.streamrune.runtime.ProjectionReadPoisonException;
 import org.streamrune.runtime.PushHealthAware;
 import org.streamrune.runtime.ReadPoisonAware;
+import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.SubscriptionLease;
 
 /**
  * Hybrid event subscription combining PostgreSQL LISTEN/NOTIFY for low-latency push with periodic
@@ -146,6 +149,38 @@ public final class HybridEventSubscription
       StreamRuneMetrics metrics,
       int readPoisonBound,
       UnaryOperator<PgNotificationListener.Builder> listenerTuning) {
+    this(
+        subscriptionName,
+        dataSource,
+        eventStore,
+        offsetStore,
+        listener,
+        config,
+        fetchSize,
+        metrics,
+        readPoisonBound,
+        listenerTuning,
+        SubscriptionLease.ungated());
+  }
+
+  /**
+   * The constructor with the push-path tuning plus the {@code lease} the polling subscription
+   * inside delivers under; the builder resolves it from {@link Builder#lease}, {@link
+   * Builder#leadership} or {@link Builder#sagaRunner}. A notification then reaches the same gate as
+   * a poll.
+   */
+  HybridEventSubscription(
+      SubscriptionName subscriptionName,
+      DataSource dataSource,
+      EventStore eventStore,
+      OffsetStore offsetStore,
+      EventListener listener,
+      SubscriptionConfig config,
+      int fetchSize,
+      StreamRuneMetrics metrics,
+      int readPoisonBound,
+      UnaryOperator<PgNotificationListener.Builder> listenerTuning,
+      SubscriptionLease lease) {
 
     if (subscriptionName == null) {
       throw new IllegalArgumentException("subscriptionName is required");
@@ -180,6 +215,7 @@ public final class HybridEventSubscription
             // readPoisonError()) instead of the resilient poll loop retrying an unreadable event
             // forever.
             .readPoisonBound(readPoisonBound)
+            .lease(lease)
             .build();
 
     // Honor SubscriptionConfig.listenNotifyEnabled(). When LISTEN/NOTIFY is disabled
@@ -364,6 +400,9 @@ public final class HybridEventSubscription
     private int fetchSize = 100;
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private int readPoisonBound = 0;
+    private SubscriptionLease lease;
+    private SubscriptionLeadership leadership;
+    private SagaRunner<?> sagaRunner;
 
     /**
      * Sets the stable subscription name (required). The name is the durable offset key in the
@@ -434,10 +473,49 @@ public final class HybridEventSubscription
     }
 
     /**
+     * The lease this subscription delivers under: it delivers only while this process holds it, and
+     * anchors it from {@code start()} to its close. Optional; without a lease, a leadership or a
+     * saga runner the subscription delivers on every replica that runs it. Not together with {@link
+     * #leadership} or {@link #sagaRunner}.
+     */
+    public Builder lease(SubscriptionLease lease) {
+      this.lease = lease;
+      return this;
+    }
+
+    /**
+     * Delivers under the lease named after this subscription over {@code leadership}: the same as
+     * {@code lease(SubscriptionLease.of(leadership, subscriptionName))}. One replica then delivers
+     * this subscription's events; the others stand by and take over when it stops or dies. Not
+     * together with {@link #lease} or {@link #sagaRunner}.
+     */
+    public Builder leadership(SubscriptionLeadership leadership) {
+      this.leadership = leadership;
+      return this;
+    }
+
+    /**
+     * Delivers a saga type's events to {@code sagaRunner}: the same as {@code
+     * listener(sagaRunner.asEventListener())} together with {@code lease(sagaRunner.lease())}. This
+     * subscription is then the anchor of the saga type's lease in this process, and the runner's
+     * timeout runner and compensation-retry sweeper act while it leads. Not together with {@link
+     * #listener}, {@link #lease} or {@link #leadership}.
+     */
+    public Builder sagaRunner(SagaRunner<?> sagaRunner) {
+      this.sagaRunner = sagaRunner;
+      return this;
+    }
+
+    /**
      * Builds the {@link HybridEventSubscription}. Requires {@code subscriptionName}, {@code
-     * dataSource}, {@code eventStore}, {@code offsetStore}, and {@code listener}.
+     * dataSource}, {@code eventStore}, {@code offsetStore}, and {@code listener} or {@code
+     * sagaRunner}. A leased subscription's standby attempts are spaced by the polling interval of
+     * {@link #config} even when notifications wake it: keep that fallback interval short.
      *
      * @throws IllegalStateException if {@code subscriptionName} was not set or is blank
+     * @throws IllegalArgumentException when two of the settings name one thing: {@code sagaRunner}
+     *     with {@code listener}, {@code lease} or {@code leadership}; {@code lease} with {@code
+     *     leadership}
      */
     public HybridEventSubscription build() {
       if (subscriptionName == null) {
@@ -445,16 +523,61 @@ public final class HybridEventSubscription
             "subscriptionName is required: set Builder.subscriptionName(...) to a stable name —"
                 + " it is the durable offset key for this subscription");
       }
+      refuseTwoSources("HybridEventSubscription.Builder");
       return new HybridEventSubscription(
           subscriptionName,
           dataSource,
           eventStore,
           offsetStore,
-          listener,
+          sagaRunner != null ? sagaRunner.asEventListener() : listener,
           config,
           fetchSize,
           metrics,
-          readPoisonBound);
+          readPoisonBound,
+          UnaryOperator.identity(),
+          resolvedLease());
+    }
+
+    /** Refuses one setting named twice: a saga runner sets the listener and the lease. */
+    private void refuseTwoSources(String prefix) {
+      if (sagaRunner != null && listener != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": sagaRunner(...) and listener(...) are both set — sagaRunner(runner) delivers"
+                + " to runner.asEventListener(); name one of them");
+      }
+      if (sagaRunner != null && lease != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": sagaRunner(...) and lease(...) are both set — sagaRunner(runner) takes"
+                + " runner.lease(); name one of them");
+      }
+      if (sagaRunner != null && leadership != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": sagaRunner(...) and leadership(...) are both set — sagaRunner(runner) takes"
+                + " runner.lease(); name one of them");
+      }
+      if (lease != null && leadership != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": lease(...) and leadership(...) are both set — leadership(l) is"
+                + " lease(SubscriptionLease.of(l, subscriptionName)); name one of them");
+      }
+    }
+
+    /** The saga runner's lease, else the one named, else one over the leadership, else none. */
+    private SubscriptionLease resolvedLease() {
+      if (sagaRunner != null) {
+        return sagaRunner.lease();
+      }
+      if (lease != null) {
+        return lease;
+      }
+      if (leadership != null && subscriptionName != null) {
+        return SubscriptionLease.of(leadership, subscriptionName.value());
+      }
+      return SubscriptionLease.ungated();
     }
   }
 }

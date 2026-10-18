@@ -18,12 +18,15 @@ import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.EventSubscription;
 import org.streamrune.core.subscription.SubscriptionConfig;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.runtime.ProjectionReadPoisonException;
 import org.streamrune.runtime.ReadPoisonAware;
 import org.streamrune.runtime.ReadPoisonClassifier;
+import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.SubscriptionLease;
 
 /**
  * PostgreSQL-backed {@link EventSubscription} that uses {@code LISTEN}/{@code NOTIFY} for
@@ -159,6 +162,19 @@ public final class PostgresNotificationSubscription implements EventSubscription
   private final AtomicBoolean notified = new AtomicBoolean(false);
   private final AtomicBoolean connected = new AtomicBoolean(false);
 
+  /**
+   * The lease this subscription delivers under; {@link SubscriptionLease#ungated()} for a
+   * subscription that takes none.
+   */
+  private final SubscriptionLease lease;
+
+  /**
+   * The anchor of {@link #lease} the current listen thread delivers under, opened by each {@link
+   * #start()}; {@code null} before the first start and for an ungated subscription. The listen
+   * thread closes it when it exits.
+   */
+  private volatile SubscriptionLease.Anchor anchor;
+
   private PostgresNotificationSubscription(Builder builder) {
     if (builder.subscriptionName == null) {
       throw new IllegalArgumentException("subscriptionName is required");
@@ -168,7 +184,9 @@ public final class PostgresNotificationSubscription implements EventSubscription
     }
     if (builder.eventStore == null) throw new IllegalArgumentException("eventStore is required");
     if (builder.offsetStore == null) throw new IllegalArgumentException("offsetStore is required");
-    if (builder.listener == null) throw new IllegalArgumentException("listener is required");
+    EventListener resolvedListener =
+        builder.sagaRunner != null ? builder.sagaRunner.asEventListener() : builder.listener;
+    if (resolvedListener == null) throw new IllegalArgumentException("listener is required");
     if (builder.config == null) throw new IllegalArgumentException("config is required");
     if (builder.fetchSize <= 0)
       throw new IllegalArgumentException("fetchSize is required and must be positive");
@@ -176,7 +194,8 @@ public final class PostgresNotificationSubscription implements EventSubscription
     this.listenDataSource = builder.listenDataSource;
     this.eventStore = builder.eventStore;
     this.offsetStore = builder.offsetStore;
-    this.listener = builder.listener;
+    this.listener = resolvedListener;
+    this.lease = builder.resolvedLease();
     this.config = builder.config;
     this.fetchSize = builder.fetchSize;
     this.readPoisonBound = Math.max(0, builder.readPoisonBound);
@@ -211,6 +230,9 @@ public final class PostgresNotificationSubscription implements EventSubscription
     private long livenessProbeIntervalMs =
         PgNotificationListener.DEFAULT_LIVENESS_PROBE_INTERVAL_MS;
     private long livenessProbeTimeoutMs = PgNotificationListener.DEFAULT_LIVENESS_PROBE_TIMEOUT_MS;
+    private SubscriptionLease lease;
+    private SubscriptionLeadership leadership;
+    private SagaRunner<?> sagaRunner;
 
     private Builder(SubscriptionName subscriptionName) {
       this.subscriptionName = subscriptionName;
@@ -283,13 +305,91 @@ public final class PostgresNotificationSubscription implements EventSubscription
     }
 
     /**
+     * The lease this subscription delivers under: it delivers only while this process holds it, and
+     * anchors it from {@code start()} to its close. Optional; without a lease, a leadership or a
+     * saga runner the subscription delivers on every replica that runs it. Not together with {@link
+     * #leadership} or {@link #sagaRunner}.
+     */
+    public Builder lease(SubscriptionLease lease) {
+      this.lease = lease;
+      return this;
+    }
+
+    /**
+     * Delivers under the lease named after this subscription over {@code leadership}: the same as
+     * {@code lease(SubscriptionLease.of(leadership, subscriptionName))}. One replica then delivers
+     * this subscription's events; the others stand by and take over when it stops or dies. Not
+     * together with {@link #lease} or {@link #sagaRunner}.
+     */
+    public Builder leadership(SubscriptionLeadership leadership) {
+      this.leadership = leadership;
+      return this;
+    }
+
+    /**
+     * Delivers a saga type's events to {@code sagaRunner}: the same as {@code
+     * listener(sagaRunner.asEventListener())} together with {@code lease(sagaRunner.lease())}. This
+     * subscription is then the anchor of the saga type's lease in this process, and the runner's
+     * timeout runner and compensation-retry sweeper act while it leads. Not together with {@link
+     * #listener}, {@link #lease} or {@link #leadership}.
+     */
+    public Builder sagaRunner(SagaRunner<?> sagaRunner) {
+      this.sagaRunner = sagaRunner;
+      return this;
+    }
+
+    /**
      * Builds the subscription; it does not start it.
      *
      * @throws IllegalArgumentException if a required value is missing or {@code fetchSize} is not
-     *     positive
+     *     positive, or when two of the settings name one thing: {@code sagaRunner} with {@code
+     *     listener}, {@code lease} or {@code leadership}; {@code lease} with {@code leadership}
      */
     public PostgresNotificationSubscription build() {
+      refuseTwoSources("PostgresNotificationSubscription.Builder");
       return new PostgresNotificationSubscription(this);
+    }
+
+    /** Refuses one setting named twice: a saga runner sets the listener and the lease. */
+    private void refuseTwoSources(String prefix) {
+      if (sagaRunner != null && listener != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": sagaRunner(...) and listener(...) are both set — sagaRunner(runner) delivers"
+                + " to runner.asEventListener(); name one of them");
+      }
+      if (sagaRunner != null && lease != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": sagaRunner(...) and lease(...) are both set — sagaRunner(runner) takes"
+                + " runner.lease(); name one of them");
+      }
+      if (sagaRunner != null && leadership != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": sagaRunner(...) and leadership(...) are both set — sagaRunner(runner) takes"
+                + " runner.lease(); name one of them");
+      }
+      if (lease != null && leadership != null) {
+        throw new IllegalArgumentException(
+            prefix
+                + ": lease(...) and leadership(...) are both set — leadership(l) is"
+                + " lease(SubscriptionLease.of(l, subscriptionName)); name one of them");
+      }
+    }
+
+    /** The saga runner's lease, else the one named, else one over the leadership, else none. */
+    private SubscriptionLease resolvedLease() {
+      if (sagaRunner != null) {
+        return sagaRunner.lease();
+      }
+      if (lease != null) {
+        return lease;
+      }
+      if (leadership != null && subscriptionName != null) {
+        return SubscriptionLease.of(leadership, subscriptionName.value());
+      }
+      return SubscriptionLease.ungated();
     }
   }
 
@@ -324,10 +424,18 @@ public final class PostgresNotificationSubscription implements EventSubscription
     if (!running.compareAndSet(false, true)) {
       throw new IllegalStateException("Subscription already running");
     }
+    SubscriptionLease.Anchor opened;
+    try {
+      opened = lease.isGated() ? lease.anchor() : null;
+    } catch (IllegalStateException anotherAnchor) {
+      running.set(false); // never ran
+      throw anotherAnchor;
+    }
+    anchor = opened;
     listenerThread =
         Thread.ofVirtual()
             .name("streamrune-listen-" + subscriptionName.value())
-            .start(this::listenLoop);
+            .start(() -> listenLoop(opened));
   }
 
   @Override
@@ -369,9 +477,14 @@ public final class PostgresNotificationSubscription implements EventSubscription
           t.join(CLOSE_JOIN_TIMEOUT_MS);
           if (t.isAlive()) {
             log.warn(
-                "Subscription '{}' listen thread did not stop within {} ms after close() — the"
-                    + " in-flight batch is still processing and may save its offset after this"
-                    + " call",
+                lease.isGated()
+                    ? "Subscription '{}' listen thread did not stop within {} ms after close() —"
+                        + " the in-flight batch is still processing and may save its offset after"
+                        + " this call, or the thread is still resigning the subscription's lease"
+                        + " (a leadership database that does not answer)"
+                    : "Subscription '{}' listen thread did not stop within {} ms after close() —"
+                        + " the in-flight batch is still processing and may save its offset after"
+                        + " this call",
                 subscriptionName.value(),
                 CLOSE_JOIN_TIMEOUT_MS);
           }
@@ -379,6 +492,13 @@ public final class PostgresNotificationSubscription implements EventSubscription
           Thread.currentThread().interrupt();
         }
       }
+    }
+    // The listen thread closed its anchor when it left; this closes it when the join ended first.
+    // Called from the listener on the listen thread itself, the anchor is left to that thread's
+    // exit, after the page in flight is saved.
+    SubscriptionLease.Anchor current = anchor;
+    if (current != null && t != Thread.currentThread()) {
+      current.close();
     }
     if (listenDataSource instanceof AutoCloseable closeable) {
       try {
@@ -390,7 +510,27 @@ public final class PostgresNotificationSubscription implements EventSubscription
     }
   }
 
-  private void listenLoop() {
+  private void listenLoop(SubscriptionLease.Anchor opened) {
+    try {
+      listenUntilStopped();
+    } finally {
+      // After the page in flight: pollAndDeliver runs on this thread only. close() interrupted
+      // this thread, and on a virtual thread an interrupt fails the resign's statement: hold it
+      // back for the resign, then restore it.
+      if (opened != null) {
+        boolean interrupted = Thread.interrupted();
+        try {
+          opened.close();
+        } finally {
+          if (interrupted) {
+            Thread.currentThread().interrupt();
+          }
+        }
+      }
+    }
+  }
+
+  private void listenUntilStopped() {
     try {
       while (running.get()) {
         try (Connection conn = listenDataSource.getConnection()) {
@@ -493,6 +633,10 @@ public final class PostgresNotificationSubscription implements EventSubscription
   }
 
   private void pollAndDeliver() {
+    SubscriptionLease.Anchor current = anchor;
+    if (lease.isGated() && (current == null || !current.lead(config.pollingInterval()))) {
+      return; // a standby reads no checkpoint, no event, saves nothing
+    }
     ProjectionName name = ProjectionName.of(subscriptionName.value());
     try {
       // DRAIN to the head, not a single page. A single append fires exactly ONE
@@ -528,6 +672,9 @@ public final class PostgresNotificationSubscription implements EventSubscription
           break;
         }
         deliver(name, events);
+        if (current != null && !current.stillLeads()) {
+          break; // the lease left during the page: that page is done, no further one
+        }
       }
     } catch (Exception e) {
       // Don't let delivery errors stop the listener loop — but never swallow them silently. The
