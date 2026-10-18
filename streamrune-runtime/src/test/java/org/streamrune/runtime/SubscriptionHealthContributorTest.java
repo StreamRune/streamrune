@@ -312,6 +312,30 @@ class SubscriptionHealthContributorTest {
   }
 
   @Test
+  void aThrowingLeaseRoleProbe_reportsNotReported_andTheScrapeSurvives() {
+    var broken = mock(RoleAwareSubscription.class);
+    when(broken.state()).thenReturn(SubscriptionLifecycleState.RUNNING);
+    when(broken.leaseRole()).thenThrow(new IllegalStateException("probe is broken"));
+    contributor.register("broken", broken);
+    contributor.register("saga", roleAwareSubscription(LeaseRole.LEADING));
+    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    stubGlobalHead(50);
+    stubLastOffset("broken", 50);
+    stubLastOffset("saga", 50);
+    stubLastOffset("orders", 50);
+
+    for (int scrape = 0; scrape < 2; scrape++) {
+      var byName = new java.util.HashMap<String, SubscriptionHealth>();
+      contributor.health().forEach(h -> byName.put(h.name(), h));
+
+      assertEquals(LeaseRole.NOT_REPORTED, byName.get("broken").role());
+      assertEquals(SubscriptionHealth.Status.UP, byName.get("broken").status());
+      assertEquals(LeaseRole.LEADING, byName.get("saga").role());
+      assertEquals(LeaseRole.NOT_REPORTED, byName.get("orders").role());
+    }
+  }
+
+  @Test
   void aProjectionCatchingUpFromOffsetZero_neverTurnsTheOverallStatusDown() {
     // Lag is measured against the shared checkpoint, so every replica reports the same value. A new
     // projection (or a reset one) replaying a large store reads the whole history as lag until the

@@ -428,13 +428,16 @@ public final class HybridEventSubscription
 
   @Override
   public void close() {
-    pollingSubscription.close();
-    // Null when LISTEN/NOTIFY is disabled (pollingOnly) — nothing to close.
-    if (notificationListener != null) {
-      notificationListener.close();
-    }
-    if (healthContributor != null) {
-      healthContributor.unregister(subscriptionName.value());
+    try {
+      pollingSubscription.close();
+      // Null when LISTEN/NOTIFY is disabled (pollingOnly) — nothing to close.
+      if (notificationListener != null) {
+        notificationListener.close();
+      }
+    } finally {
+      if (healthContributor != null) {
+        healthContributor.unregister(subscriptionName.value());
+      }
     }
   }
 
