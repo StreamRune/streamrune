@@ -404,6 +404,69 @@ class SagaDeliveryRetryTest {
     }
   }
 
+  /**
+   * A genesis-pending row for the saga id replaces the one that was there: the application deleted
+   * the row and a start event inserted it again, its start step not applied yet.
+   */
+  private static void replaceWithAGenesisPendingRow(SagaForwardFenceTwoNodeFixture f) {
+    f.rows.delete(sagaOf(ORDER), TYPE);
+    f.rows.createGenesisPending(
+        sagaOf(ORDER),
+        TYPE,
+        new State(SagaStatus.RUNNING, ORDER),
+        SagaStatus.RUNNING,
+        /* deadLetterPending= */ true);
+  }
+
+  private static void assertTheGenesisPendingRowIsUntouched(SagaForwardFenceTwoNodeFixture f) {
+    var row = f.row(ORDER);
+    assertThat(row.version()).isEqualTo(1L);
+    assertThat(row.genesisApplied()).isFalse();
+    assertThat(row.status()).isEqualTo(SagaStatus.RUNNING);
+    assertThat(row.lastAppliedOffset()).isNull();
+    assertThat(row.lastReplayedOffset()).isNull();
+  }
+
+  @Test
+  void aRowReplacedByAGenesisPendingRowBeforeTheFeedLoadsIt_defersTheReplayedEntryAndKeepsIt() {
+    try (var f = new SagaForwardFenceTwoNodeFixture(true)) {
+      EventEnvelope advanced = aHeldEvent(f);
+      // the drain's pre-check has read the row by the time the feed reads it
+      f.a.sagaStore.runOnceBeforeTheNextLoad(() -> replaceWithAGenesisPendingRow(f));
+
+      assertThat(f.a.replayer.replayAll(sagaOf(ORDER)))
+          .containsExactly(SagaDeadLetterReplayer.ReplayOutcome.SAGA_ROW_PENDING);
+
+      assertTheGenesisPendingRowIsUntouched(f);
+      assertThat(f.storedOrder(ORDER))
+          .as("only the start event's commands: the feed dispatched nothing")
+          .containsExactly("Reserved", "Shipped");
+      assertThat(f.deadLetters.findBySaga(sagaOf(ORDER)))
+          .singleElement()
+          .satisfies(entry -> assertThat(entry.eventOffset()).isEqualTo(advanced.globalOffset()));
+    }
+  }
+
+  @Test
+  void aRowReplacedByAGenesisPendingRowUnderTheFedStep_defersTheReplayedEntryAndKeepsIt() {
+    try (var f = new SagaForwardFenceTwoNodeFixture(true)) {
+      EventEnvelope advanced = aHeldEvent(f);
+      f.a.sagaStore.runOnceBeforeTheEventWrite(() -> replaceWithAGenesisPendingRow(f));
+
+      assertThat(f.a.replayer.replayAll(sagaOf(ORDER)))
+          .containsExactly(SagaDeadLetterReplayer.ReplayOutcome.SAGA_ROW_PENDING);
+
+      assertTheGenesisPendingRowIsUntouched(f);
+      assertThat(f.storedOrder(ORDER))
+          .as("the first run's Ship is all there is: the run again dispatched nothing")
+          .containsExactly("Reserved", "Shipped", "Shipped");
+      assertThat(f.deadLetters.findBySaga(sagaOf(ORDER)))
+          .singleElement()
+          .satisfies(entry -> assertThat(entry.eventOffset()).isEqualTo(advanced.globalOffset()));
+      assertThat(f.a.deliveryRetriedSamples).containsExactly(TYPE.value());
+    }
+  }
+
   @Test
   void aReplayFeedWhoseReRunIsPoison_isAnsweredFaulted() {
     try (var f = new SagaForwardFenceTwoNodeFixture(true)) {

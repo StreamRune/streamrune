@@ -30,5 +30,15 @@ enum StepOutcome {
    * defers the entry of a replay feed that meets it.
    */
   SKIPPED_NO_ROW,
+  /**
+   * A correlated replay feed over a row whose start step is not applied yet and which is not in a
+   * compensation episode. The live path holds such an event ({@code GENESIS_PENDING}) and never
+   * applies it before the genesis; the feed is refused the same way, in the executor, because the
+   * row the executor reads can be a different row from the one the drain's pre-check saw (a row
+   * deleted and inserted again for the saga id, between the drain's read and the feed's, or between
+   * the attempts of a step run again). Nothing is dispatched and nothing is written; the replayer
+   * defers the entry ({@code SAGA_ROW_PENDING}) and keeps it.
+   */
+  SKIPPED_GENESIS_PENDING,
   NOT_COMPENSATING
 }
