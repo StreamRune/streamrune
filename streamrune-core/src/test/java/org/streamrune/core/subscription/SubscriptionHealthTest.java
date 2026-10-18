@@ -10,12 +10,18 @@ class SubscriptionHealthTest {
   void construction_validFields() {
     var health =
         new SubscriptionHealth(
-            "orders", SubscriptionLifecycleState.RUNNING, 42, 3, SubscriptionHealth.Status.UP);
+            "orders",
+            SubscriptionLifecycleState.RUNNING,
+            42,
+            3,
+            SubscriptionHealth.Status.UP,
+            LeaseRole.LEADING);
     assertEquals("orders", health.name());
     assertEquals(SubscriptionLifecycleState.RUNNING, health.state());
     assertEquals(42, health.lag());
     assertEquals(3, health.errorCount());
     assertEquals(SubscriptionHealth.Status.UP, health.status());
+    assertEquals(LeaseRole.LEADING, health.role());
   }
 
   @Test
@@ -31,10 +37,20 @@ class SubscriptionHealthTest {
   void equality() {
     var a =
         new SubscriptionHealth(
-            "x", SubscriptionLifecycleState.RUNNING, 0, 0, SubscriptionHealth.Status.UP);
+            "x",
+            SubscriptionLifecycleState.RUNNING,
+            0,
+            0,
+            SubscriptionHealth.Status.UP,
+            LeaseRole.NOT_REPORTED);
     var b =
         new SubscriptionHealth(
-            "x", SubscriptionLifecycleState.RUNNING, 0, 0, SubscriptionHealth.Status.UP);
+            "x",
+            SubscriptionLifecycleState.RUNNING,
+            0,
+            0,
+            SubscriptionHealth.Status.UP,
+            LeaseRole.NOT_REPORTED);
     assertEquals(a, b);
     assertEquals(a.hashCode(), b.hashCode());
   }
@@ -45,21 +61,30 @@ class SubscriptionHealthTest {
         NullPointerException.class,
         () ->
             new SubscriptionHealth(
-                null, SubscriptionLifecycleState.RUNNING, 0, 0, SubscriptionHealth.Status.UP));
+                null,
+                SubscriptionLifecycleState.RUNNING,
+                0,
+                0,
+                SubscriptionHealth.Status.UP,
+                LeaseRole.NOT_REPORTED));
   }
 
   @Test
   void nullState_throws() {
     assertThrows(
         NullPointerException.class,
-        () -> new SubscriptionHealth("x", null, 0, 0, SubscriptionHealth.Status.UP));
+        () ->
+            new SubscriptionHealth(
+                "x", null, 0, 0, SubscriptionHealth.Status.UP, LeaseRole.NOT_REPORTED));
   }
 
   @Test
   void nullStatus_throws() {
     assertThrows(
         NullPointerException.class,
-        () -> new SubscriptionHealth("x", SubscriptionLifecycleState.RUNNING, 0, 0, null));
+        () ->
+            new SubscriptionHealth(
+                "x", SubscriptionLifecycleState.RUNNING, 0, 0, null, LeaseRole.NOT_REPORTED));
   }
 
   @Test
@@ -68,7 +93,12 @@ class SubscriptionHealthTest {
         IllegalArgumentException.class,
         () ->
             new SubscriptionHealth(
-                "x", SubscriptionLifecycleState.RUNNING, -1, 0, SubscriptionHealth.Status.UP));
+                "x",
+                SubscriptionLifecycleState.RUNNING,
+                -1,
+                0,
+                SubscriptionHealth.Status.UP,
+                LeaseRole.NOT_REPORTED));
   }
 
   @Test
@@ -77,6 +107,27 @@ class SubscriptionHealthTest {
         IllegalArgumentException.class,
         () ->
             new SubscriptionHealth(
-                "x", SubscriptionLifecycleState.RUNNING, 0, -1, SubscriptionHealth.Status.UP));
+                "x",
+                SubscriptionLifecycleState.RUNNING,
+                0,
+                -1,
+                SubscriptionHealth.Status.UP,
+                LeaseRole.NOT_REPORTED));
+  }
+
+  @Test
+  void roleIsRequired() {
+    var thrown =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new SubscriptionHealth(
+                    "x",
+                    SubscriptionLifecycleState.RUNNING,
+                    0,
+                    0,
+                    SubscriptionHealth.Status.UP,
+                    null));
+    assertEquals("role", thrown.getMessage());
   }
 }

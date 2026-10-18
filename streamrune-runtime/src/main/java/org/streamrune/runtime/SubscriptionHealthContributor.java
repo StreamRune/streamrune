@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.OffsetStore;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
@@ -35,6 +36,11 @@ import org.streamrune.core.types.SubscriptionName;
  *   <li>{@code UP} — otherwise.
  * </ul>
  *
+ * <p>Each entry also carries the subscription's role under its single-active-consumer lease ({@link
+ * LeaseRole}), read from a registration that implements {@link LeaseRoleAware} and {@code
+ * NOT_REPORTED} for any other. The role does not change the status rules: a standby is {@code
+ * RUNNING}, has no delivery errors and shares the leader's lag.
+ *
  * <p>Lag never makes a subscription {@code DOWN}. It is measured against the checkpoint all
  * replicas share, so every replica reports the same value: a new projection replaying the store, a
  * projection reset for a rebuild, or a burst of appends would read {@code DOWN} on every replica at
@@ -53,6 +59,9 @@ public final class SubscriptionHealthContributor {
 
   private static final org.slf4j.Logger log =
       org.slf4j.LoggerFactory.getLogger(SubscriptionHealthContributor.class);
+
+  // Names whose lease-role probe threw and was logged; guards the WARN to once per episode.
+  private final java.util.Set<String> roleProbeFailedWarned = ConcurrentHashMap.newKeySet();
 
   /** The default {@link #lagThreshold()}: 1000 events. */
   public static final long DEFAULT_LAG_THRESHOLD = 1000;
@@ -273,6 +282,7 @@ public final class SubscriptionHealthContributor {
 
   public void unregister(String name) {
     subscriptions.remove(name);
+    roleProbeFailedWarned.remove(name);
     lastKnownLag.remove(name);
   }
 
@@ -387,12 +397,44 @@ public final class SubscriptionHealthContributor {
           entry.subscription() != null
               ? entry.subscription().state()
               : SubscriptionLifecycleState.STOPPED;
-      return new SubscriptionHealth(name, state, lag, errors, SubscriptionHealth.Status.DOWN);
+      return new SubscriptionHealth(
+          name,
+          state,
+          lag,
+          errors,
+          SubscriptionHealth.Status.DOWN,
+          roleOf(name, entry.subscription()));
     }
     SubscriptionLifecycleState state = entry.subscription().state();
     SubscriptionHealth.Status status = determineStatus(state, sample, errors);
     status = applyPushPathHealth(name, entry, state, status);
-    return new SubscriptionHealth(name, state, lag, errors, status);
+    return new SubscriptionHealth(
+        name, state, lag, errors, status, roleOf(name, entry.subscription()));
+  }
+
+  /**
+   * The role a registration reports; {@code NOT_REPORTED} for one that is not role-aware, and for
+   * one whose probe throws — a custom {@link LeaseRoleAware} must not take the whole health scrape
+   * down. A throwing probe logs one WARN per episode (it re-arms when the probe answers again).
+   */
+  private LeaseRole roleOf(String name, SubscriptionLifecycle subscription) {
+    if (!(subscription instanceof LeaseRoleAware aware)) {
+      return LeaseRole.NOT_REPORTED;
+    }
+    try {
+      LeaseRole role = aware.leaseRole();
+      roleProbeFailedWarned.remove(name);
+      return role;
+    } catch (RuntimeException e) {
+      if (roleProbeFailedWarned.add(name)) {
+        log.warn(
+            "Lease-role probe failed for subscription '{}' — it reports NOT_REPORTED until the"
+                + " probe answers again",
+            name,
+            e);
+      }
+      return LeaseRole.NOT_REPORTED;
+    }
   }
 
   /**

@@ -4,9 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
 import io.smallrye.config.SmallRyeConfig;
 import io.smallrye.config.SmallRyeConfigBuilder;
+import jakarta.enterprise.inject.Instance;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -24,6 +28,7 @@ import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
@@ -34,6 +39,7 @@ import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.SagaEventPathRetention;
+import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
@@ -143,11 +149,96 @@ class SagaEventPathRetentionWiringTest {
     return config.getConfigMapping(StreamRuneQuarkusProperties.class);
   }
 
+  /** The configurer over {@code runners}, with no leadership bean. */
+  private static SagaEventPathRetentionConfigurer configurer(
+      List<SagaRunner<?>> runners, StreamRuneQuarkusProperties properties) {
+    return configurer(runners, properties, null);
+  }
+
+  /** The configurer over {@code runners}; {@code leadership} null resolves no bean. */
+  @SuppressWarnings("unchecked")
+  private static SagaEventPathRetentionConfigurer configurer(
+      List<SagaRunner<?>> runners,
+      StreamRuneQuarkusProperties properties,
+      SubscriptionLeadership leadership) {
+    Instance<SubscriptionLeadership> instance = mock(Instance.class);
+    when(instance.isResolvable()).thenReturn(leadership != null);
+    when(instance.get()).thenReturn(leadership);
+    return new SagaEventPathRetentionConfigurer(runners, properties, instance);
+  }
+
+  /**
+   * A leadership that is not {@link SubscriptionLeadership#NOOP}: holds nothing, grants nothing.
+   */
+  private static SubscriptionLeadership aLeadership() {
+    return new SubscriptionLeadership() {
+      @Override
+      public Optional<Lease> tryAcquire(String consumerName) {
+        return Optional.empty();
+      }
+
+      @Override
+      public Optional<Lease> current(String consumerName) {
+        return Optional.empty();
+      }
+
+      @Override
+      public void resign(String consumerName) {}
+
+      @Override
+      public void close() {}
+    };
+  }
+
+  /**
+   * This module binds SLF4J to JBoss Logging, so the startup report is observed at the call that
+   * writes it: the leadership the configurer hands to {@link
+   * SagaLeaseWiring#warnUngatedUnderLeadership}, and how many runners that call reported.
+   */
+  private record Report(SubscriptionLeadership leadership, Object reported) {}
+
+  private static List<Report> reportsOf(Runnable startup) {
+    List<Report> reports = new java.util.ArrayList<>();
+    try (var mocked =
+        mockStatic(
+            SagaLeaseWiring.class,
+            invocation -> {
+              Object reported = invocation.callRealMethod();
+              reports.add(new Report(invocation.getArgument(1), reported));
+              return reported;
+            })) {
+      startup.run();
+    }
+    return reports;
+  }
+
+  @Test
+  void anUngatedRunnerUnderRealLeadershipIsReported() {
+    SubscriptionLeadership leadership = aLeadership();
+
+    var reports =
+        reportsOf(() -> configurer(List.of(sagaRunner()), bind(Map.of()), leadership).apply(null));
+
+    assertEquals(List.of(new Report(leadership, 1)), reports);
+  }
+
+  @Test
+  void nothingIsReportedWithoutLeadership() {
+    var reports =
+        reportsOf(
+            () -> {
+              configurer(List.of(sagaRunner()), bind(Map.of()), null).apply(null);
+              configurer(List.of(sagaRunner()), bind(Map.of()), SubscriptionLeadership.NOOP)
+                  .apply(null);
+            });
+
+    assertEquals(List.of(new Report(null, 0), new Report(SubscriptionLeadership.NOOP, 0)), reports);
+  }
+
   @Test
   void configuredInboxRetention_reachesTheEventPathGuard() {
     var runner = sagaRunner();
-    new SagaEventPathRetentionConfigurer(
-            List.of(runner), bind(Map.of("streamrune.inbox.retention-max-age", "3d")))
+    configurer(List.of(runner), bind(Map.of("streamrune.inbox.retention-max-age", "3d")))
         .apply(null);
     assertEquals(Duration.ofDays(3), SagaEventPathRetention.effectiveWindowOf(runner));
   }
@@ -155,15 +246,14 @@ class SagaEventPathRetentionWiringTest {
   @Test
   void defaultInboxRetention_reachesTheEventPathGuard() {
     var runner = sagaRunner();
-    new SagaEventPathRetentionConfigurer(List.of(runner), bind(Map.of())).apply(null);
+    configurer(List.of(runner), bind(Map.of())).apply(null);
     assertEquals(Duration.ofDays(7), SagaEventPathRetention.effectiveWindowOf(runner));
   }
 
   @Test
   void disabledInboxRetention_leavesTheGuardInert() {
     var runner = sagaRunner();
-    new SagaEventPathRetentionConfigurer(
-            List.of(runner), bind(Map.of("streamrune.inbox.retention-max-age", "0s")))
+    configurer(List.of(runner), bind(Map.of("streamrune.inbox.retention-max-age", "0s")))
         .apply(null);
     assertNull(SagaEventPathRetention.effectiveWindowOf(runner));
   }
@@ -171,8 +261,7 @@ class SagaEventPathRetentionWiringTest {
   @Test
   void applicationSuppliedWindowIsNeverOverwritten() {
     var runner = sagaRunnerWithExplicitWindow(Duration.ofHours(2));
-    new SagaEventPathRetentionConfigurer(
-            List.of(runner), bind(Map.of("streamrune.inbox.retention-max-age", "3d")))
+    configurer(List.of(runner), bind(Map.of("streamrune.inbox.retention-max-age", "3d")))
         .apply(null);
     assertEquals(Duration.ofHours(2), SagaEventPathRetention.effectiveWindowOf(runner));
   }
@@ -181,9 +270,7 @@ class SagaEventPathRetentionWiringTest {
   void aSagaRunnerWithAndWithoutAnEventDataHook_isWiredAndRoutesAsItsSagaDeclares() {
     var withoutAHook = RegisteredSaga.of(new FakeOrchestrator());
     var withAHook = RegisteredSaga.of(new EventDataRoutingOrchestrator());
-    new SagaEventPathRetentionConfigurer(
-            List.of(withoutAHook.runner(), withAHook.runner()), bind(Map.of()))
-        .apply(null);
+    configurer(List.of(withoutAHook.runner(), withAHook.runner()), bind(Map.of())).apply(null);
     assertEquals(
         Duration.ofDays(7), SagaEventPathRetention.effectiveWindowOf(withoutAHook.runner()));
     assertEquals(Duration.ofDays(7), SagaEventPathRetention.effectiveWindowOf(withAHook.runner()));
@@ -201,7 +288,7 @@ class SagaEventPathRetentionWiringTest {
   void twoSagaRunnersOverOneStateClassAndOneStore_areRefusedByTheConfigurer() {
     var store = new InMemorySagaStore();
     var configurer =
-        new SagaEventPathRetentionConfigurer(
+        configurer(
             List.of(
                 runnerOver(store, new FakeOrchestrator()),
                 runnerOver(store, new EventDataRoutingOrchestrator())),

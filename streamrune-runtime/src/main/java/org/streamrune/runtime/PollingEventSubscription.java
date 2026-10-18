@@ -13,6 +13,7 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.EventListener;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
@@ -45,7 +46,8 @@ import org.streamrune.core.types.SubscriptionName;
  * except when it is called from inside the listener, which closes the paused anchor before that
  * page's checkpoint is saved. A subscription without a lease takes none of these steps.
  */
-public final class PollingEventSubscription implements SubscriptionLifecycle, ReadPoisonAware {
+public final class PollingEventSubscription
+    implements SubscriptionLifecycle, ReadPoisonAware, LeaseRoleAware {
 
   private static final Logger logger = LoggerFactory.getLogger(PollingEventSubscription.class);
   private static final Duration MAX_FAILURE_BACKOFF = Duration.ofSeconds(60);
@@ -88,6 +90,10 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
    * subscription that takes none.
    */
   private final SubscriptionLease lease;
+
+  // The contributor this subscription registers with on start() and leaves on close(); null
+  // registers nothing.
+  private final SubscriptionHealthContributor healthContributor;
 
   /**
    * A started polling thread, the interrupt deferral pause() and close() stop it through, and the
@@ -162,8 +168,8 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
   }
 
   /**
-   * Full constructor with a lease. Package-private: the builder resolves the lease from {@link
-   * Builder#lease}, {@link Builder#leadership} or {@link Builder#sagaRunner}.
+   * Constructor with a lease and no health registration. Package-private: the builder resolves the
+   * lease from {@link Builder#lease}, {@link Builder#leadership} or {@link Builder#sagaRunner}.
    */
   PollingEventSubscription(
       SubscriptionName subscriptionName,
@@ -175,6 +181,34 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
       StreamRuneMetrics metrics,
       int readPoisonBound,
       SubscriptionLease lease) {
+    this(
+        subscriptionName,
+        eventStore,
+        offsetStore,
+        listener,
+        config,
+        fetchSize,
+        metrics,
+        readPoisonBound,
+        lease,
+        null);
+  }
+
+  /**
+   * Full constructor with a lease and the contributor the subscription registers with ({@code null}
+   * = none). Package-private: the builder resolves both.
+   */
+  PollingEventSubscription(
+      SubscriptionName subscriptionName,
+      EventStore eventStore,
+      OffsetStore offsetStore,
+      EventListener listener,
+      SubscriptionConfig config,
+      int fetchSize,
+      StreamRuneMetrics metrics,
+      int readPoisonBound,
+      SubscriptionLease lease,
+      SubscriptionHealthContributor healthContributor) {
     if (subscriptionName == null) {
       throw new IllegalArgumentException("subscriptionName is required");
     }
@@ -197,6 +231,7 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
       throw new IllegalArgumentException("lease is required");
     }
     this.lease = lease;
+    this.healthContributor = healthContributor;
     this.subscriptionName = subscriptionName;
     this.eventStore = eventStore;
     this.offsetStore = offsetStore;
@@ -235,6 +270,9 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
       throw anotherAnchor;
     }
     startPollThread(anchor);
+    if (healthContributor != null) {
+      healthContributor.register(subscriptionName.value(), this);
+    }
   }
 
   /** Publishes the new polling thread with its deferral and its anchor before starting it. */
@@ -285,8 +323,12 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
         // starts after the old one. Called from the listener — on the paused thread itself, or
         // on a wake-up drain's thread, which holds pollLock the paused thread needs to close its
         // anchor — no wait is possible: the old anchor is closed here, before the checkpoint of
-        // the page in flight is saved, and the lease is taken again at once. A wake-up recorded
-        // during that page may let the old thread drain once more before it exits.
+        // the page in flight is saved, and the lease is taken again at once. The drain in flight
+        // (the paused poll thread's own, or the wake-up thread's) began under the old anchor and
+        // ends after that page, since the anchor it checks is closed; a wake-up recorded during
+        // the page lets that same thread drain once more under the new anchor before it releases
+        // pollLock. The paused poll thread itself exits once its cycle ends: its stop request
+        // from pause() is still pending.
         if (previous.thread() != Thread.currentThread() && !pollLock.isHeldByCurrentThread()) {
           try {
             previous.thread().join(CLOSE_JOIN_TIMEOUT_MS);
@@ -326,12 +368,27 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
    *
    * <p>Waits up to {@value #CLOSE_JOIN_TIMEOUT_MS} ms; if the thread is still alive after that
    * (e.g. a stuck listener), a warning is logged and close() returns anyway. Calling close() from
-   * the listener itself (i.e. on the polling thread) only signals and returns — joining the current
-   * thread would deadlock. If the closing thread is interrupted while waiting, the wait is
-   * abandoned and the interrupt flag restored.
+   * the listener — on the polling thread, or on a wake-up drain's thread ({@link
+   * #triggerImmediatePoll()}, which a notification drives) — only signals and returns: joining the
+   * thread that is inside the page would deadlock. The page in flight is then saved, and the
+   * subscription's lease resigned, after close() returns. If the closing thread is interrupted
+   * while waiting, the wait is abandoned and the interrupt flag restored.
+   *
+   * <p>A subscription built with {@link Builder#healthContributor} unregisters from it as the last
+   * step.
    */
   @Override
   public void close() {
+    try {
+      closeAndAwaitThread();
+    } finally {
+      if (healthContributor != null) {
+        healthContributor.unregister(subscriptionName.value());
+      }
+    }
+  }
+
+  private void closeAndAwaitThread() {
     // Using set() not CAS — close() is terminal and must win regardless of current state.
     // If pause() has already done its CAS (RUNNING → PAUSED) but not yet interrupted the thread,
     // close() will set STOPPED and interrupt the thread first. pause() will then also interrupt
@@ -517,6 +574,12 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
   private SubscriptionLease.Anchor currentAnchor() {
     PollThread current = pollThread;
     return current == null ? null : current.anchor();
+  }
+
+  /** {@link LeaseRole#UNGATED}, or {@link LeaseRole#LEADING} or {@link LeaseRole#STANDBY}. */
+  @Override
+  public LeaseRole leaseRole() {
+    return lease.role();
   }
 
   /** The lease this subscription delivers under; for tests. */
@@ -718,6 +781,7 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     private SubscriptionLease lease;
     private SubscriptionLeadership leadership;
     private SagaRunner<?> sagaRunner;
+    private SubscriptionHealthContributor healthContributor;
 
     /** Sets the unique subscription name (required). Accepts String for convenience. */
     public Builder subscriptionName(String name) {
@@ -817,6 +881,17 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
     }
 
     /**
+     * Registers this subscription with {@code contributor} under its name on {@link #start()} and
+     * unregisters it on {@link #close()}, so health reports its state, lag, errors and lease role.
+     * Optional; {@code null} registers nothing. The integrations cannot find a subscription the
+     * application builds itself.
+     */
+    public Builder healthContributor(SubscriptionHealthContributor contributor) {
+      this.healthContributor = contributor;
+      return this;
+    }
+
+    /**
      * Builds the {@link PollingEventSubscription}. Requires {@code subscriptionName}, {@code
      * eventStore}, {@code offsetStore}, and {@code listener} or {@code sagaRunner}.
      *
@@ -836,7 +911,8 @@ public final class PollingEventSubscription implements SubscriptionLifecycle, Re
           fetchSize,
           metrics,
           readPoisonBound,
-          resolvedLease());
+          resolvedLease(),
+          healthContributor);
     }
 
     /** Refuses one setting named twice: a saga runner sets the listener and the lease. */

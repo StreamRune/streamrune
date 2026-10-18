@@ -459,6 +459,15 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `resume()` waits for that page before it takes the lease again (a `resume()` from inside the
   listener cannot, and resigns before that page's checkpoint is saved). `LeaseRole` (`NOT_REPORTED`,
   `UNGATED`, `LEADING`, `STANDBY`) names the role a subscription plays under its lease.
+- Subscription health reports the lease role: `SubscriptionHealth.role` is a `LeaseRole`, read from a
+  registration that implements `LeaseRoleAware` (`PollingEventSubscription` and
+  `HybridEventSubscription` do) and `NOT_REPORTED` for any other, a projection runner's view
+  included. A standby is `RUNNING` with no delivery errors and shares the leader's lag: `UP` while a
+  replica leads, `DEGRADED` on every replica once the shared lag crosses the threshold, never
+  `DOWN`. `PollingEventSubscription.Builder.healthContributor(...)` and
+  `HybridEventSubscription.Builder.healthContributor(...)` register an application-built
+  subscription with the `SubscriptionHealthContributor` on `start()` and unregister it on `close()`;
+  a hybrid subscription registers itself, so a dead LISTEN/NOTIFY push path still reads `DEGRADED`.
 
 ### Sagas
 
@@ -684,7 +693,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   subscription of its process anchored logs one INFO within 15 s of its start and one WARN past it,
   and its relay health reads `DEGRADED`; a runner with a lease delivering through
   `listener(runner.asEventListener())` logs one WARN. A sweeper of a runner without a lease keeps its
-  own lease, `"saga-compensation-retry:" + saga type`.
+  own lease, `"saga-compensation-retry:" + saga type`. Stopping a started timeout runner on the
+  replica that leads its saga type logs a WARN naming the consequence (no replica claims that saga
+  type's deadlines until the runner starts again or the replica stops leading); closing a started
+  sweeper there logs an INFO to the same effect.
 - A replay feed of a correlated event is never applied over a row whose start step is not applied
   yet: the drain defers such an entry (`SAGA_ROW_PENDING`) before the feed, and the step executor
   refuses the feed itself (`SKIPPED_GENESIS_PENDING`). A row deleted and inserted again for the saga
@@ -955,7 +967,11 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   (`StreamRuneHealthIndicator`): `DOWN` when the database refuses a connection, when any subscription
   is `DOWN`, or when a started background relay's thread died; `subscription.<name>` and
   `relay.<component>` details (`relay.crypto-forget-listen` where a cached crypto engine listens on
-  the PostgreSQL forget channel).
+  the PostgreSQL forget channel). Each `subscription.<name>` detail carries the subscription's lease
+  `role` (`UNGATED`, `LEADING`, `STANDBY` or `NOT_REPORTED`) beside its `state`, `lag`, `errorCount`
+  and `status`. At startup each integration logs one WARN per `SagaRunner` that carries no lease
+  while the application has a real `SubscriptionLeadership` bean: its saga type is delivered on every
+  replica.
 - **Spring Boot**: `StreamRuneAutoConfiguration`, `StreamRuneProperties` (immutable records bound
   through their constructors), `@StreamRuneComponent` stereotype, `StreamRuneFailureAnalyzer`,
   `SmartLifecycle` runners, `streamrune.validation-enabled` (Jakarta Validation interceptor, default

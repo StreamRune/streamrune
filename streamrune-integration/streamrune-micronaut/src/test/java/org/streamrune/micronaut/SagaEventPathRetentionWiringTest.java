@@ -6,6 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.micronaut.context.ApplicationContext;
 import java.time.Duration;
 import java.time.Instant;
@@ -13,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.DomainEvent;
@@ -24,6 +29,7 @@ import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
@@ -35,6 +41,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
+import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
@@ -132,6 +139,70 @@ class SagaEventPathRetentionWiringTest {
         // SagaForwardFence*Test.
         .forwardFence(false)
         .build();
+  }
+
+  /**
+   * A runner built without a lease, next to a real leadership bean, delivers its saga type on every
+   * replica: the startup hook says so, once per such runner.
+   */
+  @Test
+  void anUngatedRunnerUnderRealLeadershipIsReported() {
+    var log = (Logger) LoggerFactory.getLogger(SagaLeaseWiring.class);
+    var appender = new ListAppender<ILoggingEvent>();
+    appender.start();
+    log.addAppender(appender);
+    try (var ctx = ApplicationContext.builder().build()) {
+      ctx.registerSingleton(SubscriptionLeadership.class, aLeadership());
+      ctx.start();
+
+      ctx.getBean(SagaEventPathRetentionConfigurer.class).apply(List.of(sagaRunner()));
+
+      var warnings = appender.list.stream().filter(e -> e.getLevel() == Level.WARN).toList();
+      assertEquals(1, warnings.size());
+      assertTrue(warnings.getFirst().getFormattedMessage().contains(FakeState.class.getName()));
+      assertTrue(
+          warnings.getFirst().getFormattedMessage().contains("is delivered on every replica"));
+    } finally {
+      log.detachAppender(appender);
+    }
+  }
+
+  @Test
+  void nothingIsReportedWithoutLeadership() {
+    var log = (Logger) LoggerFactory.getLogger(SagaLeaseWiring.class);
+    var appender = new ListAppender<ILoggingEvent>();
+    appender.start();
+    log.addAppender(appender);
+    try (var ctx = ApplicationContext.builder().start()) {
+      ctx.getBean(SagaEventPathRetentionConfigurer.class).apply(List.of(sagaRunner()));
+
+      assertTrue(appender.list.isEmpty());
+    } finally {
+      log.detachAppender(appender);
+    }
+  }
+
+  /**
+   * A leadership that is not {@link SubscriptionLeadership#NOOP}: holds nothing, grants nothing.
+   */
+  private static SubscriptionLeadership aLeadership() {
+    return new SubscriptionLeadership() {
+      @Override
+      public Optional<Lease> tryAcquire(String consumerName) {
+        return Optional.empty();
+      }
+
+      @Override
+      public Optional<Lease> current(String consumerName) {
+        return Optional.empty();
+      }
+
+      @Override
+      public void resign(String consumerName) {}
+
+      @Override
+      public void close() {}
+    };
   }
 
   @Test

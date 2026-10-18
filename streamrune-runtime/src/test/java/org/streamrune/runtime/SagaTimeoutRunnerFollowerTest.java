@@ -232,6 +232,64 @@ class SagaTimeoutRunnerFollowerTest {
     }
   }
 
+  @Test
+  void stoppingALeadingRunner_warnsNamingTheConsequence() {
+    leadership.grant(LEASE);
+    try (var p = new SagaStepLockFixture(leadership, Duration.ZERO)) {
+      SubscriptionLease.Anchor anchor = p.runner.lease().anchor();
+      assertThat(anchor.lead(Duration.ZERO)).isTrue();
+      p.timeoutRunner.start();
+
+      p.timeoutRunner.stop();
+
+      assertThat(stopLines(Level.WARN))
+          .singleElement()
+          .satisfies(
+              line ->
+                  assertThat(line)
+                      .contains(SagaStepLockFixture.TYPE.value())
+                      .contains("stops while this process leads that saga type")
+                      .contains("no replica claims its deadlines"));
+      anchor.close();
+    }
+  }
+
+  @Test
+  void stoppingAStandbyRunner_doesNotWarn() {
+    try (var p = new SagaStepLockFixture(leadership, Duration.ZERO)) {
+      SubscriptionLease.Anchor anchor = p.runner.lease().anchor();
+      assertThat(anchor.lead(Duration.ZERO)).isFalse();
+      p.timeoutRunner.start();
+
+      p.timeoutRunner.stop();
+
+      assertThat(stopLines(Level.WARN)).isEmpty();
+      anchor.close();
+    }
+  }
+
+  @Test
+  void stoppingANeverStartedRunner_doesNotWarn() {
+    leadership.grant(LEASE);
+    try (var p = new SagaStepLockFixture(leadership, Duration.ZERO)) {
+      SubscriptionLease.Anchor anchor = p.runner.lease().anchor();
+      assertThat(anchor.lead(Duration.ZERO)).isTrue();
+
+      p.timeoutRunner.stop();
+
+      assertThat(stopLines(Level.WARN)).isEmpty();
+      anchor.close();
+    }
+  }
+
+  private List<String> stopLines(Level level) {
+    return appender.list.stream()
+        .filter(e -> e.getLevel() == level)
+        .map(ILoggingEvent::getFormattedMessage)
+        .filter(m -> m.contains("stops while this process leads"))
+        .toList();
+  }
+
   private List<String> lines(Level level) {
     return appender.list.stream()
         .filter(e -> e.getLevel() == level)

@@ -1087,8 +1087,9 @@ public class StreamRuneAutoConfiguration {
   @ConditionalOnMissingBean(SagaEventPathRetentionConfigurer.class)
   public SagaEventPathRetentionConfigurer sagaEventPathRetentionConfigurer(
       ObjectProvider<org.streamrune.runtime.SagaRunner<?>> sagaRunnerProvider,
-      StreamRuneProperties properties) {
-    return new SagaEventPathRetentionConfigurer(sagaRunnerProvider, properties);
+      StreamRuneProperties properties,
+      ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership> leadershipProvider) {
+    return new SagaEventPathRetentionConfigurer(sagaRunnerProvider, properties, leadershipProvider);
   }
 
   /**

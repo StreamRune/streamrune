@@ -162,7 +162,8 @@ class StreamRuneHealthIndicatorTest {
             org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
             5L,
             0,
-            org.streamrune.core.subscription.SubscriptionHealth.Status.UP);
+            org.streamrune.core.subscription.SubscriptionHealth.Status.UP,
+            org.streamrune.core.subscription.LeaseRole.NOT_REPORTED);
     when(contributor.health()).thenReturn(List.of(sub));
     when(contributor.overallStatus())
         .thenReturn(org.streamrune.core.subscription.SubscriptionHealth.Status.UP);
@@ -179,6 +180,42 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
+  void rendersTheRoleOfEachSubscription() throws SQLException {
+    DataSource ds = validDataSource();
+    SubscriptionHealthContributor contributor = mock(SubscriptionHealthContributor.class);
+    var leading =
+        new org.streamrune.core.subscription.SubscriptionHealth(
+            "orders-saga",
+            org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
+            5L,
+            0,
+            org.streamrune.core.subscription.SubscriptionHealth.Status.UP,
+            org.streamrune.core.subscription.LeaseRole.LEADING);
+    var notReported =
+        new org.streamrune.core.subscription.SubscriptionHealth(
+            "orders",
+            org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
+            5L,
+            0,
+            org.streamrune.core.subscription.SubscriptionHealth.Status.UP,
+            org.streamrune.core.subscription.LeaseRole.NOT_REPORTED);
+    when(contributor.health()).thenReturn(List.of(leading, notReported));
+
+    var indicator = new StreamRuneHealthIndicator(ds, contributor);
+    HealthResult result = Mono.from(indicator.getResult()).block();
+
+    assertNotNull(result);
+    @SuppressWarnings("unchecked")
+    Map<String, Object> details = (Map<String, Object>) result.getDetails();
+    @SuppressWarnings("unchecked")
+    Map<String, Object> sagaDetails = (Map<String, Object>) details.get("subscription.orders-saga");
+    @SuppressWarnings("unchecked")
+    Map<String, Object> ordersDetails = (Map<String, Object>) details.get("subscription.orders");
+    assertEquals("LEADING", sagaDetails.get("role"));
+    assertEquals("NOT_REPORTED", ordersDetails.get("role"));
+  }
+
+  @Test
   void shouldReportSubscriptionHealthDown() throws SQLException {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
@@ -192,7 +229,8 @@ class StreamRuneHealthIndicatorTest {
             org.streamrune.core.subscription.SubscriptionLifecycleState.STOPPED,
             0L,
             0,
-            org.streamrune.core.subscription.SubscriptionHealth.Status.DOWN);
+            org.streamrune.core.subscription.SubscriptionHealth.Status.DOWN,
+            org.streamrune.core.subscription.LeaseRole.NOT_REPORTED);
     when(contributor.health()).thenReturn(List.of(sub));
     when(contributor.overallStatus())
         .thenReturn(org.streamrune.core.subscription.SubscriptionHealth.Status.DOWN);
@@ -278,7 +316,8 @@ class StreamRuneHealthIndicatorTest {
                     SubscriptionLifecycleState.STOPPED,
                     0L,
                     0,
-                    org.streamrune.core.subscription.SubscriptionHealth.Status.DOWN)));
+                    org.streamrune.core.subscription.SubscriptionHealth.Status.DOWN,
+                    org.streamrune.core.subscription.LeaseRole.NOT_REPORTED)));
     when(contributor.overallStatus())
         .thenReturn(org.streamrune.core.subscription.SubscriptionHealth.Status.UP);
 

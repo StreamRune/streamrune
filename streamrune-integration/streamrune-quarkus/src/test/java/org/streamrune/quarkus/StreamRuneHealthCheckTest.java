@@ -241,7 +241,8 @@ class StreamRuneHealthCheckTest {
             org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
             5L,
             0,
-            org.streamrune.core.subscription.SubscriptionHealth.Status.UP);
+            org.streamrune.core.subscription.SubscriptionHealth.Status.UP,
+            org.streamrune.core.subscription.LeaseRole.NOT_REPORTED);
     when(contributor.health()).thenReturn(List.of(sub));
     when(contributor.overallStatus())
         .thenReturn(org.streamrune.core.subscription.SubscriptionHealth.Status.UP);
@@ -262,6 +263,44 @@ class StreamRuneHealthCheckTest {
 
   @Test
   @SuppressWarnings("unchecked")
+  void rendersTheRoleOfEachSubscription() throws SQLException {
+    DataSource ds = mock(DataSource.class);
+    Connection conn = mock(Connection.class);
+    when(ds.getConnection()).thenReturn(conn);
+    when(conn.isValid(anyInt())).thenReturn(true);
+    SubscriptionHealthContributor contributor = mock(SubscriptionHealthContributor.class);
+    var leading =
+        new org.streamrune.core.subscription.SubscriptionHealth(
+            "orders-saga",
+            org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
+            5L,
+            0,
+            org.streamrune.core.subscription.SubscriptionHealth.Status.UP,
+            org.streamrune.core.subscription.LeaseRole.LEADING);
+    var notReported =
+        new org.streamrune.core.subscription.SubscriptionHealth(
+            "orders",
+            org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
+            5L,
+            0,
+            org.streamrune.core.subscription.SubscriptionHealth.Status.UP,
+            org.streamrune.core.subscription.LeaseRole.NOT_REPORTED);
+    when(contributor.health()).thenReturn(List.of(leading, notReported));
+    Instance<SubscriptionHealthContributor> healthInstance = mock(Instance.class);
+    when(healthInstance.isUnsatisfied()).thenReturn(false);
+    when(healthInstance.get()).thenReturn(contributor);
+
+    var check =
+        new StreamRuneHealthCheck(dataSource(ds), healthInstance, noEventStore(), noRelay());
+    HealthCheckResponse response = check.call();
+
+    var data = response.getData().orElseThrow();
+    assertEquals("LEADING", data.get("subscription.orders-saga.role"));
+    assertEquals("NOT_REPORTED", data.get("subscription.orders.role"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
   void shouldReportSubscriptionHealthDown() throws SQLException {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
@@ -275,7 +314,8 @@ class StreamRuneHealthCheckTest {
             org.streamrune.core.subscription.SubscriptionLifecycleState.STOPPED,
             0L,
             0,
-            org.streamrune.core.subscription.SubscriptionHealth.Status.DOWN);
+            org.streamrune.core.subscription.SubscriptionHealth.Status.DOWN,
+            org.streamrune.core.subscription.LeaseRole.NOT_REPORTED);
     when(contributor.health()).thenReturn(List.of(sub));
     when(contributor.overallStatus())
         .thenReturn(org.streamrune.core.subscription.SubscriptionHealth.Status.DOWN);
@@ -303,7 +343,8 @@ class StreamRuneHealthCheckTest {
             org.streamrune.core.subscription.SubscriptionLifecycleState.STOPPED,
             0L,
             0,
-            org.streamrune.core.subscription.SubscriptionHealth.Status.DOWN);
+            org.streamrune.core.subscription.SubscriptionHealth.Status.DOWN,
+            org.streamrune.core.subscription.LeaseRole.NOT_REPORTED);
     when(contributor.health()).thenReturn(List.of(down));
     when(contributor.overallStatus())
         .thenReturn(org.streamrune.core.subscription.SubscriptionHealth.Status.UP);

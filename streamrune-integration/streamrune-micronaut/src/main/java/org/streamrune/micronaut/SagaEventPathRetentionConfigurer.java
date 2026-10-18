@@ -3,15 +3,18 @@ package org.streamrune.micronaut;
 import io.micronaut.context.event.ApplicationEventListener;
 import io.micronaut.context.event.StartupEvent;
 import io.micronaut.core.order.Ordered;
+import jakarta.annotation.Nullable;
 import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.integration.SagaForwardFenceSetting;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
+import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SagaTypeOwnership;
 
@@ -42,6 +45,11 @@ import org.streamrune.runtime.SagaTypeOwnership;
  * streamrune.subscription.single-active-consumer.enabled} says. A runner that named its fence keeps
  * it. An unknown value fails startup.
  *
+ * <p><b>Leadership.</b> With a real {@link SubscriptionLeadership} bean (not the always-leading
+ * {@code NOOP}), the same hook logs one WARN per {@link SagaRunner} that carries no lease: its saga
+ * type is delivered on every replica ({@link SagaLeaseWiring#warnUngatedUnderLeadership}). The
+ * runner is reported, not refused.
+ *
  * <p>Deliberately not gated on {@code streamrune.saga.compensation-retry-enabled}: the event path
  * has no enable knob of its own, so the guard must not disappear with the sweeper. Mirrors the
  * {@link SagaStateCryptoValidator} startup-hook pattern, its order included: the hook runs with the
@@ -55,11 +63,15 @@ public class SagaEventPathRetentionConfigurer
 
   private final List<SagaRunner<?>> sagaRunners;
   private final StreamRuneMicronautProperties properties;
+  private final SubscriptionLeadership leadership;
 
   public SagaEventPathRetentionConfigurer(
-      List<SagaRunner<?>> sagaRunners, StreamRuneMicronautProperties properties) {
+      List<SagaRunner<?>> sagaRunners,
+      StreamRuneMicronautProperties properties,
+      @Nullable SubscriptionLeadership leadership) {
     this.sagaRunners = sagaRunners;
     this.properties = properties;
+    this.leadership = leadership;
   }
 
   // The validators' tier: a lower value than the listeners that start the integration's runners
@@ -81,6 +93,7 @@ public class SagaEventPathRetentionConfigurer
    */
   void apply(List<SagaRunner<?>> runners) {
     SagaTypeOwnership.requireOneRunnerPerSagaType(runners);
+    SagaLeaseWiring.warnUngatedUnderLeadership(runners, leadership);
     Duration window = properties.inboxRetentionMaxAge();
     int applied = SagaEventPathRetention.applyDefault(runners, window);
     if (applied > 0) {

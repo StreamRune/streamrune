@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.projection.OffsetStore;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
@@ -254,6 +255,86 @@ class SubscriptionHealthContributorTest {
     assertEquals(SubscriptionHealth.Status.UP, h.status());
   }
 
+  /** A subscription that also says which role it plays under its lease. */
+  private interface RoleAwareSubscription extends SubscriptionLifecycle, LeaseRoleAware {}
+
+  private SubscriptionLifecycle roleAwareSubscription(LeaseRole role) {
+    var sub = mock(RoleAwareSubscription.class);
+    when(sub.state()).thenReturn(SubscriptionLifecycleState.RUNNING);
+    when(sub.leaseRole()).thenReturn(role);
+    return sub;
+  }
+
+  @Test
+  void aLeaseRoleAwareRegistrationReportsItsRole() {
+    contributor.register("saga", roleAwareSubscription(LeaseRole.STANDBY));
+    stubGlobalHead(50);
+    stubLastOffset("saga", 50);
+
+    assertEquals(LeaseRole.STANDBY, contributor.health().getFirst().role());
+  }
+
+  @Test
+  void anotherRegistrationReportsNotReported() {
+    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    stubGlobalHead(50);
+    stubLastOffset("orders", 50);
+
+    assertEquals(LeaseRole.NOT_REPORTED, contributor.health().getFirst().role());
+  }
+
+  @Test
+  void aTerminalEntryWithoutASubscriptionReportsNotReported() {
+    stubGlobalHead(50);
+    stubLastOffset("orders", 10);
+
+    contributor.markTerminalError("orders");
+
+    var h = contributor.health().getFirst();
+    assertEquals(SubscriptionHealth.Status.DOWN, h.status());
+    assertEquals(LeaseRole.NOT_REPORTED, h.role());
+  }
+
+  @Test
+  void aStandbyKeepsTheStatusRules() {
+    contributor.register("saga", roleAwareSubscription(LeaseRole.STANDBY));
+    stubGlobalHead(200);
+
+    stubLastOffset("saga", 101);
+    var belowTheThreshold = contributor.health().getFirst();
+    assertEquals(SubscriptionHealth.Status.UP, belowTheThreshold.status());
+    assertEquals(LeaseRole.STANDBY, belowTheThreshold.role());
+
+    stubLastOffset("saga", 50);
+    var aboveTheThreshold = contributor.health().getFirst();
+    assertEquals(SubscriptionHealth.Status.DEGRADED, aboveTheThreshold.status());
+    assertEquals(LeaseRole.STANDBY, aboveTheThreshold.role());
+  }
+
+  @Test
+  void aThrowingLeaseRoleProbe_reportsNotReported_andTheScrapeSurvives() {
+    var broken = mock(RoleAwareSubscription.class);
+    when(broken.state()).thenReturn(SubscriptionLifecycleState.RUNNING);
+    when(broken.leaseRole()).thenThrow(new IllegalStateException("probe is broken"));
+    contributor.register("broken", broken);
+    contributor.register("saga", roleAwareSubscription(LeaseRole.LEADING));
+    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    stubGlobalHead(50);
+    stubLastOffset("broken", 50);
+    stubLastOffset("saga", 50);
+    stubLastOffset("orders", 50);
+
+    for (int scrape = 0; scrape < 2; scrape++) {
+      var byName = new java.util.HashMap<String, SubscriptionHealth>();
+      contributor.health().forEach(h -> byName.put(h.name(), h));
+
+      assertEquals(LeaseRole.NOT_REPORTED, byName.get("broken").role());
+      assertEquals(SubscriptionHealth.Status.UP, byName.get("broken").status());
+      assertEquals(LeaseRole.LEADING, byName.get("saga").role());
+      assertEquals(LeaseRole.NOT_REPORTED, byName.get("orders").role());
+    }
+  }
+
   @Test
   void aProjectionCatchingUpFromOffsetZero_neverTurnsTheOverallStatusDown() {
     // Lag is measured against the shared checkpoint, so every replica reports the same value. A new
@@ -344,7 +425,8 @@ class SubscriptionHealthContributorTest {
   }
 
   private static SubscriptionHealth health(String name, SubscriptionHealth.Status status) {
-    return new SubscriptionHealth(name, SubscriptionLifecycleState.RUNNING, 0, 0, status);
+    return new SubscriptionHealth(
+        name, SubscriptionLifecycleState.RUNNING, 0, 0, status, LeaseRole.NOT_REPORTED);
   }
 
   @Test

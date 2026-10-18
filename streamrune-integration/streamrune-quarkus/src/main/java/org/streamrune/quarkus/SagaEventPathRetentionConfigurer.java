@@ -5,15 +5,18 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.interceptor.Interceptor;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.integration.SagaForwardFenceSetting;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
+import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SagaTypeOwnership;
 
@@ -44,6 +47,11 @@ import org.streamrune.runtime.SagaTypeOwnership;
  * streamrune.subscription.single-active-consumer.enabled} says. A runner that named its fence keeps
  * it. An unknown value fails startup.
  *
+ * <p><b>Leadership.</b> With a real {@link SubscriptionLeadership} bean (not the always-leading
+ * {@code NOOP}), the same hook logs one WARN per {@link SagaRunner} that carries no lease: its saga
+ * type is delivered on every replica ({@link SagaLeaseWiring#warnUngatedUnderLeadership}). The
+ * runner is reported, not refused.
+ *
  * <p>Deliberately not gated on {@code streamrune.saga.compensation-retry-enabled}: the event path
  * has no enable knob of its own, so the guard must not disappear with the sweeper. Mirrors the
  * {@link SagaStateCryptoValidator} startup-hook pattern.
@@ -67,12 +75,16 @@ public class SagaEventPathRetentionConfigurer {
 
   private final List<SagaRunner<?>> sagaRunners;
   private final StreamRuneQuarkusProperties properties;
+  private final Instance<SubscriptionLeadership> leadership;
 
   @jakarta.inject.Inject
   public SagaEventPathRetentionConfigurer(
-      @All List<SagaRunner<?>> sagaRunners, StreamRuneQuarkusProperties properties) {
+      @All List<SagaRunner<?>> sagaRunners,
+      StreamRuneQuarkusProperties properties,
+      Instance<SubscriptionLeadership> leadership) {
     this.sagaRunners = sagaRunners;
     this.properties = properties;
+    this.leadership = leadership;
   }
 
   /**
@@ -87,6 +99,7 @@ public class SagaEventPathRetentionConfigurer {
   protected SagaEventPathRetentionConfigurer() {
     this.sagaRunners = List.of();
     this.properties = null;
+    this.leadership = null;
   }
 
   /**
@@ -99,6 +112,8 @@ public class SagaEventPathRetentionConfigurer {
    */
   public void apply(@Observes @Priority(Interceptor.Priority.LIBRARY_BEFORE) StartupEvent event) {
     SagaTypeOwnership.requireOneRunnerPerSagaType(sagaRunners);
+    SagaLeaseWiring.warnUngatedUnderLeadership(
+        sagaRunners, leadership.isResolvable() ? leadership.get() : null);
     Duration window = properties.inbox().retentionMaxAge();
     int applied = SagaEventPathRetention.applyDefault(sagaRunners, window);
     if (applied > 0) {
