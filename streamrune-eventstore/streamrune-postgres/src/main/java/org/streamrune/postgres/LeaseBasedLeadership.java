@@ -207,6 +207,15 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
     if (closed.get()) {
       return Optional.empty();
     }
+    if (Thread.currentThread().isInterrupted()) {
+      // The caller is being stopped (a subscription's pause or close interrupts its poll thread).
+      // The JDBC driver is not left to notice: it sees an interrupt only where its socket I/O
+      // parks, and only on a virtual thread, so an acquire that never parks completes and hands a
+      // stopping caller a lease it will not use. The interrupt stays set for the caller.
+      LOG.debug(
+          "tryAcquire('{}') by an interrupted calling thread; skipping this tick", consumerName);
+      return Optional.empty();
+    }
     try (Connection conn = dataSource.getConnection()) {
       Optional<Long> acquired =
           PostgresTransactions.commitIfManual(conn, "lease acquire", c -> acquire(c, consumerName));
