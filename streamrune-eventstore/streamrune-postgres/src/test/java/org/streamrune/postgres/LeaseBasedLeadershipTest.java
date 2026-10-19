@@ -5,11 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -321,36 +325,116 @@ class LeaseBasedLeadershipTest {
     assertTrue(a.current("p10").isEmpty());
   }
 
+  /**
+   * The JDBC driver notices an interrupt only where its socket I/O parks, and a read or a connect
+   * that finds its data already there never parks: an acquire interrupted by its caller may
+   * complete, so whether one fails is a matter of timing. A platform thread's socket I/O never
+   * notices an interrupt at all. This is the case where the driver cannot be left to decide: the
+   * caller is stopping, and an acquire that completed would hand it a lease it will not use.
+   */
   @Test
-  void anAcquireEndedByTheCallersOwnInterrupt_failsClosedWithoutAWarning() throws Exception {
+  void anAcquireByAnAlreadyInterruptedCaller_failsClosedAtOnceWithoutAWarningOrALease()
+      throws Exception {
     var a = leadership(Duration.ofSeconds(30));
-    var logger =
-        (ch.qos.logback.classic.Logger)
-            org.slf4j.LoggerFactory.getLogger(LeaseBasedLeadership.class);
-    var appender =
-        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
-    appender.start();
-    logger.addAppender(appender);
-    var acquired = new java.util.concurrent.atomic.AtomicReference<Optional<Lease>>();
+    var warnings = captureLeadershipLog();
+    var acquired = new AtomicReference<Optional<Lease>>();
+    var stillInterrupted = new AtomicBoolean();
     try {
-      // A subscription that stops interrupts its poll thread; on a virtual thread the interrupt
-      // fails the statement in flight.
-      Thread.ofVirtual()
-          .start(
+      // A platform thread: its blocking socket I/O ignores an interrupt, so the database would
+      // happily grant the lease were the acquire to reach it.
+      var caller =
+          new Thread(
               () -> {
                 Thread.currentThread().interrupt();
                 acquired.set(a.tryAcquire("p-interrupted"));
-              })
-          .join();
+                stillInterrupted.set(Thread.currentThread().isInterrupted());
+              });
+      caller.start();
+      caller.join();
     } finally {
-      logger.detachAppender(appender);
+      warnings.close();
     }
 
-    assertTrue(acquired.get().isEmpty(), "an interrupted acquire fails closed");
-    assertTrue(
-        appender.list.stream()
-            .noneMatch(e -> e.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.WARN)),
-        "the caller's own stop is not reported as a failure: " + appender.list);
+    assertTrue(acquired.get().isEmpty(), "an interrupted caller does not acquire");
+    assertTrue(stillInterrupted.get(), "the acquire leaves the caller's interrupt for the caller");
+    assertTrue(a.current("p-interrupted").isEmpty());
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement();
+        var rs =
+            stmt.executeQuery(
+                "SELECT count(*) FROM subscription_leases WHERE consumer_name = 'p-interrupted'")) {
+      assertTrue(rs.next());
+      assertEquals(0, rs.getInt(1), "no lease row may be written for a stopping caller");
+    }
+    assertTrue(warnings.atWarnOrAbove().isEmpty(), "a stop is not a failure: " + warnings.events());
+  }
+
+  /**
+   * An interrupt that arrives while the acquire is in flight, ended by the driver as a {@link
+   * SQLException} with the caller's interrupt still set. The test has the data source do what the
+   * driver does, so that it does not depend on where a real socket would have parked.
+   */
+  @Test
+  void anAcquireEndedByTheCallersOwnInterruptInFlight_failsClosedWithoutAWarning()
+      throws Exception {
+    DataSource endedByInterrupt =
+        (DataSource)
+            java.lang.reflect.Proxy.newProxyInstance(
+                DataSource.class.getClassLoader(),
+                new Class<?>[] {DataSource.class},
+                (proxy, method, args) -> {
+                  if (method.getName().equals("getConnection")) {
+                    // In flight: the caller was interrupted after the acquire began.
+                    Thread.currentThread().interrupt();
+                    throw new SQLException("Closed by interrupt");
+                  }
+                  throw new UnsupportedOperationException(method.getName());
+                });
+    var a = new LeaseBasedLeadership(endedByInterrupt, Duration.ofSeconds(30));
+    managed.add(a);
+    var warnings = captureLeadershipLog();
+    var acquired = new AtomicReference<Optional<Lease>>();
+    try {
+      Thread.ofVirtual().start(() -> acquired.set(a.tryAcquire("p-interrupted-inflight"))).join();
+    } finally {
+      warnings.close();
+    }
+
+    assertTrue(acquired.get().isEmpty(), "an acquire ended by an interrupt fails closed");
+    assertTrue(warnings.atWarnOrAbove().isEmpty(), "a stop is not a failure: " + warnings.events());
+  }
+
+  /** The events logged by {@link LeaseBasedLeadership} while open, from every thread. */
+  private static final class LeadershipLog implements AutoCloseable {
+    private final ch.qos.logback.classic.Logger logger =
+        (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(LeaseBasedLeadership.class);
+    private final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>
+        appender = new ch.qos.logback.core.read.ListAppender<>();
+
+    LeadershipLog() {
+      appender.start();
+      logger.addAppender(appender);
+    }
+
+    List<ch.qos.logback.classic.spi.ILoggingEvent> events() {
+      return List.copyOf(appender.list);
+    }
+
+    List<ch.qos.logback.classic.spi.ILoggingEvent> atWarnOrAbove() {
+      return events().stream()
+          .filter(e -> e.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.WARN))
+          .toList();
+    }
+
+    @Override
+    public void close() {
+      logger.detachAppender(appender);
+    }
+  }
+
+  private static LeadershipLog captureLeadershipLog() {
+    return new LeadershipLog();
   }
 
   @Test
