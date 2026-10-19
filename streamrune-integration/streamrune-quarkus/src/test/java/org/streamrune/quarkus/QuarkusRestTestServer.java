@@ -15,7 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.jboss.jandex.Index;
-import org.jboss.resteasy.reactive.server.core.BlockingOperationSupport;
+import org.jboss.resteasy.reactive.common.core.BlockingOperationSupport;
 import org.jboss.resteasy.reactive.server.core.reflection.ReflectiveContextInjectedBeanFactory;
 import org.jboss.resteasy.reactive.server.processor.ResteasyReactiveDeploymentManager;
 import org.jboss.resteasy.reactive.server.processor.scanning.AsyncReturnTypeScanner;
@@ -131,8 +131,10 @@ final class QuarkusRestTestServer implements AutoCloseable {
                   List.of(),
                   StandardCharsets.UTF_8,
                   OptionalLong.empty(),
-                  2048,
-                  1000),
+                  2048L,
+                  1000,
+                  8192,
+                  128),
               new VertxRequestContextFactory(),
               workers);
       Router router = Router.router(vertx);

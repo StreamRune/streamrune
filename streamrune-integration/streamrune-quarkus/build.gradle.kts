@@ -5,7 +5,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath("io.smallrye:jandex:3.5.3")
+        classpath("io.smallrye:jandex:3.6.0")
     }
 }
 
@@ -53,7 +53,7 @@ dependencies {
     // Testing
     // Same Jandex version the jandexIndex task below uses to WRITE META-INF/jandex.idx, so
     // JandexConfigMappingIndexTest reads the shipped index with a format-compatible IndexReader.
-    testImplementation("io.smallrye:jandex:3.5.3")
+    testImplementation("io.smallrye:jandex:3.6.0")
     testImplementation(libs.assertj.core)
     testImplementation(project(":streamrune-test"))
     // The boot test of an at-least-once projection beside a TRANSACTIONAL_LOCAL one awaits its write.

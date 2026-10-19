@@ -1,10 +1,10 @@
 [versions]
 # Frameworks
 spring-boot = "4.1.1"
-quarkus = "3.32.0"
-# The Agroal connection pool Quarkus 3.32 pins; streamrune-quarkus compiles against its API only
+quarkus = "3.40.1"
+# The Agroal connection pool Quarkus 3.40 pins; streamrune-quarkus compiles against its API only
 # (compileOnly) to open the crypto-forget LISTEN pool from the application's Agroal datasource.
-agroal = "3.0"
+agroal = "3.2.1"
 micronaut = "5.2.12"
 micronaut-security = "5.4.0"
 micronaut-serde = "3.2.4"
@@ -17,8 +17,8 @@ micronaut-application = "4.2.1"
 # targets (records) — the framework's unwrapped-envelope crypto round-trip depends on it.
 jackson = "2.19.2"
 hikaricp = "6.2.1"
-dropwizard-metrics = "4.2.29"
-dropwizard-metrics5 = "5.0.0"
+dropwizard-metrics = "4.2.40"
+dropwizard-metrics5 = "5.0.8"
 postgresql = "42.7.10"
 # 11.13.3+ (so 12.x and 13.x) accept PostgreSQL 18 without the "Flyway upgrade recommended: PostgreSQL 18.x is
 # newer than this version of Flyway" WARN that 10.22.0 logged on every migration against the 18 the suite runs on.
@@ -46,8 +46,8 @@ aws-sdk = "2.30.0"
 
 # Observability
 opentelemetry = "1.47.0"
-# The lowest Micrometer among the supported framework lines: Quarkus 3.32 manages 1.16.3, Spring
-# Boot 4.1 manages 1.17.x. An application gets the version its framework manages, because Maven
+# The Micrometer floor the framework is built against (1.16.x); Quarkus 3.40 and Spring Boot 4.1 both
+# manage 1.17.x. An application gets the version its framework manages, because Maven
 # applies the application's BOM and Gradle takes the highest version requested. Declaring more than
 # the Quarkus-managed version would raise Micrometer in a Gradle-built Quarkus application above
 # the one the Quarkus Micrometer extension is written for, and its native image then fails to build
@@ -84,7 +84,7 @@ spotless = "7.1.0"
 jmh-plugin = "0.7.3"
 graalvm = "0.10.6"
 versions-plugin = "0.54.0"
-version-catalog-update = "0.8.4"
+version-catalog-update = "1.1.1"
 
 [libraries]
 # Jackson
