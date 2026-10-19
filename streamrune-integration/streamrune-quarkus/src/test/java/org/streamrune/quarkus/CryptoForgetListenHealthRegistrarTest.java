@@ -5,7 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import io.quarkus.runtime.StartupEvent;
+import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
+import jakarta.enterprise.inject.Produces;
+import jakarta.inject.Singleton;
 import java.util.List;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
@@ -109,5 +113,87 @@ class CryptoForgetListenHealthRegistrarTest {
         new CryptoForgetListenHealthRegistrar(
             instanceOf(cachedEngine(new SwitchableForgetSignal())), none);
     registrar.registerCryptoForgetListenHealth();
+  }
+
+  /** Beans of a container: an engine whose channel the test switches, and the contributor. */
+  @ApplicationScoped
+  public static class ListeningEngineBeans {
+    static final SwitchableForgetSignal SIGNAL = new SwitchableForgetSignal();
+    static final BackgroundRelayHealthContributor CONTRIBUTOR =
+        new BackgroundRelayHealthContributor();
+
+    @Produces
+    @Singleton
+    public CryptoEngine engine() {
+      return cachedEngine(SIGNAL);
+    }
+
+    @Produces
+    @Singleton
+    public BackgroundRelayHealthContributor contributor() {
+      return CONTRIBUTOR;
+    }
+  }
+
+  /** The same, with an engine whose channel does not listen. */
+  @ApplicationScoped
+  public static class NoopEngineBeans {
+    static final BackgroundRelayHealthContributor CONTRIBUTOR =
+        new BackgroundRelayHealthContributor();
+
+    @Produces
+    @Singleton
+    public CryptoEngine engine() {
+      return cachedEngine(CryptoForgetSignal.NOOP);
+    }
+
+    @Produces
+    @Singleton
+    public BackgroundRelayHealthContributor contributor() {
+      return CONTRIBUTOR;
+    }
+  }
+
+  /**
+   * In a booted Arc container the registrar is a bean and observes the startup event: it reports
+   * the channel of the engine bean, so a missing scope, observer or producer wiring shows here.
+   */
+  @Test
+  void aBootedContainerReportsTheForgetChannelOfItsCryptoEngineBeanOnStartup() throws Exception {
+    try (var arc =
+        RealArcTestContainer.boot(
+            List.of(
+                ListeningEngineBeans.class,
+                CryptoForgetListenHealthRegistrar.class,
+                CryptoEngine.class,
+                BackgroundRelayHealthContributor.class))) {
+      assertTrue(
+          ListeningEngineBeans.CONTRIBUTOR.components().isEmpty(),
+          "nothing is reported before the application starts");
+
+      arc.container().beanManager().getEvent().select(StartupEvent.class).fire(new StartupEvent());
+
+      var components = ListeningEngineBeans.CONTRIBUTOR.components();
+      assertEquals(1, components.size());
+      assertEquals("crypto-forget-listen", components.getFirst().name());
+      assertEquals(Status.DEGRADED, components.getFirst().status());
+      ListeningEngineBeans.SIGNAL.listening = true;
+      assertEquals(Status.UP, ListeningEngineBeans.CONTRIBUTOR.components().getFirst().status());
+    }
+  }
+
+  @Test
+  void aBootedContainerWithAChannelThatDoesNotListenReportsNothing() throws Exception {
+    try (var arc =
+        RealArcTestContainer.boot(
+            List.of(
+                NoopEngineBeans.class,
+                CryptoForgetListenHealthRegistrar.class,
+                CryptoEngine.class,
+                BackgroundRelayHealthContributor.class))) {
+      arc.container().beanManager().getEvent().select(StartupEvent.class).fire(new StartupEvent());
+
+      assertTrue(NoopEngineBeans.CONTRIBUTOR.components().isEmpty());
+    }
   }
 }

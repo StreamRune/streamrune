@@ -821,7 +821,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `CryptoForgetSignal.isListening()` says whether the replica hears, and the `crypto-forget-listen`
   health component reads `DEGRADED` while it does not. A LISTEN connection that stops answering
   (its server vanished without closing it) is found by a liveness probe after 30 s of silence and
-  replaced. `streamrune.crypto.cache.enabled=false` skips the cache.
+  replaced. The LISTEN session is named `<application name>-streamrune-crypto-forget-listen` (or
+  `streamrune-crypto-forget-listen`) in `pg_stat_activity`, and several forget channels are
+  reported as `crypto-forget-listen`, `crypto-forget-listen-2`, and so on.
+  `streamrune.crypto.cache.enabled=false` skips the cache.
 - `CryptoForgetSignal` SPI: `subscribe(Consumer<String> onForget, Runnable onListening)` is the one
   method to implement besides `publish` — `onListening` runs each time the channel starts hearing,
   before any token heard from then on, and the one-argument `subscribe(onForget)` is a default that

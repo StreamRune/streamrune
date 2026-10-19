@@ -504,25 +504,106 @@ class CachedCryptoEngineTest {
   @Test
   void aDecryptInFlightWhenTheChannelStartsListeningDoesNotStayCached() throws Exception {
     TestForgetSignal channel = new TestForgetSignal();
-    assertDecryptInFlightDoesNotStayCached(channel, channel::startListening);
+    assertEquals(
+        2, delegateCallsForTwoDecryptsAround(channel, IN_FLIGHT_SUBJECT, channel::startListening));
   }
 
   @Test
   void aDecryptInFlightWhenAPeerForgetsTheSubjectDoesNotStayCached() throws Exception {
     TestForgetSignal channel = new TestForgetSignal();
     var peer = CachedCryptoEngine.builder().delegate(delegate).forgetSignal(channel).build();
-    assertDecryptInFlightDoesNotStayCached(channel, () -> peer.deleteKey(IN_FLIGHT_SUBJECT));
+    assertEquals(
+        2,
+        delegateCallsForTwoDecryptsAround(
+            channel, IN_FLIGHT_SUBJECT, () -> peer.deleteKey(IN_FLIGHT_SUBJECT)));
+  }
+
+  @Test
+  void aDecryptInFlightWhenAPeerForgetsAnotherSubjectStaysCached() throws Exception {
+    SubjectId other = subjectOfAnotherEvictionStripeThan(IN_FLIGHT_SUBJECT);
+    TestForgetSignal channel = new TestForgetSignal();
+    var peer = CachedCryptoEngine.builder().delegate(delegate).forgetSignal(channel).build();
+    // The forgotten subject is not the one being decrypted: its result is not dropped, so the next
+    // decrypt is a hit and a bulk erasure does not keep the cache cold for subjects nobody forgot.
+    assertEquals(
+        1,
+        delegateCallsForTwoDecryptsAround(channel, IN_FLIGHT_SUBJECT, () -> peer.deleteKey(other)));
+  }
+
+  @Test
+  void aDecryptInFlightWhenAPeerForgetsASubjectOfTheSameEvictionStripeIsDropped() throws Exception {
+    SubjectId neighbour = subjectOfTheSameEvictionStripeAs(IN_FLIGHT_SUBJECT);
+    TestForgetSignal channel = new TestForgetSignal();
+    var peer = CachedCryptoEngine.builder().delegate(delegate).forgetSignal(channel).build();
+    // Subjects share a stripe by hash: the result is dropped too, which costs a read and nothing
+    // more.
+    assertEquals(
+        2,
+        delegateCallsForTwoDecryptsAround(
+            channel, IN_FLIGHT_SUBJECT, () -> peer.deleteKey(neighbour)));
+  }
+
+  @Test
+  void anEntryAnEvictionOvertookIsNeverStored() throws Exception {
+    java.util.List<Object> removedKeys = new java.util.concurrent.CopyOnWriteArrayList<>();
+    TestForgetSignal channel = new TestForgetSignal();
+    // A decrypt whose entry is stored and removed again is readable by other threads in between:
+    // the entry an eviction overtook must not be stored at all, so nothing is ever removed.
+    assertEquals(
+        2,
+        delegateCallsForTwoDecryptsAround(
+            channel,
+            IN_FLIGHT_SUBJECT,
+            channel::startListening,
+            (key, value, cause) -> removedKeys.add(key)));
+    assertEquals(
+        java.util.List.of(),
+        removedKeys,
+        "an entry the eviction overtook was stored and removed again");
   }
 
   private static final SubjectId IN_FLIGHT_SUBJECT = SubjectId.of("in-flight");
 
+  private static SubjectId subjectOfAnotherEvictionStripeThan(SubjectId subject) {
+    for (int i = 0; i < 10_000; i++) {
+      SubjectId candidate = SubjectId.of("other-" + i);
+      if (CachedCryptoEngine.evictionStripe(candidate)
+          != CachedCryptoEngine.evictionStripe(subject)) {
+        return candidate;
+      }
+    }
+    return fail("every subject is in the eviction stripe of " + subject);
+  }
+
+  private static SubjectId subjectOfTheSameEvictionStripeAs(SubjectId subject) {
+    for (int i = 0; i < 10_000; i++) {
+      SubjectId candidate = SubjectId.of("neighbour-" + i);
+      if (!candidate.equals(subject)
+          && CachedCryptoEngine.evictionStripe(candidate)
+              == CachedCryptoEngine.evictionStripe(subject)) {
+        return candidate;
+      }
+    }
+    return fail("no subject shares the eviction stripe of " + subject);
+  }
+
+  private static int delegateCallsForTwoDecryptsAround(
+      TestForgetSignal channel, SubjectId subject, Runnable eviction) throws Exception {
+    return delegateCallsForTwoDecryptsAround(channel, subject, eviction, null);
+  }
+
   /**
-   * A decrypt is inside its delegate — it has read the key — when {@code eviction} runs on the
-   * signal's thread (here the test's); the decrypt then stores its result. The entry it stored must
-   * not survive: the next decrypt goes to the delegate again.
+   * A decrypt of {@code subject} is inside its delegate — it has read the key — when {@code
+   * eviction} runs on the signal's thread (here the test's); the decrypt then stores its result, if
+   * it stores it. A second decrypt follows. Returns how often the delegate was called: {@code 2}
+   * when the eviction dropped the result, {@code 1} when it kept it.
    */
-  private static void assertDecryptInFlightDoesNotStayCached(
-      TestForgetSignal channel, Runnable eviction) throws Exception {
+  private static int delegateCallsForTwoDecryptsAround(
+      TestForgetSignal channel,
+      SubjectId subject,
+      Runnable eviction,
+      com.github.benmanes.caffeine.cache.RemovalListener<Object, Object> removalListener)
+      throws Exception {
     byte[] ciphertext = "cipher".getBytes();
     CountDownLatch insideDelegate = new CountDownLatch(1);
     CountDownLatch release = new CountDownLatch(1);
@@ -557,22 +638,22 @@ class CachedCryptoEngineTest {
             return true;
           }
         };
-    var engineUnderTest =
-        CachedCryptoEngine.builder().delegate(slowDelegate).forgetSignal(channel).build();
+    var builder = CachedCryptoEngine.builder().delegate(slowDelegate).forgetSignal(channel);
+    if (removalListener != null) {
+      builder.removalListener(removalListener);
+    }
+    var engineUnderTest = builder.build();
     ExecutorService executor = Executors.newSingleThreadExecutor();
     try {
-      var inFlight = executor.submit(() -> engineUnderTest.decrypt(IN_FLIGHT_SUBJECT, ciphertext));
+      var inFlight = executor.submit(() -> engineUnderTest.decrypt(subject, ciphertext));
       assertTrue(insideDelegate.await(10, TimeUnit.SECONDS), "the decrypt never reached its key");
 
       eviction.run();
       release.countDown();
       assertEquals("secret", new String(inFlight.get(10, TimeUnit.SECONDS)));
 
-      engineUnderTest.decrypt(IN_FLIGHT_SUBJECT, ciphertext);
-      assertEquals(
-          2,
-          calls.get(),
-          "the plaintext a decrypt in flight stored after the eviction was served from the cache");
+      engineUnderTest.decrypt(subject, ciphertext);
+      return calls.get();
     } finally {
       executor.shutdownNow();
     }

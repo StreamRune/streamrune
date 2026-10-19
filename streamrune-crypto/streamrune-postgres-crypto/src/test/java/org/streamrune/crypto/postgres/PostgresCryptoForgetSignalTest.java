@@ -24,6 +24,67 @@ import org.junit.jupiter.api.Test;
 class PostgresCryptoForgetSignalTest {
 
   @Test
+  void theListenSessionIsNamedAfterTheApplicationsWhenItHasAName() {
+    assertEquals(
+        "orders-streamrune-crypto-forget-listen",
+        PostgresCryptoForgetSignal.listenApplicationName(
+            "jdbc:postgresql://db/app?ssl=true&ApplicationName=orders", null));
+    assertEquals(
+        "billing-streamrune-crypto-forget-listen",
+        PostgresCryptoForgetSignal.listenApplicationName("jdbc:postgresql://db/app", "billing"));
+    assertEquals(
+        "orders-streamrune-crypto-forget-listen",
+        PostgresCryptoForgetSignal.listenApplicationName(
+            "jdbc:postgresql://db/app?ApplicationName=orders", "billing"),
+        "the URL's parameter is what the driver uses, over a property");
+    assertEquals(
+        "my app-streamrune-crypto-forget-listen",
+        PostgresCryptoForgetSignal.listenApplicationName(
+            "jdbc:postgresql://db/app?ApplicationName=my+app", null));
+  }
+
+  @Test
+  void theListenSessionHasAFixedNameWhenTheApplicationHasNone() {
+    assertEquals(
+        "streamrune-crypto-forget-listen",
+        PostgresCryptoForgetSignal.listenApplicationName("jdbc:postgresql://db/app", null));
+    assertEquals(
+        "streamrune-crypto-forget-listen",
+        PostgresCryptoForgetSignal.listenApplicationName(null, "  "));
+    assertEquals(
+        "streamrune-crypto-forget-listen",
+        PostgresCryptoForgetSignal.listenApplicationName(
+            "jdbc:postgresql://db/app?ApplicationName=", null));
+  }
+
+  @Test
+  void aLongApplicationNameIsShortenedSoTheSuffixSurvivesWhatPostgresKeeps() {
+    String name =
+        PostgresCryptoForgetSignal.listenApplicationName(
+            null, "a-very-long-service-name".repeat(5));
+    assertEquals(63, name.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+    assertTrue(name.endsWith("-streamrune-crypto-forget-listen"));
+    String multiByte =
+        PostgresCryptoForgetSignal.listenApplicationName(null, "\u00e9\u00e8".repeat(30));
+    assertTrue(multiByte.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 63);
+    assertTrue(multiByte.endsWith("-streamrune-crypto-forget-listen"));
+  }
+
+  @Test
+  void anApplicationNameIsSetOnAUrlOverAnyExistingOne() {
+    assertEquals(
+        "jdbc:postgresql://db/app?ApplicationName=n",
+        PostgresCryptoForgetSignal.withApplicationName("jdbc:postgresql://db/app", "n"));
+    assertEquals(
+        "jdbc:postgresql://db/app?ssl=true&tcpKeepAlive=false&ApplicationName=n",
+        PostgresCryptoForgetSignal.withApplicationName(
+            "jdbc:postgresql://db/app?ssl=true&ApplicationName=old&tcpKeepAlive=false", "n"));
+    assertEquals(
+        "jdbc:postgresql://db/app?ApplicationName=a+b",
+        PostgresCryptoForgetSignal.withApplicationName("jdbc:postgresql://db/app?", "a b"));
+  }
+
+  @Test
   void constructorRejectsNullDataSource() {
     assertThrows(IllegalArgumentException.class, () -> new PostgresCryptoForgetSignal(null));
   }

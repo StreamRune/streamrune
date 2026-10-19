@@ -8,6 +8,7 @@ import io.agroal.api.configuration.supplier.AgroalDataSourceConfigurationSupplie
 import java.sql.SQLException;
 import java.time.Duration;
 import javax.sql.DataSource;
+import org.streamrune.crypto.postgres.PostgresCryptoForgetSignal;
 
 /**
  * Opens the LISTEN pool of a {@link org.streamrune.crypto.postgres.PostgresCryptoForgetSignal} for
@@ -19,7 +20,10 @@ import javax.sql.DataSource;
  * connection-factory configuration — JDBC URL, driver, user and password or credentials provider,
  * JDBC properties, initial SQL — into a separate Agroal pool of one connection: the LISTEN
  * connection connects exactly as the application's connections do and never occupies one of the
- * application pool's slots.
+ * application pool's slots. Its sessions carry their own {@code application_name} — the
+ * application's, if it sets one, followed by {@code -streamrune-crypto-forget-listen} — so that
+ * {@code pg_stat_activity} tells them from the application's. The TCP keepalive of its sockets is
+ * on, unless the datasource's JDBC properties or URL say otherwise.
  *
  * <p>The pool opens no connection when it is created, so a database that is unreachable at startup
  * delays the LISTEN instead of disabling it: the signal's listen loop keeps retrying. It validates
@@ -52,6 +56,24 @@ final class AgroalForgetListenPool {
             .getConfiguration()
             .connectionPoolConfiguration()
             .connectionFactoryConfiguration();
+    var listenSettings = new AgroalConnectionFactoryConfigurationSupplier(connectionSettings);
+    String jdbcUrl = connectionSettings.jdbcUrl();
+    if (jdbcUrl != null) {
+      // Set in the URL, never as a JDBC property of the supplier: the supplier shares its property
+      // map with the application's own configuration, and the driver lets the URL win anyway.
+      String listenName =
+          PostgresCryptoForgetSignal.listenApplicationName(
+              jdbcUrl, connectionSettings.jdbcProperties().getProperty("ApplicationName"));
+      String listenUrl = PostgresCryptoForgetSignal.withApplicationName(jdbcUrl, listenName);
+      // The driver's own default is off; a silent middlebox then drops an idle LISTEN connection
+      // without a word. The liveness probe finds that within seconds — the keepalive helps the
+      // operating system and the middlebox itself keep the connection.
+      if (!connectionSettings.jdbcProperties().containsKey("tcpKeepAlive")
+          && !jdbcUrl.contains("tcpKeepAlive=")) {
+        listenUrl += "&tcpKeepAlive=true";
+      }
+      listenSettings.jdbcUrl(listenUrl);
+    }
     var config =
         new AgroalDataSourceConfigurationSupplier()
             .connectionPoolConfiguration(
@@ -62,8 +84,7 @@ final class AgroalForgetListenPool {
                         .acquisitionTimeout(ACQUISITION_TIMEOUT)
                         .validateOnBorrow(true)
                         .connectionValidator(ConnectionValidator.defaultValidator())
-                        .connectionFactoryConfiguration(
-                            new AgroalConnectionFactoryConfigurationSupplier(connectionSettings)));
+                        .connectionFactoryConfiguration(listenSettings));
     try {
       return AgroalDataSource.from(config.get());
     } catch (SQLException e) {

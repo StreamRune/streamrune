@@ -1,7 +1,10 @@
 package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -26,6 +29,7 @@ import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -51,8 +55,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * factory — on a dedicated pool of one connection.
  *
  * <p>Each Agroal pool here carries a unique {@code ApplicationName} JDBC property. The LISTEN
- * connection is copied from the application's connection settings, so it carries the same name,
- * which is how a test finds that replica's LISTEN backend in {@code pg_stat_activity}.
+ * connection is copied from the application's connection settings and named after it ({@link
+ * PostgresCryptoForgetSignal#listenApplicationName}), which is how a test finds that replica's
+ * LISTEN backend in {@code pg_stat_activity}: by that name, not by the text of its last statement,
+ * which a liveness probe blanks after 30 s without a notification.
  */
 @Testcontainers
 class QuarkusCryptoForgetListenTest {
@@ -107,7 +113,7 @@ class QuarkusCryptoForgetListenTest {
    */
   @Test
   void aForgetOnAnotherReplicaStopsTheQuarkusEngineServingCachedPlaintext() throws Exception {
-    String replicaB = "replica-b-" + UUID.randomUUID();
+    String replicaB = unique("replica-b");
     applicationPool = agroalPool(replicaB, true, 4);
     toClose.add(applicationPool);
 
@@ -142,7 +148,7 @@ class QuarkusCryptoForgetListenTest {
   /** Vault, AWS KMS and the file-system backend wire the same channel from the same DataSource. */
   @Test
   void theOtherBackendsChannelListensOnAnAgroalDataSource() throws Exception {
-    String app = "other-backends-" + UUID.randomUUID();
+    String app = unique("other-backends");
     AgroalDataSource pool = agroalPool(app, true, 4);
     toClose.add(pool);
     BlockingQueue<String> received = new LinkedBlockingQueue<>();
@@ -163,7 +169,7 @@ class QuarkusCryptoForgetListenTest {
    */
   @Test
   void listensWhenTheApplicationDataSourceDoesNotAutoCommit() throws Exception {
-    String app = "no-autocommit-" + UUID.randomUUID();
+    String app = unique("no-autocommit");
     AgroalDataSource pool = agroalPool(app, false, 4);
     toClose.add(pool);
     BlockingQueue<String> received = new LinkedBlockingQueue<>();
@@ -180,7 +186,7 @@ class QuarkusCryptoForgetListenTest {
   /** The LISTEN connection is the channel's own; it never holds one of the application's. */
   @Test
   void theListenConnectionIsNotTakenFromTheApplicationPool() throws Exception {
-    String app = "single-slot-" + UUID.randomUUID();
+    String app = unique("single-slot");
     AgroalDataSource pool = agroalPool(app, true, 1);
     toClose.add(pool);
 
@@ -201,7 +207,7 @@ class QuarkusCryptoForgetListenTest {
    */
   @Test
   void reconnectsAfterTheListenBackendIsTerminated() throws Exception {
-    String app = "terminated-" + UUID.randomUUID();
+    String app = unique("terminated");
     AgroalDataSource pool = agroalPool(app, true, 4);
     toClose.add(pool);
     BlockingQueue<String> received = new LinkedBlockingQueue<>();
@@ -216,13 +222,89 @@ class QuarkusCryptoForgetListenTest {
         var ps =
             conn.prepareStatement(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
-                    + " WHERE application_name = ? AND query = ?")) {
-      ps.setString(1, app);
-      ps.setString(2, "LISTEN " + CHANNEL);
+                    + " WHERE application_name = ?")) {
+      ps.setString(1, listenName(app));
       ps.execute();
     }
 
     awaitDelivered(received, "after-terminate-" + UUID.randomUUID());
+  }
+
+  /**
+   * The LISTEN session carries a name of its own, so that {@code pg_stat_activity} tells it from
+   * the application's sessions; the application's pool keeps its settings; the TCP keepalive of the
+   * LISTEN sockets is on.
+   */
+  @Test
+  void theListenPoolIsNamedApartAndKeepsTheApplicationsSettingsIntact() throws Exception {
+    String app = unique("named-apart");
+    AgroalDataSource pool = agroalPool(app, true, 4);
+    toClose.add(pool);
+    try (Connection appConnection = pool.getConnection()) {
+      assertTrue(appConnection.isValid(2));
+    }
+
+    DataSource listenPool = AgroalForgetListenPool.open(pool);
+    toClose.add((AutoCloseable) listenPool);
+    var listenSettings =
+        ((AgroalDataSource) listenPool)
+            .getConfiguration()
+            .connectionPoolConfiguration()
+            .connectionFactoryConfiguration();
+    assertNotEquals(app, listenName(app));
+    assertTrue(listenSettings.jdbcUrl().contains("ApplicationName=" + listenName(app)));
+    assertTrue(listenSettings.jdbcUrl().contains("tcpKeepAlive=true"));
+    try (Connection listenConnection = listenPool.getConnection()) {
+      assertEquals(listenName(app), applicationNameOf(listenConnection));
+    }
+
+    var appSettings =
+        pool.getConfiguration().connectionPoolConfiguration().connectionFactoryConfiguration();
+    assertEquals(app, appSettings.jdbcProperties().getProperty("ApplicationName"));
+    assertNull(
+        appSettings.jdbcProperties().getProperty("tcpKeepAlive"),
+        "the application's own settings are not changed");
+    try (Connection appConnection = pool.getConnection()) {
+      assertEquals(app, applicationNameOf(appConnection));
+    }
+  }
+
+  /** A keepalive setting of the application is the application's choice; the pool keeps it. */
+  @Test
+  void theListenPoolKeepsTheApplicationsOwnKeepAliveSetting() throws Exception {
+    var config =
+        new AgroalDataSourceConfigurationSupplier()
+            .connectionPoolConfiguration(
+                pool ->
+                    pool.maxSize(1)
+                        .connectionFactoryConfiguration(
+                            factory ->
+                                factory
+                                    .jdbcUrl(PG.getJdbcUrl())
+                                    .principal(new NamePrincipal(PG.getUsername()))
+                                    .credential(new SimplePassword(PG.getPassword()))
+                                    .jdbcProperty("tcpKeepAlive", "false")));
+    AgroalDataSource pool = AgroalDataSource.from(config.get());
+    toClose.add(pool);
+
+    DataSource listenPool = AgroalForgetListenPool.open(pool);
+    toClose.add((AutoCloseable) listenPool);
+    var listenSettings =
+        ((AgroalDataSource) listenPool)
+            .getConfiguration()
+            .connectionPoolConfiguration()
+            .connectionFactoryConfiguration();
+    assertEquals("false", listenSettings.jdbcProperties().getProperty("tcpKeepAlive"));
+    assertTrue(
+        listenSettings.jdbcUrl().contains("ApplicationName=streamrune-crypto-forget-listen"));
+  }
+
+  private static String applicationNameOf(Connection connection) throws SQLException {
+    try (var stmt = connection.createStatement();
+        var rs = stmt.executeQuery("SHOW application_name")) {
+      rs.next();
+      return rs.getString(1);
+    }
   }
 
   // ---- helpers -------------------------------------------------------------------------------
@@ -247,13 +329,23 @@ class QuarkusCryptoForgetListenTest {
     return AgroalDataSource.from(config.get());
   }
 
-  private static int listenBackends(String applicationName) throws SQLException {
+  /** An application name no other test of this class uses, short enough to keep its suffix. */
+  private static String unique(String prefix) {
+    return prefix + "-" + UUID.randomUUID().toString().substring(0, 8);
+  }
+
+  /** The {@code application_name} of the LISTEN sessions of the application named {@code app}. */
+  private static String listenName(String app) {
+    return PostgresCryptoForgetSignal.listenApplicationName(null, app);
+  }
+
+  /** The backends of the LISTEN sessions of {@code app}, found by their name alone. */
+  private static int listenBackends(String app) throws SQLException {
     try (var conn = plain.getConnection();
         var ps =
             conn.prepareStatement(
-                "SELECT count(*) FROM pg_stat_activity WHERE application_name = ? AND query = ?")) {
-      ps.setString(1, applicationName);
-      ps.setString(2, "LISTEN " + CHANNEL);
+                "SELECT count(*) FROM pg_stat_activity WHERE application_name = ?")) {
+      ps.setString(1, listenName(app));
       try (var rs = ps.executeQuery()) {
         rs.next();
         return rs.getInt(1);
@@ -261,11 +353,26 @@ class QuarkusCryptoForgetListenTest {
     }
   }
 
+  /**
+   * Waits until a LISTEN session of {@code applicationName} exists and has issued its {@code
+   * LISTEN}. The statement text shows that, so this must be called right after the subscribe: it is
+   * blanked once a probe runs, after 30 s without a notification, longer than this waits.
+   */
   private static void awaitListening(String applicationName) throws Exception {
     long deadline = System.nanoTime() + WAIT.toNanos();
     while (System.nanoTime() < deadline) {
-      if (listenBackends(applicationName) > 0) {
-        return;
+      try (var conn = plain.getConnection();
+          var ps =
+              conn.prepareStatement(
+                  "SELECT count(*) FROM pg_stat_activity WHERE application_name = ? AND query = ?")) {
+        ps.setString(1, listenName(applicationName));
+        ps.setString(2, "LISTEN " + CHANNEL);
+        try (var rs = ps.executeQuery()) {
+          rs.next();
+          if (rs.getInt(1) > 0) {
+            return;
+          }
+        }
       }
       Thread.sleep(100);
     }

@@ -89,7 +89,12 @@ public class BackgroundRelayHealthContributor {
     }
   }
 
+  private static final String CRYPTO_FORGET_COMPONENT = "crypto-forget-listen";
+
   private final List<RelayStatusSource> sources = new CopyOnWriteArrayList<>();
+
+  /** The forget channels registered so far, in order; guarded by itself. */
+  private final List<CryptoForgetSignal> cryptoForgetSignals = new ArrayList<>();
 
   /** Registers the outbox relay to be reported on. A {@code null} is ignored. */
   public void registerOutboxPoller(OutboxPoller outboxPoller) {
@@ -343,16 +348,35 @@ public class BackgroundRelayHealthContributor {
    * forgotten; once it hears again the engine drops that cache. It is never {@code DOWN}: the
    * replica keeps serving, bounded by the cache's write-TTL. {@code alive} reads whether it
    * listens; {@code consecutiveFailures} is always {@code 0}.
+   *
+   * <p>A channel is reported once: registering the same instance again — the integration's
+   * registrar for an engine and the application's own call for its channel — changes nothing. A
+   * second, different channel is reported as {@code crypto-forget-listen-2}, a third as {@code
+   * crypto-forget-listen-3}, and so on, so that no component hides another under the same name in
+   * the health details.
    */
   public void registerCryptoForgetSignal(CryptoForgetSignal signal) {
     if (signal == null || !signal.isSubscribed()) {
       return;
     }
+    String name;
+    synchronized (cryptoForgetSignals) {
+      for (CryptoForgetSignal registered : cryptoForgetSignals) {
+        if (registered == signal) {
+          return;
+        }
+      }
+      cryptoForgetSignals.add(signal);
+      name =
+          cryptoForgetSignals.size() == 1
+              ? CRYPTO_FORGET_COMPONENT
+              : CRYPTO_FORGET_COMPONENT + "-" + cryptoForgetSignals.size();
+    }
     register(
         new RelayStatusSource() {
           @Override
           public String name() {
-            return "crypto-forget-listen";
+            return name;
           }
 
           @Override
