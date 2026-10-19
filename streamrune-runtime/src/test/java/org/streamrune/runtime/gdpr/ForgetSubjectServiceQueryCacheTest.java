@@ -65,7 +65,12 @@ class ForgetSubjectServiceQueryCacheTest {
             throw new IllegalStateException(e);
           }
         });
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).queryCache(bus).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .queryCache(bus)
+            .build();
 
     assertEquals("alice@example.com", bus.dispatch(new CustomerEmailQuery("alice")));
 
@@ -88,6 +93,7 @@ class ForgetSubjectServiceQueryCacheTest {
     bus.register(CustomerRowQuery.class, q -> readModel.getOrDefault(q.customerId(), "none"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(new InMemoryCryptoEngine())
             .purgers(List.of(purgerOf(readModel)))
             .queryCache(bus)
@@ -132,6 +138,7 @@ class ForgetSubjectServiceQueryCacheTest {
         };
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(new InMemoryCryptoEngine())
             .purgers(List.of(racingPurger))
             .queryCache(bus)
@@ -154,7 +161,12 @@ class ForgetSubjectServiceQueryCacheTest {
     bus.register(CustomerEmailQuery.class, q -> "answer-" + calls.incrementAndGet());
     var failing = mock(org.streamrune.core.crypto.CryptoEngine.class);
     doThrow(new IllegalStateException("key store down")).when(failing).deleteKey(ALICE);
-    var service = ForgetSubjectService.builder().cryptoEngine(failing).queryCache(bus).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(failing)
+            .queryCache(bus)
+            .build();
     assertEquals("answer-1", bus.dispatch(new CustomerEmailQuery("bob")));
 
     assertThrows(IllegalStateException.class, () -> service.forget(ALICE, null));
@@ -175,6 +187,7 @@ class ForgetSubjectServiceQueryCacheTest {
     var metrics = new ForgetSubjectServiceTest.CapturingMetrics();
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(new InMemoryCryptoEngine())
             .auditStore(audit)
             .metrics(metrics)
@@ -211,6 +224,7 @@ class ForgetSubjectServiceQueryCacheTest {
     Map<String, String> readModel = new ConcurrentHashMap<>(Map.of("alice", "Alice"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(new InMemoryCryptoEngine())
             .purgers(List.of(purgerOf(readModel)))
             .build();
@@ -233,6 +247,7 @@ class ForgetSubjectServiceQueryCacheTest {
     Map<String, String> readModel = new ConcurrentHashMap<>(Map.of("alice", "Alice"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(new InMemoryCryptoEngine())
             .purgers(List.of(purgerOf(readModel)))
             .queryCache(bus)

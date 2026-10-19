@@ -157,8 +157,7 @@ public class SagaCompensationRetryLifecycle {
           sagaRunners.size());
       return;
     }
-    SubscriptionLeadership leadership =
-        leadershipInstance.isUnsatisfied() ? null : leadershipInstance.get();
+    SubscriptionLeadership leadership = LeadershipInstances.resolve(leadershipInstance);
     BackgroundRelayHealthContributor health =
         relayHealthInstance.isUnsatisfied() ? null : relayHealthInstance.get();
     for (SagaRunner<?> runner : sagaRunners) {

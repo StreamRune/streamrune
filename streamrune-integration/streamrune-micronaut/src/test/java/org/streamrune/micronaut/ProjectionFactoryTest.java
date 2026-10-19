@@ -122,7 +122,7 @@ class ProjectionFactoryTest {
             Duration.ofDays(7),
             List.of(),
             Duration.ofDays(30),
-            true,
+            "true",
             10,
             1000L,
             2.0,
@@ -133,7 +133,8 @@ class ProjectionFactoryTest {
             java.time.Duration.ofSeconds(30),
             // sse.polling-interval
             Duration.ofSeconds(1),
-            "auto");
+            "auto",
+            "required");
 
     MultiProjectionRunner runner =
         factory.multiProjectionRunner(

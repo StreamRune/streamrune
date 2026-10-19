@@ -97,6 +97,13 @@ public class StreamRuneConfigValidator implements ApplicationEventListener<Start
         && ctx.containsBean(org.streamrune.core.EventStoreFactory.class)) {
       ctx.getBean(org.streamrune.core.EventStoreFactory.class);
     }
+    // The framework's ForgetSubjectService refuses to build without a SnapshotPurger bean (or
+    // with one under streamrune.gdpr.snapshot-purge=none). Build it here, so that refusal fails
+    // the boot rather than the first erasure request of an application that injects the service
+    // into a lazily created controller.
+    if (ctx.containsBean(org.streamrune.core.crypto.CryptoEngine.class)) {
+      ctx.findBean(org.streamrune.runtime.gdpr.ForgetSubjectService.class);
+    }
     // The saga dead-letter-retention <= inbox-retention invariant is a
     // REPLAY-safety invariant — it protects SagaDeadLetterReplayer, not the compensation-retry
     // sweeper — so it MUST be validated whenever saga dead-letter replay support is configured (a

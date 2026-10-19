@@ -82,7 +82,7 @@ class StreamRuneConfigValidatorTest {
             Duration.ofDays(7),
             java.util.List.of(),
             Duration.ofDays(30),
-            true,
+            "true",
             10,
             1000L,
             2.0,
@@ -93,7 +93,8 @@ class StreamRuneConfigValidatorTest {
             java.time.Duration.ofSeconds(30),
             // sse.polling-interval
             Duration.ofSeconds(1),
-            "auto");
+            "auto",
+            "required");
     var ctx = mock(ApplicationContext.class);
     var validator = new StreamRuneConfigValidator(props, ctx);
     var ex =
@@ -140,7 +141,7 @@ class StreamRuneConfigValidatorTest {
         Duration.ofDays(7),
         java.util.List.of(),
         Duration.ofDays(30),
-        true,
+        "true",
         10,
         1000L,
         2.0,
@@ -151,7 +152,8 @@ class StreamRuneConfigValidatorTest {
         java.time.Duration.ofSeconds(30),
         // sse.polling-interval
         Duration.ofSeconds(1),
-        "auto");
+        "auto",
+        "required");
   }
 
   /**
@@ -247,7 +249,7 @@ class StreamRuneConfigValidatorTest {
             Duration.ofDays(7),
             java.util.List.of(),
             Duration.ofDays(30),
-            true,
+            "true",
             10,
             1000L,
             2.0,
@@ -258,7 +260,8 @@ class StreamRuneConfigValidatorTest {
             java.time.Duration.ofSeconds(30),
             // sse.polling-interval
             Duration.ofSeconds(1),
-            "auto");
+            "auto",
+            "required");
     var ctx = mock(ApplicationContext.class);
     when(ctx.containsBean(org.streamrune.core.outbox.OutboxStore.class)).thenReturn(false);
     var validator = new StreamRuneConfigValidator(props, ctx);
@@ -309,7 +312,7 @@ class StreamRuneConfigValidatorTest {
         Duration.ofDays(7),
         java.util.List.of(),
         Duration.ofDays(30),
-        true,
+        "true",
         10,
         1000L,
         2.0,
@@ -320,7 +323,8 @@ class StreamRuneConfigValidatorTest {
         java.time.Duration.ofSeconds(30),
         // sse.polling-interval
         Duration.ofSeconds(1),
-        "auto");
+        "auto",
+        "required");
   }
 
   @Test
@@ -481,7 +485,7 @@ class StreamRuneConfigValidatorTest {
         Duration.ofDays(7),
         java.util.List.of(),
         Duration.ofDays(30),
-        true,
+        "true",
         10,
         1000L,
         2.0,
@@ -492,6 +496,7 @@ class StreamRuneConfigValidatorTest {
         Duration.ofSeconds(30),
         // sse.polling-interval
         Duration.ofSeconds(1),
-        "auto");
+        "auto",
+        "required");
   }
 }

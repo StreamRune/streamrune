@@ -166,6 +166,17 @@ class PostgresSnapshotStorePurgerTest {
     assertEquals(Set.of("test:order-null-mapping"), remainingSnapshotStreamIds());
   }
 
+  /**
+   * The forget service's builder refuses a service without a {@link
+   * org.streamrune.core.gdpr.SnapshotPurger} unless the application states it stores no snapshots;
+   * this purger is the one that satisfies it for {@code snapshot_store}.
+   */
+  @Test
+  void isTheSnapshotPurgerTheForgetServiceRequires() {
+    var purger = new PostgresSnapshotStorePurger(dataSource, subjectId -> List.of());
+    assertInstanceOf(org.streamrune.core.gdpr.SnapshotPurger.class, purger);
+  }
+
   @Test
   void nameIsStable() {
     var purger = new PostgresSnapshotStorePurger(dataSource, subjectId -> List.of());

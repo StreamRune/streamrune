@@ -1173,6 +1173,38 @@ class StreamRuneProducersTest {
     runner.close();
   }
 
+  /**
+   * Two leadership beans and none the default: the DLQ retry runner is refused, as the projection
+   * runners and the saga sweepers are, rather than built with the always-leading {@code NOOP} — on
+   * every replica that would retry the same dead letters.
+   */
+  @Test
+  @SuppressWarnings("unchecked")
+  void deadLetterRetryRunnerRefusesAnAmbiguousLeadership() {
+    var producers = new StreamRuneProducers();
+    Instance<org.streamrune.core.subscription.SubscriptionLeadership> ambiguous =
+        mock(Instance.class);
+    when(ambiguous.isUnsatisfied()).thenReturn(false);
+    when(ambiguous.isResolvable()).thenReturn(false);
+    when(ambiguous.isAmbiguous()).thenReturn(true);
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                producers.deadLetterRetryRunner(
+                    satisfied(mock(org.streamrune.core.DeadLetterQueue.class)),
+                    satisfied(mock(org.streamrune.core.CommandBus.class)),
+                    unsatisfied(),
+                    ambiguous,
+                    unsatisfied(),
+                    unsatisfied(),
+                    List.of(),
+                    TestProperties.defaults()));
+    assertTrue(
+        ex.getMessage().contains("SubscriptionLeadership beans and none is the default"),
+        ex.getMessage());
+  }
+
   @Test
   void deadLetterRetryRunnerReceivesLeadership_whenBeanPresent() {
     // Wiring proof: a resolvable SubscriptionLeadership bean must be threaded into the DLQ retry

@@ -40,7 +40,11 @@ class AwsKmsForgetSubjectServiceTest {
     when(purger.name()).thenReturn("orders-read-model");
 
     ForgetSubjectService service =
-        ForgetSubjectService.builder().cryptoEngine(engine).purgers(List.of(purger)).build();
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(engine)
+            .purgers(List.of(purger))
+            .build();
 
     SubjectId subject = SubjectId.of("customer-42");
 

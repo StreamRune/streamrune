@@ -145,7 +145,7 @@ public class ProjectionProducer {
     // The processor is chosen by what the registrations DECLARE and by whether the leadership
     // needs its epoch honoured — never by the presence of a DataSource or of the bean. An
     // all-AT_LEAST_ONCE_IDEMPOTENT runner without leadership runs on nonAtomicAtLeastOnce().
-    SubscriptionLeadership leadership = resolveOrNull(leadershipInstance);
+    SubscriptionLeadership leadership = LeadershipInstances.resolve(leadershipInstance);
     builder.atomicProcessor(
         ProjectionProcessorResolution.select(
             registrationsOf(entries),
@@ -229,7 +229,7 @@ public class ProjectionProducer {
     // The same rule as the CONTINUOUS runner: the processor by declared need, never by bean
     // presence. A TRANSACTIONAL_LOCAL scheduled chunk's read-model write and its checkpoint commit
     // in the processor's one transaction, with the same split-brain guard as CONTINUOUS.
-    SubscriptionLeadership leadership = resolveOrNull(leadershipInstance);
+    SubscriptionLeadership leadership = LeadershipInstances.resolve(leadershipInstance);
     builder.atomicProcessor(
         ProjectionProcessorResolution.select(
             registrationsOf(entries),

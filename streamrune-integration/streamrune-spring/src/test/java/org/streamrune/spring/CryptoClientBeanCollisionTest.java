@@ -32,6 +32,7 @@ class CryptoClientBeanCollisionTest {
   @Test
   void vaultBackend_bootsAlongsideAnApplicationOwnedHttpClientBean() {
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(
             AutoConfigurations.of(
                 StreamRuneAutoConfiguration.class,
@@ -58,6 +59,7 @@ class CryptoClientBeanCollisionTest {
   @Test
   void awsBackend_bootsAlongsideAnApplicationOwnedKmsClientBean() {
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(
             AutoConfigurations.of(
                 StreamRuneAutoConfiguration.class,
@@ -85,6 +87,7 @@ class CryptoClientBeanCollisionTest {
     // application HttpClient with unknown proxy/TLS/timeout settings — which is why the fix is
     // namespacing, not @ConditionalOnMissingBean.
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(
             AutoConfigurations.of(
                 StreamRuneAutoConfiguration.class,
@@ -113,6 +116,7 @@ class CryptoClientBeanCollisionTest {
     // inferred destroy method still closes the underlying client when the context shuts down.
     var closed = new java.util.concurrent.atomic.AtomicReference<HttpClient>();
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(
             AutoConfigurations.of(
                 StreamRuneAutoConfiguration.class,

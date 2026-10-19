@@ -38,6 +38,17 @@ import org.streamrune.test.InMemoryCryptoEngine;
 /** Tests for {@link StreamRuneMicronautModule}. */
 class StreamRuneMicronautModuleTest {
 
+  /** Properties stating that the application stores no snapshots (the forget's opt-out). */
+  private static final StreamRuneMicronautProperties NO_SNAPSHOTS = noSnapshots();
+
+  private static StreamRuneMicronautProperties noSnapshots() {
+    try (var ctx =
+        io.micronaut.context.ApplicationContext.run(
+            java.util.Map.of("streamrune.gdpr.snapshot-purge", "none"))) {
+      return ctx.getBean(StreamRuneMicronautProperties.class);
+    }
+  }
+
   @Test
   void eventTypeRegistryProvidesDefaultEmpty() {
     var module = new StreamRuneMicronautModule();
@@ -422,7 +433,8 @@ class StreamRuneMicronautModuleTest {
   void forgetSubjectServiceCreated_withoutAuditStore() {
     var module = new StreamRuneMicronautModule();
     ForgetSubjectService service =
-        module.forgetSubjectService(new InMemoryCryptoEngine(), null, List.of(), null, null);
+        module.forgetSubjectService(
+            new InMemoryCryptoEngine(), null, List.of(), null, null, NO_SNAPSHOTS);
     assertNotNull(service);
   }
 
@@ -431,7 +443,8 @@ class StreamRuneMicronautModuleTest {
     var module = new StreamRuneMicronautModule();
     AuditStore auditStore = mock(AuditStore.class);
     ForgetSubjectService service =
-        module.forgetSubjectService(new InMemoryCryptoEngine(), auditStore, List.of(), null, null);
+        module.forgetSubjectService(
+            new InMemoryCryptoEngine(), auditStore, List.of(), null, null, NO_SNAPSHOTS);
     assertNotNull(service);
     service.forget(SubjectId.of("user-1"), UserId.of("admin"));
     verify(auditStore, Mockito.atLeastOnce()).save(any(AuditEntry.class));
@@ -442,7 +455,8 @@ class StreamRuneMicronautModuleTest {
     var module = new StreamRuneMicronautModule();
     AuditStore auditStore = mock(AuditStore.class);
     ForgetSubjectService service =
-        module.forgetSubjectService(new InMemoryCryptoEngine(), auditStore, List.of(), null, null);
+        module.forgetSubjectService(
+            new InMemoryCryptoEngine(), auditStore, List.of(), null, null, NO_SNAPSHOTS);
 
     service.forget(SubjectId.of("user-1"), UserId.of("dpo"));
     service.reinstate(SubjectId.of("user-1"), UserId.of("dpo"));

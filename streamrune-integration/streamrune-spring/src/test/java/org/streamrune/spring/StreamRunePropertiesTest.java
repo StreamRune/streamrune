@@ -165,7 +165,10 @@ class StreamRunePropertiesTest {
 
   @Test
   void defaultPropertiesShouldHaveSingleActiveConsumerEnabled() {
-    assertThat(defaults().subscription().singleActiveConsumer().enabled()).isTrue();
+    assertThat(
+            org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+                defaults().subscription().singleActiveConsumer().enabled()))
+        .isTrue();
   }
 
   @Test
@@ -184,7 +187,10 @@ class StreamRunePropertiesTest {
   @Test
   void singleActiveConsumerCanBeDisabled() {
     var props = bind(Map.of("streamrune.subscription.single-active-consumer.enabled", "false"));
-    assertThat(props.subscription().singleActiveConsumer().enabled()).isFalse();
+    assertThat(
+            org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+                props.subscription().singleActiveConsumer().enabled()))
+        .isFalse();
   }
 
   @Test

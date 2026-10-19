@@ -902,6 +902,15 @@ public class StreamRuneProducers {
    * <p>The {@link CachingQueryBus}, when {@code streamrune.query-cache.enabled=true} produces one,
    * is wired in as the forget's query cache: every forget evicts it once its purgers have run, so a
    * cached answer holding the subject's data is not served after the erasure.
+   *
+   * <p>One of the purger beans must be a {@link org.streamrune.core.gdpr.SnapshotPurger} — for
+   * {@code PostgresEventStore}, a {@code PostgresSnapshotStorePurger} the application produces,
+   * since only its domain knows which streams' snapshots hold a subject's data — unless {@code
+   * streamrune.gdpr.snapshot-purge=none} states that the application has never stored a snapshot.
+   * Otherwise the producer throws ({@link
+   * org.streamrune.integration.SnapshotPurgeSetting#withoutSnapshotPurge}); {@link
+   * StreamRuneConfigValidator} resolves this bean on the startup event, so that is a startup
+   * failure, not a failure of the first request that injects the service.
    */
   @Produces
   @DefaultBean
@@ -910,11 +919,19 @@ public class StreamRuneProducers {
       Instance<AuditStore> auditStore,
       @All List<SubjectDataPurger> purgers,
       Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance,
-      Instance<CachingQueryBus> queryCache) {
+      Instance<CachingQueryBus> queryCache,
+      StreamRuneQuarkusProperties properties) {
     if (cryptoEngine.isUnsatisfied()) {
       return null;
     }
-    var b = ForgetSubjectService.builder().cryptoEngine(cryptoEngine.get()).purgers(purgers);
+    // A normal-scoped snapshot purger arrives as a client proxy without the SnapshotPurger marker;
+    // expose it, so the snapshot-purge rule sees the purger the application declared.
+    List<SubjectDataPurger> exposed = SnapshotPurgerReferences.exposeSnapshotPurgers(purgers);
+    var b = ForgetSubjectService.builder().cryptoEngine(cryptoEngine.get()).purgers(exposed);
+    if (org.streamrune.integration.SnapshotPurgeSetting.parse(properties.gdpr().snapshotPurge())
+        .withoutSnapshotPurge(exposed)) {
+      b.withoutSnapshotPurge();
+    }
     if (!auditStore.isUnsatisfied()) {
       b.auditStore(auditStore.get());
     }
@@ -1276,8 +1293,11 @@ public class StreamRuneProducers {
     // replica polls/retries; NOOP (always leader) when absent. Without it, two replicas' staggered
     // polls both re-execute the same DLQ command (duplicate domain events) with no CommandInbox to
     // de-dup.
-    if (leadershipInstance.isResolvable()) {
-      builder.leadership(leadershipInstance.get());
+    // Two leadership beans with none the default fail here, as the projection runners and the
+    // saga sweepers do, instead of leaving this runner on NOOP.
+    var leadership = LeadershipInstances.resolve(leadershipInstance);
+    if (leadership != null) {
+      builder.leadership(leadership);
     }
 
     // Wire the optional StreamRuneMetrics bean (resolved above) so retry-exhaustion emits
@@ -1458,7 +1478,10 @@ public class StreamRuneProducers {
   @DefaultBean
   public org.streamrune.core.subscription.SubscriptionLeadership subscriptionLeadership(
       Instance<DataSource> dataSource, StreamRuneQuarkusProperties properties) {
-    if (!properties.subscription().singleActiveConsumer().enabled() || dataSource.isUnsatisfied()) {
+    boolean enabled =
+        org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+            properties.subscription().singleActiveConsumer().enabled());
+    if (!enabled || dataSource.isUnsatisfied()) {
       return org.streamrune.core.subscription.SubscriptionLeadership.NOOP;
     }
     return new org.streamrune.postgres.LeaseBasedLeadership(

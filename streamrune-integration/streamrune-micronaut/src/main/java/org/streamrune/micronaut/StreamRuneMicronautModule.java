@@ -1190,6 +1190,13 @@ public class StreamRuneMicronautModule {
    * @param queryCache the {@link CachingQueryBus}, present when {@code
    *     streamrune.query-cache.enabled=true}; every forget evicts it once its purgers have run, so
    *     a cached answer holding the subject's data is not served after the erasure
+   * @param properties the StreamRune configuration: {@code streamrune.gdpr.snapshot-purge} says
+   *     whether one of {@code purgers} must be a {@link org.streamrune.core.gdpr.SnapshotPurger} —
+   *     for {@code PostgresEventStore}, a {@code PostgresSnapshotStorePurger} the application
+   *     declares, since only its domain knows which streams' snapshots hold a subject's data
+   *     ({@code required}, the default) or the application has never stored a snapshot ({@code
+   *     none}). Otherwise this method throws; {@link StreamRuneConfigValidator} resolves the bean
+   *     on the startup event, so that is a startup failure
    * @return a new {@link ForgetSubjectService}
    */
   @Singleton
@@ -1200,8 +1207,13 @@ public class StreamRuneMicronautModule {
       @jakarta.annotation.Nullable AuditStore auditStore,
       List<SubjectDataPurger> purgers,
       @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
-      @jakarta.annotation.Nullable CachingQueryBus queryCache) {
+      @jakarta.annotation.Nullable CachingQueryBus queryCache,
+      StreamRuneMicronautProperties properties) {
     var b = ForgetSubjectService.builder().cryptoEngine(cryptoEngine).purgers(purgers);
+    if (org.streamrune.integration.SnapshotPurgeSetting.parse(properties.gdprSnapshotPurge())
+        .withoutSnapshotPurge(purgers)) {
+      b.withoutSnapshotPurge();
+    }
     if (auditStore != null) {
       b.auditStore(auditStore);
     }
@@ -1494,16 +1506,17 @@ public class StreamRuneMicronautModule {
    * decided by the database clock (no session state, no dedicated connection held across calls), so
    * it is correct under any connection pooling; the leader's monotonic epoch fences a superseded
    * leader out at the projection commit. Requires a {@link DataSource} and {@code
-   * streamrune.subscription.single-active-consumer.enabled != false} (default on). The lease TTL is
-   * {@code streamrune.subscription.single-active-consumer.lease-ttl} (default 15s) — the failover
-   * bound; the renew heartbeat runs at {@code ttl/3}. When absent or disabled the projection
-   * runners fall back to {@link org.streamrune.core.subscription.SubscriptionLeadership#NOOP}
-   * (always leader — single-instance behavior unchanged). {@link StreamRuneLifecycle} closes it on
-   * shutdown, after the runners; the {@code @Bean(preDestroy = "close")} is a safety net that stops
-   * the renew heartbeat and resigns held leases on context shutdown even when the runner lifecycle
-   * is disabled ({@code streamrune.runner-lifecycle-enabled=false}) and no {@link
-   * StreamRuneLifecycle} bean exists — Micronaut does not auto-close {@code @Factory}-produced
-   * {@link AutoCloseable} beans without it.
+   * streamrune.subscription.single-active-consumer.enabled} reading as on (default on) — through
+   * {@link SingleActiveConsumerEnabled}, the reading the saga forward fence's {@code auto} follows
+   * too. The lease TTL is {@code streamrune.subscription.single-active-consumer.lease-ttl} (default
+   * 15s) — the failover bound; the renew heartbeat runs at {@code ttl/3}. When absent or disabled
+   * the projection runners fall back to {@link
+   * org.streamrune.core.subscription.SubscriptionLeadership#NOOP} (always leader — single-instance
+   * behavior unchanged). {@link StreamRuneLifecycle} closes it on shutdown, after the runners; the
+   * {@code @Bean(preDestroy = "close")} is a safety net that stops the renew heartbeat and resigns
+   * held leases on context shutdown even when the runner lifecycle is disabled ({@code
+   * streamrune.runner-lifecycle-enabled=false}) and no {@link StreamRuneLifecycle} bean exists —
+   * Micronaut does not auto-close {@code @Factory}-produced {@link AutoCloseable} beans without it.
    *
    * @param dataSource the JDBC data source
    * @param properties the StreamRune configuration (supplies the lease TTL)
@@ -1512,9 +1525,7 @@ public class StreamRuneMicronautModule {
   @Singleton
   @Secondary
   @Requires(beans = DataSource.class)
-  @Requires(
-      property = "streamrune.subscription.single-active-consumer.enabled",
-      notEquals = "false")
+  @Requires(condition = StreamRuneMicronautModule.SingleActiveConsumerEnabled.class)
   // Back off entirely when the application supplies its
   // own leadership coordinator. Unlike the inert @Secondary component defaults,
   // LeaseBasedLeadership STARTS a renew-heartbeat thread in its constructor, so leaving the
@@ -1527,6 +1538,29 @@ public class StreamRuneMicronautModule {
     Duration leaseTtl = properties.subscriptionLeaseTtl();
     return new org.streamrune.postgres.LeaseBasedLeadership(
         dataSource, leaseTtl != null ? leaseTtl : Duration.ofSeconds(15));
+  }
+
+  /**
+   * Matches when {@code streamrune.subscription.single-active-consumer.enabled} reads as on through
+   * {@link org.streamrune.integration.SingleActiveConsumerSetting#enabled}, the parser {@link
+   * SagaEventPathRetentionConfigurer} reads it through for the forward fence's {@code auto}.
+   * {@code @Requires(notEquals = "false")} kept the leadership bean for {@code off}, {@code no} or
+   * {@code 0} while the fence read them as off. An unknown spelling throws, so the context does not
+   * start.
+   */
+  public static final class SingleActiveConsumerEnabled
+      implements io.micronaut.context.condition.Condition {
+    @Override
+    public boolean matches(io.micronaut.context.condition.ConditionContext context) {
+      String value =
+          context.getBeanContext() instanceof io.micronaut.context.ApplicationContext application
+              ? application
+                  .getProperty(
+                      org.streamrune.integration.SingleActiveConsumerSetting.PROPERTY, String.class)
+                  .orElse(null)
+              : null;
+      return org.streamrune.integration.SingleActiveConsumerSetting.enabled(value);
+    }
   }
 
   /**

@@ -34,6 +34,7 @@ class CryptoClientBeanCollisionTest {
   private static final Map<String, Object> VAULT_ENABLED =
       Map.of(
           "spec.name", "crypto-client-collision",
+          "streamrune.gdpr.snapshot-purge", "none",
           "streamrune.crypto.vault.enabled", "true",
           "streamrune.crypto.vault.address", "http://localhost:8200",
           "streamrune.crypto.vault.token", "s.test");
@@ -41,6 +42,7 @@ class CryptoClientBeanCollisionTest {
   private static final Map<String, Object> AWS_ENABLED =
       Map.of(
           "spec.name", "crypto-client-collision",
+          "streamrune.gdpr.snapshot-purge", "none",
           "streamrune.crypto.aws.enabled", "true",
           "streamrune.crypto.aws.region", "eu-central-1",
           "streamrune.crypto.aws.kms-key-id", "alias/test");

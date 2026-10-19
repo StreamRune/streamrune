@@ -107,7 +107,7 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofDays(7),
         List.of(),
         skipped,
-        true,
+        "true",
         10,
         1000L,
         2.0,
@@ -118,7 +118,8 @@ class MicronautOutboxMetricsWiringTest {
         java.time.Duration.ofSeconds(30),
         // sse.polling-interval
         Duration.ofSeconds(1),
-        "auto");
+        "auto",
+        "required");
   }
 
   @Test
@@ -184,7 +185,7 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofDays(7),
         List.of(),
         Duration.ofDays(30),
-        true,
+        "true",
         maxAttempts,
         initialDelayMs,
         multiplier,
@@ -195,7 +196,8 @@ class MicronautOutboxMetricsWiringTest {
         java.time.Duration.ofSeconds(30),
         // sse.polling-interval
         Duration.ofSeconds(1),
-        "auto");
+        "auto",
+        "required");
   }
 
   private static StreamRuneMetrics metricsOf(OutboxPoller poller) throws Exception {

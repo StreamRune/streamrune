@@ -9,6 +9,7 @@ import org.streamrune.core.audit.AuditOutcome;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.gdpr.GdprAction;
+import org.streamrune.core.gdpr.SnapshotPurger;
 import org.streamrune.core.gdpr.SubjectDataPurger;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SubjectId;
@@ -55,6 +56,12 @@ import org.streamrune.runtime.gdpr.ForgetResult.PurgeOutcome;
  * The purger list defaults to empty, so a service configured without purgers crypto-shreds only —
  * note this leaves ciphertext rows in read models; register a purger per read model holding subject
  * data for a complete erasure.
+ *
+ * <p><b>Snapshots must be purged too, or stated absent.</b> An aggregate snapshot stores the
+ * aggregate's state with every field not marked {@code @Encrypted} in the clear, so deleting the
+ * key leaves it readable. {@link Builder#build()} refuses a service whose purgers hold no {@link
+ * SnapshotPurger} (for {@code PostgresEventStore}, {@code PostgresSnapshotStorePurger}) unless the
+ * application states {@link Builder#withoutSnapshotPurge()}: an explicit decision, not a default.
  *
  * <p><b>Audit failure semantics:</b> Unlike {@code AuditCommandInterceptor}, audit failures
  * encountered <em>after</em> a successful crypto-shred are <b>not</b> propagated — the operation is
@@ -648,6 +655,7 @@ public final class ForgetSubjectService {
     private List<SubjectDataPurger> purgers = List.of();
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private CachingQueryBus queryCache;
+    private boolean withoutSnapshotPurge;
 
     private Builder() {}
 
@@ -667,12 +675,32 @@ public final class ForgetSubjectService {
      * Sets the read-model purgers invoked after the key is deleted, one per read model holding the
      * subject's data. Defaults to empty (crypto-shred only, which leaves ciphertext rows in read
      * models). The list is defensively copied when the service is built. Each purger needs a name
-     * of its own (see {@link #build()}).
+     * of its own (see {@link #build()}). One of them must be a {@link SnapshotPurger} unless {@link
+     * #withoutSnapshotPurge()} is stated.
      *
      * @param purgers the purgers to invoke; must not be {@code null} (use an empty list to disable)
      */
     public Builder purgers(List<SubjectDataPurger> purgers) {
       this.purgers = Objects.requireNonNull(purgers, "purgers must not be null");
+      return this;
+    }
+
+    /**
+     * States that this application has never stored an aggregate snapshot, so the service is built
+     * without a {@link SnapshotPurger}. Without this statement {@link #build()} refuses a service
+     * whose purgers hold none: a snapshot stores the aggregate's state with every field not marked
+     * {@code @Encrypted} in the clear, and a forget that does not delete it leaves that data
+     * readable.
+     *
+     * <p>State it only when no snapshot was ever written: the snapshot policy has been {@code
+     * SnapshotPolicy.never()} since the first command, or the event store keeps no snapshots. A
+     * switch to {@code never()} stops new snapshots but keeps the old ones (see {@code
+     * PostgresSnapshotStorePurger}).
+     *
+     * @return this builder
+     */
+    public Builder withoutSnapshotPurge() {
+      this.withoutSnapshotPurge = true;
       return this;
     }
 
@@ -713,6 +741,9 @@ public final class ForgetSubjectService {
      *
      * @throws NullPointerException if no crypto engine was set, or the purger list holds a {@code
      *     null}
+     * @throws IllegalStateException if no purger is a {@link SnapshotPurger} and {@link
+     *     #withoutSnapshotPurge()} was not stated, or if one is and it was; the message says what
+     *     to add or remove
      * @throws IllegalArgumentException if two or more purgers go by one name, a class name standing
      *     in for a missing one included; the message names each shared name and the classes sharing
      *     it
@@ -721,6 +752,7 @@ public final class ForgetSubjectService {
     public ForgetSubjectService build() {
       Objects.requireNonNull(cryptoEngine, "cryptoEngine is required");
       List<SubjectDataPurger> registered = List.copyOf(purgers);
+      requireSnapshotPurge(registered, withoutSnapshotPurge);
       List<String> names = registered.stream().map(ForgetSubjectService::resolveName).toList();
       GdprNames.requireUnique(
           "SubjectDataPurger",
@@ -733,6 +765,39 @@ public final class ForgetSubjectService {
         named.add(new NamedPurger(names.get(i), registered.get(i)));
       }
       return new ForgetSubjectService(cryptoEngine, auditStore, named, metrics, queryCache);
+    }
+
+    /**
+     * Refuses a service that would leave snapshots readable after a forget, and one that states it
+     * stores no snapshots while registering a snapshot purger.
+     */
+    private static void requireSnapshotPurge(
+        List<SubjectDataPurger> registered, boolean withoutSnapshotPurge) {
+      List<String> snapshotPurgers =
+          registered.stream()
+              .filter(SnapshotPurger.class::isInstance)
+              .map(purger -> purger.getClass().getName())
+              .toList();
+      if (snapshotPurgers.isEmpty() && !withoutSnapshotPurge) {
+        throw new IllegalStateException(
+            "ForgetSubjectService has no snapshot purger. An aggregate snapshot stores the"
+                + " aggregate's state as it was when the snapshot was taken, every field not"
+                + " marked @Encrypted in the clear, so after a forget it still holds whatever"
+                + " that state kept of the subject's data. Add one to purgers(...) — for"
+                + " PostgresEventStore: new PostgresSnapshotStorePurger(dataSource, subjectId ->"
+                + " the streams whose snapshots hold the subject's data); for another store, a"
+                + " purger of your own that implements SnapshotPurger, as must any wrapper around"
+                + " one — or call withoutSnapshotPurge() if this application has never stored a"
+                + " snapshot.");
+      }
+      if (!snapshotPurgers.isEmpty() && withoutSnapshotPurge) {
+        throw new IllegalStateException(
+            "ForgetSubjectService was given a snapshot purger ("
+                + String.join(", ", snapshotPurgers)
+                + ") and withoutSnapshotPurge(), which says the application has never stored a"
+                + " snapshot: keep the purger and drop withoutSnapshotPurge(), or drop the purger"
+                + " if the application really stores none.");
+      }
     }
   }
 }

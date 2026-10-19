@@ -32,6 +32,7 @@ class StreamRuneAutoConfigurationTest {
 
   private final ApplicationContextRunner contextRunner =
       new ApplicationContextRunner()
+          .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
           .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
           .withUserConfiguration(StubDataSourceConfig.class, StubEventStoreConfig.class);
 
@@ -51,6 +52,7 @@ class StreamRuneAutoConfigurationTest {
     // context (here also with servlet.Filter filtered off the classpath) starts cleanly with
     // neither bean present.
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withUserConfiguration(StubDataSourceConfig.class, StubEventStoreConfig.class)
         .withClassLoader(new FilteredClassLoader(jakarta.servlet.Filter.class))
@@ -148,6 +150,7 @@ class StreamRuneAutoConfigurationTest {
     // No DataSource → no auto-configured OffsetStore → the contributor must degrade to absent
     // (Spring skips a null @Bean product) rather than fail context refresh.
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withUserConfiguration(StubEventStoreConfig.class)
         .run(
@@ -756,6 +759,7 @@ class StreamRuneAutoConfigurationTest {
   void applicationSuppliedSnapshotPolicyReachesTheCommandBus() {
     RecordingEventStoreConfig.LAST_EXPECTED_SNAPSHOT_VERSION.set(-1);
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withUserConfiguration(
             StubDataSourceConfig.class,
@@ -781,6 +785,7 @@ class StreamRuneAutoConfigurationTest {
   void defaultSnapshotPolicyIsEveryNEventsAtSchemaVersionOne() {
     RecordingEventStoreConfig.LAST_EXPECTED_SNAPSHOT_VERSION.set(-1);
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withUserConfiguration(
             StubDataSourceConfig.class,
@@ -812,6 +817,7 @@ class StreamRuneAutoConfigurationTest {
     // that never reaches the store cannot coincidentally read as a correct observation.
     RecordingEventStoreConfig.LAST_EXPECTED_SNAPSHOT_VERSION.set(Integer.MIN_VALUE);
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withUserConfiguration(
             StubDataSourceConfig.class,
@@ -1175,6 +1181,7 @@ class StreamRuneAutoConfigurationTest {
   @Test
   void auditBeansNotRegisteredWithoutDataSource() {
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withUserConfiguration(StubEventStoreConfig.class)
         .run(

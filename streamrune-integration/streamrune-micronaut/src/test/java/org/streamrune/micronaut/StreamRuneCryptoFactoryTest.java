@@ -44,6 +44,8 @@ class StreamRuneCryptoFactoryTest {
     try (ApplicationContext ctx =
         ApplicationContext.run(
             Map.of(
+                "streamrune.gdpr.snapshot-purge",
+                "none",
                 "streamrune.crypto.filesystem.enabled",
                 "true",
                 "streamrune.crypto.filesystem.key-directory",
@@ -62,9 +64,14 @@ class StreamRuneCryptoFactoryTest {
     try (ApplicationContext ctx =
         ApplicationContext.run(
             Map.of(
-                "streamrune.crypto.filesystem.enabled", "true",
-                "streamrune.crypto.filesystem.key-directory", keyDir.toString(),
-                "streamrune.crypto.cache.enabled", "false"))) {
+                "streamrune.gdpr.snapshot-purge",
+                "none",
+                "streamrune.crypto.filesystem.enabled",
+                "true",
+                "streamrune.crypto.filesystem.key-directory",
+                keyDir.toString(),
+                "streamrune.crypto.cache.enabled",
+                "false"))) {
       CryptoEngine engine = ctx.getBean(CryptoEngine.class);
       assertFalse(
           engine instanceof CachedCryptoEngine,

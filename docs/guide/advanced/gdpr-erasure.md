@@ -366,7 +366,10 @@ Erase a subject: delete the key, then purge any read models holding their rows.
 ForgetSubjectService forget = ForgetSubjectService.builder()
     .cryptoEngine(engine)
     .auditStore(auditStore)                              // records the erasure in the audit log
-    .purgers(List.of(new CustomerReadModelPurger()))     // one per read model with the subject's rows
+    .purgers(List.of(
+        new CustomerReadModelPurger(),                   // one per read model with the subject's rows
+        new PostgresSnapshotStorePurger(dataSource,      // the aggregate snapshots (required, see below)
+            subjectId -> List.of(StreamId.of(CUSTOMER, AggregateId.of(subjectId.value()))))))
     .queryCache(cachingQueryBus)                         // evicted after the last purger (optional)
     .build();
 
@@ -527,19 +530,24 @@ events, saga state and commands mark their personal data `@Encrypted` (deleting 
 them), a purger removes every read-model row, snapshots are purged (next section), and the query
 cache is evicted (see *Cached query answers are evicted* below).
 
-## ⚠️ Aggregate snapshots are NOT purged by `forget(...)` — register a purger
+## Aggregate snapshots: a forget needs a snapshot purger
 
-**`snapshot_store` is framework-owned infrastructure, and `ForgetSubjectService.forget(...)` never
-touches it unless you tell it to.** Crypto-shredding makes an `@Encrypted` field in the LATEST
-snapshot read back as `[REDACTED]` (same as any other post-forget read), but it does nothing for
-non-`@Encrypted` DERIVED data an aggregate's `evolve()` copied out of PII into a plain field — an
-age computed from a birth date, an email domain extracted for analytics, anything similar. That
-plaintext survives in the last snapshot taken before the forget **indefinitely**: no new snapshot
-overwrites it without new commands against that exact aggregate, and nothing else ever deletes the
-row.
+A snapshot stores an aggregate's state as it was when the snapshot was taken. Every field of that
+state not marked `@Encrypted` is stored in the clear: a name or an email the state copied from an
+event, an age computed from a birth date, an email domain kept for analytics. Deleting the key
+turns the `@Encrypted` fields of a snapshot into `[REDACTED]` on the next load, like any other
+post-forget read, and does nothing for the rest. That data survives in the last snapshot taken
+before the forget **indefinitely**: no new snapshot overwrites it without new commands against that
+exact aggregate, and nothing else deletes the row.
 
-Register [`PostgresSnapshotStorePurger`](../../../streamrune-eventstore/streamrune-postgres/src/main/java/org/streamrune/postgres/PostgresSnapshotStorePurger.java)
-alongside your other purgers to close this gap:
+**`ForgetSubjectService.Builder.build()` therefore refuses a service that does not purge
+snapshots.** One of its purgers must be a
+[`SnapshotPurger`](../../../streamrune-core/src/main/java/org/streamrune/core/gdpr/SnapshotPurger.java),
+or the application must state `withoutSnapshotPurge()`; otherwise `build()` throws
+`IllegalStateException` with what to add. Both together are refused too. For `PostgresEventStore`
+the snapshot purger is
+[`PostgresSnapshotStorePurger`](../../../streamrune-eventstore/streamrune-postgres/src/main/java/org/streamrune/postgres/PostgresSnapshotStorePurger.java),
+which deletes the subject's rows from `snapshot_store`:
 
 ```java
 ForgetSubjectService.builder()
@@ -547,32 +555,60 @@ ForgetSubjectService.builder()
     .purgers(List.of(
         new CustomerReadModelPurger(jdbc),
         new PostgresSnapshotStorePurger(dataSource,
-            subjectId -> List.of(StreamId.of(CUSTOMER, new AggregateId(subjectId.value()))))))
+            subjectId -> List.of(StreamId.of(CUSTOMER, AggregateId.of(subjectId.value()))))))
     .build();
 ```
 
 (`CUSTOMER` is the `AggregateType` the customer decider is registered under; the mapping here says
 the customer's stream carries the subject id as its aggregate id.)
 
-It is **opt-in**, not automatic, because `snapshot_store` is keyed by `(aggregate_type, aggregate_id)`
-(a typed stream), not `subject_id` — unlike your own read models (typically `DELETE ... WHERE subject_id = ?`),
-there is no indexed subject column to purge against, and the framework has no general way to
-derive one: whether a stream's aggregate id equals a subject id, or an aggregate's state merely CARRIES a
-subject's PII under an unrelated stream, is a decision only your domain model can answer. You
-supply that mapping (`Function<SubjectId, Collection<StreamId>>`) when constructing the purger —
-the same kind of lookup every other `SubjectDataPurger` already performs internally against its
-own read model, made explicit here because `snapshot_store` has none of its own to query.
+You construct the purger because `snapshot_store` is keyed by `(aggregate_type, aggregate_id)` (a
+typed stream), not `subject_id` — unlike your own read models (typically `DELETE ... WHERE
+subject_id = ?`), there is no indexed subject column to purge against, and the framework has no
+general way to derive one: whether a stream's aggregate id equals a subject id, or an aggregate's
+state merely CARRIES a subject's PII under an unrelated stream, is a decision only your domain
+model can answer. You supply that mapping (`Function<SubjectId, Collection<StreamId>>`) — the same
+kind of lookup every other `SubjectDataPurger` performs internally against its own read model.
 
-Under `SnapshotPolicy.never()`, no *new* rows are written to `snapshot_store` — but this is **not**
-"nothing to purge": if this aggregate was ever actively snapshotted before switching to `never()`,
-its pre-switch rows persist indefinitely, never read again and never overwritten (see the *Switching
-an actively-snapshotted aggregate to `never()`* caveat in
-[`snapshot-versioning.md`](snapshot-versioning.md#caveats)), and they carry exactly the derived
-plaintext this section is about. Register [`PostgresSnapshotStorePurger`](../../../streamrune-eventstore/streamrune-postgres/src/main/java/org/streamrune/postgres/PostgresSnapshotStorePurger.java)
-anyway if the table may still hold rows from before the switch, or purge the table once
-by hand when you make the switch. A fully custom `EventStore` that is not `PostgresEventStore`-backed
-has no `snapshot_store` table for this particular purger to purge — you would need your own store's
-equivalent instead.
+**With an integration**, declare the purger as a bean: the auto-configured `ForgetSubjectService`
+runs every `SubjectDataPurger` bean, and a `PostgresSnapshotStorePurger` bean is one.
+
+```java
+@Bean // Spring; a Quarkus @Produces or a Micronaut factory method works the same way
+PostgresSnapshotStorePurger customerSnapshotPurger(DataSource dataSource) {
+    return new PostgresSnapshotStorePurger(dataSource,
+        subjectId -> List.of(StreamId.of(CUSTOMER, AggregateId.of(subjectId.value()))));
+}
+```
+
+**The rule is checked on the purger object the service receives.** A wrapper or decorator around a
+snapshot purger, and a purger for another store, must implement `SnapshotPurger` themselves. A
+proxy that implements only the bean's declared type hides the marker; declare the bean as
+`PostgresSnapshotStorePurger` or `SnapshotPurger`, as above, to be safe on every integration. On
+Quarkus a normal-scoped producer (`@ApplicationScoped`) declared as `SubjectDataPurger` hands over
+a client proxy without the marker; the integration looks through the proxy to the instance, so it
+still counts. A snapshot purger whose scope is not active at startup (`@RequestScoped`) cannot be
+looked through and does not count: give it `@Singleton`, `@ApplicationScoped` or the marker as its
+declared type.
+
+Without one, the application does not start: Spring when the context builds the service (with
+`spring.main.lazy-initialization=true`, when the service is first injected), Quarkus and Micronaut
+in their startup validator, which builds it on the startup event. The message names
+the bean to declare and the property that opts out: `streamrune.gdpr.snapshot-purge=none` builds
+the service with `withoutSnapshotPurge()`. The default is `required`; any other value fails startup,
+and `none` beside a `SnapshotPurger` bean fails it too. An application that declares its own
+`ForgetSubjectService` bean builds it by hand and the builder's rule applies to it directly.
+
+**`withoutSnapshotPurge()` (`snapshot-purge=none`) is for an application that has never stored a
+snapshot** — not for one that has stopped. Under `SnapshotPolicy.never()`, no *new* rows are written
+to `snapshot_store`, but rows a stream accumulated before the switch persist indefinitely, never
+read again and never overwritten (see the *Switching an actively-snapshotted aggregate to
+`never()`* caveat in [`snapshot-versioning.md`](snapshot-versioning.md#caveats)), and they hold
+exactly the data this section is about. Keep the purger while the table may still hold rows from
+before the switch, or empty the table once by hand when you make the switch. The integrations'
+default policy snapshots every `streamrune.snapshot-every-n-events` (100) events, so an integration
+application stores snapshots unless it declares a `SnapshotPolicy.never()` bean from the start. A
+custom `EventStore` that keeps snapshots elsewhere implements `SnapshotPurger` for its own store.
 
 ## Cached query answers are evicted
 
@@ -656,6 +692,8 @@ runbook for the audit-log queries.
 | `CachedCryptoEngine` TTL | `.expireAfterWrite(Duration)` | bounds how long decrypted PII stays cached (default 5 minutes) |
 | `streamrune.crypto.cache.enabled` | Spring/Quarkus/Micronaut property (default `true`) | when `false`, the `CachedCryptoEngine` wrapper is skipped entirely on all three integrations, so no decrypted PII is ever retained in heap — the deliberate no-cache GDPR posture, stronger than shortening the TTL |
 | `ForgetSubjectService.builder().queryCache(bus)` | auto-wired by the integrations when `streamrune.query-cache.enabled=true` | every `forget(...)` evicts the `CachingQueryBus` after its last purger, in this process (see *Cached query answers are evicted*) |
+| `SnapshotPurger` among `purgers(...)`, or `withoutSnapshotPurge()` | required by `ForgetSubjectService.Builder.build()` | the forget deletes the subject's snapshots (`PostgresSnapshotStorePurger` for `snapshot_store`), or the application states it has never stored one; neither, or both, is refused (see *Aggregate snapshots*) |
+| `streamrune.gdpr.snapshot-purge` | Spring/Quarkus/Micronaut property: `required` (default) or `none` | `required`: the auto-configured `ForgetSubjectService` needs a `SnapshotPurger` bean or startup fails; `none`: built with `withoutSnapshotPurge()` (refused beside a `SnapshotPurger` bean) |
 
 ### Startup fail-fast
 

@@ -214,8 +214,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   at a schema version above what its chain reaches rather than mis-binding it.
 - `SimpleEventTypeRegistry` maps event-type and state-type names to classes; the `StreamRune`
   builder's `registerEventType` / `registerStateType` maintain one for you.
-- `PostgresSnapshotStorePurger` — an opt-in `SubjectDataPurger` for `snapshot_store`, for derived
-  plaintext an aggregate state copied out of personal data.
+- `PostgresSnapshotStorePurger` — the `SnapshotPurger` for `snapshot_store`: deletes the snapshots
+  of the streams an application-supplied `subjectId -> streams` mapping names.
 
 ### Command bus, idempotency and the command inbox
 
@@ -837,6 +837,21 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   (Article 15) collects one JSON section per `SubjectDataCollector` into a `SubjectExport`. Both
   builders read each collector's or purger's `name()` once and refuse two under one name; a `name()`
   that throws or returns nothing is replaced by the class name with a WARN.
+- A forget purges aggregate snapshots, or the application says it has none. A snapshot keeps every
+  field of the aggregate state not marked `@Encrypted` in the clear, so `ForgetSubjectService.Builder.build()`
+  refuses a service whose purgers hold no `SnapshotPurger` (`streamrune-core`;
+  `PostgresSnapshotStorePurger` implements it) unless `withoutSnapshotPurge()` is called, and
+  refuses both together; the `IllegalStateException` says what to add. Breaking for a service built
+  by hand: add a `PostgresSnapshotStorePurger` to `purgers(...)`, or call `withoutSnapshotPurge()`.
+- The integrations' auto-configured `ForgetSubjectService` applies the same rule to the
+  `SubjectDataPurger` beans: declare a `PostgresSnapshotStorePurger` bean (the integration cannot
+  build one, since which streams hold a subject is the application's mapping), or set
+  `streamrune.gdpr.snapshot-purge=none` (default `required`). Otherwise startup fails — on Quarkus
+  and Micronaut too, where `StreamRuneConfigValidator` builds the service on the startup event — with
+  a message naming the bean and the property; an unknown value, or `none` beside a `SnapshotPurger`
+  bean, fails it as well. The marker is read on the purger object: a wrapper must implement
+  `SnapshotPurger` itself; on Quarkus the integration looks through the client proxy of a
+  normal-scoped purger bean to the instance behind it.
 - Crypto-shredding covers events, snapshots, saga state and the `@Encrypted` components of dead-lettered
   commands. Saga and projection dead-letter stores hold metadata only and point at `event_stream`.
 - `streamrune.crypto.subject_redacted` and `streamrune.crypto.keystore_systemic_failure` distinguish
@@ -942,6 +957,15 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `streamrune.subscription.single-active-consumer.enabled`, `on` and `off` set it regardless, and
   a runner's own `forwardFence(...)` wins. The boolean spellings (`true`/`false`, `yes`/`no`, …)
   read as `on`/`off`, so an unquoted YAML `on` works; an unknown value fails startup.
+- `streamrune.subscription.single-active-consumer.enabled` has one meaning on all three
+  integrations: the condition that creates the `LeaseBasedLeadership` bean and the forward fence's
+  `auto` both read it through `SingleActiveConsumerSetting` (`streamrune-integration-api`), which
+  accepts `true`/`false`, `on`/`off`, `yes`/`no`, `y`/`n`, `t`/`f` and `1`/`0`, case-insensitive. An
+  unknown value fails startup with a message naming the property and the value.
+- Two `SubscriptionLeadership` beans with none marked the default (`@Primary` on Spring and
+  Micronaut, `@Alternative` with a `@Priority` on Quarkus) fail startup on all three integrations.
+  Spring and Quarkus name both bean classes (`SubscriptionLeadershipResolution`); Micronaut's
+  container refuses the non-unique bean.
 - The request filters (`ScopedValueFilter`, `StreamRuneRequestFilter`, `StreamRuneContextFilter`)
   answer a request whose correlation id, trace id or user id `RequestContext.fromRequest` refuses —
   a value longer than 255 characters, a control character, or a correlation id that starts with
@@ -1254,8 +1278,7 @@ Each statement below is a property of the shipped code and holds under the state
   `@Encrypted`-carrying record type is unguarded and leaks plaintext on write; a restore brings
   erased keys back — re-apply the erasures; cross-replica cache eviction depends on the forget
   signal's LISTEN connection, bounded by the cache TTL.
-- **GDPR**: `forget` does not touch `snapshot_store` unless `PostgresSnapshotStorePurger` is
-  registered; a dead-lettered command's personal data is protected only by its own `@Encrypted`
+- **GDPR**: a dead-lettered command's personal data is protected only by its own `@Encrypted`
   components (otherwise plaintext until the dead-letter retention sweeper deletes the row); the query
   cache eviction reaches this process only; `ForgetSubjectService` and `ExportSubjectDataService`
   record the requester but do not authorize it — authorize the caller first; nothing re-drives an
