@@ -468,6 +468,14 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `HybridEventSubscription.Builder.healthContributor(...)` register an application-built
   subscription with the `SubscriptionHealthContributor` on `start()` and unregister it on `close()`;
   a hybrid subscription registers itself, so a dead LISTEN/NOTIFY push path still reads `DEGRADED`.
+  A subscription built with `healthContributor(...)` also records each page whose listener throws
+  as a delivery error and clears the errors when a page is delivered, like a
+  `HealthTrackingEventListener` around its listener (it wraps the listener itself and does not count
+  twice when the application wrapped it for the same contributor and name).
+- A `SubscriptionLease` anchor logs one INFO line when this process takes the lease and one when a
+  check finds it gone, naming the lease. A saga follower whose lease no subscription of its process
+  anchored logs its INFO on its second unanchored poll instead of its first, so a subscription that
+  starts just after the follower costs no line.
 
 ### Sagas
 
@@ -690,8 +698,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   within the lease TTL of a crash. Correctness does not rest on it: the saga row's compare-and-swap,
   the command inbox and the forward fence hold during a handover overlap. A runner without
   leadership (absent, `null` or `NOOP`) delivers on every replica. A follower whose lease no
-  subscription of its process anchored logs one INFO within 15 s of its start and one WARN past it,
-  and its relay health reads `DEGRADED`; a runner with a lease delivering through
+  subscription of its process anchored logs one INFO on its second unanchored poll within 15 s of
+  its start and one WARN past it, and its relay health reads `DEGRADED`; a runner with a lease delivering through
   `listener(runner.asEventListener())` logs one WARN. A sweeper of a runner without a lease keeps its
   own lease, `"saga-compensation-retry:" + saga type`. Stopping a started timeout runner on the
   replica that leads its saga type logs a WARN naming the consequence (no replica claims that saga
