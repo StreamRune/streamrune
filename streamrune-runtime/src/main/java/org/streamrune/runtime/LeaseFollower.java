@@ -35,6 +35,8 @@ final class LeaseFollower {
   private final LongSupplier nanoTime;
   private final AtomicBoolean infoLogged = new AtomicBoolean();
   private final AtomicBoolean warnLogged = new AtomicBoolean();
+  // Counts every poll since the start: before an anchor first opens each poll is unanchored, and
+  // the branch that counts is never entered again once one has opened (everAnchored is permanent).
   private final AtomicInteger unanchoredPolls = new AtomicInteger();
   private volatile long startedAtNanos;
   private volatile boolean unanchoredPastGrace;

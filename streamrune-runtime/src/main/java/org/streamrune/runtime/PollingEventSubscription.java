@@ -270,10 +270,12 @@ public final class PollingEventSubscription
       lifecycleState.set(SubscriptionLifecycleState.CREATED); // never ran
       throw anotherAnchor;
     }
-    startPollThread(anchor);
+    // Registered before the poll thread starts: its first page may fail at once, and a failure
+    // recorded for a name that is not registered yet is dropped.
     if (healthContributor != null) {
       healthContributor.register(subscriptionName.value(), this);
     }
+    startPollThread(anchor);
   }
 
   /** Publishes the new polling thread with its deferral and its anchor before starting it. */
@@ -887,11 +889,12 @@ public final class PollingEventSubscription
      * Optional; {@code null} registers nothing. The integrations cannot find a subscription the
      * application builds itself.
      *
-     * <p>The subscription records each page whose listener throws as a delivery error, and clears
-     * the errors when a page is delivered, exactly as a {@link HealthTrackingEventListener} around
-     * the listener would — it wraps the listener itself, so do not wrap it again: a listener that
-     * is already a {@code HealthTrackingEventListener} for this contributor and name is left as it
-     * is and counted once, but one wrapped inside another decorator would count twice.
+     * <p>The registration precedes the first poll. The subscription records each page whose
+     * listener throws as a delivery error, and clears the errors when a page is delivered, exactly
+     * as a {@link HealthTrackingEventListener} around the listener would — it wraps the listener
+     * itself, so do not wrap it again: a listener that is already a {@code
+     * HealthTrackingEventListener} for this contributor and name is left as it is and counted once,
+     * but one wrapped inside another decorator would count twice.
      */
     public Builder healthContributor(SubscriptionHealthContributor contributor) {
       this.healthContributor = contributor;

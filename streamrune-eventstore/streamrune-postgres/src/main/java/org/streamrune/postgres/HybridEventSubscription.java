@@ -323,16 +323,23 @@ public final class HybridEventSubscription
     if (notificationListener != null) {
       notificationListener.start();
     }
+    // Registered before the polling thread starts: its first page may fail at once, and a failure
+    // recorded for a name that is not registered yet is dropped. A start of a subscription that
+    // already started registers nothing (that would reset its errors) and rolls back nothing.
+    boolean registers = healthContributor != null && state() == SubscriptionLifecycleState.CREATED;
+    if (registers) {
+      healthContributor.register(subscriptionName.value(), this);
+    }
     try {
       pollingSubscription.start();
     } catch (Exception e) {
+      if (registers) {
+        healthContributor.unregister(subscriptionName.value());
+      }
       if (notificationListener != null) {
         notificationListener.close(); // roll back listener if subscription start fails
       }
       throw e;
-    }
-    if (healthContributor != null) {
-      healthContributor.register(subscriptionName.value(), this);
     }
   }
 
@@ -573,11 +580,12 @@ public final class HybridEventSubscription
      * lease role. Optional; {@code null} registers nothing. The integrations cannot find a
      * subscription the application builds itself.
      *
-     * <p>The subscription records each page whose listener throws as a delivery error, and clears
-     * the errors when a page is delivered, exactly as a {@link HealthTrackingEventListener} around
-     * the listener would — it wraps the listener itself, so do not wrap it again: a listener that
-     * is already a {@code HealthTrackingEventListener} for this contributor and name is left as it
-     * is and counted once, but one wrapped inside another decorator would count twice.
+     * <p>The registration precedes the first poll. The subscription records each page whose
+     * listener throws as a delivery error, and clears the errors when a page is delivered, exactly
+     * as a {@link HealthTrackingEventListener} around the listener would — it wraps the listener
+     * itself, so do not wrap it again: a listener that is already a {@code
+     * HealthTrackingEventListener} for this contributor and name is left as it is and counted once,
+     * but one wrapped inside another decorator would count twice.
      */
     public Builder healthContributor(SubscriptionHealthContributor contributor) {
       this.healthContributor = contributor;

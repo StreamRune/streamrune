@@ -227,7 +227,7 @@ public final class SubscriptionLease {
 
     /** The one line per STANDBY to LEADING change. */
     private void tookLease() {
-      if (!leading) {
+      if (!leading && !closed) {
         leading = true;
         log.info("Lease '{}': this process now leads it", name);
       }

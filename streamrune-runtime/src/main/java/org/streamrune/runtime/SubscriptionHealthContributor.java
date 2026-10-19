@@ -39,7 +39,9 @@ import org.streamrune.core.types.SubscriptionName;
  * <p>Each entry also carries the subscription's role under its single-active-consumer lease ({@link
  * LeaseRole}), read from a registration that implements {@link LeaseRoleAware} and {@code
  * NOT_REPORTED} for any other. The role does not change the status rules: a standby is {@code
- * RUNNING}, has no delivery errors and shares the leader's lag.
+ * RUNNING}, has no delivery errors and shares the leader's lag. (A standby's run of delivery errors
+ * ended with its lease: reading its health clears the count, and it starts afresh when the
+ * subscription leads again.)
  *
  * <p>Lag never makes a subscription {@code DOWN}. It is measured against the checkpoint all
  * replicas share, so every replica reports the same value: a new projection replaying the store, a
@@ -368,6 +370,13 @@ public final class SubscriptionHealthContributor {
   }
 
   private SubscriptionHealth computeHealth(String name, SubscriptionEntry entry) {
+    LeaseRole role = roleOf(name, entry.subscription());
+    // A standby delivers no page, so no delivered page can end the run of errors it had when it
+    // lost its lease: the run ended with the lease. It reports none, and the count starts afresh
+    // when the subscription leads again.
+    if (role == LeaseRole.STANDBY) {
+      entry.errorCount().set(0);
+    }
     int errors = entry.errorCount().get();
     LagSample sample = computeLag(name);
     long lag = sample.lag();
@@ -397,19 +406,12 @@ public final class SubscriptionHealthContributor {
           entry.subscription() != null
               ? entry.subscription().state()
               : SubscriptionLifecycleState.STOPPED;
-      return new SubscriptionHealth(
-          name,
-          state,
-          lag,
-          errors,
-          SubscriptionHealth.Status.DOWN,
-          roleOf(name, entry.subscription()));
+      return new SubscriptionHealth(name, state, lag, errors, SubscriptionHealth.Status.DOWN, role);
     }
     SubscriptionLifecycleState state = entry.subscription().state();
     SubscriptionHealth.Status status = determineStatus(state, sample, errors);
     status = applyPushPathHealth(name, entry, state, status);
-    return new SubscriptionHealth(
-        name, state, lag, errors, status, roleOf(name, entry.subscription()));
+    return new SubscriptionHealth(name, state, lag, errors, status, role);
   }
 
   /**

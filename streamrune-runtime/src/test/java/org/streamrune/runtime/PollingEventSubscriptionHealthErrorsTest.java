@@ -11,12 +11,14 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.subscription.EventListener;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.types.AggregateId;
@@ -110,6 +112,7 @@ class PollingEventSubscriptionHealthErrorsTest {
     poll(subscription);
 
     assertThat(entry().orElseThrow().errorCount()).isEqualTo(2);
+    assertThat(other.health()).isEmpty();
   }
 
   @Test
@@ -122,6 +125,70 @@ class PollingEventSubscriptionHealthErrorsTest {
     poll(subscription);
 
     assertThat(entry().orElseThrow().errorCount()).isZero();
+  }
+
+  @Test
+  void theSubscriptionIsRegisteredBeforeItsFirstPoll() {
+    appendOne();
+    AtomicBoolean registeredAtFirstCall = new AtomicBoolean();
+    AtomicBoolean firstCall = new AtomicBoolean(true);
+    EventListener listener =
+        events -> {
+          if (firstCall.compareAndSet(true, false)) {
+            registeredAtFirstCall.set(entry().isPresent());
+          }
+          throw new IllegalStateException("the listener cannot handle the page");
+        };
+    subscription(listener, true).start();
+    await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> assertThat(firstCall).isFalse());
+
+    assertThat(registeredAtFirstCall).isTrue();
+    await()
+        .atMost(10, TimeUnit.SECONDS)
+        .untilAsserted(() -> assertThat(entry().orElseThrow().errorCount()).isEqualTo(1));
+  }
+
+  @Test
+  void aStandbyThatLostItsLeaseWhileFailing_readsUpWithNoErrors_andCountsAfresh() {
+    String lease = "saga:orders";
+    RecordingLeadership leadership = new RecordingLeadership();
+    leadership.grant(lease);
+    AtomicLong clock = new AtomicLong(1_000_000_000L);
+    appendOne();
+    PollingEventSubscription subscription =
+        PollingEventSubscription.builder()
+            .subscriptionName(NAME)
+            .eventStore(eventStore)
+            .offsetStore(offsetStore)
+            .listener(failingListener())
+            .config(SubscriptionConfig.pollingOnly(Duration.ofHours(1)))
+            .lease(SubscriptionLease.of(leadership, lease, clock::get))
+            .healthContributor(contributor)
+            .build();
+    subscriptions.add(subscription);
+    subscription.start();
+    await()
+        .atMost(10, TimeUnit.SECONDS)
+        .untilAsserted(() -> assertThat(entry().orElseThrow().errorCount()).isEqualTo(1));
+    poll(subscription);
+    assertThat(entry().orElseThrow().errorCount()).isEqualTo(2);
+    assertThat(entry().orElseThrow().role()).isEqualTo(LeaseRole.LEADING);
+
+    leadership.revoke(lease);
+
+    SubscriptionHealth standby = entry().orElseThrow();
+    assertThat(standby.role()).isEqualTo(LeaseRole.STANDBY);
+    assertThat(standby.errorCount()).isZero();
+    assertThat(standby.status()).isEqualTo(SubscriptionHealth.Status.UP);
+
+    leadership.grant(lease);
+    clock.addAndGet(Duration.ofHours(2).toNanos());
+    poll(subscription);
+
+    SubscriptionHealth leading = entry().orElseThrow();
+    assertThat(leading.role()).isEqualTo(LeaseRole.LEADING);
+    assertThat(leading.errorCount()).isEqualTo(1);
+    assertThat(leading.status()).isEqualTo(SubscriptionHealth.Status.DEGRADED);
   }
 
   /** Starts a subscription that polls once an hour and waits for its first poll to fail. */

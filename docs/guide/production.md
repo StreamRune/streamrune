@@ -245,7 +245,7 @@ The details are:
   `PollingEventSubscription.builder()` or `HybridEventSubscription.builder()`: it registers on
   `start()` and unregisters on `close()`, and it records each page its listener throws on as a
   delivery error (`errorCount`, `DEGRADED`) and clears the errors when a page is delivered, so do
-  not wrap the listener in `HealthTrackingEventListener` as well. The integrations cannot find it
+  not wrap the listener in `HealthTrackingEventListener` as well. A standby's run of errors ends with its lease: it reads `errorCount` 0 and counts afresh when it leads again. The integrations cannot find it
   otherwise.
 - `relay.<component>` — `status` (`UP` / `DEGRADED` / `DOWN`), `started`, `alive`,
   `consecutiveFailures`, one per background relay. A relay is `DOWN` when it was started but its

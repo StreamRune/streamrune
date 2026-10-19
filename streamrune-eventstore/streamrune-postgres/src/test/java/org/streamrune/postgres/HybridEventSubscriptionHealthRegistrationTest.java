@@ -193,6 +193,37 @@ class HybridEventSubscriptionHealthRegistrationTest {
   }
 
   @Test
+  void itIsRegisteredBeforeItsFirstPoll() {
+    AtomicBoolean firstCall = new AtomicBoolean(true);
+    AtomicBoolean registeredAtFirstCall = new AtomicBoolean();
+    appendOne();
+    subscription =
+        HybridEventSubscription.builder()
+            .subscriptionName(NAME)
+            .dataSource(deadPool())
+            .eventStore(eventStore)
+            .offsetStore(offsetStore)
+            .listener(
+                events -> {
+                  if (firstCall.compareAndSet(true, false)) {
+                    registeredAtFirstCall.set(entry(NAME).isPresent());
+                  }
+                  throw new IllegalStateException("the listener cannot handle the page");
+                })
+            .config(SubscriptionConfig.pollingOnly(Duration.ofHours(1)))
+            .healthContributor(contributor)
+            .build();
+
+    subscription.start();
+
+    await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> assertThat(firstCall).isFalse());
+    assertThat(registeredAtFirstCall).isTrue();
+    await()
+        .atMost(10, TimeUnit.SECONDS)
+        .untilAsserted(() -> assertThat(entry(NAME).orElseThrow().errorCount()).isEqualTo(1));
+  }
+
+  @Test
   void aListenerAlreadyWrappedForTheSameContributorIsNotCountedTwice() {
     appendOne();
     subscription =
