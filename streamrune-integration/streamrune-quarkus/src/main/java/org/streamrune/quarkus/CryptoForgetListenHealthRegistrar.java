@@ -4,6 +4,7 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.enterprise.inject.Instance;
+import jakarta.inject.Inject;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.runtime.BackgroundRelayHealthContributor;
 
@@ -22,6 +23,7 @@ public class CryptoForgetListenHealthRegistrar {
   private final Instance<CryptoEngine> cryptoEngines;
   private final Instance<BackgroundRelayHealthContributor> relayHealthInstance;
 
+  @Inject
   public CryptoForgetListenHealthRegistrar(
       Instance<CryptoEngine> cryptoEngines,
       Instance<BackgroundRelayHealthContributor> relayHealthInstance) {
@@ -29,7 +31,19 @@ public class CryptoForgetListenHealthRegistrar {
     this.relayHealthInstance = relayHealthInstance;
   }
 
-  void onStart(@Observes StartupEvent event) {
+  /**
+   * Client-proxy constructor — see {@link StreamRuneConfigValidator#StreamRuneConfigValidator()}
+   * for the rationale. Never used for a real instance: the injecting constructor above is the one
+   * Arc calls.
+   */
+  protected CryptoForgetListenHealthRegistrar() {
+    this.cryptoEngines = null;
+    this.relayHealthInstance = null;
+  }
+
+  // `public` so that the observer invoker Arc generates, a separate class that may live in a
+  // different classloader, can call it; see StreamRuneConfigValidator#validate.
+  public void onStart(@Observes StartupEvent event) {
     registerCryptoForgetListenHealth();
   }
 

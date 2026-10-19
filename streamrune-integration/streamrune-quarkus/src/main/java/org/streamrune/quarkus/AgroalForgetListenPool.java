@@ -3,11 +3,16 @@ package org.streamrune.quarkus;
 import io.agroal.api.AgroalDataSource;
 import io.agroal.api.configuration.AgroalConnectionFactoryConfiguration;
 import io.agroal.api.configuration.AgroalConnectionPoolConfiguration.ConnectionValidator;
-import io.agroal.api.configuration.supplier.AgroalConnectionFactoryConfigurationSupplier;
 import io.agroal.api.configuration.supplier.AgroalDataSourceConfigurationSupplier;
+import io.agroal.api.security.AgroalSecurityProvider;
+import java.security.Principal;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.Collection;
+import java.util.Properties;
+import java.util.function.Supplier;
 import javax.sql.DataSource;
+import org.streamrune.crypto.postgres.PostgresCryptoForgetSignal;
 
 /**
  * Opens the LISTEN pool of a {@link org.streamrune.crypto.postgres.PostgresCryptoForgetSignal} for
@@ -19,7 +24,13 @@ import javax.sql.DataSource;
  * connection-factory configuration — JDBC URL, driver, user and password or credentials provider,
  * JDBC properties, initial SQL — into a separate Agroal pool of one connection: the LISTEN
  * connection connects exactly as the application's connections do and never occupies one of the
- * application pool's slots.
+ * application pool's slots. Its sessions carry their own {@code application_name} — the
+ * application's, if it sets one, followed by {@code -streamrune-crypto-forget-listen} — so that
+ * {@code pg_stat_activity} tells them from the application's, whether the datasource connects
+ * through the driver or is a {@code DataSource} class such as an XA datasource. The TCP keepalive
+ * of its sockets is on, unless the datasource's JDBC properties or URL say otherwise. The
+ * application's own configuration is never changed: the LISTEN pool gets its own URL and its own
+ * copy of the JDBC properties.
  *
  * <p>The pool opens no connection when it is created, so a database that is unreachable at startup
  * delays the LISTEN instead of disabling it: the signal's listen loop keeps retrying. It validates
@@ -52,6 +63,35 @@ final class AgroalForgetListenPool {
             .getConfiguration()
             .connectionPoolConfiguration()
             .connectionFactoryConfiguration();
+    String jdbcUrl = connectionSettings.jdbcUrl();
+    String listenName =
+        PostgresCryptoForgetSignal.listenApplicationName(
+            jdbcUrl, connectionSettings.jdbcProperties().getProperty("ApplicationName"));
+    // The name goes into the URL, which the driver lets win over a property when Agroal connects
+    // through the driver, and into the properties, which Agroal sets after the URL when its
+    // connection provider is a DataSource class (an XA datasource): the application's own
+    // ApplicationName property would otherwise name the LISTEN session after all.
+    String listenUrl =
+        jdbcUrl == null
+            ? null
+            : PostgresCryptoForgetSignal.withApplicationName(jdbcUrl, listenName);
+    // A private copy: the application's own configuration shares its properties with anything built
+    // from it, and must never change.
+    Properties listenProperties = new Properties();
+    for (String name : connectionSettings.jdbcProperties().stringPropertyNames()) {
+      listenProperties.setProperty(name, connectionSettings.jdbcProperties().getProperty(name));
+    }
+    listenProperties.setProperty("ApplicationName", listenName);
+    // The driver's own default is off; a silent middlebox then drops an idle LISTEN connection
+    // without a word. The liveness probe finds that within seconds — the keepalive helps the
+    // operating system and the middlebox itself keep the connection.
+    if (!listenProperties.containsKey("tcpKeepAlive")
+        && (jdbcUrl == null || !jdbcUrl.contains("tcpKeepAlive="))) {
+      listenProperties.setProperty("tcpKeepAlive", "true");
+    }
+    AgroalConnectionFactoryConfiguration listenSettings =
+        new ListenSettings(connectionSettings, listenUrl, listenProperties);
+    Supplier<AgroalConnectionFactoryConfiguration> listenFactory = () -> listenSettings;
     var config =
         new AgroalDataSourceConfigurationSupplier()
             .connectionPoolConfiguration(
@@ -62,8 +102,7 @@ final class AgroalForgetListenPool {
                         .acquisitionTimeout(ACQUISITION_TIMEOUT)
                         .validateOnBorrow(true)
                         .connectionValidator(ConnectionValidator.defaultValidator())
-                        .connectionFactoryConfiguration(
-                            new AgroalConnectionFactoryConfigurationSupplier(connectionSettings)));
+                        .connectionFactoryConfiguration(listenFactory));
     try {
       return AgroalDataSource.from(config.get());
     } catch (SQLException e) {
@@ -71,6 +110,92 @@ final class AgroalForgetListenPool {
           "Cannot create the crypto-forget LISTEN pool from the Agroal datasource's connection"
               + " settings",
           e);
+    }
+  }
+
+  /**
+   * The application's connection-factory configuration with its own JDBC URL and JDBC properties.
+   * Written out rather than built on Agroal's configuration supplier, which hands the application's
+   * property map on as it is; a new method of the interface fails this class's compilation instead
+   * of being dropped silently.
+   */
+  private record ListenSettings(
+      AgroalConnectionFactoryConfiguration base, String jdbcUrl, Properties jdbcProperties)
+      implements AgroalConnectionFactoryConfiguration {
+
+    @Override
+    public boolean autoCommit() {
+      return base.autoCommit();
+    }
+
+    @Override
+    public boolean readOnly() {
+      return base.readOnly();
+    }
+
+    @Override
+    public boolean trackJdbcResources() {
+      return base.trackJdbcResources();
+    }
+
+    @Override
+    public Duration loginTimeout() {
+      return base.loginTimeout();
+    }
+
+    @Override
+    public Duration networkTimeout() {
+      return base.networkTimeout();
+    }
+
+    @Override
+    public String initialSql() {
+      return base.initialSql();
+    }
+
+    @Override
+    public Class<?> connectionProviderClass() {
+      return base.connectionProviderClass();
+    }
+
+    @Override
+    public IsolationLevel jdbcTransactionIsolation() {
+      return base.jdbcTransactionIsolation();
+    }
+
+    @Override
+    public Collection<AgroalSecurityProvider> securityProviders() {
+      return base.securityProviders();
+    }
+
+    @Override
+    public Principal principal() {
+      return base.principal();
+    }
+
+    @Override
+    public Collection<Object> credentials() {
+      return base.credentials();
+    }
+
+    @Override
+    public boolean poolRecovery() {
+      return base.poolRecovery();
+    }
+
+    @Override
+    public Principal recoveryPrincipal() {
+      return base.recoveryPrincipal();
+    }
+
+    @Override
+    public Collection<Object> recoveryCredentials() {
+      return base.recoveryCredentials();
+    }
+
+    @Override
+    public Properties xaProperties() {
+      return base.xaProperties();
     }
   }
 }

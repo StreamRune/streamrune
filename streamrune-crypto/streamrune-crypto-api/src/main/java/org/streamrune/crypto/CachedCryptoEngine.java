@@ -2,6 +2,7 @@ package org.streamrune.crypto;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.RemovalListener;
 import com.github.benmanes.caffeine.cache.Ticker;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -10,6 +11,7 @@ import java.time.Duration;
 import java.util.HexFormat;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.crypto.CryptoEngine;
@@ -62,17 +64,22 @@ import org.streamrune.core.types.SubjectId;
  * forgotten in that window finds its key gone. Until then the cache keeps serving, bounded by the
  * write-TTL ceiling.
  *
- * <p><b>An eviction is not undone by a decrypt in flight.</b> Every eviction a signal triggers — of
- * one subject, or of everything — advances an eviction counter before it removes anything. A
- * cache-miss decrypt reads the counter before it calls the delegate and, after it has stored its
- * result, removes that entry again if the counter moved. For a decrypt that read the counter before
- * an eviction advanced it, either its check comes before that advance, so its entry was stored
- * before the eviction removed entries and is removed by it, or its check sees the counter moved and
- * it removes its own entry. A decrypt that read the counter after the advance read the key after
- * the forget that caused the eviction had deleted it (a peer publishes a forget after its key
- * deletion committed, and a channel starts hearing before the engine evicts), so it finds the key
- * gone. A decrypt that read the key just before a peer's forget therefore cannot leave the
- * plaintext cached after the eviction that forget caused.
+ * <p><b>An eviction is not undone by a decrypt in flight.</b> Every eviction a signal triggers
+ * advances an eviction counter before it removes anything: the counter of the forgotten subject's
+ * eviction stripe for one subject's forget, and one counter that every decrypt reads for the
+ * eviction of everything. A cache-miss decrypt reads the counters that apply to its subject before
+ * it calls the delegate and stores its result only if they have not moved since; the check and the
+ * store are one step that an advance cannot interleave with. For a decrypt that read the counter
+ * before an eviction advanced it, either its step comes before that advance, so its entry was
+ * stored before the eviction removed entries and is removed by it, or its step comes after, sees
+ * the counter moved and stores nothing — so no thread ever finds the entry. A decrypt that read the
+ * counter after the advance read the key after the forget that caused the eviction had deleted it
+ * (a peer publishes a forget after its key deletion committed, and a channel starts hearing before
+ * the engine evicts), so it finds the key gone. A decrypt that read the key just before a peer's
+ * forget therefore cannot leave the plaintext cached after the eviction that forget caused. A
+ * forget costs only the in-flight results of its own stripe — one in 64 subjects at random — not of
+ * every subject, so a stream of forgets (a bulk erasure) does not keep the cache cold for the
+ * subjects nobody forgot.
  *
  * <p>That argument assumes two things of the delegate, which the shipped engines (PostgreSQL,
  * filesystem, Vault, AWS KMS) meet: it holds no cache of key material of its own, and each decrypt
@@ -111,6 +118,12 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
   /** Number of lock stripes. Bounds lock memory; each subject maps to one stripe by hash. */
   private static final int LOCK_STRIPES = 64;
 
+  /**
+   * Number of eviction stripes: the subjects a peer's forget can cost an in-flight decrypt are one
+   * stripe's share of them.
+   */
+  private static final int EVICTION_STRIPES = 64;
+
   private final CryptoEngine delegate;
   private final Cache<CacheKey, byte[]> cache;
   private final CryptoForgetSignal forgetSignal;
@@ -123,9 +136,20 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
   private final ReentrantLock[] stripes;
 
   /**
-   * Advanced before every eviction a {@link CryptoForgetSignal} triggers; see the class javadoc.
+   * Advanced before a {@link CryptoForgetSignal}'s eviction of the subjects of one stripe (see
+   * {@link #evictionStripe(SubjectId)}), indexed by stripe; see the class javadoc.
    */
-  private final AtomicLong signalEvictions = new AtomicLong();
+  private final AtomicLong[] stripeEvictions = new AtomicLong[EVICTION_STRIPES];
+
+  /** Advanced before a {@link CryptoForgetSignal}'s eviction of every subject. */
+  private final AtomicLong allEvictions = new AtomicLong();
+
+  /**
+   * Makes a decrypt's check of the eviction counters and its store of the result one step with
+   * respect to an advance of a counter: a decrypt holds the read side across both, an advance takes
+   * the write side. Neither holds it across anything slow — the delegate call is outside it.
+   */
+  private final ReentrantReadWriteLock evictionGate = new ReentrantReadWriteLock();
 
   /** Cache key: subject id plus SHA-256 hex of the ciphertext being decrypted. */
   private record CacheKey(SubjectId subjectId, String ciphertextHash) {}
@@ -150,10 +174,18 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
     if (builder.ticker != null) {
       b.ticker(builder.ticker);
     }
+    // A test-only seam, like the ticker: lets a test see an entry that was stored and removed
+    // again. Notifications run on the removing thread so the test reads them without waiting.
+    if (builder.removalListener != null) {
+      b.removalListener(builder.removalListener).executor(Runnable::run);
+    }
     this.cache = b.build();
     this.stripes = new ReentrantLock[LOCK_STRIPES];
     for (int i = 0; i < LOCK_STRIPES; i++) {
       this.stripes[i] = new ReentrantLock();
+    }
+    for (int i = 0; i < EVICTION_STRIPES; i++) {
+      this.stripeEvictions[i] = new AtomicLong();
     }
     this.forgetSignal = builder.forgetSignal;
     // Subscribe to cross-instance forget signals: when a peer replica crypto-shreds a subject,
@@ -199,15 +231,24 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
       if (recheck != null) {
         return recheck.clone();
       }
-      long evictionsBefore = signalEvictions.get();
+      AtomicLong stripeEvictionCounter = stripeEvictions[evictionStripe(subjectId)];
+      long stripeEvictionsBefore = stripeEvictionCounter.get();
+      long allEvictionsBefore = allEvictions.get();
       byte[] result = delegate.decrypt(subjectId, ciphertext);
       // Store a private copy: callers receive distinct arrays and cannot mutate the cached one.
       byte[] stored = result.clone();
-      cache.put(key, stored);
-      if (signalEvictions.get() != evictionsBefore) {
-        // A signal evicted since the delegate read the key: the eviction may have swept past
-        // before this entry was stored, so it is removed here (see the class javadoc).
-        cache.asMap().remove(key, stored);
+      // The check and the store are one step with respect to an eviction's advance of its counter:
+      // an eviction that advanced after the key was read either finds the stored entry and removes
+      // it, or is seen here and nothing is stored — no thread ever reads an entry the eviction
+      // should have removed (see the class javadoc).
+      evictionGate.readLock().lock();
+      try {
+        if (stripeEvictionCounter.get() == stripeEvictionsBefore
+            && allEvictions.get() == allEvictionsBefore) {
+          cache.put(key, stored);
+        }
+      } finally {
+        evictionGate.readLock().unlock();
       }
       return result;
     } finally {
@@ -254,14 +295,15 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
 
   /**
    * Evicts every cached entry whose subject matches the opaque token published by a peer replica's
-   * {@link #deleteKey}. Lock-free: this is a pure removal on the concurrent cache map, after the
-   * eviction counter advanced, so a decrypt in flight does not leave the subject cached behind it.
+   * {@link #deleteKey}. Takes no stripe lock: this is a pure removal on the concurrent cache map,
+   * after the subject's eviction counter advanced, so a decrypt in flight does not leave the
+   * subject cached behind it.
    */
   private void invalidateByToken(String token) {
     if (token == null) {
       return;
     }
-    signalEvictions.incrementAndGet();
+    advance(stripeEvictions[evictionStripe(token)]);
     cache.asMap().keySet().removeIf(key -> subjectToken(key.subjectId()).equals(token));
   }
 
@@ -270,8 +312,31 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
    * did not reach this replica. The eviction counter advances first, as for one subject.
    */
   private void invalidateAllCached() {
-    signalEvictions.incrementAndGet();
+    advance(allEvictions);
     cache.invalidateAll();
+  }
+
+  /** Advances an eviction counter, never between a decrypt's check of it and its store. */
+  private void advance(AtomicLong counter) {
+    evictionGate.writeLock().lock();
+    try {
+      counter.incrementAndGet();
+    } finally {
+      evictionGate.writeLock().unlock();
+    }
+  }
+
+  /**
+   * The eviction stripe of a subject: the stripe of its token, so a peer's forget, which carries
+   * only the token, advances the counter of the stripe its subject's decrypts read. Package-private
+   * for tests.
+   */
+  static int evictionStripe(SubjectId subjectId) {
+    return evictionStripe(subjectToken(subjectId));
+  }
+
+  private static int evictionStripe(String token) {
+    return Math.floorMod(token.hashCode(), EVICTION_STRIPES);
   }
 
   /**
@@ -347,6 +412,7 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
     private Duration expireAfterWrite;
     private Duration expireAfterAccess;
     private Ticker ticker;
+    private RemovalListener<Object, Object> removalListener;
     private CryptoForgetSignal forgetSignal = CryptoForgetSignal.NOOP;
 
     public Builder delegate(CryptoEngine delegate) {
@@ -374,6 +440,16 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
      */
     Builder ticker(Ticker ticker) {
       this.ticker = ticker;
+      return this;
+    }
+
+    /**
+     * Test-only seam: receives every removal from the cache, so a test can tell an entry that was
+     * never stored from one stored and removed again. Package-private, like {@link
+     * #ticker(Ticker)}.
+     */
+    Builder removalListener(RemovalListener<Object, Object> removalListener) {
+      this.removalListener = removalListener;
       return this;
     }
 

@@ -473,6 +473,43 @@ class BackgroundRelayHealthContributorTest {
   }
 
   @Test
+  void theSameForgetChannelRegisteredTwiceIsReportedOnce() {
+    var signal = new FakeForgetSignal();
+    var contributor = new BackgroundRelayHealthContributor();
+    contributor.registerCryptoEngine(cachedEngine(signal));
+    contributor.registerCryptoForgetSignal(signal);
+    contributor.registerCryptoEngine(cachedEngine(signal));
+
+    assertEquals(1, contributor.components().size());
+    assertEquals("crypto-forget-listen", contributor.components().getFirst().name());
+  }
+
+  @Test
+  void differentForgetChannelsAreReportedUnderDistinctNames() {
+    var first = new FakeForgetSignal();
+    var second = new FakeForgetSignal();
+    var third = new FakeForgetSignal();
+    third.subscribed = true;
+    var contributor = new BackgroundRelayHealthContributor();
+    contributor.registerCryptoEngine(cachedEngine(first));
+    contributor.registerCryptoEngine(cachedEngine(second));
+    contributor.registerCryptoForgetSignal(third);
+
+    var components = contributor.components();
+    assertEquals(
+        java.util.List.of(
+            "crypto-forget-listen", "crypto-forget-listen-2", "crypto-forget-listen-3"),
+        components.stream().map(BackgroundRelayHealthContributor.ComponentHealth::name).toList());
+
+    // Each reads its own channel: one that listens does not hide the one that does not.
+    second.listening = true;
+    var byName = contributor.components();
+    assertEquals(Status.DEGRADED, byName.get(0).status());
+    assertEquals(Status.UP, byName.get(1).status());
+    assertEquals(Status.DEGRADED, byName.get(2).status());
+  }
+
+  @Test
   void nothingIsReportedForAnEngineWithoutAListeningForgetChannel() {
     var contributor = new BackgroundRelayHealthContributor();
     contributor.registerCryptoEngine(null);

@@ -2,9 +2,13 @@ package org.streamrune.crypto.postgres;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -38,7 +42,9 @@ import org.streamrune.crypto.CryptoForgetSignal;
  *       consumes no shared connection) that issues {@code LISTEN streamrune_crypto_forget} on an
  *       auto-commit connection and dispatches each received token to every subscribed listener. It
  *       reconnects automatically if the connection drops, and a bounded {@code getNotifications}
- *       poll means {@link #close()} is honored within ~500ms.
+ *       poll means {@link #close()} is honored within ~500ms — within about 5.5 s when a liveness
+ *       probe is in flight against a dead server on a pool that does not abort its connection when
+ *       it closes (the framework's own Hikari pool does; Agroal and a pool you supply may not).
  * </ul>
  *
  * <p><b>A connection that dies silently is detected.</b> When the database host vanishes without
@@ -93,6 +99,16 @@ import org.streamrune.crypto.CryptoForgetSignal;
 public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
 
   private static final Logger log = LoggerFactory.getLogger(PostgresCryptoForgetSignal.class);
+
+  /**
+   * The {@code application_name} of the dedicated LISTEN session, appended after the application's
+   * own name when it has one, so that {@code pg_stat_activity} tells the LISTEN session from the
+   * application's. See {@link #listenApplicationName(String, String)}.
+   */
+  static final String LISTEN_APPLICATION_NAME = "streamrune-crypto-forget-listen";
+
+  /** PostgreSQL keeps at most 63 bytes of an {@code application_name} (NAMEDATALEN - 1). */
+  private static final int MAX_APPLICATION_NAME_BYTES = 63;
 
   /** The single well-known channel every {@code CachedCryptoEngine} forgets/listens on. */
   static final String CHANNEL = "streamrune_crypto_forget";
@@ -444,8 +460,9 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
    * HikariDataSource}, {@code PGSimpleDataSource}, and other beans exposing the usual accessors.
    * Hikari validates a connection that sat idle when it is borrowed, so a broken LISTEN connection
    * is replaced on the loop's next borrow. The driver's {@code tcpKeepAlive} is on (a {@code
-   * tcpKeepAlive} parameter in the JDBC URL takes precedence); the liveness probe is what finds a
-   * dead connection within seconds, the operating system's keepalive only after its own idle time.
+   * tcpKeepAlive} parameter in the JDBC URL takes precedence), and its sessions are named by {@link
+   * #listenApplicationName(String, String)}; the liveness probe is what finds a dead connection
+   * within seconds, the operating system's keepalive only after its own idle time.
    */
   static HikariDataSource createListenDataSource(DataSource dataSource) {
     String jdbcUrl;
@@ -468,8 +485,12 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
               + " DataSource exposing getJdbcUrl()/getUrl()/getURL(), or pass the LISTEN pool to"
               + " PostgresCryptoForgetSignal(DataSource, Supplier).");
     }
+    String configuredName =
+        dataSource instanceof HikariDataSource hds
+            ? hds.getDataSourceProperties().getProperty("ApplicationName")
+            : null;
     HikariConfig config = new HikariConfig();
-    config.setJdbcUrl(jdbcUrl);
+    config.setJdbcUrl(withApplicationName(jdbcUrl, listenApplicationName(jdbcUrl, configuredName)));
     if (username != null) config.setUsername(username);
     if (password != null) config.setPassword(password);
     config.setMaximumPoolSize(1);
@@ -480,6 +501,105 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
     config.setMaxLifetime(0); // never recycle the LISTEN connection
     config.addDataSourceProperty("tcpKeepAlive", "true");
     return new HikariDataSource(config);
+  }
+
+  /**
+   * The {@code application_name} the dedicated LISTEN session of a replica carries: the
+   * application's own name, when its JDBC URL or data source configures one, followed by {@code
+   * -streamrune-crypto-forget-listen}; just {@code streamrune-crypto-forget-listen} when it
+   * configures none. It tells the LISTEN session from the application's in {@code pg_stat_activity}
+   * — whose {@code query} column cannot: a liveness probe blanks it — and keeps apart the sessions
+   * of replicas that name themselves. The application's part is shortened when needed, so the name
+   * stays within the 63 bytes PostgreSQL keeps and the suffix survives.
+   *
+   * <p>Public for the integrations that open the dedicated pool of a connection pool of their own,
+   * such as Quarkus' Agroal.
+   *
+   * @param jdbcUrl the application's JDBC URL, whose {@code ApplicationName} parameter is the name
+   *     its connections carry — the driver lets it win over a property; {@code null} or a URL
+   *     without one contributes no name
+   * @param configuredApplicationName the application name set on the data source as a property, or
+   *     {@code null}; used when the URL has none
+   * @return the name of the LISTEN session
+   * @see #withApplicationName(String, String)
+   */
+  public static String listenApplicationName(String jdbcUrl, String configuredApplicationName) {
+    String base = urlApplicationName(jdbcUrl);
+    if (base == null || base.isBlank()) {
+      base = configuredApplicationName;
+    }
+    if (base == null || base.isBlank()) {
+      return LISTEN_APPLICATION_NAME;
+    }
+    String suffix = "-" + LISTEN_APPLICATION_NAME;
+    int room = MAX_APPLICATION_NAME_BYTES - suffix.length();
+    StringBuilder kept = new StringBuilder();
+    int bytes = 0;
+    for (int i = 0; i < base.length(); ) {
+      int codePoint = base.codePointAt(i);
+      // PostgreSQL stores every byte of an application name that is not printable ASCII as a
+      // four-character \xNN escape, and keeps 63 of the stored characters.
+      int width =
+          codePoint >= 0x20 && codePoint <= 0x7e
+              ? 1
+              : 4
+                  * new String(Character.toChars(codePoint))
+                      .getBytes(StandardCharsets.UTF_8)
+                      .length;
+      if (bytes + width > room) {
+        break;
+      }
+      kept.appendCodePoint(codePoint);
+      bytes += width;
+      i += Character.charCount(codePoint);
+    }
+    return kept.isEmpty() ? LISTEN_APPLICATION_NAME : kept + suffix;
+  }
+
+  /**
+   * {@code jdbcUrl} with its {@code ApplicationName} parameter set to {@code applicationName}: an
+   * existing one is replaced, since a parameter in the URL takes precedence over the properties
+   * handed to the driver. Public for the same integrations as {@link #listenApplicationName(String,
+   * String)}.
+   *
+   * @param jdbcUrl a PostgreSQL JDBC URL
+   * @param applicationName the application name to set
+   * @return the URL carrying that application name
+   * @throws IllegalArgumentException if either argument is null
+   */
+  public static String withApplicationName(String jdbcUrl, String applicationName) {
+    if (jdbcUrl == null || applicationName == null) {
+      throw new IllegalArgumentException("jdbcUrl and applicationName must not be null");
+    }
+    int query = jdbcUrl.indexOf('?');
+    String head = query < 0 ? jdbcUrl : jdbcUrl.substring(0, query);
+    List<String> parameters = new ArrayList<>();
+    if (query >= 0) {
+      for (String parameter : jdbcUrl.substring(query + 1).split("&")) {
+        if (!parameter.isEmpty() && !parameter.startsWith("ApplicationName=")) {
+          parameters.add(parameter);
+        }
+      }
+    }
+    parameters.add("ApplicationName=" + URLEncoder.encode(applicationName, StandardCharsets.UTF_8));
+    return head + "?" + String.join("&", parameters);
+  }
+
+  private static String urlApplicationName(String jdbcUrl) {
+    int query = jdbcUrl == null ? -1 : jdbcUrl.indexOf('?');
+    if (query < 0) {
+      return null;
+    }
+    String name = null;
+    // The last one wins, as in the driver.
+    for (String parameter : jdbcUrl.substring(query + 1).split("&")) {
+      if (parameter.startsWith("ApplicationName=")) {
+        name =
+            URLDecoder.decode(
+                parameter.substring("ApplicationName=".length()), StandardCharsets.UTF_8);
+      }
+    }
+    return name;
   }
 
   private static String firstString(DataSource ds, String... methodNames) {

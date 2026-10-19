@@ -192,7 +192,9 @@ With the crypto cache on (`streamrune.crypto.cache.enabled`, the default) and a 
 present, a subject forgotten on one replica is evicted from every other replica's cache through
 PostgreSQL `LISTEN/NOTIFY`. Each replica listens on one extra connection: a separate Agroal pool of
 one connection that copies the application datasource's URL, credentials (or credentials provider)
-and JDBC properties, so it never takes a slot of the application pool. A `DataSource` that is not
+and JDBC properties, so it never takes a slot of the application pool. Its sessions are named
+`<application name>-streamrune-crypto-forget-listen` in `pg_stat_activity` (just
+`streamrune-crypto-forget-listen` when the application sets no `ApplicationName`). A `DataSource` that is not
 Agroal goes through the generic `PostgresCryptoForgetSignal` derivation (see the
 [GDPR erasure guide](../../docs/guide/advanced/gdpr-erasure.md)).
 

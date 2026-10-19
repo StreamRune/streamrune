@@ -279,6 +279,19 @@ dropping and reconnecting (it retries every second) therefore also keeps the cac
 decrypt goes to the key store. A `crypto-forget-listen` component that keeps switching between
 `DEGRADED` and `UP` is worth investigating for that reason too.
 
+A database that is alive but cannot answer the probe within 5 seconds — a stalled backend, a network
+brown-out — is treated as lost in the same way: while the stall lasts the replica replaces the
+connection and evicts its whole cache about every 36 seconds (30 seconds of silence, the 5-second
+probe, the 1-second wait before it connects again and the time to connect), and the component keeps
+switching between `DEGRADED` and `UP`. That is the safe direction for erasure; the price is a cold
+cache, and with a PostgreSQL key store key reads that arrive just when the database is struggling.
+
+The LISTEN session is named in `pg_stat_activity.application_name` after the application's own name
+(from the `ApplicationName` of its JDBC URL or data source), followed by
+`-streamrune-crypto-forget-listen`, and `streamrune-crypto-forget-listen` alone when the application
+sets none: look for that name when you check that a replica listens. Do not look for the `LISTEN`
+statement in `query` — after 30 seconds without a notification the liveness probe blanks it.
+
 **What the TTL still bounds.** A replica whose `LISTEN` never takes effect (below) serves its cache
 until the write TTL. A forget delivered late — the notification is delayed between the database and
 a listening replica — is applied when it arrives, and that replica serves the subject from its cache
