@@ -242,6 +242,7 @@ class VaultCryptoEngineIntegrationTest {
     List<SubjectId> purged = Collections.synchronizedList(new ArrayList<>());
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(engine)
             .purgers(
                 List.of(

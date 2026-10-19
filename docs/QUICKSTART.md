@@ -465,7 +465,8 @@ StreamRune streamRune = StreamRune.builder()
 **Key deletion is part of the `CryptoEngine` interface and is terminal.** `deleteKey(subjectId)` is
 the GDPR Article 17 operation, and every engine in the table above implements it. It is typically
 triggered by a GDPR "right to be forgotten" request workflow — `ForgetSubjectService` (in
-`streamrune-runtime`) deletes the key and then runs the registered read-model purgers — or by a
+`streamrune-runtime`) deletes the key and then runs the registered read-model purgers and the
+snapshot purger it requires (see `docs/guide/advanced/gdpr-erasure.md`) — or by a
 scheduled compliance job. Once `deleteKey` returns, `encrypt` for that subject throws
 `SubjectForgottenException`, and decrypting its existing ciphertext throws `KeyNotFoundException`,
 which the crypto-shredding module reads back as `[REDACTED]`. What each engine removes:

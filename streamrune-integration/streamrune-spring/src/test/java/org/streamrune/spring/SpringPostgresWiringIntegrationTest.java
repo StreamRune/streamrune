@@ -88,6 +88,7 @@ class SpringPostgresWiringIntegrationTest {
     var streamId =
         StreamId.of(AggregateType.of("customer"), AggregateId.of("customer-" + UUID.randomUUID()));
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(DataSource.class, () -> dataSource)
         .withBean(EventTypeRegistry.class, () -> typeRegistry)
@@ -156,6 +157,7 @@ class SpringPostgresWiringIntegrationTest {
     // the first still holds a live lease, then wins it after the first resigns.
     var consumer = "spring-e2e-leader-" + UUID.randomUUID();
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(DataSource.class, () -> dataSource)
         .withBean(EventTypeRegistry.class, () -> typeRegistry)
@@ -172,6 +174,7 @@ class SpringPostgresWiringIntegrationTest {
               // be
               // standby for the same name while A still holds a live lease.
               new ApplicationContextRunner()
+                  .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
                   .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
                   .withBean(DataSource.class, () -> dataSource)
                   .withBean(EventTypeRegistry.class, () -> typeRegistry)
@@ -201,6 +204,7 @@ class SpringPostgresWiringIntegrationTest {
   @Test
   void theEventStoreFencesAgainstTheSagaStoresRows() {
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(DataSource.class, () -> dataSource)
         .withBean(EventTypeRegistry.class, () -> typeRegistry)

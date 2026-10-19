@@ -193,6 +193,8 @@ class MicronautBeanWiringTest {
     try (var ctx =
         ApplicationContext.run(
             Map.of(
+                "streamrune.gdpr.snapshot-purge",
+                "none",
                 "streamrune.crypto.filesystem.enabled",
                 "true",
                 "streamrune.crypto.filesystem.key-directory",

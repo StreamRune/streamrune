@@ -46,6 +46,7 @@ class EventStoreWiringAutoConfigurationTest {
    */
   private final ApplicationContextRunner runner =
       new ApplicationContextRunner()
+          .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
           .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
           .withBean(DataSource.class, () -> mock(DataSource.class))
           .withBean(EventStore.class, () -> mock(EventStore.class));
@@ -232,6 +233,7 @@ class EventStoreWiringAutoConfigurationTest {
   private static ApplicationContextRunner projectionRunnerOver(
       JdbcProjectionRepository repository) {
     return new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(ProjectionAutoConfig.class))
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .withBean(EventStore.class, () -> mock(EventStore.class))

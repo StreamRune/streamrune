@@ -93,7 +93,8 @@ class StreamRuneConfigValidatorTest {
             java.time.Duration.ofSeconds(30),
             // sse.polling-interval
             Duration.ofSeconds(1),
-            "auto");
+            "auto",
+            "required");
     var ctx = mock(ApplicationContext.class);
     var validator = new StreamRuneConfigValidator(props, ctx);
     var ex =
@@ -151,7 +152,8 @@ class StreamRuneConfigValidatorTest {
         java.time.Duration.ofSeconds(30),
         // sse.polling-interval
         Duration.ofSeconds(1),
-        "auto");
+        "auto",
+        "required");
   }
 
   /**
@@ -258,7 +260,8 @@ class StreamRuneConfigValidatorTest {
             java.time.Duration.ofSeconds(30),
             // sse.polling-interval
             Duration.ofSeconds(1),
-            "auto");
+            "auto",
+            "required");
     var ctx = mock(ApplicationContext.class);
     when(ctx.containsBean(org.streamrune.core.outbox.OutboxStore.class)).thenReturn(false);
     var validator = new StreamRuneConfigValidator(props, ctx);
@@ -320,7 +323,8 @@ class StreamRuneConfigValidatorTest {
         java.time.Duration.ofSeconds(30),
         // sse.polling-interval
         Duration.ofSeconds(1),
-        "auto");
+        "auto",
+        "required");
   }
 
   @Test
@@ -492,6 +496,7 @@ class StreamRuneConfigValidatorTest {
         Duration.ofSeconds(30),
         // sse.polling-interval
         Duration.ofSeconds(1),
-        "auto");
+        "auto",
+        "required");
   }
 }

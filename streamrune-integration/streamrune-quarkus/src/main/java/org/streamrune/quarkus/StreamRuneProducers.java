@@ -902,6 +902,15 @@ public class StreamRuneProducers {
    * <p>The {@link CachingQueryBus}, when {@code streamrune.query-cache.enabled=true} produces one,
    * is wired in as the forget's query cache: every forget evicts it once its purgers have run, so a
    * cached answer holding the subject's data is not served after the erasure.
+   *
+   * <p>One of the purger beans must be a {@link org.streamrune.core.gdpr.SnapshotPurger} — for
+   * {@code PostgresEventStore}, a {@code PostgresSnapshotStorePurger} the application produces,
+   * since only its domain knows which streams' snapshots hold a subject's data — unless {@code
+   * streamrune.gdpr.snapshot-purge=none} states that the application has never stored a snapshot.
+   * Otherwise the producer throws ({@link
+   * org.streamrune.integration.SnapshotPurgeSetting#withoutSnapshotPurge}); {@link
+   * StreamRuneConfigValidator} resolves this bean on the startup event, so that is a startup
+   * failure, not a failure of the first request that injects the service.
    */
   @Produces
   @DefaultBean
@@ -910,11 +919,16 @@ public class StreamRuneProducers {
       Instance<AuditStore> auditStore,
       @All List<SubjectDataPurger> purgers,
       Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance,
-      Instance<CachingQueryBus> queryCache) {
+      Instance<CachingQueryBus> queryCache,
+      StreamRuneQuarkusProperties properties) {
     if (cryptoEngine.isUnsatisfied()) {
       return null;
     }
     var b = ForgetSubjectService.builder().cryptoEngine(cryptoEngine.get()).purgers(purgers);
+    if (org.streamrune.integration.SnapshotPurgeSetting.parse(properties.gdpr().snapshotPurge())
+        .withoutSnapshotPurge(purgers)) {
+      b.withoutSnapshotPurge();
+    }
     if (!auditStore.isUnsatisfied()) {
       b.auditStore(auditStore.get());
     }

@@ -16,6 +16,13 @@ final class SpringTestMocks {
   private SpringTestMocks() {}
 
   /**
+   * States that the test application stores no snapshots, so a context with a crypto engine builds
+   * the auto-configured {@code ForgetSubjectService} without a snapshot purger bean. For tests of
+   * everything but the snapshot purge, which {@code SpringGdprAutoConfigTest} covers.
+   */
+  static final String NO_SNAPSHOTS = "streamrune.gdpr.snapshot-purge=none";
+
+  /**
    * An {@link EventStoreFactory} mock whose {@code create()} returns a mock {@link EventStore}: the
    * minimal event-store wiring most auto-configuration tests need. The store mock is created before
    * the stubbing starts, never inside {@code thenReturn(...)}.

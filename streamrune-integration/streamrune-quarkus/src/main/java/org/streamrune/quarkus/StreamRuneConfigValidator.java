@@ -16,15 +16,29 @@ public class StreamRuneConfigValidator {
   private final StreamRuneQuarkusProperties properties;
   private final Instance<org.streamrune.core.outbox.OutboxStore> outboxStore;
   private final Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore;
+  private final Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService;
 
   @jakarta.inject.Inject
   public StreamRuneConfigValidator(
       StreamRuneQuarkusProperties properties,
       Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
-      Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore) {
+      Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore,
+      Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService) {
     this.properties = properties;
     this.outboxStore = outboxStore;
     this.sagaDeadLetterStore = sagaDeadLetterStore;
+    this.forgetSubjectService = forgetSubjectService;
+  }
+
+  /**
+   * A validator that does not build the forget service on the startup event — for tests of the
+   * other checks.
+   */
+  StreamRuneConfigValidator(
+      StreamRuneQuarkusProperties properties,
+      Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
+      Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore) {
+    this(properties, outboxStore, sagaDeadLetterStore, null);
   }
 
   /**
@@ -40,6 +54,7 @@ public class StreamRuneConfigValidator {
     this.properties = null;
     this.outboxStore = null;
     this.sagaDeadLetterStore = null;
+    this.forgetSubjectService = null;
   }
 
   // Without an explicit @Priority, CDI/Arc observer ordering among the several
@@ -99,6 +114,20 @@ public class StreamRuneConfigValidator {
           properties.subscription().singleActiveConsumer().enabled());
     } catch (IllegalArgumentException e) {
       throw new IllegalStateException(e.getMessage(), e);
+    }
+    // streamrune.gdpr.snapshot-purge, parsed here for the same reason: the forget service that
+    // reads it is a dependent bean built only when injected.
+    try {
+      org.streamrune.integration.SnapshotPurgeSetting.parse(properties.gdpr().snapshotPurge());
+    } catch (IllegalArgumentException e) {
+      throw new IllegalStateException(e.getMessage(), e);
+    }
+    // The produced ForgetSubjectService refuses to build without a snapshot purger bean (or with
+    // one under snapshot-purge=none). Building it here makes that a startup failure: an
+    // application may inject the service only into a request-time resource, where the refusal
+    // would surface on the first erasure request instead.
+    if (forgetSubjectService != null && forgetSubjectService.isResolvable()) {
+      forgetSubjectService.get();
     }
     if (properties.outbox().enabled() && !outboxStore.isResolvable()) {
       throw new IllegalStateException(

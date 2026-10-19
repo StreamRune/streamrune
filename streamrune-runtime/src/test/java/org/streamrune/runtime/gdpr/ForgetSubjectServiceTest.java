@@ -26,7 +26,12 @@ class ForgetSubjectServiceTest {
   void forget_callsDeleteKeyAndWritesAuditSuccess() {
     var crypto = mock(CryptoEngine.class);
     var audit = mock(AuditStore.class);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     service.forget(SubjectId.of("user-1"), UserId.of("admin-42"));
 
@@ -54,7 +59,12 @@ class ForgetSubjectServiceTest {
   void forget_nullSubjectThrowsBeforeAudit() {
     var crypto = mock(CryptoEngine.class);
     var audit = mock(AuditStore.class);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     assertThrows(NullPointerException.class, () -> service.forget(null, UserId.of("admin-1")));
     verifyNoInteractions(crypto, audit);
@@ -63,7 +73,8 @@ class ForgetSubjectServiceTest {
   @Test
   void forget_nullAuditStore_callsDeleteKeyOnly() {
     var crypto = mock(CryptoEngine.class);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).build();
+    var service =
+        ForgetSubjectService.builder().withoutSnapshotPurge().cryptoEngine(crypto).build();
 
     service.forget(SubjectId.of("user-1"), UserId.of("admin-1"));
 
@@ -76,7 +87,12 @@ class ForgetSubjectServiceTest {
     var audit = mock(AuditStore.class);
     var boom = new RuntimeException("KMS down");
     doThrow(boom).when(crypto).deleteKey(SubjectId.of("user-1"));
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown =
         assertThrows(
@@ -100,7 +116,12 @@ class ForgetSubjectServiceTest {
     var audit = mock(AuditStore.class);
     String raw = "KMS down\r\n2026-10-02 INFO gdpr - erasure completed\u0000";
     doThrow(new RuntimeException(raw)).when(crypto).deleteKey(SubjectId.of("user-1"));
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     assertThrows(
         RuntimeException.class, () -> service.forget(SubjectId.of("user-1"), UserId.of("admin-1")));
@@ -123,6 +144,7 @@ class ForgetSubjectServiceTest {
     doThrow(boom).when(crypto).deleteKey(SubjectId.of("user-1"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .purgers(List.of(purger))
@@ -148,7 +170,12 @@ class ForgetSubjectServiceTest {
     var auditEx = new RuntimeException("audit also down");
     doThrow(boom).when(crypto).deleteKey(SubjectId.of("user-1"));
     doThrow(auditEx).when(audit).save(any());
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown =
         assertThrows(
@@ -162,7 +189,12 @@ class ForgetSubjectServiceTest {
     var crypto = mock(CryptoEngine.class);
     var audit = mock(AuditStore.class);
     doThrow(new RuntimeException("audit DB down")).when(audit).save(any());
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     // Crypto-shred is irreversible — audit failure must NOT propagate.
     assertDoesNotThrow(() -> service.forget(SubjectId.of("user-1"), UserId.of("admin-1")));
@@ -177,7 +209,12 @@ class ForgetSubjectServiceTest {
     var auditEx = new RuntimeException("audit also down");
     doThrow(original).when(crypto).deleteKey(SubjectId.of("user-1"));
     doThrow(auditEx).when(audit).save(any());
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown =
         assertThrows(
@@ -193,7 +230,8 @@ class ForgetSubjectServiceTest {
   @Test
   void forget_idempotent_secondCallSucceeds() {
     var crypto = mock(CryptoEngine.class);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).build();
+    var service =
+        ForgetSubjectService.builder().withoutSnapshotPurge().cryptoEngine(crypto).build();
 
     service.forget(SubjectId.of("user-1"), null);
     service.forget(SubjectId.of("user-1"), null);
@@ -205,7 +243,12 @@ class ForgetSubjectServiceTest {
   void forget_nullRequesterUserId_allowed() {
     var crypto = mock(CryptoEngine.class);
     var audit = mock(AuditStore.class);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     service.forget(SubjectId.of("user-1"), null);
 
@@ -216,7 +259,9 @@ class ForgetSubjectServiceTest {
 
   @Test
   void builder_rejectsNullCryptoEngine() {
-    assertThrows(NullPointerException.class, () -> ForgetSubjectService.builder().build());
+    assertThrows(
+        NullPointerException.class,
+        () -> ForgetSubjectService.builder().withoutSnapshotPurge().build());
   }
 
   // === Read-model purging (GDPR forget completeness) ===
@@ -229,7 +274,11 @@ class ForgetSubjectServiceTest {
     when(p1.name()).thenReturn("orders-read-model");
     when(p2.name()).thenReturn("customer-profile");
     var service =
-        ForgetSubjectService.builder().cryptoEngine(crypto).purgers(List.of(p1, p2)).build();
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .purgers(List.of(p1, p2))
+            .build();
 
     service.forget(SubjectId.of("user-1"), UserId.of("admin-1"));
 
@@ -248,6 +297,7 @@ class ForgetSubjectServiceTest {
     when(p1.name()).thenReturn("orders-read-model");
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .purgers(List.of(p1))
@@ -280,6 +330,7 @@ class ForgetSubjectServiceTest {
     doThrow(new RuntimeException("DB down")).when(failing).purge(SubjectId.of("user-1"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .metrics(metrics)
@@ -319,6 +370,7 @@ class ForgetSubjectServiceTest {
     when(p2.name()).thenReturn("customer-profile");
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .metrics(metrics)
             .purgers(List.of(p1, p2))
@@ -358,6 +410,7 @@ class ForgetSubjectServiceTest {
     doThrow(new RuntimeException("DB down")).when(failing).purge(SubjectId.of("user-1"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .metrics(throwingMetrics)
@@ -408,6 +461,7 @@ class ForgetSubjectServiceTest {
     var audit = mock(AuditStore.class);
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .purgers(List.of())
@@ -423,7 +477,8 @@ class ForgetSubjectServiceTest {
   @Test
   void forget_noPurgersConfigured_behavesAsBefore() {
     var crypto = mock(CryptoEngine.class);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).build();
+    var service =
+        ForgetSubjectService.builder().withoutSnapshotPurge().cryptoEngine(crypto).build();
 
     service.forget(SubjectId.of("user-1"), UserId.of("admin-1"));
 
@@ -437,7 +492,11 @@ class ForgetSubjectServiceTest {
     when(purger.name()).thenReturn("orders-read-model");
     doThrow(new RuntimeException("KMS down")).when(crypto).deleteKey(SubjectId.of("user-1"));
     var service =
-        ForgetSubjectService.builder().cryptoEngine(crypto).purgers(List.of(purger)).build();
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .purgers(List.of(purger))
+            .build();
 
     assertThrows(
         RuntimeException.class, () -> service.forget(SubjectId.of("user-1"), UserId.of("admin-1")));
@@ -471,6 +530,7 @@ class ForgetSubjectServiceTest {
     doThrow(auditError).when(audit).save(any());
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .purgers(List.of(purger))
@@ -497,7 +557,12 @@ class ForgetSubjectServiceTest {
     var auditError = new LinkageError("audit store class failed to link");
     doThrow(original).when(crypto).deleteKey(SubjectId.of("user-1"));
     doThrow(auditError).when(audit).save(any());
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown =
         assertThrows(
@@ -516,7 +581,12 @@ class ForgetSubjectServiceTest {
     var shared = new IllegalStateException("one shared failure");
     doThrow(shared).when(crypto).deleteKey(SubjectId.of("user-1"));
     doThrow(shared).when(audit).save(any());
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown =
         assertThrows(
@@ -552,6 +622,7 @@ class ForgetSubjectServiceTest {
     doThrow(auditError).when(audit).save(any());
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .purgers(List.of(purger))
@@ -590,7 +661,12 @@ class ForgetSubjectServiceTest {
     var audit = mock(AuditStore.class);
     var auditError = new LinkageError("audit store class failed to link");
     doThrow(auditError).when(audit).save(any());
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown =
         assertThrows(
@@ -619,6 +695,7 @@ class ForgetSubjectServiceTest {
     doThrow(purgeError).when(broken).purge(SubjectId.of("user-1"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .metrics(metrics)
@@ -676,6 +753,7 @@ class ForgetSubjectServiceTest {
     doNothing().doThrow(auditError).when(audit).save(any());
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .purgers(List.of(p1, p2))
@@ -723,6 +801,7 @@ class ForgetSubjectServiceTest {
     doThrow(new RuntimeException("DB down")).when(failing).purge(SubjectId.of("user-1"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .metrics(throwingMetrics)
@@ -763,7 +842,11 @@ class ForgetSubjectServiceTest {
     doThrow(first).when(p1).purge(SubjectId.of("user-1"));
     doThrow(second).when(p2).purge(SubjectId.of("user-1"));
     var service =
-        ForgetSubjectService.builder().cryptoEngine(crypto).purgers(List.of(p1, p2, p3)).build();
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .purgers(List.of(p1, p2, p3))
+            .build();
 
     var thrown =
         assertThrows(
@@ -800,6 +883,7 @@ class ForgetSubjectServiceTest {
         .purge(SubjectId.of("user-1"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .metrics(metrics)
             .purgers(List.of(sneaky, ok))
@@ -844,6 +928,7 @@ class ForgetSubjectServiceTest {
         .purge(SubjectId.of("user-1"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .purgers(List.of(interrupted, ok))
             .build();
@@ -880,6 +965,7 @@ class ForgetSubjectServiceTest {
         .save(any());
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .purgers(List.of(purger))
@@ -910,6 +996,7 @@ class ForgetSubjectServiceTest {
     when(ok.name()).thenReturn("good-read-model");
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .purgers(List.of(nameless, ok))
@@ -945,6 +1032,7 @@ class ForgetSubjectServiceTest {
     when(ok.name()).thenReturn("good-read-model");
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .purgers(List.of(nameless, ok))
@@ -986,7 +1074,11 @@ class ForgetSubjectServiceTest {
           }
         };
     var service =
-        ForgetSubjectService.builder().cryptoEngine(crypto).purgers(List.of(anonymous)).build();
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .purgers(List.of(anonymous))
+            .build();
 
     ForgetResult result = service.forget(SubjectId.of("user-1"), UserId.of("admin-1"));
 
@@ -1017,6 +1109,7 @@ class ForgetSubjectServiceTest {
     doThrow(new RuntimeException("DB down")).when(nameless).purge(SubjectId.of("user-1"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .metrics(metrics)
@@ -1051,6 +1144,7 @@ class ForgetSubjectServiceTest {
     when(broken.name()).thenThrow(nameError);
     var builder =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .purgers(List.of(broken, good));
@@ -1076,6 +1170,7 @@ class ForgetSubjectServiceTest {
     when(drifting.name()).thenReturn("customers", "orders");
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .purgers(List.of(orders, drifting))
             .build();
@@ -1114,6 +1209,7 @@ class ForgetSubjectServiceTest {
     doThrow(new RuntimeException("DB down")).when(failing).purge(SubjectId.of("user-1"));
     var service =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .auditStore(audit)
             .metrics(metrics)
@@ -1174,6 +1270,7 @@ class ForgetSubjectServiceTest {
     try {
       var service =
           ForgetSubjectService.builder()
+              .withoutSnapshotPurge()
               .cryptoEngine(crypto)
               .purgers(List.of(throwing, nullNamed))
               .build();
@@ -1217,6 +1314,7 @@ class ForgetSubjectServiceTest {
     when(second.name()).thenReturn("customers");
     var builder =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(crypto)
             .purgers(List.of(purgerNamed("orders"), first, second));
 
@@ -1248,6 +1346,7 @@ class ForgetSubjectServiceTest {
             IllegalArgumentException.class,
             () ->
                 ForgetSubjectService.builder()
+                    .withoutSnapshotPurge()
                     .cryptoEngine(crypto)
                     .purgers(List.of(nullNamed, blankNamed))
                     .build());
@@ -1260,6 +1359,7 @@ class ForgetSubjectServiceTest {
             IllegalArgumentException.class,
             () ->
                 ForgetSubjectService.builder()
+                    .withoutSnapshotPurge()
                     .cryptoEngine(crypto)
                     .purgers(List.of(nullNamed, namedLikeTheClass))
                     .build());
@@ -1273,6 +1373,7 @@ class ForgetSubjectServiceTest {
     String forged = "orders\nERROR forged line\u202e";
     var builder =
         ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
             .cryptoEngine(mock(CryptoEngine.class))
             .purgers(List.of(purgerNamed(forged), purgerNamed(forged)));
 

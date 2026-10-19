@@ -42,6 +42,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param metadata event-metadata configuration (baggage allowlisting)
  * @param security security configuration (authorization-identity source)
  * @param sse Server-Sent Events endpoint configuration
+ * @param gdpr GDPR configuration of the auto-configured {@code ForgetSubjectService}
  */
 @ConfigurationProperties(prefix = "streamrune")
 public record StreamRuneProperties(
@@ -70,7 +71,8 @@ public record StreamRuneProperties(
     @DefaultValue EventStore eventStore,
     @DefaultValue Metadata metadata,
     @DefaultValue Security security,
-    @DefaultValue Sse sse) {
+    @DefaultValue Sse sse,
+    @DefaultValue Gdpr gdpr) {
 
   /**
    * @param enabled whether {@link org.streamrune.runtime.CachingQueryBus} is auto-configured
@@ -282,4 +284,20 @@ public record StreamRuneProperties(
       @DefaultValue("5m") Duration timeout,
       @DefaultValue("30s") Duration keepAliveInterval,
       @DefaultValue("1s") Duration pollingInterval) {}
+
+  /**
+   * @param snapshotPurge whether the auto-configured {@code ForgetSubjectService} must run a {@code
+   *     SnapshotPurger} bean: {@code required} (default) — declare one, for {@code
+   *     PostgresEventStore} a {@code PostgresSnapshotStorePurger}, or the application does not
+   *     start; {@code none} — the application has never stored a snapshot, and the service is built
+   *     with {@code withoutSnapshotPurge()}. Read through {@link
+   *     org.streamrune.integration.SnapshotPurgeSetting}; an unknown value fails binding, and so
+   *     startup, with a message naming the property
+   */
+  public record Gdpr(@DefaultValue("required") String snapshotPurge) {
+
+    public Gdpr {
+      org.streamrune.integration.SnapshotPurgeSetting.parse(snapshotPurge);
+    }
+  }
 }

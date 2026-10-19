@@ -1873,6 +1873,13 @@ public class StreamRuneAutoConfiguration {
    * <p>The {@link CachingQueryBus}, when {@code streamrune.query-cache.enabled=true} provides one,
    * is wired in as the forget's query cache: every forget evicts it once its purgers have run, so a
    * cached answer holding the subject's data is not served after the erasure.
+   *
+   * <p>One of the purger beans must be a {@link org.streamrune.core.gdpr.SnapshotPurger} — for
+   * {@code PostgresEventStore}, a {@code PostgresSnapshotStorePurger} the application declares,
+   * since only its domain knows which streams' snapshots hold a subject's data — unless {@code
+   * streamrune.gdpr.snapshot-purge=none} states that the application has never stored a snapshot.
+   * Otherwise the context does not start ({@link
+   * org.streamrune.integration.SnapshotPurgeSetting#withoutSnapshotPurge}).
    */
   @Bean
   @ConditionalOnBean(CryptoEngine.class)
@@ -1882,10 +1889,17 @@ public class StreamRuneAutoConfiguration {
       ObjectProvider<AuditStore> auditStoreProvider,
       ObjectProvider<org.streamrune.core.gdpr.SubjectDataPurger> purgerProvider,
       ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider,
-      ObjectProvider<CachingQueryBus> queryCacheProvider) {
+      ObjectProvider<CachingQueryBus> queryCacheProvider,
+      StreamRuneProperties properties) {
     var b = ForgetSubjectService.builder().cryptoEngine(cryptoEngine);
     auditStoreProvider.ifAvailable(b::auditStore);
-    b.purgers(purgerProvider.orderedStream().toList());
+    List<org.streamrune.core.gdpr.SubjectDataPurger> purgers =
+        purgerProvider.orderedStream().toList();
+    b.purgers(purgers);
+    if (org.streamrune.integration.SnapshotPurgeSetting.parse(properties.gdpr().snapshotPurge())
+        .withoutSnapshotPurge(purgers)) {
+      b.withoutSnapshotPurge();
+    }
     // Wire metrics so a failed read-model purge increments streamrune.gdpr.purge_failed.
     b.metrics(metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP));
     // A forget evicts the query cache after its last purger, so no cached answer taken before the

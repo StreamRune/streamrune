@@ -40,7 +40,12 @@ class ForgetSubjectServiceReinstateTest {
   void reinstate_liftsTheTombstoneThroughTheEngine_thenRecordsASuccessRow() {
     var crypto = mock(CryptoEngine.class);
     var audit = mock(AuditStore.class);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     service.reinstate(SUBJECT, DPO);
 
@@ -66,7 +71,12 @@ class ForgetSubjectServiceReinstateTest {
   void reinstate_nullSubject_throwsBeforeTouchingTheEngineOrTheAuditLog() {
     var crypto = mock(CryptoEngine.class);
     var audit = mock(AuditStore.class);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     assertThrows(NullPointerException.class, () -> service.reinstate(null, DPO));
     verifyNoInteractions(crypto, audit);
@@ -75,7 +85,8 @@ class ForgetSubjectServiceReinstateTest {
   @Test
   void reinstate_withoutAnAuditStore_stillReinstates() {
     var crypto = mock(CryptoEngine.class);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).build();
+    var service =
+        ForgetSubjectService.builder().withoutSnapshotPurge().cryptoEngine(crypto).build();
 
     service.reinstate(SUBJECT, null);
 
@@ -90,7 +101,12 @@ class ForgetSubjectServiceReinstateTest {
         new CryptoOperationException(
             "Refusing to reinstate subject: the erasure COMPLETED (the transit key was destroyed)");
     doThrow(refusal).when(crypto).reinstate(SUBJECT);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown =
         assertThrows(CryptoOperationException.class, () -> service.reinstate(SUBJECT, DPO));
@@ -113,7 +129,12 @@ class ForgetSubjectServiceReinstateTest {
     var audit = mock(AuditStore.class);
     var error = new LinkageError("engine class failed to link");
     doThrow(error).when(crypto).reinstate(SUBJECT);
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown = assertThrows(LinkageError.class, () -> service.reinstate(SUBJECT, DPO));
 
@@ -132,7 +153,12 @@ class ForgetSubjectServiceReinstateTest {
     var auditDown = new IllegalStateException("audit_log unavailable");
     doThrow(refusal).when(crypto).reinstate(SUBJECT);
     doThrow(auditDown).when(audit).save(any());
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown =
         assertThrows(CryptoOperationException.class, () -> service.reinstate(SUBJECT, DPO));
@@ -148,7 +174,12 @@ class ForgetSubjectServiceReinstateTest {
     var shared = new IllegalStateException("one shared failure");
     doThrow(shared).when(crypto).reinstate(SUBJECT);
     doThrow(shared).when(audit).save(any());
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown = assertThrows(IllegalStateException.class, () -> service.reinstate(SUBJECT, DPO));
 
@@ -162,7 +193,12 @@ class ForgetSubjectServiceReinstateTest {
     var audit = mock(AuditStore.class);
     var auditDown = new IllegalStateException("audit_log unavailable");
     doThrow(auditDown).when(audit).save(any());
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
     var appender = attachGdprLogAppender();
     try {
       var thrown = assertThrows(IllegalStateException.class, () -> service.reinstate(SUBJECT, DPO));
@@ -196,7 +232,12 @@ class ForgetSubjectServiceReinstateTest {
     var audit = mock(AuditStore.class);
     var auditError = new AssertionError("audit store invariant broken");
     doThrow(auditError).when(audit).save(any());
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
 
     var thrown = assertThrows(AssertionError.class, () -> service.reinstate(SUBJECT, DPO));
 
@@ -214,7 +255,11 @@ class ForgetSubjectServiceReinstateTest {
     var crypto = new InMemoryCryptoEngine();
     List<AuditEntry> auditLog = new ArrayList<>();
     var service =
-        ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(auditLog::add).build();
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(auditLog::add)
+            .build();
     crypto.encrypt(SUBJECT, PII);
 
     service.forget(SUBJECT, UserId.of("dpo-1"));
@@ -250,7 +295,12 @@ class ForgetSubjectServiceReinstateTest {
           }
           auditLog.add(entry);
         };
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).auditStore(audit).build();
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
     service.forget(SUBJECT, DPO);
 
     failNextWrite.set(true);

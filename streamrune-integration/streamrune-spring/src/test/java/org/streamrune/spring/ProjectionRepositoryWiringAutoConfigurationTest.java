@@ -30,6 +30,7 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
 
   private final ApplicationContextRunner runner =
       new ApplicationContextRunner()
+          .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
           .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
           .withBean(DataSource.class, () -> mock(DataSource.class))
           .withBean(EventStore.class, () -> mock(EventStore.class));

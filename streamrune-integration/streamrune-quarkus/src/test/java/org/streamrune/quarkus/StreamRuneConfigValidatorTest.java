@@ -90,6 +90,38 @@ class StreamRuneConfigValidatorTest {
         ex.getMessage());
   }
 
+  /** An unknown {@code streamrune.gdpr.snapshot-purge} fails startup, crypto engine or not. */
+  @Test
+  void unknownSnapshotPurgeValueFailsStartup() {
+    var props = TestProperties.of(Map.of("streamrune.gdpr.snapshot-purge", "maybe"));
+    var validator = new StreamRuneConfigValidator(props, unsatisfied(), unsatisfied());
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
+    assertEquals(
+        "streamrune.gdpr.snapshot-purge must be required or none (case-insensitive); got: 'maybe'",
+        ex.getMessage());
+  }
+
+  /**
+   * The validator builds the forget service on the startup event, so a refused build (no snapshot
+   * purger) stops startup instead of the first request that injects it.
+   */
+  @Test
+  void aRefusedForgetServiceFailsStartup() {
+    @SuppressWarnings("unchecked")
+    Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forget = mock(Instance.class);
+    when(forget.isResolvable()).thenReturn(true);
+    when(forget.get()).thenThrow(new IllegalStateException("no snapshot purger"));
+    var validator =
+        new StreamRuneConfigValidator(
+            TestProperties.defaults(), unsatisfied(), unsatisfied(), forget);
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
+    assertEquals("no snapshot purger", ex.getMessage());
+  }
+
   /** Zero is the documented "do not wait at all" value and must pass. */
   @Test
   void zeroLockTimeoutPasses() {

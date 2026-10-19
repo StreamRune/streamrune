@@ -133,7 +133,8 @@ class ProjectionFactoryTest {
             java.time.Duration.ofSeconds(30),
             // sse.polling-interval
             Duration.ofSeconds(1),
-            "auto");
+            "auto",
+            "required");
 
     MultiProjectionRunner runner =
         factory.multiProjectionRunner(

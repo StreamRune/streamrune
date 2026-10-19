@@ -110,6 +110,24 @@ public interface StreamRuneQuarkusProperties {
    */
   SubscriptionConfig subscription();
 
+  /** GDPR configuration of the produced {@code ForgetSubjectService}, {@code streamrune.gdpr.*}. */
+  GdprConfig gdpr();
+
+  /** GDPR section, {@code streamrune.gdpr.*}. */
+  interface GdprConfig {
+
+    /**
+     * Whether the produced {@code ForgetSubjectService} must run a {@code SnapshotPurger} bean:
+     * {@code required} (default) — declare one, for {@code PostgresEventStore} a {@code
+     * PostgresSnapshotStorePurger}, or startup fails; {@code none} — the application has never
+     * stored a snapshot, and the service is built with {@code withoutSnapshotPurge()}. Read through
+     * {@link org.streamrune.integration.SnapshotPurgeSetting}; an unknown value fails startup
+     * ({@link StreamRuneConfigValidator}), naming the property.
+     */
+    @WithDefault("required")
+    String snapshotPurge();
+  }
+
   /** Metrics configuration, {@code streamrune.metrics.*}. */
   MetricsConfig metrics();
 

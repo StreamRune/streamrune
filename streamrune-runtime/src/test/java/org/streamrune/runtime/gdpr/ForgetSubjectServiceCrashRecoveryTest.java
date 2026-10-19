@@ -145,6 +145,7 @@ class ForgetSubjectServiceCrashRecoveryTest {
             });
       }
       return ForgetSubjectService.builder()
+          .withoutSnapshotPurge()
           .cryptoEngine(engine)
           .auditStore(audit)
           .purgers(purgers)

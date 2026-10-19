@@ -191,11 +191,20 @@ public record StreamRuneMicronautProperties(
     // the quoted word. Appended at the end so the positional withDefaults() stays aligned.
     @Bindable(defaultValue = "auto")
         @io.micronaut.context.annotation.Property(name = "streamrune.saga.forward-fence")
-        String sagaForwardFence) {
+        String sagaForwardFence,
+    // gdpr.snapshot-purge: matches Spring/Quarkus. Whether the framework's ForgetSubjectService
+    // must run a SnapshotPurger bean: required (default) — declare one, for PostgresEventStore a
+    // PostgresSnapshotStorePurger, or startup fails; none — the application has never stored a
+    // snapshot. Read through SnapshotPurgeSetting; an unknown value fails binding, naming the
+    // property. Appended at the end so the positional withDefaults() stays aligned.
+    @Bindable(defaultValue = "required")
+        @io.micronaut.context.annotation.Property(name = "streamrune.gdpr.snapshot-purge")
+        String gdprSnapshotPurge) {
 
   public StreamRuneMicronautProperties {
     org.streamrune.integration.SingleActiveConsumerSetting.enabled(
         subscriptionSingleActiveConsumerEnabled);
+    org.streamrune.integration.SnapshotPurgeSetting.parse(gdprSnapshotPurge);
     metadataBaggageAllowlist =
         metadataBaggageAllowlist == null ? List.of() : List.copyOf(metadataBaggageAllowlist);
   }
@@ -257,6 +266,8 @@ public record StreamRuneMicronautProperties(
         // sse.polling-interval
         Duration.ofSeconds(1),
         // saga.forward-fence
-        "auto");
+        "auto",
+        // gdpr.snapshot-purge
+        "required");
   }
 }

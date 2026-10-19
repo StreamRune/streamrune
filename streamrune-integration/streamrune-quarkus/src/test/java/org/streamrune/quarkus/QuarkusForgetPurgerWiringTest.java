@@ -1,9 +1,11 @@
 package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.quarkus.arc.All;
+import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.Produces;
@@ -51,7 +53,80 @@ class QuarkusForgetPurgerWiringTest {
         @All List<SubjectDataPurger> purgers,
         Instance<org.streamrune.core.StreamRuneMetrics> metrics,
         Instance<CachingQueryBus> queryCache) {
-      return PRODUCERS.forgetSubjectService(crypto, audit, purgers, metrics, queryCache);
+      // The snapshot purge is tested in aMissingSnapshotPurgerFailsStartup.
+      return PRODUCERS.forgetSubjectService(
+          crypto,
+          audit,
+          purgers,
+          metrics,
+          queryCache,
+          TestProperties.of(Map.of("streamrune.gdpr.snapshot-purge", "none")));
+    }
+  }
+
+  /** The defaults, bound the way Quarkus binds them: the snapshot purge stays {@code required}. */
+  @ApplicationScoped
+  public static class RequiredSnapshotPurgeDefaults {
+    @Produces
+    @Singleton
+    public CryptoEngine cryptoEngine() {
+      return new InMemoryCryptoEngine();
+    }
+
+    @Produces
+    @Singleton
+    public StreamRuneQuarkusProperties properties() {
+      return TestProperties.defaults();
+    }
+
+    @Produces
+    @Singleton
+    public ForgetSubjectService forgetSubjectService(
+        Instance<CryptoEngine> crypto,
+        Instance<AuditStore> audit,
+        @All List<SubjectDataPurger> purgers,
+        Instance<org.streamrune.core.StreamRuneMetrics> metrics,
+        Instance<CachingQueryBus> queryCache,
+        StreamRuneQuarkusProperties properties) {
+      return PRODUCERS.forgetSubjectService(
+          crypto, audit, purgers, metrics, queryCache, properties);
+    }
+  }
+
+  /**
+   * A crypto engine and no snapshot purger fail startup, not the first forget: the forget service
+   * is a dependent bean the application may inject only into a request-time resource, so the config
+   * validator builds it on the startup event.
+   */
+  @Test
+  void aMissingSnapshotPurgerFailsStartup() throws Exception {
+    try (var arc =
+        RealArcTestContainer.boot(
+            List.of(
+                RequiredSnapshotPurgeDefaults.class,
+                RecordingPurger.class,
+                StreamRuneConfigValidator.class,
+                ForgetSubjectService.class,
+                CryptoEngine.class,
+                SubjectDataPurger.class))) {
+      var failure =
+          assertThrows(
+              Exception.class,
+              () ->
+                  arc.container()
+                      .beanManager()
+                      .getEvent()
+                      .select(StartupEvent.class)
+                      .fire(new StartupEvent()));
+      boolean found = false;
+      for (Throwable t = failure; t != null && !found; t = t.getCause()) {
+        found =
+            t.getMessage() != null
+                && t.getMessage()
+                    .contains(
+                        "The ForgetSubjectService StreamRune configures has no snapshot purger.");
+      }
+      assertTrue(found, "the startup failure says what to add: " + failure);
     }
   }
 

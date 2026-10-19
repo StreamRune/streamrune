@@ -48,6 +48,7 @@ class DeadLetterWiringAutoConfigurationTest {
 
   private final ApplicationContextRunner runner =
       new ApplicationContextRunner()
+          .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
           .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
           .withBean(DataSource.class, () -> mock(DataSource.class))
           .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
@@ -148,6 +149,7 @@ class DeadLetterWiringAutoConfigurationTest {
   void dlqPayloadIsEncryptedWhenCryptoEngineBeanIsPresent() {
     var realDlq = new InMemoryDeadLetterQueue();
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
@@ -194,6 +196,7 @@ class DeadLetterWiringAutoConfigurationTest {
   void dlqPayloadIsEncryptedEvenWhenApplicationObjectMapperBeanIsPresent() {
     var realDlq = new InMemoryDeadLetterQueue();
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
@@ -239,6 +242,7 @@ class DeadLetterWiringAutoConfigurationTest {
   @Test
   void encryptedCommandWithoutCryptoEngineFailsStartup() {
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
@@ -267,6 +271,7 @@ class DeadLetterWiringAutoConfigurationTest {
   @Test
   void encryptedCommandWithCryptoEngineStartsCleanly() {
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
@@ -304,6 +309,7 @@ class DeadLetterWiringAutoConfigurationTest {
   void primaryCryptoEngineResolvesAmbiguityForDlq() {
     var realDlq = new InMemoryDeadLetterQueue();
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
@@ -401,6 +407,7 @@ class DeadLetterWiringAutoConfigurationTest {
     var executed = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         // Deliberately no DataSource bean: its presence auto-configures a PostgresCommandInbox,
         // which would make the runner's replay take the keyed execute(command, key) path and fail
@@ -476,6 +483,7 @@ class DeadLetterWiringAutoConfigurationTest {
     var executed = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         // No DataSource bean, as in autoConfiguredRunnerResolvesCommandTypeFromDeciderRegistry:
         // the replay takes the unkeyed execute(command) path.
@@ -541,6 +549,7 @@ class DeadLetterWiringAutoConfigurationTest {
     var capturedEmail = new java.util.concurrent.atomic.AtomicReference<String>();
 
     new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)

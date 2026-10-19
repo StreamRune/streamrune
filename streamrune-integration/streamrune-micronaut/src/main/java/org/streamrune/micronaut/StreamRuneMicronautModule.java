@@ -1190,6 +1190,13 @@ public class StreamRuneMicronautModule {
    * @param queryCache the {@link CachingQueryBus}, present when {@code
    *     streamrune.query-cache.enabled=true}; every forget evicts it once its purgers have run, so
    *     a cached answer holding the subject's data is not served after the erasure
+   * @param properties the StreamRune configuration: {@code streamrune.gdpr.snapshot-purge} says
+   *     whether one of {@code purgers} must be a {@link org.streamrune.core.gdpr.SnapshotPurger} —
+   *     for {@code PostgresEventStore}, a {@code PostgresSnapshotStorePurger} the application
+   *     declares, since only its domain knows which streams' snapshots hold a subject's data
+   *     ({@code required}, the default) or the application has never stored a snapshot ({@code
+   *     none}). Otherwise this method throws; {@link StreamRuneConfigValidator} resolves the bean
+   *     on the startup event, so that is a startup failure
    * @return a new {@link ForgetSubjectService}
    */
   @Singleton
@@ -1200,8 +1207,13 @@ public class StreamRuneMicronautModule {
       @jakarta.annotation.Nullable AuditStore auditStore,
       List<SubjectDataPurger> purgers,
       @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
-      @jakarta.annotation.Nullable CachingQueryBus queryCache) {
+      @jakarta.annotation.Nullable CachingQueryBus queryCache,
+      StreamRuneMicronautProperties properties) {
     var b = ForgetSubjectService.builder().cryptoEngine(cryptoEngine).purgers(purgers);
+    if (org.streamrune.integration.SnapshotPurgeSetting.parse(properties.gdprSnapshotPurge())
+        .withoutSnapshotPurge(purgers)) {
+      b.withoutSnapshotPurge();
+    }
     if (auditStore != null) {
       b.auditStore(auditStore);
     }

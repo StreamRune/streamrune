@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.core.gdpr.SnapshotPurger;
 import org.streamrune.core.gdpr.SubjectDataCollector;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.core.types.UserId;
@@ -24,6 +25,102 @@ import org.streamrune.test.InMemoryCryptoEngine;
 class QuarkusGdprProducerTest {
 
   private final StreamRuneProducers producers = new StreamRuneProducers();
+
+  /**
+   * The tests of everything but the snapshot purge state that their application stores no
+   * snapshots; the snapshot purge is tested below with the defaults.
+   */
+  private static final StreamRuneQuarkusProperties NO_SNAPSHOTS =
+      TestProperties.of(java.util.Map.of("streamrune.gdpr.snapshot-purge", "none"));
+
+  /**
+   * The produced forget needs a snapshot purger: a snapshot keeps every field of the aggregate's
+   * state not marked {@code @Encrypted} in the clear. The producer refuses, saying what to declare
+   * and which property opts out.
+   */
+  @Test
+  void forgetSubjectService_withoutASnapshotPurger_isRefusedSayingWhatToAdd() {
+    var failure =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                producers.forgetSubjectService(
+                    satisfied(new InMemoryCryptoEngine()),
+                    unsatisfied(),
+                    List.of(),
+                    unsatisfied(),
+                    unsatisfied(),
+                    TestProperties.defaults()));
+    assertTrue(
+        failure
+            .getMessage()
+            .startsWith("The ForgetSubjectService StreamRune configures has no snapshot purger."),
+        failure.getMessage());
+    assertTrue(failure.getMessage().contains("or set streamrune.gdpr.snapshot-purge=none"));
+  }
+
+  /** A {@link SnapshotPurger} bean is run by the produced forget like any other purger. */
+  @Test
+  void forgetSubjectService_runsASnapshotPurger() {
+    var purged = new java.util.concurrent.CopyOnWriteArrayList<SubjectId>();
+    SnapshotPurger snapshots =
+        new SnapshotPurger() {
+          @Override
+          public String name() {
+            return "snapshots";
+          }
+
+          @Override
+          public void purge(SubjectId subjectId) {
+            purged.add(subjectId);
+          }
+        };
+    var service =
+        producers.forgetSubjectService(
+            satisfied(new InMemoryCryptoEngine()),
+            unsatisfied(),
+            List.of(snapshots),
+            unsatisfied(),
+            unsatisfied(),
+            TestProperties.defaults());
+
+    service.forget(SubjectId.of("user-1"), null);
+
+    assertEquals(List.of(SubjectId.of("user-1")), purged);
+  }
+
+  /** {@code none} beside a snapshot purger bean contradicts itself: the producer refuses. */
+  @Test
+  void forgetSubjectService_snapshotPurgeNoneWithASnapshotPurger_isRefused() {
+    SnapshotPurger snapshots =
+        new SnapshotPurger() {
+          @Override
+          public String name() {
+            return "snapshots";
+          }
+
+          @Override
+          public void purge(SubjectId subjectId) {}
+        };
+    var failure =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                producers.forgetSubjectService(
+                    satisfied(new InMemoryCryptoEngine()),
+                    unsatisfied(),
+                    List.of(snapshots),
+                    unsatisfied(),
+                    unsatisfied(),
+                    NO_SNAPSHOTS));
+    assertTrue(
+        failure
+            .getMessage()
+            .startsWith(
+                "streamrune.gdpr.snapshot-purge=none says this application has never stored a"
+                    + " snapshot"),
+        failure.getMessage());
+  }
 
   @SuppressWarnings("unchecked")
   private <T> Instance<T> satisfied(T value) {
@@ -48,7 +145,8 @@ class QuarkusGdprProducerTest {
             unsatisfied(),
             List.of(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            NO_SNAPSHOTS);
     assertNotNull(service);
   }
 
@@ -71,7 +169,8 @@ class QuarkusGdprProducerTest {
                     unsatisfied(),
                     List.of(),
                     unsatisfied(),
-                    ambiguous));
+                    ambiguous,
+                    NO_SNAPSHOTS));
     assertTrue(failure.getMessage().contains("CachingQueryBus"));
   }
 
@@ -93,7 +192,8 @@ class QuarkusGdprProducerTest {
             unsatisfied(),
             List.of(),
             unsatisfied(),
-            resolvable);
+            resolvable,
+            NO_SNAPSHOTS);
     assertEquals("answer-1", bus.dispatch(new GlobalQuery()));
 
     service.forget(SubjectId.of("user-1"), null);
@@ -109,7 +209,7 @@ class QuarkusGdprProducerTest {
     Instance<CryptoEngine> crypto = unsatisfied();
     var service =
         producers.forgetSubjectService(
-            crypto, unsatisfied(), List.of(), unsatisfied(), unsatisfied());
+            crypto, unsatisfied(), List.of(), unsatisfied(), unsatisfied(), NO_SNAPSHOTS);
     assertNull(service);
   }
 
@@ -122,7 +222,8 @@ class QuarkusGdprProducerTest {
             satisfied(auditStore),
             List.of(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            NO_SNAPSHOTS);
     assertNotNull(service);
     service.forget(SubjectId.of("user-1"), UserId.of("admin"));
     verify(auditStore, atLeastOnce()).save(any(AuditEntry.class));
@@ -137,7 +238,8 @@ class QuarkusGdprProducerTest {
             satisfied(auditStore),
             List.of(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            NO_SNAPSHOTS);
 
     service.forget(SubjectId.of("user-1"), UserId.of("dpo"));
     service.reinstate(SubjectId.of("user-1"), UserId.of("dpo"));

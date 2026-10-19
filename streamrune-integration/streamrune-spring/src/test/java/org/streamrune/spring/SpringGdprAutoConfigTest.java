@@ -21,6 +21,7 @@ import org.streamrune.core.Query;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.core.gdpr.SnapshotPurger;
 import org.streamrune.core.gdpr.SubjectDataCollector;
 import org.streamrune.core.gdpr.SubjectDataPurger;
 import org.streamrune.core.types.SubjectId;
@@ -32,10 +33,108 @@ import org.streamrune.test.InMemoryCryptoEngine;
 
 class SpringGdprAutoConfigTest {
 
-  private final ApplicationContextRunner runner =
+  /** No snapshot-purge setting: the default, {@code required}. */
+  private final ApplicationContextRunner defaultRunner =
       new ApplicationContextRunner()
           .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
           .withUserConfiguration(StubEventStoreConfig.class);
+
+  /**
+   * The tests of everything but the snapshot purge state that their application stores no
+   * snapshots; the snapshot purge is tested below on {@link #defaultRunner}.
+   */
+  private final ApplicationContextRunner runner =
+      defaultRunner.withPropertyValues("streamrune.gdpr.snapshot-purge=none");
+
+  /**
+   * The auto-configured forget needs a snapshot purger: a snapshot keeps every field of the
+   * aggregate's state not marked {@code @Encrypted} in the clear, so a forget without one leaves
+   * the subject's data readable. The application does not start, and the message says what to
+   * declare and which property opts out.
+   */
+  @Test
+  void forgetService_withoutASnapshotPurgerBean_failsStartupSayingWhatToAdd() {
+    defaultRunner
+        .withUserConfiguration(CryptoConfig.class, PurgerConfig.class)
+        .run(
+            ctx ->
+                assertThat(ctx)
+                    .hasFailed()
+                    .getFailure()
+                    .hasStackTraceContaining(
+                        "The ForgetSubjectService StreamRune configures has no snapshot purger.")
+                    .hasStackTraceContaining("new PostgresSnapshotStorePurger(dataSource,")
+                    .hasStackTraceContaining("or set streamrune.gdpr.snapshot-purge=none"));
+  }
+
+  /** A {@link SnapshotPurger} bean is run by the auto-configured forget like any other purger. */
+  @Test
+  void forgetService_runsASnapshotPurgerBeanBesideTheReadModelPurgers() {
+    defaultRunner
+        .withUserConfiguration(CryptoConfig.class, PurgerConfig.class, SnapshotPurgerConfig.class)
+        .run(
+            ctx -> {
+              var result =
+                  ctx.getBean(ForgetSubjectService.class).forget(SubjectId.of("subject-42"), null);
+              assertThat(ctx.getBean(RecordingSnapshotPurger.class).purged)
+                  .containsExactly(SubjectId.of("subject-42"));
+              assertThat(ctx.getBean(RecordingPurger.class).purged)
+                  .containsExactly(SubjectId.of("subject-42"));
+              assertThat(result.fullyErased()).isTrue();
+            });
+  }
+
+  /** {@code none}: the application states it stores no snapshots, and the service is built. */
+  @Test
+  void forgetService_snapshotPurgeNone_isBuiltWithoutASnapshotPurger() {
+    defaultRunner
+        .withPropertyValues("streamrune.gdpr.snapshot-purge=none")
+        .withUserConfiguration(CryptoConfig.class)
+        .run(ctx -> assertThat(ctx).hasSingleBean(ForgetSubjectService.class));
+  }
+
+  /** {@code none} beside a snapshot purger bean contradicts itself: startup fails. */
+  @Test
+  void forgetService_snapshotPurgeNoneWithASnapshotPurgerBean_failsStartup() {
+    defaultRunner
+        .withPropertyValues("streamrune.gdpr.snapshot-purge=none")
+        .withUserConfiguration(CryptoConfig.class, SnapshotPurgerConfig.class)
+        .run(
+            ctx ->
+                assertThat(ctx)
+                    .hasFailed()
+                    .getFailure()
+                    .hasStackTraceContaining(
+                        "streamrune.gdpr.snapshot-purge=none says this application has never"
+                            + " stored a snapshot, but a snapshot purger bean is registered ("
+                            + RecordingSnapshotPurger.class.getName()
+                            + ")"));
+  }
+
+  /** An unknown value fails startup, with or without a crypto engine. */
+  @Test
+  void snapshotPurge_anUnknownValueFailsStartupNamingTheProperty() {
+    defaultRunner
+        .withPropertyValues("streamrune.gdpr.snapshot-purge=maybe")
+        .run(
+            ctx ->
+                assertThat(ctx)
+                    .hasFailed()
+                    .getFailure()
+                    .hasStackTraceContaining(
+                        "streamrune.gdpr.snapshot-purge must be required or none"
+                            + " (case-insensitive); got: 'maybe'"));
+  }
+
+  /** Without a crypto engine there is no forget service, and no snapshot purger is asked for. */
+  @Test
+  void noCryptoEngine_needsNoSnapshotPurger() {
+    defaultRunner.run(
+        ctx -> {
+          assertThat(ctx).hasNotFailed();
+          assertThat(ctx).doesNotHaveBean(ForgetSubjectService.class);
+        });
+  }
 
   @Test
   void forgetService_present_withCryptoEngineBean() {
@@ -224,6 +323,7 @@ class SpringGdprAutoConfigTest {
                 VaultCryptoEngineConfiguration.class))
         .withUserConfiguration(StubEventStoreConfig.class, StubDataSourceConfig.class)
         .withPropertyValues(
+            "streamrune.gdpr.snapshot-purge=none",
             "streamrune.crypto.vault.enabled=true",
             "streamrune.crypto.vault.token=s.test",
             "streamrune.crypto.vault.address=http://localhost:8200")
@@ -381,10 +481,35 @@ class SpringGdprAutoConfigTest {
   }
 
   @Configuration
+  static class SnapshotPurgerConfig {
+    @Bean
+    RecordingSnapshotPurger recordingSnapshotPurger() {
+      return new RecordingSnapshotPurger();
+    }
+  }
+
+  static class RecordingSnapshotPurger implements SnapshotPurger {
+    final List<SubjectId> purged = new CopyOnWriteArrayList<>();
+
+    @Override
+    public String name() {
+      return "snapshots";
+    }
+
+    @Override
+    public void purge(SubjectId subjectId) {
+      purged.add(subjectId);
+    }
+  }
+
+  @Configuration
   static class UserForgetServiceConfig {
     @Bean
     ForgetSubjectService userForgetService() {
-      return ForgetSubjectService.builder().cryptoEngine(new InMemoryCryptoEngine()).build();
+      return ForgetSubjectService.builder()
+          .cryptoEngine(new InMemoryCryptoEngine())
+          .withoutSnapshotPurge()
+          .build();
     }
   }
 

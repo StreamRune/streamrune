@@ -8,26 +8,28 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.gdpr.SnapshotPurger;
 import org.streamrune.core.gdpr.SubjectDataPurger;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubjectId;
 
 /**
- * Opt-in {@link SubjectDataPurger} that deletes a subject's rows from the framework-owned {@code
- * snapshot_store} table.
+ * The {@link SnapshotPurger} for {@code PostgresEventStore}: deletes a subject's rows from the
+ * framework-owned {@code snapshot_store} table.
  *
  * <p><b>Why this exists.</b> {@link org.streamrune.runtime.gdpr.ForgetSubjectService#forget} does
  * two things: crypto-shred the subject's key, then run every REGISTERED {@link SubjectDataPurger}.
- * The framework's own {@code snapshot_store} is never among them unless the application registers
- * this class explicitly — {@code forget()} therefore leaves non-{@code @Encrypted} DERIVED
- * plaintext (a computed age, an email domain, anything the aggregate's {@code evolve()} copied out
- * of an {@code @Encrypted} field into a plain one) sitting in the last snapshot taken before the
- * forget, readable indefinitely: a post-forget {@code load()} tombstones only the
- * {@code @Encrypted} fields still present in the stored JSON (the snapshot-load crypto-mapping
- * guard has nothing to catch on a plain field), and no new snapshot gets taken without new commands
- * against that aggregate to overwrite it.
+ * Without this purger among them, {@code forget()} leaves every non-{@code @Encrypted} field of the
+ * aggregate state (a name the state copied in the clear, a computed age, an email domain, anything
+ * the aggregate's {@code evolve()} copied out of an {@code @Encrypted} field into a plain one)
+ * sitting in the last snapshot taken before the forget, readable indefinitely: a post-forget {@code
+ * load()} tombstones only the {@code @Encrypted} fields still present in the stored JSON (the
+ * snapshot-load crypto-mapping guard has nothing to catch on a plain field), and no new snapshot
+ * gets taken without new commands against that aggregate to overwrite it. The forget service's
+ * builder therefore refuses a service without a {@link SnapshotPurger} unless the application
+ * states {@code withoutSnapshotPurge()}.
  *
- * <p><b>Why this is opt-in, not automatic.</b> {@code snapshot_store} is keyed by the stream —
+ * <p><b>Why the application constructs it.</b> {@code snapshot_store} is keyed by the stream —
  * {@code (aggregate_type, aggregate_id)} — not by {@code subject_id}: unlike the read models {@link
  * SubjectDataPurger}'s own javadoc describes ({@code DELETE ... WHERE subject_id = ?}), there is no
  * indexed, subject-keyed column to purge against, and no framework-level way to derive one: the
@@ -61,7 +63,7 @@ import org.streamrune.core.types.SubjectId;
  * <p>Idempotent per {@link SubjectDataPurger}'s contract: deleting an already-absent row, or an
  * empty/{@code null} stream collection, is a safe no-op.
  */
-public final class PostgresSnapshotStorePurger implements SubjectDataPurger {
+public final class PostgresSnapshotStorePurger implements SnapshotPurger {
 
   private static final Logger log = LoggerFactory.getLogger(PostgresSnapshotStorePurger.class);
 

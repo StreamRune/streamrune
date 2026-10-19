@@ -140,7 +140,8 @@ class StreamRuneMicronautPropertiesTest {
             java.time.Duration.ofSeconds(30),
             // sse.polling-interval
             Duration.ofSeconds(1),
-            "auto");
+            "auto",
+            "required");
     assertEquals(10, p.snapshotEveryNEvents());
     assertEquals(1, p.retryMaxAttempts());
     assertEquals(1L, p.retryInitialDelayMs());

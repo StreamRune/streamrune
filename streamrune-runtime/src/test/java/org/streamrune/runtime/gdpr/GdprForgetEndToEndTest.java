@@ -32,7 +32,8 @@ class GdprForgetEndToEndTest {
     assertEquals("alice@example.com", pre.email());
 
     // Right to be forgotten — crypto-shred user-1's key.
-    var forgetService = ForgetSubjectService.builder().cryptoEngine(crypto).build();
+    var forgetService =
+        ForgetSubjectService.builder().withoutSnapshotPurge().cryptoEngine(crypto).build();
     forgetService.forget(SubjectId.of("user-1"), null);
 
     // Post-forget: stored JSON unchanged, but email reads as REDACTED.
@@ -45,7 +46,8 @@ class GdprForgetEndToEndTest {
   @Test
   void forget_isIdempotent_secondCallSucceeds() {
     var crypto = new InMemoryCryptoEngine();
-    var service = ForgetSubjectService.builder().cryptoEngine(crypto).build();
+    var service =
+        ForgetSubjectService.builder().withoutSnapshotPurge().cryptoEngine(crypto).build();
 
     service.forget(SubjectId.of("user-2"), null);
     assertFalse(crypto.isKeyAvailable(SubjectId.of("user-2")));
