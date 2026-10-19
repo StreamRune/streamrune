@@ -235,7 +235,8 @@ public final class PollingEventSubscription
     this.subscriptionName = subscriptionName;
     this.eventStore = eventStore;
     this.offsetStore = offsetStore;
-    this.listener = listener;
+    this.listener =
+        HealthTrackingEventListener.tracking(listener, healthContributor, subscriptionName);
     this.config = config;
     this.fetchSize = fetchSize;
     this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
@@ -885,6 +886,12 @@ public final class PollingEventSubscription
      * unregisters it on {@link #close()}, so health reports its state, lag, errors and lease role.
      * Optional; {@code null} registers nothing. The integrations cannot find a subscription the
      * application builds itself.
+     *
+     * <p>The subscription records each page whose listener throws as a delivery error, and clears
+     * the errors when a page is delivered, exactly as a {@link HealthTrackingEventListener} around
+     * the listener would — it wraps the listener itself, so do not wrap it again: a listener that
+     * is already a {@code HealthTrackingEventListener} for this contributor and name is left as it
+     * is and counted once, but one wrapped inside another decorator would count twice.
      */
     public Builder healthContributor(SubscriptionHealthContributor contributor) {
       this.healthContributor = contributor;

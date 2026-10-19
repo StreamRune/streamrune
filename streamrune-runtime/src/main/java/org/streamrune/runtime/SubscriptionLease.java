@@ -4,6 +4,8 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongSupplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 
@@ -25,8 +27,15 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
  *
  * <p>A lease over {@link SubscriptionLeadership#NOOP}, and {@link #ungated()}, is <em>ungated</em>:
  * it leads everywhere, has no anchor and issues no statement.
+ *
+ * <p>The anchor writes one {@code INFO} line each time this process takes the lease ({@code ... now
+ * leads}) and each time a check finds it gone ({@code ... no longer leads}), naming the lease; a
+ * standby's polls, a leader's steady polls and a deliberate {@linkplain Anchor#close() close} write
+ * none. Logger: {@code org.streamrune.runtime.SubscriptionLease}.
  */
 public final class SubscriptionLease {
+
+  private static final Logger log = LoggerFactory.getLogger(SubscriptionLease.class);
 
   private static final SubscriptionLease UNGATED =
       new SubscriptionLease(SubscriptionLeadership.NOOP, "ungated", System::nanoTime);
@@ -154,6 +163,9 @@ public final class SubscriptionLease {
    */
   public final class Anchor implements AutoCloseable {
     private volatile boolean closed;
+    // The role this anchor last reported in the log: true from the line "now leads" until the line
+    // "no longer leads" (or its close). Written by the polling thread, reset by close().
+    private volatile boolean leading;
     private boolean attempted;
     private long lastAttemptNanos;
 
@@ -172,8 +184,10 @@ public final class SubscriptionLease {
         return false;
       }
       if (leadership.current(name).isPresent()) {
+        tookLease();
         return true;
       }
+      lostLease();
       long now = nanoTime.getAsLong();
       if (attempted && now - lastAttemptNanos < minAttemptInterval.toNanos()) {
         return false;
@@ -186,6 +200,7 @@ public final class SubscriptionLease {
       lock.lock();
       try {
         if (!closed) {
+          tookLease();
           return true;
         }
         if (openAnchor != null) {
@@ -200,7 +215,33 @@ public final class SubscriptionLease {
 
     /** Whether this anchor is open and the lease is still held; a local read, no statement. */
     public boolean stillLeads() {
-      return !closed && leadership.current(name).isPresent();
+      if (closed) {
+        return false;
+      }
+      if (leadership.current(name).isPresent()) {
+        return true;
+      }
+      lostLease();
+      return false;
+    }
+
+    /** The one line per STANDBY to LEADING change. */
+    private void tookLease() {
+      if (!leading) {
+        leading = true;
+        log.info("Lease '{}': this process now leads it", name);
+      }
+    }
+
+    /** The one line per LEADING to STANDBY change, found by a check; none for a close. */
+    private void lostLease() {
+      if (leading) {
+        leading = false;
+        log.info(
+            "Lease '{}': this process no longer leads it (the lease is gone; it stands by until it"
+                + " takes it again)",
+            name);
+      }
     }
 
     /** Closes this anchor and resigns the lease; idempotent. The resign is no-throw by contract. */
@@ -212,6 +253,7 @@ public final class SubscriptionLease {
           return;
         }
         closed = true;
+        leading = false;
         if (openAnchor == this) {
           openAnchor = null;
         }

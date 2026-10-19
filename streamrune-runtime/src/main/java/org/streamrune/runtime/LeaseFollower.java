@@ -3,6 +3,7 @@ package org.streamrune.runtime;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 
@@ -10,6 +11,12 @@ import org.slf4j.Logger;
  * The follower side of a {@link SubscriptionLease}, for a saga's timeout runner and its
  * compensation-retry sweeper: whether the component may act on this cycle, and the two lines and
  * the health reading for a lease no subscription of this process ever anchored.
+ *
+ * <p>The {@code INFO} line is written on the second poll in a row that finds no anchor, one poll
+ * interval of the follower's own after the first: a subscription that starts a moment after the
+ * follower (the usual order in an application whose timeout runner starts first) opens its anchor
+ * before that and costs no line. The {@code WARN} and the {@code DEGRADED} reading come once the
+ * grace has passed, unchanged.
  */
 final class LeaseFollower {
 
@@ -28,6 +35,7 @@ final class LeaseFollower {
   private final LongSupplier nanoTime;
   private final AtomicBoolean infoLogged = new AtomicBoolean();
   private final AtomicBoolean warnLogged = new AtomicBoolean();
+  private final AtomicInteger unanchoredPolls = new AtomicInteger();
   private volatile long startedAtNanos;
   private volatile boolean unanchoredPastGrace;
 
@@ -56,6 +64,7 @@ final class LeaseFollower {
   /** A new start: the grace counts from now, and each line may be written once again. */
   void started() {
     startedAtNanos = nanoTime.getAsLong();
+    unanchoredPolls.set(0);
     infoLogged.set(false);
     warnLogged.set(false);
     unanchoredPastGrace = false;
@@ -76,7 +85,8 @@ final class LeaseFollower {
     }
     long elapsed = nanoTime.getAsLong() - startedAtNanos;
     if (elapsed < anchorGrace.toNanos()) {
-      if (infoLogged.compareAndSet(false, true)) {
+      // The second unanchored poll since the start, not the first: see the class documentation.
+      if (unanchoredPolls.incrementAndGet() >= 2 && infoLogged.compareAndSet(false, true)) {
         log.info(
             "Saga type {}: no subscription of this saga type is anchored in this process; {} by"
                 + " the process that delivers its events",
