@@ -100,7 +100,9 @@ class StreamRuneQuarkusPropertiesTest {
 
   @Test
   void singleActiveConsumerEnabledByDefault() {
-    assertTrue(TestProperties.defaults().subscription().singleActiveConsumer().enabled());
+    assertTrue(
+        org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+            TestProperties.defaults().subscription().singleActiveConsumer().enabled()));
   }
 
   @Test
@@ -142,7 +144,9 @@ class StreamRuneQuarkusPropertiesTest {
     var p =
         TestProperties.of(
             Map.of("streamrune.subscription.single-active-consumer.enabled", "false"));
-    assertFalse(p.subscription().singleActiveConsumer().enabled());
+    assertFalse(
+        org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+            p.subscription().singleActiveConsumer().enabled()));
   }
 
   @Test

@@ -124,10 +124,12 @@ public class ProjectionAutoConfig {
     // The processor is chosen by what the registrations DECLARE and by whether the leadership
     // needs its epoch honoured — never by the presence of a DataSource or of the bean. An
     // all-AT_LEAST_ONCE_IDEMPOTENT runner without leadership runs on nonAtomicAtLeastOnce().
+    // Two leadership beans with none @Primary fail here, as on Quarkus and Micronaut.
+    SubscriptionLeadership leadership = LeadershipBeans.resolve(leadershipProvider);
     builder.atomicProcessor(
         ProjectionProcessorResolution.select(
             registrationsOf(entries),
-            leadershipProvider.getIfAvailable(),
+            leadership,
             atomicProcessorProvider.orderedStream().toList(),
             "streamRuneMultiProjectionRunner"));
     // Propagate the metrics collector (e.g. the auto-configured MicrometerStreamRuneMetrics) so
@@ -136,7 +138,9 @@ public class ProjectionAutoConfig {
     // Thread the single-active-consumer leadership bean (LeaseBasedLeadership when a
     // DataSource is present and the knob is on; absent otherwise) into every per-projection runner;
     // defaults to SubscriptionLeadership.NOOP (always leader) when no bean exists.
-    leadershipProvider.ifAvailable(builder::leadership);
+    if (leadership != null) {
+      builder.leadership(leadership);
+    }
     // Optional user-supplied poison-vs-transient classifier; defaults to
     // ProjectionErrorClassifier.DEFAULT when no bean exists.
     classifierProvider.ifAvailable(builder::classifier);
@@ -199,17 +203,20 @@ public class ProjectionAutoConfig {
     // The same rule as the CONTINUOUS runner: the processor by declared need, never by bean
     // presence. A TRANSACTIONAL_LOCAL scheduled chunk's read-model write and its checkpoint commit
     // in the processor's one transaction, with the same split-brain guard as CONTINUOUS.
+    SubscriptionLeadership leadership = LeadershipBeans.resolve(leadershipProvider);
     builder.atomicProcessor(
         ProjectionProcessorResolution.select(
             registrationsOf(entries),
-            leadershipProvider.getIfAvailable(),
+            leadership,
             atomicProcessorProvider.orderedStream().toList(),
             "streamRuneScheduledProjectionRunner"));
     // Propagate the metrics collector so projections.* meters are recorded for scheduled runs;
     // absent collector leaves projection metrics unchanged.
     metricsProvider.ifAvailable(builder::metrics);
     // Only a leader drains on each tick; NOOP (always leader) when no leadership bean exists.
-    leadershipProvider.ifAvailable(builder::leadership);
+    if (leadership != null) {
+      builder.leadership(leadership);
+    }
     // Optional user-supplied poison-vs-transient classifier; DEFAULT when absent.
     classifierProvider.ifAvailable(builder::classifier);
     // Wire the subscription health contributor so each scheduled projection registers itself and

@@ -1644,6 +1644,43 @@ class MicronautBeanWiringTest {
     }
   }
 
+  /**
+   * Two leadership beans and none {@code @Primary}: startup is refused (a non-unique bean where the
+   * framework injects the one leadership every runner shares), as on Spring and Quarkus.
+   */
+  @Test
+  void twoLeadershipBeansWithoutAPrimaryFailStartup() {
+    var failure =
+        assertThrows(
+            io.micronaut.context.exceptions.BeanContextException.class,
+            () -> ApplicationContext.run(Map.of("spec.name", "two-leaderships")).close());
+    Throwable root = failure;
+    while (root.getCause() != null) {
+      root = root.getCause();
+    }
+    assertInstanceOf(
+        io.micronaut.context.exceptions.NonUniqueBeanException.class,
+        root,
+        () -> "expected the non-unique leadership to stop startup: " + failure);
+  }
+
+  @Factory
+  @Requires(property = "spec.name", value = "two-leaderships")
+  static class TwoLeadershipsFixture {
+
+    @Singleton
+    @Named("leadershipA")
+    SubscriptionLeadership leadershipA() {
+      return mock(SubscriptionLeadership.class);
+    }
+
+    @Singleton
+    @Named("leadershipB")
+    SubscriptionLeadership leadershipB() {
+      return mock(SubscriptionLeadership.class);
+    }
+  }
+
   @Factory
   @Requires(property = "spec.name", value = "with-datasource")
   static class WithDataSourceFixture {

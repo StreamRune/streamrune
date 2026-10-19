@@ -28,7 +28,7 @@ class StreamRuneMicronautPropertiesTest {
     assertEquals(Duration.ofDays(7), p.inboxRetentionMaxAge());
     assertEquals(List.of(), p.metadataBaggageAllowlist());
     assertEquals(Duration.ofDays(30), p.outboxSkippedRetentionMaxAge());
-    assertTrue(p.subscriptionSingleActiveConsumerEnabled());
+    assertEquals("true", p.subscriptionSingleActiveConsumerEnabled());
   }
 
   @Test
@@ -86,7 +86,9 @@ class StreamRuneMicronautPropertiesTest {
             java.util.Map.of("streamrune.subscription.single-active-consumer.enabled", "false"));
     try {
       assertFalse(
-          p.getBean(StreamRuneMicronautProperties.class).subscriptionSingleActiveConsumerEnabled());
+          org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+              p.getBean(StreamRuneMicronautProperties.class)
+                  .subscriptionSingleActiveConsumerEnabled()));
     } finally {
       p.close();
     }
@@ -127,7 +129,7 @@ class StreamRuneMicronautPropertiesTest {
             Duration.ofDays(3),
             List.of("tracking", "tenant"),
             Duration.ofDays(90),
-            false,
+            "false",
             15,
             2000L,
             3.5,
@@ -156,7 +158,7 @@ class StreamRuneMicronautPropertiesTest {
     assertEquals(Duration.ofDays(45), p.deadLetterRetentionMaxAge());
     assertEquals(List.of("tracking", "tenant"), p.metadataBaggageAllowlist());
     assertEquals(Duration.ofDays(90), p.outboxSkippedRetentionMaxAge());
-    assertFalse(p.subscriptionSingleActiveConsumerEnabled());
+    assertEquals("false", p.subscriptionSingleActiveConsumerEnabled());
     assertEquals(15, p.outboxRetryMaxAttempts());
     assertEquals(2000L, p.outboxRetryInitialDelayMs());
     assertEquals(3.5, p.outboxRetryMultiplier());

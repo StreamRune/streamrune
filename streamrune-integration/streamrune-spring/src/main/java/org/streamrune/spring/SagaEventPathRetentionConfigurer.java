@@ -9,6 +9,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.integration.SagaForwardFenceSetting;
+import org.streamrune.integration.SingleActiveConsumerSetting;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
 import org.streamrune.runtime.SagaLeaseWiring;
@@ -73,7 +74,8 @@ public class SagaEventPathRetentionConfigurer implements SmartInitializingSingle
   public void afterSingletonsInstantiated() {
     List<SagaRunner<?>> sagaRunners = sagaRunnerProvider.orderedStream().toList();
     SagaTypeOwnership.requireOneRunnerPerSagaType(sagaRunners);
-    SagaLeaseWiring.warnUngatedUnderLeadership(sagaRunners, leadershipProvider.getIfAvailable());
+    SagaLeaseWiring.warnUngatedUnderLeadership(
+        sagaRunners, LeadershipBeans.resolve(leadershipProvider));
     Duration window = properties.inbox().retentionMaxAge();
     int applied = SagaEventPathRetention.applyDefault(sagaRunners, window);
     if (applied > 0) {
@@ -84,7 +86,9 @@ public class SagaEventPathRetentionConfigurer implements SmartInitializingSingle
           applied);
     }
     SagaForwardFenceSetting fence = SagaForwardFenceSetting.parse(properties.saga().forwardFence());
-    boolean singleActiveConsumer = properties.subscription().singleActiveConsumer().enabled();
+    boolean singleActiveConsumer =
+        SingleActiveConsumerSetting.enabled(
+            properties.subscription().singleActiveConsumer().enabled());
     boolean fenceOn = fence.enabled(singleActiveConsumer);
     int fenced = SagaForwardFenceDefault.applyDefault(sagaRunners, fenceOn);
     if (fenced > 0) {

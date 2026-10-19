@@ -942,6 +942,15 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `streamrune.subscription.single-active-consumer.enabled`, `on` and `off` set it regardless, and
   a runner's own `forwardFence(...)` wins. The boolean spellings (`true`/`false`, `yes`/`no`, …)
   read as `on`/`off`, so an unquoted YAML `on` works; an unknown value fails startup.
+- `streamrune.subscription.single-active-consumer.enabled` has one meaning on all three
+  integrations: the condition that creates the `LeaseBasedLeadership` bean and the forward fence's
+  `auto` both read it through `SingleActiveConsumerSetting` (`streamrune-integration-api`), which
+  accepts `true`/`false`, `on`/`off`, `yes`/`no`, `y`/`n`, `t`/`f` and `1`/`0`, case-insensitive. An
+  unknown value fails startup with a message naming the property and the value.
+- Two `SubscriptionLeadership` beans with none marked the default (`@Primary` on Spring and
+  Micronaut, `@Alternative` with a `@Priority` on Quarkus) fail startup on all three integrations.
+  Spring and Quarkus name both bean classes (`SubscriptionLeadershipResolution`); Micronaut's
+  container refuses the non-unique bean.
 - The request filters (`ScopedValueFilter`, `StreamRuneRequestFilter`, `StreamRuneContextFilter`)
   answer a request whose correlation id, trace id or user id `RequestContext.fromRequest` refuses —
   a value longer than 255 characters, a control character, or a correlation id that starts with

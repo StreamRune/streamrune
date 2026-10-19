@@ -156,14 +156,23 @@ public record StreamRuneProperties(
      * @param enabled whether a {@code LeaseBasedLeadership} bean is auto-configured (when a {@code
      *     DataSource} is present) so at most one replica of each projection/subscription is the
      *     active consumer. When {@code false} or no {@code DataSource} is present, runners receive
-     *     {@code SubscriptionLeadership.NOOP} (always leader — single-instance behavior).
+     *     {@code SubscriptionLeadership.NOOP} (always leader — single-instance behavior). Bound as
+     *     text and read only through {@link
+     *     org.streamrune.integration.SingleActiveConsumerSetting#enabled}, by the bean's condition
+     *     and by the saga forward fence's {@code auto} alike; an unknown spelling fails binding,
+     *     and so startup, with a message naming the property
      * @param leaseTtl how long a granted lease stays live before another replica may take it over.
      *     This is the upper bound on failover latency: when a leader stops renewing (crash, pause,
      *     graceful close) a standby wins the name at most {@code leaseTtl} later. The renew
      *     heartbeat runs at {@code leaseTtl/3}. Default 15s.
      */
     public record SingleActiveConsumer(
-        @DefaultValue("true") boolean enabled, @DefaultValue("15s") Duration leaseTtl) {}
+        @DefaultValue("true") String enabled, @DefaultValue("15s") Duration leaseTtl) {
+
+      public SingleActiveConsumer {
+        org.streamrune.integration.SingleActiveConsumerSetting.enabled(enabled);
+      }
+    }
   }
 
   /**

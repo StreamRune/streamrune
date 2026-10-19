@@ -122,7 +122,7 @@ class ProjectionFactoryTest {
             Duration.ofDays(7),
             List.of(),
             Duration.ofDays(30),
-            true,
+            "true",
             10,
             1000L,
             2.0,

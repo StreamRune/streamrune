@@ -167,7 +167,10 @@ public final class SagaCompensationRetryLifecycle implements SmartLifecycle {
             .inboxRetentionMaxAge(properties.inbox().retentionMaxAge())
             .clock(Clock.systemUTC())
             .metrics(resolvedMetrics);
-    leadership.ifAvailable(builder::leadership);
+    SubscriptionLeadership resolvedLeadership = LeadershipBeans.resolve(leadership);
+    if (resolvedLeadership != null) {
+      builder.leadership(resolvedLeadership);
+    }
     return builder.build();
   }
 

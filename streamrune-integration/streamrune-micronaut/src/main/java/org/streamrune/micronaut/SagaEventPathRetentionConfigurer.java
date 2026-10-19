@@ -104,7 +104,9 @@ public class SagaEventPathRetentionConfigurer
           applied);
     }
     SagaForwardFenceSetting fence = SagaForwardFenceSetting.parse(properties.sagaForwardFence());
-    boolean singleActiveConsumer = properties.subscriptionSingleActiveConsumerEnabled();
+    boolean singleActiveConsumer =
+        org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+            properties.subscriptionSingleActiveConsumerEnabled());
     boolean fenceOn = fence.enabled(singleActiveConsumer);
     int fenced = SagaForwardFenceDefault.applyDefault(runners, fenceOn);
     if (fenced > 0) {

@@ -43,6 +43,7 @@ import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.integration.AuthenticatedUserResolver;
 import org.streamrune.integration.MicrometerStreamRuneMetrics;
 import org.streamrune.integration.RequestIdentityPolicy;
+import org.streamrune.integration.SingleActiveConsumerSetting;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.postgres.PostgresAuditStore;
 import org.streamrune.postgres.PostgresCommandInbox;
@@ -1341,8 +1342,12 @@ public class StreamRuneAutoConfiguration {
     // DataSource is present and the knob is on) into the DLQ retry runner so only the leader
     // replica polls/retries; defaults to SubscriptionLeadership.NOOP (always leader) when no bean
     // exists. Without this, two replicas' staggered polls both re-execute the same DLQ command
-    // (duplicate domain events) whenever no CommandInbox is present to de-dup them.
-    leadershipProvider.ifAvailable(builder::leadership);
+    // (duplicate domain events) whenever no CommandInbox is present to de-dup them. Two leadership
+    // beans with none @Primary fail here, as on Quarkus and Micronaut.
+    var leadership = LeadershipBeans.resolve(leadershipProvider);
+    if (leadership != null) {
+      builder.leadership(leadership);
+    }
 
     DeadLetterRetryRunner runner = builder.build();
     // Register for relay liveness health so /health degrades if this runner's thread
@@ -1569,25 +1574,46 @@ public class StreamRuneAutoConfiguration {
    * no dedicated connection held across calls); the leader's monotonic epoch is threaded into the
    * projection commit and rejected downstream if a superseded leader ever tries to write. Produced
    * when a {@link DataSource} is present and {@code
-   * streamrune.subscription.single-active-consumer.enabled} is not {@code false} (default on). The
-   * lease TTL is {@code streamrune.subscription.single-active-consumer.lease-ttl} (default 15s) —
-   * the failover bound; the renew heartbeat runs at {@code ttl/3}. When absent or disabled the
-   * projection runners fall back to {@link
-   * org.streamrune.core.subscription.SubscriptionLeadership#NOOP} (always leader — single-instance
-   * behavior unchanged); see {@link ProjectionAutoConfig}, which resolves this bean via {@code
-   * ObjectProvider} and threads it into the runner builders.
+   * streamrune.subscription.single-active-consumer.enabled} reads as on (default on) — through
+   * {@link SingleActiveConsumerEnabledCondition}, the same reading the saga forward fence's {@code
+   * auto} follows. The lease TTL is {@code
+   * streamrune.subscription.single-active-consumer.lease-ttl} (default 15s) — the failover bound;
+   * the renew heartbeat runs at {@code ttl/3}. When absent or disabled the projection runners fall
+   * back to {@link org.streamrune.core.subscription.SubscriptionLeadership#NOOP} (always leader —
+   * single-instance behavior unchanged); see {@link ProjectionAutoConfig}, which resolves this bean
+   * via {@code ObjectProvider} and threads it into the runner builders.
    */
   @Bean
   @ConditionalOnBean(DataSource.class)
   @ConditionalOnMissingBean(org.streamrune.core.subscription.SubscriptionLeadership.class)
-  @ConditionalOnProperty(
-      name = "streamrune.subscription.single-active-consumer.enabled",
-      havingValue = "true",
-      matchIfMissing = true)
+  @org.springframework.context.annotation.Conditional(SingleActiveConsumerEnabledCondition.class)
   public org.streamrune.core.subscription.SubscriptionLeadership streamRuneSubscriptionLeadership(
       DataSource dataSource, StreamRuneProperties properties) {
     return new org.streamrune.postgres.LeaseBasedLeadership(
         dataSource, properties.subscription().singleActiveConsumer().leaseTtl());
+  }
+
+  /**
+   * Matches when {@code streamrune.subscription.single-active-consumer.enabled} reads as on through
+   * {@link SingleActiveConsumerSetting#enabled}, the parser {@link
+   * SagaEventPathRetentionConfigurer} reads it through for the forward fence's {@code auto}. The
+   * value is bound with the same relaxed binding as {@link StreamRuneProperties}, so the condition
+   * and the bound value see the same text. {@code @ConditionalOnProperty(havingValue = "true")}
+   * matched the literal {@code true} only: {@code on}, {@code yes} or {@code 1} left this bean out
+   * while the fence read them as on. An unknown spelling throws, so the context does not start.
+   */
+  static final class SingleActiveConsumerEnabledCondition
+      implements org.springframework.context.annotation.Condition {
+    @Override
+    public boolean matches(
+        org.springframework.context.annotation.ConditionContext context,
+        org.springframework.core.type.AnnotatedTypeMetadata metadata) {
+      String value =
+          org.springframework.boot.context.properties.bind.Binder.get(context.getEnvironment())
+              .bind(SingleActiveConsumerSetting.PROPERTY, String.class)
+              .orElse(null);
+      return SingleActiveConsumerSetting.enabled(value);
+    }
   }
 
   /**

@@ -351,10 +351,14 @@ public interface StreamRuneQuarkusProperties {
        * Whether a {@code LeaseBasedLeadership} bean is produced (when a {@code DataSource} is
        * present) so at most one replica of each projection/subscription is the active consumer.
        * When {@code false} or no {@code DataSource} is present, runners receive {@code
-       * SubscriptionLeadership.NOOP} (always leader — single-instance behavior).
+       * SubscriptionLeadership.NOOP} (always leader — single-instance behavior). Text, read only
+       * through {@link org.streamrune.integration.SingleActiveConsumerSetting#enabled} — by the
+       * leadership producer and the saga forward fence's {@code auto} alike, with the spellings
+       * Spring and Micronaut accept. An unknown spelling fails startup ({@link
+       * StreamRuneConfigValidator}), naming the property.
        */
       @WithDefault("true")
-      boolean enabled();
+      String enabled();
 
       /**
        * How long a granted lease stays live before another replica may take it over — the upper

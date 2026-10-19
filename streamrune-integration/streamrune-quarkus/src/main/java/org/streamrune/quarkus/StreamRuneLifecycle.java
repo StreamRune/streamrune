@@ -225,7 +225,7 @@ public class StreamRuneLifecycle {
     // Materialize the leadership bean (if produced) so this lifecycle owns the single instance and
     // can release its advisory locks + dedicated connection on shutdown, after the runners stop.
     // The runners resolve the same singleton and acquire leadership lazily; nothing to start here.
-    leadership = resolveOrNull(leadershipInstance);
+    leadership = LeadershipInstances.resolve(leadershipInstance);
   }
 
   void onStop(@Observes ShutdownEvent event) {

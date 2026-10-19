@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
@@ -375,6 +377,73 @@ class SagaEventPathRetentionWiringTest {
     var unfenced = fencedRunner(false);
     applyWith(Map.of("streamrune.saga.forward-fence", "on"), unfenced);
     assertFalse(SagaForwardFenceDefault.effectiveOf(unfenced));
+  }
+
+  /**
+   * {@code streamrune.subscription.single-active-consumer.enabled} has one meaning: the leadership
+   * bean exists exactly when the forward fence's {@code auto} switches the fence on. The bean's
+   * {@code @Requires(notEquals = "false")} used to keep it for {@code no} or {@code off} while the
+   * fence read the bound boolean as false, so every replica fenced nothing yet only one led.
+   */
+  @ParameterizedTest
+  @CsvSource({
+    "true,true", "on,true", "yes,true", "TRUE,true", "1,true",
+    "false,false", "off,false", "no,false", "Off,false", "0,false"
+  })
+  void singleActiveConsumer_meansTheSameForTheLeadershipBeanAndTheFence(String value, boolean on) {
+    var runner = fencedRunner(null);
+    try (var ctx =
+        ApplicationContext.builder()
+            .properties(
+                Map.of(
+                    "spec.name",
+                    "with-datasource",
+                    "streamrune.subscription.single-active-consumer.enabled",
+                    value))
+            .start()) {
+      assertEquals(
+          on,
+          ctx.containsBean(SubscriptionLeadership.class),
+          () -> "leadership bean for enabled=" + value);
+      ctx.getBean(SagaEventPathRetentionConfigurer.class).apply(List.of(runner));
+    }
+    assertEquals(
+        on,
+        SagaForwardFenceDefault.effectiveOf(runner),
+        () -> "forward fence for enabled=" + value);
+  }
+
+  @Test
+  void singleActiveConsumer_anUnknownSpellingFailsStartupNamingTheProperty() {
+    var failure =
+        assertThrows(
+            RuntimeException.class,
+            () ->
+                ApplicationContext.builder()
+                    .properties(
+                        Map.of(
+                            "spec.name",
+                            "with-datasource",
+                            "streamrune.subscription.single-active-consumer.enabled",
+                            "maybe"))
+                    .start()
+                    .close());
+    assertTrue(
+        causeChainContains(
+            failure,
+            "streamrune.subscription.single-active-consumer.enabled must be true or false",
+            "got: 'maybe'"),
+        () -> "the startup failure names the property and the value: " + failure);
+  }
+
+  private static boolean causeChainContains(Throwable failure, String... fragments) {
+    for (Throwable t = failure; t != null; t = t.getCause()) {
+      String message = t.getMessage();
+      if (message != null && java.util.Arrays.stream(fragments).allMatch(message::contains)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @Test

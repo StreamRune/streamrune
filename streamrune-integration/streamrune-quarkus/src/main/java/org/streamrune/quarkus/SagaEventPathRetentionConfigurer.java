@@ -113,7 +113,7 @@ public class SagaEventPathRetentionConfigurer {
   public void apply(@Observes @Priority(Interceptor.Priority.LIBRARY_BEFORE) StartupEvent event) {
     SagaTypeOwnership.requireOneRunnerPerSagaType(sagaRunners);
     SagaLeaseWiring.warnUngatedUnderLeadership(
-        sagaRunners, leadership.isResolvable() ? leadership.get() : null);
+        sagaRunners, LeadershipInstances.resolve(leadership));
     Duration window = properties.inbox().retentionMaxAge();
     int applied = SagaEventPathRetention.applyDefault(sagaRunners, window);
     if (applied > 0) {
@@ -124,7 +124,9 @@ public class SagaEventPathRetentionConfigurer {
           applied);
     }
     SagaForwardFenceSetting fence = SagaForwardFenceSetting.parse(properties.saga().forwardFence());
-    boolean singleActiveConsumer = properties.subscription().singleActiveConsumer().enabled();
+    boolean singleActiveConsumer =
+        org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+            properties.subscription().singleActiveConsumer().enabled());
     boolean fenceOn = fence.enabled(singleActiveConsumer);
     int fenced = SagaForwardFenceDefault.applyDefault(sagaRunners, fenceOn);
     if (fenced > 0) {

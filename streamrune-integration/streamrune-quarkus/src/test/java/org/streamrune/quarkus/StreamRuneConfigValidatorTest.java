@@ -69,6 +69,27 @@ class StreamRuneConfigValidatorTest {
     assertTrue(ex.getMessage().contains("must not be negative"));
   }
 
+  /**
+   * An unknown spelling of {@code streamrune.subscription.single-active-consumer.enabled} fails
+   * startup, with or without a {@code DataSource}: it used to read as {@code false}, silently
+   * leaving every replica leading.
+   */
+  @Test
+  void unknownSingleActiveConsumerSpellingFailsStartup() {
+    var props =
+        TestProperties.of(
+            Map.of("streamrune.subscription.single-active-consumer.enabled", "maybe"));
+    var validator = new StreamRuneConfigValidator(props, unsatisfied(), unsatisfied());
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
+    assertEquals(
+        "streamrune.subscription.single-active-consumer.enabled must be true or false"
+            + " (case-insensitive; on/off, yes/no, y/n, t/f and 1/0 are accepted too); got:"
+            + " 'maybe'",
+        ex.getMessage());
+  }
+
   /** Zero is the documented "do not wait at all" value and must pass. */
   @Test
   void zeroLockTimeoutPasses() {

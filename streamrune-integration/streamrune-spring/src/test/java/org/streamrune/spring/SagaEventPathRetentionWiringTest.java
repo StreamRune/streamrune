@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Optional;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -431,6 +433,49 @@ class SagaEventPathRetentionWiringTest {
       @Override
       public void close() {}
     };
+  }
+
+  /**
+   * {@code streamrune.subscription.single-active-consumer.enabled} has one meaning: the leadership
+   * bean exists exactly when the forward fence's {@code auto} switches the fence on. The bean's
+   * condition used to match only the literal {@code true} while the fence read the bound boolean,
+   * so {@code on} or {@code yes} turned the fence on and left every replica leading.
+   */
+  @ParameterizedTest
+  @CsvSource({
+    "true,true", "on,true", "yes,true", "TRUE,true", "1,true",
+    "false,false", "off,false", "no,false", "Off,false", "0,false"
+  })
+  void singleActiveConsumer_meansTheSameForTheLeadershipBeanAndTheFence(String value, boolean on) {
+    runner
+        .withPropertyValues("streamrune.subscription.single-active-consumer.enabled=" + value)
+        .withBean("orderSagaRunner", SagaRunner.class, () -> fencedRunner(null))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(ctx.getBeansOfType(SubscriptionLeadership.class))
+                  .as("leadership bean for enabled=%s", value)
+                  .hasSize(on ? 1 : 0);
+              assertThat(fenceOf(ctx.getBean("orderSagaRunner")))
+                  .as("forward fence for enabled=%s", value)
+                  .isEqualTo(on);
+            });
+  }
+
+  @Test
+  void singleActiveConsumer_anUnknownSpellingFailsStartupNamingTheProperty() {
+    runner
+        .withPropertyValues("streamrune.subscription.single-active-consumer.enabled=maybe")
+        .withBean("orderSagaRunner", SagaRunner.class, () -> fencedRunner(null))
+        .run(
+            ctx ->
+                assertThat(ctx)
+                    .hasFailed()
+                    .getFailure()
+                    .hasStackTraceContaining(
+                        "streamrune.subscription.single-active-consumer.enabled must be true or"
+                            + " false")
+                    .hasStackTraceContaining("got: 'maybe'"));
   }
 
   private static boolean fenceOf(Object sagaRunnerBean) {

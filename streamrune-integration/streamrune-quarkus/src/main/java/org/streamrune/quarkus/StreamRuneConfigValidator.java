@@ -90,6 +90,16 @@ public class StreamRuneConfigValidator {
     } catch (IllegalArgumentException e) {
       throw new IllegalStateException(e.getMessage(), e);
     }
+    // streamrune.subscription.single-active-consumer.enabled is bound as text and parsed where it
+    // is read — the leadership producer, which runs only when something injects the leadership,
+    // and the saga forward fence. Parsing it here makes an unknown spelling fail every startup,
+    // with or without a DataSource, as binding does on Spring and Micronaut.
+    try {
+      org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+          properties.subscription().singleActiveConsumer().enabled());
+    } catch (IllegalArgumentException e) {
+      throw new IllegalStateException(e.getMessage(), e);
+    }
     if (properties.outbox().enabled() && !outboxStore.isResolvable()) {
       throw new IllegalStateException(
           "Outbox enabled but no OutboxStore found. "

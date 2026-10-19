@@ -5,11 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
 import io.quarkus.runtime.StartupEvent;
 import io.smallrye.config.SmallRyeConfig;
 import io.smallrye.config.SmallRyeConfigBuilder;
+import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
@@ -17,7 +20,10 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventEnvelope;
@@ -443,6 +449,137 @@ class SagaEventPathRetentionContainerWiringTest {
         Map.of("streamrune.saga.forward-fence", "on"),
         false,
         () -> assertFalse(SagaForwardFenceDefault.effectiveOf(namesItsFence)));
+  }
+
+  /**
+   * {@code streamrune.subscription.single-active-consumer.enabled} has one meaning: the leadership
+   * producer hands out a real lease exactly when the forward fence's {@code auto} switches the
+   * fence on. Both read one parser, the same one Spring and Micronaut use.
+   */
+  @ParameterizedTest
+  @CsvSource({
+    "true,true", "on,true", "yes,true", "TRUE,true", "1,true",
+    "false,false", "off,false", "no,false", "Off,false", "0,false"
+  })
+  void singleActiveConsumer_meansTheSameForTheLeadershipProducerAndTheFence(
+      String value, boolean on) throws Exception {
+    Map<String, String> properties =
+        Map.of("streamrune.subscription.single-active-consumer.enabled", value);
+    @SuppressWarnings("unchecked")
+    Instance<DataSource> dataSource = mock(Instance.class);
+    when(dataSource.isUnsatisfied()).thenReturn(false);
+    when(dataSource.isResolvable()).thenReturn(true);
+    when(dataSource.get()).thenReturn(mock(DataSource.class));
+    SubscriptionLeadership leadership =
+        new StreamRuneProducers().subscriptionLeadership(dataSource, TestProperties.of(properties));
+    try {
+      assertEquals(
+          on,
+          leadership instanceof org.streamrune.postgres.LeaseBasedLeadership,
+          () -> "leadership for enabled=" + value);
+    } finally {
+      leadership.close();
+    }
+    startWith(
+        properties,
+        false,
+        () ->
+            assertEquals(
+                on,
+                SagaForwardFenceDefault.effectiveOf(namesNothing),
+                () -> "forward fence for enabled=" + value));
+  }
+
+  @Test
+  void singleActiveConsumer_anUnknownSpellingFailsStartupNamingTheProperty() {
+    var failure =
+        assertThrows(
+            Exception.class,
+            () ->
+                startWith(
+                    Map.of("streamrune.subscription.single-active-consumer.enabled", "maybe"),
+                    false,
+                    () -> {}));
+    Throwable cause = failure;
+    boolean found = false;
+    while (cause != null && !found) {
+      found =
+          cause.getMessage() != null
+              && cause
+                  .getMessage()
+                  .contains(
+                      "streamrune.subscription.single-active-consumer.enabled must be true or"
+                          + " false")
+              && cause.getMessage().contains("got: 'maybe'");
+      cause = cause.getCause();
+    }
+    assertTrue(found, "the startup failure names the property and the value: " + failure);
+  }
+
+  /** A leadership that holds nothing and grants nothing. */
+  @Singleton
+  public static class LeadershipA implements SubscriptionLeadership {
+    @Override
+    public Optional<Lease> tryAcquire(String consumerName) {
+      return Optional.empty();
+    }
+
+    @Override
+    public Optional<Lease> current(String consumerName) {
+      return Optional.empty();
+    }
+
+    @Override
+    public void resign(String consumerName) {}
+
+    @Override
+    public void close() {}
+  }
+
+  /** A second leadership bean, so the refusal can name both. */
+  @Singleton
+  public static class LeadershipB extends LeadershipA {}
+
+  /**
+   * Two leadership beans and none the default: startup is refused with a message naming both, the
+   * way Spring and Micronaut refuse them. The startup hook used to read the ambiguous leadership as
+   * absent and report nothing.
+   */
+  @Test
+  void twoLeadershipBeansWithoutADefaultFailStartupNamingBoth() {
+    fenceProperties = Map.of();
+    namesNothing = fencedRunner(null);
+    namesItsFence = fencedRunner(false);
+    var failure =
+        assertThrows(
+            Exception.class,
+            () -> {
+              try (var arc =
+                  RealArcTestContainer.boot(
+                      List.of(
+                          SagaEventPathRetentionConfigurer.class,
+                          FenceBeans.class,
+                          LeadershipA.class,
+                          LeadershipB.class))) {
+                arc.container()
+                    .beanManager()
+                    .getEvent()
+                    .select(StartupEvent.class)
+                    .fire(new StartupEvent());
+              }
+            });
+    Throwable cause = failure;
+    String message = null;
+    while (cause != null && message == null) {
+      if (cause.getMessage() != null
+          && cause.getMessage().contains("SubscriptionLeadership beans and none is the default")) {
+        message = cause.getMessage();
+      }
+      cause = cause.getCause();
+    }
+    assertTrue(message != null, "the startup failure explains the two leaderships: " + failure);
+    assertTrue(message.contains(LeadershipA.class.getName()), message);
+    assertTrue(message.contains(LeadershipB.class.getName()), message);
   }
 
   @Test

@@ -120,11 +120,14 @@ public record StreamRuneMicronautProperties(
     // streamrune.subscription.single-active-consumer.enabled. Whether a
     // LeaseBasedLeadership bean is produced (when a DataSource is present) so at most one
     // replica of each projection/subscription is the active consumer. When false or no DataSource
-    // is present, runners receive SubscriptionLeadership.NOOP (always leader).
+    // is present, runners receive SubscriptionLeadership.NOOP (always leader). Bound as text and
+    // read only through SingleActiveConsumerSetting.enabled — by the leadership bean's condition
+    // and the saga forward fence's auto alike — so a spelling cannot mean one thing to one and the
+    // opposite to the other; an unknown spelling fails binding, naming the property.
     @Bindable(defaultValue = "true")
         @io.micronaut.context.annotation.Property(
             name = "streamrune.subscription.single-active-consumer.enabled")
-        boolean subscriptionSingleActiveConsumerEnabled,
+        String subscriptionSingleActiveConsumerEnabled,
     // Outbox retry knobs — appended at the end so the positional withDefaults() stays
     // aligned. Delivery attempts a per-entry rejection may accrue before terminal FAILED; transport
     // failures are non-counting regardless (see OutboxPoller.recordFailure).
@@ -191,6 +194,8 @@ public record StreamRuneMicronautProperties(
         String sagaForwardFence) {
 
   public StreamRuneMicronautProperties {
+    org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+        subscriptionSingleActiveConsumerEnabled);
     metadataBaggageAllowlist =
         metadataBaggageAllowlist == null ? List.of() : List.copyOf(metadataBaggageAllowlist);
   }
@@ -237,7 +242,7 @@ public record StreamRuneMicronautProperties(
         List.of(),
         // outbox.skipped-retention-max-age (the SKIPPED audit window; FAILED is never pruned)
         Duration.ofDays(30),
-        true,
+        "true",
         // Outbox retry knobs: maxAttempts, initialDelayMs, multiplier.
         10,
         1000L,
