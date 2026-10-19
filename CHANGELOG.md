@@ -849,7 +849,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `streamrune.gdpr.snapshot-purge=none` (default `required`). Otherwise startup fails — on Quarkus
   and Micronaut too, where `StreamRuneConfigValidator` builds the service on the startup event — with
   a message naming the bean and the property; an unknown value, or `none` beside a `SnapshotPurger`
-  bean, fails it as well.
+  bean, fails it as well. The marker is read on the purger object: a wrapper must implement
+  `SnapshotPurger` itself; on Quarkus the integration looks through the client proxy of a
+  normal-scoped purger bean to the instance behind it.
 - Crypto-shredding covers events, snapshots, saga state and the `@Encrypted` components of dead-lettered
   commands. Saga and projection dead-letter stores hold metadata only and point at `event_stream`.
 - `streamrune.crypto.subject_redacted` and `streamrune.crypto.keystore_systemic_failure` distinguish

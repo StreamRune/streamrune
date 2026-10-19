@@ -207,9 +207,9 @@
     },
     {
       "name": "streamrune.subscription.single-active-consumer.enabled",
-      "type": "java.lang.Boolean",
+      "type": "java.lang.String",
       "description": "Enable single-active-consumer subscription leadership so at most one replica of each projection/subscription is the active consumer (requires a DataSource); when false, runners always lead (single-instance behavior). The leadership bean and the saga forward fence's auto read this value through one parser: true/false, on/off, yes/no, y/n, t/f and 1/0, case-insensitive; any other value fails startup",
-      "defaultValue": true
+      "defaultValue": "true"
     },
     {
       "name": "streamrune.subscription.health.lag-threshold",

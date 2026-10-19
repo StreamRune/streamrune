@@ -540,6 +540,60 @@ class SagaEventPathRetentionContainerWiringTest {
   @Singleton
   public static class LeadershipB extends LeadershipA {}
 
+  /** Two leadership producers in one configuration class. */
+  public static class TwoLeadershipProducers {
+    @Produces
+    @Singleton
+    @Named("leadershipA")
+    public SubscriptionLeadership leadershipA() {
+      return new LeadershipA();
+    }
+
+    @Produces
+    @Singleton
+    @Named("leadershipB")
+    public SubscriptionLeadership leadershipB() {
+      return new LeadershipB();
+    }
+  }
+
+  /**
+   * Two producers of one class are told apart in the refusal: each is named by its producer method,
+   * not by the declaring class both share.
+   */
+  @Test
+  void twoLeadershipProducersOfOneClassAreNamedApart() {
+    fenceProperties = Map.of();
+    namesNothing = fencedRunner(null);
+    namesItsFence = fencedRunner(false);
+    var failure =
+        assertThrows(
+            Exception.class,
+            () -> {
+              try (var arc =
+                  RealArcTestContainer.boot(
+                      List.of(
+                          SagaEventPathRetentionConfigurer.class,
+                          FenceBeans.class,
+                          TwoLeadershipProducers.class))) {
+                arc.container()
+                    .beanManager()
+                    .getEvent()
+                    .select(StartupEvent.class)
+                    .fire(new StartupEvent());
+              }
+            });
+    String message = null;
+    for (Throwable t = failure; t != null && message == null; t = t.getCause()) {
+      if (t.getMessage() != null
+          && t.getMessage().contains("SubscriptionLeadership beans and none is the default")) {
+        message = t.getMessage();
+      }
+    }
+    assertTrue(message != null, "the startup failure explains the two leaderships: " + failure);
+    assertTrue(message.contains("leadershipA") && message.contains("leadershipB"), message);
+  }
+
   /**
    * Two leadership beans and none the default: startup is refused with a message naming both, the
    * way Spring and Micronaut refuse them. The startup hook used to read the ambiguous leadership as

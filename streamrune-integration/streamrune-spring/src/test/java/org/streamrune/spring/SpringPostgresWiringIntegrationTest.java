@@ -12,6 +12,7 @@ import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.streamrune.core.AggregateState;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
@@ -29,8 +30,13 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubjectId;
+import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 import org.streamrune.postgres.PostgresEventStoreFactory;
+import org.streamrune.postgres.PostgresSnapshotStorePurger;
+import org.streamrune.runtime.gdpr.ForgetResult;
+import org.streamrune.runtime.gdpr.ForgetSubjectService;
 import org.streamrune.test.InMemoryCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -58,6 +64,9 @@ class SpringPostgresWiringIntegrationTest {
   record CustomerRegistered(String customerId, @Encrypted(subjectId = "customerId") String email)
       implements DomainEvent {}
 
+  /** A customer's state as a snapshot keeps it: the email in the clear, as a state often does. */
+  record CustomerState(String customerId, String email) implements AggregateState {}
+
   static PGSimpleDataSource dataSource;
   static EventTypeRegistry typeRegistry;
 
@@ -71,6 +80,7 @@ class SpringPostgresWiringIntegrationTest {
     typeRegistry =
         SimpleEventTypeRegistry.builder()
             .registerEvent("CustomerRegistered", CustomerRegistered.class)
+            .registerState("CustomerState", CustomerState.class)
             .build();
 
     // Run Flyway migrations once for both tests. CustomerRegistered carries an @Encrypted field,
@@ -221,6 +231,66 @@ class SpringPostgresWiringIntegrationTest {
               assertThat(ctx.getBean(CommandBus.class).sagaFenceStorageIdentity())
                   .isEqualTo(sagaStore.storageIdentity());
             });
+  }
+
+  /**
+   * The guarantee the snapshot-purge rule exists for, end to end: a {@code
+   * PostgresSnapshotStorePurger} bean is run by the auto-configured {@code ForgetSubjectService},
+   * and the subject's row in {@code snapshot_store} — with the email in the clear — is gone after
+   * the forget, while another customer's snapshot stays.
+   */
+  @Test
+  void theAutoConfiguredForgetDeletesTheSubjectsSnapshotRow() {
+    var subject = "snap-" + UUID.randomUUID();
+    var customer = AggregateType.of("customer");
+    var subjectStream = StreamId.of(customer, AggregateId.of(subject));
+    var otherStream = StreamId.of(customer, AggregateId.of("other-" + UUID.randomUUID()));
+    new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(DataSource.class, () -> dataSource)
+        .withBean(EventTypeRegistry.class, () -> typeRegistry)
+        .withBean(CryptoEngine.class, InMemoryCryptoEngine::new)
+        .withBean(
+            PostgresSnapshotStorePurger.class,
+            () ->
+                new PostgresSnapshotStorePurger(
+                    dataSource,
+                    subjectId -> List.of(StreamId.of(customer, AggregateId.of(subjectId.value())))))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              EventStore store = ctx.getBean(EventStore.class);
+              store.saveSnapshot(
+                  subjectStream, new Version(1), new CustomerState(subject, "alice@example.com"));
+              store.saveSnapshot(
+                  otherStream, new Version(1), new CustomerState("other", "bob@example.com"));
+              assertThat(snapshotRows(subjectStream)).isEqualTo(1);
+
+              ForgetResult result =
+                  ctx.getBean(ForgetSubjectService.class)
+                      .forget(SubjectId.of(subject), UserId.of("dpo"));
+
+              assertThat(result.fullyErased()).isTrue();
+              assertThat(result.purgeOutcomes())
+                  .extracting(ForgetResult.PurgeOutcome::purgerName)
+                  .containsExactly("snapshot_store");
+              assertThat(snapshotRows(subjectStream)).isZero();
+              assertThat(snapshotRows(otherStream)).isEqualTo(1);
+            });
+  }
+
+  private static int snapshotRows(StreamId streamId) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "SELECT count(*) FROM snapshot_store WHERE aggregate_type = ? AND aggregate_id = ?")) {
+      ps.setString(1, streamId.aggregateType().value());
+      ps.setString(2, streamId.aggregateId().value());
+      try (var rs = ps.executeQuery()) {
+        rs.next();
+        return rs.getInt(1);
+      }
+    }
   }
 
   private static String rawPayload(StreamId streamId) throws Exception {

@@ -25,9 +25,33 @@ final class LeadershipInstances {
     }
     if (instance.isAmbiguous()) {
       throw SubscriptionLeadershipResolution.ambiguous(
-          instance.handlesStream().map(h -> h.getBean().getBeanClass().getName()).toList(),
+          instance.handlesStream().map(h -> describe(h.getBean())).toList(),
           "@Alternative with a @Priority (or give the others a qualifier)");
     }
     return instance.get();
+  }
+
+  /**
+   * Names a candidate: a class bean by its class; a producer by the class that declares it and the
+   * qualifiers that set it apart (the bean class alone is the declaring class, the same for two
+   * producers of one configuration class).
+   */
+  private static String describe(jakarta.enterprise.inject.spi.Bean<?> bean) {
+    if (bean instanceof io.quarkus.arc.InjectableBean<?> injectable
+        && injectable.getKind() != io.quarkus.arc.InjectableBean.Kind.CLASS) {
+      String qualifiers =
+          bean.getQualifiers().stream()
+              .filter(
+                  q ->
+                      !(q instanceof jakarta.enterprise.inject.Default)
+                          && !(q instanceof jakarta.enterprise.inject.Any))
+              .map(Object::toString)
+              .sorted()
+              .collect(java.util.stream.Collectors.joining(" "));
+      return "a producer of "
+          + bean.getBeanClass().getName()
+          + (qualifiers.isEmpty() ? "" : " " + qualifiers);
+    }
+    return bean.getBeanClass().getName();
   }
 }

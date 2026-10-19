@@ -924,9 +924,12 @@ public class StreamRuneProducers {
     if (cryptoEngine.isUnsatisfied()) {
       return null;
     }
-    var b = ForgetSubjectService.builder().cryptoEngine(cryptoEngine.get()).purgers(purgers);
+    // A normal-scoped snapshot purger arrives as a client proxy without the SnapshotPurger marker;
+    // expose it, so the snapshot-purge rule sees the purger the application declared.
+    List<SubjectDataPurger> exposed = SnapshotPurgerReferences.exposeSnapshotPurgers(purgers);
+    var b = ForgetSubjectService.builder().cryptoEngine(cryptoEngine.get()).purgers(exposed);
     if (org.streamrune.integration.SnapshotPurgeSetting.parse(properties.gdpr().snapshotPurge())
-        .withoutSnapshotPurge(purgers)) {
+        .withoutSnapshotPurge(exposed)) {
       b.withoutSnapshotPurge();
     }
     if (!auditStore.isUnsatisfied()) {

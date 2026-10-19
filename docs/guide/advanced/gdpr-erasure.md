@@ -574,15 +574,26 @@ kind of lookup every other `SubjectDataPurger` performs internally against its o
 runs every `SubjectDataPurger` bean, and a `PostgresSnapshotStorePurger` bean is one.
 
 ```java
-@Bean // Spring; a Quarkus @Produces or a Micronaut @Singleton factory method works the same way
+@Bean // Spring; a Quarkus @Produces or a Micronaut factory method works the same way
 PostgresSnapshotStorePurger customerSnapshotPurger(DataSource dataSource) {
     return new PostgresSnapshotStorePurger(dataSource,
         subjectId -> List.of(StreamId.of(CUSTOMER, AggregateId.of(subjectId.value()))));
 }
 ```
 
-Without one, the application does not start: Spring when the context builds the service, Quarkus
-and Micronaut in their startup validator, which builds it on the startup event. The message names
+**The rule is checked on the purger object the service receives.** A wrapper or decorator around a
+snapshot purger, and a purger for another store, must implement `SnapshotPurger` themselves. A
+proxy that implements only the bean's declared type hides the marker; declare the bean as
+`PostgresSnapshotStorePurger` or `SnapshotPurger`, as above, to be safe on every integration. On
+Quarkus a normal-scoped producer (`@ApplicationScoped`) declared as `SubjectDataPurger` hands over
+a client proxy without the marker; the integration looks through the proxy to the instance, so it
+still counts. A snapshot purger whose scope is not active at startup (`@RequestScoped`) cannot be
+looked through and does not count: give it `@Singleton`, `@ApplicationScoped` or the marker as its
+declared type.
+
+Without one, the application does not start: Spring when the context builds the service (with
+`spring.main.lazy-initialization=true`, when the service is first injected), Quarkus and Micronaut
+in their startup validator, which builds it on the startup event. The message names
 the bean to declare and the property that opts out: `streamrune.gdpr.snapshot-purge=none` builds
 the service with `withoutSnapshotPurge()`. The default is `required`; any other value fails startup,
 and `none` beside a `SnapshotPurger` bean fails it too. An application that declares its own

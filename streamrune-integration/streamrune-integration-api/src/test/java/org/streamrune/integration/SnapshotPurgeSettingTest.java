@@ -77,7 +77,9 @@ class SnapshotPurgeSettingTest {
                 + " every field not marked @Encrypted in the clear, so after a forget it still"
                 + " holds whatever that state kept of the subject's data. Declare a SnapshotPurger"
                 + " bean — for PostgresEventStore: new PostgresSnapshotStorePurger(dataSource,"
-                + " subjectId -> the streams whose snapshots hold the subject's data); the"
+                + " subjectId -> the streams whose snapshots hold the subject's data); for another"
+                + " store, a purger of your own that implements SnapshotPurger. A wrapper or proxy"
+                + " around a snapshot purger must implement SnapshotPurger itself. The"
                 + " ForgetSubjectService runs it with the other SubjectDataPurger beans — or set"
                 + " streamrune.gdpr.snapshot-purge=none if this application has never stored a"
                 + " snapshot.");

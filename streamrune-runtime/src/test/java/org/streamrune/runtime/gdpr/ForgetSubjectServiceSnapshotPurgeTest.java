@@ -37,8 +37,10 @@ class ForgetSubjectServiceSnapshotPurgeTest {
                 + " marked @Encrypted in the clear, so after a forget it still holds whatever"
                 + " that state kept of the subject's data. Add one to purgers(...) — for"
                 + " PostgresEventStore: new PostgresSnapshotStorePurger(dataSource, subjectId ->"
-                + " the streams whose snapshots hold the subject's data) — or call"
-                + " withoutSnapshotPurge() if this application has never stored a snapshot.");
+                + " the streams whose snapshots hold the subject's data); for another store, a"
+                + " purger of your own that implements SnapshotPurger, as must any wrapper around"
+                + " one — or call withoutSnapshotPurge() if this application has never stored a"
+                + " snapshot.");
     verifyNoInteractions(crypto);
   }
 

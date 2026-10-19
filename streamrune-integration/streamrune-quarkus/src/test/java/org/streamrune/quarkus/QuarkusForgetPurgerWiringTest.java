@@ -130,6 +130,54 @@ class QuarkusForgetPurgerWiringTest {
     }
   }
 
+  /**
+   * A snapshot purger produced the way an application commonly writes it: normal-scoped, typed by
+   * the purger API. The forget receives Arc's client proxy, which implements only {@link
+   * SubjectDataPurger}.
+   */
+  @ApplicationScoped
+  public static class NormalScopedSnapshotPurgerProducer {
+    @Produces
+    @ApplicationScoped
+    public SubjectDataPurger customerSnapshotPurger() {
+      return new org.streamrune.postgres.PostgresSnapshotStorePurger(
+          org.mockito.Mockito.mock(javax.sql.DataSource.class), subjectId -> List.of());
+    }
+  }
+
+  /**
+   * The marker is read on the instance behind the client proxy, so an {@code @ApplicationScoped}
+   * producer typed {@link SubjectDataPurger} that returns a {@code PostgresSnapshotStorePurger}
+   * counts as the snapshot purger: startup passes, and the forget runs it under its own name.
+   */
+  @Test
+  void aNormalScopedProducerTypedSubjectDataPurgerCountsAsTheSnapshotPurger() throws Exception {
+    try (var arc =
+        RealArcTestContainer.boot(
+            List.of(
+                RequiredSnapshotPurgeDefaults.class,
+                NormalScopedSnapshotPurgerProducer.class,
+                StreamRuneConfigValidator.class,
+                ForgetSubjectService.class,
+                CryptoEngine.class,
+                SubjectDataPurger.class))) {
+      arc.container().beanManager().getEvent().select(StartupEvent.class).fire(new StartupEvent());
+
+      var result =
+          arc.container()
+              .instance(ForgetSubjectService.class)
+              .get()
+              .forget(SubjectId.of("subject-42"), null);
+
+      assertEquals(
+          List.of("snapshot_store"),
+          result.purgeOutcomes().stream()
+              .map(org.streamrune.runtime.gdpr.ForgetResult.PurgeOutcome::purgerName)
+              .toList());
+      assertTrue(result.fullyErased());
+    }
+  }
+
   /** The query cache {@code streamrune.query-cache.enabled=true} produces, for the test below. */
   @ApplicationScoped
   public static class QueryCacheDefaults {
