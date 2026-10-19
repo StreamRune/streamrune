@@ -359,7 +359,7 @@ public class BackgroundRelayHealthContributor {
     if (signal == null || !signal.isSubscribed()) {
       return;
     }
-    String name;
+    // Registered under the lock too, so that the components list in the order they are numbered.
     synchronized (cryptoForgetSignals) {
       for (CryptoForgetSignal registered : cryptoForgetSignals) {
         if (registered == signal) {
@@ -367,11 +367,15 @@ public class BackgroundRelayHealthContributor {
         }
       }
       cryptoForgetSignals.add(signal);
-      name =
+      String name =
           cryptoForgetSignals.size() == 1
               ? CRYPTO_FORGET_COMPONENT
               : CRYPTO_FORGET_COMPONENT + "-" + cryptoForgetSignals.size();
+      registerCryptoForgetComponent(name, signal);
     }
+  }
+
+  private void registerCryptoForgetComponent(String name, CryptoForgetSignal signal) {
     register(
         new RelayStatusSource() {
           @Override

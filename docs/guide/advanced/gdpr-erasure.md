@@ -281,10 +281,10 @@ decrypt goes to the key store. A `crypto-forget-listen` component that keeps swi
 
 A database that is alive but cannot answer the probe within 5 seconds — a stalled backend, a network
 brown-out — is treated as lost in the same way: while the stall lasts the replica replaces the
-connection and evicts its whole cache roughly every 31 seconds (30 seconds of silence plus the
-probe), and the component keeps switching between `DEGRADED` and `UP`. That is the safe direction
-for erasure; the price is a cold cache, and with a PostgreSQL key store key reads that arrive just
-when the database is struggling.
+connection and evicts its whole cache about every 36 seconds (30 seconds of silence, the 5-second
+probe, the 1-second wait before it connects again and the time to connect), and the component keeps
+switching between `DEGRADED` and `UP`. That is the safe direction for erasure; the price is a cold
+cache, and with a PostgreSQL key store key reads that arrive just when the database is struggling.
 
 The LISTEN session is named in `pg_stat_activity.application_name` after the application's own name
 (from the `ApplicationName` of its JDBC URL or data source), followed by

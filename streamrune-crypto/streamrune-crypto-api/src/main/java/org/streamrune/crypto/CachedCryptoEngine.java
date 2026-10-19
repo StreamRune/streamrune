@@ -66,20 +66,20 @@ import org.streamrune.core.types.SubjectId;
  *
  * <p><b>An eviction is not undone by a decrypt in flight.</b> Every eviction a signal triggers
  * advances an eviction counter before it removes anything: the counter of the forgotten subject's
- * eviction stripe for one subject's forget, the counter of every subject for the eviction of
- * everything. A cache-miss decrypt reads the counters that apply to its subject before it calls the
- * delegate and stores its result only if they have not moved since; the check and the store are one
- * step that an advance cannot interleave with. For a decrypt that read the counter before an
- * eviction advanced it, either its step comes before that advance, so its entry was stored before
- * the eviction removed entries and is removed by it, or its step comes after, sees the counter
- * moved and stores nothing — so no thread ever finds the entry. A decrypt that read the counter
- * after the advance read the key after the forget that caused the eviction had deleted it (a peer
- * publishes a forget after its key deletion committed, and a channel starts hearing before the
- * engine evicts), so it finds the key gone. A decrypt that read the key just before a peer's forget
- * therefore cannot leave the plaintext cached after the eviction that forget caused. A forget costs
- * only the in-flight results of its own stripe — one in 64 subjects at random — not of every
- * subject, so a stream of forgets (a bulk erasure) does not keep the cache cold for the subjects
- * nobody forgot.
+ * eviction stripe for one subject's forget, and one counter that every decrypt reads for the
+ * eviction of everything. A cache-miss decrypt reads the counters that apply to its subject before
+ * it calls the delegate and stores its result only if they have not moved since; the check and the
+ * store are one step that an advance cannot interleave with. For a decrypt that read the counter
+ * before an eviction advanced it, either its step comes before that advance, so its entry was
+ * stored before the eviction removed entries and is removed by it, or its step comes after, sees
+ * the counter moved and stores nothing — so no thread ever finds the entry. A decrypt that read the
+ * counter after the advance read the key after the forget that caused the eviction had deleted it
+ * (a peer publishes a forget after its key deletion committed, and a channel starts hearing before
+ * the engine evicts), so it finds the key gone. A decrypt that read the key just before a peer's
+ * forget therefore cannot leave the plaintext cached after the eviction that forget caused. A
+ * forget costs only the in-flight results of its own stripe — one in 64 subjects at random — not of
+ * every subject, so a stream of forgets (a bulk erasure) does not keep the cache cold for the
+ * subjects nobody forgot.
  *
  * <p>That argument assumes two things of the delegate, which the shipped engines (PostgreSQL,
  * filesystem, Vault, AWS KMS) meet: it holds no cache of key material of its own, and each decrypt

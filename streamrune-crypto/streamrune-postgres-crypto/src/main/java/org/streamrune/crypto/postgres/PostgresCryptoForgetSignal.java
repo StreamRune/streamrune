@@ -521,6 +521,7 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
    * @param configuredApplicationName the application name set on the data source as a property, or
    *     {@code null}; used when the URL has none
    * @return the name of the LISTEN session
+   * @see #withApplicationName(String, String)
    */
   public static String listenApplicationName(String jdbcUrl, String configuredApplicationName) {
     String base = urlApplicationName(jdbcUrl);
@@ -536,7 +537,15 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
     int bytes = 0;
     for (int i = 0; i < base.length(); ) {
       int codePoint = base.codePointAt(i);
-      int width = new String(Character.toChars(codePoint)).getBytes(StandardCharsets.UTF_8).length;
+      // PostgreSQL stores every byte of an application name that is not printable ASCII as a
+      // four-character \xNN escape, and keeps 63 of the stored characters.
+      int width =
+          codePoint >= 0x20 && codePoint <= 0x7e
+              ? 1
+              : 4
+                  * new String(Character.toChars(codePoint))
+                      .getBytes(StandardCharsets.UTF_8)
+                      .length;
       if (bytes + width > room) {
         break;
       }
@@ -556,8 +565,12 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
    * @param jdbcUrl a PostgreSQL JDBC URL
    * @param applicationName the application name to set
    * @return the URL carrying that application name
+   * @throws IllegalArgumentException if either argument is null
    */
   public static String withApplicationName(String jdbcUrl, String applicationName) {
+    if (jdbcUrl == null || applicationName == null) {
+      throw new IllegalArgumentException("jdbcUrl and applicationName must not be null");
+    }
     int query = jdbcUrl.indexOf('?');
     String head = query < 0 ? jdbcUrl : jdbcUrl.substring(0, query);
     List<String> parameters = new ArrayList<>();
@@ -577,13 +590,16 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
     if (query < 0) {
       return null;
     }
+    String name = null;
+    // The last one wins, as in the driver.
     for (String parameter : jdbcUrl.substring(query + 1).split("&")) {
       if (parameter.startsWith("ApplicationName=")) {
-        return URLDecoder.decode(
-            parameter.substring("ApplicationName=".length()), StandardCharsets.UTF_8);
+        name =
+            URLDecoder.decode(
+                parameter.substring("ApplicationName=".length()), StandardCharsets.UTF_8);
       }
     }
-    return null;
+    return name;
   }
 
   private static String firstString(DataSource ds, String... methodNames) {

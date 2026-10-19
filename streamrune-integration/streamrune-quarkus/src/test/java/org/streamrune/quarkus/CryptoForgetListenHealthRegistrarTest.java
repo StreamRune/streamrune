@@ -12,6 +12,7 @@ import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Singleton;
 import java.util.List;
 import java.util.function.Consumer;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
@@ -113,6 +114,11 @@ class CryptoForgetListenHealthRegistrarTest {
         new CryptoForgetListenHealthRegistrar(
             instanceOf(cachedEngine(new SwitchableForgetSignal())), none);
     registrar.registerCryptoForgetListenHealth();
+  }
+
+  @AfterEach
+  void resetTheSwitchedChannel() {
+    ListeningEngineBeans.SIGNAL.listening = false;
   }
 
   /** Beans of a container: an engine whose channel the test switches, and the contributor. */

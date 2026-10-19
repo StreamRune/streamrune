@@ -11,6 +11,7 @@ import jakarta.inject.Singleton;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
@@ -84,6 +85,11 @@ class CryptoForgetListenHealthRegistrarTest {
             List.of(cachedEngine(CryptoForgetSignal.NOOP), mock(CryptoEngine.class)), contributor)
         .registerCryptoForgetListenHealth();
     assertTrue(contributor.components().isEmpty());
+  }
+
+  @AfterEach
+  void resetTheSwitchedChannel() {
+    ListeningEngineFixture.SIGNAL.listening = false;
   }
 
   /**

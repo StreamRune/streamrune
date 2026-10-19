@@ -66,8 +66,32 @@ class PostgresCryptoForgetSignalTest {
     assertTrue(name.endsWith("-streamrune-crypto-forget-listen"));
     String multiByte =
         PostgresCryptoForgetSignal.listenApplicationName(null, "\u00e9\u00e8".repeat(30));
-    assertTrue(multiByte.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 63);
     assertTrue(multiByte.endsWith("-streamrune-crypto-forget-listen"));
+    // PostgreSQL stores each byte that is not printable ASCII as a four-character escape.
+    int stored = 0;
+    for (byte b : multiByte.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+      stored += b >= 0x20 && b <= 0x7e ? 1 : 4;
+    }
+    assertTrue(stored <= 63, "stored as " + stored + " characters");
+    assertTrue(multiByte.startsWith("\u00e9"), "some of the application's name is kept");
+  }
+
+  @Test
+  void theLastApplicationNameParameterOfAUrlIsTheOneTheDriverUses() {
+    assertEquals(
+        "second-streamrune-crypto-forget-listen",
+        PostgresCryptoForgetSignal.listenApplicationName(
+            "jdbc:postgresql://db/app?ApplicationName=first&ApplicationName=second", null));
+  }
+
+  @Test
+  void theUrlHelpersRejectNull() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> PostgresCryptoForgetSignal.withApplicationName(null, "n"));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> PostgresCryptoForgetSignal.withApplicationName("jdbc:postgresql://db/app", null));
   }
 
   @Test

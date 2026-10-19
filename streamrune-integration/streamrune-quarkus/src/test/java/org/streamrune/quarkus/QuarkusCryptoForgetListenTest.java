@@ -253,7 +253,8 @@ class QuarkusCryptoForgetListenTest {
             .connectionFactoryConfiguration();
     assertNotEquals(app, listenName(app));
     assertTrue(listenSettings.jdbcUrl().contains("ApplicationName=" + listenName(app)));
-    assertTrue(listenSettings.jdbcUrl().contains("tcpKeepAlive=true"));
+    assertEquals("true", listenSettings.jdbcProperties().getProperty("tcpKeepAlive"));
+    assertEquals(listenName(app), listenSettings.jdbcProperties().getProperty("ApplicationName"));
     try (Connection listenConnection = listenPool.getConnection()) {
       assertEquals(listenName(app), applicationNameOf(listenConnection));
     }
@@ -267,6 +268,50 @@ class QuarkusCryptoForgetListenTest {
     try (Connection appConnection = pool.getConnection()) {
       assertEquals(app, applicationNameOf(appConnection));
     }
+  }
+
+  /**
+   * An XA datasource (Quarkus {@code jdbc.transactions=xa}) is a {@code DataSource} class Agroal
+   * configures URL first and JDBC properties after, so the application's own {@code
+   * ApplicationName} property would override the URL's: the LISTEN session is named through the
+   * properties too.
+   */
+  @Test
+  void theListenPoolOfAnXaDataSourceIsNamedApartToo() throws Exception {
+    String app = unique("xa-apart");
+    var config =
+        new AgroalDataSourceConfigurationSupplier()
+            .connectionPoolConfiguration(
+                pool ->
+                    pool.maxSize(2)
+                        .acquisitionTimeout(Duration.ofSeconds(2))
+                        .connectionFactoryConfiguration(
+                            factory ->
+                                factory
+                                    .connectionProviderClass(org.postgresql.xa.PGXADataSource.class)
+                                    .jdbcUrl(PG.getJdbcUrl())
+                                    .principal(new NamePrincipal(PG.getUsername()))
+                                    .credential(new SimplePassword(PG.getPassword()))
+                                    .jdbcProperty("ApplicationName", app)));
+    AgroalDataSource pool = AgroalDataSource.from(config.get());
+    toClose.add(pool);
+    try (Connection appConnection = pool.getConnection()) {
+      assertEquals(app, applicationNameOf(appConnection));
+    }
+
+    DataSource listenPool = AgroalForgetListenPool.open(pool);
+    toClose.add((AutoCloseable) listenPool);
+    try (Connection listenConnection = listenPool.getConnection()) {
+      assertEquals(listenName(app), applicationNameOf(listenConnection));
+    }
+    assertEquals(
+        app,
+        pool.getConfiguration()
+            .connectionPoolConfiguration()
+            .connectionFactoryConfiguration()
+            .jdbcProperties()
+            .getProperty("ApplicationName"),
+        "the application's own settings are not changed");
   }
 
   /** A keepalive setting of the application is the application's choice; the pool keeps it. */
@@ -297,6 +342,37 @@ class QuarkusCryptoForgetListenTest {
     assertEquals("false", listenSettings.jdbcProperties().getProperty("tcpKeepAlive"));
     assertTrue(
         listenSettings.jdbcUrl().contains("ApplicationName=streamrune-crypto-forget-listen"));
+  }
+
+  /** A keepalive setting in the application's URL wins, so the pool sets none of its own. */
+  @Test
+  void theListenPoolLeavesAKeepAliveSettingOfTheUrlAlone() throws Exception {
+    var config =
+        new AgroalDataSourceConfigurationSupplier()
+            .connectionPoolConfiguration(
+                pool ->
+                    pool.maxSize(1)
+                        .connectionFactoryConfiguration(
+                            factory ->
+                                factory
+                                    .jdbcUrl(PG.getJdbcUrl() + "?tcpKeepAlive=false")
+                                    .principal(new NamePrincipal(PG.getUsername()))
+                                    .credential(new SimplePassword(PG.getPassword()))));
+    AgroalDataSource pool = AgroalDataSource.from(config.get());
+    toClose.add(pool);
+
+    DataSource listenPool = AgroalForgetListenPool.open(pool);
+    toClose.add((AutoCloseable) listenPool);
+    var listenSettings =
+        ((AgroalDataSource) listenPool)
+            .getConfiguration()
+            .connectionPoolConfiguration()
+            .connectionFactoryConfiguration();
+    assertNull(listenSettings.jdbcProperties().getProperty("tcpKeepAlive"));
+    assertTrue(listenSettings.jdbcUrl().contains("tcpKeepAlive=false"));
+    try (Connection connection = listenPool.getConnection()) {
+      assertTrue(connection.isValid(2));
+    }
   }
 
   private static String applicationNameOf(Connection connection) throws SQLException {
