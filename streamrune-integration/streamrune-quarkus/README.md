@@ -347,6 +347,12 @@ nothing. This contract is identical across the Spring, Quarkus, and Micronaut in
   connection and refuses the commit, so a command, an outbox replay or skip, or a dead-letter
   discard called from a `@Transactional` method fails and breaks the surrounding transaction.
   Start the call outside the transaction, or on its own thread.
+- **A proxied `BaseProjection` needs `quarkus.arc.transform-unproxyable-classes=true`** (the
+  Quarkus default). `BaseProjection.process(List, ProjectionRepository)` is final; a
+  `BaseProjection` subclass that is normal-scoped (`@ApplicationScoped`) or carries an interceptor
+  binding gets a generated client proxy or interceptor subclass, and Quarkus can generate it only
+  by removing that `final` at build time. With the property set to `false` the build fails because
+  the proxy cannot be created.
 - **Crypto engine selection is build-time** — `streamrune.crypto.<backend>.enabled` is read by
   `@IfBuildProperty`; overriding it to `false` at runtime fails fast at startup.
 - **Native image** — `StreamRuneReflectionConfig` registers the framework's own value types

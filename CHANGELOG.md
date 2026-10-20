@@ -422,6 +422,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   without extending `BaseProjection` must also override `writesThroughRepository()` to return `true`
   (the delivery policy refuses a `TRANSACTIONAL_LOCAL`/`EXTERNAL_EFFECT` registration otherwise), and
   no projection class needs registering for native-image reflection on this account.
+- Spring refuses at startup a `CONTINUOUS` or `SCHEDULED` projection bean that is a CGLIB proxy of
+  a `BaseProjection` subclass (an aspect applies to the class): the final two-argument `process`
+  cannot be forwarded and would run on the uninitialised proxy. The proxy is refused, not unwrapped,
+  so no advice is silently dropped. On Quarkus such a proxied subclass needs
+  `quarkus.arc.transform-unproxyable-classes=true`, the default.
 - Decorators `TracingProjectionDecorator`, `ValidatingProjectionDecorator` and `CacheAwareProjection`
   forward `process(List, ProjectionRepository)`, `writesThroughRepository()`, `writeTarget()` and
   `processDeadLetterReplay(List, ProjectionRepository)` to their delegate.
