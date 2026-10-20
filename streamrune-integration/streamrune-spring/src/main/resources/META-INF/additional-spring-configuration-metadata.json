@@ -14,7 +14,8 @@
     { "name": "streamrune.crypto.filesystem", "type": "org.streamrune.spring.StreamRuneCryptoProperties$FileSystem", "description": "File system crypto engine configuration." },
     { "name": "streamrune.crypto.postgres", "type": "org.streamrune.spring.StreamRuneCryptoProperties$Postgres", "description": "PostgreSQL crypto engine configuration." },
     { "name": "streamrune.crypto.vault", "type": "org.streamrune.spring.StreamRuneCryptoProperties$Vault", "description": "HashiCorp Vault crypto engine configuration." },
-    { "name": "streamrune.crypto.aws", "type": "org.streamrune.spring.StreamRuneCryptoProperties$Aws", "description": "AWS KMS crypto engine configuration." }
+    { "name": "streamrune.crypto.aws", "type": "org.streamrune.spring.StreamRuneCryptoProperties$Aws", "description": "AWS KMS crypto engine configuration." },
+    { "name": "streamrune.crypto.aws.data-key-cache", "type": "org.streamrune.spring.StreamRuneCryptoProperties$Aws$DataKeyCache", "description": "The AWS KMS engine's cache of plaintext data keys; off whenever streamrune.crypto.cache.enabled=false." }
   ],
   "properties": [
     { "name": "streamrune.snapshot-every-n-events", "type": "java.lang.Integer", "defaultValue": 100, "description": "Number of events between automatic snapshots." },
@@ -63,6 +64,8 @@
     { "name": "streamrune.crypto.vault.engine-mount", "type": "java.lang.String", "defaultValue": "transit", "description": "Mount path of the Vault transit engine." },
     { "name": "streamrune.crypto.aws.enabled", "type": "java.lang.Boolean", "defaultValue": false, "description": "Enable the AWS KMS crypto engine." },
     { "name": "streamrune.crypto.aws.region", "type": "java.lang.String", "description": "AWS region of the KMS key. Required when the AWS KMS engine is enabled." },
-    { "name": "streamrune.crypto.aws.kms-key-id", "type": "java.lang.String", "description": "AWS KMS key id or ARN. Required when the AWS KMS engine is enabled." }
+    { "name": "streamrune.crypto.aws.kms-key-id", "type": "java.lang.String", "description": "AWS KMS key id or ARN. Required when the AWS KMS engine is enabled." },
+    { "name": "streamrune.crypto.aws.data-key-cache.maximum-size", "type": "java.lang.Integer", "defaultValue": 1000, "description": "Data keys the AWS KMS engine caches per map (one per subject for encryption, one per subject and data key for decryption); 0 disables the data-key cache, so every value costs one KMS call. Ignored (0) when streamrune.crypto.cache.enabled=false." },
+    { "name": "streamrune.crypto.aws.data-key-cache.expire-after-write", "type": "java.time.Duration", "defaultValue": "5m", "description": "How long a cached plaintext data key lives after it was stored; must be positive. Expired keys leave the heap at the next cache store or eviction, or at a lookup at most once a second." }
   ]
 }

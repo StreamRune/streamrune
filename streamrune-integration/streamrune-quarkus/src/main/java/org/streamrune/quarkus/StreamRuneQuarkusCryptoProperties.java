@@ -96,6 +96,29 @@ public interface StreamRuneQuarkusCryptoProperties {
      */
     @WithName("kms-key-id")
     Optional<String> kmsKeyId();
+
+    /**
+     * The engine's cache of plaintext data keys ({@code streamrune.crypto.aws.data-key-cache.*});
+     * off whenever {@code streamrune.crypto.cache.enabled=false}.
+     */
+    @WithName("data-key-cache")
+    DataKeyCacheConfig dataKeyCache();
+
+    /** The AWS KMS engine's data-key cache. */
+    interface DataKeyCacheConfig {
+      /** Entries per data-key map; {@code 0} disables the data-key cache. */
+      @WithDefault("1000")
+      int maximumSize();
+
+      /**
+       * How long a cached data key lives after it was stored; must be positive. Strict ISO-8601
+       * duration format (e.g. {@code PT5M}), like the other crypto cache durations — Quarkus'
+       * {@code 5m} shorthand is not supported.
+       */
+      @WithName("expire-after-write")
+      @WithDefault("PT5M")
+      String expireAfterWriteRaw();
+    }
   }
 
   /** Caching layer applied over the active crypto engine. */

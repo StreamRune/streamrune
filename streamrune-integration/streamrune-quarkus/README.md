@@ -181,6 +181,9 @@ streamrune.crypto.vault.token=${VAULT_TOKEN}
 streamrune.crypto.aws.enabled=true
 streamrune.crypto.aws.region=eu-central-1
 streamrune.crypto.aws.kms-key-id=arn:aws:kms:...
+# optional: the AWS KMS engine's data-key cache (defaults shown; 0 disables it)
+streamrune.crypto.aws.data-key-cache.maximum-size=1000
+streamrune.crypto.aws.data-key-cache.expire-after-write=PT5M
 ```
 
 A `.properties` comment must start its own line — text after a value is part of the value.

@@ -207,7 +207,7 @@ public class StreamRuneCryptoFactory {
     // The same DataSource that backs the durable tombstone
     // store also wires the LISTEN/NOTIFY forget channel for prompt cross-replica cache eviction.
     return wrapWithCache(
-        buildAwsKmsDelegate(kmsClient.client(), dataSource, props),
+        buildAwsKmsDelegate(kmsClient.client(), dataSource, props, true),
         props.cache(),
         resolveForgetSignal(dataSource, props.cache().expireAfterWrite(), "aws-kms"));
   }
@@ -220,7 +220,8 @@ public class StreamRuneCryptoFactory {
       StreamRuneKmsClient kmsClient,
       @Nullable DataSource dataSource,
       StreamRuneMicronautCryptoProperties props) {
-    return buildAwsKmsDelegate(kmsClient.client(), dataSource, props);
+    // The no-cache posture keeps no data key in heap either.
+    return buildAwsKmsDelegate(kmsClient.client(), dataSource, props, false);
   }
 
   // ── delegate builders (shared by the cached + bare beans above) ──────────────────────────────
@@ -271,7 +272,8 @@ public class StreamRuneCryptoFactory {
   private CryptoEngine buildAwsKmsDelegate(
       KmsClient kmsClient,
       @Nullable DataSource dataSource,
-      StreamRuneMicronautCryptoProperties props) {
+      StreamRuneMicronautCryptoProperties props,
+      boolean dataKeyCacheOn) {
     var ap = props.aws();
     if (ap.region() == null || ap.region().isBlank()) {
       throw new IllegalStateException(
@@ -281,7 +283,27 @@ public class StreamRuneCryptoFactory {
       throw new IllegalStateException(
           "streamrune.crypto.aws.kms-key-id must be set when streamrune.crypto.aws.enabled is true");
     }
-    var builder = AwsKmsCryptoEngine.builder().kmsClient(kmsClient).kmsKeyId(ap.kmsKeyId());
+    var dataKeyCache = ap.dataKeyCache();
+    int maximumSize = dataKeyCache.maximumSize();
+    if (maximumSize < 0) {
+      throw new IllegalStateException(
+          "streamrune.crypto.aws.data-key-cache.maximum-size must be 0 or more (0 disables the"
+              + " data-key cache), got "
+              + maximumSize);
+    }
+    Duration expireAfterWrite = dataKeyCache.expireAfterWrite();
+    if (expireAfterWrite == null || expireAfterWrite.isZero() || expireAfterWrite.isNegative()) {
+      throw new IllegalStateException(
+          "streamrune.crypto.aws.data-key-cache.expire-after-write must be a positive duration,"
+              + " got "
+              + expireAfterWrite);
+    }
+    var builder =
+        AwsKmsCryptoEngine.builder()
+            .kmsClient(kmsClient)
+            .kmsKeyId(ap.kmsKeyId())
+            .dataKeyCacheMaximumSize(dataKeyCacheOn ? maximumSize : 0)
+            .dataKeyCacheExpireAfterWrite(expireAfterWrite);
     if (dataSource != null) {
       builder.forgottenSubjectStore(new JdbcForgottenSubjectStore(dataSource));
     }

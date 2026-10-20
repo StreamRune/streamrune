@@ -4,12 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 
+import java.time.Duration;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.context.annotation.UserConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.streamrune.aws.AwsKmsCryptoEngine;
 import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.crypto.CachedCryptoEngine;
 
 /** Tests for crypto engine auto-configuration beans. */
 class CryptoConfigurationTest {
@@ -28,6 +31,75 @@ class CryptoConfigurationTest {
     CryptoEngine engine =
         config.awsKmsCryptoEngine(config.streamRuneKmsClient(props), mock(DataSource.class), props);
     assertNotNull(engine);
+  }
+
+  private static CryptoTestProps awsProps() {
+    return CryptoTestProps.builder()
+        .awsRegion("us-west-2")
+        .awsKmsKeyId("arn:aws:kms:us-west-2:123456789012:key/test-key-id");
+  }
+
+  private static CryptoEngine awsEngine(StreamRuneCryptoProperties props) {
+    var config = new AwsKmsCryptoEngineConfiguration();
+    return config.awsKmsCryptoEngine(
+        config.streamRuneKmsClient(props), mock(DataSource.class), props);
+  }
+
+  @Test
+  void awsKmsDataKeyCacheIsOffWhenTheCryptoCacheIsDisabled() {
+    // streamrune.crypto.cache.enabled=false is the no-cache posture: no plaintext and no data key
+    // in heap, whatever the data-key cache size says.
+    var engine = awsEngine(awsProps().cacheEnabled(false).awsDataKeyCacheMaximumSize(500).build());
+    var kms = assertInstanceOf(AwsKmsCryptoEngine.class, engine);
+    assertEquals(0, kms.dataKeyCacheMaximumSize());
+  }
+
+  @Test
+  void awsKmsDataKeyCacheTakesItsDefaultsAndItsTunedValues() throws Exception {
+    try (var cached = (CachedCryptoEngine) awsEngine(awsProps().build())) {
+      var kms = assertInstanceOf(AwsKmsCryptoEngine.class, cached.delegate());
+      assertEquals(1_000, kms.dataKeyCacheMaximumSize());
+      assertEquals(Duration.ofMinutes(5), kms.dataKeyCacheExpireAfterWrite());
+    }
+    try (var cached =
+        (CachedCryptoEngine)
+            awsEngine(
+                awsProps()
+                    .awsDataKeyCacheMaximumSize(50)
+                    .awsDataKeyCacheExpireAfterWrite(Duration.ofMinutes(2))
+                    .build())) {
+      var kms = assertInstanceOf(AwsKmsCryptoEngine.class, cached.delegate());
+      assertEquals(50, kms.dataKeyCacheMaximumSize());
+      assertEquals(Duration.ofMinutes(2), kms.dataKeyCacheExpireAfterWrite());
+    }
+  }
+
+  @Test
+  void awsKmsDataKeyCacheRejectsInvalidValuesNamingTheKey() {
+    for (boolean cacheEnabled : new boolean[] {true, false}) {
+      // A negative size fails startup with the cache on and in the no-cache posture alike.
+      var size =
+          assertThrows(
+              IllegalStateException.class,
+              () ->
+                  awsEngine(
+                      awsProps()
+                          .cacheEnabled(cacheEnabled)
+                          .awsDataKeyCacheMaximumSize(-1)
+                          .build()));
+      assertTrue(
+          size.getMessage().contains("streamrune.crypto.aws.data-key-cache.maximum-size"),
+          size.getMessage());
+    }
+    for (Duration bad : new Duration[] {Duration.ZERO, Duration.ofSeconds(-1), null}) {
+      var ttl =
+          assertThrows(
+              IllegalStateException.class,
+              () -> awsEngine(awsProps().awsDataKeyCacheExpireAfterWrite(bad).build()));
+      assertTrue(
+          ttl.getMessage().contains("streamrune.crypto.aws.data-key-cache.expire-after-write"),
+          ttl.getMessage());
+    }
   }
 
   @Test

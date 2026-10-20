@@ -432,9 +432,36 @@ public class StreamRuneCryptoProducers {
             aws.kmsKeyId(),
             "streamrune.crypto.aws.kms-key-id",
             "the ARN or id of a KMS symmetric key");
+    var dataKeyCache = aws.dataKeyCache();
+    int dataKeyCacheMaximumSize = dataKeyCache.maximumSize();
+    if (dataKeyCacheMaximumSize < 0) {
+      throw new IllegalStateException(
+          "streamrune.crypto.aws.data-key-cache.maximum-size must be 0 or more (0 disables the"
+              + " data-key cache), got "
+              + dataKeyCacheMaximumSize);
+    }
+    Duration dataKeyCacheExpireAfterWrite =
+        expiry(
+                "streamrune.crypto.aws.data-key-cache.expire-after-write",
+                java.util.Optional.of(dataKeyCache.expireAfterWriteRaw()))
+            .filter(d -> !d.isZero() && !d.isNegative())
+            .orElseThrow(
+                () ->
+                    new IllegalStateException(
+                        "streamrune.crypto.aws.data-key-cache.expire-after-write must be a"
+                            + " positive ISO-8601 duration (e.g. PT5M), got '"
+                            + dataKeyCache.expireAfterWriteRaw()
+                            + "'"));
     CryptoEngine delegate;
     try {
-      var builder = AwsKmsCryptoEngine.builder().kmsClient(kmsClient).kmsKeyId(kmsKeyId);
+      var builder =
+          AwsKmsCryptoEngine.builder()
+              .kmsClient(kmsClient)
+              .kmsKeyId(kmsKeyId)
+              // streamrune.crypto.cache.enabled=false is the no-cache posture: neither decrypted
+              // plaintext nor plaintext data keys are kept in heap.
+              .dataKeyCacheMaximumSize(props.cache().enabled() ? dataKeyCacheMaximumSize : 0)
+              .dataKeyCacheExpireAfterWrite(dataKeyCacheExpireAfterWrite);
       if (dataSource != null) {
         builder.forgottenSubjectStore(new JdbcForgottenSubjectStore(dataSource));
       }

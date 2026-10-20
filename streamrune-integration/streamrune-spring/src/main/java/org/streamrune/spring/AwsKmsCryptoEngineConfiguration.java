@@ -75,7 +75,23 @@ public class AwsKmsCryptoEngineConfiguration {
       throw new IllegalStateException(
           "streamrune.crypto.aws.kms-key-id must be set when streamrune.crypto.aws.enabled is true");
     }
-    var builder = AwsKmsCryptoEngine.builder().kmsClient(kmsClient.client()).kmsKeyId(kmsKeyId);
+    var cacheProps = props.cache();
+    var dataKeyCache = props.aws().dataKeyCache();
+    // Validated whether or not the cache is on, as on Quarkus and Micronaut.
+    int dataKeyCacheMaximumSize =
+        requireNotNegative(
+            dataKeyCache.maximumSize(), "streamrune.crypto.aws.data-key-cache.maximum-size");
+    var builder =
+        AwsKmsCryptoEngine.builder()
+            .kmsClient(kmsClient.client())
+            .kmsKeyId(kmsKeyId)
+            .dataKeyCacheExpireAfterWrite(
+                requirePositive(
+                    dataKeyCache.expireAfterWrite(),
+                    "streamrune.crypto.aws.data-key-cache.expire-after-write"))
+            // streamrune.crypto.cache.enabled=false is the no-cache posture: neither decrypted
+            // plaintext nor plaintext data keys are kept in heap.
+            .dataKeyCacheMaximumSize(cacheProps.enabled() ? dataKeyCacheMaximumSize : 0);
     if (dataSource != null) {
       builder.forgottenSubjectStore(new JdbcForgottenSubjectStore(dataSource));
     }
@@ -83,9 +99,9 @@ public class AwsKmsCryptoEngineConfiguration {
     // in-memory tombstones that would resurrect erased PII on restart.
     var delegate = builder.build();
 
-    var cacheProps = props.cache();
     // Honor streamrune.crypto.cache.enabled=false (parity with Quarkus) — return the bare
-    // engine so no decrypted PII is retained in heap (the deliberate no-cache GDPR posture).
+    // engine, its data-key cache off, so no decrypted PII and no data key is retained in heap (the
+    // deliberate no-cache GDPR posture).
     if (!cacheProps.enabled()) {
       return delegate;
     }
@@ -100,5 +116,20 @@ public class AwsKmsCryptoEngineConfiguration {
         .forgetSignal(
             SpringCryptoForgetSignals.resolve(dataSource, cacheProps.expireAfterWrite(), "aws-kms"))
         .build();
+  }
+
+  private static int requireNotNegative(int value, String key) {
+    if (value < 0) {
+      throw new IllegalStateException(
+          key + " must be 0 or more (0 disables the data-key cache), got " + value);
+    }
+    return value;
+  }
+
+  private static java.time.Duration requirePositive(java.time.Duration value, String key) {
+    if (value == null || value.isZero() || value.isNegative()) {
+      throw new IllegalStateException(key + " must be a positive duration, got " + value);
+    }
+    return value;
   }
 }

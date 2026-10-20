@@ -829,8 +829,22 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
     auth, retries with backoff on 429/5xx); `deleteKey` records a durable tombstone, sets
     `deletion_allowed=true` on the transit key and deletes it (the token needs `update` on
     `<mount>/keys/+/config` and `delete` on `<mount>/keys/+`).
-  - **aws-kms** — `AwsKmsCryptoEngine`: one customer managed key encrypts every subject with a
-    per-subject encryption context; erasure is a durable per-subject tombstone.
+  - **aws-kms** — `AwsKmsCryptoEngine`: envelope encryption under one customer managed key. Each
+    value is encrypted locally with AES-256-GCM under a data key from KMS `GenerateDataKey`, wrapped
+    under a per-subject encryption context and stored in the ciphertext (envelope version 2:
+    `SRKC`, version byte, wrapped-key length, wrapped key, nonce, ciphertext and tag; the
+    associated data is magic, version and the subject hash, so a CMK migration re-wraps data keys
+    in place with `kms:ReEncrypt`), so values of any size are encrypted — KMS `Encrypt` and its
+    4,096-byte limit are not used. A bounded data-key cache (`dataKeyCacheMaximumSize`, default
+    1,000 entries; `dataKeyCacheExpireAfterWrite`, default 5 minutes, expired keys swept at the next
+    store, eviction or once-a-second lookup; a new data key after 2^24 values) makes it one KMS
+    call per subject and window instead of one per value. The integrations set it from
+    `streamrune.crypto.aws.data-key-cache.maximum-size` and `.expire-after-write`, and turn it off
+    with `streamrune.crypto.cache.enabled=false`. The IAM
+    permissions are `kms:GenerateDataKey`, `kms:Decrypt` and `kms:DescribeKey`. Erasure is a durable
+    per-subject tombstone, read before every cache lookup and KMS call; `deleteKey` also drops the
+    subject's cached data keys. Ciphertext written by an earlier snapshot (envelope version 1, each
+    value sent to KMS `Encrypt`) is refused with `CryptoMappingException`; re-create that data.
 - Vault and AWS KMS `build()` fail closed without a `ForgottenSubjectStore`; `JdbcForgottenSubjectStore`
   is the durable one, auto-wired by the integrations whenever a `DataSource` is present.
 - postgres and filesystem keep a key-generation byte in every ciphertext header, so a subject that is
@@ -1327,7 +1341,9 @@ Each statement below is a property of the shipped code and holds under the state
   filesystem store key bytes unwrapped (no envelope encryption); the filesystem backend has no
   replication and shares a key directory safely only within one kernel's view of the filesystem;
   Vault supports token auth only and refuses `reinstate` after a completed erasure; on AWS KMS
-  `reinstate` makes pre-erasure ciphertext readable again; `[REDACTED]` is an in-band marker — confirm
+  `reinstate` makes pre-erasure ciphertext readable again, and cached plaintext data keys stay in a
+  replica's heap for up to the data-key cache window plus the time to the next sweep (a replica
+  that serves no encrypt or decrypt keeps them until it does); `[REDACTED]` is an in-band marker — confirm
   erasure with `isKeyAvailable`; property-level `@JsonSerialize`/`@JsonDeserialize` on a field of an
   `@Encrypted`-carrying record type is unguarded and leaks plaintext on write; a restore brings
   erased keys back — re-apply the erasures; cross-replica cache eviction depends on the forget

@@ -334,6 +334,70 @@ class StreamRuneCryptoProducersTest {
     assertFalse(engine instanceof CachedCryptoEngine);
   }
 
+  private CryptoEngine awsEngine(Map<String, String> extra) {
+    var map = new HashMap<String, String>();
+    map.put("streamrune.crypto.aws.region", "us-west-2");
+    map.put("streamrune.crypto.aws.kms-key-id", "key-1");
+    map.putAll(extra);
+    return producers.buildAwsKmsCryptoEngine(
+        mock(KmsClient.class), mock(DataSource.class), props(awsEnabled(map)));
+  }
+
+  @Test
+  void awsKmsDataKeyCacheIsOffWhenTheCryptoCacheIsDisabled() {
+    // streamrune.crypto.cache.enabled=false is the no-cache posture: no plaintext and no data key
+    // in heap, whatever the data-key cache size says.
+    var engine =
+        awsEngine(
+            Map.of(
+                "streamrune.crypto.cache.enabled", "false",
+                "streamrune.crypto.aws.data-key-cache.maximum-size", "500"));
+    var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, engine);
+    assertEquals(0, kms.dataKeyCacheMaximumSize());
+  }
+
+  @Test
+  void awsKmsDataKeyCacheTakesItsDefaultsAndItsTunedValues() throws Exception {
+    try (var cached = (CachedCryptoEngine) awsEngine(Map.of())) {
+      var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, cached.delegate());
+      assertEquals(1_000, kms.dataKeyCacheMaximumSize());
+      assertEquals(java.time.Duration.ofMinutes(5), kms.dataKeyCacheExpireAfterWrite());
+    }
+    try (var cached =
+        (CachedCryptoEngine)
+            awsEngine(
+                Map.of(
+                    "streamrune.crypto.aws.data-key-cache.maximum-size", "50",
+                    "streamrune.crypto.aws.data-key-cache.expire-after-write", "PT2M"))) {
+      var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, cached.delegate());
+      assertEquals(50, kms.dataKeyCacheMaximumSize());
+      assertEquals(java.time.Duration.ofMinutes(2), kms.dataKeyCacheExpireAfterWrite());
+    }
+  }
+
+  @Test
+  void awsKmsDataKeyCacheRejectsInvalidValuesNamingTheKey() {
+    var size =
+        assertThrows(
+            IllegalStateException.class,
+            () -> awsEngine(Map.of("streamrune.crypto.aws.data-key-cache.maximum-size", "-1")));
+    assertTrue(
+        size.getMessage().contains("streamrune.crypto.aws.data-key-cache.maximum-size"),
+        size.getMessage());
+    // Strict ISO-8601, like the other crypto cache durations: Quarkus' 5m shorthand is refused.
+    for (String bad : new String[] {"PT0S", "PT-1S", "5m"}) {
+      var ttl =
+          assertThrows(
+              IllegalStateException.class,
+              () ->
+                  awsEngine(Map.of("streamrune.crypto.aws.data-key-cache.expire-after-write", bad)),
+              bad);
+      assertTrue(
+          ttl.getMessage().contains("streamrune.crypto.aws.data-key-cache.expire-after-write"),
+          ttl.getMessage());
+    }
+  }
+
   @Test
   void awsKmsCryptoEngineFailsClosed_whenNoDataSourceForDurableErasure() {
     // Valid config but NO DataSource → no durable ForgottenSubjectStore → fail closed rather

@@ -15,6 +15,18 @@ class ConfigurationMetadataTest {
   }
 
   @Test
+  void configurationMetadataDeclaresTheAwsKmsDataKeyCacheKeys() throws Exception {
+    InputStream is =
+        getClass().getClassLoader().getResourceAsStream("META-INF/configuration-metadata.json");
+    String content = new String(is.readAllBytes());
+    assertThat(content)
+        .contains(
+            "\"streamrune.crypto.aws.data-key-cache\"",
+            "\"streamrune.crypto.aws.data-key-cache.maximum-size\"",
+            "\"streamrune.crypto.aws.data-key-cache.expire-after-write\"");
+  }
+
+  @Test
   void configurationMetadataContainsStreamRuneProperties() throws Exception {
     InputStream is =
         getClass().getClassLoader().getResourceAsStream("META-INF/configuration-metadata.json");

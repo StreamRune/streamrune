@@ -34,6 +34,11 @@
       "name": "streamrune.crypto.aws",
       "type": "org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$AwsConfig",
       "description": "AWS KMS crypto engine configuration."
+    },
+    {
+      "name": "streamrune.crypto.aws.data-key-cache",
+      "type": "org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$AwsConfig$DataKeyCacheConfig",
+      "description": "The AWS KMS engine's cache of plaintext data keys; off whenever streamrune.crypto.cache.enabled=false."
     }
   ],
   "properties": [
@@ -332,6 +337,18 @@
       "name": "streamrune.crypto.aws.kms-key-id",
       "type": "java.lang.String",
       "description": "AWS KMS key id or ARN. Required when the AWS KMS engine is enabled."
+    },
+    {
+      "name": "streamrune.crypto.aws.data-key-cache.maximum-size",
+      "type": "java.lang.Integer",
+      "description": "Data keys the AWS KMS engine caches per map (one per subject for encryption, one per subject and data key for decryption); 0 disables the data-key cache, so every value costs one KMS call. Ignored (0) when streamrune.crypto.cache.enabled=false.",
+      "defaultValue": 1000
+    },
+    {
+      "name": "streamrune.crypto.aws.data-key-cache.expire-after-write",
+      "type": "java.time.Duration",
+      "description": "How long a cached plaintext data key lives after it was stored; must be positive. Expired keys leave the heap at the next cache store or eviction, or at a lookup at most once a second.",
+      "defaultValue": "5m"
     }
   ]
 }

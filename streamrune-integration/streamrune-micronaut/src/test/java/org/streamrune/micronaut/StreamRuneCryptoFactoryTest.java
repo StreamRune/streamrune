@@ -129,6 +129,78 @@ class StreamRuneCryptoFactoryTest {
     assertFalse(engine instanceof CachedCryptoEngine);
   }
 
+  private static CryptoTestProps awsProps() {
+    return CryptoTestProps.builder()
+        .awsRegion("us-west-2")
+        .awsKmsKeyId("arn:aws:kms:us-west-2:123456789012:key/test-key-id");
+  }
+
+  @Test
+  void awsKmsDataKeyCacheIsOffWhenTheCryptoCacheIsDisabled() {
+    // streamrune.crypto.cache.enabled=false is the no-cache posture: no plaintext and no data key
+    // in heap, whatever the data-key cache size says.
+    CryptoEngine engine =
+        factory.awsKmsCryptoEngineUncached(
+            kmsClient(),
+            mock(DataSource.class),
+            awsProps().cacheEnabled(false).awsDataKeyCacheMaximumSize(500).build());
+    var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, engine);
+    assertEquals(0, kms.dataKeyCacheMaximumSize());
+  }
+
+  @Test
+  void awsKmsDataKeyCacheTakesItsDefaultsAndItsTunedValues() throws Exception {
+    try (var cached =
+        factory.awsKmsCryptoEngine(kmsClient(), mock(DataSource.class), awsProps().build())) {
+      var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, cached.delegate());
+      assertEquals(1_000, kms.dataKeyCacheMaximumSize());
+      assertEquals(java.time.Duration.ofMinutes(5), kms.dataKeyCacheExpireAfterWrite());
+    }
+    try (var cached =
+        factory.awsKmsCryptoEngine(
+            kmsClient(),
+            mock(DataSource.class),
+            awsProps()
+                .awsDataKeyCacheMaximumSize(50)
+                .awsDataKeyCacheExpireAfterWrite(java.time.Duration.ofMinutes(2))
+                .build())) {
+      var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, cached.delegate());
+      assertEquals(50, kms.dataKeyCacheMaximumSize());
+      assertEquals(java.time.Duration.ofMinutes(2), kms.dataKeyCacheExpireAfterWrite());
+    }
+  }
+
+  @Test
+  void awsKmsDataKeyCacheRejectsInvalidValuesNamingTheKey() {
+    var size =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                factory.awsKmsCryptoEngine(
+                    kmsClient(),
+                    mock(DataSource.class),
+                    awsProps().awsDataKeyCacheMaximumSize(-1).build()));
+    assertTrue(
+        size.getMessage().contains("streamrune.crypto.aws.data-key-cache.maximum-size"),
+        size.getMessage());
+    for (var bad :
+        new java.time.Duration[] {
+          java.time.Duration.ZERO, java.time.Duration.ofSeconds(-1), null
+        }) {
+      var ttl =
+          assertThrows(
+              IllegalStateException.class,
+              () ->
+                  factory.awsKmsCryptoEngineUncached(
+                      kmsClient(),
+                      mock(DataSource.class),
+                      awsProps().awsDataKeyCacheExpireAfterWrite(bad).build()));
+      assertTrue(
+          ttl.getMessage().contains("streamrune.crypto.aws.data-key-cache.expire-after-write"),
+          ttl.getMessage());
+    }
+  }
+
   // --- the produced CryptoEngine must be closed on context shutdown ---
 
   @Test
