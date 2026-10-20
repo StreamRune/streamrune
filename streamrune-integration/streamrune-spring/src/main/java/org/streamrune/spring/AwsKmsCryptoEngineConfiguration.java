@@ -77,6 +77,10 @@ public class AwsKmsCryptoEngineConfiguration {
     }
     var cacheProps = props.cache();
     var dataKeyCache = props.aws().dataKeyCache();
+    // Validated whether or not the cache is on, as on Quarkus and Micronaut.
+    int dataKeyCacheMaximumSize =
+        requireNotNegative(
+            dataKeyCache.maximumSize(), "streamrune.crypto.aws.data-key-cache.maximum-size");
     var builder =
         AwsKmsCryptoEngine.builder()
             .kmsClient(kmsClient.client())
@@ -87,12 +91,7 @@ public class AwsKmsCryptoEngineConfiguration {
                     "streamrune.crypto.aws.data-key-cache.expire-after-write"))
             // streamrune.crypto.cache.enabled=false is the no-cache posture: neither decrypted
             // plaintext nor plaintext data keys are kept in heap.
-            .dataKeyCacheMaximumSize(
-                cacheProps.enabled()
-                    ? requireNotNegative(
-                        dataKeyCache.maximumSize(),
-                        "streamrune.crypto.aws.data-key-cache.maximum-size")
-                    : 0);
+            .dataKeyCacheMaximumSize(cacheProps.enabled() ? dataKeyCacheMaximumSize : 0);
     if (dataSource != null) {
       builder.forgottenSubjectStore(new JdbcForgottenSubjectStore(dataSource));
     }

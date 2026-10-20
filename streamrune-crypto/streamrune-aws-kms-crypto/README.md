@@ -19,6 +19,10 @@ itself refuse a call without it, add a condition to the key policy statement tha
 }
 ```
 
+Grant `kms:DescribeKey` in a separate statement without the `Null` condition: `DescribeKey`
+carries no encryption context, so one statement granting all three actions with that condition
+denies `isKeyAvailable`.
+
 ## Usage
 
 ```java
@@ -112,8 +116,8 @@ data keys it unwrapped, each map at most `dataKeyCacheMaximumSize` entries (defa
 least-recently-used first out) and each entry at most `dataKeyCacheExpireAfterWrite` (default
 5 minutes) after it was stored, however often it is used. Expired entries are swept from both maps
 at every cache store and every `deleteKey`, and at a lookup when the last sweep is at least a
-second old — so on a replica that encrypts or decrypts anything, an expired key, a forgotten
-subject's included, leaves the heap within a second of its expiry. The cache owns no thread: a
+second old — so an expired key, a forgotten subject's included, leaves the heap at the replica's
+next encrypt or decrypt, at most a second after the previous sweep. The cache owns no thread: a
 replica that serves no encrypt or decrypt at all keeps expired keys until it next does.
 
 | Operation | KMS calls |
@@ -142,9 +146,11 @@ decryption and the tombstone read on a cache hit.
   the migration re-wraps each data key in place:
   1. For each stored value, read the wrapped data key from the envelope (the two length bytes after
      `SRKC` and the version byte, then that many bytes).
-  2. Call `kms:ReEncrypt` with that blob, `SourceKeyId` = the old CMK, `DestinationKeyId` = the new
+  2. Call `kms:ReEncrypt` (the migration principal needs `kms:ReEncryptFrom` on the old CMK and
+     `kms:ReEncryptTo` on the new one; the application's role needs neither) with that blob, `SourceKeyId` = the old CMK, `DestinationKeyId` = the new
      CMK, and `SourceEncryptionContext` = `DestinationEncryptionContext` =
-     `{"streamrune-subject": sha256hex(subjectId)}`.
+     `{"streamrune-subject": sha256hex(subjectId)}` — the call carries the subject context on both
+     sides, so the key-policy condition under *Prerequisites* lets it through.
   3. Write the envelope back with the new wrapped key and its length; the nonce, the ciphertext and
      the tag stay as they are.
   4. Start the application with `kmsKeyId` pointing at the new CMK. Run steps 1-3 while the
@@ -152,7 +158,10 @@ decryption and the tombstone read on a cache hit.
      engine keeps writing values under the old one. Keep the old CMK enabled until every value is
      re-wrapped.
 
-  A forgotten subject's values can be skipped: they stay unreadable either way.
+  Skip a forgotten subject's values only if the subject will never be reinstated: while the
+  tombstone stands they read as `[REDACTED]` either way, but after a later `reinstate` a value still
+  wrapped under the old CMK fails with the bare `IncorrectKeyException` (retried), not
+  `[REDACTED]`. Otherwise re-wrap them too.
 
 ## Key Deletion & Terminal Erasure
 
@@ -223,7 +232,7 @@ implementation("org.streamrune:streamrune-aws-kms-crypto:1.0.0-alpha-SNAPSHOT")
 ## Known Limitations
 
 - **Erasure durability equals the tombstone store** — the shared CMK is immutable, so `deleteKey()` records a per-subject tombstone rather than deleting a key. `reinstate(subjectId)` makes pre-erasure ciphertext readable again, because the CMK was never destroyed.
-- **Data keys in heap** — cached plaintext data keys live in the process heap for up to `dataKeyCacheExpireAfterWrite` plus the time to the next sweep (a second on a replica that encrypts or decrypts anything); a heap dump of a running replica exposes them. Disable the cache (`dataKeyCacheMaximumSize(0)`, or `streamrune.crypto.cache.enabled=false` through an integration) where that matters more than KMS cost and latency.
+- **Data keys in heap** — cached plaintext data keys live in the process heap for up to `dataKeyCacheExpireAfterWrite` plus the time to the next sweep (the replica's next encrypt or decrypt, at most a second after the previous sweep; an idle replica keeps them until it next calls the engine); a heap dump of a running replica exposes them. Disable the cache (`dataKeyCacheMaximumSize(0)`, or `streamrune.crypto.cache.enabled=false` through an integration) where that matters more than KMS cost and latency.
 - **No single-flight** — concurrent encrypts for one subject on a cache miss each call `GenerateDataKey`; the last one's key is cached, the others live on in their own values. Cost only.
 - **One monitor** — the data-key cache synchronizes every operation on one lock (about a microsecond each).
 - **Latency** — a cache miss is a network call to AWS.

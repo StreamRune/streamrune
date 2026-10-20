@@ -76,13 +76,21 @@ class CryptoConfigurationTest {
 
   @Test
   void awsKmsDataKeyCacheRejectsInvalidValuesNamingTheKey() {
-    var size =
-        assertThrows(
-            IllegalStateException.class,
-            () -> awsEngine(awsProps().awsDataKeyCacheMaximumSize(-1).build()));
-    assertTrue(
-        size.getMessage().contains("streamrune.crypto.aws.data-key-cache.maximum-size"),
-        size.getMessage());
+    for (boolean cacheEnabled : new boolean[] {true, false}) {
+      // A negative size fails startup with the cache on and in the no-cache posture alike.
+      var size =
+          assertThrows(
+              IllegalStateException.class,
+              () ->
+                  awsEngine(
+                      awsProps()
+                          .cacheEnabled(cacheEnabled)
+                          .awsDataKeyCacheMaximumSize(-1)
+                          .build()));
+      assertTrue(
+          size.getMessage().contains("streamrune.crypto.aws.data-key-cache.maximum-size"),
+          size.getMessage());
+    }
     for (Duration bad : new Duration[] {Duration.ZERO, Duration.ofSeconds(-1), null}) {
       var ttl =
           assertThrows(
