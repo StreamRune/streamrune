@@ -38,7 +38,8 @@ import org.streamrune.integration.tck.DefaultRendering;
  * looks up in code. Against it:
  *
  * <ol>
- *   <li>{@code configuration-metadata.json} declares every key;
+ *   <li>{@code configuration-metadata.json} declares every key, and no other, with the default this
+ *       integration has;
  *   <li>the guides or this module's README name every key, and every {@code streamrune.} name they
  *       use is a key, a meter or a span attribute;
  *   <li>every table with a {@code Default} column states the default this integration has.
@@ -47,6 +48,8 @@ import org.streamrune.integration.tck.DefaultRendering;
 class ConfigurationDocLintTest {
 
   private static final String README = "streamrune-integration/streamrune-micronaut/README.md";
+
+  private static final String METADATA = "META-INF/configuration-metadata.json";
 
   /** The keys the projection discovery looks up in code; see the Spring test for the defaults. */
   private static final List<ReadElsewhere> LOOKUPS =
@@ -117,14 +120,25 @@ class ConfigurationDocLintTest {
   }
 
   @Test
-  void theMetadataDeclaresEveryKey() throws Exception {
-    try (var json =
-        getClass().getClassLoader().getResourceAsStream("META-INF/configuration-metadata.json")) {
-      assertTrue(json != null, "the metadata must be on the classpath");
-      assertNoProblems(
-          "key(s) missing from configuration-metadata.json",
-          ConfigurationDocs.missingFrom(ConfigurationDocs.metadataKeys(json), oracle));
-    }
+  void theMetadataDeclaresEveryKey() {
+    assertNoProblems(
+        "key(s) missing from " + METADATA,
+        ConfigurationDocs.missingFrom(metadata().keySet(), oracle));
+  }
+
+  @Test
+  void theMetadataStatesTheMicronautDefaultOfEveryKeyItDeclares() {
+    Map<String, String> metadata = metadata();
+    assertTrue(metadata.size() > 50, "the metadata's keys must be found: " + metadata);
+    assertNoProblems(
+        "entr(y/ies) of " + METADATA + " the code disagrees with",
+        ConfigurationDocs.wrongMetadata(metadata, oracle));
+  }
+
+  private static Map<String, String> metadata() {
+    var json = ConfigurationDocLintTest.class.getClassLoader().getResourceAsStream(METADATA);
+    assertTrue(json != null, "the metadata must be on the classpath");
+    return ConfigurationDocs.metadataDefaults(json);
   }
 
   @Test

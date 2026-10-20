@@ -140,9 +140,7 @@ class ConfigurationDocsTest {
         "{\"groups\":[],\"properties\":[{\"name\":\"streamrune.outbox.enabled\"},"
             + "{\"name\":\"streamrune.retry-max-attempts\"}]}";
 
-    Set<String> declared =
-        ConfigurationDocs.metadataKeys(
-            new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)));
+    Set<String> declared = metadata(json).keySet();
 
     assertEquals(Set.of("streamrune.outbox.enabled", "streamrune.retry-max-attempts"), declared);
     assertEquals(
@@ -153,11 +151,91 @@ class ConfigurationDocsTest {
   }
 
   @Test
+  void metadataDefaultsAreRenderedAsTheGuidesWriteThem() {
+    Map<String, String> stated =
+        metadata(
+            "{\"properties\":["
+                + duration("a.days", "\"7d\"")
+                + duration("a.hours", "\"24h\"")
+                + duration("a.minutes", "\"60s\"")
+                + duration("a.seconds", "\"PT30S\"")
+                + duration("a.millis", "\"1500ms\"")
+                + duration("a.micros", "\"500us\"")
+                + duration("a.nanos", "\"500ns\"")
+                + duration("a.minutes-short", "\"5m\"")
+                + duration("a.zero", "\"0s\"")
+                + duration("a.words", "\"5 minutes\"")
+                + "{\"name\":\"a.flag\",\"type\":\"java.lang.Boolean\",\"defaultValue\":false},"
+                + "{\"name\":\"a.ratio\",\"type\":\"java.lang.Double\",\"defaultValue\":2.0},"
+                + "{\"name\":\"a.count\",\"type\":\"java.lang.Integer\",\"defaultValue\":100},"
+                + "{\"name\":\"a.mode\",\"type\":\"java.lang.String\",\"defaultValue\":\"5m\"},"
+                + "{\"name\":\"a.list\",\"defaultValue\":[\"x\",\"y\"]},"
+                + "{\"name\":\"a.empty\",\"defaultValue\":\"\"},"
+                + "{\"name\":\"a.null\",\"defaultValue\":null},"
+                + "{\"name\":\"a.none\",\"type\":\"java.time.Duration\"}]}");
+
+    Map<String, String> expected = new TreeMap<>();
+    expected.putAll(
+        Map.of(
+            "a.days", "7d",
+            "a.hours", "1d",
+            "a.minutes", "1m",
+            "a.seconds", "30s",
+            "a.millis", "1500ms",
+            "a.micros", "PT0.0005S",
+            "a.nanos", "PT0.0000005S",
+            "a.minutes-short", "5m",
+            "a.zero", "0s",
+            "a.words", "5 minutes"));
+    expected.putAll(
+        Map.of(
+            "a.flag", "false",
+            "a.ratio", "2.0",
+            "a.count", "100",
+            "a.mode", "5m",
+            "a.list", "x, y",
+            "a.empty", DefaultRendering.NONE,
+            "a.null", DefaultRendering.NONE,
+            "a.none", DefaultRendering.NONE));
+    assertEquals(expected, stated);
+  }
+
+  @Test
+  void metadataMustStateTheCodeDefaultOfAKeyTheCodeKnows() {
+    Map<String, String> stated =
+        metadata(
+            "{\"properties\":["
+                + duration("streamrune.outbox.retention-max-age", "\"PT168H\"")
+                + duration("streamrune.inbox.retention-max-age", "\"6d\"")
+                + "{\"name\":\"streamrune.outbox.enabled\",\"defaultValue\":false},"
+                + "{\"name\":\"streamrune.retry-max-attempts\"},"
+                + "{\"name\":\"streamrune.outbox.renamed-key\",\"defaultValue\":1}]}");
+
+    assertEquals(
+        List.of(
+            "streamrune.inbox.retention-max-age: the metadata says '6d', the code default is"
+                + " '7d'",
+            "streamrune.outbox.renamed-key: declared, but the code neither binds nor reads it",
+            "streamrune.retry-max-attempts: the metadata says '—', the code default is '3'"),
+        ConfigurationDocs.wrongMetadata(stated, ORACLE));
+  }
+
+  @Test
   void brokenMetadataIsAnError() {
-    assertThrowsUnchecked(
-        () ->
-            ConfigurationDocs.metadataKeys(
-                new ByteArrayInputStream("{".getBytes(StandardCharsets.UTF_8))));
+    assertThrowsUnchecked(() -> metadata("{"));
+  }
+
+  private static Map<String, String> metadata(String json) {
+    return ConfigurationDocs.metadataDefaults(
+        new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  private static String duration(String name, String defaultValue) {
+    return "{\"name\":\""
+        + name
+        + "\",\"type\":\"java.time.Duration\",\"defaultValue\":"
+        + defaultValue
+        + "},";
   }
 
   @Test

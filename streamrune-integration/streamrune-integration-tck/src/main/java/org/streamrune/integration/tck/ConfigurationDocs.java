@@ -10,6 +10,8 @@ import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -17,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -257,18 +260,96 @@ public final class ConfigurationDocs {
     return types;
   }
 
-  /** The {@code properties[].name} values of a Spring or Micronaut configuration metadata file. */
-  public static Set<String> metadataKeys(InputStream json) {
-    Set<String> keys = new TreeSet<>();
+  /**
+   * The keys a Spring or Micronaut configuration metadata file declares ({@code
+   * properties[].name}), each with the {@code defaultValue} it states, rendered as {@link
+   * DefaultRendering} writes it: for a {@code java.time.Duration} key the value is read in the
+   * short form ({@code 5s}, {@code 7d}, {@code 500ms}) or in ISO-8601 ({@code PT5M}); any other
+   * value is its JSON text, and a key that states none has {@link DefaultRendering#NONE}.
+   */
+  public static Map<String, String> metadataDefaults(InputStream json) {
+    Map<String, String> defaults = new TreeMap<>();
     try (json) {
       JsonNode root = new ObjectMapper().readTree(json);
       for (JsonNode property : root.path("properties")) {
-        keys.add(property.path("name").asText());
+        defaults.put(property.path("name").asText(), statedDefault(property));
       }
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
-    return keys;
+    return defaults;
+  }
+
+  /**
+   * Every key of {@code metadata}, an integration's configuration metadata as {@link
+   * #metadataDefaults} reads it, that {@code oracle} does not know or whose stated default differs
+   * from the oracle's, as {@code key: …}. The keys the metadata leaves out are {@link
+   * #missingFrom}'s.
+   */
+  public static List<String> wrongMetadata(
+      Map<String, String> metadata, Map<String, String> oracle) {
+    List<String> problems = new ArrayList<>();
+    metadata.forEach(
+        (key, stated) -> {
+          String expected = oracle.get(key);
+          if (expected == null) {
+            problems.add(key + ": declared, but the code neither binds nor reads it");
+          } else if (!expected.equals(stated)) {
+            problems.add(
+                key
+                    + ": the metadata says '"
+                    + stated
+                    + "', the code default is '"
+                    + expected
+                    + "'");
+          }
+        });
+    return problems;
+  }
+
+  /** A duration in the short form: an integer and one of the units the integrations accept. */
+  private static final Pattern SHORT_DURATION = Pattern.compile("(-?\\d+)(ns|us|ms|s|m|h|d)");
+
+  private static String statedDefault(JsonNode property) {
+    JsonNode value = property.path("defaultValue");
+    if (value.isMissingNode() || value.isNull()) {
+      return DefaultRendering.NONE;
+    }
+    if (value.isArray()) {
+      List<String> elements = new ArrayList<>();
+      value.forEach(element -> elements.add(element.asText()));
+      return DefaultRendering.render(elements);
+    }
+    String text = value.asText();
+    if ("java.time.Duration".equals(property.path("type").asText())) {
+      Duration duration = duration(text);
+      if (duration != null) {
+        return DefaultRendering.render(duration);
+      }
+    }
+    return DefaultRendering.render(text);
+  }
+
+  /** {@code text} read as a duration in the short form or in ISO-8601, or null if it is neither. */
+  private static Duration duration(String text) {
+    Matcher shortForm = SHORT_DURATION.matcher(text);
+    if (shortForm.matches()) {
+      long amount = Long.parseLong(shortForm.group(1));
+      return switch (shortForm.group(2)) {
+        case "ns" -> Duration.ofNanos(amount);
+        case "us" -> Duration.ofNanos(amount * 1_000);
+        case "ms" -> Duration.ofMillis(amount);
+        case "s" -> Duration.ofSeconds(amount);
+        case "m" -> Duration.ofMinutes(amount);
+        case "h" -> Duration.ofHours(amount);
+        default -> Duration.ofDays(amount);
+      };
+    }
+    try {
+      return Duration.parse(text);
+    } catch (DateTimeParseException notIso) {
+      return null;
+    }
   }
 
   /**
