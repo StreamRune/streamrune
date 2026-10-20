@@ -172,6 +172,9 @@ public interface EventStore {
    */
   default void saveSnapshot(
       StreamId streamId, Version version, AggregateState state, int snapshotVersion) {
+    if (snapshotVersion < 1) {
+      throw new IllegalArgumentException("snapshotVersion must be >= 1, got " + snapshotVersion);
+    }
     if (!saveSnapshot(streamId, version, state, snapshotVersion, 0)) {
       throw new IllegalStateException(
           "Snapshot of stream "
@@ -202,6 +205,10 @@ public interface EventStore {
    * the row the purge also writes). A store without a purge record returns {@code true} after
    * storing, whatever the generation. A store that keeps no snapshots throws {@link
    * UnsupportedOperationException}.
+   *
+   * <p>Every implementation must reject {@code snapshotVersion < 1} with {@link
+   * IllegalArgumentException}: {@code 0} is reserved by {@link #load(StreamId, int)} as the
+   * skip-the-check value and must never be persisted as a schema version.
    *
    * @param streamId the stream to snapshot
    * @param version the event version at which the snapshot was taken

@@ -126,6 +126,21 @@ class EventStoreDefaultMethodsTest {
     assertEquals(List.of("1/0"), store.saves);
   }
 
+  /**
+   * Schema version 0 is the load's skip-the-check value: the default refuses it before the store.
+   */
+  @Test
+  void versionedSaveSnapshotDefault_refusesSchemaVersionZero_beforeReachingTheStore() {
+    var store = new MinimalEventStore();
+    var stream = StreamId.of(TYPE, AggregateId.of("s1"));
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> store.saveSnapshot(stream, new Version(3), new DummyState(), 0));
+    assertTrue(refused.getMessage().contains("snapshotVersion must be >= 1"));
+    assertEquals(List.of(), store.saves);
+  }
+
   @Test
   void versionedSaveSnapshotDefault_savesAtGenerationZero() {
     var store = new MinimalEventStore();
