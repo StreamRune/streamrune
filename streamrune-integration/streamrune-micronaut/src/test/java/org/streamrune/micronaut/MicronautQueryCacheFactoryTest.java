@@ -38,7 +38,10 @@ class MicronautQueryCacheFactoryTest {
             .properties(Map.of("streamrune.query-cache.enabled", "true"))
             .start()) {
       assertTrue(ctx.containsBean(CachingQueryBus.class));
-      assertInstanceOf(CachingQueryBus.class, ctx.getBean(QueryBus.class));
+      assertInstanceOf(
+          CachingQueryBus.class,
+          assertInstanceOf(UnboundRequestContextQueryBus.class, ctx.getBean(QueryBus.class))
+              .delegate());
     }
   }
 
@@ -162,7 +165,9 @@ class MicronautQueryCacheFactoryTest {
     AuditStore store = mock(AuditStore.class);
 
     QueryBus result = module.queryBus(simpleBus, null, store);
-    assertInstanceOf(AuditingQueryBus.class, result);
+    assertInstanceOf(
+        AuditingQueryBus.class,
+        assertInstanceOf(UnboundRequestContextQueryBus.class, result).delegate());
   }
 
   @Test
@@ -171,7 +176,7 @@ class MicronautQueryCacheFactoryTest {
     var simpleBus = new SimpleQueryBus();
 
     QueryBus result = module.queryBus(simpleBus, null, null);
-    assertSame(simpleBus, result);
+    assertSame(simpleBus, assertInstanceOf(UnboundRequestContextQueryBus.class, result).delegate());
   }
 
   @Test
@@ -182,6 +187,8 @@ class MicronautQueryCacheFactoryTest {
     AuditStore store = mock(AuditStore.class);
 
     QueryBus result = module.queryBus(simpleBus, cachingBus, store);
-    assertInstanceOf(AuditingQueryBus.class, result);
+    assertInstanceOf(
+        AuditingQueryBus.class,
+        assertInstanceOf(UnboundRequestContextQueryBus.class, result).delegate());
   }
 }

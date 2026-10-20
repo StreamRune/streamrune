@@ -21,6 +21,7 @@ import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.SnapshotPolicy;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.projection.Projection;
@@ -761,6 +762,20 @@ public final class StreamRune implements CommandBus, AutoCloseable {
      */
     public Builder asyncTaskWrapper(UnaryOperator<Runnable> asyncTaskWrapper) {
       busBuilder.asyncTaskWrapper(asyncTaskWrapper);
+      return this;
+    }
+
+    /**
+     * Sets where the underlying command bus takes the caller's request context from for a command
+     * dispatched on a thread where {@link StreamRuneContext#CURRENT} is not bound. See {@link
+     * VirtualThreadCommandBus.Builder#unboundRequestContext(java.util.function.Supplier)}.
+     *
+     * @param unboundRequestContext the source; {@code null} removes it
+     * @return this builder
+     */
+    public Builder unboundRequestContext(
+        java.util.function.Supplier<StreamRuneContext.RequestContext> unboundRequestContext) {
+      busBuilder.unboundRequestContext(unboundRequestContext);
       return this;
     }
 

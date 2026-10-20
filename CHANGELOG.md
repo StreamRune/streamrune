@@ -879,6 +879,16 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   build when a registered command declares `@RequireRole`/`@RequirePermission` and no
   `AnnotationAuthorizationInterceptor` is in its own chain; the Spring, Quarkus and Micronaut startup
   checks read the chain of every command bus bean, also one the application builds itself.
+- Micronaut: the request's caller reaches every command and query on every thread Micronaut runs a
+  route on. A route whose body arrives after the request head (the default `streamed` server type)
+  runs on a Netty event loop, and an `@ExecuteOn` controller on its executor under either server
+  type, both outside the request filter's `ScopedValue` binding. The module's command bus binds the
+  context the filter stored on the request for a dispatch that starts with
+  `StreamRuneContext.CURRENT` unbound (`VirtualThreadCommandBus.Builder#unboundRequestContext`,
+  asked on entry to `execute` and at submission in `executeAsync`), its `QueryBus` bean does the
+  same (`UnboundRequestContextQueryBus`), and `StreamRuneContextHelper.get()` falls back to the
+  request's context. A bound context is never replaced, and a dispatch with no request current runs
+  without one.
 - Off-thread authorization: request-scoped resolvers are evaluated once at the request edge and the
   result travels in `RequestContext.authority()`, so `executeAsync` authorizes like synchronous
   execution; a dead-letter replay runs under a recorded system principal. The captured authority is

@@ -393,9 +393,18 @@ public class StreamRuneMicronautModule {
 
   /**
    * Creates the {@link QueryBus} composing the full chain: SimpleQueryBus → CachingQueryBus (if
-   * enabled) → AuditingQueryBus (if AuditStore available). The building blocks ({@link
-   * #simpleQueryBus}, {@link #cachingQueryBus}) do not carry the {@link QueryBus} bean type, so
-   * this composed bus is the only framework candidate for plain {@code QueryBus} injection points.
+   * enabled) → AuditingQueryBus (if AuditStore available), inside an {@link
+   * UnboundRequestContextQueryBus} over {@link StreamRuneContextHelper#get()}. The building blocks
+   * ({@link #simpleQueryBus}, {@link #cachingQueryBus}) do not carry the {@link QueryBus} bean
+   * type, so this composed bus is the only framework candidate for plain {@code QueryBus} injection
+   * points.
+   *
+   * <p><b>The request's caller on every route thread.</b> A query dispatched where {@link
+   * org.streamrune.core.StreamRuneContext#CURRENT} is not bound — a route Micronaut runs on a Netty
+   * event loop because its body arrived after the request head, or a controller annotated with
+   * {@code @ExecuteOn} — runs under the context {@link StreamRuneContextFilter} stored on the
+   * request, so the audit row and the handler see the caller, as they do on the filter's own
+   * thread. A query with no request current is dispatched without a context, as before.
    *
    * <p><b>It backs off entirely for any application-defined {@code QueryBus}.</b> Without
    * {@code @Requires(missingBeans = QueryBus.class)} this method won every injection point even
@@ -419,7 +428,7 @@ public class StreamRuneMicronautModule {
    * @param simpleBus the base query bus
    * @param cachingBus the optional caching layer
    * @param auditStore the optional audit store
-   * @return the fully composed query bus
+   * @return the fully composed query bus, inside the {@link UnboundRequestContextQueryBus}
    */
   @Singleton
   @Requires(missingBeans = QueryBus.class)
@@ -428,7 +437,8 @@ public class StreamRuneMicronautModule {
       @jakarta.annotation.Nullable CachingQueryBus cachingBus,
       @jakarta.annotation.Nullable AuditStore auditStore) {
     QueryBus bus = cachingBus != null ? cachingBus : simpleBus;
-    return auditStore != null ? new AuditingQueryBus(bus, auditStore) : bus;
+    QueryBus audited = auditStore != null ? new AuditingQueryBus(bus, auditStore) : bus;
+    return new UnboundRequestContextQueryBus(audited, StreamRuneContextHelper::get);
   }
 
   /**
@@ -589,6 +599,18 @@ public class StreamRuneMicronautModule {
    * (dispatched/succeeded/failed/duration/retries/DLQ-published) are recorded instead of NOOPed.
    * Both default to today's behavior (no DLQ / NOOP metrics) when absent.
    *
+   * <p><b>The request's caller on every route thread.</b> The bus is built with {@link
+   * StreamRuneContextHelper#get()} as its {@link
+   * VirtualThreadCommandBus.Builder#unboundRequestContext unbound-request-context source}. {@link
+   * StreamRuneContextFilter} binds {@link org.streamrune.core.StreamRuneContext#CURRENT} on its own
+   * thread only; a route Micronaut runs elsewhere — on a Netty event loop because its body arrived
+   * after the request head (the default {@code streamed} server type), or on the executor of a
+   * controller annotated {@code @ExecuteOn} — dispatches with {@code CURRENT} unbound, and the bus
+   * then binds the context the filter stored on the request. The command is authorized, audited and
+   * recorded as the request's caller on every thread. A dispatch with {@code CURRENT} bound (the
+   * filter's thread, a saga, a replay) keeps its binding, and a dispatch with no request current (a
+   * background thread) runs without a context, as before.
+   *
    * <p><b>Snapshot policy:</b> the default is {@code
    * SnapshotPolicy.everyNEvents(streamrune.snapshot-every-n-events)} at snapshot schema version 1.
    * An application {@link SnapshotPolicy} bean replaces it wholesale — that is the ONLY way to bump
@@ -672,7 +694,8 @@ public class StreamRuneMicronautModule {
             .lockTimeout(properties.lockTimeout())
             .stripeCount(properties.stripeCount())
             .maxInFlightAsyncCommands(properties.maxInFlightAsyncCommands())
-            .interceptors(orderedInterceptors);
+            .interceptors(orderedInterceptors)
+            .unboundRequestContext(StreamRuneContextHelper::get);
 
     // Wire the optional StreamRuneMetrics bean so command-bus meters are recorded (NOOP if absent),
     // mirroring Spring (StreamRuneAutoConfiguration) and the query bus on this framework.

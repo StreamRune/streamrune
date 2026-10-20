@@ -16,7 +16,7 @@ Do **not** use `CommandAuthorizationPolicy.allowAll()` in production — it is a
 
 `AuthorizationCommandInterceptor` is a `CommandInterceptor` that calls the policy in `before(ctx)` before every command reaches the decider.
 
-The `UserId` is read from `StreamRuneContext.CURRENT` (a `ScopedValue<RequestContext>`). If unbound (anonymous request), `userId` is `null`.
+The `UserId` is read from `StreamRuneContext.CURRENT` (a `ScopedValue<RequestContext>`). If unbound (anonymous request), `userId` is `null`. On Micronaut a route can run on a thread outside the request filter's binding (a body that arrives after the request head, an `@ExecuteOn` controller); the module's command bus binds the request's context there before the interceptors run — see the [Micronaut README](../../../streamrune-integration/streamrune-micronaut/README.md#context-propagation).
 
 ### Where the identity comes from (security)
 
