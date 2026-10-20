@@ -14,8 +14,22 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubjectId;
 
 /**
- * The {@link SnapshotPurger} for {@code PostgresEventStore}: deletes a subject's rows from the
- * framework-owned {@code snapshot_store} table.
+ * The {@link SnapshotPurger} for {@code PostgresEventStore}: purges the snapshots of a subject's
+ * streams from the framework-owned {@code snapshot_store} table.
+ *
+ * <p><b>What a purge writes.</b> For every stream the mapping names, the stream's row loses its
+ * state ({@code state_type} and {@code state_payload} become {@code NULL}) and its {@code
+ * purge_generation} goes up by one; a stream with no row gets one in that form. The row stays so
+ * that a command in flight cannot put the snapshot back: a command loads the aggregate, decides,
+ * appends, and only then saves a snapshot, and a forget can run between the load and the save. The
+ * save is a conditional upsert that writes only while the row still has the generation the load saw
+ * (see {@code PostgresEventStore#saveSnapshot(StreamId, Version, AggregateState, int, long)}), so a
+ * state loaded before the purge, which still holds whatever it copied from the subject's
+ * {@code @Encrypted} fields in the clear, is never stored after it. The purge and the save upsert
+ * one primary key, so the database serializes them on every replica, with any {@code
+ * AggregateLocker}. The first command that loads after the purge sees the new generation and
+ * snapshots again, from events whose {@code @Encrypted} fields now read {@code [REDACTED]}. A
+ * loaded row without a state is no snapshot: the load replays the stream's events.
  *
  * <p><b>Why this exists.</b> {@link org.streamrune.runtime.gdpr.ForgetSubjectService#forget} does
  * two things: crypto-shred the subject's key, then run every REGISTERED {@link SubjectDataPurger}.
@@ -60,19 +74,28 @@ import org.streamrune.core.types.SubjectId;
  *     .build();
  * }</pre>
  *
- * <p>Idempotent per {@link SubjectDataPurger}'s contract: deleting an already-absent row, or an
- * empty/{@code null} stream collection, is a safe no-op.
+ * <p>Idempotent per {@link SubjectDataPurger}'s contract: purging a stream again raises its
+ * generation once more and leaves it without a state, and an empty or {@code null} stream
+ * collection writes nothing. One statement purges every stream of the subject, so a failure or a
+ * crash leaves either all of them purged or none; a re-run of the forget converges either way.
  */
 public final class PostgresSnapshotStorePurger implements SnapshotPurger {
 
   private static final Logger log = LoggerFactory.getLogger(PostgresSnapshotStorePurger.class);
 
   // One statement for every stream of the subject: the two arrays are zipped by unnest into
-  // (aggregate_type, aggregate_id) pairs, each served by the primary key.
-  private static final String DELETE_SNAPSHOTS =
-      "DELETE FROM snapshot_store s"
-          + " USING unnest(?::varchar[], ?::varchar[]) AS k(aggregate_type, aggregate_id)"
-          + " WHERE s.aggregate_type = k.aggregate_type AND s.aggregate_id = k.aggregate_id";
+  // (aggregate_type, aggregate_id) pairs, each served by the primary key. DISTINCT, because an
+  // upsert may not touch one row twice; ORDER BY, so two purges of overlapping streams lock their
+  // rows in one order.
+  private static final String PURGE_SNAPSHOTS =
+      "INSERT INTO snapshot_store AS s (aggregate_type, aggregate_id, version, state_type,"
+          + " state_payload, purge_generation)"
+          + " SELECT DISTINCT k.aggregate_type, k.aggregate_id, 0, NULL, NULL::jsonb, 1"
+          + " FROM unnest(?::varchar[], ?::varchar[]) AS k(aggregate_type, aggregate_id)"
+          + " ORDER BY k.aggregate_type, k.aggregate_id"
+          + " ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET"
+          + " version = 0, state_type = NULL, state_payload = NULL, created_at = NOW(),"
+          + " purge_generation = s.purge_generation + 1";
 
   private final DataSource dataSource;
   private final Function<SubjectId, ? extends Collection<StreamId>> streamsForSubject;
@@ -117,14 +140,14 @@ public final class PostgresSnapshotStorePurger implements SnapshotPurger {
       i++;
     }
     try (var conn = dataSource.getConnection();
-        var ps = conn.prepareStatement(DELETE_SNAPSHOTS)) {
+        var ps = conn.prepareStatement(PURGE_SNAPSHOTS)) {
       ps.setArray(1, conn.createArrayOf("varchar", types));
       ps.setArray(2, conn.createArrayOf("varchar", ids));
-      int deleted =
+      int purged =
           PostgresTransactions.commitIfManual(conn, "snapshot purge", c -> ps.executeUpdate());
       log.info(
-          "GDPR forget: purged {} snapshot_store row(s) for subject-hash={}",
-          deleted,
+          "GDPR forget: purged the snapshots of {} stream(s) in snapshot_store for subject-hash={}",
+          purged,
           subjectId.redacted());
     } catch (SQLException e) {
       throw new EventStoreException("Failed to purge snapshot_store rows for subject", e);

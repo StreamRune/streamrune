@@ -52,6 +52,15 @@ public record ForgetResult(
    * {@code true} only when the key was deleted, every purger succeeded AND the query cache was
    * evicted — i.e. no derived PII is known to remain. When this is {@code false}, the caller must
    * not tell the data subject the erasure completed.
+   *
+   * <p>It describes the moment {@code forget} returned. It does not cover a projection page that
+   * was decrypted before the key was deleted and is written after the purgers ran: neither the key
+   * deletion nor a purger reaches data a projection holds in memory. A projection closes that
+   * window by deleting the subject's rows when it handles an event that says the subject is
+   * forgotten, or the application calls {@code forget} again once every such projection's
+   * checkpoint has passed the head of the global stream read after the forget (see the GDPR guide).
+   * Request identities ({@code userId} in event metadata, the audit logs and the dead-letter queue)
+   * are outside erasure by design.
    */
   public boolean fullyErased() {
     return keyDeleted

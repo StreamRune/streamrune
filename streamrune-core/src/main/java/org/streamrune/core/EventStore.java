@@ -176,6 +176,51 @@ public interface EventStore {
   }
 
   /**
+   * Persists a snapshot of a state built from a load, unless the stream's snapshot was purged since
+   * that load. This is the method the command bus calls.
+   *
+   * <p><b>Why the purge generation.</b> A command loads its aggregate, decides and appends, and
+   * snapshots the resulting state afterwards. A forget can run in between: it deletes the subject's
+   * key and its {@link org.streamrune.core.gdpr.SnapshotPurger} purges the stream's snapshot. The
+   * state the command loaded before the forget still holds whatever it copied in the clear from the
+   * subject's {@code @Encrypted} fields, and saving it would put that data back into the store
+   * after the forget reported the snapshot purged. {@code snapshotPurgeGeneration} is the
+   * generation the command's load saw ({@link AggregateHistory#snapshotPurgeGeneration()}); a purge
+   * raises the stream's generation, and a save whose generation is no longer the stream's writes
+   * nothing. The next command loads after the purge, sees the new generation, and its snapshot is
+   * stored.
+   *
+   * <p>A store whose snapshots a {@code SnapshotPurger} purges must override this method, and the
+   * comparison and the write must be one atomic step against the purge (for {@code
+   * PostgresEventStore}, one conditional upsert on the row the purge also writes). The default
+   * keeps no purge record: it calls {@link #saveSnapshot(StreamId, Version, AggregateState, int)}
+   * and returns {@code true}.
+   *
+   * @param streamId the stream to snapshot
+   * @param version the event version at which the snapshot was taken
+   * @param state the state to persist
+   * @param snapshotVersion the schema version of {@code state} (must be >= 1)
+   * @param snapshotPurgeGeneration the purge generation of the load {@code state} was built from
+   * @return {@code true} if the snapshot was stored, {@code false} if the stream's snapshot was
+   *     purged since the load and nothing was written
+   * @throws IllegalArgumentException if {@code snapshotVersion < 1} or {@code
+   *     snapshotPurgeGeneration < 0}
+   */
+  default boolean saveSnapshot(
+      StreamId streamId,
+      Version version,
+      AggregateState state,
+      int snapshotVersion,
+      long snapshotPurgeGeneration) {
+    if (snapshotPurgeGeneration < 0) {
+      throw new IllegalArgumentException(
+          "snapshotPurgeGeneration must not be negative, got " + snapshotPurgeGeneration);
+    }
+    saveSnapshot(streamId, version, state, snapshotVersion);
+    return true;
+  }
+
+  /**
    * Returns the head of the global stream: the highest global offset assigned in this event store
    * to an event that is readable, or {@link GlobalOffset#initial} if no events have been appended
    * yet.

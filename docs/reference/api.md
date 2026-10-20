@@ -46,6 +46,7 @@ building custom projections or subscription runners.
 | `append` | `AppendResult append(StreamId streamId, List<EventEnvelope> events, Version expectedVersion)` | Always — called by the command bus after `Decider.decide()`. Throws `OptimisticLockException` on version conflict (SQLSTATE 23505 in Postgres). |
 | `saveSnapshot` | `void saveSnapshot(StreamId streamId, Version version, AggregateState state)` | Saves snapshot without schema version (defaults to version 1 in Postgres). |
 | `saveSnapshot` (versioned) | `void saveSnapshot(StreamId streamId, Version version, AggregateState state, int snapshotVersion)` | Use alongside `SnapshotPolicy.everyNEvents(n, version)` to tag the snapshot with its schema version. |
+| `saveSnapshot` (purge-aware) | `boolean saveSnapshot(StreamId streamId, Version version, AggregateState state, int snapshotVersion, long snapshotPurgeGeneration)` | What the command bus calls: saves a snapshot of a state built from a load that saw `snapshotPurgeGeneration` (`AggregateHistory.snapshotPurgeGeneration()`), and writes nothing (returns `false`) when the stream's snapshot was purged by a GDPR forget since that load. The default calls the versioned overload and returns `true`; a store whose snapshots a `SnapshotPurger` purges overrides it. |
 | `readGlobalStream` | `List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount)` | Used by projections and subscriptions to consume the global event log. |
 | `readStream` | `List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount)` | Used when replaying a single aggregate stream without loading its snapshot. |
 
@@ -156,8 +157,11 @@ record AggregateHistory(
     AggregateState snapshotState,     // null if no snapshot or version mismatch
     List<EventEnvelope> events,       // events after the snapshot (all events if no snapshot)
     Version version,                  // latest version of the stream
-    Version lastSnapshotVersion)      // Version.initial() if no snapshot
+    Version lastSnapshotVersion,      // Version.initial() if no snapshot
+    long snapshotPurgeGeneration)     // how often the stream's snapshot was purged; 0 if never
 ```
+
+A four-argument constructor builds a history whose `snapshotPurgeGeneration` is `0`.
 
 > **Note:** you rarely construct this directly. The command bus reads it from `EventStore.load()`.
 >

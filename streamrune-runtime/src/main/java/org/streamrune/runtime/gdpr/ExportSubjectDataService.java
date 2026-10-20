@@ -75,7 +75,9 @@ public final class ExportSubjectDataService {
    * export.
    *
    * @param subjectId the data subject identifier; must not be null
-   * @param requesterUserId who requested the export (for audit); may be {@code null}
+   * @param requesterUserId who requested the export (for audit); may be {@code null}. When it
+   *     equals the subject id (a self-service request), the audit row stores the subject's hash in
+   *     its place
    * @return immutable {@link SubjectExport} with sections in registration order
    * @throws NullPointerException if {@code subjectId} is null
    * @throws IllegalStateException if no collectors were registered (Quarkus path)

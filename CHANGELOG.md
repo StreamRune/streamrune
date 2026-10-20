@@ -214,8 +214,16 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   at a schema version above what its chain reaches rather than mis-binding it.
 - `SimpleEventTypeRegistry` maps event-type and state-type names to classes; the `StreamRune`
   builder's `registerEventType` / `registerStateType` maintain one for you.
-- `PostgresSnapshotStorePurger` — the `SnapshotPurger` for `snapshot_store`: deletes the snapshots
-  of the streams an application-supplied `subjectId -> streams` mapping names.
+- `PostgresSnapshotStorePurger` — the `SnapshotPurger` for `snapshot_store`: purges the snapshots
+  of the streams an application-supplied `subjectId -> streams` mapping names. Each stream's row
+  keeps no state (`state_type` and `state_payload` `NULL`) and its `purge_generation` goes up by one.
+  A load returns the generation (`AggregateHistory.snapshotPurgeGeneration()`), the command bus saves
+  with it (`EventStore.saveSnapshot(streamId, version, state, snapshotVersion,
+  snapshotPurgeGeneration)`, which returns whether the snapshot was stored), and `PostgresEventStore`
+  writes only while the row still has that generation, in one conditional upsert. A command in
+  flight across a forget therefore never stores the state it loaded before the forget, on any
+  replica and with any `AggregateLocker`; the next command snapshots again. A refused save is logged
+  at INFO and not counted in `streamrune.snapshots.created`.
 
 ### Command bus, idempotency and the command inbox
 
@@ -857,6 +865,17 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   normal-scoped purger bean to the instance behind it.
 - Crypto-shredding covers events, snapshots, saga state and the `@Encrypted` components of dead-lettered
   commands. Saga and projection dead-letter stores hold metadata only and point at `event_stream`.
+- The GDPR audit rows store the requester as given, except when it equals the subject id (a
+  self-service request): `forget`, `reinstate` and `export` then store the subject's hash in
+  `audit_log.user_id`, beside the same hash in `aggregate_id`.
+- The request identities — `event_stream.metadata.userId`, `audit_log.user_id`,
+  `event_audit_log.user_id`, `dead_letter_queue.user_id` — are outside erasure by design; the GDPR
+  guide lists them and recommends an `AuthenticatedUserResolver` that returns an opaque id.
+- `ForgetResult.fullyErased()` describes the moment `forget` returns. A projection page decrypted
+  before the key deletion and written after the purgers is outside it; the GDPR guide gives the two
+  ways to close it (the projection deletes the subject's rows on an event that says the subject is
+  forgotten, or `forget` is called again once the projections have passed the head of the global
+  stream read after the forget).
 - `streamrune.crypto.subject_redacted` and `streamrune.crypto.keystore_systemic_failure` distinguish
   lawful per-subject redaction from a wiped or misconfigured key store.
 

@@ -23,7 +23,7 @@ class EventStoreDefaultMethodsTest {
   private static final AggregateType TYPE = AggregateType.of("cart");
 
   /** Minimal implementation that overrides only the abstract methods. */
-  private static final class MinimalEventStore implements EventStore {
+  private static class MinimalEventStore implements EventStore {
 
     boolean loadCalled;
 
@@ -134,6 +134,41 @@ class EventStoreDefaultMethodsTest {
                       invalid));
       assertTrue(ex.getMessage().contains("snapshotVersion must be >= 1"), ex.getMessage());
     }
+  }
+
+  /** A store that keeps no purge record writes through the versioned save and reports it stored. */
+  @Test
+  void purgeAwareSaveSnapshotDefault_delegatesToTheVersionedSaveAndReportsStored() {
+    var saved = new java.util.ArrayList<Integer>();
+    EventStore store =
+        new MinimalEventStore() {
+          @Override
+          public void saveSnapshot(
+              StreamId streamId, Version version, AggregateState state, int snapshotVersion) {
+            saved.add(snapshotVersion);
+          }
+        };
+
+    assertTrue(
+        store.saveSnapshot(
+            StreamId.of(TYPE, AggregateId.of("s1")), new Version(3), new DummyState(), 2, 4));
+    assertEquals(List.of(2), saved);
+  }
+
+  @Test
+  void purgeAwareSaveSnapshotDefault_rejectsANegativeGeneration() {
+    var store = new MinimalEventStore();
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                store.saveSnapshot(
+                    StreamId.of(TYPE, AggregateId.of("s1")),
+                    new Version(3),
+                    new DummyState(),
+                    1,
+                    -1));
+    assertTrue(ex.getMessage().contains("snapshotPurgeGeneration"), ex.getMessage());
   }
 
   @Test

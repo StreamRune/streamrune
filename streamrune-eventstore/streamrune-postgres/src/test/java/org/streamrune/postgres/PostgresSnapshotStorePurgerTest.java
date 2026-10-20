@@ -72,11 +72,15 @@ class PostgresSnapshotStorePurgerTest {
     }
   }
 
+  /** The streams that still have a stored state; a purged stream keeps a row without one. */
   private static Set<String> remainingSnapshotStreamIds() throws Exception {
     var ids = new java.util.HashSet<String>();
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement();
-        var rs = stmt.executeQuery("SELECT aggregate_type, aggregate_id FROM snapshot_store")) {
+        var rs =
+            stmt.executeQuery(
+                "SELECT aggregate_type, aggregate_id FROM snapshot_store"
+                    + " WHERE state_payload IS NOT NULL")) {
       while (rs.next()) {
         ids.add(rs.getString(1) + ":" + rs.getString(2));
       }
@@ -164,6 +168,82 @@ class PostgresSnapshotStorePurgerTest {
     assertDoesNotThrow(() -> purger.purge(SubjectId.of("subject-x")));
 
     assertEquals(Set.of("test:order-null-mapping"), remainingSnapshotStreamIds());
+  }
+
+  private static long purgeGeneration(StreamId stream) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "SELECT purge_generation FROM snapshot_store"
+                    + " WHERE aggregate_type = ? AND aggregate_id = ?")) {
+      ps.setString(1, stream.aggregateType().value());
+      ps.setString(2, stream.aggregateId().value());
+      try (var rs = ps.executeQuery()) {
+        assertTrue(rs.next(), "the purged stream keeps its row");
+        return rs.getLong(1);
+      }
+    }
+  }
+
+  @Test
+  void purgeRaisesTheGenerationOfTheStreamEveryTime() throws Exception {
+    StreamId stream = TestStreams.stream("order-generation");
+    store.saveSnapshot(stream, new Version(1), new PurgerTestState("v1"));
+    var purger = new PostgresSnapshotStorePurger(dataSource, subjectId -> List.of(stream));
+
+    purger.purge(SubjectId.of("subject-gen"));
+    assertEquals(1, purgeGeneration(stream));
+    purger.purge(SubjectId.of("subject-gen"));
+    assertEquals(2, purgeGeneration(stream));
+  }
+
+  @Test
+  void purgeOfAStreamWithoutASnapshotLeavesARowWithoutAState() throws Exception {
+    StreamId stream = TestStreams.stream("order-never-snapshotted");
+    var purger = new PostgresSnapshotStorePurger(dataSource, subjectId -> List.of(stream));
+
+    purger.purge(SubjectId.of("subject-none"));
+
+    assertEquals(1, purgeGeneration(stream));
+    assertTrue(remainingSnapshotStreamIds().isEmpty());
+  }
+
+  @Test
+  void aStreamNamedTwiceByTheMappingIsPurgedOnce() throws Exception {
+    StreamId stream = TestStreams.stream("order-twice");
+    store.saveSnapshot(stream, new Version(1), new PurgerTestState("v1"));
+    var purger = new PostgresSnapshotStorePurger(dataSource, subjectId -> List.of(stream, stream));
+
+    purger.purge(SubjectId.of("subject-twice"));
+
+    assertEquals(1, purgeGeneration(stream));
+    assertTrue(remainingSnapshotStreamIds().isEmpty());
+  }
+
+  @Test
+  void aSaveFromALoadBeforeThePurgeWritesNothingAndOneFromALoadAfterItWrites() throws Exception {
+    StreamId stream = TestStreams.stream("order-save-after-purge");
+    store.saveSnapshot(stream, new Version(1), new PurgerTestState("before"));
+    long seenBefore = store.load(stream).snapshotPurgeGeneration();
+    new PostgresSnapshotStorePurger(dataSource, subjectId -> List.of(stream))
+        .purge(SubjectId.of("subject-save"));
+
+    assertFalse(
+        store.saveSnapshot(stream, new Version(2), new PurgerTestState("stale"), 1, seenBefore));
+    assertTrue(remainingSnapshotStreamIds().isEmpty());
+
+    var afterPurge = store.load(stream);
+    assertNull(afterPurge.snapshotState(), "a purged row is no snapshot");
+    assertEquals(1, afterPurge.snapshotPurgeGeneration());
+    assertTrue(
+        store.saveSnapshot(
+            stream,
+            new Version(3),
+            new PurgerTestState("after"),
+            1,
+            afterPurge.snapshotPurgeGeneration()));
+    assertEquals(new PurgerTestState("after"), store.load(stream).snapshotState());
+    assertEquals(1, purgeGeneration(stream), "a save never changes the purge generation");
   }
 
   /**

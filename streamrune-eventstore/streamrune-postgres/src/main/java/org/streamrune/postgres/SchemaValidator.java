@@ -43,7 +43,8 @@ public final class SchemaValidator {
                   "version",
                   "state_type",
                   "state_payload",
-                  "snapshot_version")),
+                  "snapshot_version",
+                  "purge_generation")),
           Map.entry("projection_offset", Set.of("projection_name", "last_offset", "epoch")),
           Map.entry(
               "subscription_leases", Set.of("consumer_name", "holder_id", "epoch", "lease_until")),
