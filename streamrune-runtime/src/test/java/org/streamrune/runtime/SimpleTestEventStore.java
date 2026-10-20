@@ -68,6 +68,16 @@ final class SimpleTestEventStore implements EventStore {
   }
 
   @Override
+  public boolean saveSnapshot(
+      StreamId streamId,
+      Version version,
+      AggregateState state,
+      int snapshotVersion,
+      long snapshotPurgeGeneration) {
+    throw new UnsupportedOperationException("this test store keeps no snapshots");
+  }
+
+  @Override
   public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
     throw new UnsupportedOperationException("SimpleTestEventStore does not support readStream");
   }

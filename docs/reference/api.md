@@ -44,8 +44,9 @@ building custom projections or subscription runners.
 | `load` | `AggregateHistory load(StreamId streamId)` | Default load; uses any stored snapshot regardless of schema version. |
 | `load` (versioned) | `AggregateHistory load(StreamId streamId, int expectedSnapshotVersion)` | Use when snapshot schema versioning is active (i.e., `SnapshotPolicy.everyNEvents(n, version)`). Pass the current `snapshotVersion`; mismatching snapshots are silently dropped and all events are replayed instead. Pass `0` to skip version check (equivalent to the single-arg overload), or `EventStore.IGNORE_SNAPSHOT` (`-1`) to read no snapshot at all; that is what `SnapshotPolicy.never()`, the default, uses. |
 | `append` | `AppendResult append(StreamId streamId, List<EventEnvelope> events, Version expectedVersion)` | Always — called by the command bus after `Decider.decide()`. Throws `OptimisticLockException` on version conflict (SQLSTATE 23505 in Postgres). |
-| `saveSnapshot` | `void saveSnapshot(StreamId streamId, Version version, AggregateState state)` | Saves snapshot without schema version (defaults to version 1 in Postgres). |
-| `saveSnapshot` (versioned) | `void saveSnapshot(StreamId streamId, Version version, AggregateState state, int snapshotVersion)` | Use alongside `SnapshotPolicy.everyNEvents(n, version)` to tag the snapshot with its schema version. |
+| `saveSnapshot` | `boolean saveSnapshot(StreamId streamId, Version version, AggregateState state, int snapshotVersion, long snapshotPurgeGeneration)` | The one save every store implements, and what the command bus calls: saves a snapshot of a state built from a load that saw `snapshotPurgeGeneration` (`AggregateHistory.snapshotPurgeGeneration()`), and writes nothing (returns `false`) when the stream's snapshot was purged by a GDPR forget since that load. A store without a purge record stores and returns `true`. |
+| `saveSnapshot` (versioned) | `void saveSnapshot(StreamId streamId, Version version, AggregateState state, int snapshotVersion)` | Default: saves at purge generation `0`, for a caller with no load behind the state (a test, a tool); throws `IllegalStateException` on a stream whose snapshot was purged. |
+| `saveSnapshot` (unversioned) | `void saveSnapshot(StreamId streamId, Version version, AggregateState state)` | Default: the versioned save at snapshot schema version `1`. |
 | `readGlobalStream` | `List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount)` | Used by projections and subscriptions to consume the global event log. |
 | `readStream` | `List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount)` | Used when replaying a single aggregate stream without loading its snapshot. |
 
@@ -156,8 +157,11 @@ record AggregateHistory(
     AggregateState snapshotState,     // null if no snapshot or version mismatch
     List<EventEnvelope> events,       // events after the snapshot (all events if no snapshot)
     Version version,                  // latest version of the stream
-    Version lastSnapshotVersion)      // Version.initial() if no snapshot
+    Version lastSnapshotVersion,      // Version.initial() if no snapshot
+    long snapshotPurgeGeneration)     // how often the stream's snapshot was purged; 0 if never
 ```
+
+A four-argument constructor builds a history whose `snapshotPurgeGeneration` is `0`.
 
 > **Note:** you rarely construct this directly. The command bus reads it from `EventStore.load()`.
 >

@@ -404,7 +404,9 @@ runs each registered `SubjectDataPurger` in turn, then evicts the query cache wh
 *Cached query answers are evicted* below). Every engine tombstones the subject even when it
 never had a key, so a later `encrypt` for that id is refused until a reinstate: issue a forget only
 for subject ids known to exist. The `UserId` — who requested the erasure — is
-recorded in the audit log and may be `null`. If `deleteKey` itself throws, `forget` audits a
+recorded in the audit log and may be `null`. When it equals the subject id (the subject asked for
+its own erasure), the audit rows store the subject's hash in its place, so the raw id never sits
+beside its own hash (see *Request identities are not erased* below). If `deleteKey` itself throws, `forget` audits a
 `FAILURE` and rethrows; no purger runs, because the key was not deleted. A purger that throws does
 **not** abort the erasure and is not rethrown (the key is already gone): the failure is audited per
 purger, counted as `streamrune.gdpr.purge_failed` when the builder was given `metrics(...)`, the
@@ -540,8 +542,13 @@ public record RegisterCustomer(
 
 An erasure therefore reaches every copy of the subject's data only when all of these hold: the
 events, saga state and commands mark their personal data `@Encrypted` (deleting the key covers
-them), a purger removes every read-model row, snapshots are purged (next section), and the query
-cache is evicted (see *Cached query answers are evicted* below).
+them), a purger removes every read-model row, snapshots are purged (next section), the query
+cache is evicted (see *Cached query answers are evicted* below), and every projection that keeps
+the subject's data either handles an event that says the subject is forgotten or has its purger run
+again once it has passed the forget (see *A projection batch in flight during a forget* below).
+The request identities — `event_stream.metadata.userId`, `audit_log.user_id`,
+`event_audit_log.user_id` and `dead_letter_queue.user_id` — are outside erasure by design (see
+*Request identities are not erased* below).
 
 ## Aggregate snapshots: a forget needs a snapshot purger
 
@@ -560,7 +567,7 @@ or the application must state `withoutSnapshotPurge()`; otherwise `build()` thro
 `IllegalStateException` with what to add. Both together are refused too. For `PostgresEventStore`
 the snapshot purger is
 [`PostgresSnapshotStorePurger`](../../../streamrune-eventstore/streamrune-postgres/src/main/java/org/streamrune/postgres/PostgresSnapshotStorePurger.java),
-which deletes the subject's rows from `snapshot_store`:
+which purges the snapshots of the subject's streams from `snapshot_store`:
 
 ```java
 ForgetSubjectService.builder()
@@ -582,6 +589,49 @@ general way to derive one: whether a stream's aggregate id equals a subject id, 
 state merely CARRIES a subject's PII under an unrelated stream, is a decision only your domain
 model can answer. You supply that mapping (`Function<SubjectId, Collection<StreamId>>`) — the same
 kind of lookup every other `SubjectDataPurger` performs internally against its own read model.
+
+**A command in flight cannot put a purged snapshot back.** A command loads its aggregate, decides,
+appends, and saves a snapshot only after the append, so a forget can run between its load and its
+save. The state it loaded before the forget still holds, in plain fields, what it copied from the
+subject's `@Encrypted` fields while the key existed. `PostgresSnapshotStorePurger` therefore does not
+delete the stream's row: it clears the row's state (`state_type` and `state_payload` become `NULL`)
+and raises its `purge_generation`, and creates the row in that form for a stream that has no
+snapshot yet. Every load reads the generation with the snapshot row, and the command bus saves the
+snapshot with the generation its load saw. The save is one conditional upsert that writes only while
+the row still has that generation, so a state loaded before the purge is never stored after it; the
+command itself succeeds, the store logs at INFO that the snapshot was not stored, and the bus counts
+it in `streamrune.snapshots.refused`. The purge and
+the save upsert the same primary key, so PostgreSQL serializes them on every replica, whichever
+`AggregateLocker` the command bus uses. A row without a state is no snapshot: the next command
+replays the stream's events, whose `@Encrypted` fields read `[REDACTED]` on a replica whose cache no
+longer holds the subject's plaintext (see the next paragraph), and its snapshot is stored again. A purge that fails, or a process that dies during it, leaves either every
+stream of the subject purged or none (one statement), and calling `forget` again converges.
+
+This holds as long as a load after the purge cannot decrypt the subject's fields. On the replica
+that ran the forget that is immediate. On a peer replica with `CachedCryptoEngine`, a plaintext
+decrypted before the forget stays cached until the forget signal evicts it (see *What a replica that
+cannot hear does* above): a command on that replica in this interval loads the subject's data in
+the clear even after the purge, and its snapshot is stored. Keep the forget signal wired, or set
+`streamrune.crypto.cache.enabled=false`, if that interval matters to you.
+
+**Rows without a state, and deleting rows by hand.** After a forget, `snapshot_store` keeps one row
+per stream the mapping named, with `version` `0`, no `state_type` and no `state_payload`, including
+streams that never had a snapshot and streams that do not exist (a forget of an unknown subject id
+whose mapping derives the stream from the id). These rows are markers, not snapshots: an ad-hoc
+query that lists snapshots filters them with `WHERE state_payload IS NOT NULL`. Do not delete them
+by hand while commands may be in flight: a deleted row loses its generation, so a command that
+loaded the stream before the forget can store its snapshot again. Purge through
+`ForgetSubjectService`, which keeps the row.
+
+A save that names no load — `saveSnapshot(streamId, version, state)` or `saveSnapshot(streamId,
+version, state, snapshotVersion)`, which a test or a tool may call — saves at generation `0` and
+throws `IllegalStateException` on a stream whose snapshot was ever purged; load the stream and save
+with `AggregateHistory.snapshotPurgeGeneration()` instead.
+
+A store of your own that keeps snapshots implements the same guard: its `SnapshotPurger` must make
+every save of a state loaded before the purge write nothing, which is what
+`EventStore.saveSnapshot(streamId, version, state, snapshotVersion, snapshotPurgeGeneration)` and
+`AggregateHistory.snapshotPurgeGeneration()` are for.
 
 **With an integration**, declare the purger as a bean: the auto-configured `ForgetSubjectService`
 runs every `SubjectDataPurger` bean, and a `PostgresSnapshotStorePurger` bean is one.
@@ -655,6 +705,77 @@ shredded and the row purged. `forget(...)` therefore evicts the query cache give
   a TTL you can accept as the longest time such an answer may outlive an erasure, or evict on
   every instance yourself (for example from a purger that broadcasts the eviction).
 
+## A projection batch in flight during a forget
+
+A projection reads a page of events, decrypts it, and writes its rows afterwards. A forget can run
+in between: the page was decrypted while the key existed, the purger runs and deletes the subject's
+rows, `forget` returns `fullyErased() == true`, and then the projection writes the page, putting the
+subject's decrypted data back into the read model. Neither the key deletion nor the purger can reach
+a page already in memory, on this replica or on another, and the framework cannot tell which rows a
+projection writes for which subject. Close the window in the projection, in one of two ways:
+
+- **Handle an event that says the subject is forgotten (recommended).** Append an event such as
+  `CustomerForgotten` to the subject's stream as part of the erasure, and let every projection that
+  keeps the subject's data delete or redact its rows when it handles that event. A projection
+  handles events in global order, so a page decrypted before the forget is written before the
+  projection reaches that event, and the event's handler removes what the page wrote. It also covers
+  a projection that is far behind and a rebuild. The purger still runs at once for rows that are
+  already there.
+
+  **Precondition: no event after the forgotten event carries the subject's data.** The handler runs
+  once; an event appended after it whose `@Encrypted` fields still decrypt — because it was
+  encrypted while the key existed — is written by the projection after the handler ran, and
+  nothing removes it. On the subject's own stream the decider closes this by refusing every command
+  once the state is forgotten. For the subject's data on other streams (an order that carries the
+  customer's address), choose one:
+  - append the forgotten event after `forget` returns: every later `encrypt` for the subject is
+    refused, so no event after it can carry the subject's data;
+  - let the projection treat the subject as forgotten from that event on: it records the subject
+    and refuses or redacts every later write for it;
+  - combine with the second way below, which covers every event up to the head read after the
+    forget.
+- **Run the purgers again once the projections have passed the forget.** Read the head of the
+  global stream after `forget` returns (`EventStore.lastGlobalOffset()`), wait until the checkpoint
+  of every projection that keeps the subject's data (`OffsetStore.getLastOffset(name)`) is at or
+  above it, and call `forget` again (idempotent; it runs every purger again). Every page decrypted
+  before the forget has then been written, because it held only events at or below that head. It
+  does not cover an `AT_LEAST_ONCE_IDEMPOTENT` projection whose leader is still writing a page while
+  a new leader moves the checkpoint past the head; the event above covers that too.
+
+`fullyErased()` cannot see either window: it reports that the key is deleted, that every registered
+purger succeeded and that the query cache is evicted, at the moment `forget` returns. Nor does it
+cover a peer replica whose `CachedCryptoEngine` still holds the subject's plaintext until the forget
+signal evicts it (see *What a replica that cannot hear does* above): a snapshot or a projection page
+built there from that cache after the forget holds the subject's data in the clear. Tell the data
+subject the erasure is complete once `fullyErased()` is `true` and the projections are closed in
+one of the two ways above.
+
+## Request identities are not erased
+
+Every command records who issued it, in plaintext, and a forget does not touch it:
+
+| Where | What | Why it stays |
+|---|---|---|
+| `event_stream.metadata` → `userId` | the request identity of the command that appended the event | events are immutable; the metadata is not encrypted |
+| `audit_log.user_id` | the request identity of every audited command and query | the audit trail must survive the erasures it records |
+| `event_audit_log.user_id` | the request identity of every audited event | the same |
+| `dead_letter_queue.user_id` | the request identity of a dead-lettered command, used when it is replayed | a replay runs as the original caller; the row is deleted by the retention sweeper |
+
+The request identity is `RequestContext.userId`: in the authenticated-principal mode it is what the
+`AuthenticatedUserResolver` returns, which for most identity providers is the login name or the
+e-mail address; in the trusted-gateway mode it is the `X-User-Id` header (see
+[Authorization](authorization.md#where-the-identity-comes-from-security)). If that is personal data,
+it is a second copy of the user's identity that no erasure removes. Make it an opaque id: register
+an `AuthenticatedUserResolver` of your own that returns a stable, non-personal id for the principal
+(the identity provider's subject claim, or a UUID you keep beside the account), so these columns
+identify nobody once the account's own data is erased.
+
+The GDPR audit rows are the one place the framework hashes the requester: when the requester id
+equals the subject id, `forget`, `reinstate` and `export` store the subject's hash
+(`SubjectId.redacted()`) in `audit_log.user_id`, the same value as `audit_log.aggregate_id`. A
+requester id that names the same person in another form (an e-mail principal erasing a UUID subject)
+cannot be recognized and is stored as given.
+
 ## When a forget does not finish: call it again
 
 There is no durable job behind `forget(...)`. If the process dies, or a step fails, anywhere
@@ -705,7 +826,7 @@ runbook for the audit-log queries.
 | `CachedCryptoEngine` TTL | `.expireAfterWrite(Duration)` | bounds how long decrypted PII stays cached (default 5 minutes) |
 | `streamrune.crypto.cache.enabled` | Spring/Quarkus/Micronaut property (default `true`) | when `false`, the `CachedCryptoEngine` wrapper is skipped entirely on all three integrations, so no decrypted PII is ever retained in heap — the deliberate no-cache GDPR posture, stronger than shortening the TTL |
 | `ForgetSubjectService.builder().queryCache(bus)` | auto-wired by the integrations when `streamrune.query-cache.enabled=true` | every `forget(...)` evicts the `CachingQueryBus` after its last purger, in this process (see *Cached query answers are evicted*) |
-| `SnapshotPurger` among `purgers(...)`, or `withoutSnapshotPurge()` | required by `ForgetSubjectService.Builder.build()` | the forget deletes the subject's snapshots (`PostgresSnapshotStorePurger` for `snapshot_store`), or the application states it has never stored one; neither, or both, is refused (see *Aggregate snapshots*) |
+| `SnapshotPurger` among `purgers(...)`, or `withoutSnapshotPurge()` | required by `ForgetSubjectService.Builder.build()` | the forget purges the subject's snapshots (`PostgresSnapshotStorePurger` for `snapshot_store`, which keeps each row without a state), or the application states it has never stored one; neither, or both, is refused (see *Aggregate snapshots*) |
 | `streamrune.gdpr.snapshot-purge` | Spring/Quarkus/Micronaut property: `required` (default) or `none` | `required`: the auto-configured `ForgetSubjectService` needs a `SnapshotPurger` bean or startup fails; `none`: built with `withoutSnapshotPurge()` (refused beside a `SnapshotPurger` bean) |
 
 ### Startup fail-fast
@@ -970,7 +1091,9 @@ start rather than leak.
   `"[REDACTED]"` round-trips unchanged while its key exists; confirm erasure via
   `CryptoEngine.isKeyAvailable(subjectId)`, not by string comparison.
 - **The audit log stores `userId` as plaintext, by design** — the audit trail must survive the
-  subject's erasure. Do not put the subject's PII in audit fields.
+  subject's erasure. Do not put the subject's PII in audit fields, and make the request identity an
+  opaque id (see *Request identities are not erased*). A GDPR audit row whose requester is the
+  subject itself stores the subject's hash instead.
 - **Purgers must be idempotent.** A `forget(...)` may run more than once; purging a subject with no
   rows, or purging twice, must be a safe no-op.
 - **Give every purger a literal, stable, unique `name()`.** It is the label in the audit trail, the

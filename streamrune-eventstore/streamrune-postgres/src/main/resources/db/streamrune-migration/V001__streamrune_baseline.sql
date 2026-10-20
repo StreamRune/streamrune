@@ -52,19 +52,26 @@ INSERT INTO global_offset_sequence (id, next_value) VALUES (1, 0);
 
 -- ===========================================================================================
 -- snapshot_store — the latest aggregate snapshot per stream.
+-- A purged stream keeps its row without a state (state_type and state_payload NULL): the row
+-- carries purge_generation, which a snapshot save compares with the generation its load saw.
 -- ===========================================================================================
 CREATE TABLE snapshot_store (
     aggregate_type   VARCHAR(32)  NOT NULL,
     aggregate_id     VARCHAR(255) NOT NULL,
     version          BIGINT       NOT NULL,   -- stream version the snapshot was taken at
-    state_type       VARCHAR(255) NOT NULL,
-    state_payload    JSONB        NOT NULL,
+    state_type       VARCHAR(255),            -- NULL once the snapshot is purged
+    state_payload    JSONB,                   -- NULL once the snapshot is purged
     created_at       TIMESTAMPTZ  DEFAULT NOW(),
     -- Snapshot schema version: a snapshot whose version differs from the configured one is
     -- migrated on load or discarded and rebuilt from events.
     snapshot_version INT          NOT NULL DEFAULT 1,
+    -- How many times PostgresSnapshotStorePurger has purged this stream's snapshot. A snapshot
+    -- save writes only while the row still has the generation the command's load saw, so a
+    -- state loaded before a purge is never stored after it.
+    purge_generation BIGINT       NOT NULL DEFAULT 0,
     CONSTRAINT snapshot_store_pkey PRIMARY KEY (aggregate_type, aggregate_id),
-    CONSTRAINT snapshot_store_aggregate_type_syntax CHECK (aggregate_type ~ '^[a-z][a-z0-9_]{0,31}$')
+    CONSTRAINT snapshot_store_aggregate_type_syntax CHECK (aggregate_type ~ '^[a-z][a-z0-9_]{0,31}$'),
+    CONSTRAINT snapshot_store_state_present CHECK ((state_type IS NULL) = (state_payload IS NULL))
 );
 
 

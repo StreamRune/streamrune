@@ -57,6 +57,15 @@ import org.streamrune.runtime.gdpr.ForgetResult.PurgeOutcome;
  * note this leaves ciphertext rows in read models; register a purger per read model holding subject
  * data for a complete erasure.
  *
+ * <p><b>What a returned forget does not reach.</b> The steps above act on what is stored when they
+ * run. A projection page decrypted before {@code deleteKey} and written after the purgers ran puts
+ * the subject's data back into a read model, and no step here can reach it: the projection must
+ * delete the subject's rows when it handles an event that says the subject is forgotten (provided
+ * no later event carries the subject's data), or the application calls {@code forget} again once
+ * its projections have passed the forget (see {@link ForgetResult#fullyErased()} and the GDPR
+ * guide). A command in flight cannot do the same to a snapshot: the snapshot save refuses a state
+ * loaded before the purge (see {@code PostgresSnapshotStorePurger}).
+ *
  * <p><b>Snapshots must be purged too, or stated absent.</b> An aggregate snapshot stores the
  * aggregate's state with every field not marked {@code @Encrypted} in the clear, so deleting the
  * key leaves it readable. {@link Builder#build()} refuses a service whose purgers hold no {@link
@@ -158,7 +167,8 @@ public final class ForgetSubjectService {
    *
    * @param subjectId the data subject identifier; must not be null
    * @param requesterUserId who requested the forget (for audit); may be {@code null} for
-   *     system-initiated operations (scheduled retention jobs, admin tools)
+   *     system-initiated operations (scheduled retention jobs, admin tools). When it equals the
+   *     subject id (a self-service request), the audit rows store the subject's hash in its place
    * @return the erasure outcome: the key was deleted plus one outcome per registered purger. Check
    *     {@link ForgetResult#fullyErased()} before reporting a completed erasure — a {@code false}
    *     value means some read model may still hold the subject's PII.
@@ -247,7 +257,8 @@ public final class ForgetSubjectService {
    *
    * @param subjectId the forgotten data subject; must not be null
    * @param requesterUserId who decided the reinstate (for audit); may be {@code null} for
-   *     system-initiated operations
+   *     system-initiated operations. When it equals the subject id, the audit row stores the
+   *     subject's hash in its place
    * @throws NullPointerException if {@code subjectId} is null; nothing is called or written
    * @throws RuntimeException re-thrown unchanged from {@link CryptoEngine#reinstate(SubjectId)} —
    *     for example the Vault engine's refusal after a completed erasure, or {@link

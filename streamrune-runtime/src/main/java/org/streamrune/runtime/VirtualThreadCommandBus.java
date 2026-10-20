@@ -1568,11 +1568,25 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         finalState = decider.evolve(finalState, event);
       }
       Version newVersion = envelopes.getLast().version();
-      eventStore.saveSnapshot(streamId, newVersion, finalState, policy.snapshotVersion());
+      // The purge generation the load saw: a forget that purged this stream's snapshot after the
+      // load makes the store refuse the save, because finalState was built from data read before
+      // the forget (see EventStore#saveSnapshot(StreamId, Version, AggregateState, int, long)).
+      boolean stored =
+          eventStore.saveSnapshot(
+              streamId,
+              newVersion,
+              finalState,
+              policy.snapshotVersion(),
+              history.snapshotPurgeGeneration());
       // The ONLY production snapshot writer — emit streamrune.snapshots
       // .created here, after the store accepted the write, so the series an operator is told to
-      // watch when enabling SnapshotPolicy.EveryNEvents actually moves.
-      recordMetric(metrics::recordSnapshotCreated, "recordSnapshotCreated");
+      // watch when enabling SnapshotPolicy.EveryNEvents actually moves. A refused save stored
+      // nothing and is not counted.
+      if (stored) {
+        recordMetric(metrics::recordSnapshotCreated, "recordSnapshotCreated");
+      } else {
+        recordMetric(metrics::recordSnapshotRefused, "recordSnapshotRefused");
+      }
     }
   }
 

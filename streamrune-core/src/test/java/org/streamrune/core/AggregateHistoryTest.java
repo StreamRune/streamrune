@@ -40,6 +40,26 @@ class AggregateHistoryTest {
   }
 
   @Test
+  void theFourArgumentConstructorIsAStreamNeverPurged() {
+    var h = new AggregateHistory(null, List.of(), Version.initial(), Version.initial());
+    assertEquals(0, h.snapshotPurgeGeneration());
+    assertEquals(0, AggregateHistory.empty().snapshotPurgeGeneration());
+  }
+
+  @Test
+  void carriesThePurgeGenerationItWasGiven() {
+    var h = new AggregateHistory(null, List.of(), Version.initial(), Version.initial(), 3);
+    assertEquals(3, h.snapshotPurgeGeneration());
+  }
+
+  @Test
+  void rejectsANegativePurgeGeneration() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new AggregateHistory(null, List.of(), Version.initial(), Version.initial(), -1));
+  }
+
+  @Test
   void eventsAreDefensivelyCopied() {
     var events = new ArrayList<EventEnvelope>();
     var h = new AggregateHistory(null, events, Version.initial(), Version.initial());

@@ -414,6 +414,16 @@ class HybridEventSubscriptionTest {
     }
 
     @Override
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      throw new UnsupportedOperationException("this test store keeps no snapshots");
+    }
+
+    @Override
     public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
       throw new UnsupportedOperationException();
     }

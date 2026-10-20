@@ -2726,6 +2726,17 @@ class DeadLetterRetryRunnerTest {
     }
 
     @Override
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      saveSnapshot(streamId, version, state, snapshotVersion);
+      return true;
+    }
+
+    @Override
     public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
       return streams.values().stream()
           .flatMap(List::stream)

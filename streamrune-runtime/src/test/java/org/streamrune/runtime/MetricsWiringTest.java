@@ -237,6 +237,17 @@ class MetricsWiringTest {
         StreamId streamId, Version version, AggregateState state, int snapshotVersion) {}
 
     @Override
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      saveSnapshot(streamId, version, state, snapshotVersion);
+      return true;
+    }
+
+    @Override
     public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
       return streams.values().stream()
           .flatMap(List::stream)
@@ -433,6 +444,82 @@ class MetricsWiringTest {
     assertEquals(0, metrics.count("snapshot.created"));
     assertEquals(0, metrics.count("snapshot.loaded"));
     assertEquals(4, metrics.count("event.appendDuration"));
+  }
+
+  /**
+   * The bus snapshots with the purge generation its load saw, and a save the store refuses (the
+   * stream's snapshot was purged since the load) is not counted as a created snapshot.
+   */
+  @Test
+  void commandBusSnapshotsWithTheLoadsPurgeGenerationAndDoesNotCountARefusedSave() {
+    var delegate = new InMemoryEventStore();
+    var generationsSaved = new ArrayList<Long>();
+    EventStore purgedSinceLoad =
+        new EventStore() {
+          @Override
+          public AggregateHistory load(StreamId streamId) {
+            return load(streamId, 0);
+          }
+
+          @Override
+          public AggregateHistory load(StreamId streamId, int expectedSnapshotVersion) {
+            AggregateHistory h = delegate.load(streamId, expectedSnapshotVersion);
+            return new AggregateHistory(
+                h.snapshotState(), h.events(), h.version(), h.lastSnapshotVersion(), 5);
+          }
+
+          @Override
+          public AppendResult append(
+              StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
+            return delegate.append(streamId, events, expectedVersion);
+          }
+
+          @Override
+          public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
+            throw new AssertionError("the bus saves through the generation-aware method");
+          }
+
+          @Override
+          public boolean saveSnapshot(
+              StreamId streamId,
+              Version version,
+              AggregateState state,
+              int snapshotVersion,
+              long snapshotPurgeGeneration) {
+            generationsSaved.add(snapshotPurgeGeneration);
+            return false;
+          }
+
+          @Override
+          public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
+            return delegate.readGlobalStream(afterOffset, maxCount);
+          }
+
+          @Override
+          public List<EventEnvelope> readStream(
+              StreamId streamId, Version afterVersion, int maxCount) {
+            return delegate.readStream(streamId, afterVersion, maxCount);
+          }
+        };
+    var metrics = new RecordingStreamRuneMetrics();
+    var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(purgedSinceLoad)
+            .locker(new LocalStripedLocker(16))
+            .metrics(metrics)
+            .snapshotPolicy(SnapshotPolicy.everyNEvents(1))
+            .register(
+                TYPE,
+                CounterCommand.class,
+                cmd -> AggregateId.of(((CounterCommand.Inc) cmd).id()),
+                new CounterDecider())
+            .build();
+
+    runWithContext(() -> bus.execute(new CounterCommand.Inc("counter-purged")));
+
+    assertEquals(List.of(5L), generationsSaved, "the save carries the generation the load saw");
+    assertEquals(0, metrics.count("snapshot.created"), "a refused save created no snapshot");
+    assertEquals(1, metrics.count("snapshot.refused"), "a refused save is counted as refused");
   }
 
   // ==================== Query bus ====================

@@ -128,6 +128,17 @@ class DlqReplayKeyedIdempotencyTest {
     }
 
     @Override
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      saveSnapshot(streamId, version, state, snapshotVersion);
+      return true;
+    }
+
+    @Override
     public GlobalOffset lastGlobalOffset() {
       return delegate.lastGlobalOffset();
     }

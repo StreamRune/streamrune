@@ -236,11 +236,11 @@ class SpringPostgresWiringIntegrationTest {
   /**
    * The guarantee the snapshot-purge rule exists for, end to end: a {@code
    * PostgresSnapshotStorePurger} bean is run by the auto-configured {@code ForgetSubjectService},
-   * and the subject's row in {@code snapshot_store} — with the email in the clear — is gone after
-   * the forget, while another customer's snapshot stays.
+   * and the subject's snapshot in {@code snapshot_store} — with the email in the clear — is gone
+   * after the forget (its row keeps no state), while another customer's snapshot stays.
    */
   @Test
-  void theAutoConfiguredForgetDeletesTheSubjectsSnapshotRow() {
+  void theAutoConfiguredForgetPurgesTheSubjectsSnapshot() {
     var subject = "snap-" + UUID.randomUUID();
     var customer = AggregateType.of("customer");
     var subjectStream = StreamId.of(customer, AggregateId.of(subject));
@@ -283,7 +283,8 @@ class SpringPostgresWiringIntegrationTest {
     try (var conn = dataSource.getConnection();
         var ps =
             conn.prepareStatement(
-                "SELECT count(*) FROM snapshot_store WHERE aggregate_type = ? AND aggregate_id = ?")) {
+                "SELECT count(*) FROM snapshot_store WHERE aggregate_type = ? AND aggregate_id = ?"
+                    + " AND state_payload IS NOT NULL")) {
       ps.setString(1, streamId.aggregateType().value());
       ps.setString(2, streamId.aggregateId().value());
       try (var rs = ps.executeQuery()) {

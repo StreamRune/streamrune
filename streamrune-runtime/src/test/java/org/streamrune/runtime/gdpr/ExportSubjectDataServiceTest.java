@@ -201,6 +201,38 @@ class ExportSubjectDataServiceTest {
   }
 
   @Test
+  void export_requestedByTheSubjectItself_storesTheSubjectsHashAsTheRequester() {
+    var audit = mock(AuditStore.class);
+    var service =
+        ExportSubjectDataService.builder()
+            .collectors(List.of(collector("profile", mapper.createObjectNode())))
+            .auditStore(audit)
+            .build();
+
+    service.export(SubjectId.of("user-1"), UserId.of("user-1"));
+
+    var captor = org.mockito.ArgumentCaptor.forClass(AuditEntry.class);
+    verify(audit).save(captor.capture());
+    assertEquals(UserId.of(SubjectId.of("user-1").redacted()), captor.getValue().userId());
+  }
+
+  @Test
+  void export_requestedBySomeoneElse_storesTheRequesterAsGiven() {
+    var audit = mock(AuditStore.class);
+    var service =
+        ExportSubjectDataService.builder()
+            .collectors(List.of(collector("profile", mapper.createObjectNode())))
+            .auditStore(audit)
+            .build();
+
+    service.export(SubjectId.of("user-1"), UserId.of("dpo"));
+
+    var captor = org.mockito.ArgumentCaptor.forClass(AuditEntry.class);
+    verify(audit).save(captor.capture());
+    assertEquals(UserId.of("dpo"), captor.getValue().userId());
+  }
+
+  @Test
   void export_writesAuditSuccessWithSectionNames() {
     var audit = mock(AuditStore.class);
     var service =

@@ -22,6 +22,58 @@ import org.streamrune.core.types.UserId;
 
 class ForgetSubjectServiceTest {
 
+  /**
+   * A self-service erasure names the subject as the requester. Every row it writes stores the
+   * subject's hash in both columns, so the raw identifier never reaches the audit trail.
+   */
+  @Test
+  void forget_requestedByTheSubjectItself_storesTheSubjectsHashAsTheRequester() {
+    var crypto = mock(CryptoEngine.class);
+    var audit = mock(AuditStore.class);
+    SubjectDataPurger purger = mock(SubjectDataPurger.class);
+    when(purger.name()).thenReturn("customers");
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .purgers(List.of(purger))
+            .build();
+
+    service.forget(SubjectId.of("c-alice"), UserId.of("c-alice"));
+
+    var captor = org.mockito.ArgumentCaptor.forClass(AuditEntry.class);
+    verify(audit, times(2)).save(captor.capture());
+    String hash = SubjectId.of("c-alice").redacted();
+    for (AuditEntry entry : captor.getAllValues()) {
+      assertEquals(UserId.of(hash), entry.userId());
+      assertEquals(AggregateId.of(hash), entry.aggregateId());
+    }
+  }
+
+  /** A failed self-service erasure stores no raw identifier either. */
+  @Test
+  void forget_requestedByTheSubjectItself_failureRowStoresTheHashToo() {
+    var crypto = mock(CryptoEngine.class);
+    var audit = mock(AuditStore.class);
+    doThrow(new IllegalStateException("key store down")).when(crypto).deleteKey(any());
+    var service =
+        ForgetSubjectService.builder()
+            .withoutSnapshotPurge()
+            .cryptoEngine(crypto)
+            .auditStore(audit)
+            .build();
+
+    assertThrows(
+        IllegalStateException.class,
+        () -> service.forget(SubjectId.of("c-bob"), UserId.of("c-bob")));
+
+    var captor = org.mockito.ArgumentCaptor.forClass(AuditEntry.class);
+    verify(audit).save(captor.capture());
+    assertEquals(UserId.of(SubjectId.of("c-bob").redacted()), captor.getValue().userId());
+    assertEquals(AuditOutcome.FAILURE, captor.getValue().outcome());
+  }
+
   @Test
   void forget_callsDeleteKeyAndWritesAuditSuccess() {
     var crypto = mock(CryptoEngine.class);
