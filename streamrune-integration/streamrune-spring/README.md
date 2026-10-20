@@ -268,6 +268,11 @@ proxy of a `BaseProjection` subclass, naming the bean; it does not unwrap the pr
 the projection without its advice. Move the advice into a bean the projection calls, or implement
 `Projection` directly and override both `process` methods and `writesThroughRepository()`. An
 `INLINE` projection is not affected: the inline interceptor calls the one-argument `process`.
+The check covers the projection beans the auto-configuration discovers. A projection the
+application hands to a runner it builds itself (`streamrune.projections.auto-discovery.enabled=false`),
+including one wrapped in `TracingProjectionDecorator`, `ValidatingProjectionDecorator` or
+`CacheAwareProjection`, is the application's to keep free of such proxies: the decorators forward
+the two-argument `process` to what they wrap.
 
 `ScopedValueFilter` is registered only in servlet web applications
 (`@ConditionalOnWebApplication(SERVLET)`), so a headless worker

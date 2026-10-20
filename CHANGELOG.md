@@ -845,7 +845,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   all three integrations startup fails when `streamrune.outbox.enabled=true` has no `OutboxStore`
   (the message names `PostgresOutboxStore`; the broker modules ship publishers only) or has neither
   an `OutboxPublisher` nor an application `OutboxPoller`, since nothing would relay the entries the
-  event store writes. On Micronaut, startup also fails when an `OutboxEventMapper` is paired with a
+  event store writes; the messages are shared (`OutboxWiringMessages`), and say that an application
+  whose outbox table an external relay reads sets `streamrune.outbox.enabled=false` (the property
+  switches the framework's relay, not the event store's write). Quarkus says so when more than one
+  publisher bean matches. On Micronaut, startup also fails when an `OutboxEventMapper` is paired with a
   store the event store cannot write in the append transaction.
 
 ### GDPR — encryption at rest and crypto-shredding

@@ -208,10 +208,7 @@ public class StreamRuneConfigValidator {
     }
     if (properties.outbox().enabled()) {
       if (!outboxStore.isResolvable()) {
-        throw new IllegalStateException(
-            "Outbox enabled but no OutboxStore found. Declare a PostgresOutboxStore bean"
-                + " (streamrune-postgres); streamrune-kafka-outbox and streamrune-rabbitmq-outbox"
-                + " provide only the OutboxPublisher.");
+        throw new IllegalStateException(org.streamrune.integration.OutboxWiringMessages.noStore());
       }
       // Without a publisher the framework poller is never produced, so the entries the event
       // store writes would stay PENDING with nothing relaying them. An application poller brings
@@ -224,10 +221,12 @@ public class StreamRuneConfigValidator {
                   org.streamrune.runtime.OutboxPoller.class,
                   StreamRuneProducers.FRAMEWORK_OUTBOX_POLLER);
       if (!publisher && !applicationPoller) {
+        // The framework producer resolves the publisher the same way, so an ambiguous or only
+        // qualified publisher relays nothing either; say which it is.
         throw new IllegalStateException(
-            "Outbox enabled but no OutboxPublisher found, so no OutboxPoller can relay the outbox"
-                + " entries. Declare an OutboxPublisher bean (streamrune-kafka-outbox,"
-                + " streamrune-rabbitmq-outbox or an HttpOutboxPublisher).");
+            outboxPublisher != null && outboxPublisher.isAmbiguous()
+                ? org.streamrune.integration.OutboxWiringMessages.ambiguousPublisher()
+                : org.streamrune.integration.OutboxWiringMessages.noPublisher());
       }
     }
     // The command dead-letter twin of the saga check below: a keyed entry must not outlive the

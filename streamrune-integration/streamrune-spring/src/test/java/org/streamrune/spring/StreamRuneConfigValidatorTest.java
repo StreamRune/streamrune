@@ -127,6 +127,9 @@ class StreamRuneConfigValidatorTest {
               assertThat(ctx).hasFailed();
               assertThat(ctx.getStartupFailure())
                   .hasMessageContaining("no OutboxPublisher found")
+                  .hasMessageContaining(
+                      "If an external relay reads the outbox table, set"
+                          + " streamrune.outbox.enabled=false")
                   .hasMessageContaining("no OutboxPoller can relay the outbox entries");
             });
   }

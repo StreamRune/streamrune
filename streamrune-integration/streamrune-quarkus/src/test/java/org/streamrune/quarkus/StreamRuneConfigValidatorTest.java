@@ -189,8 +189,7 @@ class StreamRuneConfigValidatorTest {
 
   /**
    * Without a publisher the framework's poller is never produced, so the entries the event store
-   * writes would stay {@code PENDING} for ever. This was a WARN; it refuses the boot now, as on
-   * Spring and Micronaut.
+   * writes would stay {@code PENDING} for ever. Startup is refused, as on Spring and Micronaut.
    */
   @Test
   void outboxEnabledWithStoreButNoPublisherThrows() {
@@ -207,7 +206,39 @@ class StreamRuneConfigValidatorTest {
             IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
     assertTrue(ex.getMessage().contains("no OutboxPublisher found"), ex.getMessage());
     assertTrue(
+        ex.getMessage()
+            .contains(
+                "If an external relay reads the outbox table, set"
+                    + " streamrune.outbox.enabled=false"),
+        ex.getMessage());
+    assertTrue(
         ex.getMessage().contains("no OutboxPoller can relay the outbox entries"), ex.getMessage());
+  }
+
+  /**
+   * Two publisher beans resolve to none: the framework's poller would not be produced either. The
+   * message says so instead of claiming there is no publisher.
+   */
+  @Test
+  void outboxEnabledWithAnAmbiguousPublisherThrows_sayingItIsAmbiguous() {
+    var props = TestProperties.of(Map.of("streamrune.outbox.enabled", "true"));
+    @SuppressWarnings("unchecked")
+    Instance<org.streamrune.core.outbox.OutboxPublisher> ambiguous = mock(Instance.class);
+    when(ambiguous.isResolvable()).thenReturn(false);
+    when(ambiguous.isAmbiguous()).thenReturn(true);
+    var validator =
+        new StreamRuneConfigValidator(
+            props,
+            satisfied(mock(org.streamrune.core.outbox.OutboxStore.class)),
+            ambiguous,
+            beanManagerWithOutboxPollers(frameworkPoller()),
+            unsatisfied());
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
+    assertTrue(
+        ex.getMessage().contains("more than one OutboxPublisher bean matches"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("streamrune.outbox.enabled=false"), ex.getMessage());
   }
 
   @Test

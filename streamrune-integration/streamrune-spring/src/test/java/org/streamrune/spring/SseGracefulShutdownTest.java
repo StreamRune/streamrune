@@ -106,9 +106,10 @@ class SseGracefulShutdownTest {
 
       Duration shutdown;
       try {
+        long closing = System.nanoTime();
         context.close();
         closed = true;
-        shutdown = Duration.ofNanos(System.nanoTime() - started);
+        shutdown = Duration.ofNanos(System.nanoTime() - closing);
       } finally {
         root.detachAppender(shutdownLog);
       }
