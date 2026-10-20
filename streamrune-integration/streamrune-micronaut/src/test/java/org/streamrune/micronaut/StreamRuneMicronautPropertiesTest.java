@@ -142,8 +142,7 @@ class StreamRuneMicronautPropertiesTest {
             Duration.ofSeconds(1),
             "auto",
             "required",
-            "operator-only",
-            false);
+            "operator-only");
     assertEquals(10, p.snapshotEveryNEvents());
     assertEquals(1, p.retryMaxAttempts());
     assertEquals(1L, p.retryInitialDelayMs());

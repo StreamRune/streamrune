@@ -135,8 +135,7 @@ class ProjectionFactoryTest {
             Duration.ofSeconds(1),
             "auto",
             "required",
-            "operator-only",
-            false);
+            "operator-only");
 
     MultiProjectionRunner runner =
         factory.multiProjectionRunner(

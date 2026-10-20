@@ -85,7 +85,6 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
   private boolean autoInitializeSchema = true;
   private boolean validateSchema = true;
   private Duration statementTimeout = StatementTimeout.DEFAULT;
-  private boolean strictEventPayloads;
 
   /**
    * Creates a new factory.
@@ -298,18 +297,6 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
     return this;
   }
 
-  /**
-   * Reads event payloads strictly; see {@link PostgresEventStore.Builder#strictEventPayloads}. Off
-   * by default: a payload property the event class does not declare is ignored.
-   *
-   * @param strict {@code true} to refuse a property the event class does not declare
-   * @return this factory
-   */
-  public PostgresEventStoreFactory strictEventPayloads(boolean strict) {
-    this.strictEventPayloads = strict;
-    return this;
-  }
-
   /** Sets the crypto engine for encryption (optional). */
   public PostgresEventStoreFactory cryptoEngine(CryptoEngine cryptoEngine) {
     this.cryptoEngine = cryptoEngine;
@@ -447,7 +434,6 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
         .outboxEventMapper(outboxEventMapper)
         .commandInbox(commandInbox)
         .statementTimeout(statementTimeout)
-        .strictEventPayloads(strictEventPayloads)
         .buildAfterCryptoCheck();
   }
 

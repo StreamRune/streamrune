@@ -773,8 +773,7 @@ class StreamRuneContextFilterTest {
         java.time.Duration.ofSeconds(1),
         "auto",
         "required",
-        "operator-only",
-        false);
+        "operator-only");
   }
 
   @Test

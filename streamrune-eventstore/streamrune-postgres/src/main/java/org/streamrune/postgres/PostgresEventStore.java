@@ -2,7 +2,6 @@ package org.streamrune.postgres;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
@@ -282,17 +281,6 @@ public final class PostgresEventStore implements EventStore {
 
   private final DataSource dataSource;
   private final ObjectMapper objectMapper;
-
-  /**
-   * Binds stored event payloads to their classes: {@link #objectMapper} with {@link
-   * DeserializationFeature#FAIL_ON_UNKNOWN_PROPERTIES} off (the tolerant reader), or {@link
-   * #objectMapper} itself under {@link Builder#strictEventPayloads(boolean)}. Only event payloads
-   * go through it. Everything else the store reads — event metadata and snapshot state — goes
-   * through the strict {@link #objectMapper}: snapshot state is read, evolved and saved back, so a
-   * property dropped on read would be lost on the next save.
-   */
-  private final ObjectMapper eventPayloadMapper;
-
   private final EventTypeRegistry typeRegistry;
   private final UpcasterChain upcasterChain;
   private final PostgresEventAuditStore eventAuditStore;
@@ -500,48 +488,11 @@ public final class PostgresEventStore implements EventStore {
       SnapshotMigrationChain snapshotMigrations,
       StreamRuneMetrics metrics,
       StatementTimeout statementTimeout) {
-    this(
-        dataSource,
-        objectMapper,
-        typeRegistry,
-        upcasterChain,
-        eventAuditStore,
-        outboxStore,
-        outboxEventMapper,
-        commandInbox,
-        snapshotMigrations,
-        metrics,
-        statementTimeout,
-        false);
-  }
-
-  /**
-   * Full constructor plus how event payloads are read. Package-private: {@link
-   * Builder#strictEventPayloads(boolean)} is the public entry point.
-   *
-   * @param strictEventPayloads {@code true} to refuse a payload property the event class does not
-   *     declare; {@code false} (the default everywhere) to ignore it
-   */
-  PostgresEventStore(
-      DataSource dataSource,
-      ObjectMapper objectMapper,
-      EventTypeRegistry typeRegistry,
-      UpcasterChain upcasterChain,
-      PostgresEventAuditStore eventAuditStore,
-      PostgresOutboxStore outboxStore,
-      OutboxEventMapper outboxEventMapper,
-      PostgresCommandInbox commandInbox,
-      SnapshotMigrationChain snapshotMigrations,
-      StreamRuneMetrics metrics,
-      StatementTimeout statementTimeout,
-      boolean strictEventPayloads) {
     if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
     if (objectMapper == null) throw new IllegalArgumentException("objectMapper is required");
     if (typeRegistry == null) throw new IllegalArgumentException("typeRegistry is required");
     this.dataSource = dataSource;
     this.objectMapper = objectMapper;
-    this.eventPayloadMapper =
-        strictEventPayloads ? objectMapper : tolerantEventPayloadMapper(objectMapper);
     this.typeRegistry = typeRegistry;
     this.upcasterChain = upcasterChain;
     this.eventAuditStore = eventAuditStore;
@@ -680,21 +631,6 @@ public final class PostgresEventStore implements EventStore {
               cryptoEngine, metrics == null ? StreamRuneMetrics.NOOP : metrics));
     }
     return mapper;
-  }
-
-  /**
-   * The tolerant reader for event payloads: a copy of {@code mapper} — the same modules, including
-   * {@link CryptoShreddingModule}, and the same configuration — that ignores a payload property the
-   * event class does not declare instead of failing. An event is an immutable fact that many
-   * releases of the application read; a newer release that adds a field must not make the older
-   * replicas' reads fail. A renamed, removed or retyped field is not something a tolerant reader
-   * can make safe: it needs an upcaster step and a schema-version bump.
-   *
-   * @param mapper the store's mapper (left unchanged)
-   * @return a new mapper for event payloads
-   */
-  static ObjectMapper tolerantEventPayloadMapper(ObjectMapper mapper) {
-    return mapper.copy().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
   }
 
   /**
@@ -2349,9 +2285,9 @@ public final class PostgresEventStore implements EventStore {
         // measured ~3.6x slower than convertValue in the upcast hot path).
         Map<String, Object> rawData = objectMapper.readValue(row.payloadJson(), MAP_TYPE);
         Map<String, Object> upcasted = upcasterChain.upcast(eventType, rawData, schemaVersion);
-        event = eventPayloadMapper.convertValue(upcasted, eventClass);
+        event = objectMapper.convertValue(upcasted, eventClass);
       } else {
-        event = eventPayloadMapper.readValue(row.payloadJson(), eventClass);
+        event = objectMapper.readValue(row.payloadJson(), eventClass);
       }
 
       EventMetadata metadata = objectMapper.readValue(row.metadataJson(), EventMetadata.class);
@@ -2434,7 +2370,6 @@ public final class PostgresEventStore implements EventStore {
     private List<SnapshotMigration> migrations;
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private StatementTimeout statementTimeout = StatementTimeout.of(StatementTimeout.DEFAULT);
-    private boolean strictEventPayloads;
 
     /** Sets the JDBC data source (required). */
     public Builder dataSource(DataSource ds) {
@@ -2548,24 +2483,6 @@ public final class PostgresEventStore implements EventStore {
     }
 
     /**
-     * Reads event payloads strictly: a stored payload carrying a property its event class does not
-     * declare fails to bind ({@link org.streamrune.core.EventDeserializationException}) instead of
-     * having the property ignored. Off by default: the store reads event payloads as a tolerant
-     * reader, so a replica on an older release reads the events a newer release wrote with an added
-     * field. Snapshot state is always read strictly.
-     *
-     * <p>Turn it on in a test suite to catch an event class that no longer matches what is stored,
-     * or an upcaster step that writes a misspelled key.
-     *
-     * @param strict {@code true} to refuse a property the event class does not declare
-     * @return this builder
-     */
-    public Builder strictEventPayloads(boolean strict) {
-      this.strictEventPayloads = strict;
-      return this;
-    }
-
-    /**
      * Builds the {@link PostgresEventStore}. Requires {@code dataSource} and {@code typeRegistry}.
      * {@code outboxStore} and {@code outboxEventMapper} must be configured together or not at all.
      * Does not touch the database.
@@ -2624,8 +2541,7 @@ public final class PostgresEventStore implements EventStore {
           commandInbox,
           migrationChain,
           metrics,
-          statementTimeout,
-          strictEventPayloads);
+          statementTimeout);
     }
   }
 }

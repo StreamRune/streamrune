@@ -211,15 +211,7 @@ public record StreamRuneMicronautProperties(
     // stays aligned.
     @Bindable(defaultValue = "operator-only")
         @io.micronaut.context.annotation.Property(name = "streamrune.dead-letter.unkeyed-replay")
-        String deadLetterUnkeyedReplay,
-    // event-store.strict-event-payloads: matches Spring/Quarkus. With false (the default) a stored
-    // event payload property the event class does not declare is ignored; with true it fails to
-    // bind. Snapshot state is always read strictly. Appended at the end so the positional
-    // withDefaults() stays aligned.
-    @Bindable(defaultValue = "false")
-        @io.micronaut.context.annotation.Property(
-            name = "streamrune.event-store.strict-event-payloads")
-        boolean eventStoreStrictEventPayloads) {
+        String deadLetterUnkeyedReplay) {
 
   public StreamRuneMicronautProperties {
     org.streamrune.integration.SingleActiveConsumerSetting.enabled(
@@ -292,8 +284,6 @@ public record StreamRuneMicronautProperties(
         // gdpr.snapshot-purge
         "required",
         // dead-letter.unkeyed-replay
-        "operator-only",
-        // event-store.strict-event-payloads
-        false);
+        "operator-only");
   }
 }

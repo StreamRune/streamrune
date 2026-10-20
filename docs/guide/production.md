@@ -847,29 +847,29 @@ A replica reads only what its own code understands, and three rules decide what 
 
 - **The stored `schema_version` must not be above the reader's.** A store stamps every appended
   event with the `currentVersion()` of its upcaster for the type (1 without one), and a store whose
-  chain stops below the stored version refuses the event with `EventSchemaAheadException`.
+  chain stops below the stored version refuses the event with `EventSchemaAheadException`. This
+  refusal is retry-later: it never quarantines anything.
 - **The stored event type must be registered with the reader.** A type the reader's
-  `EventTypeRegistry` does not know fails with `UnknownEventTypeException`. It stays deterministic
-  read poison on purpose: nothing stored tells "a newer release wrote it" apart from "this
-  application forgot to register it", and a missing registration must fail loudly.
-- **The stored payload must bind to the reader's event class.** The event store reads event
-  payloads as a tolerant reader: a property the class does not declare is ignored, so an added
-  field does not stop an older replica. Under `streamrune.event-store.strict-event-payloads=true`
-  (`strictEventPayloads(true)` on the store or factory) such a property fails with
-  `EventDeserializationException`, deterministic read poison. Snapshot state is always read
-  strictly; a snapshot that does not bind is discarded and the events replay.
+  `EventTypeRegistry` does not know fails with `UnknownEventTypeException`. It is deterministic read
+  poison on purpose: nothing stored tells "a newer release wrote it" apart from "this application
+  forgot to register it", and a missing registration must fail loudly.
+- **The stored payload must bind strictly to the reader's event class.** A property the class does
+  not declare fails with `EventDeserializationException`, also deterministic read poison. A property
+  the class declares but the payload lacks binds as `null` (or the primitive default).
+
+The rule that follows: **every change to an event payload's shape bumps the event's schema
+version**, an added field included. A replica still on the previous release then meets the first
+rule, a transient pause, instead of the third, a halt or a misread. Only the new release's replicas
+read the new events, and they read the old ones through the upcaster.
 
 The first replica of a new release that appends such an event creates a window in which every
 replica still on the previous release is behind. What those replicas do in the window:
 
-| What the old replica does | Schema-version bump (`EventSchemaAheadException`) | New event type (`UnknownEventTypeException`) | Added field, strict payloads only (`EventDeserializationException`) |
+| What the old replica does | Schema-version bump (`EventSchemaAheadException`) | New event type (`UnknownEventTypeException`) | Shape change without a bump (`EventDeserializationException`) |
 |---|---|---|---|
 | A command that loads an aggregate carrying a newer event | fails, is dead-lettered, does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker | fails, is dead-lettered, does not count toward the breaker |
-| A projection or subscription it leads | stops at the first newer event and retries it (lag, no quarantine) until the replica is upgraded; its lease then passes to an upgraded replica | halts after the read-poison bound (5 consecutive failures by default) with health `DOWN`, until the replica is upgraded | halts after the read-poison bound with health `DOWN`, until the replica is upgraded |
+| A projection or subscription it leads | stops at the first newer event and retries it (lag, no quarantine) until the replica is upgraded; its lease then passes to an upgraded replica | halts after the read-poison bound (5 consecutive failures by default) with health `DOWN`, until the replica is upgraded | halts after the read-poison bound with health `DOWN` (an added or renamed field); a removed field reads as `null` with no failure at all |
 | Every other command | runs normally | runs normally | runs normally |
-
-Under the default tolerant reader an added field changes nothing on the old replicas: they read the
-event without it. Both replicas must run a StreamRune release that reads tolerantly.
 
 Dead-lettered commands replay once their entry is retried on an upgraded replica: the retry runner
 is leased, so its automatic attempts run where the lease is, and an entry that exhausted its
@@ -877,40 +877,69 @@ attempts during a long rollout is retried by the operator (`retry(commandId)`) a
 
 Choose the procedure by the kind of change:
 
-1. **An added field: one release.** Make the field nullable, or default it in the record's compact
-   constructor for the events stored without it, and leave the type's upcaster version unchanged.
-   The old replicas ignore the field; the new ones read the old events with the default. With
-   strict payloads switched on, use procedure 4 instead.
+1. **An event payload changes shape: bump its schema version.** The version is the
+   `currentVersion()` of the type's `EventUpcaster`, so a bump always needs one, even when nothing
+   is transformed: without an upcaster the type is version 1. Register one per type (as an
+   `EventUpcaster` bean with an integration, or with `PostgresEventStore.builder().upcasters(...)`)
+   whose step for the old version makes the stored payload bind to the new class:
+   - an **added** field needs no rewrite — make it nullable, or default it in the record's compact
+     constructor — so the step returns the payload unchanged;
+   - a **removed** field must be dropped from the payload (`eventData.remove("note")`), or the
+     strict read of an old event fails on it;
+   - a **renamed** field moves the value (`eventData.put("total", eventData.remove("amount"))`);
+   - a **retyped** field converts it.
+
+   ```java
+   public final class OrderPlacedUpcaster implements EventUpcaster {
+     @Override
+     public EventType eventType() {
+       return new EventType("OrderPlaced");
+     }
+
+     @Override
+     public int currentVersion() {
+       return 2;
+     }
+
+     @Override
+     public Map<String, Object> upcast(Map<String, Object> eventData, int fromVersion) {
+       // 1 -> 2 added the optional giftMessage field: an old payload binds as it is.
+       return eventData;
+     }
+   }
+   ```
+
+   The next change of the same type raises `currentVersion()` to 3 and adds the step for
+   `fromVersion == 2` to the same upcaster: one upcaster owns every step of its type. In a test,
+   `EventPayloadAssertions.assertUpcastBinds(upcaster, oldPayload, 1, OrderPlaced.class)` from
+   `streamrune-test` checks that a step's output binds to the new class, and
+   `EventPayloadAssertions.assertRoundTrips(event)` that the class reads what it writes. Then roll
+   out replica by replica (procedure 4) or stop and switch (procedure 5).
 2. **A new event type: readers first.** Release A registers the type (its class in the
    `EventTypeRegistry`, and whatever the projections and sagas do with it) and emits it nowhere;
    roll A out completely. Release B emits it. A replica that has not registered the type halts its
    projections on the first such event, so no writer may emit it while such a replica runs.
-3. **A renamed, removed or retyped field: an upcaster and a version bump.** A tolerant reader
-   cannot make these safe: an old class would bind a renamed field as missing. Register an upcaster
-   step that rewrites the old payload and raise its `currentVersion()`. Old replicas then refuse the
-   new events with `EventSchemaAheadException`, and you either accept that window (procedure 5) or
-   stop and switch (procedure 4).
-4. **Stop and switch.** Stop every replica of the previous release, then start the new release
+3. **The aggregate's state class changes shape: bump `snapshotVersion`.** A snapshot is bound
+   strictly too, but a field the state class gained binds as `null` from a snapshot the previous
+   release wrote, and that snapshot then stands in for the events it covers. Raise the
+   `snapshotVersion` of the `SnapshotPolicy` in the same release (`SnapshotPolicy.everyNEvents(100,
+   2)`; the integrations' default policy is version 1, so declare a `SnapshotPolicy` bean): each
+   release then discards the other's snapshots and replays the events, or migrates them through a
+   `SnapshotMigration`. See [snapshot versioning](advanced/snapshot-versioning.md).
+4. **Roll out replica by replica.** For a schema-version bump nothing is quarantined: the old
+   replicas fail the commands that load an aggregate with a newer event and lag on the projections
+   they lead, the circuit breaker stays closed, and the dead-lettered commands replay on the
+   upgraded replicas. Keep the window short, and send traffic to the upgraded replicas first where
+   the load balancer allows it. A new event type is the exception: use procedure 2.
+5. **Stop and switch.** Stop every replica of the previous release, then start the new release
    (a blue/green cutover that stops the old fleet before the new one serves writes, or a scale to
    zero). No replica is ever behind.
-5. **Accept the window.** Roll the release out replica by replica and keep the window short. For a
-   schema-version bump or an added field nothing is quarantined: the old replicas fail the commands
-   that load an aggregate with a newer event and lag on the projections they lead, the circuit
-   breaker stays closed, and the dead-lettered commands replay on the upgraded replicas. A new event
-   type, or an added field under strict payloads, halts the old replicas' leading projections after
-   the read-poison bound instead: use procedure 2 or 4 for those. Send traffic to the upgraded
-   replicas first where the load balancer allows it.
 
 A release that bumps a schema version can only be rolled forward once it has stored an event at
 the new version: roll back only together with a reader that reaches that version, or every replica
 of the older release refuses those events for good. In the same way, a store wired with fewer
 upcasters than another store that writes the same database is behind permanently, not for a
 rollout: register the same upcasters on every event store of the application.
-
-To catch, in a test suite, an event class that no longer reads what it writes or an upcaster step
-that writes a misspelled key (which the tolerant reader would bind as a default), use
-`StrictEventPayloads.assertRoundTrips(event)` and `StrictEventPayloads.upcastStrictly(...)` from
-`streamrune-test`, or switch strict payloads on for the test profile.
 
 ### Write capacity: one global write lane
 

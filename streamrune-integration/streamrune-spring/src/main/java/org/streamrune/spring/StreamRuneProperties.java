@@ -233,15 +233,9 @@ public record StreamRuneProperties(
    *     the store's own, so the session's {@code statement_timeout} applies. Applied per
    *     transaction or per statement, never on the pooled connection's session. A negative value or
    *     a positive one below {@code 1ms} fails the boot.
-   * @param strictEventPayloads whether event payloads are read strictly (default {@code false}):
-   *     with {@code false} a stored payload property the event class does not declare is ignored,
-   *     so a replica on an older release reads what a newer release wrote with an added field; with
-   *     {@code true} it fails to bind. Snapshot state is always read strictly.
    */
   public record EventStore(
-      @DefaultValue Schema schema,
-      @DefaultValue("30s") Duration statementTimeout,
-      @DefaultValue("false") boolean strictEventPayloads) {}
+      @DefaultValue Schema schema, @DefaultValue("30s") Duration statementTimeout) {}
 
   /**
    * @param autoInitialize whether the event store auto-creates / migrates its schema on startup

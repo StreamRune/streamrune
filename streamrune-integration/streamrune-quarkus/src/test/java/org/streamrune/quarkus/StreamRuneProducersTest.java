@@ -75,32 +75,6 @@ class StreamRuneProducersTest {
   }
 
   @Test
-  void postgresEventStoreFactoryReadsEventPayloadsTolerantlyUnlessConfiguredStrict()
-      throws Exception {
-    var producers = new StreamRuneProducers();
-    var field = PostgresEventStoreFactoryFields.strictEventPayloads();
-    assertEquals(false, field.get(eventStoreFactoryWith(producers, TestProperties.of(Map.of()))));
-    assertEquals(
-        true,
-        field.get(
-            eventStoreFactoryWith(
-                producers,
-                TestProperties.of(
-                    Map.of("streamrune.event-store.strict-event-payloads", "true")))));
-  }
-
-  /** The factory's private flag, read the way the statement-timeout test reads its bound. */
-  private static final class PostgresEventStoreFactoryFields {
-    static java.lang.reflect.Field strictEventPayloads() throws NoSuchFieldException {
-      var field =
-          org.streamrune.postgres.PostgresEventStoreFactory.class.getDeclaredField(
-              "strictEventPayloads");
-      field.setAccessible(true);
-      return field;
-    }
-  }
-
-  @Test
   void postgresEventStoreFactoryRefusesAnInvalidStatementTimeoutNamingTheProperty() {
     var producers = new StreamRuneProducers();
     var properties = TestProperties.of(Map.of("streamrune.event-store.statement-timeout", "-PT1S"));

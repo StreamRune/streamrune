@@ -204,7 +204,6 @@ public class StreamRuneMicronautModule {
             e);
       }
     }
-    factory.strictEventPayloads(properties.eventStoreStrictEventPayloads());
     if (!cryptoEngines.isEmpty()) {
       factory.cryptoEngine(cryptoEngines.get(0));
     }

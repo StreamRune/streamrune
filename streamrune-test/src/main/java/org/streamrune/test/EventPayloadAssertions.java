@@ -11,29 +11,27 @@ import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.core.upcasting.UpcasterChain;
 
 /**
- * Strict checks of event payloads for a test suite. The event stores read event payloads as a
- * tolerant reader: a property the event class does not declare is ignored. That keeps an older
- * replica reading what a newer release wrote, and it also hides two mistakes: an event class that
- * no longer writes what it reads, and an upcaster step that writes a misspelled key (the bound
- * event then carries a default instead of the upcast value). These methods bind strictly, with a
- * mapper configured like the event store's (Java time support, no crypto module), so either mistake
- * fails the test.
+ * Test-time checks of event payloads. The event stores bind stored payloads strictly, so an event
+ * class that no longer reads what it writes, or an upcaster step that writes a misspelled key,
+ * fails the read in production with {@code EventDeserializationException}. These methods surface
+ * both in a test suite instead, with a mapper configured like the event store's (Java time support,
+ * no crypto module, strict binding).
  *
  * <pre>{@code
- * StrictEventPayloads.assertRoundTrips(new OrderPlaced("o-1", Money.of(10)));
+ * EventPayloadAssertions.assertRoundTrips(new OrderPlaced("o-1", Money.of(10)));
  *
  * OrderPlaced upcast =
- *     StrictEventPayloads.upcastStrictly(
+ *     EventPayloadAssertions.assertUpcastBinds(
  *         new OrderPlacedUpcaster(), Map.of("orderId", "o-1"), 1, OrderPlaced.class);
  * assertEquals("EUR", upcast.currency());
  * }</pre>
  */
-public final class StrictEventPayloads {
+public final class EventPayloadAssertions {
 
   private static final ObjectMapper STRICT =
       new ObjectMapper().registerModule(new JavaTimeModule());
 
-  private StrictEventPayloads() {}
+  private EventPayloadAssertions() {}
 
   /**
    * Serializes {@code event}, binds the JSON strictly to its class and asserts the result equals
@@ -77,7 +75,7 @@ public final class StrictEventPayloads {
    * @throws AssertionError when the upcast payload carries a property {@code eventClass} does not
    *     declare, or does not bind for another reason
    */
-  public static <E extends DomainEvent> E upcastStrictly(
+  public static <E extends DomainEvent> E assertUpcastBinds(
       EventUpcaster upcaster,
       Map<String, Object> storedPayload,
       int fromVersion,
@@ -93,7 +91,7 @@ public final class StrictEventPayloads {
           upcaster.eventType().name()
               + " upcast from version "
               + fromVersion
-              + " does not bind strictly to "
+              + " does not bind to "
               + eventClass.getName()
               + ": "
               + e.getMessage(),

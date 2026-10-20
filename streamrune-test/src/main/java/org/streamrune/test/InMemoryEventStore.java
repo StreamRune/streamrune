@@ -2,7 +2,6 @@ package org.streamrune.test;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
@@ -160,24 +159,14 @@ public final class InMemoryEventStore implements EventStore {
    */
   private volatile UpcasterChain upcasterChain;
 
-  private volatile boolean strictEventPayloads;
-
   /** Both null in by-reference mode, both set in serializing mode. */
   private final ObjectMapper objectMapper;
-
-  /**
-   * {@link #objectMapper} without {@code FAIL_ON_UNKNOWN_PROPERTIES}: the tolerant reader for event
-   * payloads, as in {@code PostgresEventStore}. Event metadata and snapshot state are read with the
-   * strict {@link #objectMapper}. Null in by-reference mode.
-   */
-  private final ObjectMapper tolerantEventPayloadMapper;
 
   private final EventTypeRegistry typeRegistry;
 
   /** Creates a store that keeps events and snapshot state by reference (no serialization). */
   public InMemoryEventStore() {
     this.objectMapper = null;
-    this.tolerantEventPayloadMapper = null;
     this.typeRegistry = null;
   }
 
@@ -194,14 +183,7 @@ public final class InMemoryEventStore implements EventStore {
    */
   public InMemoryEventStore(ObjectMapper objectMapper, EventTypeRegistry typeRegistry) {
     this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper is required");
-    this.tolerantEventPayloadMapper =
-        objectMapper.copy().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
     this.typeRegistry = Objects.requireNonNull(typeRegistry, "typeRegistry is required");
-  }
-
-  /** The mapper event payloads are bound with: tolerant unless strict payloads were asked for. */
-  private ObjectMapper eventPayloadMapper() {
-    return strictEventPayloads ? objectMapper : tolerantEventPayloadMapper;
   }
 
   /**
@@ -295,21 +277,6 @@ public final class InMemoryEventStore implements EventStore {
   public InMemoryEventStore withUpcasters(List<EventUpcaster> upcasters) {
     this.upcasterChain =
         (upcasters == null || upcasters.isEmpty()) ? null : new UpcasterChain(upcasters);
-    return this;
-  }
-
-  /**
-   * Reads event payloads strictly, mirroring {@code
-   * PostgresEventStore.Builder.strictEventPayloads(...)}: a stored payload carrying a property its
-   * event class does not declare fails with {@link
-   * org.streamrune.core.EventDeserializationException} instead of having the property ignored. Off
-   * by default. Snapshot state is always read strictly.
-   *
-   * @param strict {@code true} to refuse a property the event class does not declare
-   * @return this store, for chaining
-   */
-  public InMemoryEventStore withStrictEventPayloads(boolean strict) {
-    this.strictEventPayloads = strict;
     return this;
   }
 
@@ -707,9 +674,9 @@ public final class InMemoryEventStore implements EventStore {
         Map<String, Object> rawData = objectMapper.readValue(stored.payloadJson(), MAP_TYPE);
         Map<String, Object> upcasted =
             upcasterChain.upcast(eventType, rawData, stored.schemaVersion());
-        event = eventPayloadMapper().convertValue(upcasted, eventClass);
+        event = objectMapper.convertValue(upcasted, eventClass);
       } else {
-        event = eventPayloadMapper().readValue(stored.payloadJson(), eventClass);
+        event = objectMapper.readValue(stored.payloadJson(), eventClass);
       }
       EventMetadata metadata = objectMapper.readValue(stored.metadataJson(), EventMetadata.class);
       return new EventEnvelope(

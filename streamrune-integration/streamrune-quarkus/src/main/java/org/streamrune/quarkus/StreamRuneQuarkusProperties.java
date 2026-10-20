@@ -164,16 +164,6 @@ public interface StreamRuneQuarkusProperties {
     @WithDefault("PT30S")
     Duration statementTimeout();
 
-    /**
-     * Whether event payloads are read strictly, {@code
-     * streamrune.event-store.strict-event-payloads} (default {@code false}). With {@code false} a
-     * stored payload property the event class does not declare is ignored, so a replica on an older
-     * release reads what a newer release wrote with an added field; with {@code true} it fails to
-     * bind. Snapshot state is always read strictly.
-     */
-    @WithDefault("false")
-    boolean strictEventPayloads();
-
     /** Schema management section, {@code streamrune.event-store.schema.*}. */
     interface SchemaConfig {
 

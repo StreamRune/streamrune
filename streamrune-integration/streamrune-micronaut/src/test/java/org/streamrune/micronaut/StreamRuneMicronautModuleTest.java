@@ -24,7 +24,6 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.upcasting.EventUpcaster;
-import org.streamrune.postgres.PostgresEventStoreFactory;
 import org.streamrune.postgres.PostgresOutboxStore;
 import org.streamrune.runtime.AuditingQueryBus;
 import org.streamrune.runtime.CacheInvalidator;
@@ -1343,18 +1342,6 @@ class StreamRuneMicronautModuleTest {
     assertEquals(
         java.time.Duration.ofSeconds(30),
         statementTimeoutOf(eventStoreFactoryWith(module, properties)));
-  }
-
-  @Test
-  void postgresEventStoreFactory_readsEventPayloadsTolerantlyUnlessConfiguredStrict()
-      throws Exception {
-    var module = new StreamRuneMicronautModule();
-    var properties = mock(StreamRuneMicronautProperties.class);
-    var field = PostgresEventStoreFactory.class.getDeclaredField("strictEventPayloads");
-    field.setAccessible(true);
-    assertEquals(false, field.get(eventStoreFactoryWith(module, properties)));
-    when(properties.eventStoreStrictEventPayloads()).thenReturn(true);
-    assertEquals(true, field.get(eventStoreFactoryWith(module, properties)));
   }
 
   @Test

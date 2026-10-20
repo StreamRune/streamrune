@@ -52,9 +52,6 @@ streamrune:
     # bound on every event-store statement, per transaction or statement (never on the pooled
     # session); 0s sets none
     statement-timeout: 30s
-    # true: a stored event payload property the event class does not declare fails the read
-    # (default false: it is ignored; snapshot state is always read strictly)
-    strict-event-payloads: false
 ```
 
 The event store borrows its connections from your `DataSource` bean as given and builds no pool of

@@ -82,7 +82,9 @@ the cause chain: this replica's upcaster chain does not reach the `schema_versio
 stored) is treated the same way, for a different reason: it is dead-lettered because a replay on an
 upgraded replica succeeds, and it does not count toward the breaker because the store answered —
 counting it would open the circuit of every replica still on the previous release for the whole
-rollout. See [rolling out an event-schema change](../production.md#rolling-out-an-event-schema-change).
+rollout. Bumping an event's schema version for every change to its payload's shape is what makes
+a rolling deployment meet this retry-later case rather than read poison. See
+[rolling out an event-schema change](../production.md#rolling-out-an-event-schema-change).
 
 A configured `deadLetterQueue` requires an `objectMapper` on the builder — `build()` throws
 `IllegalArgumentException` otherwise, rather than deferring to a later NPE on the publish path
