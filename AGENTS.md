@@ -8,7 +8,7 @@ Licensing, the Developer Certificate of Origin and the contribution policy are i
 
 StreamRune is a CQRS and event-sourcing framework for Java 25 with PostgreSQL as its event store
 and integrations for Spring Boot, Quarkus and Micronaut. Applications wire it with builders and
-plain constructors: no annotation scanning, no hidden behaviour. It is one Gradle build: the root
+plain constructors, and the integrations use the same builders. It is one Gradle build: the root
 `build.gradle.kts` configures every module (there are no convention plugins), versions live in
 `gradle/libs.versions.toml` and the module list in `settings.gradle.kts`.
 
@@ -94,9 +94,12 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 
 ## 3. Conventions
 
-- **Explicit code.** No annotation magic, no classpath scanning, no hidden behaviour: every
-  component exists because a builder or a constructor created it, and the three integrations create
-  theirs with the same builders.
+- **Explicit code, no hidden behaviour.** Every component exists because a builder or a constructor
+  created it, and the three integrations create theirs with the same builders. An annotation is
+  configuration that a named component reads: `@RequireRole` and `@RequirePermission`
+  for the authorization check, `@Encrypted` for the crypto-shredding module, `@Auditable` and
+  `@Cacheable` for the auditing and caching query buses, `@ProjectionConfig` for an integration's
+  projection registration. A new annotation comes with the component that reads it.
 - **Comments and javadoc state what the code does now, and why,** in the present tense (section 5).
 - **No `--enable-preview`.** Published class files must load on any Java 25 runtime, so the
   framework uses finalized language features only.
