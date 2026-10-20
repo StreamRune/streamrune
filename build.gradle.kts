@@ -454,8 +454,9 @@ subprojects {
         testImplementation(libs.findLibrary("archunit-junit5").get())
     }
 
+    // `check` runs spotlessCheck (Spotless's default), so `build` fails on a formatting violation;
+    // the pre-commit hook runs the same check before every commit.
     configure<com.diffplug.gradle.spotless.SpotlessExtension> {
-        setEnforceCheck(false) // JDK 25+ spotless/guava: skip lint failures
         java {
             googleJavaFormat("1.34.1")
             removeUnusedImports()
@@ -1669,10 +1670,9 @@ tasks.named("check") { dependsOn(verifyPostgresTestImage) }
 
 // The shared test-support sources live in no module, so no module's spotless can own them (see
 // the PostgreSQL-backed modules' wiring in `subprojects`); the root project formats them with the
-// same formatter the modules use.
+// same formatter the modules use; the root's `check` runs its spotlessCheck as the modules' do.
 apply(plugin = "com.diffplug.spotless")
 configure<com.diffplug.gradle.spotless.SpotlessExtension> {
-    setEnforceCheck(false) // same JDK 25+ spotless/guava lint-failure workaround as the modules
     java {
         target("gradle/test-support/**/*.java")
         googleJavaFormat("1.34.1")
