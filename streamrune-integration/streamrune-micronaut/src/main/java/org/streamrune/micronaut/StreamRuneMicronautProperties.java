@@ -146,11 +146,12 @@ public record StreamRuneMicronautProperties(
         double outboxRetryMultiplier,
     // subscription.single-active-consumer.lease-ttl: matches Spring/Quarkus. How long a granted
     // lease stays live before another replica may take it over — the failover bound; the
-    // LeaseBasedLeadership renew heartbeat runs at leaseTtl/3. @Nullable with a "15s" default so
-    // binding fills it while the factory defends against an explicit null (defaults to PT15S).
-    // Appended at the end so the positional withDefaults() stays aligned.
+    // LeaseBasedLeadership renew heartbeat runs at leaseTtl/3. Not @Nullable: Micronaut binds a
+    // @Nullable component to null when the key is absent and ignores its default, so these
+    // durations carry their defaults only as plain components. The factory still defends against
+    // an explicit null (defaults to PT15S). Appended at the end so the positional withDefaults()
+    // stays aligned.
     @Bindable(defaultValue = "15s")
-        @io.micronaut.core.annotation.Nullable
         @io.micronaut.context.annotation.Property(
             name = "streamrune.subscription.single-active-consumer.lease-ttl")
         Duration subscriptionLeaseTtl,
@@ -159,33 +160,29 @@ public record StreamRuneMicronautProperties(
     // WRITE, so an idle stream needs the periodic keepalive comment frame; the finite timeout is
     // the backstop that completes the stream (SSE clients auto-reconnect). Zero or negative
     // disables either one — the same contract on all three frameworks.
-    // Disabling both knobs re-opens the dead-client FD leak. Appended at the end so the
-    // positional withDefaults() stays aligned.
+    // Disabling both knobs re-opens the dead-client FD leak, which is why neither is @Nullable (see
+    // subscriptionLeaseTtl). Appended at the end so the positional withDefaults() stays aligned.
     @Bindable(defaultValue = "5m")
-        @io.micronaut.core.annotation.Nullable
         @io.micronaut.context.annotation.Property(name = "streamrune.sse.timeout")
         Duration sseTimeout,
     @Bindable(defaultValue = "30s")
-        @io.micronaut.core.annotation.Nullable
         @io.micronaut.context.annotation.Property(name = "streamrune.sse.keep-alive-interval")
         Duration sseKeepAliveInterval,
     // event-store.statement-timeout: matches Spring/Quarkus. The bound on every statement the
     // event store runs, applied per transaction or per statement and never on the pooled
     // connection's session; 0 sets no bound of the store's own. A negative value or a positive one
-    // below 1ms fails the boot. @Nullable with a "30s" default so binding fills it while the
-    // factory method keeps the factory's default for an explicit null. Appended at the end so the
-    // positional withDefaults() stays aligned.
+    // below 1ms fails the boot. Bound with its "30s" default (not @Nullable, see
+    // subscriptionLeaseTtl); the factory method keeps the factory's default for an explicit null.
+    // Appended at the end so the positional withDefaults() stays aligned.
     @Bindable(defaultValue = "30s")
-        @io.micronaut.core.annotation.Nullable
         @io.micronaut.context.annotation.Property(name = "streamrune.event-store.statement-timeout")
         Duration eventStoreStatementTimeout,
     // sse.polling-interval: matches Spring/Quarkus. How often the SSE endpoint's feed reads the
-    // global stream for new events — the usual delay between a commit and its frame. @Nullable
-    // with a "1s" default so binding fills it while the feed's factory method keeps the default
-    // for an explicit null; a value below one millisecond fails the boot. Appended at the end so
-    // the positional withDefaults() stays aligned.
+    // global stream for new events — the usual delay between a commit and its frame. Bound with
+    // its "1s" default (not @Nullable, see subscriptionLeaseTtl); the feed's factory method keeps
+    // the default for an explicit null, and a value below one millisecond fails the boot. Appended
+    // at the end so the positional withDefaults() stays aligned.
     @Bindable(defaultValue = "1s")
-        @io.micronaut.core.annotation.Nullable
         @io.micronaut.context.annotation.Property(name = "streamrune.sse.polling-interval")
         Duration ssePollingInterval,
     // saga.forward-fence: matches Spring/Quarkus. The forward fence of the SagaRunner beans whose

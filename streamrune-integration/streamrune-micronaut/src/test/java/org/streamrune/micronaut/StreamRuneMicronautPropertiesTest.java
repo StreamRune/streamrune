@@ -244,6 +244,23 @@ class StreamRuneMicronautPropertiesTest {
     }
   }
 
+  /**
+   * The five durations an application rarely sets are bound with their documented defaults when the
+   * configuration names none: the SSE endpoint reaps a silent client after the timeout and probes
+   * it with the keepalive, as on Spring and Quarkus.
+   */
+  @Test
+  void aContextWithNoConfigurationBindsTheDocumentedDurations() {
+    try (var ctx = io.micronaut.context.ApplicationContext.run()) {
+      var bound = ctx.getBean(StreamRuneMicronautProperties.class);
+      assertEquals(Duration.ofMinutes(5), bound.sseTimeout());
+      assertEquals(Duration.ofSeconds(30), bound.sseKeepAliveInterval());
+      assertEquals(Duration.ofSeconds(1), bound.ssePollingInterval());
+      assertEquals(Duration.ofSeconds(30), bound.eventStoreStatementTimeout());
+      assertEquals(Duration.ofSeconds(15), bound.subscriptionLeaseTtl());
+    }
+  }
+
   @Test
   void subscriptionLeaseTtlDefaultsTo15Seconds() {
     assertEquals(
