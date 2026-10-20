@@ -730,6 +730,76 @@ void concurrentAppend_throwsOptimisticLockException() {
 
 ---
 
+## The kit, type by type
+
+Every public type of `streamrune-test` (package `org.streamrune.test`):
+
+| Type | What it is for |
+|---|---|
+| `InMemoryEventStore` | An `EventStore` with the semantics of `PostgresEventStore`: optimistic locking, one global order, snapshots, upcasting, and with `serializing(...)` JSON payloads and crypto-shredding. |
+| `InMemoryEventStoreFactory` | An `EventStoreFactory` that creates `InMemoryEventStore`s, for wiring that asks for a factory. |
+| `InMemoryCommandBus` | A `CommandBus` without locks, retries or interceptors that runs each decider's `guard` before `decide`. |
+| `InMemoryQueryBus` | A `QueryBus` that dispatches by the exact query class. |
+| `InMemoryEventSubscription` | An `EventSubscription` with the at-most-once notification semantics of PostgreSQL `LISTEN`/`NOTIFY`, to test push-driven wiring without Docker. |
+| `InMemoryOffsetStore` | An `OffsetStore` with the monotonic guard of the PostgreSQL one. |
+| `InMemoryProjectionRepository` | A `ProjectionRepository`, a fencing `AtomicBatchProcessor` and its own checkpoint in one object, to run a `TRANSACTIONAL_LOCAL` projection without PostgreSQL. |
+| `InMemoryProjectionDeadLetterStore` | A `ProjectionDeadLetterStore`; `all()` returns every entry for an assertion. |
+| `InMemoryCommandInbox` | A `CommandInbox`; the in-memory event store appends and claims under one lock. |
+| `InMemoryDeadLetterQueue` | A `DeadLetterQueue` that stamps `publishedAt` from the `Clock` it is given. |
+| `InMemoryOutboxStore` | An `OutboxStore` with the claim, lease and ordering rules of `PostgresOutboxStore`, its retry times taken from the `Clock` it is given. |
+| `ForwardingOutboxStore` | An `OutboxStore` that forwards every call to a delegate: override one method to make that call fail, block or record. |
+| `InMemorySagaStore` | A `SagaStore` that keeps the state objects themselves and stamps their times from the `Clock` it is given. |
+| `InMemorySagaDeadLetterStore` | A `SagaDeadLetterStore` whose `publish` is an upsert per saga and event offset, as in PostgreSQL. |
+| `InMemoryCryptoEngine` | An AES-256-GCM `CryptoEngine` with its keys in memory and the terminal erasure of the production engines. |
+| `MutableClock` | A `Clock` the test sets and advances: retry backoff, timeouts and timestamps without sleeping. |
+| `DeciderFixture` | Given events, when a command, then events or a domain exception, for a decider. |
+| `EventStoreFixture` | Given/when/then over an event store's appends; `event(...)` builds a test envelope. |
+| `ProjectionFixture` | Feeds a projection events in sequence and asserts on its state. |
+| `SagaEnvelopes` | The metadata and envelopes of the events a saga's commands, and the commands of a continuation, produce. |
+| `EventPayloadAssertions` | `assertRoundTrips(event)` and `assertUpcastBinds(...)`: an event that writes what it cannot read, or an upcaster that writes a misspelled key, fails the test instead of a read in production. |
+| `AtomicBatchProcessorContract` | The contract suite of `AtomicBatchProcessor.supportsFencing()`; extend it to prove a custom processor. |
+| `CommandBusProvenanceContract` | The contract suite of where a `CommandBus` takes an event's saga origin and causation id from; extend it for a custom bus. |
+| `OutboxStoreContract` | The contract suite of every `OutboxStore`: status transitions, both ordering modes, retention and replay. |
+| `SagaStoreContract` | The contract suite of every `SagaStore`: the recovery state a saga runner, step executor and replayer depend on. |
+| `SagaDeadLetterStoreContract` | The contract suite of every `SagaDeadLetterStore`: stored facts win, and the shield decides what retention removes. |
+| `SagaForwardFenceContract` | The contract suite of an `EventStore` that fences a saga's forward command against the rows of a `SagaStore`. |
+| `NativeReflectionTypes` | Derives from code the StreamRune types a GraalVM native image registers for reflection; the integrations' native-hint tests compare their hints with it. |
+| `ShippedMigrationScripts` | Lists the Flyway migration scripts StreamRune ships, from the class path, so a native-image test can check each is a registered resource. |
+| `UnregisteredSealedTypes` | Builds a sealed type that looks like one a native image did not register (`isSealed()` with no permitted subclasses), to test the code that refuses it. |
+
+A test that controls time passes a `MutableClock` to the store it exercises and advances it:
+
+```java
+var clock = MutableClock.startingAt(Instant.parse("2026-01-01T00:00:00Z"));
+var outbox = new InMemoryOutboxStore(clock);
+// ... an entry marked for retry 5 s from now is not pending yet ...
+clock.advance(Duration.ofSeconds(5));
+// ... and is pending now
+```
+
+A test of what happens when one store call fails overrides that call alone:
+
+```java
+var failingDelivery =
+    new ForwardingOutboxStore(new InMemoryOutboxStore()) {
+      @Override
+      public boolean markDelivered(OutboxEntryId id, String claimedBy) {
+        throw new IllegalStateException("simulated crash after the publish");
+      }
+    };
+```
+
+A test of an event class or an upcaster binds the payload the way the event store does:
+
+```java
+OrderPlaced placed = new OrderPlaced("order-1", "SKU-A", 2);
+EventPayloadAssertions.assertRoundTrips(placed);
+EventPayloadAssertions.assertUpcastBinds(
+    new OrderPlacedUpcaster(), Map.of("orderId", "order-1", "sku", "SKU-A"), 1, OrderPlaced.class);
+```
+
+---
+
 ## Test Dependency Matrix
 
 | Test type | Modules required | Database? |
