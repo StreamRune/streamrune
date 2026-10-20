@@ -114,7 +114,12 @@ private object BrA17SupertypeCheck {
 private object TestSummary {
     const val AGGREGATE = "reports/test-summary.txt"
     private const val SLOWEST = 10
-    private const val MESSAGE_LIMIT = 300
+    // A joined message keeps every line, each cut to LINE_LIMIT, and a message longer than
+    // MESSAGE_LIMIT keeps its beginning and its end: AssertJ and JUnit put the verdict ("but some
+    // elements were not found: [51]", "but was: <5>") after the values they print, so cutting the
+    // end off would keep the values and drop the verdict.
+    private const val LINE_LIMIT = 120
+    private const val MESSAGE_LIMIT = 600
     private val TOTALS =
         Regex(
             """^\S+ — (\d+) tests, \d+ passed, (\d+) failed, \d+ skipped""" +
@@ -209,8 +214,14 @@ private object TestSummary {
         // A first line that ends in a colon continues on the next ones: AssertJ starts its message
         // on the line after the exception's class ("java.lang.AssertionError:", then "expected: 6"
         // and "but was: 5"), so the lines are joined into one.
-        val first = if (head.endsWith(":")) lines.joinToString(" ") else head
-        val message = if (first.length > MESSAGE_LIMIT) first.take(MESSAGE_LIMIT) + "…" else first
+        val first =
+            if (head.endsWith(":")) lines.joinToString(" ") { cut(it, LINE_LIMIT) } else head
+        val message =
+            if (first.length > MESSAGE_LIMIT) {
+                first.take(MESSAGE_LIMIT / 2) + " … " + first.takeLast(MESSAGE_LIMIT / 2)
+            } else {
+                first
+            }
         val frame =
             generateSequence(failure) { it.cause }
                 .take(10)
@@ -223,6 +234,9 @@ private object TestSummary {
             }
         }
     }
+
+    private fun cut(text: String, limit: Int): String =
+        if (text.length > limit) text.take(limit) + "…" else text
 
     private fun duration(millis: Long): String =
         if (millis < 1000) "${millis}ms" else String.format(Locale.ROOT, "%.1fs", millis / 1000.0)
