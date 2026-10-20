@@ -587,7 +587,11 @@ class VirtualThreadCommandBusTest {
               CommandId commandId, int dlqAttempts, java.time.Instant lastAttemptAt) {}
 
           @Override
-          public List<DeadLetterEntry> readRetryable(int maxRetries, int limit) {
+          public List<DeadLetterEntry> readRetryable(
+              int maxRetries,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
             return List.of();
           }
         };
@@ -725,7 +729,11 @@ class VirtualThreadCommandBusTest {
               CommandId commandId, int dlqAttempts, java.time.Instant lastAttemptAt) {}
 
           @Override
-          public List<DeadLetterEntry> readRetryable(int maxRetries, int limit) {
+          public List<DeadLetterEntry> readRetryable(
+              int maxRetries,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
             return List.of();
           }
         };
@@ -1919,7 +1927,8 @@ class VirtualThreadCommandBusTest {
     public void updateAttempts(CommandId commandId, int dlqAttempts, Instant lastAttemptAt) {}
 
     @Override
-    public List<DeadLetterEntry> readRetryable(int maxRetries, int limit) {
+    public List<DeadLetterEntry> readRetryable(
+        int maxRetries, int limit, boolean includeUnkeyed, Instant keyedFirstAttemptAtOrAfter) {
       return List.of();
     }
   }

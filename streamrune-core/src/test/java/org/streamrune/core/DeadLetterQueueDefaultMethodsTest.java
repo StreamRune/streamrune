@@ -46,9 +46,21 @@ class DeadLetterQueueDefaultMethodsTest {
   }
 
   @Test
+  void countAwaitingOperatorDefault_throwsUnsupportedOperation() {
+    var dlq = new MinimalDeadLetterQueue();
+    var ex =
+        assertThrows(
+            UnsupportedOperationException.class,
+            () -> dlq.countAwaitingOperator(3, true, java.time.Instant.EPOCH));
+    assertTrue(ex.getMessage().contains("countAwaitingOperator"), ex.getMessage());
+  }
+
+  @Test
   void readRetryableDefault_throwsUnsupportedOperation() {
     var dlq = new MinimalDeadLetterQueue();
-    var ex = assertThrows(UnsupportedOperationException.class, () -> dlq.readRetryable(3, 10));
+    var ex =
+        assertThrows(
+            UnsupportedOperationException.class, () -> dlq.readRetryable(3, 10, true, null));
     assertTrue(ex.getMessage().contains("readRetryable"), ex.getMessage());
     assertTrue(ex.getMessage().contains(MinimalDeadLetterQueue.class.getName()), ex.getMessage());
   }

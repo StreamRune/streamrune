@@ -6,7 +6,7 @@ Use command idempotency when a command may be delivered more than once and you n
 
 - **HTTP clients retry.** A browser, mobile app, or upstream service that times out on a slow `POST` will re-send the same request — often the same logical "place order" twice.
 - **Message-driven flows redeliver.** A command triggered off a broker or an event subscription (a saga dispatching commands, an integration consuming a queue) inherits the broker's at-least-once semantics.
-- **The dead-letter retry runner re-dispatches.** `DeadLetterRetryRunner` re-runs a failed command; without a key it would re-append events on a partial success.
+- **The dead-letter retry runner re-dispatches.** `DeadLetterRetryRunner` re-runs a failed command. With a key the replay and the caller's own retry meet at one inbox row, so the command applies once; without one nothing pairs them, and a replay after a successful retry by the caller applies the command a second time — which is why the runner replays unkeyed entries only when an operator asks, by default (see [Retry and resilience](retry-and-resilience.md#which-entries-are-replayed-automatically)).
 
 Idempotency makes those redeliveries safe: the first execution runs the decider and appends events; every later execution under the **same** `IdempotencyKey` returns the recorded result of the first, without re-running the handler or re-persisting events. This is *effectively-once* execution on top of at-least-once delivery.
 
@@ -145,7 +145,7 @@ The framework owns no HTTP command endpoint, so making idempotency an invariant 
 
 3. **Reject a missing token on mutating endpoints**, unless the endpoint is explicitly fire-and-forget. Without a key, a client retry executes the command a second time.
 
-4. **Retain completed keys for the whole redelivery window.** `streamrune.inbox.retention-max-age` (see [Retention](#retention)) must be longer than the maximum client retry horizon plus queue or broker redelivery plus any operator replay — `DeadLetterRetryRunner` re-executes a dead-lettered command under its original key, which only deduplicates while that key is still in the inbox.
+4. **Retain completed keys for the whole redelivery window.** `streamrune.inbox.retention-max-age` (see [Retention](#retention)) must be longer than the maximum client retry horizon plus queue or broker redelivery plus any operator replay — `DeadLetterRetryRunner` re-executes a dead-lettered command under its original key, which only deduplicates while that key is still in the inbox. The integrations refuse to start with a `streamrune.dead-letter.retention-max-age` longer than the inbox window, and the runner refuses to replay a keyed entry older than it (`STALE_REPLAY_BLOCKED`) unless an operator forces it.
 
 5. **Record only a hash of the key in your own audit data and logs.** A key is a bearer token for its recorded result (see above). Know where the framework keeps the raw value: it is the primary key of `command_inbox`, and it is stored with a dead-lettered command in `dead_letter_queue.idempotency_key`. A key-reuse rejection's `IllegalArgumentException` message also names it, and the audit interceptor records that message in `audit_log.error_message` for a failed command. The message renders the key through `LogSanitizer.sanitizeForLog`, so control characters are stripped and only the first 64 characters appear. The audit interceptor stores the message through `LogSanitizer.sanitizeFreeText`, as the framework does for every error text it persists. That still leaves up to 64 characters of the key in the row.
 

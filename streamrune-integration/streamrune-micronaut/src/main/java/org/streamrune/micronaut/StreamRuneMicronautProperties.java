@@ -71,8 +71,11 @@ public record StreamRuneMicronautProperties(
     @Bindable(defaultValue = "60000")
         @io.micronaut.context.annotation.Property(name = "streamrune.dead-letter.retry-interval-ms")
         long deadLetterRetryIntervalMs,
-    // dead-letter.retention-max-age: matches Spring's streamrune.dead-letter.retention-max-age
-    @Bindable(defaultValue = "30d")
+    // dead-letter.retention-max-age: matches Spring's streamrune.dead-letter.retention-max-age.
+    // Must not exceed streamrune.inbox.retention-max-age when a command inbox is declared (the
+    // config validator refuses the boot): a keyed entry that outlives its key's inbox row would
+    // execute its command again on a retry.
+    @Bindable(defaultValue = "7d")
         @io.micronaut.context.annotation.Property(name = "streamrune.dead-letter.retention-max-age")
         Duration deadLetterRetentionMaxAge,
     @Bindable(defaultValue = "true")
@@ -199,12 +202,22 @@ public record StreamRuneMicronautProperties(
     // property. Appended at the end so the positional withDefaults() stays aligned.
     @Bindable(defaultValue = "required")
         @io.micronaut.context.annotation.Property(name = "streamrune.gdpr.snapshot-purge")
-        String gdprSnapshotPurge) {
+        String gdprSnapshotPurge,
+    // dead-letter.unkeyed-replay: matches Spring/Quarkus. Whether the automatic dead-letter retry
+    // replays entries of commands that ran without an idempotency key: operator-only (default)
+    // leaves them to an operator, automatic replays them — a second execution whenever the caller
+    // already retried successfully. Read through DeadLetterUnkeyedReplaySetting; an unknown value
+    // fails binding, naming the property. Appended at the end so the positional withDefaults()
+    // stays aligned.
+    @Bindable(defaultValue = "operator-only")
+        @io.micronaut.context.annotation.Property(name = "streamrune.dead-letter.unkeyed-replay")
+        String deadLetterUnkeyedReplay) {
 
   public StreamRuneMicronautProperties {
     org.streamrune.integration.SingleActiveConsumerSetting.enabled(
         subscriptionSingleActiveConsumerEnabled);
     org.streamrune.integration.SnapshotPurgeSetting.parse(gdprSnapshotPurge);
+    org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(deadLetterUnkeyedReplay);
     metadataBaggageAllowlist =
         metadataBaggageAllowlist == null ? List.of() : List.copyOf(metadataBaggageAllowlist);
   }
@@ -240,7 +253,8 @@ public record StreamRuneMicronautProperties(
         true,
         5,
         60000L,
-        Duration.ofDays(30),
+        // dead-letter.retention-max-age: the inbox window, which it must not exceed
+        Duration.ofDays(7),
         true,
         "streamrune",
         true,
@@ -268,6 +282,8 @@ public record StreamRuneMicronautProperties(
         // saga.forward-fence
         "auto",
         // gdpr.snapshot-purge
-        "required");
+        "required",
+        // dead-letter.unkeyed-replay
+        "operator-only");
   }
 }

@@ -31,6 +31,9 @@ class StreamRuneConfigValidatorTest {
     Instance<T> inst = mock(Instance.class);
     when(inst.isResolvable()).thenReturn(true);
     when(inst.get()).thenReturn(value);
+    Instance.Handle<T> handle = mock(Instance.Handle.class);
+    when(handle.get()).thenReturn(value);
+    when(inst.getHandle()).thenReturn(handle);
     return inst;
   }
 
@@ -322,5 +325,112 @@ class StreamRuneConfigValidatorTest {
             .withDefaultValues(overrides)
             .build();
     return config.getConfigMapping(StreamRuneQuarkusProperties.class);
+  }
+
+  // ── Command dead-letter retention vs inbox retention ──────────────────────────────────────────
+
+  @Test
+  void deadLetterRetentionLongerThanTheInboxWindowFailsStartup() {
+    var props = TestProperties.of(Map.of("streamrune.dead-letter.retention-max-age", "PT720H"));
+    var validator =
+        new StreamRuneConfigValidator(
+            props,
+            unsatisfied(),
+            unsatisfied(),
+            satisfied(mock(org.streamrune.core.CommandInbox.class)),
+            satisfied(mock(org.streamrune.core.DeadLetterQueue.class)));
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
+    assertTrue(ex.getMessage().contains("streamrune.dead-letter.retention-max-age"));
+    assertTrue(ex.getMessage().contains("streamrune.inbox.retention-max-age"));
+  }
+
+  @Test
+  void deadLetterRetentionIsJudgedEvenWithSagasAndTheAutomaticRetryOff() {
+    var props =
+        TestProperties.of(
+            Map.of(
+                "streamrune.dead-letter.retention-max-age", "PT0S",
+                "streamrune.dead-letter.enabled", "false",
+                "streamrune.saga.enabled", "false"));
+    var validator =
+        new StreamRuneConfigValidator(
+            props,
+            unsatisfied(),
+            unsatisfied(),
+            satisfied(mock(org.streamrune.core.CommandInbox.class)),
+            satisfied(mock(org.streamrune.core.DeadLetterQueue.class)));
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
+    assertTrue(ex.getMessage().contains("pruning disabled"), ex.getMessage());
+  }
+
+  @Test
+  void theDefaultDeadLetterAndInboxRetentionPass() {
+    var validator =
+        new StreamRuneConfigValidator(
+            TestProperties.defaults(),
+            unsatisfied(),
+            unsatisfied(),
+            satisfied(mock(org.streamrune.core.CommandInbox.class)),
+            satisfied(mock(org.streamrune.core.DeadLetterQueue.class)));
+    assertDoesNotThrow(() -> validator.validate(mock(StartupEvent.class)));
+  }
+
+  @Test
+  void deadLetterRetentionIsNotJudgedWithoutBothStores() {
+    var props = TestProperties.of(Map.of("streamrune.dead-letter.retention-max-age", "PT720H"));
+    var noInbox =
+        new StreamRuneConfigValidator(
+            props,
+            unsatisfied(),
+            unsatisfied(),
+            unsatisfied(),
+            satisfied(mock(org.streamrune.core.DeadLetterQueue.class)));
+    assertDoesNotThrow(() -> noInbox.validate(mock(StartupEvent.class)));
+    // A producer that resolves but hands back null is no store.
+    var nullQueue =
+        new StreamRuneConfigValidator(
+            props,
+            unsatisfied(),
+            unsatisfied(),
+            satisfied(mock(org.streamrune.core.CommandInbox.class)),
+            satisfied(null));
+    assertDoesNotThrow(() -> nullQueue.validate(mock(StartupEvent.class)));
+  }
+
+  @Test
+  void theRetentionCheckDestroysTheDependentInstancesItResolved() {
+    @SuppressWarnings("unchecked")
+    Instance<org.streamrune.core.CommandInbox> inbox = mock(Instance.class);
+    @SuppressWarnings("unchecked")
+    Instance.Handle<org.streamrune.core.CommandInbox> handle = mock(Instance.Handle.class);
+    when(inbox.isResolvable()).thenReturn(true);
+    when(inbox.getHandle()).thenReturn(handle);
+    when(handle.get()).thenReturn(mock(org.streamrune.core.CommandInbox.class));
+    var validator =
+        new StreamRuneConfigValidator(
+            TestProperties.defaults(),
+            unsatisfied(),
+            unsatisfied(),
+            inbox,
+            satisfied(mock(org.streamrune.core.DeadLetterQueue.class)));
+
+    validator.validate(mock(StartupEvent.class));
+
+    org.mockito.Mockito.verify(handle).close();
+    org.mockito.Mockito.verify(inbox, org.mockito.Mockito.never()).get();
+  }
+
+  @Test
+  void anUnknownUnkeyedReplayValueFailsStartup() {
+    var props = TestProperties.of(Map.of("streamrune.dead-letter.unkeyed-replay", "sometimes"));
+    var validator = new StreamRuneConfigValidator(props, unsatisfied(), unsatisfied());
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
+    assertTrue(ex.getMessage().contains("streamrune.dead-letter.unkeyed-replay"));
   }
 }

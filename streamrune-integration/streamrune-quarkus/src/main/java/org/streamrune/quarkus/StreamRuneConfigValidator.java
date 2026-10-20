@@ -17,17 +17,45 @@ public class StreamRuneConfigValidator {
   private final Instance<org.streamrune.core.outbox.OutboxStore> outboxStore;
   private final Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore;
   private final Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService;
+  private final Instance<org.streamrune.core.CommandInbox> commandInbox;
+  private final Instance<org.streamrune.core.DeadLetterQueue> deadLetterQueue;
 
   @jakarta.inject.Inject
   public StreamRuneConfigValidator(
       StreamRuneQuarkusProperties properties,
       Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
       Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore,
-      Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService) {
+      Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService,
+      Instance<org.streamrune.core.CommandInbox> commandInbox,
+      Instance<org.streamrune.core.DeadLetterQueue> deadLetterQueue) {
     this.properties = properties;
     this.outboxStore = outboxStore;
     this.sagaDeadLetterStore = sagaDeadLetterStore;
     this.forgetSubjectService = forgetSubjectService;
+    this.commandInbox = commandInbox;
+    this.deadLetterQueue = deadLetterQueue;
+  }
+
+  /**
+   * A validator that resolves the given command inbox and dead letter queue and does not build the
+   * forget service on the startup event — for tests of the dead-letter retention check.
+   */
+  StreamRuneConfigValidator(
+      StreamRuneQuarkusProperties properties,
+      Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
+      Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore,
+      Instance<org.streamrune.core.CommandInbox> commandInbox,
+      Instance<org.streamrune.core.DeadLetterQueue> deadLetterQueue) {
+    this(properties, outboxStore, sagaDeadLetterStore, null, commandInbox, deadLetterQueue);
+  }
+
+  /** A validator without a command inbox or dead letter queue — for tests of the other checks. */
+  StreamRuneConfigValidator(
+      StreamRuneQuarkusProperties properties,
+      Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
+      Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore,
+      Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService) {
+    this(properties, outboxStore, sagaDeadLetterStore, forgetSubjectService, null, null);
   }
 
   /**
@@ -38,7 +66,7 @@ public class StreamRuneConfigValidator {
       StreamRuneQuarkusProperties properties,
       Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
       Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore) {
-    this(properties, outboxStore, sagaDeadLetterStore, null);
+    this(properties, outboxStore, sagaDeadLetterStore, null, null, null);
   }
 
   /**
@@ -55,6 +83,8 @@ public class StreamRuneConfigValidator {
     this.outboxStore = null;
     this.sagaDeadLetterStore = null;
     this.forgetSubjectService = null;
+    this.commandInbox = null;
+    this.deadLetterQueue = null;
   }
 
   // Without an explicit @Priority, CDI/Arc observer ordering among the several
@@ -122,6 +152,14 @@ public class StreamRuneConfigValidator {
     } catch (IllegalArgumentException e) {
       throw new IllegalStateException(e.getMessage(), e);
     }
+    // streamrune.dead-letter.unkeyed-replay, parsed here for the same reason: the retry runner that
+    // reads it is a dependent bean built only when the lifecycle resolves it.
+    try {
+      org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(
+          properties.deadLetter().unkeyedReplay());
+    } catch (IllegalArgumentException e) {
+      throw new IllegalStateException(e.getMessage(), e);
+    }
     // The produced ForgetSubjectService refuses to build without a snapshot purger bean (or with
     // one under snapshot-purge=none). Building it here makes that a startup failure: an
     // application may inject the service only into a request-time resource, where the refusal
@@ -133,6 +171,15 @@ public class StreamRuneConfigValidator {
       throw new IllegalStateException(
           "Outbox enabled but no OutboxStore found. "
               + "Add streamrune-kafka-outbox or streamrune-rabbitmq-outbox to your classpath.");
+    }
+    // The command dead-letter twin of the saga check below: a keyed entry must not outlive the
+    // inbox row that deduplicates its replay. Checked whenever both stores resolve to a real
+    // instance — independent of streamrune.dead-letter.enabled, which switches only the automatic
+    // retry, and before the saga kill switch, which has nothing to do with it. Resolve, then
+    // null-check: a producer may resolve and still hand back null.
+    if (resolvesToInstance(commandInbox) && resolvesToInstance(deadLetterQueue)) {
+      org.streamrune.integration.CommandDeadLetterRetentionValidator.validate(
+          properties.deadLetter().retentionMaxAge(), properties.inbox().retentionMaxAge());
     }
     // The saga dead-letter-retention <= inbox-retention invariant is a
     // REPLAY-safety invariant — it protects SagaDeadLetterReplayer, not the compensation-retry
@@ -164,6 +211,21 @@ public class StreamRuneConfigValidator {
     if (resolvedDeadLetterStore != null) {
       org.streamrune.integration.SagaRetentionValidator.validateDeadLetterRetention(
           properties.saga().deadLetterRetentionMaxAge(), properties.inbox().retentionMaxAge());
+    }
+  }
+
+  /**
+   * Whether {@code instance} resolves to a non-null bean. Resolved through a handle that is closed
+   * at once: for a {@code @Dependent} producer — the framework's command inbox is one — that
+   * destroys the instance this check created, instead of leaving it to live as long as the
+   * validator.
+   */
+  private static boolean resolvesToInstance(Instance<?> instance) {
+    if (instance == null || !instance.isResolvable()) {
+      return false;
+    }
+    try (var handle = instance.getHandle()) {
+      return handle.get() != null;
     }
   }
 }

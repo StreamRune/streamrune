@@ -91,6 +91,20 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
   }
 
   @Override
+  public long countAwaitingOperator(
+      int maxRetries, boolean countUnkeyed, Instant keyedFirstAttemptBefore) {
+    return entries.stream()
+        .filter(e -> e.dlqAttempts() < maxRetries)
+        .filter(
+            e ->
+                e.idempotencyKey() == null
+                    ? countUnkeyed
+                    : keyedFirstAttemptBefore != null
+                        && e.firstAttemptAt().isBefore(keyedFirstAttemptBefore))
+        .count();
+  }
+
+  @Override
   public void discard(CommandId commandId) {
     Objects.requireNonNull(commandId, "commandId is required");
     entries.removeIf(e -> e.commandId().equals(commandId));
@@ -126,7 +140,8 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
   }
 
   @Override
-  public List<DeadLetterEntry> readRetryable(int maxRetries, int limit) {
+  public List<DeadLetterEntry> readRetryable(
+      int maxRetries, int limit, boolean includeUnkeyed, Instant keyedFirstAttemptAtOrAfter) {
     // Order by least-recently-active — the most recent of (lastAttemptAt,
     // publishedAt) — ascending, so the entries most likely to be past their backoff sort first and
     // a recently-attempted (still backing-off) entry never sits at the head starving due entries
@@ -134,6 +149,12 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
     // `ORDER BY COALESCE(last_attempt_at, published_at) ASC`.
     return entries.stream()
         .filter(e -> e.dlqAttempts() < maxRetries)
+        .filter(e -> includeUnkeyed || e.idempotencyKey() != null)
+        .filter(
+            e ->
+                e.idempotencyKey() == null
+                    || keyedFirstAttemptAtOrAfter == null
+                    || !e.firstAttemptAt().isBefore(keyedFirstAttemptAtOrAfter))
         .sorted(Comparator.comparing(InMemoryDeadLetterQueue::lastActivity))
         .limit(limit)
         .toList();

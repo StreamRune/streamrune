@@ -198,6 +198,8 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
    */
   private final AtomicLong dlqPending = new AtomicLong();
 
+  private final AtomicLong dlqAwaitingOperator = new AtomicLong();
+
   /**
    * Projection dead-letter backlog: un-replayed dead-letter entries across all projections, sampled
    * once per cycle by the projection runners and updated in place (gauge semantics, last write
@@ -455,6 +457,12 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
             "Current command dead-letter-queue depth (entries queued for retry/inspection)")
         .register(registry);
     Gauge.builder(
+            meter(MetricNames.DLQ_AWAITING_OPERATOR), dlqAwaitingOperator, AtomicLong::doubleValue)
+        .description(
+            "Command dead-letter entries the retry runner will never replay on its schedule"
+                + " (unkeyed, or keyed past the inbox window); each awaits an operator")
+        .register(registry);
+    Gauge.builder(
             meter(MetricNames.PROJECTIONS_DEAD_LETTER_BACKLOG),
             projectionsDeadLetterBacklog,
             AtomicLong::doubleValue)
@@ -599,6 +607,17 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
         .description(
             "Commands that exhausted every DLQ retry; the retry runner stops retrying them (their"
                 + " events were never produced)")
+        .register(registry)
+        .increment();
+  }
+
+  @Override
+  public void recordDeadLetterStaleReplayBlocked(String commandType) {
+    Counter.builder(meter(MetricNames.DLQ_STALE_REPLAY_BLOCKED))
+        .tag(MetricNames.TAG_COMMAND_TYPE, commandTypeTag(commandType))
+        .description(
+            "Dead-letter replays refused because the entry is older than the command-inbox"
+                + " retention window (nothing executed; the entry awaits an operator)")
         .register(registry)
         .increment();
   }
@@ -1172,6 +1191,11 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   @Override
   public void recordDlqBacklog(long pending) {
     dlqPending.set(pending);
+  }
+
+  @Override
+  public void recordDlqAwaitingOperator(long awaiting) {
+    dlqAwaitingOperator.set(awaiting);
   }
 
   @Override

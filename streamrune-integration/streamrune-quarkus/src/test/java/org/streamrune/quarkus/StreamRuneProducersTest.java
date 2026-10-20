@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 import io.opentelemetry.api.OpenTelemetry;
 import io.quarkus.security.identity.SecurityIdentity;
 import jakarta.enterprise.inject.Instance;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -1152,6 +1153,43 @@ class StreamRuneProducersTest {
   }
 
   @Test
+  void deadLetterRetryRunnerIsBuiltWithTheConfiguredUnkeyedReplayAndInboxWindow() {
+    var producers = new StreamRuneProducers();
+    var byDefault =
+        producers.deadLetterRetryRunner(
+            satisfied(mock(org.streamrune.core.DeadLetterQueue.class)),
+            satisfied(mock(org.streamrune.core.CommandBus.class)),
+            unsatisfied(),
+            unsatisfied(),
+            unsatisfied(),
+            unsatisfied(),
+            List.of(),
+            TestProperties.defaults());
+    assertEquals(
+        org.streamrune.core.DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY,
+        byDefault.policy().unkeyedReplay());
+    assertEquals(Duration.ofDays(7), byDefault.inboxRetentionMaxAge());
+
+    var configured =
+        producers.deadLetterRetryRunner(
+            satisfied(mock(org.streamrune.core.DeadLetterQueue.class)),
+            satisfied(mock(org.streamrune.core.CommandBus.class)),
+            unsatisfied(),
+            unsatisfied(),
+            unsatisfied(),
+            unsatisfied(),
+            List.of(),
+            TestProperties.of(
+                Map.of(
+                    "streamrune.dead-letter.unkeyed-replay", "automatic",
+                    "streamrune.inbox.retention-max-age", "PT336H")));
+    assertEquals(
+        org.streamrune.core.DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC,
+        configured.policy().unkeyedReplay());
+    assertEquals(Duration.ofDays(14), configured.inboxRetentionMaxAge());
+  }
+
+  @Test
   void deadLetterRetryRunnerProduced_whenEnabledAndDepsPresent() {
     var producers = new StreamRuneProducers();
     var runner =
@@ -1641,9 +1679,9 @@ class StreamRuneProducersTest {
             null,
             null));
 
-    boolean retried = runner.retry(commandId);
+    var retried = runner.retry(commandId, true);
 
-    assertTrue(retried);
+    assertEquals(org.streamrune.runtime.DeadLetterRetryRunner.RetryOutcome.REPLAYED, retried);
     assertTrue(
         executed.get(),
         "decider must actually execute — the command type must resolve via the decider registry,"

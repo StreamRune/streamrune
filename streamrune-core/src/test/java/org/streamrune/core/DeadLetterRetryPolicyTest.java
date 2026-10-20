@@ -17,35 +17,76 @@ class DeadLetterRetryPolicyTest {
   }
 
   @Test
+  void defaultPolicyLeavesUnkeyedEntriesToAnOperator() {
+    // An unkeyed command's automatic replay cannot be deduplicated against its caller's own
+    // retry, so the production default must not replay it on the schedule.
+    assertEquals(
+        DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY,
+        DeadLetterRetryPolicy.DEFAULT.unkeyedReplay());
+  }
+
+  @Test
+  void rejectsNullUnkeyedReplay() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new DeadLetterRetryPolicy(3, Duration.ofSeconds(1), 2.0, false, null));
+    assertTrue(ex.getMessage().contains("unkeyedReplay"), ex.getMessage());
+  }
+
+  @Test
   void rejectsMaxRetriesBelowOne() {
     assertThrows(
         IllegalArgumentException.class,
-        () -> new DeadLetterRetryPolicy(0, Duration.ofSeconds(1), 2.0, false));
+        () ->
+            new DeadLetterRetryPolicy(
+                0,
+                Duration.ofSeconds(1),
+                2.0,
+                false,
+                DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC));
   }
 
   @Test
   void rejectsNullInitialDelay() {
     assertThrows(
-        IllegalArgumentException.class, () -> new DeadLetterRetryPolicy(3, null, 2.0, false));
+        IllegalArgumentException.class,
+        () ->
+            new DeadLetterRetryPolicy(
+                3, null, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC));
   }
 
   @Test
   void rejectsNegativeInitialDelay() {
     assertThrows(
         IllegalArgumentException.class,
-        () -> new DeadLetterRetryPolicy(3, Duration.ofSeconds(-1), 2.0, false));
+        () ->
+            new DeadLetterRetryPolicy(
+                3,
+                Duration.ofSeconds(-1),
+                2.0,
+                false,
+                DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC));
   }
 
   @Test
   void rejectsBackoffMultiplierBelowOne() {
     assertThrows(
         IllegalArgumentException.class,
-        () -> new DeadLetterRetryPolicy(3, Duration.ofSeconds(1), 0.5, false));
+        () ->
+            new DeadLetterRetryPolicy(
+                3,
+                Duration.ofSeconds(1),
+                0.5,
+                false,
+                DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC));
   }
 
   @Test
   void delayForAttemptOneIsNearInitialDelay() {
-    var policy = new DeadLetterRetryPolicy(3, Duration.ofSeconds(10), 2.0, false);
+    var policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ofSeconds(10), 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     Duration delay = policy.delayForAttempt(1);
     assertTrue(
         delay.toMillis() >= 5000 && delay.toMillis() <= 15000,
@@ -54,7 +95,9 @@ class DeadLetterRetryPolicyTest {
 
   @Test
   void delayForAttemptIncreasesAcrossAttempts() {
-    var policy = new DeadLetterRetryPolicy(5, Duration.ofSeconds(1), 2.0, false);
+    var policy =
+        new DeadLetterRetryPolicy(
+            5, Duration.ofSeconds(1), 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     long sum1 = 0, sum3 = 0;
     for (int i = 0; i < 100; i++) {
       sum1 += policy.delayForAttempt(1).toMillis();

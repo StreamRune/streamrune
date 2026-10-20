@@ -1346,7 +1346,12 @@ public class StreamRuneMicronautModule {
                     properties.deadLetterMaxRetries(),
                     java.time.Duration.ofMillis(properties.deadLetterRetryIntervalMs()),
                     2.0,
-                    false))
+                    false,
+                    org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(
+                        properties.deadLetterUnkeyedReplay())))
+            // The window the inbox retention sweeper prunes with: a keyed entry older than it is
+            // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
+            .inboxRetentionMaxAge(properties.inboxRetentionMaxAge())
             .pollInterval(java.time.Duration.ofMillis(properties.deadLetterRetryIntervalMs()))
             // Metrics bean (MicrometerStreamRuneMetrics when present) so retry-exhaustion emits
             // streamrune.dlq.exhausted + a terminal ERROR log under the default policy; NOOP when
@@ -1665,7 +1670,7 @@ public class StreamRuneMicronautModule {
   /**
    * Creates a {@link org.streamrune.runtime.DeadLetterRetentionSweeper} that prunes command
    * dead-letter-queue entries older than {@code streamrune.dead-letter.retention-max-age} (default
-   * 30 days). A DLQ entry holds the full command payload (encrypted where {@code @Encrypted} fields
+   * 7 days). A DLQ entry holds the full command payload (encrypted where {@code @Encrypted} fields
    * apply per) — this bounds how long that payload remains queryable, a GDPR storage-limitation
    * concern. Only created when a {@link org.streamrune.core.DeadLetterQueue} bean is present,
    * mirroring how {@link #deadLetterRetryRunner} is gated on the generic interface rather than a

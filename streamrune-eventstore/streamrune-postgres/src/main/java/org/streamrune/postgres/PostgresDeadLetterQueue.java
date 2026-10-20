@@ -101,11 +101,19 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
   // sit at the head of the page and starve genuinely-due entries behind it. Never-attempted entries
   // (last_attempt_at IS NULL) fall back to published_at, preserving oldest-first among fresh
   // entries.
+  private static final String COUNT_AWAITING_OPERATOR =
+      "SELECT COUNT(*) FROM dead_letter_queue WHERE dlq_attempts < ? "
+          + "AND ((? AND idempotency_key IS NULL) "
+          + "OR (idempotency_key IS NOT NULL AND first_attempt_at < ?))";
+
   private static final String SELECT_RETRYABLE =
       "SELECT command_id, command_type, payload, aggregate_type, aggregate_id, "
           + "error_type, error_message, attempts, first_attempt_at, published_at, "
           + "dlq_attempts, last_attempt_at, correlation_id, user_id, trace_id, idempotency_key "
           + "FROM dead_letter_queue WHERE dlq_attempts < ? "
+          + "AND (? OR idempotency_key IS NOT NULL) "
+          + "AND (idempotency_key IS NULL OR CAST(? AS TIMESTAMPTZ) IS NULL "
+          + "OR first_attempt_at >= CAST(? AS TIMESTAMPTZ)) "
           + "ORDER BY COALESCE(last_attempt_at, published_at) ASC LIMIT ? "
           + "FOR UPDATE SKIP LOCKED";
 
@@ -227,12 +235,18 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
   }
 
   @Override
-  public List<DeadLetterEntry> readRetryable(int maxRetries, int limit) {
+  public List<DeadLetterEntry> readRetryable(
+      int maxRetries, int limit, boolean includeUnkeyed, Instant keyedFirstAttemptAtOrAfter) {
     List<DeadLetterEntry> results = new ArrayList<>();
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_RETRYABLE)) {
+      Timestamp cutoff =
+          keyedFirstAttemptAtOrAfter == null ? null : Timestamp.from(keyedFirstAttemptAtOrAfter);
       ps.setInt(1, maxRetries);
-      ps.setInt(2, limit);
+      ps.setBoolean(2, includeUnkeyed);
+      ps.setTimestamp(3, cutoff);
+      ps.setTimestamp(4, cutoff);
+      ps.setInt(5, limit);
       try (var rs = ps.executeQuery()) {
         while (rs.next()) {
           results.add(readEntry(rs));
@@ -252,6 +266,24 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
       return rs.next() ? rs.getLong(1) : 0L;
     } catch (SQLException e) {
       throw new EventStoreException("Failed to count dead letter queue entries", e);
+    }
+  }
+
+  @Override
+  public long countAwaitingOperator(
+      int maxRetries, boolean countUnkeyed, Instant keyedFirstAttemptBefore) {
+    try (var conn = dataSource.getConnection();
+        var ps = conn.prepareStatement(COUNT_AWAITING_OPERATOR)) {
+      ps.setInt(1, maxRetries);
+      ps.setBoolean(2, countUnkeyed);
+      // NULL makes the keyed comparison false: no keyed entry counts.
+      ps.setTimestamp(
+          3, keyedFirstAttemptBefore == null ? null : Timestamp.from(keyedFirstAttemptBefore));
+      try (var rs = ps.executeQuery()) {
+        return rs.next() ? rs.getLong(1) : 0L;
+      }
+    } catch (SQLException e) {
+      throw new EventStoreException("Failed to count dead letter entries awaiting an operator", e);
     }
   }
 

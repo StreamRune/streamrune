@@ -193,13 +193,31 @@ public record StreamRuneProperties(
    * @param retryIntervalMs interval between retry attempts in milliseconds
    * @param retentionMaxAge how long to keep command dead-letter-queue entries (which hold command
    *     payloads, encrypted where {@code @Encrypted} fields apply) before the retention sweeper
-   *     prunes them; zero or negative disables pruning. Independent of {@code enabled}
+   *     prunes them; zero or negative disables pruning. Independent of {@code enabled}. Must not
+   *     exceed {@code streamrune.inbox.retention-max-age} whenever a command inbox is configured:
+   *     an entry that outlives its key's inbox row would execute its command again on a retry
+   *     (startup fails otherwise)
+   * @param unkeyedReplay whether the automatic retry replays entries of commands that ran without
+   *     an idempotency key: {@code operator-only} (the default) leaves them to an operator, {@code
+   *     automatic} replays them — a second execution when the caller already retried successfully.
+   *     Read through {@link org.streamrune.integration.DeadLetterUnkeyedReplaySetting}
    */
   public record DeadLetter(
       @DefaultValue("true") boolean enabled,
       @DefaultValue("5") int maxRetries,
       @DefaultValue("60000") long retryIntervalMs,
-      @DefaultValue("30d") Duration retentionMaxAge) {}
+      @DefaultValue("7d") Duration retentionMaxAge,
+      @DefaultValue("operator-only") String unkeyedReplay) {
+
+    public DeadLetter {
+      org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(unkeyedReplay);
+    }
+
+    /** {@link #unkeyedReplay()} as the policy choice the retry runner is built with. */
+    public org.streamrune.core.DeadLetterRetryPolicy.UnkeyedReplay unkeyedReplayPolicy() {
+      return org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(unkeyedReplay);
+    }
+  }
 
   /**
    * @param enabled whether Micrometer metrics publishing is enabled

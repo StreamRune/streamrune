@@ -459,6 +459,8 @@ class MicrometerStreamRuneMetricsTest {
     metrics.registerInFlightCommandsGauge(() -> 5L);
     metrics.recordDeadLetterPublished("PlaceOrder");
     metrics.recordDeadLetterExhausted("PlaceOrder");
+    metrics.recordDeadLetterStaleReplayBlocked("PlaceOrder");
+    metrics.recordDlqAwaitingOperator(3);
     metrics.recordLockWait(1_000L);
     metrics.recordEventAppended("OrderPlaced");
     metrics.recordEventReplayed();
@@ -912,6 +914,40 @@ class MicrometerStreamRuneMetricsTest {
               .allMatch(c -> c.getId().getTag(MetricNames.TAG_COMMAND_TYPE) != null),
           name + " must carry command.type on EVERY series after typed samples too");
     }
+  }
+
+  @Test
+  void awaitingOperatorIsAnUntaggedGaugeOfTheLatestSample() {
+    var registry = new SimpleMeterRegistry();
+    var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
+    var gauge = registry.find(MetricNames.DLQ_AWAITING_OPERATOR).gauge();
+    assertNotNull(gauge, "registered at startup, so an alert on it is evaluable before any sample");
+    assertEquals(0.0, gauge.value());
+
+    metrics.recordDlqAwaitingOperator(4);
+    metrics.recordDlqAwaitingOperator(2);
+
+    assertEquals(2.0, gauge.value());
+    assertEquals(1, registry.find(MetricNames.DLQ_AWAITING_OPERATOR).gauges().size());
+    assertTrue(gauge.getId().getTags().isEmpty());
+  }
+
+  @Test
+  void staleReplayBlockedIsCountedPerCommandType() {
+    var registry = new SimpleMeterRegistry();
+    var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
+
+    metrics.recordDeadLetterStaleReplayBlocked("AdjustStock");
+    metrics.recordDeadLetterStaleReplayBlocked("AdjustStock");
+    metrics.recordDeadLetterStaleReplayBlocked(null);
+
+    assertEquals(2.0, typed(registry, MetricNames.DLQ_STALE_REPLAY_BLOCKED, "AdjustStock"));
+    assertEquals(
+        1.0,
+        typed(
+            registry,
+            MetricNames.DLQ_STALE_REPLAY_BLOCKED,
+            MicrometerStreamRuneMetrics.UNKNOWN_TAG_VALUE));
   }
 
   @Test

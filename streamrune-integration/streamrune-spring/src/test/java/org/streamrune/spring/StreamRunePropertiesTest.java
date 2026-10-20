@@ -217,7 +217,29 @@ class StreamRunePropertiesTest {
 
   @Test
   void defaultPropertiesShouldHaveDeadLetterRetentionMaxAge() {
-    assertThat(defaults().deadLetter().retentionMaxAge()).isEqualTo(Duration.ofDays(30));
+    // The inbox window: a keyed entry must not outlive the inbox row that deduplicates its replay.
+    assertThat(defaults().deadLetter().retentionMaxAge())
+        .isEqualTo(defaults().inbox().retentionMaxAge())
+        .isEqualTo(Duration.ofDays(7));
+  }
+
+  @Test
+  void deadLetterUnkeyedReplayDefaultsToOperatorOnlyAndBindsAutomatic() {
+    assertThat(defaults().deadLetter().unkeyedReplay()).isEqualTo("operator-only");
+    assertThat(defaults().deadLetter().unkeyedReplayPolicy())
+        .isEqualTo(org.streamrune.core.DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY);
+    assertThat(
+            bind(Map.of("streamrune.dead-letter.unkeyed-replay", "automatic"))
+                .deadLetter()
+                .unkeyedReplayPolicy())
+        .isEqualTo(org.streamrune.core.DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
+  }
+
+  @Test
+  void deadLetterUnkeyedReplayRefusesAnUnknownValue() {
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> bind(Map.of("streamrune.dead-letter.unkeyed-replay", "yes")))
+        .hasStackTraceContaining("streamrune.dead-letter.unkeyed-replay");
   }
 
   @Test

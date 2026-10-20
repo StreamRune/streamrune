@@ -58,6 +58,15 @@ public final class MetricNames {
    */
   public static final String DLQ_EXHAUSTED = "streamrune.dlq.exhausted";
 
+  /**
+   * Dead-letter replays refused because the entry's command ran under an idempotency key and the
+   * entry is older than the command-inbox retention window, so the inbox can no longer be relied on
+   * to deduplicate the replay against the caller's own retry. Nothing was executed; the entry stays
+   * for an operator to reconcile (discard it, or retry it with {@code force}). Tagged by {@link
+   * #TAG_COMMAND_TYPE}. Counter.
+   */
+  public static final String DLQ_STALE_REPLAY_BLOCKED = "streamrune.dlq.stale_replay_blocked";
+
   /** Command dead-letter-queue rows swept by the housekeeping job */
   public static final String DLQ_SWEPT_ROWS = "streamrune.dlq.swept_rows";
 
@@ -69,6 +78,16 @@ public final class MetricNames {
    * #DLQ_EXHAUSTED}, which fires only once an entry exhausts its whole retry ladder.
    */
   public static final String DLQ_PENDING = "streamrune.dlq.pending";
+
+  /**
+   * Command dead-letter entries the retry runner will never replay on its schedule and that are not
+   * exhausted: unkeyed entries under {@code UnkeyedReplay.OPERATOR_ONLY} (nothing can deduplicate
+   * their replay against a retry by the caller), and keyed entries first received longer ago than
+   * the command-inbox retention window. Every one of them waits for an operator to retry or discard
+   * it, and none ever reaches {@link #DLQ_EXHAUSTED}. Gauge, sampled by the {@code
+   * DeadLetterRetryRunner} each poll cycle; alert on a value above zero. Untagged.
+   */
+  public static final String DLQ_AWAITING_OPERATOR = "streamrune.dlq.awaiting_operator";
 
   /**
    * Consecutive poll-cycle failures of the outbox relay ({@code OutboxPoller}) — a gauge, {@code 0}

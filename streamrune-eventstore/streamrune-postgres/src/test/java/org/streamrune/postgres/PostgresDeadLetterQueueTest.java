@@ -819,9 +819,115 @@ class PostgresDeadLetterQueueTest {
             null));
     dlq.updateAttempts(cmd2, 3, Instant.now());
 
-    var retryable = dlq.readRetryable(3, 10);
+    var retryable = dlq.readRetryable(3, 10, true, null);
     assertEquals(1, retryable.size());
     assertEquals("Eligible", retryable.getFirst().commandType());
+  }
+
+  @Test
+  void readRetryableWithoutUnkeyedReturnsOnlyKeyedEntries() {
+    var unkeyed = CommandId.of("7a000000-0000-0000-0000-000000000001");
+    var keyed = CommandId.of("7a000000-0000-0000-0000-000000000002");
+    for (var id : List.of(unkeyed, keyed)) {
+      dlq.publish(
+          new DeadLetterQueue.DeadLetterPublishRequest(
+              "{}",
+              id.equals(keyed) ? "Keyed" : "Unkeyed",
+              id,
+              TestStreams.stream("s1"),
+              "Err",
+              "msg",
+              1,
+              Instant.now(),
+              null,
+              null,
+              null,
+              id.equals(keyed) ? IdempotencyKey.of("k-keyed") : null));
+    }
+
+    var keyedOnly = dlq.readRetryable(3, 10, false, null);
+    assertEquals(1, keyedOnly.size());
+    assertEquals("Keyed", keyedOnly.getFirst().commandType());
+    assertEquals(2, dlq.readRetryable(3, 10, true, null).size());
+  }
+
+  @Test
+  void countAwaitingOperatorCountsUnkeyedAndOldKeyedEntriesButNotExhaustedOnes() {
+    Instant now = Instant.now();
+    Instant old = now.minus(java.time.Duration.ofDays(8));
+    String[][] rows = {
+      {"7b000000-0000-0000-0000-000000000001", null, "now"},
+      {"7b000000-0000-0000-0000-000000000002", null, "now"},
+      {"7b000000-0000-0000-0000-000000000003", "k-old", "old"},
+      {"7b000000-0000-0000-0000-000000000004", "k-fresh", "now"},
+    };
+    for (String[] row : rows) {
+      dlq.publish(
+          new DeadLetterQueue.DeadLetterPublishRequest(
+              "{}",
+              "Cmd",
+              CommandId.of(row[0]),
+              TestStreams.stream("s1"),
+              "Err",
+              "msg",
+              1,
+              row[2].equals("old") ? old : now,
+              null,
+              null,
+              null,
+              row[1] == null ? null : IdempotencyKey.of(row[1])));
+    }
+    // An exhausted unkeyed entry is the exhausted alert's, not this count's.
+    dlq.updateAttempts(CommandId.of("7b000000-0000-0000-0000-000000000002"), 5, now);
+    Instant cutoff = now.minus(java.time.Duration.ofDays(7));
+
+    assertEquals(2, dlq.countAwaitingOperator(5, true, cutoff));
+    assertEquals(1, dlq.countAwaitingOperator(5, true, null), "no keyed entry without a cutoff");
+    assertEquals(1, dlq.countAwaitingOperator(5, false, cutoff), "the old keyed entry only");
+    assertEquals(0, dlq.countAwaitingOperator(5, false, null));
+    assertEquals(
+        3,
+        dlq.countAwaitingOperator(5, true, Instant.parse("9999-12-31T23:59:59Z")),
+        "a far-future cutoff counts every keyed entry");
+  }
+
+  @Test
+  void readRetryableWithACutoffLeavesOutOldKeyedEntriesButNotUnkeyedOnes() {
+    Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+    String[][] rows = {
+      {"7c000000-0000-0000-0000-000000000001", null, "8", "UnkeyedOld"},
+      {"7c000000-0000-0000-0000-000000000002", "k-old", "8", "KeyedOld"},
+      {"7c000000-0000-0000-0000-000000000003", "k-edge", "7", "KeyedEdge"},
+      {"7c000000-0000-0000-0000-000000000004", "k-fresh", "0", "KeyedFresh"},
+    };
+    for (String[] row : rows) {
+      dlq.publish(
+          new DeadLetterQueue.DeadLetterPublishRequest(
+              "{}",
+              row[3],
+              CommandId.of(row[0]),
+              TestStreams.stream("s1"),
+              "Err",
+              "msg",
+              1,
+              now.minus(java.time.Duration.ofDays(Long.parseLong(row[2]))),
+              null,
+              null,
+              null,
+              row[1] == null ? null : IdempotencyKey.of(row[1])));
+    }
+    Instant cutoff = now.minus(java.time.Duration.ofDays(7));
+
+    var types =
+        dlq.readRetryable(5, 10, true, cutoff).stream()
+            .map(DeadLetterQueue.DeadLetterEntry::commandType)
+            .toList();
+    assertFalse(types.contains("KeyedOld"), "a keyed entry before the cutoff is left out");
+    assertTrue(types.contains("KeyedEdge"), "the cutoff itself is included");
+    assertTrue(types.contains("KeyedFresh"));
+    assertTrue(types.contains("UnkeyedOld"), "the cutoff does not apply to unkeyed entries");
+    assertEquals(4, dlq.readRetryable(5, 10, true, null).size());
+    assertEquals(2, dlq.readRetryable(5, 10, false, cutoff).size());
   }
 
   @Test
@@ -858,7 +964,7 @@ class PostgresDeadLetterQueueTest {
             null,
             null));
 
-    var retryable = dlq.readRetryable(5, 10);
+    var retryable = dlq.readRetryable(5, 10, true, null);
     assertEquals(2, retryable.size());
     assertEquals("First", retryable.get(0).commandType());
     assertEquals("Second", retryable.get(1).commandType());
@@ -908,7 +1014,7 @@ class PostgresDeadLetterQueueTest {
     // recent activity, so under COALESCE ordering it sorts last despite being published first.
     dlq.updateAttempts(older, 1, Instant.now().plus(java.time.Duration.ofHours(1)));
 
-    var retryable = dlq.readRetryable(5, 10);
+    var retryable = dlq.readRetryable(5, 10, true, null);
     assertEquals(2, retryable.size());
     assertEquals(
         "Newer",
@@ -938,7 +1044,7 @@ class PostgresDeadLetterQueueTest {
               null,
               null));
     }
-    assertEquals(3, dlq.readRetryable(5, 3).size());
+    assertEquals(3, dlq.readRetryable(5, 3, true, null).size());
   }
 
   @Test
@@ -1081,7 +1187,7 @@ class PostgresDeadLetterQueueTest {
             TraceId.of("trace-retry-1"),
             null));
 
-    var entry = dlq.readRetryable(5, 10).getFirst();
+    var entry = dlq.readRetryable(5, 10, true, null).getFirst();
     assertNotNull(entry.correlationId());
     assertEquals("corr-retry-1", entry.correlationId().value());
     assertEquals("user-retry-1", entry.userId().value());

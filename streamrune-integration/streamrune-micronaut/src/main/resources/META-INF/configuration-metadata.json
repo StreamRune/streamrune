@@ -177,8 +177,14 @@
     {
       "name": "streamrune.dead-letter.retention-max-age",
       "type": "java.time.Duration",
-      "description": "How long to keep command dead-letter-queue entries (which hold command payloads) before the retention sweeper prunes them; zero or negative disables pruning. Independent of streamrune.dead-letter.enabled",
-      "defaultValue": "30d"
+      "description": "How long to keep command dead-letter-queue entries (which hold command payloads) before the retention sweeper prunes them; zero or negative disables pruning. Independent of streamrune.dead-letter.enabled. Must not exceed streamrune.inbox.retention-max-age when a command inbox is configured, or startup fails: an entry that outlives its key's inbox row would execute its command again on a retry",
+      "defaultValue": "7d"
+    },
+    {
+      "name": "streamrune.dead-letter.unkeyed-replay",
+      "type": "java.lang.String",
+      "description": "Whether the automatic dead-letter retry replays entries of commands that ran without an idempotency key: operator-only (default) - they stay in the queue until an operator retries or discards them; automatic - they are replayed like keyed entries, a second execution whenever the caller already retried the command successfully. Any other value fails startup",
+      "defaultValue": "operator-only"
     },
     {
       "name": "streamrune.metrics.enabled",

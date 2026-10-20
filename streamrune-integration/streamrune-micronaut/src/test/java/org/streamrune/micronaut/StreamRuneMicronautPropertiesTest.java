@@ -141,7 +141,8 @@ class StreamRuneMicronautPropertiesTest {
             // sse.polling-interval
             Duration.ofSeconds(1),
             "auto",
-            "required");
+            "required",
+            "operator-only");
     assertEquals(10, p.snapshotEveryNEvents());
     assertEquals(1, p.retryMaxAttempts());
     assertEquals(1L, p.retryInitialDelayMs());
@@ -167,10 +168,50 @@ class StreamRuneMicronautPropertiesTest {
   }
 
   @Test
-  void deadLetterRetentionMaxAgeDefaultsTo30Days() {
-    assertEquals(
-        Duration.ofDays(30),
-        StreamRuneMicronautProperties.withDefaults().deadLetterRetentionMaxAge());
+  void deadLetterRetentionMaxAgeDefaultsToTheInboxWindow() {
+    var defaults = StreamRuneMicronautProperties.withDefaults();
+    assertEquals(Duration.ofDays(7), defaults.deadLetterRetentionMaxAge());
+    assertEquals(defaults.inboxRetentionMaxAge(), defaults.deadLetterRetentionMaxAge());
+  }
+
+  @Test
+  void bindingDefaultsMatchWithDefaultsForTheDeadLetterKeys() {
+    try (var ctx = io.micronaut.context.ApplicationContext.run()) {
+      var bound = ctx.getBean(StreamRuneMicronautProperties.class);
+      assertEquals(Duration.ofDays(7), bound.deadLetterRetentionMaxAge());
+      assertEquals("operator-only", bound.deadLetterUnkeyedReplay());
+    }
+  }
+
+  @Test
+  void deadLetterUnkeyedReplayBindsTheDocumentedKey() {
+    try (var ctx =
+        io.micronaut.context.ApplicationContext.run(
+            java.util.Map.of("streamrune.dead-letter.unkeyed-replay", "automatic"))) {
+      assertEquals(
+          "automatic", ctx.getBean(StreamRuneMicronautProperties.class).deadLetterUnkeyedReplay());
+    }
+  }
+
+  @Test
+  void anUnknownDeadLetterUnkeyedReplayValueFailsBinding() {
+    var ex =
+        assertThrows(
+            RuntimeException.class,
+            () -> {
+              try (var ctx =
+                  io.micronaut.context.ApplicationContext.run(
+                      java.util.Map.of("streamrune.dead-letter.unkeyed-replay", "maybe"))) {
+                ctx.getBean(StreamRuneMicronautProperties.class);
+              }
+            });
+    Throwable t = ex;
+    boolean named = false;
+    while (t != null) {
+      named |= String.valueOf(t.getMessage()).contains("streamrune.dead-letter.unkeyed-replay");
+      t = t.getCause();
+    }
+    assertTrue(named, "the failure names the property");
   }
 
   @Test

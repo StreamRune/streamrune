@@ -19,6 +19,7 @@
   {"name": "org.streamrune.core.types.Version", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.AggregateHistory", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.DeadLetterRetryPolicy", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
+  {"name": "org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.EventEnvelope", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.EventMetadata", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.Page", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},

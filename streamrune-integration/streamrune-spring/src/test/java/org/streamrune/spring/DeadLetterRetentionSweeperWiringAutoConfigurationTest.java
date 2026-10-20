@@ -79,7 +79,11 @@ class DeadLetterRetentionSweeperWiringAutoConfigurationTest {
   @Test
   void aZeroRetentionMaxAgeIsTheSwitchThatTurnsPruningOff() {
     runner
-        .withPropertyValues("streamrune.dead-letter.retention-max-age=0")
+        // Unbounded dead-letter retention is valid only beside an inbox that is never pruned
+        // either:
+        // otherwise a retained keyed entry would outlive its inbox row (startup refuses that).
+        .withPropertyValues(
+            "streamrune.dead-letter.retention-max-age=0", "streamrune.inbox.retention-max-age=0")
         .withBean(DeadLetterQueue.class, () -> deadLetterQueue)
         .run(
             ctx -> {

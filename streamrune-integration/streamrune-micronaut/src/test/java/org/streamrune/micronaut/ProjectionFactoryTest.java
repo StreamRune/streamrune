@@ -134,7 +134,8 @@ class ProjectionFactoryTest {
             // sse.polling-interval
             Duration.ofSeconds(1),
             "auto",
-            "required");
+            "required",
+            "operator-only");
 
     MultiProjectionRunner runner =
         factory.multiProjectionRunner(

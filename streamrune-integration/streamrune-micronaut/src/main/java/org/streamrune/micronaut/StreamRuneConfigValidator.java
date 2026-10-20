@@ -121,6 +121,15 @@ public class StreamRuneConfigValidator implements ApplicationEventListener<Start
     // USER-supplied SagaDeadLetterStore bean (custom schema/store, left wired while sagas are
     // switched off) still satisfies the gate and re-armed a replay invariant for a replayer that
     // can never run.
+    // The command dead-letter twin of the saga check below: a keyed entry must not outlive the
+    // inbox row that deduplicates its replay. Checked whenever both stores are declared —
+    // independent of streamrune.dead-letter.enabled, which switches only the automatic retry; an
+    // operator's retry of a retained entry is exactly the replay that would miss the inbox.
+    if (ctx.containsBean(org.streamrune.core.CommandInbox.class)
+        && ctx.containsBean(org.streamrune.core.DeadLetterQueue.class)) {
+      org.streamrune.integration.CommandDeadLetterRetentionValidator.validate(
+          properties.deadLetterRetentionMaxAge(), properties.inboxRetentionMaxAge());
+    }
     if (properties.sagaEnabled()
         && ctx.containsBean(org.streamrune.core.saga.SagaDeadLetterStore.class)) {
       org.streamrune.integration.SagaRetentionValidator.validateDeadLetterRetention(
