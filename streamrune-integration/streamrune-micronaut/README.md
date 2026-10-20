@@ -285,8 +285,8 @@ enable constraint validation — non-introspected commands are skipped with a on
 ## Native image
 
 The module ships `META-INF/native-image/org.streamrune/streamrune-micronaut/reflect-config.json`
-for the framework's own value types and records. Its `@Requires(condition = ...)` classes hold no state: Micronaut keeps a
-condition instance in the compile-time annotation metadata, which the image stores in its heap, and
+for the framework's own value types and records. Its `@Requires(condition = ...)` classes hold no
+state: Micronaut keeps a condition instance in the compile-time annotation metadata, which the image stores in its heap, and
 a framework enum held there failed the build (*An object of type
 'org.streamrune.core.ProjectionConfig$Mode' was found in the image heap*); `ArchitectureTest` keeps
 it that way.

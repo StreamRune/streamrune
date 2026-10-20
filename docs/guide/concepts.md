@@ -238,8 +238,8 @@ its word: it is not read back from the class, because the object a container han
 a generated subclass of the bean (an interceptor subclass in Quarkus or Micronaut) whose class
 declares the two-argument `process` whether or not the projection does. A `TRANSACTIONAL_LOCAL` or
 `EXTERNAL_EFFECT` projection that does not declare it is refused at startup.
- Inside
-`process`, write only through these helpers: the `repository` field is the repository the
+
+Inside `process`, write only through these helpers: the `repository` field is the repository the
 projection was constructed with, outside the checkpoint transaction, so a `repository.delete(...)`
 there misses a row the same batch inserted and, on JDBC, can wait forever on a row lock the batch
 holds.

@@ -118,13 +118,14 @@ final class ProjectionDeliveryPolicy {
               + mode
               + " under a transactional AtomicBatchProcessor ("
               + processorLabel(processor)
-              + "), but it does not write through the handed repository: it does not declare"
-              + " writesThroughRepository(), so its process(List, ProjectionRepository) is taken to"
+              + "), but it does not write through the handed repository: its"
+              + " writesThroughRepository() answers false, so its process(List, ProjectionRepository) is taken to"
               + " be the INHERITED DEFAULT, which ignores the repository and falls back to"
               + " process(List), and its read-model writes would commit outside the checkpoint's"
               + " transaction. Extend BaseProjection, or override process(List,"
               + " ProjectionRepository), write through the supplied repository and override"
-              + " writesThroughRepository() to return true, or declare AT_LEAST_ONCE_IDEMPOTENT.");
+              + " writesThroughRepository() to return true (a decorator forwards it to the projection"
+              + " it wraps), or declare AT_LEAST_ONCE_IDEMPOTENT.");
     }
     Optional<ProjectionRepository> target = projection.writeTarget();
     if (target.isEmpty()) {
