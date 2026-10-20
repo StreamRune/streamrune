@@ -25,7 +25,9 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.kms.KmsClient;
 import software.amazon.awssdk.services.kms.model.CreateKeyRequest;
 import software.amazon.awssdk.services.kms.model.CreateKeyResponse;
+import software.amazon.awssdk.services.kms.model.DecryptRequest;
 import software.amazon.awssdk.services.kms.model.EncryptRequest;
+import software.amazon.awssdk.services.kms.model.InvalidCiphertextException;
 
 @Testcontainers
 class AwsKmsCryptoEngineIntegrationTest {
@@ -124,10 +126,15 @@ class AwsKmsCryptoEngineIntegrationTest {
     engine.encrypt(SubjectId.of("subject-B"), pii); // B has a cached key of its own
 
     for (var e : List.of(engine, newEngine())) {
-      assertThrows(
-          CryptoMappingException.class,
-          () -> e.decrypt(SubjectId.of("subject-B"), ct),
-          "a subject/ciphertext mismatch must be refused, not decrypted");
+      var thrown =
+          assertThrows(
+              CryptoMappingException.class,
+              () -> e.decrypt(SubjectId.of("subject-B"), ct),
+              "a subject/ciphertext mismatch must be refused, not decrypted");
+      assertInstanceOf(
+          InvalidCiphertextException.class,
+          thrown.getCause(),
+          "KMS itself refuses the data key under another subject's encryption context");
     }
     assertArrayEquals(pii, engine.decrypt(SubjectId.of("subject-A"), ct));
   }
@@ -158,6 +165,53 @@ class AwsKmsCryptoEngineIntegrationTest {
     // Reinstating lifts the tombstone, and with it the erasure: the CMK was never touched.
     writer.reinstate(subject);
     assertArrayEquals(value(5_001), newEngine().decrypt(subject, blobs.get(1)));
+  }
+
+  @Test
+  void a_value_survives_re_wrapping_its_data_key_under_another_cmk() {
+    // The migration to another CMK: kms:ReEncrypt each wrapped data key under the same encryption
+    // context, splice it into the envelope, then point the engine at the new key. LocalStack does
+    // not emulate ReEncrypt, so the test does what it does server side: Decrypt under the old key,
+    // Encrypt under the new one, both with the subject's encryption context.
+    var subject = SubjectId.of("subject-migrated");
+    byte[] blob = engine.encrypt(subject, value(6_000));
+    int wrappedLength = ((blob[5] & 0xFF) << 8) | (blob[6] & 0xFF);
+    byte[] wrapped = java.util.Arrays.copyOfRange(blob, 7, 7 + wrappedLength);
+    String newKeyId = kmsClient.createKey(CreateKeyRequest.builder().build()).keyMetadata().keyId();
+    var context = java.util.Map.of("streamrune-subject", subject.redacted());
+    SdkBytes dataKey =
+        kmsClient
+            .decrypt(
+                DecryptRequest.builder()
+                    .ciphertextBlob(SdkBytes.fromByteArray(wrapped))
+                    .keyId(keyId)
+                    .encryptionContext(context)
+                    .build())
+            .plaintext();
+    byte[] rewrapped =
+        kmsClient
+            .encrypt(
+                EncryptRequest.builder()
+                    .keyId(newKeyId)
+                    .plaintext(dataKey)
+                    .encryptionContext(context)
+                    .build())
+            .ciphertextBlob()
+            .asByteArray();
+    byte[] migrated = AwsKmsCryptoEngineTest.withWrappedKey(blob, rewrapped);
+
+    var onNewKey =
+        AwsKmsCryptoEngine.builder()
+            .kmsClient(kmsClient)
+            .kmsKeyId(newKeyId)
+            .forgottenSubjectStore(store)
+            .build();
+    assertArrayEquals(value(6_000), onNewKey.decrypt(subject, migrated));
+    var thrown =
+        assertThrows(
+            CryptoMappingException.class,
+            () -> onNewKey.decrypt(SubjectId.of("subject-not-migrated"), migrated));
+    assertInstanceOf(InvalidCiphertextException.class, thrown.getCause());
   }
 
   @Test

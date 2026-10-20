@@ -268,6 +268,8 @@ class StreamRuneQuarkusPropertiesTest {
     assertEquals(10000, crypto.cache().maximumSize());
     assertTrue(crypto.cache().expireAfterWriteRaw().isEmpty());
     assertTrue(crypto.cache().expireAfterAccessRaw().isEmpty());
+    assertEquals(1000, crypto.aws().dataKeyCache().maximumSize());
+    assertEquals("PT5M", crypto.aws().dataKeyCache().expireAfterWriteRaw());
   }
 
   @Test
@@ -280,6 +282,8 @@ class StreamRuneQuarkusPropertiesTest {
                 "streamrune.crypto.vault.token", "s.token",
                 "streamrune.crypto.aws.region", "eu-central-1",
                 "streamrune.crypto.aws.kms-key-id", "key-1",
+                "streamrune.crypto.aws.data-key-cache.maximum-size", "50",
+                "streamrune.crypto.aws.data-key-cache.expire-after-write", "PT2M",
                 "streamrune.crypto.cache.expire-after-write", "PT5M"));
     assertTrue(crypto.filesystem().enabled());
     assertEquals("/tmp/keys", crypto.filesystem().keyDirectory());
@@ -287,5 +291,7 @@ class StreamRuneQuarkusPropertiesTest {
     assertEquals("eu-central-1", crypto.aws().region().orElseThrow());
     assertEquals("key-1", crypto.aws().kmsKeyId().orElseThrow());
     assertEquals("PT5M", crypto.cache().expireAfterWriteRaw().orElseThrow());
+    assertEquals(50, crypto.aws().dataKeyCache().maximumSize());
+    assertEquals("PT2M", crypto.aws().dataKeyCache().expireAfterWriteRaw());
   }
 }

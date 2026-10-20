@@ -19,6 +19,8 @@ final class CryptoTestProps {
   private String vaultEngineMount = "transit";
   private String awsRegion;
   private String awsKmsKeyId;
+  private int awsDataKeyCacheMaximumSize = 1_000;
+  private Duration awsDataKeyCacheExpireAfterWrite = Duration.ofMinutes(5);
 
   private CryptoTestProps() {}
 
@@ -76,6 +78,16 @@ final class CryptoTestProps {
     return this;
   }
 
+  CryptoTestProps awsDataKeyCacheMaximumSize(int v) {
+    this.awsDataKeyCacheMaximumSize = v;
+    return this;
+  }
+
+  CryptoTestProps awsDataKeyCacheExpireAfterWrite(Duration v) {
+    this.awsDataKeyCacheExpireAfterWrite = v;
+    return this;
+  }
+
   StreamRuneCryptoProperties build() {
     return new StreamRuneCryptoProperties(
         new StreamRuneCryptoProperties.Cache(
@@ -83,6 +95,10 @@ final class CryptoTestProps {
         new StreamRuneCryptoProperties.FileSystem(keyDirectory),
         new StreamRuneCryptoProperties.Postgres(tableName),
         new StreamRuneCryptoProperties.Vault(vaultAddress, vaultToken, vaultEngineMount),
-        new StreamRuneCryptoProperties.Aws(awsRegion, awsKmsKeyId));
+        new StreamRuneCryptoProperties.Aws(
+            awsRegion,
+            awsKmsKeyId,
+            new StreamRuneCryptoProperties.Aws.DataKeyCache(
+                awsDataKeyCacheMaximumSize, awsDataKeyCacheExpireAfterWrite)));
   }
 }

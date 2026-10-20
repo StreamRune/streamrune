@@ -17,7 +17,8 @@ class StreamRuneMicronautCryptoPropertiesTest {
     StreamRuneMicronautCryptoProperties.FileSystemConfig.class,
     StreamRuneMicronautCryptoProperties.PostgresConfig.class,
     StreamRuneMicronautCryptoProperties.VaultConfig.class,
-    StreamRuneMicronautCryptoProperties.AwsConfig.class
+    StreamRuneMicronautCryptoProperties.AwsConfig.class,
+    StreamRuneMicronautCryptoProperties.AwsConfig.DataKeyCacheConfig.class
   };
 
   @Test
@@ -47,6 +48,8 @@ class StreamRuneMicronautCryptoPropertiesTest {
       assertNull(props.vault().token());
       assertNull(props.aws().region());
       assertNull(props.aws().kmsKeyId());
+      assertEquals(1_000, props.aws().dataKeyCache().maximumSize());
+      assertEquals(Duration.ofMinutes(5), props.aws().dataKeyCache().expireAfterWrite());
     }
   }
 
@@ -65,7 +68,9 @@ class StreamRuneMicronautCryptoPropertiesTest {
                 Map.entry("streamrune.crypto.vault.token", "s.test"),
                 Map.entry("streamrune.crypto.vault.engine-mount", "custom-transit"),
                 Map.entry("streamrune.crypto.aws.region", "us-west-2"),
-                Map.entry("streamrune.crypto.aws.kms-key-id", "key-123")))) {
+                Map.entry("streamrune.crypto.aws.kms-key-id", "key-123"),
+                Map.entry("streamrune.crypto.aws.data-key-cache.maximum-size", "50"),
+                Map.entry("streamrune.crypto.aws.data-key-cache.expire-after-write", "2m")))) {
       var props = ctx.getBean(StreamRuneMicronautCryptoProperties.class);
       assertFalse(props.cache().enabled());
       assertEquals(500, props.cache().maximumSize());
@@ -78,6 +83,8 @@ class StreamRuneMicronautCryptoPropertiesTest {
       assertEquals("custom-transit", props.vault().engineMount());
       assertEquals("us-west-2", props.aws().region());
       assertEquals("key-123", props.aws().kmsKeyId());
+      assertEquals(50, props.aws().dataKeyCache().maximumSize());
+      assertEquals(Duration.ofMinutes(2), props.aws().dataKeyCache().expireAfterWrite());
     }
   }
 }

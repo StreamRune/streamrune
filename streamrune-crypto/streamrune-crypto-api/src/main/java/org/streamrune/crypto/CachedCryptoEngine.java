@@ -341,6 +341,15 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
   }
 
   /**
+   * The engine this cache decorates.
+   *
+   * @return the delegate every cache miss, encrypt and erasure goes to
+   */
+  public CryptoEngine delegate() {
+    return delegate;
+  }
+
+  /**
    * The channel this engine publishes its forgets on and hears peers' forgets from; {@link
    * CryptoForgetSignal#NOOP} when none was configured. Health reporting reads whether it listens.
    *

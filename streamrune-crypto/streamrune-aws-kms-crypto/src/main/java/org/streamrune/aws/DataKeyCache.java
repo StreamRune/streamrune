@@ -162,6 +162,12 @@ final class DataKeyCache {
     unwrappedKeys.put(new UnwrapKey(subject, wrapped.clone()), new UnwrappedKey(key, now()));
   }
 
+  /** Whether either map holds a data key of the subject, expired or not; for tests. */
+  synchronized boolean holds(SubjectId subject) {
+    return encryptionKeys.containsKey(subject)
+        || unwrappedKeys.keySet().stream().anyMatch(id -> id.subject.equals(subject));
+  }
+
   /** Drops every data key of the subject; a store that read an earlier epoch is dropped too. */
   synchronized void evict(SubjectId subject) {
     epoch++;

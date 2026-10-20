@@ -268,14 +268,153 @@ class AwsKmsCryptoEngineTest {
     verify(kmsClient, times(1)).decrypt(any(DecryptRequest.class));
   }
 
+  @Test
+  void anExpiredDataKeyLeavesThePeersHeapOnceThePeerStoresAnotherKey() {
+    // A replica that did not run the forget never looks the forgotten subject up again (the
+    // tombstone refuses first), so expiry checked on lookup alone would keep the key forever.
+    AtomicLong now = new AtomicLong(0);
+    var peer = clockedEngine(now);
+    var forgetter = clockedEngine(now);
+    var forgotten = SubjectId.of("customer-forgotten");
+    byte[] blob = peer.encrypt(forgotten, bytes("pii"));
+    assertArrayEquals(bytes("pii"), peer.decrypt(forgotten, blob));
+    assertTrue(peer.holdsDataKeysOf(forgotten));
+
+    forgetter.deleteKey(forgotten);
+    assertTrue(peer.holdsDataKeysOf(forgotten), "the peer has not expired the keys yet");
+
+    now.addAndGet(Duration.ofMinutes(5).toNanos());
+    for (int i = 0; i < 100; i++) {
+      peer.encrypt(SubjectId.of("customer-" + i), bytes("v"));
+    }
+    assertFalse(peer.holdsDataKeysOf(forgotten), "expired keys are swept on the next store");
+    assertTrue(peer.holdsDataKeysOf(SubjectId.of("customer-99")));
+  }
+
+  @Test
+  void anExpiredDataKeyLeavesTheHeapOfAPeerThatOnlyReadsCachedKeys() {
+    AtomicLong now = new AtomicLong(0);
+    var peer = clockedEngine(now);
+    var forgotten = SubjectId.of("customer-forgotten-read");
+    var reader = SubjectId.of("customer-read-only");
+    peer.encrypt(forgotten, bytes("pii"));
+    now.addAndGet(Duration.ofMinutes(4).toNanos());
+    byte[] blob = peer.encrypt(reader, bytes("kept")); // stored at 4 min: live until 9 min
+    engine.deleteKey(forgotten);
+
+    now.addAndGet(Duration.ofMinutes(1).toNanos() + Duration.ofSeconds(1).toNanos());
+    clearInvocations(kmsClient);
+    assertArrayEquals(bytes("kept"), peer.decrypt(reader, blob)); // a cache hit, no store
+    verify(kmsClient, never()).decrypt(any(DecryptRequest.class));
+    assertFalse(peer.holdsDataKeysOf(forgotten), "a lookup sweeps at most once a second");
+    assertTrue(peer.holdsDataKeysOf(reader));
+  }
+
+  @Test
+  void aLookupSweepsAtMostOnceASecond() {
+    AtomicLong now = new AtomicLong(0);
+    var peer = clockedEngine(now);
+    var stale = SubjectId.of("customer-stale");
+    var reader = SubjectId.of("customer-reader");
+    peer.encrypt(stale, bytes("pii"));
+    now.addAndGet(Duration.ofMinutes(5).toNanos() - Duration.ofMillis(500).toNanos());
+    byte[] blob = peer.encrypt(reader, bytes("kept")); // a store sweeps: stale is still live
+    now.addAndGet(Duration.ofMillis(500).toNanos()); // stale expires now
+    peer.decrypt(reader, blob); // less than a second after the store's sweep: no sweep
+    assertTrue(peer.holdsDataKeysOf(stale));
+    now.addAndGet(Duration.ofMillis(500).toNanos());
+    peer.decrypt(reader, blob); // a second after the last sweep
+    assertFalse(peer.holdsDataKeysOf(stale));
+  }
+
+  @Test
+  void deleteKeySweepsExpiredKeysOfOtherSubjects() {
+    AtomicLong now = new AtomicLong(0);
+    var peer = clockedEngine(now);
+    var stale = SubjectId.of("customer-stale-2");
+    peer.encrypt(stale, bytes("pii"));
+    now.addAndGet(Duration.ofMinutes(5).toNanos());
+    peer.deleteKey(SubjectId.of("someone-else"));
+    assertFalse(peer.holdsDataKeysOf(stale));
+  }
+
+  private AwsKmsCryptoEngine clockedEngine(AtomicLong now) {
+    return AwsKmsCryptoEngine.builder()
+        .kmsClient(kmsClient)
+        .kmsKeyId(KEY_ID)
+        .forgottenSubjectStore(store)
+        .nanoClock(now::get)
+        .build();
+  }
+
+  @Test
+  void theEngineReportsItsDataKeyCacheSettings() {
+    assertEquals(1_000, engine.dataKeyCacheMaximumSize());
+    assertEquals(Duration.ofMinutes(5), engine.dataKeyCacheExpireAfterWrite());
+    var tuned =
+        AwsKmsCryptoEngine.builder()
+            .kmsClient(kmsClient)
+            .kmsKeyId(KEY_ID)
+            .forgottenSubjectStore(store)
+            .dataKeyCacheMaximumSize(0)
+            .dataKeyCacheExpireAfterWrite(Duration.ofSeconds(30))
+            .build();
+    assertEquals(0, tuned.dataKeyCacheMaximumSize());
+    assertEquals(Duration.ofSeconds(30), tuned.dataKeyCacheExpireAfterWrite());
+  }
+
+  // ---- re-wrapping under another CMK ---------------------------------------------------------
+
+  /** {@code blob} with its wrapped data key replaced, as a {@code kms:ReEncrypt} migration does. */
+  static byte[] withWrappedKey(byte[] blob, byte[] rewrapped) {
+    int oldLength = ((blob[5] & 0xFF) << 8) | (blob[6] & 0xFF);
+    int tail = blob.length - FIXED_HEADER - oldLength;
+    byte[] out = new byte[FIXED_HEADER + rewrapped.length + tail];
+    System.arraycopy(blob, 0, out, 0, 5);
+    out[5] = (byte) (rewrapped.length >>> 8);
+    out[6] = (byte) rewrapped.length;
+    System.arraycopy(rewrapped, 0, out, FIXED_HEADER, rewrapped.length);
+    System.arraycopy(blob, FIXED_HEADER + oldLength, out, FIXED_HEADER + rewrapped.length, tail);
+    return out;
+  }
+
+  @Test
+  void aDataKeyReWrappedUnderAnotherCmkStillOpensTheValue() {
+    // Migrating to another CMK re-wraps each data key in place (kms:ReEncrypt) and leaves the
+    // AES-GCM layer alone: the wrapped key is not part of the associated data.
+    var subject = SubjectId.of("customer-migrated");
+    byte[] blob = engine.encrypt(subject, bytes("pii"));
+    byte[] migrated = withWrappedKey(blob, kms.reEncrypt(wrappedKey(blob), "new-key-id"));
+    assertNotEquals(184, wrappedKeyLength(migrated));
+
+    var onNewKey =
+        AwsKmsCryptoEngine.builder()
+            .kmsClient(kmsClient)
+            .kmsKeyId("new-key-id")
+            .forgottenSubjectStore(store)
+            .build();
+    assertArrayEquals(bytes("pii"), onNewKey.decrypt(subject, migrated));
+    // Still bound to the subject: KMS refuses another subject's context.
+    var other = SubjectId.of("customer-other-migrated");
+    var thrown =
+        assertThrows(CryptoMappingException.class, () -> onNewKey.decrypt(other, migrated));
+    assertInstanceOf(
+        software.amazon.awssdk.services.kms.model.InvalidCiphertextException.class,
+        thrown.getCause());
+  }
+
   // ---- subject binding --------------------------------------------------------------------
 
   @Test
   void aCiphertextOfOneSubjectNeverDecryptsAsAnother() {
-    var alice = SubjectId.of("alice");
-    var mallory = SubjectId.of("mallory");
+    // "Aa" and "BB" have the same String hash code, so the two subjects' cache entries share a
+    // bucket and only equality on the subject keeps them apart.
+    var alice = SubjectId.of("Aa");
+    var mallory = SubjectId.of("BB");
+    assertEquals(alice.hashCode(), mallory.hashCode());
     byte[] blob = engine.encrypt(alice, bytes("alice's address"));
     engine.encrypt(mallory, bytes("warm the cache for mallory too"));
+    engine.decrypt(alice, blob); // alice's key is in the unwrap map under alice
 
     // Warm engine (alice's key is cached) and cold engine: KMS refuses to unwrap alice's data key
     // under mallory's context — a deterministic verdict on the blob.

@@ -196,10 +196,15 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
   private final DataKeyCache dataKeys;
   private final SecureRandom random = new SecureRandom();
 
+  private final int dataKeyCacheMaximumSize;
+  private final Duration dataKeyCacheExpireAfterWrite;
+
   private AwsKmsCryptoEngine(Builder builder) {
     this.kmsClient = builder.kmsClient;
     this.kmsKeyId = builder.kmsKeyId;
     this.forgottenSubjects = builder.forgottenSubjects;
+    this.dataKeyCacheMaximumSize = builder.dataKeyCacheMaximumSize;
+    this.dataKeyCacheExpireAfterWrite = builder.dataKeyCacheExpireAfterWrite;
     this.dataKeys =
         new DataKeyCache(
             builder.dataKeyCacheMaximumSize,
@@ -210,6 +215,29 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
 
   public static Builder builder() {
     return new Builder();
+  }
+
+  /**
+   * The configured size of each data-key map; {@code 0} when the data-key cache is off.
+   *
+   * @return the number of entries each map holds at most
+   */
+  public int dataKeyCacheMaximumSize() {
+    return dataKeyCacheMaximumSize;
+  }
+
+  /**
+   * How long a cached data key lives after it was stored.
+   *
+   * @return the configured lifetime
+   */
+  public Duration dataKeyCacheExpireAfterWrite() {
+    return dataKeyCacheExpireAfterWrite;
+  }
+
+  /** Whether this engine's cache holds a data key of the subject; for tests. */
+  boolean holdsDataKeysOf(SubjectId subjectId) {
+    return dataKeys.holds(subjectId);
   }
 
   @Override

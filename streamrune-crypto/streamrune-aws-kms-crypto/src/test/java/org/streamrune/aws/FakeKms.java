@@ -54,6 +54,23 @@ final class FakeKms {
     enforceContext = false;
   }
 
+  /**
+   * What {@code kms:ReEncrypt} does to a wrapped data key: the same key and encryption context,
+   * wrapped anew under {@code destinationKeyId}.
+   */
+  byte[] reEncrypt(byte[] wrapped, String destinationKeyId) {
+    Issued i = issued.get(ByteBuffer.wrap(wrapped));
+    if (i == null) {
+      throw InvalidCiphertextException.builder().message("unknown ciphertext").build();
+    }
+    byte[] rewrapped = new byte[150];
+    random.nextBytes(rewrapped);
+    issued.put(
+        ByteBuffer.wrap(rewrapped.clone()),
+        new Issued(i.key().clone(), i.context(), destinationKeyId));
+    return rewrapped;
+  }
+
   private GenerateDataKeyResponse generate(GenerateDataKeyRequest request) {
     if (request.keySpec() != DataKeySpec.AES_256) {
       throw new IllegalArgumentException("the fake issues AES_256 data keys only");
