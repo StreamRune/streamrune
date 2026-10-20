@@ -142,6 +142,7 @@ public class StreamRuneRuntimeHints implements RuntimeHintsRegistrar {
           // Core records — org.streamrune.core (11)
           AggregateHistory.class,
           DeadLetterRetryPolicy.class,
+          DeadLetterRetryPolicy.UnkeyedReplay.class,
           EventEnvelope.class,
           EventMetadata.class,
           Page.class,

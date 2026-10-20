@@ -819,9 +819,36 @@ class PostgresDeadLetterQueueTest {
             null));
     dlq.updateAttempts(cmd2, 3, Instant.now());
 
-    var retryable = dlq.readRetryable(3, 10);
+    var retryable = dlq.readRetryable(3, 10, true);
     assertEquals(1, retryable.size());
     assertEquals("Eligible", retryable.getFirst().commandType());
+  }
+
+  @Test
+  void readRetryableWithoutUnkeyedReturnsOnlyKeyedEntries() {
+    var unkeyed = CommandId.of("7a000000-0000-0000-0000-000000000001");
+    var keyed = CommandId.of("7a000000-0000-0000-0000-000000000002");
+    for (var id : List.of(unkeyed, keyed)) {
+      dlq.publish(
+          new DeadLetterQueue.DeadLetterPublishRequest(
+              "{}",
+              id.equals(keyed) ? "Keyed" : "Unkeyed",
+              id,
+              TestStreams.stream("s1"),
+              "Err",
+              "msg",
+              1,
+              Instant.now(),
+              null,
+              null,
+              null,
+              id.equals(keyed) ? IdempotencyKey.of("k-keyed") : null));
+    }
+
+    var keyedOnly = dlq.readRetryable(3, 10, false);
+    assertEquals(1, keyedOnly.size());
+    assertEquals("Keyed", keyedOnly.getFirst().commandType());
+    assertEquals(2, dlq.readRetryable(3, 10, true).size());
   }
 
   @Test
@@ -858,7 +885,7 @@ class PostgresDeadLetterQueueTest {
             null,
             null));
 
-    var retryable = dlq.readRetryable(5, 10);
+    var retryable = dlq.readRetryable(5, 10, true);
     assertEquals(2, retryable.size());
     assertEquals("First", retryable.get(0).commandType());
     assertEquals("Second", retryable.get(1).commandType());
@@ -908,7 +935,7 @@ class PostgresDeadLetterQueueTest {
     // recent activity, so under COALESCE ordering it sorts last despite being published first.
     dlq.updateAttempts(older, 1, Instant.now().plus(java.time.Duration.ofHours(1)));
 
-    var retryable = dlq.readRetryable(5, 10);
+    var retryable = dlq.readRetryable(5, 10, true);
     assertEquals(2, retryable.size());
     assertEquals(
         "Newer",
@@ -938,7 +965,7 @@ class PostgresDeadLetterQueueTest {
               null,
               null));
     }
-    assertEquals(3, dlq.readRetryable(5, 3).size());
+    assertEquals(3, dlq.readRetryable(5, 3, true).size());
   }
 
   @Test
@@ -1081,7 +1108,7 @@ class PostgresDeadLetterQueueTest {
             TraceId.of("trace-retry-1"),
             null));
 
-    var entry = dlq.readRetryable(5, 10).getFirst();
+    var entry = dlq.readRetryable(5, 10, true).getFirst();
     assertNotNull(entry.correlationId());
     assertEquals("corr-retry-1", entry.correlationId().value());
     assertEquals("user-retry-1", entry.userId().value());

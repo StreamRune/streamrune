@@ -125,7 +125,9 @@ class DeadLetterReplayProvenanceTest {
           .deadLetterQueue(dlq)
           .commandBus(bus)
           .objectMapper(mapper)
-          .policy(new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false))
+          .policy(
+              new DeadLetterRetryPolicy(
+                  3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC))
           .pollInterval(pollInterval)
           .registerCommand(Pay.class)
           .build();
@@ -264,7 +266,9 @@ class DeadLetterReplayProvenanceTest {
           .run(
               () -> {
                 assertEquals(1, StreamRuneContext.cause().sagaOrigin().hop());
-                assertTrue(harness.runner.retry(CommandId.of("cmd-pay-1")));
+                assertEquals(
+                    DeadLetterRetryRunner.RetryOutcome.REPLAYED,
+                    harness.runner.retry(CommandId.of("cmd-pay-1")));
               });
       assertNoProvenance(harness.stored("pay-1"));
       assertEquals(UserId.of("alice"), harness.stored("pay-1").getFirst().metadata().userId());
@@ -275,11 +279,19 @@ class DeadLetterReplayProvenanceTest {
               CausationId.of("evt-trigger"), sagaCausedEvent().metadata().sagaOrigin());
       ScopedValue.where(StreamRuneContext.CAUSE, sagaDispatch)
           .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
-          .run(() -> assertTrue(harness.runner.retry(CommandId.of("cmd-pay-2"))));
+          .run(
+              () ->
+                  assertEquals(
+                      DeadLetterRetryRunner.RetryOutcome.REPLAYED,
+                      harness.runner.retry(CommandId.of("cmd-pay-2"))));
       assertNoProvenance(harness.stored("pay-2"));
 
       // From a task that carried a cause across a thread boundary.
-      Runnable retry = () -> assertTrue(harness.runner.retry(CommandId.of("cmd-pay-3")));
+      Runnable retry =
+          () ->
+              assertEquals(
+                  DeadLetterRetryRunner.RetryOutcome.REPLAYED,
+                  harness.runner.retry(CommandId.of("cmd-pay-3")));
       Runnable wrapped =
           StreamRuneContext.continuing(sagaCausedEvent()).call(() -> StreamRuneContext.wrap(retry));
       Thread thread = new Thread(wrapped);

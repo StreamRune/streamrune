@@ -130,6 +130,18 @@ public interface StreamRuneMetrics {
   default void recordDeadLetterExhausted(String commandType) {}
 
   /**
+   * Records a dead-letter replay the retry runner refused because the entry's command ran under an
+   * idempotency key and the entry is older than the command-inbox retention window: the inbox may
+   * already have pruned the row that would deduplicate the replay against the caller's own retry,
+   * so a replay could execute the command a second time. Nothing was executed and the entry is
+   * unchanged. Emitted on every refusal — by the scheduled retry and by an operator retry without
+   * {@code force}. See {@link org.streamrune.core.metrics.MetricNames#DLQ_STALE_REPLAY_BLOCKED}.
+   *
+   * @param commandType simple class name of the command
+   */
+  default void recordDeadLetterStaleReplayBlocked(String commandType) {}
+
+  /**
    * Records time spent waiting to acquire an aggregate lock.
    *
    * @param durationNanos wait duration in nanoseconds

@@ -1000,6 +1000,44 @@ class StreamRuneMicronautModuleTest {
    * executes, and the entry is discarded on success.
    */
   @Test
+  void deadLetterRetryRunnerIsBuiltWithTheConfiguredUnkeyedReplayAndInboxWindow() throws Exception {
+    var module = new StreamRuneMicronautModule();
+    var defaults = StreamRuneMicronautProperties.withDefaults();
+    var bus =
+        module.virtualThreadCommandBus(
+            new org.streamrune.test.InMemoryEventStore(),
+            module.aggregateLocker(defaults),
+            defaults,
+            null,
+            List.of(),
+            List.of(),
+            List.of(),
+            null,
+            null,
+            null);
+    var dlq = new org.streamrune.test.InMemoryDeadLetterQueue();
+
+    var byDefault =
+        module.deadLetterRetryRunner(dlq, bus, List.of(), List.of(), null, null, null, defaults);
+    assertEquals(
+        org.streamrune.core.DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY,
+        byDefault.policy().unkeyedReplay());
+    assertEquals(java.time.Duration.ofDays(7), byDefault.inboxRetentionMaxAge());
+
+    var configured =
+        MicronautPropertiesTestSupport.with(
+            MicronautPropertiesTestSupport.with(defaults, "deadLetterUnkeyedReplay", "automatic"),
+            "inboxRetentionMaxAge",
+            java.time.Duration.ofDays(14));
+    var custom =
+        module.deadLetterRetryRunner(dlq, bus, List.of(), List.of(), null, null, null, configured);
+    assertEquals(
+        org.streamrune.core.DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC,
+        custom.policy().unkeyedReplay());
+    assertEquals(java.time.Duration.ofDays(14), custom.inboxRetentionMaxAge());
+  }
+
+  @Test
   void deadLetterRetryRunnerResolvesCommandTypeFromDeciderRegistry() throws Exception {
     var module = new StreamRuneMicronautModule();
     var executed = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -1062,9 +1100,9 @@ class StreamRuneMicronautModuleTest {
             null,
             null));
 
-    boolean retried = runner.retry(commandId);
+    var retried = runner.retry(commandId);
 
-    assertTrue(retried);
+    assertEquals(org.streamrune.runtime.DeadLetterRetryRunner.RetryOutcome.REPLAYED, retried);
     assertTrue(
         executed.get(),
         "decider must actually execute — the command type must resolve via the decider registry,"
@@ -1516,12 +1554,12 @@ class StreamRuneMicronautModuleTest {
   }
 
   @Test
-  void deadLetterRetentionMaxAgeProperty_defaults30Days() {
+  void deadLetterRetentionMaxAgeProperty_defaultsToTheInboxWindow() {
     var props = StreamRuneMicronautProperties.withDefaults();
     assertEquals(
-        java.time.Duration.ofDays(30),
+        java.time.Duration.ofDays(7),
         props.deadLetterRetentionMaxAge(),
-        "deadLetterRetentionMaxAge must default to 30 days");
+        "deadLetterRetentionMaxAge must default to 7 days, the inbox retention window");
   }
 
   /**

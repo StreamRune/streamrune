@@ -772,7 +772,8 @@ class StreamRuneContextFilterTest {
         // sse.polling-interval
         java.time.Duration.ofSeconds(1),
         "auto",
-        "required");
+        "required",
+        "operator-only");
   }
 
   @Test

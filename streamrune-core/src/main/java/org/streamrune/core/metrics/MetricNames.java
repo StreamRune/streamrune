@@ -58,6 +58,15 @@ public final class MetricNames {
    */
   public static final String DLQ_EXHAUSTED = "streamrune.dlq.exhausted";
 
+  /**
+   * Dead-letter replays refused because the entry's command ran under an idempotency key and the
+   * entry is older than the command-inbox retention window, so the inbox can no longer be relied on
+   * to deduplicate the replay against the caller's own retry. Nothing was executed; the entry stays
+   * for an operator to reconcile (discard it, or retry it with {@code force}). Tagged by {@link
+   * #TAG_COMMAND_TYPE}. Counter.
+   */
+  public static final String DLQ_STALE_REPLAY_BLOCKED = "streamrune.dlq.stale_replay_blocked";
+
   /** Command dead-letter-queue rows swept by the housekeeping job */
   public static final String DLQ_SWEPT_ROWS = "streamrune.dlq.swept_rows";
 

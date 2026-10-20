@@ -126,7 +126,7 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
   }
 
   @Override
-  public List<DeadLetterEntry> readRetryable(int maxRetries, int limit) {
+  public List<DeadLetterEntry> readRetryable(int maxRetries, int limit, boolean includeUnkeyed) {
     // Order by least-recently-active — the most recent of (lastAttemptAt,
     // publishedAt) — ascending, so the entries most likely to be past their backoff sort first and
     // a recently-attempted (still backing-off) entry never sits at the head starving due entries
@@ -134,6 +134,7 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
     // `ORDER BY COALESCE(last_attempt_at, published_at) ASC`.
     return entries.stream()
         .filter(e -> e.dlqAttempts() < maxRetries)
+        .filter(e -> includeUnkeyed || e.idempotencyKey() != null)
         .sorted(Comparator.comparing(InMemoryDeadLetterQueue::lastActivity))
         .limit(limit)
         .toList();

@@ -459,6 +459,7 @@ class MicrometerStreamRuneMetricsTest {
     metrics.registerInFlightCommandsGauge(() -> 5L);
     metrics.recordDeadLetterPublished("PlaceOrder");
     metrics.recordDeadLetterExhausted("PlaceOrder");
+    metrics.recordDeadLetterStaleReplayBlocked("PlaceOrder");
     metrics.recordLockWait(1_000L);
     metrics.recordEventAppended("OrderPlaced");
     metrics.recordEventReplayed();
@@ -912,6 +913,24 @@ class MicrometerStreamRuneMetricsTest {
               .allMatch(c -> c.getId().getTag(MetricNames.TAG_COMMAND_TYPE) != null),
           name + " must carry command.type on EVERY series after typed samples too");
     }
+  }
+
+  @Test
+  void staleReplayBlockedIsCountedPerCommandType() {
+    var registry = new SimpleMeterRegistry();
+    var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
+
+    metrics.recordDeadLetterStaleReplayBlocked("AdjustStock");
+    metrics.recordDeadLetterStaleReplayBlocked("AdjustStock");
+    metrics.recordDeadLetterStaleReplayBlocked(null);
+
+    assertEquals(2.0, typed(registry, MetricNames.DLQ_STALE_REPLAY_BLOCKED, "AdjustStock"));
+    assertEquals(
+        1.0,
+        typed(
+            registry,
+            MetricNames.DLQ_STALE_REPLAY_BLOCKED,
+            MicrometerStreamRuneMetrics.UNKNOWN_TAG_VALUE));
   }
 
   @Test

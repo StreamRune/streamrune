@@ -94,7 +94,8 @@ class StreamRuneConfigValidatorTest {
             // sse.polling-interval
             Duration.ofSeconds(1),
             "auto",
-            "required");
+            "required",
+            "operator-only");
     var ctx = mock(ApplicationContext.class);
     var validator = new StreamRuneConfigValidator(props, ctx);
     var ex =
@@ -153,7 +154,8 @@ class StreamRuneConfigValidatorTest {
         // sse.polling-interval
         Duration.ofSeconds(1),
         "auto",
-        "required");
+        "required",
+        "operator-only");
   }
 
   /**
@@ -261,7 +263,8 @@ class StreamRuneConfigValidatorTest {
             // sse.polling-interval
             Duration.ofSeconds(1),
             "auto",
-            "required");
+            "required",
+            "operator-only");
     var ctx = mock(ApplicationContext.class);
     when(ctx.containsBean(org.streamrune.core.outbox.OutboxStore.class)).thenReturn(false);
     var validator = new StreamRuneConfigValidator(props, ctx);
@@ -324,7 +327,8 @@ class StreamRuneConfigValidatorTest {
         // sse.polling-interval
         Duration.ofSeconds(1),
         "auto",
-        "required");
+        "required",
+        "operator-only");
   }
 
   @Test
@@ -497,6 +501,58 @@ class StreamRuneConfigValidatorTest {
         // sse.polling-interval
         Duration.ofSeconds(1),
         "auto",
-        "required");
+        "required",
+        "operator-only");
+  }
+
+  // ── Command dead-letter retention vs inbox retention ──────────────────────────────────────────
+
+  private static StreamRuneMicronautProperties with(
+      StreamRuneMicronautProperties base, String component, Object value) throws Exception {
+    return MicronautPropertiesTestSupport.with(base, component, value);
+  }
+
+  private static ApplicationContext contextWith(boolean commandInbox, boolean deadLetterQueue) {
+    var ctx = mock(ApplicationContext.class);
+    when(ctx.containsBean(org.streamrune.core.CommandInbox.class)).thenReturn(commandInbox);
+    when(ctx.containsBean(org.streamrune.core.DeadLetterQueue.class)).thenReturn(deadLetterQueue);
+    return ctx;
+  }
+
+  @Test
+  void deadLetterRetentionLongerThanTheInboxWindowFailsStartup() throws Exception {
+    var props =
+        with(
+            StreamRuneMicronautProperties.withDefaults(),
+            "deadLetterRetentionMaxAge",
+            Duration.ofDays(30));
+    var validator = new StreamRuneConfigValidator(props, contextWith(true, true));
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () -> validator.onApplicationEvent(mock(StartupEvent.class)));
+    assertTrue(ex.getMessage().contains("streamrune.dead-letter.retention-max-age"));
+    assertTrue(ex.getMessage().contains("streamrune.inbox.retention-max-age"));
+  }
+
+  @Test
+  void theDefaultDeadLetterAndInboxRetentionPass() {
+    var validator =
+        new StreamRuneConfigValidator(
+            StreamRuneMicronautProperties.withDefaults(), contextWith(true, true));
+    assertDoesNotThrow(() -> validator.onApplicationEvent(mock(StartupEvent.class)));
+  }
+
+  @Test
+  void deadLetterRetentionIsNotJudgedWithoutBothStores() throws Exception {
+    var props =
+        with(
+            StreamRuneMicronautProperties.withDefaults(),
+            "deadLetterRetentionMaxAge",
+            Duration.ofDays(30));
+    for (boolean[] stores : new boolean[][] {{true, false}, {false, true}}) {
+      var validator = new StreamRuneConfigValidator(props, contextWith(stores[0], stores[1]));
+      assertDoesNotThrow(() -> validator.onApplicationEvent(mock(StartupEvent.class)));
+    }
   }
 }

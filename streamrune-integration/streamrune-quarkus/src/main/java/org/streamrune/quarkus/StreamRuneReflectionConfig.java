@@ -100,6 +100,7 @@ import org.streamrune.core.types.Version;
       // Core records — org.streamrune.core (11)
       AggregateHistory.class,
       DeadLetterRetryPolicy.class,
+      DeadLetterRetryPolicy.UnkeyedReplay.class,
       EventEnvelope.class,
       EventMetadata.class,
       Page.class,

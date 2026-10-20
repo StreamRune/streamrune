@@ -162,4 +162,73 @@ class StreamRuneConfigValidatorTest {
             "streamrune.inbox.retention-max-age=7d")
         .run(ctx -> assertThat(ctx).hasNotFailed());
   }
+
+  // ── Command dead-letter retention vs inbox retention ──────────────────────────────────────────
+  // The mock DataSource auto-configures a PostgresCommandInbox; the application supplies the queue.
+
+  @Test
+  void failsWhenDeadLetterRetentionExceedsInbox_withACommandInboxAndADeadLetterQueue() {
+    runner
+        .withBean(
+            org.streamrune.core.DeadLetterQueue.class,
+            () -> mock(org.streamrune.core.DeadLetterQueue.class))
+        .withPropertyValues(
+            "streamrune.dead-letter.retention-max-age=30d", "streamrune.inbox.retention-max-age=7d")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasMessageContaining("streamrune.dead-letter.retention-max-age")
+                  .hasMessageContaining("streamrune.inbox.retention-max-age");
+            });
+  }
+
+  @Test
+  void failsWhenDeadLetterRetentionExceedsInbox_evenWithTheAutomaticRetryOff() {
+    // dead-letter.enabled switches only the automatic retry; an operator's retry of a retained
+    // entry is the replay that would miss the inbox.
+    runner
+        .withBean(
+            org.streamrune.core.DeadLetterQueue.class,
+            () -> mock(org.streamrune.core.DeadLetterQueue.class))
+        .withPropertyValues(
+            "streamrune.dead-letter.enabled=false", "streamrune.dead-letter.retention-max-age=0d")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure()).hasMessageContaining("pruning disabled");
+            });
+  }
+
+  @Test
+  void bootsWithTheDefaultDeadLetterAndInboxRetention() {
+    runner
+        .withBean(
+            org.streamrune.core.DeadLetterQueue.class,
+            () -> mock(org.streamrune.core.DeadLetterQueue.class))
+        .run(ctx -> assertThat(ctx).hasNotFailed());
+  }
+
+  @Test
+  void skipsDeadLetterRetentionValidation_whenNoDeadLetterQueue() {
+    runner
+        .withPropertyValues("streamrune.dead-letter.retention-max-age=30d")
+        .run(ctx -> assertThat(ctx).hasNotFailed());
+  }
+
+  @Test
+  void skipsDeadLetterRetentionValidation_whenNoCommandInbox() {
+    new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
+        .withBean(
+            org.streamrune.core.DeadLetterQueue.class,
+            () -> mock(org.streamrune.core.DeadLetterQueue.class))
+        .withPropertyValues("streamrune.dead-letter.retention-max-age=30d")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(ctx).doesNotHaveBean(org.streamrune.core.CommandInbox.class);
+            });
+  }
 }

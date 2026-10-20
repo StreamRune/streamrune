@@ -106,6 +106,7 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
           + "error_type, error_message, attempts, first_attempt_at, published_at, "
           + "dlq_attempts, last_attempt_at, correlation_id, user_id, trace_id, idempotency_key "
           + "FROM dead_letter_queue WHERE dlq_attempts < ? "
+          + "AND (? OR idempotency_key IS NOT NULL) "
           + "ORDER BY COALESCE(last_attempt_at, published_at) ASC LIMIT ? "
           + "FOR UPDATE SKIP LOCKED";
 
@@ -227,12 +228,13 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
   }
 
   @Override
-  public List<DeadLetterEntry> readRetryable(int maxRetries, int limit) {
+  public List<DeadLetterEntry> readRetryable(int maxRetries, int limit, boolean includeUnkeyed) {
     List<DeadLetterEntry> results = new ArrayList<>();
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_RETRYABLE)) {
       ps.setInt(1, maxRetries);
-      ps.setInt(2, limit);
+      ps.setBoolean(2, includeUnkeyed);
+      ps.setInt(3, limit);
       try (var rs = ps.executeQuery()) {
         while (rs.next()) {
           results.add(readEntry(rs));

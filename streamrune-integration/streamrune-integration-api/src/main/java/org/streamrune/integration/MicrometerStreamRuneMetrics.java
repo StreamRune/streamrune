@@ -603,6 +603,17 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
         .increment();
   }
 
+  @Override
+  public void recordDeadLetterStaleReplayBlocked(String commandType) {
+    Counter.builder(meter(MetricNames.DLQ_STALE_REPLAY_BLOCKED))
+        .tag(MetricNames.TAG_COMMAND_TYPE, commandTypeTag(commandType))
+        .description(
+            "Dead-letter replays refused because the entry is older than the command-inbox"
+                + " retention window (nothing executed; the entry awaits an operator)")
+        .register(registry)
+        .increment();
+  }
+
   /**
    * The {@code command.type} tag value for the command-type family: the simple class name the bus
    * passes, or {@link #UNKNOWN_TAG_VALUE} when the caller supplied none.

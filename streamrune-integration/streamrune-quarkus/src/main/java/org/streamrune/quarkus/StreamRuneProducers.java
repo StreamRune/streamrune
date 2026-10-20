@@ -1279,7 +1279,12 @@ public class StreamRuneProducers {
                     properties.deadLetter().maxRetries(),
                     java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()),
                     2.0,
-                    false))
+                    false,
+                    org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(
+                        properties.deadLetter().unkeyedReplay())))
+            // The window the inbox retention sweeper prunes with: a keyed entry older than it is
+            // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
+            .inboxRetentionMaxAge(properties.inbox().retentionMaxAge())
             .pollInterval(java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()));
 
     for (DeciderRegistration<?, ?, ?> reg : registrations) {
@@ -1578,7 +1583,7 @@ public class StreamRuneProducers {
   /**
    * Produces a {@link org.streamrune.runtime.DeadLetterRetentionSweeper} that prunes command
    * dead-letter-queue entries older than {@code streamrune.dead-letter.retention-max-age} (default
-   * 30 days). A DLQ entry holds the full command payload (encrypted where {@code @Encrypted} fields
+   * 7 days). A DLQ entry holds the full command payload (encrypted where {@code @Encrypted} fields
    * apply per) — this bounds how long that payload remains queryable, a GDPR storage-limitation
    * concern. Dependent-scoped optional bean: returns {@code null} when no {@link
    * org.streamrune.core.DeadLetterQueue} bean exists, mirroring how {@link #deadLetterRetryRunner}

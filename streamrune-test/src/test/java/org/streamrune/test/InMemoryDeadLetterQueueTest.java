@@ -11,6 +11,7 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
@@ -123,9 +124,33 @@ class InMemoryDeadLetterQueueTest {
     dlq.publish(request("cmd-2", "Exhausted"));
     dlq.updateAttempts(CommandId.of("cmd-2"), 3, Instant.now());
 
-    var retryable = dlq.readRetryable(3, 10);
+    var retryable = dlq.readRetryable(3, 10, true);
     assertEquals(1, retryable.size());
     assertEquals("Eligible", retryable.getFirst().commandType());
+  }
+
+  @Test
+  void readRetryableWithoutUnkeyedReturnsOnlyKeyedEntries() {
+    dlq.publish(request("cmd-unkeyed", "Unkeyed"));
+    dlq.publish(
+        new DeadLetterQueue.DeadLetterPublishRequest(
+            "{}",
+            "Keyed",
+            CommandId.of("cmd-keyed"),
+            StreamId.of(TYPE, AggregateId.of("s1")),
+            "Err",
+            "msg",
+            1,
+            Instant.now(),
+            null,
+            null,
+            null,
+            IdempotencyKey.of("k-1")));
+
+    var keyedOnly = dlq.readRetryable(3, 10, false);
+    assertEquals(1, keyedOnly.size());
+    assertEquals("Keyed", keyedOnly.getFirst().commandType());
+    assertEquals(2, dlq.readRetryable(3, 10, true).size());
   }
 
   @Test
@@ -133,7 +158,7 @@ class InMemoryDeadLetterQueueTest {
     dlq.publish(request("cmd-1", "First"));
     dlq.publish(request("cmd-2", "Second"));
 
-    var retryable = dlq.readRetryable(5, 10);
+    var retryable = dlq.readRetryable(5, 10, true);
     assertEquals("First", retryable.get(0).commandType());
     assertEquals("Second", retryable.get(1).commandType());
   }
@@ -143,7 +168,7 @@ class InMemoryDeadLetterQueueTest {
     for (int i = 0; i < 5; i++) {
       dlq.publish(request("cmd-" + i, "Cmd"));
     }
-    assertEquals(3, dlq.readRetryable(5, 3).size());
+    assertEquals(3, dlq.readRetryable(5, 3, true).size());
   }
 
   @Test
@@ -154,16 +179,16 @@ class InMemoryDeadLetterQueueTest {
     // across retry cycles is driven by dlqAttempts gating (and discard), not by claiming.
     dlq.publish(request("cmd-1", "Eligible"));
 
-    assertEquals(1, dlq.readRetryable(3, 10).size(), "first poll returns the eligible entry");
+    assertEquals(1, dlq.readRetryable(3, 10, true).size(), "first poll returns the eligible entry");
     assertEquals(
         1,
-        dlq.readRetryable(3, 10).size(),
+        dlq.readRetryable(3, 10, true).size(),
         "a second sequential poll returns it again — readRetryable does not claim");
 
     // Bumping dlqAttempts to the limit is what removes it from the retryable set.
     dlq.updateAttempts(CommandId.of("cmd-1"), 3, Instant.now());
     assertTrue(
-        dlq.readRetryable(3, 10).isEmpty(),
+        dlq.readRetryable(3, 10, true).isEmpty(),
         "exhausted entry drops out of the retryable set via dlqAttempts gating");
   }
 
