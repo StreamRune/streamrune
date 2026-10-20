@@ -45,8 +45,8 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 
 | Command | What it runs | Typical wall time |
 |---|---|---|
-| `./gradlew quickCheck` | Compiles the main and test sources of every module, runs `spotlessCheck` and the tests of the six modules whose tests need no Docker. No JaCoCo, no Javadoc, no Testcontainers. | about 3 minutes when the runtime tests run, under a minute when they are up to date |
-| `./gradlew build` | What the `build` check runs in CI: every test suite, Javadoc, the coverage gates and the build's own verification tasks. Needs Docker. | about 7 minutes; `streamrune-postgres`'s suite is the longest |
+| `./gradlew quickCheck` | Compiles every source set of every module, runs `spotlessCheck` and the tests of the six modules whose tests need no Docker. No JaCoCo, no Javadoc, no Testcontainers. | about 3 minutes when the runtime tests run, under a minute when they are up to date |
+| `./gradlew build` | What the `build` check runs in CI: every test suite, Javadoc, the coverage gates, `spotlessCheck` and the build's own verification tasks. Needs Docker. | about 7 minutes; `streamrune-postgres`'s suite is the longest |
 | `./gradlew :streamrune-core:test` | One module's tests | |
 | `./gradlew :streamrune-core:test --tests "DeadLetterRetryPolicyTest"` | One test class; `--tests` also takes a pattern such as `"*RetryPolicy*"` | |
 | `./gradlew :streamrune-integration:streamrune-spring:test` | A nested module's tests | |
@@ -56,8 +56,8 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 
 - **`quickCheck` is the inner loop, `build` is the gate.** A green `quickCheck` says nothing about
   the Testcontainers suites, the coverage gates or Javadoc: run `./gradlew build` before every pull
-  request. Every task `quickCheck` runs is one `build` runs as well, except `spotlessCheck`, and a
-  `build` after a green `quickCheck` reuses its test results.
+  request. Every task `quickCheck` runs is one `build` runs as well, and a `build` after a green
+  `quickCheck` reuses its test results.
 - **Docker** is needed by the modules marked "yes" above: their tests start PostgreSQL, Kafka,
   RabbitMQ, Vault or LocalStack through Testcontainers. Every PostgreSQL container takes its image
   from `PostgresTestImage.NAME` (`gradle/test-support/`), and `verifyPostgresTestImage`, part of
@@ -68,12 +68,15 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   `build/reports/jacoco/test/html/index.html`.
 - **Test summary.** Every test task writes `<module>/build/test-summary.txt` (for a test task not
   named `test`: `test-summary-<task>.txt`): the totals, one line per failure (the test, the first
-  line of its exception, the first stack frame in `org.streamrune`) and the ten slowest tests. Every
-  `test`, `check`, `build` and `quickCheck` ends with the line
-  `N tests, F failed — see build/reports/test-summary.txt`; that file collects the summaries of the
-  run's test tasks. Each entry carries the time it was written: a build that stops before a test
-  task runs (a compile error, or an earlier failure without `--continue`) leaves that task's entry
-  from an earlier run. Read the summary before the HTML reports under `build/reports/tests/`.
+  line of its exception, joined with the lines after it when it ends in a colon as an AssertJ
+  message does, and the first stack frame in `org.streamrune`) and the ten slowest tests. A failure
+  outside any test, such as a test JVM that stops, is listed under the run's name and counted on its
+  own. Every test task, `check`, `build` and `quickCheck` ends with the line
+  `N tests, F failed — see build/reports/test-summary.txt`, where F counts both kinds of failure;
+  that file collects the summaries of the run's test tasks. Each entry carries the time it was
+  written: a build that stops before a test task runs (a compile error, or an earlier failure
+  without `--continue`) leaves that task's entry from an earlier run. Read the summary before the
+  HTML reports under `build/reports/tests/`.
 - **Mutation testing.** `./gradlew :streamrune-core:pitest` and `./gradlew :streamrune-runtime:pitest`
   run PIT, which changes the compiled code one small mutation at a time and lists every mutant no
   test detects; the task prints the path of its report (`build/reports/pitest/index.html`). It is
@@ -108,10 +111,10 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   `git commit --signoff`: the `dco` check verifies that the trailer names the commit's author.
 - **Pull requests** go to `main` and are squash-merged. The required checks are `build`,
   `postgres-17` and `dco`.
-- **Formatting** is google-java-format through Spotless. The pre-commit hook
+- **Formatting** is google-java-format through Spotless. `check` runs `spotlessCheck`, so `build`
+  and the `build` check in CI fail on a formatting violation; the pre-commit hook
   (`gradle/hooks/pre-commit`, installed by `./gradlew installGitHooks` and by every `build`) runs
-  `spotlessCheck`; `./gradlew spotlessApply` fixes what it reports. `check` does not run Spotless,
-  so the hook and `quickCheck` are where a formatting error shows.
+  the same check before each commit, and `./gradlew spotlessApply` fixes what it reports.
 - **Build scripts and the configuration cache.** Code that runs at execution time (`doLast`,
   `onlyIf`, a test listener) captures plain values computed at configuration time, never `project`
   or a top-level declaration of the script; the root `build.gradle.kts` keeps such helpers in nested
