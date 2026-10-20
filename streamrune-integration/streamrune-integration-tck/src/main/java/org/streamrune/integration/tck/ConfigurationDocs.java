@@ -51,6 +51,9 @@ public final class ConfigurationDocs {
       Pattern.compile(
           "(?<![\\w.$/-])streamrune(?:\\.(?:[a-z0-9]+(?:[-_][a-z0-9]+)*|<[a-z-]+>))+(?:\\.\\*)?");
 
+  /** A Java string literal on one line; group 1 is its content. */
+  private static final Pattern STRING_LITERAL = Pattern.compile("\"((?:[^\"\\\\]|\\\\.)*)\"");
+
   /** A YAML mapping key at the start of a line, with its indentation. */
   private static final Pattern YAML_KEY =
       Pattern.compile("^(\\s*)([a-z0-9][a-z0-9_.-]*):(?:\\s|$)");
@@ -136,16 +139,21 @@ public final class ConfigurationDocs {
     known.addAll(nonConfigurationNames());
     List<String> problems = new ArrayList<>();
     for (Occurrence occurrence : occurrences()) {
-      String name = occurrence.name();
-      String stem = name.endsWith(".*") ? name.substring(0, name.length() - 2) : name;
-      boolean isKnown =
-          (!name.endsWith(".*") && known.contains(name))
-              || known.stream().anyMatch(k -> k.startsWith(stem + "."));
-      if (!isKnown) {
-        problems.add(occurrence.where() + ": " + name);
+      if (!isKnown(occurrence.name(), known)) {
+        problems.add(occurrence.where() + ": " + occurrence.name());
       }
     }
     return problems;
+  }
+
+  /**
+   * Whether {@code name} is one of {@code known} or a namespace of one, with or without {@code .*}.
+   */
+  private static boolean isKnown(String name, Set<String> known) {
+    boolean wildcard = name.endsWith(".*");
+    String stem = wildcard ? name.substring(0, name.length() - 2) : name;
+    return (!wildcard && known.contains(name))
+        || known.stream().anyMatch(k -> k.startsWith(stem + "."));
   }
 
   /**
@@ -192,6 +200,61 @@ public final class ConfigurationDocs {
       }
     }
     return missing;
+  }
+
+  /**
+   * Every {@code streamrune.} name inside a string literal of the Java sources under {@code
+   * sourceRoot} that is not a key of {@code oracle}, a meter, a span attribute or a namespace of
+   * them, as {@code file:line: name}: a key the integration reads in code that the oracle does not
+   * know. Comment lines (starting with {@code //}, {@code /*} or {@code *}) are skipped.
+   */
+  public static List<String> unknownInJavaSources(Path sourceRoot, Map<String, String> oracle) {
+    Set<String> known = new TreeSet<>(oracle.keySet());
+    known.addAll(nonConfigurationNames());
+    List<String> problems = new ArrayList<>();
+    try (Stream<Path> sources = Files.walk(sourceRoot)) {
+      for (Path source : sources.filter(p -> p.toString().endsWith(".java")).sorted().toList()) {
+        List<String> lines = Files.readAllLines(source, StandardCharsets.UTF_8);
+        for (int i = 0; i < lines.size(); i++) {
+          String code = lines.get(i).strip();
+          if (code.startsWith("//") || code.startsWith("/*") || code.startsWith("*")) {
+            continue;
+          }
+          Matcher literal = STRING_LITERAL.matcher(code);
+          while (literal.find()) {
+            Matcher name = NAME.matcher(literal.group(1));
+            while (name.find()) {
+              if (!isKnown(name.group(), known)) {
+                problems.add(relative(sourceRoot, source) + ":" + (i + 1) + ": " + name.group());
+              }
+            }
+          }
+        }
+      }
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+    return problems;
+  }
+
+  /**
+   * The names of the top-level types declared in the Java sources under {@code sourceRoot}, a
+   * {@code src/main/java} directory: what an integration's test loads, with their nested types, to
+   * read the annotations its framework reads.
+   */
+  public static List<String> typesDeclaredIn(Path sourceRoot) {
+    List<String> types = new ArrayList<>();
+    try (Stream<Path> sources = Files.walk(sourceRoot)) {
+      for (Path source : sources.filter(p -> p.toString().endsWith(".java")).sorted().toList()) {
+        String name = relative(sourceRoot, source);
+        if (!name.endsWith("module-info.java") && !name.endsWith("package-info.java")) {
+          types.add(name.substring(0, name.length() - ".java".length()).replace('/', '.'));
+        }
+      }
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+    return types;
   }
 
   /** The {@code properties[].name} values of a Spring or Micronaut configuration metadata file. */

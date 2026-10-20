@@ -185,4 +185,35 @@ class ConfigurationOracleTest {
     assertEquals("data-key-cache", ConfigurationOracle.kebab("dataKeyCache"));
     assertEquals("enabled", ConfigurationOracle.kebab("enabled"));
   }
+
+  @Test
+  void keysReadElsewhereJoinTheBoundKeysAndDisagreementsAreReported() {
+    Map<String, String> bound = Map.of("streamrune.outbox.enabled", "false");
+    List<ConfigurationOracle.ReadElsewhere> reads =
+        List.of(
+            new ConfigurationOracle.ReadElsewhere("streamrune.outbox.enabled", "false", "A"),
+            new ConfigurationOracle.ReadElsewhere("streamrune.outbox.enabled", null, "B"),
+            new ConfigurationOracle.ReadElsewhere("streamrune.outbox.enabled", "true", "C"),
+            new ConfigurationOracle.ReadElsewhere("streamrune.sse.enabled", null, "D"),
+            new ConfigurationOracle.ReadElsewhere("streamrune.sse.enabled", "false", "E"),
+            new ConfigurationOracle.ReadElsewhere("streamrune.sse.enabled", "false", "F"),
+            new ConfigurationOracle.ReadElsewhere("streamrune.sse.enabled", null, "G"),
+            new ConfigurationOracle.ReadElsewhere("streamrune.sse.enabled", "true", "H"),
+            new ConfigurationOracle.ReadElsewhere("streamrune.lookup", null, "I"));
+
+    ConfigurationOracle.Merged merged = ConfigurationOracle.merge(bound, reads);
+
+    assertEquals(
+        Map.of(
+            "streamrune.outbox.enabled", "false",
+            "streamrune.sse.enabled", "false",
+            "streamrune.lookup", "—"),
+        merged.keys());
+    assertEquals(
+        List.of(
+            "C: streamrune.outbox.enabled defaults to 'true' there and to 'false' in the"
+                + " properties",
+            "H: streamrune.sse.enabled defaults to 'true' there and to 'false' in E"),
+        merged.conflicts());
+  }
 }

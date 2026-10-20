@@ -141,3 +141,16 @@ tasks.named<Test>("test") {
 }
 
 tasks.named("check") { dependsOn(noValidationProviderTest, optionalDependencyAbsentTest) }
+
+// ConfigurationDocLintTest reads the guides, this module's README and its main sources (the keys it
+// reads in code) (docLintTest, see the root build): declared, so an edit to any of them re-runs it.
+tasks.named<Test>("docLintTest") {
+    inputs
+        .files(
+            fileTree(rootDir.resolve("docs/guide")) { include("**/*.md") },
+            file("README.md"),
+            fileTree("src/main/java") { include("**/*.java") },
+        )
+        .withPropertyName("configurationDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}

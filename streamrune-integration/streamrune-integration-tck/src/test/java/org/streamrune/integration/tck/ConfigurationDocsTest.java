@@ -187,6 +187,41 @@ class ConfigurationDocsTest {
     assertThrowsUnchecked(() -> ConfigurationDocs.read(empty, "no/such/README.md"));
   }
 
+  @Test
+  void aKeyReadInCodeMustBeKnown(@TempDir Path sources) throws Exception {
+    Path type = sources.resolve("org/example/Reader.java");
+    Files.createDirectories(type.getParent());
+    Files.writeString(
+        type,
+        String.join(
+            "\n",
+            "package org.example;",
+            "// \"streamrune.in-a-comment\" is not read",
+            "/* \"streamrune.in-a-block\" neither */",
+            " * \"streamrune.in-javadoc\" neither",
+            "class Reader {",
+            "  String a = env.get(\"streamrune.outbox.enabled\");",
+            "  String b = env.get(\"streamrune.projections.\" + name + \".enabled\");",
+            "  String c = \"streamrune.renamed must be set with \\\"streamrune.outbox.enabled\\\"\";",
+            "  String d = \"" + MetricNames.COMMANDS_DISPATCHED + "\";",
+            "}"));
+    Files.writeString(sources.resolve("org/example/package-info.java"), "package org.example;");
+    Files.writeString(sources.resolve("module-info.java"), "module org.example {}");
+
+    assertEquals(
+        List.of("org/example/Reader.java:8: streamrune.renamed"),
+        ConfigurationDocs.unknownInJavaSources(sources, ORACLE));
+    assertEquals(List.of("org.example.Reader"), ConfigurationDocs.typesDeclaredIn(sources));
+  }
+
+  @Test
+  void anUnreadableSourceTreeIsAnError(@TempDir Path empty) {
+    Path missing = empty.resolve("no-such-dir");
+
+    assertThrowsUnchecked(() -> ConfigurationDocs.unknownInJavaSources(missing, ORACLE));
+    assertThrowsUnchecked(() -> ConfigurationDocs.typesDeclaredIn(missing));
+  }
+
   private static void assertThrowsUnchecked(Runnable action) {
     try {
       action.run();

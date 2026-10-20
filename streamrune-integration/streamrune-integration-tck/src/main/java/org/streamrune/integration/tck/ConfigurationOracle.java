@@ -7,8 +7,10 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -46,7 +48,70 @@ public final class ConfigurationOracle {
     KeyNaming KEBAB = (parentKey, element, javaName) -> parentKey + "." + kebab(javaName);
   }
 
+  /**
+   * A key an integration reads outside its properties types: the property of a bean condition, an
+   * injected property, or a lookup in code. {@code impliedDefault} is the default the reading
+   * implies (a condition that matches a missing property implies {@code true}), or {@code null}
+   * when it implies none; {@code where} names the reading for a failure message.
+   */
+  public record ReadElsewhere(String key, String impliedDefault, String where) {}
+
+  /**
+   * The keys of the properties types and the keys read elsewhere, as one map, and every
+   * disagreement between two readings of one key.
+   */
+  public record Merged(Map<String, String> keys, List<String> conflicts) {}
+
   private ConfigurationOracle() {}
+
+  /**
+   * Adds the keys read outside the properties types to {@code bound}, the keys of the properties
+   * types. A key both bind and read keeps the bound default, and a reading that implies another
+   * default is a conflict; a key only read takes the default its readings imply ({@link
+   * DefaultRendering#NONE} when none does), and two readings that imply different defaults are a
+   * conflict.
+   */
+  public static Merged merge(Map<String, String> bound, List<ReadElsewhere> reads) {
+    Map<String, String> keys = new TreeMap<>(bound);
+    Map<String, String> impliedBy = new TreeMap<>();
+    List<String> conflicts = new ArrayList<>();
+    for (ReadElsewhere read : reads) {
+      String implied = read.impliedDefault();
+      if (bound.containsKey(read.key())) {
+        if (implied != null && !implied.equals(bound.get(read.key()))) {
+          conflicts.add(
+              read.where()
+                  + ": "
+                  + read.key()
+                  + " defaults to '"
+                  + implied
+                  + "' there and to '"
+                  + bound.get(read.key())
+                  + "' in the properties");
+        }
+        continue;
+      }
+      String known = keys.get(read.key());
+      if (known == null || (DefaultRendering.NONE.equals(known) && implied != null)) {
+        keys.put(read.key(), implied == null ? DefaultRendering.NONE : implied);
+        if (implied != null) {
+          impliedBy.put(read.key(), read.where());
+        }
+      } else if (implied != null && !implied.equals(known)) {
+        conflicts.add(
+            read.where()
+                + ": "
+                + read.key()
+                + " defaults to '"
+                + implied
+                + "' there and to '"
+                + known
+                + "' in "
+                + impliedBy.get(read.key()));
+      }
+    }
+    return new Merged(keys, conflicts);
+  }
 
   /** The keys and defaults of a record tree, named in {@link KeyNaming#KEBAB kebab case}. */
   public static Map<String, String> ofRecord(Object instance, String prefix) {
