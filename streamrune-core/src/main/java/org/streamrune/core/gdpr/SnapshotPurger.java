@@ -14,8 +14,18 @@ package org.streamrune.core.gdpr;
  * for; a snapshot purger is otherwise an ordinary purger, run after the key is deleted, audited and
  * reported under its {@link #name()} like any other.
  *
+ * <p><b>A command in flight must not put the snapshot back.</b> A command saves its snapshot after
+ * its append, from a state it loaded before; a forget can purge between the two. The purge must
+ * therefore make a save of a state loaded before it write nothing: the store records a purge
+ * generation per stream, hands it out with every load ({@link
+ * org.streamrune.core.AggregateHistory#snapshotPurgeGeneration()}), and stores a snapshot only
+ * while the stream still has the generation its load saw ({@link
+ * org.streamrune.core.EventStore#saveSnapshot(org.streamrune.core.types.StreamId,
+ * org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int, long)}), with the
+ * comparison and the write atomic against the purge.
+ *
  * <p>{@code PostgresSnapshotStorePurger} ({@code streamrune-postgres}) implements it for the {@code
  * snapshot_store} table of {@code PostgresEventStore}. An application whose event store keeps
- * snapshots elsewhere implements it for that store.
+ * snapshots elsewhere implements it, and the guard above, for that store.
  */
 public interface SnapshotPurger extends SubjectDataPurger {}

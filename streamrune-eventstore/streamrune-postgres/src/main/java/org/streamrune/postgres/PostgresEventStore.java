@@ -187,7 +187,7 @@ public final class PostgresEventStore implements EventStore {
   private static final String SQLSTATE_SERIALIZATION_FAILURE = "40001";
 
   private static final String LOAD_SNAPSHOT =
-      "SELECT version, state_type, state_payload, snapshot_version"
+      "SELECT version, state_type, state_payload, snapshot_version, purge_generation"
           + " FROM snapshot_store WHERE aggregate_type = ? AND aggregate_id = ?";
 
   // Table-wide, not per-stream — the warning is about whether snapshot_store has ANY
@@ -195,7 +195,7 @@ public final class PostgresEventStore implements EventStore {
   // instance) probe. LIMIT 1: existence-only, deliberately NOT state_payload, so it never pulls
   // (and never needs to decrypt) the actual snapshot content.
   private static final String SNAPSHOT_STATE_TYPE_FOR_WARNING =
-      "SELECT state_type FROM snapshot_store LIMIT 1";
+      "SELECT state_type FROM snapshot_store WHERE state_type IS NOT NULL LIMIT 1";
 
   private static final String LOAD_EVENTS =
       "SELECT global_offset, aggregate_type, aggregate_id, version, event_type, payload, metadata,"
@@ -255,15 +255,21 @@ public final class PostgresEventStore implements EventStore {
 
   private static final String NOTIFY_NEW_EVENTS = "SELECT pg_notify('streamrune_events', ?)";
 
+  // Writes only while the row still has the purge generation the command's load saw. The purge
+  // (PostgresSnapshotStorePurger) upserts the same primary key, so the unique index serializes the
+  // two statements: a purge committed first makes the WHERE fail and the save writes nothing; a
+  // save committed first is overwritten by the purge. purge_generation is never written here.
   private static final String UPSERT_SNAPSHOT_VERSIONED =
       "INSERT INTO snapshot_store (aggregate_type, aggregate_id, version, state_type,"
-          + " state_payload, snapshot_version) VALUES (?, ?, ?, ?, ?::jsonb, ?)"
+          + " state_payload, snapshot_version, purge_generation)"
+          + " VALUES (?, ?, ?, ?, ?::jsonb, ?, ?)"
           + " ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET"
           + " version = EXCLUDED.version,"
           + " state_type = EXCLUDED.state_type,"
           + " state_payload = EXCLUDED.state_payload,"
           + " snapshot_version = EXCLUDED.snapshot_version,"
-          + " created_at = NOW()";
+          + " created_at = NOW()"
+          + " WHERE snapshot_store.purge_generation = EXCLUDED.purge_generation";
 
   // Rows fetched per driver round trip when loading a stream. pgjdbc honors fetchSize only
   // inside an explicit transaction (autocommit off); under autocommit it materializes the whole
@@ -705,6 +711,8 @@ public final class PostgresEventStore implements EventStore {
     // When set, the loaded snapshot must be migrated from this stored version up to
     // expectedSnapshotVersion after the connection is released (chain application below).
     int migrateFromVersion = -1;
+    // The purge generation of the stream's snapshot row, read with the row; 0 when there is none.
+    long purgeGeneration = 0;
     List<RawEventRow> rawRows;
 
     try (var conn = dataSource.getConnection()) {
@@ -717,7 +725,12 @@ public final class PostgresEventStore implements EventStore {
           statementTimeout.applyTo(ps);
           PostgresStreamKeys.bind(ps, 1, streamId);
           try (var rs = ps.executeQuery()) {
-            if (rs.next()) {
+            boolean rowPresent = rs.next();
+            if (rowPresent) {
+              purgeGeneration = rs.getLong("purge_generation");
+            }
+            // A purged row keeps its purge generation and has no state: there is no snapshot.
+            if (rowPresent && rs.getString("state_type") != null) {
               int storedSnapshotVersion = rs.getInt("snapshot_version");
               boolean compatible =
                   expectedSnapshotVersion == 0 || storedSnapshotVersion == expectedSnapshotVersion;
@@ -865,7 +878,8 @@ public final class PostgresEventStore implements EventStore {
         List<EventEnvelope> replayEvents = replayRows.stream().map(this::toEnvelope).toList();
         Version replayLast =
             replayEvents.isEmpty() ? Version.initial() : replayEvents.getLast().version();
-        return new AggregateHistory(null, replayEvents, replayLast, Version.initial());
+        return new AggregateHistory(
+            null, replayEvents, replayLast, Version.initial(), purgeGeneration);
       }
       if (migrateFromVersion >= 0) {
         final int from = migrateFromVersion; // effectively-final capture for the lambda below
@@ -921,7 +935,8 @@ public final class PostgresEventStore implements EventStore {
           List<EventEnvelope> replayEvents = replayRows.stream().map(this::toEnvelope).toList();
           Version replayLast =
               replayEvents.isEmpty() ? Version.initial() : replayEvents.getLast().version();
-          return new AggregateHistory(null, replayEvents, replayLast, Version.initial());
+          return new AggregateHistory(
+              null, replayEvents, replayLast, Version.initial(), purgeGeneration);
         }
         // canReach(migrateFromVersion, expected) already held inside the connection, so this must
         // resolve; the guard turns any inconsistency into a clear error instead of silently
@@ -947,7 +962,7 @@ public final class PostgresEventStore implements EventStore {
     warnIfNonContiguous(streamId, snapshotVersion, events);
     Version lastVersion = events.isEmpty() ? snapshotVersion : events.getLast().version();
     return new AggregateHistory(
-        (AggregateState) snapshotState, events, lastVersion, snapshotVersion);
+        (AggregateState) snapshotState, events, lastVersion, snapshotVersion, purgeGeneration);
   }
 
   /**
@@ -1894,29 +1909,40 @@ public final class PostgresEventStore implements EventStore {
     }
   }
 
-  @Override
-  public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
-    saveSnapshot(streamId, version, state, 1);
-  }
-
   /**
    * {@inheritDoc}
    *
    * <p>The snapshot's {@code state_type} column stores the state class's <b>simple name</b>, so the
    * state class must be registered in the {@link EventTypeRegistry} under exactly that name, and
    * simple names must be unique across all registered state classes. Both rules are validated here,
-   * before anything is written: a snapshot whose type does not round-trip through the registry
-   * would otherwise fail (or silently rehydrate the wrong class) only later, at load time.
+   * before anything is written.
+   *
+   * <p>The write is one conditional upsert: it stores the snapshot only while the stream's {@code
+   * snapshot_store} row still has {@code snapshotPurgeGeneration} (or has no row, which inserts one
+   * with it). {@link PostgresSnapshotStorePurger} upserts the same row and raises its generation,
+   * so the purge and this save are serialized by the primary key and a save from a state loaded
+   * before the purge writes nothing. A refused save is logged at INFO and returns {@code false}.
+   * The three- and four-argument {@code saveSnapshot} save with generation {@code 0} and throw
+   * {@link IllegalStateException} when the stream's snapshot was ever purged (see {@link
+   * EventStore#saveSnapshot(StreamId, Version, AggregateState, int)}).
    */
   @Override
-  public void saveSnapshot(
-      StreamId streamId, Version version, AggregateState state, int snapshotVersion) {
+  public boolean saveSnapshot(
+      StreamId streamId,
+      Version version,
+      AggregateState state,
+      int snapshotVersion,
+      long snapshotPurgeGeneration) {
     Objects.requireNonNull(streamId, "streamId is required");
     if (state == null) {
       throw new IllegalArgumentException("state must not be null");
     }
     if (snapshotVersion < 1) {
       throw new IllegalArgumentException("snapshotVersion must be >= 1");
+    }
+    if (snapshotPurgeGeneration < 0) {
+      throw new IllegalArgumentException(
+          "snapshotPurgeGeneration must not be negative, got " + snapshotPurgeGeneration);
     }
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
     String stateType = state.getClass().getSimpleName();
@@ -1962,7 +1988,20 @@ public final class PostgresEventStore implements EventStore {
       ps.setString(4, stateType);
       ps.setString(5, stateJson);
       ps.setInt(6, snapshotVersion);
-      PostgresTransactions.commitIfManual(conn, "snapshot save", c -> ps.executeUpdate());
+      ps.setLong(7, snapshotPurgeGeneration);
+      int written =
+          PostgresTransactions.commitIfManual(conn, "snapshot save", c -> ps.executeUpdate());
+      if (written == 0) {
+        log.info(
+            "Snapshot of stream {} at version {} not stored: its snapshot_store row no longer has"
+                + " purge generation {}, so a GDPR forget purged the stream's snapshot after the"
+                + " state being saved was loaded; the next command loads and snapshots again",
+            shownStream,
+            version.value(),
+            snapshotPurgeGeneration);
+        return false;
+      }
+      return true;
     } catch (SQLException e) {
       throw new EventStoreException("Failed to save snapshot for stream: " + shownStream, e);
     }

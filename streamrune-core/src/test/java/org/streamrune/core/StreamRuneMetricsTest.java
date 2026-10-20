@@ -29,6 +29,7 @@ class StreamRuneMetricsTest {
           m.recordEventAppendDuration(1000);
           m.recordSnapshotCreated();
           m.recordSnapshotLoaded();
+          m.recordSnapshotRefused();
           m.recordProjectionProcessed();
           m.recordProjectionFailed();
           m.recordProjectionDuration(1000);

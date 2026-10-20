@@ -522,6 +522,17 @@ class MicrometerStreamRuneMetricsSagaTest {
   }
 
   @Test
+  void recordSnapshotRefusedIncrementsCounter() {
+    var registry = new SimpleMeterRegistry();
+    var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
+
+    assertEquals(0.0, registry.counter("streamrune.snapshots.refused").count());
+    metrics.recordSnapshotRefused();
+
+    assertEquals(1.0, registry.counter("streamrune.snapshots.refused").count());
+  }
+
+  @Test
   void recordSnapshotLoadedIncrementsCounter() {
     var registry = new SimpleMeterRegistry();
     var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();

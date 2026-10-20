@@ -18,7 +18,7 @@ Do **not** use snapshots as a substitute for projections.
 
 `SnapshotPolicy` is a sealed interface with two implementations: `EveryNEvents(int n, int snapshotVersion)` and `Never`.
 
-`VirtualThreadCommandBus` checks the policy after every successful `EventStore.append()`. If `eventsSinceSnapshot >= n`, it calls `EventStore.saveSnapshot(streamId, version, state, snapshotVersion)`.
+`VirtualThreadCommandBus` checks the policy after every successful `EventStore.append()`. If `eventsSinceSnapshot >= n`, it calls `EventStore.saveSnapshot(streamId, version, state, snapshotVersion, snapshotPurgeGeneration)` with the purge generation its load saw; the store writes nothing when a GDPR forget purged the stream's snapshot since that load (see [GDPR erasure — Aggregate snapshots](gdpr-erasure.md#aggregate-snapshots-a-forget-needs-a-snapshot-purger)).
 
 A snapshot belongs to one typed stream: `snapshot_store` is keyed by the two columns `aggregate_type` and `aggregate_id`, so two aggregate types that share an id value keep separate snapshots.
 
@@ -115,7 +115,7 @@ The in-memory test double takes the same migrations via `InMemoryEventStore.with
 
 Bump the bean's `snapshotVersion` in the same commit that changes the state class, exactly as you would the migration that carries it forward.
 
-Flyway: `snapshot_store`, with its `snapshot_version` column (default 1), is part of the baseline schema shipped in `streamrune-postgres` (`V001__streamrune_baseline.sql`).
+Flyway: `snapshot_store`, with its `snapshot_version` column (default 1), is part of the baseline schema shipped in `streamrune-postgres` (`V001__streamrune_baseline.sql`). A row whose `state_type` and `state_payload` are `NULL` is a snapshot a GDPR forget purged; it keeps the stream's `purge_generation` and is read as no snapshot (see [GDPR erasure — Aggregate snapshots](gdpr-erasure.md#aggregate-snapshots-a-forget-needs-a-snapshot-purger)).
 
 ## Caveats
 

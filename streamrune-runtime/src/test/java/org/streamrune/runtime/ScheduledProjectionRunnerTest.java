@@ -1304,6 +1304,16 @@ class ScheduledProjectionRunnerTest {
           }
 
           @Override
+          public boolean saveSnapshot(
+              org.streamrune.core.types.StreamId streamId,
+              org.streamrune.core.types.Version version,
+              org.streamrune.core.AggregateState state,
+              int snapshotVersion,
+              long snapshotPurgeGeneration) {
+            throw new UnsupportedOperationException("this test store keeps no snapshots");
+          }
+
+          @Override
           public List<EventEnvelope> readStream(
               org.streamrune.core.types.StreamId streamId,
               org.streamrune.core.types.Version afterVersion,

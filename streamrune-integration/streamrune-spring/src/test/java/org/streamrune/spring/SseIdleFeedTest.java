@@ -232,6 +232,17 @@ class SseIdleFeedTest {
     }
 
     @Override
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      saveSnapshot(streamId, version, state, snapshotVersion);
+      return true;
+    }
+
+    @Override
     public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
       return delegate.readStream(streamId, afterVersion, maxCount);
     }
