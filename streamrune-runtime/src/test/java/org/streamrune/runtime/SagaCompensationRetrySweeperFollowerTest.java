@@ -162,6 +162,11 @@ class SagaCompensationRetrySweeperFollowerTest {
         p.sweeper.sweepOnce();
         p.sweeper.sweepOnce();
 
+        // The started sweeper's own thread sweeps too, and whichever sweep comes first past the
+        // grace writes the WARN: it may still be writing it when the sweeps above return.
+        SagaStepLockFixture.awaitUntil(
+            "the WARN about the unanchored lease is written", () -> !lines(Level.WARN).isEmpty());
+        p.sweeper.sweepOnce();
         assertThat(lines(Level.WARN))
             .singleElement()
             .satisfies(line -> assertThat(line).contains("has anchored its lease").contains(LEASE));
@@ -246,8 +251,18 @@ class SagaCompensationRetrySweeperFollowerTest {
     }
   }
 
+  /**
+   * A copy of the captured events. A started sweeper logs from its own thread; the appender adds
+   * each event while holding its own monitor, so the copy is taken under it.
+   */
+  private List<ILoggingEvent> events() {
+    synchronized (appender) {
+      return List.copyOf(appender.list);
+    }
+  }
+
   private List<String> closeLines(Level level) {
-    return appender.list.stream()
+    return events().stream()
         .filter(e -> e.getLevel() == level)
         .map(ILoggingEvent::getFormattedMessage)
         .filter(m -> m.contains("closes while this process leads"))
@@ -277,7 +292,7 @@ class SagaCompensationRetrySweeperFollowerTest {
   }
 
   private List<String> lines(Level level) {
-    return appender.list.stream()
+    return events().stream()
         .filter(e -> e.getLevel() == level)
         .map(ILoggingEvent::getFormattedMessage)
         .filter(m -> m.contains("anchored"))

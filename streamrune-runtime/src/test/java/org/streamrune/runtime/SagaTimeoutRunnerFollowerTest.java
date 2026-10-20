@@ -90,6 +90,11 @@ class SagaTimeoutRunnerFollowerTest {
         p.timeOut();
 
         assertThat(p.sagaStore.timeoutQueryLimits).isEmpty();
+        // The started runner's own poll thread polls too, and whichever poll comes first past the
+        // grace writes the WARN: it may still be writing it when the polls above return.
+        SagaStepLockFixture.awaitUntil(
+            "the WARN about the unanchored lease is written", () -> !lines(Level.WARN).isEmpty());
+        p.timeOut();
         assertThat(lines(Level.WARN))
             .singleElement()
             .satisfies(line -> assertThat(line).contains("has anchored its lease").contains(LEASE));
@@ -282,8 +287,18 @@ class SagaTimeoutRunnerFollowerTest {
     }
   }
 
+  /**
+   * A copy of the captured events. A started runner logs from its own poll thread; the appender
+   * adds each event while holding its own monitor, so the copy is taken under it.
+   */
+  private List<ILoggingEvent> events() {
+    synchronized (appender) {
+      return List.copyOf(appender.list);
+    }
+  }
+
   private List<String> stopLines(Level level) {
-    return appender.list.stream()
+    return events().stream()
         .filter(e -> e.getLevel() == level)
         .map(ILoggingEvent::getFormattedMessage)
         .filter(m -> m.contains("stops while this process leads"))
@@ -291,7 +306,7 @@ class SagaTimeoutRunnerFollowerTest {
   }
 
   private List<String> lines(Level level) {
-    return appender.list.stream()
+    return events().stream()
         .filter(e -> e.getLevel() == level)
         .map(ILoggingEvent::getFormattedMessage)
         .filter(m -> m.contains("anchored"))
