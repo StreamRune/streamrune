@@ -82,6 +82,33 @@ class DeadLetterRetryPolicyTest {
                 DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC));
   }
 
+  /** One retry is the smallest budget, and a valid one: the bound is inclusive. */
+  @Test
+  void acceptsASingleRetry() {
+    var policy =
+        new DeadLetterRetryPolicy(
+            1, Duration.ofSeconds(1), 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
+
+    assertEquals(1, policy.maxRetries());
+  }
+
+  /**
+   * A multiplier of exactly 1.0 is valid and means a constant backoff: every attempt's base delay
+   * is the initial delay, so the third attempt still falls in the jitter band around it.
+   */
+  @Test
+  void acceptsAMultiplierOfOneAsAConstantBackoff() {
+    var policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ofSeconds(10), 1.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
+
+    assertEquals(1.0, policy.backoffMultiplier());
+    Duration third = policy.delayForAttempt(3);
+    assertTrue(
+        third.toMillis() >= 5000 && third.toMillis() <= 15000,
+        "a constant backoff keeps the third delay between 5s and 15s but was " + third);
+  }
+
   @Test
   void delayForAttemptOneIsNearInitialDelay() {
     var policy =
