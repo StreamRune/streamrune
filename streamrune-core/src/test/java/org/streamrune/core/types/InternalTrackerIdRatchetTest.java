@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
@@ -46,6 +47,10 @@ import org.junit.jupiter.api.Test;
  * #REVIEW_ID}), and for narration of an earlier behaviour, rejected outside test sources and code
  * samples ({@link #HISTORY_NARRATION}); work deferred to the project roadmap is rejected everywhere
  * ({@link #ROADMAP}).
+ *
+ * <p><b>Across a line break.</b> A rule that looks for a phrase of more than one word reads on into
+ * the next line of the same kind, so a phrase a reflow broke across two lines is still found, and
+ * reported on the line it starts on ({@link #ruleBrokenBy}).
  *
  * <p><b>No space before a period.</b> In prose, a period follows its word directly ({@link
  * #STRAY_SPACE_BEFORE_PERIOD}). Prose means javadoc and comment lines of a {@code .java} file
@@ -182,21 +187,25 @@ class InternalTrackerIdRatchetTest {
   /**
    * Narration of an earlier behaviour of the code, in any letter case: the words that describe a
    * change instead of the current state ({@code previously}, {@code used to}, {@code no longer},
-   * {@code now also}, {@code until now}, {@code historically}, and "before this" followed by fix,
-   * change, wave or release). Rejected outside test sources ({@link #isTestSource}) and outside
-   * code samples (a fenced block of a guide, a {@code <pre>} block of a javadoc), which quote code
-   * as it is written. Write the state as it is: "cannot" or "is not" for a state that ends at run
-   * time, "the recorded result" for a result recorded earlier, "the clock that computes" for a
-   * purpose. {@code used to} after a form of "be", with or without an adverb ("is used to look up",
-   * "was successfully used to rehydrate"), is the passive of "use", never a narration, and is left
-   * alone.
+   * {@code now also}, {@code until now}, {@code historically}, "this wave", "before this" followed
+   * by fix, change or release, and "before this" or "exactly as before" closing a clause). Rejected
+   * outside test sources ({@link #isTestSource}) and outside code samples (a fenced block of a
+   * guide, a {@code <pre>} block of a javadoc), which quote code as it is written; read on into the
+   * next line ({@link #ruleBrokenBy}). Write the state as it is: "cannot" or "is not" for a state
+   * that ends at run time, "the recorded result" for a result recorded earlier, "the clock that
+   * computes" for a purpose. Left alone: {@code used to} after a form of "be", with or without an
+   * adverb ("is used to look up", "was successfully used to rehydrate"), the passive of "use";
+   * "before this" without the comma ("before this call returns"); and "exactly as before" followed
+   * by an article or a determiner ("exactly as before the reinstate"), a state at run time.
    */
   private static final Pattern HISTORY_NARRATION =
       Pattern.compile(
-          "(?i)\\b(?:previously|historically|until now|now also|no longer"
-              + "|before this (?:fix|change|wave|release)"
+          "(?i)\\b(?:previously|historically|until now|now also|no longer|this wave"
+              + "|before this (?:fix|change|release)"
               + "|(?<!\\b(?:is|are|was|were|be|been|being) )"
-              + "(?<!\\b(?:is|are|was|were|be|been|being) [a-z]{1,20}ly )used to)\\b");
+              + "(?<!\\b(?:is|are|was|were|be|been|being) [a-z]{1,20}ly )used to)\\b"
+              + "|\\bbefore this,"
+              + "|\\bexactly as before\\b(?!\\s+(?:the|a|an|its|this|that|their|any|each|every)\\b)");
 
   /**
    * Work deferred to the project roadmap ("on the" followed by "roadmap"), in any letter case:
@@ -267,7 +276,8 @@ class InternalTrackerIdRatchetTest {
       String relative = relative(file);
       List<Line> lines = classify(relative, read(file));
       for (int i = 0; i < lines.size(); i++) {
-        String rule = ruleBrokenBy(relative, lines.get(i));
+        Line next = i + 1 < lines.size() ? lines.get(i + 1) : null;
+        String rule = ruleBrokenBy(relative, lines.get(i), next);
         if (rule != null) {
           violations.add(
               rule + " " + relative + ":" + (i + 1) + ": " + lines.get(i).text().strip());
@@ -297,43 +307,89 @@ class InternalTrackerIdRatchetTest {
 
   /**
    * The rule a line of the repository-relative file breaks, by the name of its pattern, or {@code
-   * null}.
+   * null}. {@code next} is the line after it, or {@code null} at the end of the file.
+   *
+   * <p>A rule that matches a phrase of more than one word reads on into the next line when that
+   * line is of the same kind (prose, code sample, or neither): a reflowed comment or paragraph
+   * breaks a phrase across a line break ("no" at the end of one line, "longer" at the start of the
+   * next), and the phrase is still there. Both lines are read without their indentation and their
+   * leading comment or quote marker ({@link #unmarked}), joined by one space, and a match belongs
+   * to the line it starts on. The label rules, which match a single token or a marker-anchored
+   * label, read the line alone.
    */
-  private static String ruleBrokenBy(String relative, Line classified) {
+  private static String ruleBrokenBy(String relative, Line classified, Line next) {
     String line = classified.text();
     String prose = classified.prose();
     boolean testSource = isTestSource(relative);
-    if (FORBIDDEN.matcher(line).find()) {
+    Line joinable = next != null && kindOf(next) == kindOf(classified) ? next : null;
+    String nextText = joinable == null ? null : joinable.text();
+    String nextProse = joinable == null ? null : joinable.prose();
+    if (startsHere(FORBIDDEN, line, nextText)) {
       return "FORBIDDEN";
     }
     if (SHORT_LABEL.matcher(line).find()) {
       return "SHORT_LABEL";
     }
-    if (REVIEW_ID.matcher(line).find()) {
+    if (REVIEW_ID.matcher(line).find() || startsHere(REVIEW_ID, line, nextText)) {
       return "REVIEW_ID";
     }
-    if (PRIVATE_MATERIAL.matcher(line).find()) {
+    if (startsHere(PRIVATE_MATERIAL, line, nextText)) {
       return "PRIVATE_MATERIAL";
     }
-    if (HISTORY.matcher(line).find()) {
+    if (startsHere(HISTORY, line, nextText)) {
       return "HISTORY";
     }
-    if (ROADMAP.matcher(line).find()) {
+    if (startsHere(ROADMAP, line, nextText)) {
       return "ROADMAP";
     }
     if (!testSource && FIX_HISTORY.matcher(line).find()) {
       return "FIX_HISTORY";
     }
-    if (!testSource && !classified.sample() && HISTORY_NARRATION.matcher(line).find()) {
+    if (!testSource && !classified.sample() && startsHere(HISTORY_NARRATION, line, nextText)) {
       return "HISTORY_NARRATION";
     }
     if (!CRASH_POINT_TABLE_TESTS.contains(relative) && CRASH_POINT_LABEL.matcher(line).find()) {
       return "CRASH_POINT_LABEL";
     }
-    if (prose != null && STRAY_SPACE_BEFORE_PERIOD.matcher(prose).find()) {
+    if (prose != null && startsHere(STRAY_SPACE_BEFORE_PERIOD, prose, nextProse)) {
       return "STRAY_SPACE_BEFORE_PERIOD";
     }
     return null;
+  }
+
+  /** The kind of a line, for {@link #ruleBrokenBy}: lines of one kind read on into each other. */
+  private enum Kind {
+    PROSE,
+    SAMPLE,
+    OTHER
+  }
+
+  private static Kind kindOf(Line line) {
+    return line.prose() != null ? Kind.PROSE : line.sample() ? Kind.SAMPLE : Kind.OTHER;
+  }
+
+  /**
+   * The indentation and one leading comment or quote marker of a line: what {@link #unmarked}
+   * drops.
+   */
+  private static final Pattern LEADING_MARKER =
+      Pattern.compile("^\\s*(?:/\\*\\*?|\\*+|//+|#+|>+)?\\s*");
+
+  /** {@code text} without its indentation and leading comment or quote marker. */
+  static String unmarked(String text) {
+    return LEADING_MARKER.matcher(text).replaceFirst("");
+  }
+
+  /**
+   * Whether {@code pattern} matches the line {@code text} joined with {@code nextText} (both {@link
+   * #unmarked}, one space between them; {@code nextText} is {@code null} for no next line) at a
+   * position on {@code text}: a match that starts on the next line is that line's.
+   */
+  static boolean startsHere(Pattern pattern, String text, String nextText) {
+    String head = unmarked(text);
+    String joined = nextText == null ? head : head + " " + unmarked(nextText);
+    Matcher matcher = pattern.matcher(joined);
+    return matcher.find() && matcher.start() < head.length();
   }
 
   /**
@@ -471,16 +527,68 @@ class InternalTrackerIdRatchetTest {
     String strayProse = "The sweep is done " + ".";
     assertEquals(
         "STRAY_SPACE_BEFORE_PERIOD",
-        ruleBrokenBy("docs/guide/x.md", classify("docs/guide/x.md", List.of(strayProse)).get(0)));
+        ruleBrokenBy(
+            "docs/guide/x.md", classify("docs/guide/x.md", List.of(strayProse)).get(0), null));
     String strayJavadoc = "   * The sweep is done " + ".";
     assertEquals(
         "STRAY_SPACE_BEFORE_PERIOD",
-        ruleBrokenBy("a/src/main/java/A.java", classify("A.java", List.of(strayJavadoc)).get(0)));
+        ruleBrokenBy(
+            "a/src/main/java/A.java", classify("A.java", List.of(strayJavadoc)).get(0), null));
     String narrationInGuide = "The rule now al" + "so covers the band.";
     assertEquals(
         "HISTORY_NARRATION",
         ruleBrokenBy(
-            "docs/guide/x.md", classify("docs/guide/x.md", List.of(narrationInGuide)).get(0)));
+            "docs/guide/x.md",
+            classify("docs/guide/x.md", List.of(narrationInGuide)).get(0),
+            null));
+    for (String narration :
+        List.of(
+            "Since this wa" + "ve, both runners continue",
+            "Befo" + "re this, the guard was a flag",
+            "tolerated exactly as befo" + "re.",
+            "threads it in exactly as befo" + "re even with zero registrations",
+            "and stays exactly as befo" + "re (the erased subject)")) {
+      assertTrue(HISTORY_NARRATION.matcher(narration).find(), "the rule must reject: " + narration);
+    }
+    // A phrase broken across a line break is still one phrase, reported on the line it starts on.
+    assertWrapped(
+        "HISTORY_NARRATION", "a/src/main/java/A.java", "   * It no", "   * lo" + "nger guesses.");
+    assertWrapped(
+        "HISTORY_NARRATION",
+        "a/src/main/java/A.java",
+        "    // a relay whose thread is no",
+        "    // lo" + "nger alive died unexpectedly");
+    assertWrapped(
+        "HISTORY_NARRATION",
+        "docs/guide/x.md",
+        "(the event store can no",
+        "lo" + "nger read the entry's offset)");
+    assertWrapped("ROADMAP", "docs/guide/x.md", "Envelope encryption is on the", "road" + "map.");
+    assertWrapped(
+        "STRAY_SPACE_BEFORE_PERIOD",
+        "a/src/main/java/A.java",
+        "   * The sweep is done",
+        "   * " + ". Then the purge runs.");
+  }
+
+  /** No line of {@code lines}, consecutive lines of {@code relative}, breaks a rule. */
+  private static void assertNoneFlagged(String relative, List<String> lines) {
+    List<Line> classified = classify(relative, lines);
+    for (int i = 0; i < classified.size(); i++) {
+      Line next = i + 1 < classified.size() ? classified.get(i + 1) : null;
+      assertNull(
+          ruleBrokenBy(relative, classified.get(i), next),
+          "must not flag: " + classified.get(i).text());
+    }
+  }
+
+  /**
+   * {@code first} and {@code second}, consecutive lines of {@code relative}, break {@code rule}.
+   */
+  private static void assertWrapped(String rule, String relative, String first, String second) {
+    List<Line> lines = classify(relative, List.of(first, second));
+    assertEquals(rule, ruleBrokenBy(relative, lines.get(0), lines.get(1)), first + " / " + second);
+    assertNull(ruleBrokenBy(relative, lines.get(1), null), "reported once, on the first line");
   }
 
   @Test
@@ -519,7 +627,14 @@ class InternalTrackerIdRatchetTest {
             "version 1.0.1",
             "e.g. a lease",
             "wait ... and retry",
-            "./gradlew build")) {
+            "./gradlew build",
+            "before this call returns",
+            "rebuilds stay working, exactly as before the reinstate",
+            "the runner processes exactly as before the gate opens",
+            "as before the restore",
+            "as it was before the transaction",
+            "each wave of concurrent appends",
+            "the third wave queues")) {
       assertFalse(FORBIDDEN.matcher(ordinary).find(), "must not flag: " + ordinary);
       assertFalse(CRASH_POINT_LABEL.matcher(ordinary).find(), "must not flag: " + ordinary);
       assertFalse(SHORT_LABEL.matcher(ordinary).find(), "must not flag: " + ordinary);
@@ -536,9 +651,7 @@ class InternalTrackerIdRatchetTest {
     String narration = "the rule now al" + "so covers the band";
     List<String> guide =
         List.of("Text before.", "```java", "// " + narration, "```", "Version `1.0 " + ".` here.");
-    for (Line line : classify("docs/guide/x.md", guide)) {
-      assertNull(ruleBrokenBy("docs/guide/x.md", line), "must not flag: " + line.text());
-    }
+    assertNoneFlagged("docs/guide/x.md", guide);
     List<String> javadoc =
         List.of(
             "  /**",
@@ -548,17 +661,18 @@ class InternalTrackerIdRatchetTest {
             "   * }</pre>",
             "   * Returns {@code done " + ".} and {@link Foo#bar() bar " + ".} as written.",
             "   */");
-    for (Line line : classify("a/src/main/java/A.java", javadoc)) {
-      assertNull(ruleBrokenBy("a/src/main/java/A.java", line), "must not flag: " + line.text());
-    }
+    assertNoneFlagged("a/src/main/java/A.java", javadoc);
+    // Reading on into the next line keeps its punctuation, and stops at a code sample.
+    assertNoneFlagged(
+        "a/src/main/java/A.java",
+        List.of("   * The lease is no.", "   * Longer leases renew less."));
+    assertNoneFlagged("docs/guide/x.md", List.of("A step is no", "```", "lo" + "nger here", "```"));
+    assertNoneFlagged("docs/guide/x.md", List.of("A step is no", "", "lo" + "nger here."));
     // A code line of a java file is not prose; a narration in a test source is allowed.
     String codeLine = "    int x = done " + ". size();";
-    assertNull(
-        ruleBrokenBy("a/src/main/java/A.java", classify("A.java", List.of(codeLine)).get(0)));
+    assertNoneFlagged("a/src/main/java/A.java", List.of(codeLine));
     String testNarration = "  // Previ" + "ously the poller dropped it.";
-    assertNull(
-        ruleBrokenBy(
-            "a/src/test/java/ATest.java", classify("ATest.java", List.of(testNarration)).get(0)));
+    assertNoneFlagged("a/src/test/java/ATest.java", List.of(testNarration));
     for (String ordinary :
         List.of(
             "the episode age (T0) is the claim anchor",
