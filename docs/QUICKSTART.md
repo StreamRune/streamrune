@@ -411,7 +411,7 @@ command side only returns a `CommandResult`.
 
 StreamRune supports encrypting event payload data at rest per subject: the in-memory, filesystem
 and PostgreSQL engines keep one AES-256-GCM key per subject, Vault uses one transit key per subject,
-and AWS KMS encrypts every subject under a single shared CMK. Five engine implementations are
+and AWS KMS encrypts each value under a data key wrapped by a single shared CMK. Five engine implementations are
 available:
 
 | Engine | Module | Best for |

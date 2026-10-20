@@ -282,6 +282,11 @@ class AwsKmsCryptoEngineTest {
     for (var e : List.of(engine, engineOn(store))) {
       var thrown = assertThrows(CryptoMappingException.class, () -> e.decrypt(mallory, blob));
       assertTrue(thrown.getMessage().contains(mallory.redacted()), thrown.getMessage());
+      // KMS's verdict, not the GCM tag: a data key is cached only for the subject it was
+      // unwrapped (or generated) for, so mallory's lookup never finds alice's key.
+      assertInstanceOf(
+          software.amazon.awssdk.services.kms.model.InvalidCiphertextException.class,
+          thrown.getCause());
     }
     assertArrayEquals(bytes("alice's address"), engine.decrypt(alice, blob));
   }
@@ -339,6 +344,11 @@ class AwsKmsCryptoEngineTest {
     malformed.add(new byte[] {'S', 'X', 'K', 'C', 2, 0, 1, 1});
     malformed.add(new byte[] {'S', 'R', 'X', 'C', 2, 0, 1, 1});
     malformed.add(new byte[] {'S', 'R', 'K', 'X', 2, 0, 1, 1});
+    for (int i = 0; i < 4; i++) {
+      byte[] foreignMagic = good.clone(); // well-formed apart from one byte of the magic
+      foreignMagic[i] ^= 0x20;
+      malformed.add(foreignMagic);
+    }
     byte[] zeroLength = good.clone();
     zeroLength[5] = 0;
     zeroLength[6] = 0;
@@ -387,11 +397,13 @@ class AwsKmsCryptoEngineTest {
     doReturn(
             DecryptResponse.builder()
                 .keyId(KEY_ID)
-                .plaintext(SdkBytes.fromByteArray(new byte[16]))
+                .plaintext(SdkBytes.fromByteArray(new byte[7]))
                 .build())
         .when(kmsClient)
         .decrypt(any(DecryptRequest.class));
-    assertThrows(CryptoMappingException.class, () -> engineOn(store).decrypt(subject, blob));
+    var thrown =
+        assertThrows(CryptoMappingException.class, () -> engineOn(store).decrypt(subject, blob));
+    assertTrue(thrown.getMessage().contains("7-byte value"), thrown.getMessage());
   }
 
   // ---- crypto-shredding ----------------------------------------------------------------------
@@ -539,6 +551,35 @@ class AwsKmsCryptoEngineTest {
   }
 
   @Test
+  void aDataKeyGeneratedAcrossAForgetIsNotCached() {
+    // The subject is forgotten and reinstated while GenerateDataKey runs: the encrypt may return
+    // (the subject is live again), but the key it generated before the forget's eviction is not
+    // cached after it.
+    var subject = SubjectId.of("customer-forget-reinstate");
+    KmsClient racingClient = forwardingClient();
+    var racer = engineWith(racingClient);
+    doAnswer(
+            invocation -> {
+              Object response =
+                  kmsClient.generateDataKey((GenerateDataKeyRequest) invocation.getArgument(0));
+              racer.deleteKey(subject);
+              racer.reinstate(subject);
+              return response;
+            })
+        .when(racingClient)
+        .generateDataKey(any(GenerateDataKeyRequest.class));
+
+    byte[] blob = racer.encrypt(subject, bytes("pii"));
+    forwardGenerateDataKey(racingClient);
+    clearInvocations(racingClient);
+
+    racer.encrypt(subject, bytes("pii"));
+    verify(racingClient, times(1)).generateDataKey(any(GenerateDataKeyRequest.class));
+    assertArrayEquals(bytes("pii"), racer.decrypt(subject, blob));
+    verify(racingClient, times(1)).decrypt(any(DecryptRequest.class));
+  }
+
+  @Test
   void deleteKeyTombstonesSubject_soDecryptYieldsRedacted() {
     var subject = SubjectId.of("subject-4");
     engine.deleteKey(subject);
@@ -644,6 +685,20 @@ class AwsKmsCryptoEngineTest {
             CryptoOperationException.class,
             () -> engine.encrypt(SubjectId.of("subject-long-wrap"), bytes("pii")));
     assertTrue(thrown.getMessage().contains("65536"), thrown.getMessage());
+
+    doReturn(
+            GenerateDataKeyResponse.builder()
+                .keyId(KEY_ID)
+                .plaintext(SdkBytes.fromByteArray(new byte[32]))
+                .ciphertextBlob(SdkBytes.fromByteArray(new byte[0]))
+                .build())
+        .when(kmsClient)
+        .generateDataKey(any(GenerateDataKeyRequest.class));
+    var empty =
+        assertThrows(
+            CryptoOperationException.class,
+            () -> engine.encrypt(SubjectId.of("subject-empty-wrap"), bytes("pii")));
+    assertTrue(empty.getMessage().contains("of 0 bytes"), empty.getMessage());
   }
 
   @Test
