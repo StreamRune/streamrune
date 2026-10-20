@@ -10,14 +10,13 @@ import java.util.Set;
  * compile time and so cannot be a typed record/{@code @ConfigMapping} field.
  *
  * <p><b>Why this exists.</b> Each framework's own relaxed boolean conversion disagrees on
- * non-canonical values: {@code Boolean.parseBoolean} (used previously in the Spring and Quarkus
- * integrations) treats <em>only</em> {@code "true"} as {@code true}, so {@code on}/{@code
- * yes}/{@code 1} all read as {@code false}; Micronaut's typed {@code Boolean} converter reads
- * {@code yes}/{@code y}/{@code on}/{@code true} as {@code true} but {@code 1} as {@code false};
- * SmallRye reads {@code 1}/{@code y}/{@code t} as {@code true}. The same {@code enabled=on}
- * therefore enabled a projection on Micronaut but silently disabled it on Spring/Quarkus. Routing
- * every integration through this one method makes the interpretation identical on all three
- * runtimes.
+ * non-canonical values: {@code Boolean.parseBoolean} treats <em>only</em> {@code "true"} as {@code
+ * true}, so {@code on}/{@code yes}/{@code 1} all read as {@code false}; Micronaut's typed {@code
+ * Boolean} converter reads {@code yes}/{@code y}/{@code on}/{@code true} as {@code true} but {@code
+ * 1} as {@code false}; SmallRye reads {@code 1}/{@code y}/{@code t} as {@code true}. The same
+ * {@code enabled=on} therefore enabled a projection on Micronaut but silently disabled it on
+ * Spring/Quarkus. Routing every integration through this one method makes the interpretation
+ * identical on all three runtimes.
  *
  * <p><b>Canonical interpretation</b> (case-insensitive, surrounding whitespace ignored):
  *

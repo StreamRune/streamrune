@@ -168,9 +168,8 @@ public final class SubscriptionHealthContributor {
     // other metrics call site in the runners ("metric failures never disrupt projection
     // processing"); an Error still propagates, and run() now registers inside its try so even that
     // hits the finally bookkeeping.
-    // This comment used to claim registerSubscriptionLagGauge was "the ONLY unwrapped
-    // metrics call in the projection stack" — false even at the time: computeHealth()'s
-    // recordSubscriptionLag below was bare too, and is now guarded the same way.
+    // registerSubscriptionLagGauge is not the only unwrapped metrics call in the projection
+    // stack: computeHealth()'s recordSubscriptionLag below is guarded the same way.
     try {
       metrics.registerSubscriptionLagGauge(SubscriptionName.of(name), () -> currentLag(name));
     } catch (RuntimeException e) {
@@ -245,11 +244,11 @@ public final class SubscriptionHealthContributor {
    * subscriptions.lag} supplier gauge so a metrics scrape reads current lag without a
    * health-endpoint scrape. Never throws into a scrape.
    *
-   * <p><b>A failed read must not look healthy.</b> This used to swallow every {@link
-   * RuntimeException} and return {@code 0}, silently, which is the value a perfectly caught-up
-   * subscription reports. So a {@code statement_timeout} on {@code lastGlobalOffset()}, a revoked
-   * {@code projection_offset} SELECT grant, or a momentarily exhausted pool made every scrape read
-   * lag=0 while the projection made no progress and the backlog grew — and {@code
+   * <p><b>A failed read must not look healthy.</b> Swallowing every {@link RuntimeException} and
+   * returning {@code 0}, silently, would report the value a perfectly caught-up subscription
+   * reports. So a {@code statement_timeout} on {@code lastGlobalOffset()}, a revoked {@code
+   * projection_offset} SELECT grant, or a momentarily exhausted pool made every scrape read lag=0
+   * while the projection made no progress and the backlog grew — and {@code
    * docs/guide/production.md}'s "alert on rising {@code streamrune.subscriptions.lag}" was
    * structurally unfirable during exactly the store trouble it exists to catch, with no log line to
    * correlate against.
@@ -385,7 +384,7 @@ public final class SubscriptionHealthContributor {
     // subscription's entry) — the entire endpoint down over a metrics-backend hiccup that has
     // nothing to do with subscription health itself.
     //
-    // A PERSISTENTLY throwing sink used to WARN-with-stack-trace on every single call —
+    // A PERSISTENTLY throwing sink must not WARN-with-stack-trace on every single call —
     // i.e. once per subscription, every health() scrape — flooding the log at scrape cadence x N
     // subscriptions. One-shot latch per subscription, mirroring the class's own pushPathDeadWarned
     // / registration guard: warn once when the sink starts failing, stay

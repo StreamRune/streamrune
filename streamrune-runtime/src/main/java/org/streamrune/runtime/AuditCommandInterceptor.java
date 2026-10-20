@@ -16,8 +16,8 @@ import org.streamrune.core.types.UserId;
  * <p>The caller's {@link org.streamrune.core.types.UserId} is read from {@link
  * StreamRuneContext#CURRENT} in {@link #before(CommandContext)} and captured in a {@link
  * ThreadLocal} so it remains available in {@link #after(CommandContext)} and {@link
- * #onError(CommandContext, Throwable)}, even if the ScopedValue is no longer bound on the calling
- * thread at that point.
+ * #onError(CommandContext, Throwable)}, even if the ScopedValue is not bound on the calling thread
+ * at that point.
  *
  * <p>A {@code null} userId in the audit entry means the command was submitted without an
  * authenticated user (anonymous request).

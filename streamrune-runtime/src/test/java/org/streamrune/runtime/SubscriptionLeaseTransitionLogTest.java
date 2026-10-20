@@ -82,7 +82,7 @@ class SubscriptionLeaseTransitionLogTest {
 
     assertThat(infoLines())
         .singleElement()
-        .satisfies(line -> assertThat(line).contains(NAME).contains("no longer leads"));
+        .satisfies(line -> assertThat(line).contains(NAME).contains("has lost it"));
   }
 
   @Test
@@ -99,7 +99,7 @@ class SubscriptionLeaseTransitionLogTest {
 
     assertThat(infoLines())
         .singleElement()
-        .satisfies(line -> assertThat(line).contains(NAME).contains("no longer leads"));
+        .satisfies(line -> assertThat(line).contains(NAME).contains("has lost it"));
   }
 
   @Test
@@ -117,7 +117,7 @@ class SubscriptionLeaseTransitionLogTest {
         .hasSize(3)
         .satisfiesExactly(
             line -> assertThat(line).contains("now leads"),
-            line -> assertThat(line).contains("no longer leads"),
+            line -> assertThat(line).contains("has lost it"),
             line -> assertThat(line).contains("now leads"));
   }
 

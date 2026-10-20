@@ -316,24 +316,24 @@ final class SagaCommandDispatch {
    *             before()}, so it was never attempted and no side effect can have occurred. A pure
    *             "later" gate, bounded by the breaker's own cooldown. This is the trigger for the
    *             retry-later verdict: the breaker is a DEFAULT bean in all three integrations, so
-   *             before this fix a downstream incident silently refunded every saga that touched it.
+   *             classified otherwise, a downstream incident would silently refund every saga that
+   *             touched it.
    *         <li>{@link SagaCommandVetoedException} — a USER interceptor refused the command in
    *             {@code before()} by returning {@code false}. Same event as the line above,
    *             different spelling: nothing was attempted, nothing was decided, nothing was
-   *             touched. It used to sit in the permanent bucket above (as a {@code
-   *             DomainException}), which meant a rate limiter or maintenance-mode window terminally
-   *             FAILED every saga that received an event while it was on — with forward side
-   *             effects already applied and the undo, vetoed by the same gate, never run. See
-   *             {@link SagaCommandVetoedException} for the full argument; the operator remedy is to
-   *             have such a gate consult {@code StreamRuneContext.isSagaDispatch()}.
+   *             touched. In the permanent bucket above (as a {@code DomainException}) it would let
+   *             a rate limiter or maintenance-mode window terminally FAIL every saga that received
+   *             an event while it was on — with forward side effects already applied and the undo,
+   *             vetoed by the same gate, never run. See {@link SagaCommandVetoedException} for the
+   *             full argument; the operator remedy is to have such a gate consult {@code
+   *             StreamRuneContext.isSagaDispatch()}.
    *         <li>{@link CommandBusClosedException} — the bus is shutting down, so the command was
    *             refused ADMISSION exactly like the two entries above: nothing was attempted,
-   *             nothing was decided, nothing was touched. This used to be a bare {@code
-   *             IllegalStateException} this classifier could not prove retriable, so a graceful
-   *             node shutdown mid-flow claimed a compensation episode and issued the undo for a
-   *             healthy saga — while {@link #compensateAndClassify} binned the very same exception
-   *             RETRY. The redelivered event converges on the deterministic forward keys after
-   *             restart.
+   *             nothing was decided, nothing was touched. As a bare {@code IllegalStateException}
+   *             this classifier could not prove it retriable, so a graceful node shutdown mid-flow
+   *             would claim a compensation episode and issue the undo for a healthy saga — while
+   *             {@link #compensateAndClassify} bins the very same exception RETRY. The redelivered
+   *             event converges on the deterministic forward keys after restart.
    *         <li>{@link CommandBusOverloadedException} — the bus's {@code executeAsync} in-flight
    *             admission budget is exhausted. Same ADMISSION refusal shape as {@link
    *             CommandBusClosedException} directly above (nothing was attempted), so it gets the
@@ -497,8 +497,9 @@ final class SagaCommandDispatch {
         // deliberately NOT a DomainException, so it lands in this RETRY branch: the
         // episode stays COMPENSATING and the resume paths re-drive it, bounded by
         // SagaCompensationRetrySweeper's age-based give-up -> FAULTED like any other transient
-        // compensation failure. It used to terminalize FAILED on the argument that "a veto is
-        // deterministic, re-driving would spin forever" — but a veto is a load-shedding GATE, and
+        // compensation failure. Terminalizing FAILED on the argument that "a veto is
+        // deterministic, re-driving would spin forever" would be wrong: a veto is a load-shedding
+        // GATE, and
         // the two ways it can be wrong are not symmetric: staying COMPENSATING through a
         // maintenance window costs a bounded dwell and then actually issues the refund, whereas
         // terminalizing abandoned the undo permanently for a gate that lifts in minutes. What is

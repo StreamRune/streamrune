@@ -265,7 +265,7 @@ public class StreamRuneRuntimeHints implements RuntimeHintsRegistrar {
    * skipped.
    *
    * @param hints the registry to add reflection hints to
-   * @param classLoader the class loader used to resolve scanned class names
+   * @param classLoader the class loader that resolves scanned class names
    * @param basePackages the application packages to scan, e.g. {@code "com.example.shop.domain"}
    */
   public static void registerDomainPackages(

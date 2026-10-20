@@ -106,7 +106,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * isPermanentRejection} definition {@link
    * CircuitBreakerCommandInterceptor#INFRASTRUCTURE_FAILURES} derives from, not a second copy that
    * claims to mirror it (the two copies had already drifted on exactly the forgotten-subject
-   * clause). The two predicates are no longer IDENTICAL, by design — a deterministic per-aggregate
+   * clause). The two predicates are not IDENTICAL, by design — a deterministic per-aggregate
    * stored-data failure ({@link CommandFailureClassification#isDeterministicPerAggregate}) IS
    * dead-lettered here (the entry, marked by its {@code errorType}, is the durable operator signal)
    * while it is excluded from the breaker's threshold, and so is a reader behind the stored schema
@@ -514,8 +514,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       // The command succeeded and any produced events are committed. From here on nothing may
       // turn the result into a failure — a misreported failure would be replayed from the DLQ
       // and duplicate the committed events. after() was already invoked above, from INSIDE the
-      // locked section (this call used to sit here, AFTER the aggregate lock was released,
-      // letting a second command's after() phase on the same aggregate interleave with — and
+      // locked section (it must not run here, AFTER the aggregate lock is released: that
+      // would let a second command's after() phase on the same aggregate interleave with — and
       // outrun — this one's; see executeWithRetry).
       try {
         metrics.recordCommandSucceeded();
@@ -543,11 +543,11 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * Two concurrent executions of the same key both MISS it (neither inbox row is committed yet);
    * the loser is then answered by the lookup under the aggregate lock, by the lookup after a
    * decider rejection ({@link #recordedOutcomeAfterRejection}), or — when both reached the append —
-   * by {@link org.streamrune.core.EventStore#appendWithKey}'s claim-loser branch, which used to
-   * return the winner's offsets as a success. Every path calls this same guard with the same two
-   * discriminators, so the outcome no longer depends on timing. The stream check is part of that:
-   * without it this path still replayed another aggregate's {@code streamId}, {@code finalVersion}
-   * and offsets whenever one key was presented on two streams.
+   * by {@link org.streamrune.core.EventStore#appendWithKey}'s claim-loser branch, which without the
+   * guard would return the winner's offsets as a success. Every path calls this same guard with the
+   * same two discriminators, so the outcome does not depend on timing. The stream check is part of
+   * that: without it this path would replay another aggregate's {@code streamId}, {@code
+   * finalVersion} and offsets whenever one key was presented on two streams.
    *
    * @throws IllegalArgumentException if {@code key} was recorded for a different command type or a
    *     different stream
@@ -899,15 +899,15 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * Without the two lookups here, a saga treated the lock-serialized loser's rejection as a
    * permanent failure and compensated a forward step that had succeeded.
    *
-   * <p>The lock is a try-with-resources scoped to this method. Before this fix it was released as
-   * soon as this method returned, and the command bus's {@code after()} phase — including {@link
-   * InlineProjectionInterceptor} — ran afterward, unlocked. Two commands committed against the same
-   * aggregate could then apply their inline projections out of commit order: the second commits and
-   * projects while the first is still mid-projection, and the first then overwrites the read model
-   * with its now-stale value. {@code postCommitAfterPhase} is invoked here, still inside the lock's
-   * try-with-resources, so a second command targeting the same aggregate cannot even start its own
-   * critical section until the first's after() phase — including its inline projection — has
-   * finished and released the lock.
+   * <p>The lock is a try-with-resources scoped to this method. Released as soon as this method
+   * returned, it would leave the command bus's {@code after()} phase — including {@link
+   * InlineProjectionInterceptor} — to run afterward, unlocked. Two commands committed against the
+   * same aggregate could then apply their inline projections out of commit order: the second
+   * commits and projects while the first is still mid-projection, and the first then overwrites the
+   * read model with its now-stale value. {@code postCommitAfterPhase} is invoked here, still inside
+   * the lock's try-with-resources, so a second command targeting the same aggregate cannot even
+   * start its own critical section until the first's after() phase — including its inline
+   * projection — has finished and released the lock.
    *
    * <p><b>Reentrant on every locker, via the bus:</b> a nested same-thread dispatch from inside
    * {@code postCommitAfterPhase} (e.g. an inline projection that dispatches a follow-up command
@@ -1994,11 +1994,11 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
-     * Sets the {@link Clock} used to stamp each produced event's {@link EventMetadata#timestamp()}
-     * at append time. Defaults to {@link Clock#systemUTC()}. Inject a fixed or stepping clock in
-     * tests to assert append-time stamping. The clock is read once per produced event, so events of
-     * one command and successive commands under one bound request context receive distinct
-     * timestamps rather than sharing the request-creation instant.
+     * Sets the {@link Clock} that stamps each produced event's {@link EventMetadata#timestamp()} at
+     * append time. Defaults to {@link Clock#systemUTC()}. Inject a fixed or stepping clock in tests
+     * to assert append-time stamping. The clock is read once per produced event, so events of one
+     * command and successive commands under one bound request context receive distinct timestamps
+     * rather than sharing the request-creation instant.
      */
     public Builder clock(Clock clock) {
       this.clock = clock;

@@ -794,14 +794,14 @@ public final class VaultCryptoEngine implements CryptoEngine {
     // ORIGINAL while that DELETE is about to land. This second read is the last look at Vault
     // before the decision becomes durable.
     //
-    // It used to run AFTER the lift, restoring the tombstone when the key had vanished. That
-    // detected exactly the same interleavings — the undetected window is "the DELETE lands after
+    // Run AFTER the lift instead, restoring the tombstone when the key had vanished, it would
+    // detect exactly the same interleavings — the undetected window is "the DELETE lands after
     // this read" either way, because this read is the last observation in both orderings — but it
-    // opened a window in which the subject was UNGATED and the decision half-made. A process
-    // killed there (OOM, pod eviction, SIGKILL) left a COMPLETED erasure with NO tombstone: the
-    // next encrypt passed the pre-check and transit silently upserted a fresh key for an erased
-    // person, and a rerun could neither repair nor DETECT it, because isForgotten was false and
-    // reinstate returned an idempotent no-op.
+    // would open a window in which the subject is UNGATED and the decision half-made. A process
+    // killed there (OOM, pod eviction, SIGKILL) would leave a COMPLETED erasure with NO tombstone:
+    // the next encrypt would pass the pre-check and transit would silently upsert a fresh key for
+    // an erased person, and a rerun could neither repair nor DETECT it, because isForgotten is
+    // false and reinstate returns an idempotent no-op.
     //
     // With the lift last, reinstate performs exactly ONE durable write and there is no
     // intermediate state to crash into: a crash before it leaves the tombstone (and its evidence)
@@ -1131,8 +1131,8 @@ public final class VaultCryptoEngine implements CryptoEngine {
    * could not be decoded}, {@code could not decode base64}, {@code invalid ciphertext length}) and
    * may forward the AEAD failure text if the open itself fails ( unverified for current Vault, so
    * treated as "if forwarded" rather than a guaranteed shape — Go's {@code cipher: message
-   * authentication failed} / {@code chacha20poly1305: message authentication failed} is the
-   * historically observed text). All are deterministic for the blob.
+   * authentication failed} / {@code chacha20poly1305: message authentication failed} is the text
+   * observed so far). All are deterministic for the blob.
    *
    * <p>NOT included on purpose, both REVERSIBLE and therefore left on the bare (blocks-and-retries)
    * side: the {@code min_decryption_version} policy refusal ({@code "ciphertext or signature

@@ -227,15 +227,15 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
   /**
    * Starts the polling thread.
    *
-   * <p><b>A restart is refused, not silently accepted.</b> The guard used to be {@code
-   * running.compareAndSet(false, true)} alone, which succeeded the instant {@code close()} flipped
-   * the flag — while the previous poll thread was still inside {@code pollOnce()}, whose delivery
-   * close() does not interrupt. Two poll threads then shared one checkpoint: both read {@code
-   * lastOffset = N}, both delivered the same batch to the same listener, and both saved (with an
-   * OffsetStore that is not monotonic-guarded, the later save can even regress the checkpoint).
-   * This is the same guard {@code OutboxPoller} / {@code SagaTimeoutRunner} / the projection
-   * runners apply after a join that timed out and {@code ContinuousProjectionRunner} applies via
-   * its {@code previousRunThread.isAlive()} check.
+   * <p><b>A restart is refused, not silently accepted.</b> {@code running.compareAndSet(false,
+   * true)} alone is not a guard: it succeeds the instant {@code close()} flips the flag — while the
+   * previous poll thread may still be inside {@code pollOnce()}, whose delivery close() does not
+   * interrupt. Two poll threads would then share one checkpoint: both read {@code lastOffset = N},
+   * both delivered the same batch to the same listener, and both saved (with an OffsetStore that is
+   * not monotonic-guarded, the later save can even regress the checkpoint). This is the same guard
+   * {@code OutboxPoller} / {@code SagaTimeoutRunner} / the projection runners apply after a join
+   * that timed out and {@code ContinuousProjectionRunner} applies via its {@code
+   * previousRunThread.isAlive()} check.
    *
    * @throws IllegalStateException if the subscription is already running, has been closed, or its
    *     previous polling thread has not finished winding down

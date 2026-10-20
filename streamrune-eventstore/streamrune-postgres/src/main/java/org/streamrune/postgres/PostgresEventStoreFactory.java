@@ -109,8 +109,8 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
    * shipped at {@link #EVENT_STORE_MIGRATION_LOCATION}, recorded in {@link
    * #EVENT_STORE_HISTORY_TABLE}.
    *
-   * <p><b>Why neither is the Flyway default.</b> The series used to live at {@code
-   * classpath:db/migration} on {@code flyway_schema_history}, which is exactly where a consuming
+   * <p><b>Why neither is the Flyway default.</b> Flyway's defaults are {@code
+   * classpath:db/migration} and {@code flyway_schema_history}, which is exactly where a consuming
    * application puts its OWN migrations (Spring Boot's documented default), and this module
    * declares {@code api(flyway-core)} so Boot's Flyway auto-configuration activates transitively
    * whether or not the application asked for it. Sharing the location merged two independent series
@@ -448,10 +448,9 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
    * way the factory-equivalent Spring/Quarkus/Micronaut projection-repository beans and the
    * saga/DLQ stores build theirs. So when a {@link CryptoEngine} is configured, an
    * {@code @Encrypted} read-model field is ciphertext at rest and within {@code forget(subjectId)}
-   * scope. Previously this method returned the crypto-BLIND 1-arg repository even though the
-   * factory held a configured engine, so an {@code @Encrypted} read model built through the factory
-   * was written to the {@code data} column as plaintext PII and GDPR-forget never reached it. With
-   * no {@code cryptoEngine} the mapper is crypto-blind exactly as before.
+   * scope. The crypto-BLIND 1-arg repository would write an {@code @Encrypted} read model built
+   * through a factory that holds a configured engine to the {@code data} column as plaintext PII,
+   * out of the reach of a GDPR forget. With no {@code cryptoEngine} the mapper is crypto-blind.
    *
    * @return configured JdbcProjectionRepository, crypto-aware iff this factory has a {@link
    *     CryptoEngine}

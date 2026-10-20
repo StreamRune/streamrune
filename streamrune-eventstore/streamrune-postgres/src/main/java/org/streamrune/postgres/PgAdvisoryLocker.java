@@ -142,13 +142,13 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
   /**
    * {@inheritDoc}
    *
-   * <p>A negative timeout used to be replaced by this locker's hardcoded 30-second default and then
-   * BLOCK, while {@code LocalStripedLocker} — the auto-configured default — passed the same value
-   * to {@code tryLock} and did not wait at all. One {@code streamrune.lock-timeout}, two
-   * behaviours, selected by which locker happened to be wired. It is now rejected here (before any
-   * connection is checked out, so no pool slot can leak) and at boot by all three integrations. A
-   * {@code null} timeout still falls back to that 30-second default: that is a programmatic-wiring
-   * omission, not an operator-supplied value — no property binding can produce it.
+   * <p>A negative timeout replaced by a hardcoded 30-second default would BLOCK here, while {@code
+   * LocalStripedLocker} — the auto-configured default — passes the same value to {@code tryLock}
+   * and does not wait at all: one {@code streamrune.lock-timeout}, two behaviours, selected by
+   * which locker happens to be wired. It is rejected here (before any connection is checked out, so
+   * no pool slot can leak) and at boot by all three integrations. A {@code null} timeout still
+   * falls back to that 30-second default: that is a programmatic-wiring omission, not an
+   * operator-supplied value — no property binding can produce it.
    *
    * <p>A positive SUB-MILLISECOND timeout is rejected on the same terms, here and at boot. It used
    * to survive every check — positive, so not the negative arm; not {@code isZero()}, so it routed
@@ -181,7 +181,7 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
     // A single guard over EVERYTHING from setAutoCommit through the
     // successful lock releases the already-checked-out connection on ANY throwable, not just
     // SQLException — a RuntimeException from a proxying/instrumented pool's setAutoCommit (the arm
-    // that previously caught only SQLException), or an Error (OOME, a lazy driver LinkageError)
+    // a catch of SQLException alone misses), or an Error (OOME, a lazy driver LinkageError)
     // from the lock attempt. Without this the pool slot leaks permanently and, after maxPoolSize
     // such events, the whole command path deadlocks long after the fault cleared.
     try {

@@ -9,7 +9,7 @@ import com.fasterxml.jackson.annotation.JsonValue;
  * effectively-once delivery: the bus checks the {@link org.streamrune.core.CommandInbox} before
  * running the handler, and commits the inbox row atomically with the command's events via {@link
  * org.streamrune.core.EventStore#appendWithKey}. A redelivered call with the same key returns the
- * previously recorded result without re-running the handler.
+ * recorded result without re-running the handler.
  *
  * <p>Saga commands use deterministic keys derived from the triggering event's global offset and the
  * command's index in the dispatch list — see {@code SagaCommandDispatch.forwardKey} and {@code

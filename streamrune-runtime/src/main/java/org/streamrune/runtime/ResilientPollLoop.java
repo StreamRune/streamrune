@@ -122,8 +122,8 @@ final class ResilientPollLoop {
         Duration backoff = backoffDelay(failures);
         // Read once, before logging, and reuse below for the retry decision. keepRunning may
         // already be false by the time we get here (e.g. a terminal read-poison signal sets it
-        // before throwing — see the comment below) — the ERROR branch used to unconditionally
-        // say "retrying in N ms" immediately before the loop returned WITHOUT retrying.
+        // before throwing — see the comment below) — an ERROR branch that unconditionally
+        // says "retrying in N ms" would say it right before the loop returns WITHOUT retrying.
         boolean willRetry = keepRunning.getAsBoolean();
         if (e instanceof BenignSignal) {
           // Expected control-flow signal (e.g. leadership loss), not an error: one-line INFO, no
@@ -166,9 +166,10 @@ final class ResilientPollLoop {
       } catch (Throwable t) {
         // A java.lang.Error (AssertionError, NoClassDefFoundError/LinkageError from a
         // missing optional dependency, StackOverflowError on pathological data, OutOfMemoryError)
-        // is NOT retryable, and until now it left this loop — and the owning virtual thread —
-        // without a single log line naming the loop. An owner without its own liveness accessor
-        // (the retention sweepers) then froze silently, every gauge it fed holding its last value.
+        // is NOT retryable. Leaving this loop — and the owning virtual thread — without a single
+        // log
+        // line naming the loop, it would let an owner without its own liveness accessor (the
+        // retention sweepers) freeze silently, every gauge it fed holding its last value.
         // Log the death BY NAME, then RETHROW: the loop stops terminally and the owner decides what
         // a dead thread means — PollingEventSubscription flips STOPPED in its own catch,
         // the retention sweepers report isStarted() && !isAlive() to

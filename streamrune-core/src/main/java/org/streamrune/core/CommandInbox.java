@@ -62,16 +62,16 @@ public interface CommandInbox {
      * inbox HIT, and {@link EventStore#appendWithKey}'s claim-loser branch in <em>every</em>
      * implementation — must call this BEFORE returning the row's offsets and version.
      *
-     * <p><b>Why it lives here.</b> The guard used to exist only on the command bus's sequential
-     * pre-check. Two concurrent executions presenting the same key both miss that pre-check
-     * (neither inbox row is committed yet), so the loser reached the store's claim-loser branch,
-     * which returned the WINNER's {@code globalOffsets}/{@code finalVersion} with {@code
-     * alreadyApplied == true} and no comparison at all. The losing caller was told its command had
-     * succeeded — its events were never appended and never would be, the key being permanently
-     * claimed — and the result carried another aggregate's stream metadata. The same two inputs
-     * therefore produced either a loud rejection or a silent false success depending purely on
-     * timing. One shared guard, called from every path, is what keeps the verdict identical; a
-     * per-call-site copy is exactly how the paths diverged in the first place.
+     * <p><b>Why it lives here.</b> The command bus's sequential pre-check cannot be the only guard.
+     * Two concurrent executions presenting the same key both miss that pre-check (neither inbox row
+     * is committed yet), so the loser reaches the store's claim-loser branch, which without the
+     * guard would return the WINNER's {@code globalOffsets}/{@code finalVersion} with {@code
+     * alreadyApplied == true} and no comparison at all. The losing caller would be told its command
+     * had succeeded — its events never appended and never to be, the key being permanently claimed
+     * — and the result would carry another aggregate's stream metadata: the same two inputs would
+     * produce either a loud rejection or a silent false success depending purely on timing. One
+     * shared guard, called from every path, keeps the verdict identical; a per-call-site copy lets
+     * the paths diverge.
      *
      * <p>Both discriminators are {@code NOT NULL} columns of the inbox table in the event-store
      * baseline, so every recorded row carries them.

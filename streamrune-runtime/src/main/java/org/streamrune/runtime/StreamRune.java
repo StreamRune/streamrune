@@ -132,10 +132,10 @@ public final class StreamRune implements CommandBus, AutoCloseable {
    * for any of them to complete.
    *
    * <p>A live/continuous {@link ProjectionRunner} (e.g. {@link ContinuousProjectionRunner}) never
-   * returns from {@link ProjectionRunner#run} while running — calling it in a synchronous loop, as
-   * this method used to, meant the SECOND registration's {@code run} call was never even issued
-   * until the first one stopped, which for a live runner is never. Mirrors {@link
-   * MultiProjectionRunner#start()}'s per-registration virtual thread.
+   * returns from {@link ProjectionRunner#run} while running — calling it in a synchronous loop
+   * would mean the SECOND registration's {@code run} call is never even issued until the first one
+   * stops, which for a live runner is never. Mirrors {@link MultiProjectionRunner#start()}'s
+   * per-registration virtual thread.
    *
    * <p>Every registered projection's {@code run} call is issued exactly once per call to this
    * method, regardless of whether earlier ones block.
@@ -846,7 +846,7 @@ public final class StreamRune implements CommandBus, AutoCloseable {
         // Unlike ConfiguredEventStoreFactory below, this form's lambda returns the FACTORY,
         // not the store — call create() on it ourselves, and retain the factory (closed exactly
         // like the plain eventStoreFactory(EventStoreFactory) form) so builder-accumulated
-        // settings and automatic cleanup are no longer mutually exclusive.
+        // settings and automatic cleanup are not mutually exclusive.
         var settings = new EventStoreSettings(typeRegistryBuilder.build(), cryptoEngine, upcasters);
         EventStoreFactory factory = configuredEventStoreFactoryProvider.create(settings);
         if (factory == null) {

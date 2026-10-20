@@ -283,7 +283,7 @@ Keys are stored as **plaintext AES-256 bytes** in `encryption_keys` — there is
 - **Same-instance compromise** — if `encryption_keys` lives in the same PostgreSQL instance and backup set as the event stream, any attacker or backup leak that reaches the database obtains keys *and* ciphertext together; encryption at rest adds nothing against that attacker. Place `encryption_keys` in a separate database/instance with its own credentials, or use `streamrune-vault-crypto` / `streamrune-aws-kms-crypto` so key material never reaches your database at all.
 - **Crypto-shredding is only as strong as backup hygiene** — any backup of `encryption_keys` taken *before* a subject was forgotten resurrects that subject's key on restore. Align key-table backup retention with your GDPR erasure deadlines and never restore `encryption_keys` from a pre-forget snapshot.
 
-Envelope encryption (per-subject keys wrapped by a KEK held in Vault/KMS/HSM) is the standard remedy and is on the roadmap; until then the controls above are operational, not technical.
+Envelope encryption (per-subject keys wrapped by a KEK held in Vault/KMS/HSM) is the standard remedy; the AWS KMS engine (`streamrune-aws-kms-crypto`) uses it. With this engine the controls above are operational, not technical.
 
 ## Known Limitations
 

@@ -59,7 +59,7 @@ public final class DeadLetterRetentionSweeper implements RetentionSweeper {
    * @param deadLetterQueue the command dead-letter queue to prune (required)
    * @param maxAge how far back to keep dead-letter entries; zero or negative disables retention
    * @param interval how often to sweep; must be positive
-   * @param clock clock used to compute the cutoff instant (required)
+   * @param clock the clock the cutoff instant is computed from (required)
    * @param metrics metrics collector (required; pass {@link StreamRuneMetrics#NOOP} to disable)
    */
   public DeadLetterRetentionSweeper(

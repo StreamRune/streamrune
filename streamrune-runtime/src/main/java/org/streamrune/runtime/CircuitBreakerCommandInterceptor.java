@@ -105,11 +105,11 @@ public final class CircuitBreakerCommandInterceptor implements CommandIntercepto
    * so {@link InlineProjectionInterceptor} executes user projection code on the calling thread
    * while this interceptor's callback is still pending; a process-manager projection that
    * dispatches a follow-up command through the same bus runs a NESTED execution there. The nested
-   * {@code before()} used to clear the flat flag before rejecting itself (a probe is already in
-   * flight, so the nested command is turned away), which cost the OUTER execution its probe
-   * designation — the designated probe then never reported back and the circuit stayed HALF_OPEN,
-   * rejecting all traffic, until {@code probeTimeout} (30s by default) let another thread take
-   * over.
+   * {@code before()} must not clear the flat flag before rejecting itself (a probe is already in
+   * flight, so the nested command is turned away): that would cost the OUTER execution its probe
+   * designation — the designated probe would never report back and the circuit would stay
+   * HALF_OPEN, rejecting all traffic, until {@code probeTimeout} (30s by default) let another
+   * thread take over.
    *
    * <p>A frame is pushed only on the paths that return {@code true}: a {@code before()} that throws
    * {@link CircuitBreakerOpenException} gets no callback from the bus, so it must leave the stack
@@ -324,8 +324,8 @@ public final class CircuitBreakerCommandInterceptor implements CommandIntercepto
    * Reopens the circuit on behalf of a failing probe, but only while the HALF_OPEN episode the
    * probe was designated for is still live. Returns whether the trip happened.
    *
-   * <p>This used to be an unconditional {@code state.set(State.OPEN)} guarded by {@code failures >=
-   * threshold || thisThreadIsProbe}, and a probe designation is not self-invalidating: the
+   * <p>An unconditional {@code state.set(State.OPEN)} guarded by {@code failures >= threshold ||
+   * thisThreadIsProbe} is not enough, because a probe designation is not self-invalidating: the
    * silent-probe takeover at {@link #before} CASes {@code probeStartedAtNano} alone, so a taker
    * keeps its designation even after the probe it superseded finally reports back and CASes the
    * circuit CLOSED. The taker's next single failure — one connection reset, with the

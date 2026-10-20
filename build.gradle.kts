@@ -542,10 +542,9 @@ subprojects {
         // `compileOnly` project deps are unioned in alongside `implementation` ones — a
         // `compileOnly` project dependency is invisible in the published POM ENTIRELY (not even at
         // `runtime` scope, which `implementation` at least gets), so a public supertype leaking from
-        // one is strictly worse than the `implementation` case this check originally covered, and
-        // was previously invisible to it (e.g. streamrune-postgres's
-        // compileOnly(project(":streamrune-runtime")), leaking through PostgresNotificationSubscription
-        // / HybridEventSubscription — fixed alongside this guard extension, not caught by it before).
+        // one is strictly worse than the `implementation` case, and a check of `implementation`
+        // alone would not see it (streamrune-postgres's compileOnly(project(":streamrune-runtime")),
+        // for example, would leak through PostgresNotificationSubscription / HybridEventSubscription).
         val nonApiProjectDepPaths: Set<String> =
             (configurations.getByName("implementation").dependencies
                 .withType(ProjectDependency::class.java).map { it.path }.toSet() +
@@ -943,7 +942,7 @@ subprojects {
                 url.set("https://github.com/StreamRune/streamrune")
 
                 // <url> is the field tooling and lawyers follow, so it must resolve to the text
-                // that governs. It used to point at https://mariadb.com/bsl11/ — MariaDB's
+                // that governs. It does not point at https://mariadb.com/bsl11/, MariaDB's
                 // UNPARAMETERISED template. That page has no Parameters block, so its Terms'
                 // "The Licensor may make an Additional Use Grant, above, permitting limited
                 // production use" refers to nothing, and anyone following the URL concludes that
@@ -1291,7 +1290,7 @@ subprojects {
         // ── A release cannot ship without CI having actually passed ───────────
         //
         // A `v*` tag push starts build.yml and broker-e2e-test.yml, but starting is not the same
-        // as enforcing: nothing previously made a publish wait for or check either workflow's
+        // as enforcing: on its own, nothing makes a publish wait for or check either workflow's
         // result, so a release could be tagged and uploaded to the immutable Central Portal from a
         // commit whose test suite had never run at all, or had failed. verifyReleaseTag (above)
         // only proves git facts (the tag exists, on HEAD, on origin) — it has no notion of CI.

@@ -112,13 +112,13 @@ import org.streamrune.core.types.SagaType;
  *
  * <p><b>Forward faults with nothing left to drain ({@link #compensateFaulted}).</b> A forward fault
  * owns the dead-letter entry of the event that faulted it, and the drain is its remedy — until an
- * operator discards that entry (its event can no longer be read, or the business process was
- * cancelled out-of-band). The row then stays {@code FAULTED} with a forward {@code
- * pre_fault_status}, and no automatic driver selects a {@code FAULTED} row. {@link #discard} names
- * the remedy when it leaves a row in that shape (or in the give-up shape), and {@link
- * #compensateFaulted} is it: the fresh claim to {@code COMPENSATING} the timeout runner would have
- * made, taken from the faulted row, then the compensation of the persisted state. Once the claim
- * commits the episode is an ordinary claimed one, re-driven by the automatic drivers.
+ * operator discards that entry (its event cannot be read, or the business process was cancelled
+ * out-of-band). The row then stays {@code FAULTED} with a forward {@code pre_fault_status}, and no
+ * automatic driver selects a {@code FAULTED} row. {@link #discard} names the remedy when it leaves
+ * a row in that shape (or in the give-up shape), and {@link #compensateFaulted} is it: the fresh
+ * claim to {@code COMPENSATING} the timeout runner would have made, taken from the faulted row,
+ * then the compensation of the persisted state. Once the claim commits the episode is an ordinary
+ * claimed one, re-driven by the automatic drivers.
  *
  * <p>Deferrals are recorded through {@link StreamRuneMetrics#recordSagaReplayDeferred} and never
  * under {@link StreamRuneMetrics#recordSagaReplayed}; {@code resumeFaulted} outcomes through {@link
@@ -194,9 +194,8 @@ public final class SagaDeadLetterReplayer {
   public enum ResumeOutcome {
     /**
      * The episode re-ran under its durable episode keys and its terminal write committed: the row
-     * is {@code COMPENSATED} or {@code FAILED} (the episode's own classification) and no longer
-     * {@code FAULTED}. Compensations an earlier attempt committed deduplicated in the command
-     * inbox.
+     * is {@code COMPENSATED} or {@code FAILED} (the episode's own classification) and not {@code
+     * FAULTED}. Compensations an earlier attempt committed deduplicated in the command inbox.
      */
     RESUMED,
     /**
@@ -252,7 +251,7 @@ public final class SagaDeadLetterReplayer {
   public enum CompensateOutcome {
     /**
      * The claim committed and so did the episode's terminal write: the row is {@code COMPENSATED}
-     * or {@code FAILED} (the episode's own classification) and no longer {@code FAULTED}.
+     * or {@code FAILED} (the episode's own classification) and not {@code FAULTED}.
      */
     TERMINAL,
     /**
@@ -580,7 +579,7 @@ public final class SagaDeadLetterReplayer {
 
   /**
    * Resumes the compensation episode of a saga the compensation-retry sweeper or the timeout runner
-   * gave up on . Their give-up writes the row {@code FAULTED} with {@code pre_fault_status =
+   * gave up on. Their give-up writes the row {@code FAULTED} with {@code pre_fault_status =
    * COMPENSATING} and — having no triggering event — no dead-letter entry, so {@link #replayAll}
    * has nothing to feed. No entry is fabricated: the episode resumes through the saga executor's
    * own compensation resume, at the row's current version and under the durable episode keys, so
@@ -680,10 +679,10 @@ public final class SagaDeadLetterReplayer {
 
   /**
    * Compensates a saga a forward step faulted, once it has no dead-letter entry left to drain — the
-   * operator path for a forward fault whose poison entry was discarded (its event can no longer be
-   * read, or the business process was cancelled out-of-band). Such a row is {@code FAULTED} with
-   * {@code pre_fault_status} {@code NULL} (a fault before the genesis was applied), {@code STARTED}
-   * or {@code RUNNING}: {@link #replayAll} has nothing to feed, {@link #resumeFaulted} refuses a
+   * operator path for a forward fault whose poison entry was discarded (its event cannot be read,
+   * or the business process was cancelled out-of-band). Such a row is {@code FAULTED} with {@code
+   * pre_fault_status} {@code NULL} (a fault before the genesis was applied), {@code STARTED} or
+   * {@code RUNNING}: {@link #replayAll} has nothing to feed, {@link #resumeFaulted} refuses a
    * forward fault, the live path holds the saga's later correlated events behind the fault, and
    * neither the timeout runner nor the compensation-retry sweeper ever selects a {@code FAULTED}
    * row — so without this operation the saga stays halted with its forward side effects in place.
@@ -707,8 +706,8 @@ public final class SagaDeadLetterReplayer {
    * drain them with {@link #replayAll} or discard them first).
    *
    * <p><b>Crash points.</b> Before the claim commits nothing is written: rerun the call. Once it
-   * commits, the row is a stamped {@code COMPENSATING} episode and no longer this operation's — a
-   * rerun answers {@code NOT_FAULTED} and dispatches nothing — and its automatic re-drivers (the
+   * commits, the row is a stamped {@code COMPENSATING} episode and not this operation's — a rerun
+   * answers {@code NOT_FAULTED} and dispatches nothing — and its automatic re-drivers (the
    * compensation-retry sweeper, the timeout runner, a correlated event) resume it at that version
    * under the same episode keys: a compensation the crashed call committed dedups in the command
    * inbox, the rest run, and the terminal write lands. A {@code compensate()} that throws faults

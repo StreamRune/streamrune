@@ -19,8 +19,8 @@ package org.streamrune.core.saga;
  *       episode (re-driving it at the existing version, under the shared episode-scoped key; see
  *       {@code SagaRunner}'s explicit status check and {@code resumeCompensation}) rather than
  *       being skipped — and the claim-first ordering eliminates orphaned compensation (a lost
- *       terminal-write race can no longer follow an already-dispatched side effect, because the
- *       claim happens first). {@code COMPENSATING} is intentionally still selected by {@code
+ *       terminal-write race cannot follow an already-dispatched side effect, because the claim
+ *       happens first). {@code COMPENSATING} is intentionally still selected by {@code
  *       SagaStore.findTimedOut} (i.e. it is <em>not</em> {@linkplain #isHalted() halted}) and is
  *       not terminal-guarded by {@code SagaStore.update}: a crashed compensation episode is
  *       re-picked by {@code SagaTimeoutRunner} once another timeout interval elapses, OR re-driven

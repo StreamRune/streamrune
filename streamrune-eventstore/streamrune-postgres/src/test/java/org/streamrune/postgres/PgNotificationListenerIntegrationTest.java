@@ -134,7 +134,7 @@ class PgNotificationListenerIntegrationTest {
     assertTrue(listener.isRunning());
 
     // Force the live connection to break so the loop re-enters getConnection(), which now always
-    // fails. Before FIX 5 the listener gave up after 5 attempts; now it must keep retrying.
+    // fails. A listener that gave up after 5 attempts would stop; this one must keep retrying.
     terminateListenerBackend(channel);
 
     // Wait well past what 5 fast reconnect attempts would take; the listener must still be running.

@@ -122,7 +122,7 @@ public final class RabbitMqOutboxPublisher implements OutboxPublisher {
   private final ConcurrentNavigableMap<Long, OutboxEntryId> outstanding =
       new ConcurrentSkipListMap<>();
 
-  // FIX 2 (upgraded): per-batch state, bundled in one immutable holder behind a single volatile
+  // Per-batch state, bundled in one immutable holder behind a single volatile
   // field. One volatile read gives the confirm thread a mutually consistent snapshot of
   // (ids, latch, acked, nacked) — separate volatile fields could tear across a batch boundary
   // (the new latch observed together with the previous batch's accounting). publishBatch writes

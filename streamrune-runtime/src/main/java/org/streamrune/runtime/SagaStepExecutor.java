@@ -1200,8 +1200,8 @@ final class SagaStepExecutor<S extends SagaState> {
    * never the dead-letter entry's resettable {@code faultedAt}, and never the row's {@code
    * updatedAt}, which a fault refreshes and so would make a stale episode look fresh. Every row in
    * a compensation episode carries the stamp, and {@link #requireStampedEpisode} has already
-   * refused one that does not on every path that reaches this guard, so the old "no anchor ⇒
-   * proceed unguarded" case no longer exists.
+   * refused one that does not on every path that reaches this guard, so there is no "no anchor ⇒
+   * proceed unguarded" case.
    *
    * <p>Deliberately NOT unified with the three sibling guards into one implementation: they end in
    * a CAS-FAULT with no event to record, this one ends in a quarantine-and-fault driven by the

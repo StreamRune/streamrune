@@ -26,10 +26,10 @@ public interface ProjectionRunner {
    *
    * <p><b>The offset is all this resets.</b> Existing read models and {@link
    * ProjectionDeadLetterStore} entries for the projection are left untouched. Replaying upserts
-   * over existing read models leaves behind rows the current event history would no longer produce
-   * — for example after events were deleted or crypto-shredded for GDPR erasure. A caller that
-   * needs a clean rebuild must delete the projection's read models (via {@link
-   * ProjectionRepository}) and prune its dead-letter entries before the next {@link #run} cycle.
+   * over existing read models leaves behind rows the current event history would not produce — for
+   * example after events were deleted or crypto-shredded for GDPR erasure. A caller that needs a
+   * clean rebuild must delete the projection's read models (via {@link ProjectionRepository}) and
+   * prune its dead-letter entries before the next {@link #run} cycle.
    *
    * <p>Calling this concurrently with an in-flight {@link #run} cycle has implementation-defined
    * results: the running cycle may save a higher offset after the reset, undoing it. Reset while

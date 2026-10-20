@@ -86,13 +86,13 @@ import org.streamrune.core.types.SagaType;
  *
  * <p><b>Sampling-only mode.</b> The {@code streamrune.saga.compensating} and {@code
  * streamrune.saga.faulted_rows} gauges are emitted by this sweeper's per-cycle sample and by
- * nothing else, so the integrations no longer withhold the sweeper when {@code
+ * nothing else, so the integrations do not withhold the sweeper when {@code
  * streamrune.saga.compensation-retry-enabled=false}: they build it with {@link
  * Builder#compensationRetryEnabled(boolean) compensationRetryEnabled(false)}, and it then samples
- * every cycle but never takes the lease or re-drives. Switching the re-drive off no longer blinds
- * the saga backlog observability. The one exception: when no {@code StreamRuneMetrics} is wired
- * either, such a sweeper would neither re-drive nor sample anything, so the integrations do not
- * build it at all.
+ * every cycle but never takes the lease or re-drives. Switching the re-drive off does not blind the
+ * saga backlog observability. The one exception: when no {@code StreamRuneMetrics} is wired either,
+ * such a sweeper would neither re-drive nor sample anything, so the integrations do not build it at
+ * all.
  *
  * <p><b>Single-active-consumer.</b> A sweeper of a runner that carries a lease ({@link
  * SagaRunner#lease()}) follows that lease: it re-drives only while a subscription of this process
@@ -339,7 +339,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     // The SubscriptionLeadership contract requires resign to be no-throw for transient
     // failures, but close() must complete its lifecycle bookkeeping (re-drive evidence reset,
     // stuck warning, restartability reset below) even against a contract-breaking implementation —
-    // a resign throw used to escape close() into the shutting-down lifecycle adapter and leave the
+    // a resign throw escaping close() into the shutting-down lifecycle adapter would leave the
     // sweeper permanently not-restartable.
     // Sampling-only mode (compensationRetryEnabled=false) returns out of sweepOnce()
     // before the leadership gate (see below), so it never calls tryAcquire and never holds a
@@ -389,9 +389,8 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
   }
 
   /**
-   * Whether the sweeper's thread is currently alive. A started sweeper whose thread is no longer
-   * alive died unexpectedly (e.g. an {@link Error} escaped the sweep loop) — see {@link
-   * #isStarted()}.
+   * Whether the sweeper's thread is currently alive. A started sweeper whose thread is not alive
+   * died unexpectedly (e.g. an {@link Error} escaped the sweep loop) — see {@link #isStarted()}.
    */
   public boolean isAlive() {
     Thread t = thread;
@@ -825,7 +824,8 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     }
 
     /**
-     * Clock used to compute the due cutoff and give-up age. Defaults to {@link Clock#systemUTC()}.
+     * The clock the due cutoff and the give-up age are computed from. Defaults to {@link
+     * Clock#systemUTC()}.
      */
     public Builder<S> clock(Clock clock) {
       this.clock = clock;
@@ -838,7 +838,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
      * streamrune.saga.compensating} and {@code streamrune.saga.faulted_rows} every cycle — those
      * gauges are emitted nowhere else — but never takes the lease or re-drives. The integrations
      * wire {@code streamrune.saga.compensation-retry-enabled} here instead of withholding the
-     * sweeper, so switching the re-drive off no longer blinds the saga backlog observability; they
+     * sweeper, so switching the re-drive off does not blind the saga backlog observability; they
      * skip the sweeper only when no {@code StreamRuneMetrics} is wired either, since it would then
      * have nothing to re-drive or sample. {@link #build()} validates {@code retryInterval} and
      * {@code giveUpAfter} in both modes.

@@ -3,8 +3,8 @@ package org.streamrune.runtime;
 /**
  * Terminal signal that a projection was halted because a <b>read/deserialization-level poison
  * event</b> could not be read from the event store and never will be on retry — for example an
- * event whose type is no longer registered in the {@code EventTypeRegistry}, or whose payload is
- * corrupt / schema-incompatible.
+ * event whose type is not registered in the {@code EventTypeRegistry}, or whose payload is corrupt
+ * / schema-incompatible.
  *
  * <p>Such a failure occurs <em>before</em> the projection's {@code process()} runs, so it can reach
  * neither the {@code ProjectionErrorStrategy} (SKIP/DLQ/HALT) nor the projection dead-letter store.

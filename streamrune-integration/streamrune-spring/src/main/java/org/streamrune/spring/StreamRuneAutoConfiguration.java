@@ -1737,7 +1737,7 @@ public class StreamRuneAutoConfiguration {
    * COMPENSATING} forever with the undo abandoned. Gated on the presence of at least one {@code
    * SagaRunner} bean plus a {@link SagaStore} — mirroring how the dead-letter retry runner is gated
    * on a {@code DeadLetterQueue} bean. {@code streamrune.saga.compensation-retry-enabled} (default
-   * on) no longer withholds this bean: the sweepers are the sole emitters of {@code
+   * on) does not withhold this bean: the sweepers are the sole emitters of {@code
    * streamrune.saga.compensating} / {@code streamrune.saga.faulted_rows}, so the knob is threaded
    * into each sweeper as sampling-only mode instead — the re-drive stops, the gauges stay live. The
    * shared {@link org.streamrune.core.subscription.SubscriptionLeadership} bean is threaded in so

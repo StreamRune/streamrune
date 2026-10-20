@@ -1320,7 +1320,7 @@ public class StreamRuneProducers {
   }
 
   /**
-   * Aggregates outbox-relay and DLQ-retry-runner liveness for the readiness health check . The
+   * Aggregates outbox-relay and DLQ-retry-runner liveness for the readiness health check. The
    * runners register themselves into it when produced, so {@code /q/health/ready} reports DOWN when
    * a started relay's poll thread has died instead of silently reporting UP.
    */
@@ -1542,11 +1542,11 @@ public class StreamRuneProducers {
    *
    * <p><strong>Missing store:</strong> when sagas are enabled but no concrete {@link
    * org.streamrune.postgres.PostgresSagaDeadLetterStore} bean can be resolved this logs a WARN
-   * before returning {@code null}. It used to return {@code null} silently, which is how an
-   * interface-typed default store producer left the sweeper absent in <em>every</em> default
-   * deployment without a single diagnostic. The remaining legitimate case is an application that
-   * supplied its own {@link SagaDeadLetterStore}: the framework prunes only the Postgres table it
-   * created itself, so that application owns its store's retention — and now hears about it.
+   * before returning {@code null}: a silent {@code null} from an interface-typed default store
+   * producer would leave the sweeper absent in <em>every</em> default deployment without a single
+   * diagnostic. The remaining legitimate case is an application that supplied its own {@link
+   * SagaDeadLetterStore}: the framework prunes only the Postgres table it created itself, so that
+   * application owns its store's retention — and now hears about it.
    */
   @Produces
   @DefaultBean

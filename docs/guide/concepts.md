@@ -273,7 +273,7 @@ answer. Inherited,
 each answers for the wrapper instead of the projection it wraps — the default
 `writesThroughRepository()` is `false`, so a wrapper that forwards the two-arg `process` reads as
 not writing through even around a projection that does; the default
-`writeTarget()` is empty, so the startup check can no longer verify that the delegate writes to the
+`writeTarget()` is empty, so the startup check cannot verify that the delegate writes to the
 runner's processor; and the default `processDeadLetterReplay`
 reports "applied" for a dead-lettered range a self-fencing delegate ignored, so the
 [dead-letter replayer](advanced/retry-and-resilience.md#projection-dead-letter-replay) discards the

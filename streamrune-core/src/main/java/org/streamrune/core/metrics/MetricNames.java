@@ -60,8 +60,8 @@ public final class MetricNames {
 
   /**
    * Dead-letter replays refused because the entry's command ran under an idempotency key and the
-   * entry is older than the command-inbox retention window, so the inbox can no longer be relied on
-   * to deduplicate the replay against the caller's own retry. Nothing was executed; the entry stays
+   * entry is older than the command-inbox retention window, so the inbox cannot be relied on to
+   * deduplicate the replay against the caller's own retry. Nothing was executed; the entry stays
    * for an operator to reconcile (discard it, or retry it with {@code force}). Tagged by {@link
    * #TAG_COMMAND_TYPE}. Counter.
    */
@@ -141,10 +141,9 @@ public final class MetricNames {
   public static final String EVENTS_REPLAYED = "streamrune.events.replayed";
 
   /**
-   * Event append duration. <b>Renamed in emission:</b> the Micrometer collector used to register
-   * this timer as {@code streamrune.events.append.duration} while this constant documented {@code
-   * streamrune.events.duration}, so the documented series never existed and an append-latency alert
-   * written against it could never fire. The constant is the contract and it won.
+   * Event append duration. The Micrometer collector registers this timer under this constant's
+   * name, {@code streamrune.events.duration}: an append-latency alert is written against the
+   * documented series, so the constant is the contract the emitted name follows.
    *
    * <p><b>Emission:</b> the timer was registered under this name but had no recording call, so the
    * series existed at {@code count=0} and the alert remained unfirable. The command bus now samples

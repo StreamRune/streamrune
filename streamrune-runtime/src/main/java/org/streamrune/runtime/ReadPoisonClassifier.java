@@ -27,10 +27,10 @@ import org.streamrune.core.crypto.SubjectForgottenException;
  * identically forever. Classifying such a read as TRANSIENT is exactly what wedges a projection —
  * the runner retries the read with backoff indefinitely and never advances, dead-letters, or halts.
  *
- * <p><b>The whole cause chain is walked, flag-and-continue.</b> The walk used to early-return
- * POISON on the first {@link IOException} frame without ever looking underneath it. A transient
- * Vault/KMS outage during nested-{@code @Encrypted} decryption surfaces WRAPPED by Jackson into a
- * {@code JsonMappingException} (an IOException), so a routine key-store blip terminally halted
+ * <p><b>The whole cause chain is walked, flag-and-continue.</b> A walk that early-returns POISON on
+ * the first {@link IOException} frame never looks underneath it. A transient Vault/KMS outage
+ * during nested-{@code @Encrypted} decryption surfaces WRAPPED by Jackson into a {@code
+ * JsonMappingException} (an IOException), so a routine key-store blip would terminally halt
  * projections. The walk now mirrors {@link SagaStateConversion#isDeterministic}: deterministic
  * markers are flagged and the walk continues; engine/JDBC <em>transient</em> evidence anywhere in
  * the chain outranks every deterministic marker and short-circuits TRANSIENT. The rules, in the

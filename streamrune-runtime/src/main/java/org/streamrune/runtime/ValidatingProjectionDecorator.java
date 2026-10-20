@@ -39,7 +39,7 @@ public final class ValidatingProjectionDecorator implements Projection {
    * Creates a validating decorator.
    *
    * @param delegate the real projection to delegate to
-   * @param validator the JSR-380 Validator used to validate event payloads
+   * @param validator the JSR-380 Validator that validates event payloads
    */
   public ValidatingProjectionDecorator(Projection delegate, Validator validator) {
     this.delegate = delegate;

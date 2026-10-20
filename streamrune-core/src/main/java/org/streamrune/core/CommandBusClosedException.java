@@ -6,11 +6,11 @@ package org.streamrune.core;
  * touched. A graceful shutdown drains the in-flight commands it already admitted; this exception is
  * only ever the answer to work arriving <em>after</em> that point.
  *
- * <p><b>Why the dedicated type is load-bearing.</b> The closed-bus rejection used to be a bare
- * {@code IllegalStateException}, and the two saga dispatch paths read that opposite ways: the
- * forward classifier ({@code SagaCommandDispatch.isRetryLater}) could not prove it retriable, so a
- * node shutting down mid-flow <em>claimed a compensation episode and issued the undo</em> for a
- * perfectly healthy saga — while the compensation classifier binned the very same exception as
+ * <p><b>Why the dedicated type is load-bearing.</b> As a bare {@code IllegalStateException}, the
+ * closed-bus rejection would be read opposite ways by the two saga dispatch paths: the forward
+ * classifier ({@code SagaCommandDispatch.isRetryLater}) cannot prove it retriable, so a node
+ * shutting down mid-flow would <em>claim a compensation episode and issue the undo</em> for a
+ * perfectly healthy saga — while the compensation classifier bins the very same exception as
  * transient/RETRY. A shutdown is a pure "later" signal, exactly like {@link
  * CircuitBreakerOpenException} (the framework's own admission gate) — the node is going away and
  * another node (or this one, restarted) will redeliver the event and converge via the deterministic

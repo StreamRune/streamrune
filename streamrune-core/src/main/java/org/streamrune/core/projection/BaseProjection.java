@@ -169,7 +169,7 @@ public abstract class BaseProjection implements Projection {
     activeRepository().delete(projectionName(), id);
   }
 
-  /** Returns the projection name used to namespace read models in the repository. */
+  /** Returns the projection name, the namespace of its read models in the repository. */
   protected ProjectionName projectionName() {
     return projectionName;
   }

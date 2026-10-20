@@ -135,7 +135,7 @@ public interface OutboxStore {
    * @param id the entry to mark delivered
    * @param claimedBy the identity that claimed the entry (see {@link #claimedBy()})
    * @return {@code true} if the entry transitioned; {@code false} means the lease was lost — the
-   *     entry is no longer {@code IN_PROGRESS} under this {@code claimedBy} (another holder already
+   *     entry is not {@code IN_PROGRESS} under this {@code claimedBy} (another holder already
    *     recorded the outcome, expected under failover). Callers must treat {@code false} as a
    *     <b>benign no-op, not an error</b>.
    */

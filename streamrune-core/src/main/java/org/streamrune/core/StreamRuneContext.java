@@ -589,7 +589,7 @@ public final class StreamRuneContext {
       if (traceId != null) {
         IdConstraints.requireBoundedAndPrintable(traceId.value(), "traceId");
       }
-      // The third header-sourced value, and the one this door used to skip. Same
+      // The third header-sourced value, which this door must not skip either. Same
       // channels as the two above, plus the one that makes it worse than a disclosure vector: an
       // identity over MAX_LENGTH cannot be written to dead_letter_queue.user_id VARCHAR(255), and
       // that INSERT failure is caught and logged inside VirtualThreadCommandBus rather than

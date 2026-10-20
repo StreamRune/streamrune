@@ -178,7 +178,7 @@ summary WARN per cycle.)
 `retry(commandId)` refuses it with `STALE_REPLAY_BLOCKED`, a WARN naming the entry and the window,
 and `streamrune.dlq.stale_replay_blocked`. The remedy is a decision by an operator: if the
 command's effect is present, discard the entry; if it is not, `retry(commandId, true)` replays it
-anyway — `force` acknowledges that the inbox can no longer deduplicate it, and the forced replay is
+anyway — `force` acknowledges that the inbox cannot deduplicate it, and the forced replay is
 logged at WARN. The age is measured from `firstAttemptAt` because no row the dead-lettered attempt
 or a later retry by its caller wrote can be older.
 

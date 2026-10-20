@@ -196,9 +196,9 @@ public interface EventStore {
    * subject's {@code @Encrypted} fields, and saving it would put that data back into the store
    * after the forget reported the snapshot purged. {@code snapshotPurgeGeneration} is the
    * generation the command's load saw ({@link AggregateHistory#snapshotPurgeGeneration()}); a purge
-   * raises the stream's generation, and a save whose generation is no longer the stream's writes
-   * nothing and returns {@code false}. The next command loads after the purge, sees the new
-   * generation, and its snapshot is stored.
+   * raises the stream's generation, and a save whose generation is not the stream's writes nothing
+   * and returns {@code false}. The next command loads after the purge, sees the new generation, and
+   * its snapshot is stored.
    *
    * <p>A store whose snapshots a {@code SnapshotPurger} purges makes the comparison and the write
    * one atomic step against the purge (for {@code PostgresEventStore}, one conditional upsert on
@@ -306,9 +306,9 @@ public interface EventStore {
   /**
    * Idempotent, atomic append: claims {@code key} in the command inbox and appends {@code events}
    * in a single database transaction (claim → append → backfill offsets). If {@code key} was
-   * already claimed by a prior call, nothing is appended and the previously recorded offsets and
-   * version are returned with {@code alreadyApplied() == true}. An empty {@code events} list still
-   * claims the key so a zero-event command is not re-run on redelivery.
+   * already claimed by a prior call, nothing is appended and the recorded offsets and version are
+   * returned with {@code alreadyApplied() == true}. An empty {@code events} list still claims the
+   * key so a zero-event command is not re-run on redelivery.
    *
    * <p>The atomicity guarantee is the foundation of effectively-once delivery for saga commands:
    * the inbox row and the command's events commit together, so either both are visible or neither

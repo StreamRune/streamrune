@@ -63,16 +63,16 @@ public interface OffsetStore {
    * replays from the beginning, which the guard would otherwise reject as a regression.
    *
    * <p>Default implementation throws {@link UnsupportedOperationException}. A default that
-   * delegated to {@code saveOffset(name, GlobalOffset.initial())} previously sat here — harmless
-   * for unguarded stores, but for a guarded implementation (PostgreSQL/JDBC/guarded in-memory) that
-   * delegation is silently rejected by the very guard {@code saveOffset} applies (0 rows updated,
-   * no exception, per the class contract), so a projection rebuild would appear to succeed while
-   * never actually rewinding. This mirrors the repo's default-method policy of failing loudly,
-   * never silently (see {@code DeadLetterQueue}'s default-method policy). Implementations <b>must
-   * override</b> this with a direct unguarded write (see {@code PostgresOffsetStore}). An unguarded
-   * store (whose {@code saveOffset} has no monotonic guard to begin with) may override this with
-   * the one-line {@code saveOffset(projectionName, GlobalOffset.initial())} delegation explicitly —
-   * that is a visible, deliberate choice, unlike inheriting a silent default.
+   * delegates to {@code saveOffset(name, GlobalOffset.initial())} would be harmless for unguarded
+   * stores, but for a guarded implementation (PostgreSQL/JDBC/guarded in-memory) that delegation is
+   * silently rejected by the very guard {@code saveOffset} applies (0 rows updated, no exception,
+   * per the class contract), so a projection rebuild would appear to succeed while never actually
+   * rewinding. This mirrors the repo's default-method policy of failing loudly, never silently (see
+   * {@code DeadLetterQueue}'s default-method policy). Implementations <b>must override</b> this
+   * with a direct unguarded write (see {@code PostgresOffsetStore}). An unguarded store (whose
+   * {@code saveOffset} has no monotonic guard to begin with) may override this with the one-line
+   * {@code saveOffset(projectionName, GlobalOffset.initial())} delegation explicitly — that is a
+   * visible, deliberate choice, unlike inheriting a silent default.
    *
    * @param projectionName unique name of the projection to reset
    * @throws UnsupportedOperationException if not overridden

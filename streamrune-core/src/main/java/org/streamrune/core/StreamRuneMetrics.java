@@ -372,9 +372,9 @@ public interface StreamRuneMetrics {
    *
    * <p><b>Prefer {@link #registerSubscriptionLagGauge(SubscriptionName,
    * java.util.function.LongSupplier)}.</b> This push variant only refreshes the gauge when a caller
-   * happens to sample lag (historically only a health-endpoint scrape), so a metrics scraper
-   * polling between samples sees a stale value. A live supplier gauge recomputes on every scrape
-   * and is the primary path.
+   * happens to sample lag (a health-endpoint scrape, say), so a metrics scraper polling between
+   * samples sees a stale value. A live supplier gauge recomputes on every scrape and is the primary
+   * path.
    *
    * @param subscriptionName the subscription's registered name
    * @param lag the number of unprocessed events (never negative)

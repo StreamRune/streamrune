@@ -10,10 +10,10 @@ import java.util.function.Consumer;
  *
  * <p><b>Why this exists.</b> {@link CachedCryptoEngine} serves decrypt cache hits without
  * consulting the delegate. When replica A processes {@code deleteKey(X)} it deletes the durable key
- * and invalidates <em>only its own</em> cache; peer replicas that previously cached {@code
- * decrypt(X)} keep serving that now-forgotten plaintext until their own entries expire. This
- * channel closes that gap: {@code deleteKey} publishes an opaque per-subject token, and every
- * {@code CachedCryptoEngine} subscribed to the same channel evicts the matching entries on receipt.
+ * and invalidates <em>only its own</em> cache; peer replicas that cached {@code decrypt(X)} keep
+ * serving that now-forgotten plaintext until their own entries expire. This channel closes that
+ * gap: {@code deleteKey} publishes an opaque per-subject token, and every {@code
+ * CachedCryptoEngine} subscribed to the same channel evicts the matching entries on receipt.
  *
  * <p><b>Opaque tokens, never PII.</b> The published {@code token} is a stable, non-reversible hash
  * of the subject id (computed by {@code CachedCryptoEngine}), never the raw subject id — a subject

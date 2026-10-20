@@ -140,7 +140,7 @@ public interface SagaDeadLetterStore {
    * saga_id = ?} lookup) can never return it — this is the targeted counterpart for that
    * population.
    *
-   * <p><b>Why this exists.</b> The only way to resolve a null-saga entry used to be {@code
+   * <p><b>Why this exists.</b> Without it, the only way to resolve a null-saga entry is {@code
    * findAll(Integer.MAX_VALUE)} filtered in Java. The null-saga population is precisely the one
    * that grows without bound: PostgreSQL's {@code UNIQUE(saga_id, event_offset)} treats NULLs as
    * distinct, so every re-quarantine INSERTs a fresh row, and a broken {@code correlateByEventData}
@@ -224,8 +224,8 @@ public interface SagaDeadLetterStore {
   /**
    * Removes a single quarantined entry, identified by its idempotency key {@code (sagaId,
    * eventOffset)}, and only when its stored saga type equals {@code sagaType}. Once a quarantined
-   * event has been replayed or otherwise resolved, the entry is discarded so it no longer appears
-   * in {@link #findAll} / {@link #findBySaga}.
+   * event has been replayed or otherwise resolved, the entry is discarded so it does not appear in
+   * {@link #findAll} / {@link #findBySaga}.
    *
    * <p>{@code sagaId} is nullable and its null-ness is significant: SQL {@code IS NOT DISTINCT
    * FROM} semantics apply, so a {@code null sagaId} matches <b>only</b> entries whose stored {@code
@@ -402,7 +402,7 @@ public interface SagaDeadLetterStore {
    * therefore also exclude (a) a NAMED entry whose type-scoped owner row is absent — the entry is
    * itself that record — and (b) a null-saga entry whose {@link SagaDeadLetterEntry#targetSagaId()
    * resolved target} has no type-scoped row but owns an own-type named entry. A row an operator
-   * removes by hand no longer releases its entries — discard them explicitly.
+   * removes by hand does not release its entries — discard them explicitly.
    *
    * <p><b>A null-saga entry RESOLVED to a {@link SagaDeadLetterEntry#targetSagaId() target} is
    * never pruned while the resolution stands.</b> A null-saga entry names no {@code saga_state} row

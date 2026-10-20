@@ -55,7 +55,7 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
    * @param inbox the command inbox to prune (required)
    * @param maxAge how far back to keep processed entries; zero or negative disables retention
    * @param interval how often to sweep; must be positive
-   * @param clock clock used to compute the cutoff instant (required)
+   * @param clock the clock the cutoff instant is computed from (required)
    * @param metrics metrics collector (required; pass {@link StreamRuneMetrics#NOOP} to disable)
    */
   public InboxRetentionSweeper(

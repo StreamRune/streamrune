@@ -396,11 +396,11 @@ public final class PostgresNotificationSubscription implements EventSubscription
   /**
    * Starts the listen loop.
    *
-   * <p><b>Start guard.</b> The guard used to be {@code running.compareAndSet(false, true)} alone,
-   * which succeeded the instant {@code close()} flipped the flag — while the previous listen thread
-   * was still inside {@code pollAndDeliver()}, whose delivery close() does not interrupt. Two
-   * listen threads then shared one checkpoint: both read the same {@code lastOffset}, both
-   * delivered the same batch to the same listener, and both saved. It also broke this class's own
+   * <p><b>Start guard.</b> {@code running.compareAndSet(false, true)} alone is not a guard: it
+   * succeeds the instant {@code close()} flips the flag — while the previous listen thread may
+   * still be inside {@code pollAndDeliver()}, whose delivery close() does not interrupt. Two listen
+   * threads would then share one checkpoint: both read the same {@code lastOffset}, both delivered
+   * the same batch to the same listener, and both saved. It also broke this class's own
    * single-thread assumption for the read-poison streak fields, which are plain (non-volatile)
    * precisely because "pollAndDeliver runs solely on the single listen thread". {@code close()} is
    * terminal here, matching {@link org.streamrune.runtime.PollingEventSubscription} and {@code
@@ -594,7 +594,8 @@ public final class PostgresNotificationSubscription implements EventSubscription
           // PoolInitializationException for a non-SQL cause; a DataSource wrapper can raise
           // anything) — but this catch also takes anything else that escapes the LISTEN loop
           // (the driver while waiting for notifications, closing the connection after a loss).
-          // A RuntimeException used to escape this catch and kill the listen thread silently,
+          // A RuntimeException must not escape this catch: it would kill the listen thread
+          // silently,
           // with `running` still true. A pool that cannot start is as transient as a connection
           // that cannot be established: log and retry, exactly like the SQLException path.
           if (running.get()) {
@@ -842,7 +843,7 @@ public final class PostgresNotificationSubscription implements EventSubscription
    *
    * <p>The returned DataSource should be closed when the subscription is closed.
    *
-   * @param dataSource the original DataSource (used to extract JDBC URL)
+   * @param dataSource the original DataSource (the source of the JDBC URL)
    * @return a dedicated HikariDataSource with maxPoolSize=1 for LISTEN
    * @throws IllegalArgumentException if no JDBC URL can be read off {@code dataSource}
    */

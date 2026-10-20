@@ -242,7 +242,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   writes only while the row still has that generation, in one conditional upsert. A command in
   flight across a forget therefore never stores the state it loaded before the forget, on any
   replica and with any `AggregateLocker`; the next command snapshots again, from events whose
-  `@Encrypted` fields read `[REDACTED]` on a replica whose decrypt cache no longer holds the
+  `@Encrypted` fields read `[REDACTED]` on a replica whose decrypt cache does not hold the
   subject's plaintext. A refused save is logged at INFO, counted in `streamrune.snapshots.refused`
   and not in `streamrune.snapshots.created`. The purge-aware `saveSnapshot` is the one save every
   `EventStore` implements; the three- and four-argument overloads save at generation `0` and throw

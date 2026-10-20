@@ -26,7 +26,7 @@ import org.streamrune.runtime.health.RelayComponentNames;
  * <p>Status per component:
  *
  * <ul>
- *   <li><b>DOWN</b> — started but the poll thread is no longer alive/running (died unexpectedly).
+ *   <li><b>DOWN</b> — started but the poll thread is not alive/running (died unexpectedly).
  *   <li><b>DEGRADED</b> — running but with one or more consecutive poll-cycle failures (in
  *       backoff-retry: store/broker unreachable); or, for a saga timeout runner, running while a
  *       saga's deadline is not enforced because a step of that saga has not returned; or, for a

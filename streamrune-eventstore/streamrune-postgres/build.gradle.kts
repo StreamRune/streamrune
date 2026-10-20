@@ -11,7 +11,7 @@ dependencies {
     // ITS OWN compile classpath. No dependency cycle: streamrune-runtime depends only on
     // streamrune-core, streamrune-crypto-api and external libraries — never back on this module.
     // Enforced by the verifyModularApiScopes check in the root build (extended to also see
-    // compileOnly project deps, which is what let this leak stand uncaught until now).
+    // compileOnly project deps, so a leak through one is caught too).
     api(project(":streamrune-runtime"))
     // A PUBLIC method takes a crypto-api type directly —
     // PostgresEventStoreFactory.cryptoEngine(CryptoEngine) — so this must be api(...), not

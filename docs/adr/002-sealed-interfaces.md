@@ -5,7 +5,7 @@
 
 ## Context
 
-Domain event sourcing requires modeling command, event, and policy hierarchies as closed, exhaustive sets known at compile time. Java historically offered four options:
+Domain event sourcing requires modeling command, event, and policy hierarchies as closed, exhaustive sets known at compile time. Java offers four options:
 
 1. **Marker interfaces** (`interface DomainEvent {}`) — no enforcement. Any class can implement the interface, making the hierarchy open and unverifiable at compile time. `switch` on type requires a default branch even when all types are covered.
 2. **Abstract classes** — can carry shared state and behavior but single-inheritance constraint prevents composing hierarchies; every event must extend the abstract class, coupling unrelated events to shared superclass fields.

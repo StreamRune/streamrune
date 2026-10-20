@@ -80,7 +80,7 @@ public final class RequestEdgeAuthority {
       // around the downstream chain afterwards, and on Quarkus there is no chain to wrap at all, so
       // a binding that outlived this call would either shadow the filter's or leak past the filter.
       // ctx cannot carry an authority yet (that is what this method produces), so a resolver that
-      // recursed into authorization would see the same null it saw before this fix — no new cycle.
+      // recursed into authorization would see no authority, as without this binding — no new cycle.
       return ScopedValue.where(StreamRuneContext.CURRENT, ctx)
           .call(() -> ctx.withAuthority(resolver.resolve(ctx.userId())));
     } catch (RuntimeException e) {

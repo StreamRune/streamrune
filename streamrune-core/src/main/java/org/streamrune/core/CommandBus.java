@@ -20,7 +20,7 @@ public interface CommandBus {
 
   /**
    * Executes {@code command} idempotently under {@code key}: if {@code key} was already processed,
-   * the handler does not run and the previously recorded result is returned (with {@link
+   * the handler does not run and the recorded result is returned (with {@link
    * CommandResult#shortCircuited()} true). Otherwise the command runs and its events + the inbox
    * row commit atomically. The honest guarantee is <b>effectively-once</b> for the command's
    * events.
@@ -31,7 +31,7 @@ public interface CommandBus {
    * projections) are skipped on a hit; an idempotent replay is authorized and audited exactly like
    * a first execution. If an interceptor's {@code before()} vetoes the call, that veto wins over
    * the inbox: the returned result is the short-circuit result naming the vetoing interceptor, not
-   * the previously recorded result.
+   * the recorded result.
    *
    * <p><b>Key reuse across commands is rejected.</b> {@code key} must always be presented with the
    * same command type it was first recorded under, targeting the same stream. Any other combination
@@ -96,9 +96,9 @@ public interface CommandBus {
    *       persisted. Map this to an authorization/validation failure (e.g. HTTP 403/409).
    *   <li>{@link #IDEMPOTENT_REPLAY} — a <b>success</b>. The command was already applied by a prior
    *       execution under the same {@link org.streamrune.core.types.IdempotencyKey IdempotencyKey}
-   *       and <b>its events were persisted then</b>; this call returns the previously-recorded
-   *       outcome without re-running the handler. This is a deduplicated at-least-once redelivery —
-   *       map it to success (e.g. HTTP 200 OK), <b>never</b> to a rejection.
+   *       and <b>its events were persisted then</b>; this call returns the recorded outcome without
+   *       re-running the handler. This is a deduplicated at-least-once redelivery — map it to
+   *       success (e.g. HTTP 200 OK), <b>never</b> to a rejection.
    * </ul>
    *
    * <p>Before this discriminator existed, {@link CommandResult#shortCircuited()} alone could not

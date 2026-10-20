@@ -58,14 +58,14 @@ import org.streamrune.runtime.SagaTypeOwnership;
  *
  * <p><b>Startup-order parity.</b> {@link #apply} carries
  * {@code @Priority(Interceptor.Priority.LIBRARY_BEFORE)} on the event parameter, mirroring {@link
- * SagaStateCryptoValidator}. Before this fix {@code apply} had no {@code @Priority} at all (CDI
- * default 2500), so once Arc honoured the two runner starters' own priorities ({@link
- * StreamRuneLifecycle#onStart} and {@link SagaCompensationRetryLifecycle#onStart}, both {@code
- * LIBRARY_BEFORE + 100}), this configurer ran DETERMINISTICALLY AFTER them — the event-path key-age
- * guard landed only after the framework-hosted runners had already started, so a backlog of events
- * delivered to the saga event path during that window saw the guard still inert. Spring's sibling
- * ({@code SmartInitializingSingleton}) and Micronaut's ({@code Ordered}, the validators' order)
- * both run before their runners start; this restores parity.
+ * SagaStateCryptoValidator}. Without a {@code @Priority} (CDI default 2500), with Arc honouring the
+ * two runner starters' own priorities ({@link StreamRuneLifecycle#onStart} and {@link
+ * SagaCompensationRetryLifecycle#onStart}, both {@code LIBRARY_BEFORE + 100}), this configurer
+ * would run DETERMINISTICALLY AFTER them — the event-path key-age guard would land only after the
+ * framework-hosted runners had started, so a backlog of events delivered to the saga event path
+ * during that window would see the guard still inert. Spring's sibling ({@code
+ * SmartInitializingSingleton}) and Micronaut's ({@code Ordered}, the validators' order) both run
+ * before their runners start, as this one does.
  */
 @ApplicationScoped
 public class SagaEventPathRetentionConfigurer {

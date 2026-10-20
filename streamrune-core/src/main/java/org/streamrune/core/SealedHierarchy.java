@@ -14,10 +14,10 @@ import java.util.List;
  * GraalVM CE 25.0.1; registering only the subclasses does not help — the sealed type itself must be
  * registered, and every nested sealed level with it). A walk that read that empty array as "no
  * subtypes" would see only the root, silently: a dead-lettered command of a registered root would
- * no longer resolve, an annotated subtype would escape the authorization check, and an {@code
- * Encrypted} field of a subtype would escape the startup guard. The JVM never gives that answer for
- * a class javac compiled (a sealed class must permit at least one subclass), except when every
- * permitted subclass fails to load.
+ * not resolve, an annotated subtype would escape the authorization check, and an {@code Encrypted}
+ * field of a subtype would escape the startup guard. The JVM never gives that answer for a class
+ * javac compiled (a sealed class must permit at least one subclass), except when every permitted
+ * subclass fails to load.
  *
  * <p><b>Registering a sealed type.</b> A plain type entry in the image's reachability metadata
  * ({@code {"type": "com.example.OrderCommand"}} in {@code reachability-metadata.json}) makes the

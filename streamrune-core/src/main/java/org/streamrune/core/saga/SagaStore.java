@@ -38,7 +38,7 @@ import org.streamrune.core.types.SagaType;
  * class of a load, and a query's cutoff, age bound and status filter are all required, and a {@code
  * null} of any of them is the same caller bug, rejected with {@link IllegalArgumentException}
  * (naming the argument) before any I/O — never a {@link NullPointerException} (the in-memory store
- * used to raise one for the applied event), never a storage failure the saga runtime retries as
+ * would raise one for the applied event), never a storage failure the saga runtime retries as
  * infrastructure forever (the Postgres store raised one for a status, a cutoff and an age bound),
  * never a state stored as a JSON {@code null}, and never a query silently answering "nothing" for a
  * {@code null} filter. {@code SagaStoreContract} pins all of it for every implementation. Primitive

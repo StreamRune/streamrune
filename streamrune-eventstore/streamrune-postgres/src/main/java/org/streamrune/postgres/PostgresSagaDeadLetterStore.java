@@ -136,7 +136,7 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   private static final String SELECT_ALL =
       "SELECT " + COLUMNS + " FROM saga_dead_letters ORDER BY faulted_at DESC LIMIT ?";
 
-  // The TARGETED null-saga read. Same predicate the replayer used to evaluate in Java
+  // The TARGETED null-saga read: the predicate a replayer would otherwise evaluate in Java
   // over findAll(Integer.MAX_VALUE) — saga_id IS NULL, this offset, and the type scoping
   // (the stored type equals the parameter; there is no unscoped form, a null type is rejected
   // before this statement runs) — and the same
@@ -379,8 +379,8 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    * PostgresEventStore}). The {@code finally} is the single rollback point for every uncommitted
    * exit — an {@link SQLException}, a {@link RuntimeException} or an {@link Error} — and it runs
    * BEFORE autoCommit is restored, because pgjdbc's {@code setAutoCommit(true)} COMMITS an open
-   * transaction. The catch used to take only {@code SQLException | RuntimeException}, so an {@code
-   * OutOfMemoryError} between {@code publishShielded}'s upsert and its shield write committed the
+   * transaction. A catch of only {@code SQLException | RuntimeException} would let an {@code
+   * OutOfMemoryError} between {@code publishShielded}'s upsert and its shield write commit the
    * entry alone: entry present, shield FALSE, the entry-without-shield state the SPI forbids.
    *
    * <p>If the rollback itself fails (a {@code SQLException}, a {@code RuntimeException} or an
