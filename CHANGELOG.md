@@ -292,13 +292,35 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   (sealed roots expand to every permitted class), refuses to replay an entry whose `@Encrypted`
   fields read `[REDACTED]`, is leadership-gated, and offers an on-demand `retry(CommandId)` that runs
   on its own virtual thread with the context recorded on the entry, never the operator's identity,
-  correlation, baggage, saga marker or dispatch cause. A replay restores user, correlation id and
-  trace id and never a saga origin or a causation id; a command dispatched with a dispatch cause
-  bound (a saga's own dispatch, or a `StreamRuneContext.continuing` reaction to a stored event) is
-  not dead-lettered, its caller retries it. `DeadLetterRetentionSweeper` prunes after
-  `streamrune.dead-letter.retention-max-age` (default 30 days; zero or negative disables pruning) and
-  is registered for any `DeadLetterQueue` bean; `streamrune.dead-letter.enabled=false` switches off
-  only the automatic retry runner.
+  correlation, baggage, saga marker or dispatch cause, and returns a `RetryOutcome` (`REPLAYED`,
+  `FAILED`, `ADMISSION_REFUSED`, `STALE_REPLAY_BLOCKED`, `NOT_DEDUPLICATED`, `NOT_FOUND`). A replay restores user,
+  correlation id and trace id and never a saga origin or a causation id; a command dispatched with a
+  dispatch cause bound (a saga's own dispatch, or a `StreamRuneContext.continuing` reaction to a
+  stored event) is not dead-lettered, its caller retries it. `DeadLetterRetentionSweeper` prunes
+  after `streamrune.dead-letter.retention-max-age` (default 7 days; zero or negative disables
+  pruning) and is registered for any `DeadLetterQueue` bean; `streamrune.dead-letter.enabled=false`
+  switches off only the automatic retry runner.
+- Only replays that the command inbox can deduplicate against the caller's own retry run
+  automatically. An unkeyed command's caller may already have retried it successfully, and a replay
+  would then apply it a second time (a relative "adjust stock by +50" twice), so under
+  `DeadLetterRetryPolicy.DEFAULT` the scheduled retry replays keyed entries only and leaves the rest
+  to an operator; `DeadLetterRetryPolicy.unkeyedReplay()` (`OPERATOR_ONLY` / `AUTOMATIC`) and
+  `streamrune.dead-letter.unkeyed-replay` (`operator-only` / `automatic`) choose. The store filters
+  the scheduled read (`DeadLetterQueue.readRetryable(maxRetries, limit, includeUnkeyed,
+  keyedFirstAttemptAtOrAfter)`), so a
+  backlog of unkeyed entries never starves the keyed ones. A keyed entry first received longer ago
+  than the inbox retention window (`Builder.inboxRetentionMaxAge`, which the integrations set from
+  `streamrune.inbox.retention-max-age`) is left out of the scheduled read, and an operator's
+  `retry(commandId)` refuses it (`STALE_REPLAY_BLOCKED`, a WARN, `streamrune.dlq.stale_replay_blocked`),
+  until an operator either discards it or forces it with `retry(commandId, true)`. Under
+  `OPERATOR_ONLY`, an operator's `retry(commandId)` of an entry the inbox cannot deduplicate at all
+  — unkeyed, or on a bus without an inbox — is refused the same way (`NOT_DEDUPLICATED`) unless
+  forced; under `AUTOMATIC` it is replayed, as on the schedule. A forced replay's WARN names the
+  user bound to the calling thread. The gauge `streamrune.dlq.awaiting_operator`
+  (`DeadLetterQueue.countAwaitingOperator`) counts the entries the schedule will never replay; and
+  the integrations refuse to start when
+  `streamrune.dead-letter.retention-max-age` exceeds `streamrune.inbox.retention-max-age` with a
+  `CommandInbox` and a `DeadLetterQueue` configured.
 
 ### Aggregates and deciders
 

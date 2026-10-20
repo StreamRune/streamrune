@@ -99,5 +99,14 @@ public class StreamRuneConfigValidator implements SmartInitializingSingleton {
       org.streamrune.integration.SagaRetentionValidator.validateDeadLetterRetention(
           properties.saga().deadLetterRetentionMaxAge(), properties.inbox().retentionMaxAge());
     }
+    // The command-side twin: a keyed dead-letter entry must not outlive the inbox row that
+    // deduplicates its replay. Checked whenever both stores exist — not only when the automatic
+    // retry is on, because streamrune.dead-letter.enabled switches only that retry, and an
+    // operator's retry of a retained entry is exactly the replay that would miss the inbox.
+    if (!ctx.getBeansOfType(org.streamrune.core.CommandInbox.class).isEmpty()
+        && !ctx.getBeansOfType(org.streamrune.core.DeadLetterQueue.class).isEmpty()) {
+      org.streamrune.integration.CommandDeadLetterRetentionValidator.validate(
+          properties.deadLetter().retentionMaxAge(), properties.inbox().retentionMaxAge());
+    }
   }
 }

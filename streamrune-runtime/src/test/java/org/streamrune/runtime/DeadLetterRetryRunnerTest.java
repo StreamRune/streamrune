@@ -78,7 +78,9 @@ class DeadLetterRetryRunnerTest {
     objectMapper = new ObjectMapper();
     // Zero initial delay: entries are due immediately, so tests not about backoff scheduling
     // can call processBatch() right after publishing.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
   }
 
   private DeadLetterRetryRunner runner() {
@@ -203,7 +205,9 @@ class DeadLetterRetryRunnerTest {
     // Sharpest form of the defect: maxRetries=1 with discardAfterMaxRetries=true means ONE counted
     // attempt permanently DROPS the command. A node bouncing during a shutdown window must not be
     // able to destroy the entry via an admission refusal.
-    policy = new DeadLetterRetryPolicy(1, Duration.ZERO, 2.0, true);
+    policy =
+        new DeadLetterRetryPolicy(
+            1, Duration.ZERO, 2.0, true, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
@@ -506,7 +510,9 @@ class DeadLetterRetryRunnerTest {
 
   @Test
   void exhaustedRetriesWithDiscardRemovesEntry() {
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, true);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, true, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
     dlq.updateAttempts(CommandId.of("cmd-1"), 2, Instant.now());
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
@@ -520,7 +526,9 @@ class DeadLetterRetryRunnerTest {
 
   @Test
   void exhaustedRetriesWithoutDiscardLeavesEntry() {
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
     dlq.updateAttempts(CommandId.of("cmd-1"), 2, Instant.now());
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
@@ -571,7 +579,9 @@ class DeadLetterRetryRunnerTest {
   @Test
   void retryExhaustion_firesDlqExhaustedCounterExactlyOnce_discardEnabled() {
     var metrics = new RecordingStreamRuneMetrics();
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, true);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, true, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
     dlq.updateAttempts(CommandId.of("cmd-1"), 2, Instant.now()); // next failure hits maxRetries=3
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
@@ -596,7 +606,9 @@ class DeadLetterRetryRunnerTest {
     // Default policy: discardAfterMaxRetries=false — the exhausted entry is RETAINED and silently
     // aged out by readRetryable's dlq_attempts < maxRetries filter, so the terminal counter + ERROR
     // log are the ONLY signal that a command was permanently lost. They must still fire here.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
@@ -634,7 +646,9 @@ class DeadLetterRetryRunnerTest {
     // be
     // the simple name too.
     var metrics = new RecordingStreamRuneMetrics();
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, true);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, true, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     String fqn = OrdersNs.CancelCommand.class.getName();
     publishRaw(fqn, objectMapper.writeValueAsString(new OrdersNs.CancelCommand("o-1")), "cmd-1");
     dlq.updateAttempts(CommandId.of("cmd-1"), 2, Instant.now()); // next failure hits maxRetries=3
@@ -699,7 +713,9 @@ class DeadLetterRetryRunnerTest {
   void unresolvableCommandTypeIsDiscardedOnceMaxRetriesReached() {
     // Once dlqAttempts reaches maxRetries under a discard-enabled policy, an unresolvable entry
     // must be discarded per policy exactly like any other exhausted entry — never stuck forever.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, true);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, true, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     dlq.publish(
         new DeadLetterQueue.DeadLetterPublishRequest(
             "{}",
@@ -1502,7 +1518,9 @@ class DeadLetterRetryRunnerTest {
   void entryInsideBackoffWindowIsSkipped() {
     // First retry is due delayForAttempt(1) after publish — at least 30 minutes with a
     // 1-hour initial delay (jitter lower bound is base/2). A just-published entry is not due.
-    policy = new DeadLetterRetryPolicy(3, Duration.ofHours(1), 2.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ofHours(1), 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
 
     runner().processBatch();
@@ -1518,7 +1536,9 @@ class DeadLetterRetryRunnerTest {
   void entryPastBackoffWindowIsRetried() {
     // delayForAttempt(2) with multiplier 1.0 is at most 1.5 hours (jitter upper bound);
     // a last attempt one day ago is past any possible window.
-    policy = new DeadLetterRetryPolicy(3, Duration.ofHours(1), 1.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ofHours(1), 1.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
     dlq.updateAttempts(CommandId.of("cmd-1"), 1, Instant.now().minus(Duration.ofDays(1)));
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
@@ -1550,8 +1570,13 @@ class DeadLetterRetryRunnerTest {
           }
 
           @Override
-          public java.util.List<DeadLetterEntry> readRetryable(int maxAttempts, int limit) {
-            return dlq.readRetryable(maxAttempts, limit);
+          public java.util.List<DeadLetterEntry> readRetryable(
+              int maxAttempts,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
+            return dlq.readRetryable(
+                maxAttempts, limit, includeUnkeyed, keyedFirstAttemptAtOrAfter);
           }
 
           @Override
@@ -1705,7 +1730,9 @@ class DeadLetterRetryRunnerTest {
     // command is permanently discarded — the exact permanent-command-loss class
     // the off-request authorization rule was written to prevent, re-created through a different
     // door.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 1.0, true);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 1.0, true, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishContextEntry("cmd-control-char", "corr\r\nFORGED", "user-orig", CONTROL_CHAR_TRACE);
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     var observed = new java.util.concurrent.atomic.AtomicReference<RequestContext>();
@@ -1737,7 +1764,9 @@ class DeadLetterRetryRunnerTest {
     // without the bus ever seeing the command and then discard it per policy — a lost business
     // operation whose domain events were never produced, with the logs blaming a correlation-id
     // constraint. The ladder must instead end on the first attempt, by SUCCEEDING.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 1.0, true);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 1.0, true, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishContextEntry("cmd-control-char", "corr" + (char) 0x07 + "id", "user-orig", null);
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
@@ -1756,7 +1785,9 @@ class DeadLetterRetryRunnerTest {
     // The length arm of the same bound. Unreachable through the shipped VARCHAR(255) schema, but a
     // custom DeadLetterQueue implementation (an in-memory or document store) has no such cap, and
     // the read path must not be the thing that discovers it.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 1.0, true);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 1.0, true, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishContextEntry("cmd-overlong", "c".repeat(4096), null, null);
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
@@ -1907,9 +1938,12 @@ class DeadLetterRetryRunnerTest {
               return null;
             });
 
-    boolean result = runner().retry(CommandId.of("cmd-1"));
+    var result = runner().retry(CommandId.of("cmd-1"), true);
 
-    assertTrue(result, "retry must return true when a matching entry was found and re-dispatched");
+    assertEquals(
+        DeadLetterRetryRunner.RetryOutcome.REPLAYED,
+        result,
+        "retry reports REPLAYED when a matching entry was re-dispatched and succeeded");
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
     assertTrue(
         replayMarkerBound.get(), "retry must execute the replay under the DLQ_REPLAY marker");
@@ -1917,30 +1951,35 @@ class DeadLetterRetryRunnerTest {
   }
 
   @Test
-  void retryIdNotFoundReturnsFalseAndExecutesNothing() {
+  void retryIdNotFoundReturnsNotFoundAndExecutesNothing() {
     // The queue is non-empty but has no entry with this id — retry must not execute anything.
     publishTestEntry("cmd-present");
 
-    boolean result = runner().retry(CommandId.of("cmd-absent"));
+    var result = runner().retry(CommandId.of("cmd-absent"), true);
 
-    assertFalse(result, "retry must return false when no entry matches the id");
+    assertEquals(
+        DeadLetterRetryRunner.RetryOutcome.NOT_FOUND,
+        result,
+        "retry reports NOT_FOUND when no entry matches the id");
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().size(), "the unrelated entry is untouched");
     assertEquals(0, dlq.all().getFirst().dlqAttempts());
   }
 
   @Test
-  void retryFoundEntryWhoseCommandThrowsReturnsTrueAndBumpsAttempts() {
+  void retryFoundEntryWhoseCommandThrowsReturnsFailedAndBumpsAttempts() {
     publishTestEntry("cmd-1");
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
         .thenThrow(new RuntimeException("still broken"));
 
-    boolean result = runner().retry(CommandId.of("cmd-1"));
+    var result = runner().retry(CommandId.of("cmd-1"), true);
 
-    // retry returns true once a matching entry was found and re-dispatched, regardless of whether
-    // the command itself then succeeded — the failure outcome is reflected in the entry's state.
-    assertTrue(result, "retry returns true even when the re-dispatched command then fails");
+    // The failure is reported, and reflected in the entry's state.
+    assertEquals(
+        DeadLetterRetryRunner.RetryOutcome.FAILED,
+        result,
+        "retry reports FAILED when the re-dispatched command fails");
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
     assertEquals(1, dlq.all().size(), "a failed retry leaves the entry queued");
     assertEquals(1, dlq.all().getFirst().dlqAttempts(), "a failed retry bumps the attempt count");
@@ -1983,11 +2022,11 @@ class DeadLetterRetryRunnerTest {
             });
     var runner = runner();
 
-    boolean result =
+    var result =
         ScopedValue.where(StreamRuneContext.CURRENT, operatorContext())
-            .call(() -> runner.retry(CommandId.of("cmd-1")));
+            .call(() -> runner.retry(CommandId.of("cmd-1"), true));
 
-    assertTrue(result);
+    assertEquals(DeadLetterRetryRunner.RetryOutcome.REPLAYED, result);
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
     assertFalse(
         contextBound.get(),
@@ -2011,7 +2050,7 @@ class DeadLetterRetryRunnerTest {
     var runner = runner();
 
     ScopedValue.where(StreamRuneContext.CURRENT, operatorContext())
-        .call(() -> runner.retry(CommandId.of("cmd-1")));
+        .call(() -> runner.retry(CommandId.of("cmd-1"), true));
 
     RequestContext ctx = observed.get();
     assertNotNull(ctx, "the recorded context is rebound for the replay");
@@ -2045,7 +2084,7 @@ class DeadLetterRetryRunnerTest {
     try {
       ScopedValue.where(StreamRuneContext.CURRENT, operatorContext())
           .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
-          .call(() -> runner.retry(CommandId.of("cmd-1")));
+          .call(() -> runner.retry(CommandId.of("cmd-1"), true));
     } finally {
       callerSecurity.remove();
     }
@@ -2108,11 +2147,11 @@ class DeadLetterRetryRunnerTest {
             .registerCommand(TestCmd.class)
             .build();
 
-    boolean result =
+    var result =
         ScopedValue.where(StreamRuneContext.CURRENT, operatorContext())
-            .call(() -> realRunner.retry(CommandId.of("cmd-boot-1")));
+            .call(() -> realRunner.retry(CommandId.of("cmd-boot-1"), true));
 
-    assertTrue(result);
+    assertEquals(DeadLetterRetryRunner.RetryOutcome.REPLAYED, result);
     assertTrue(realDlq.all().isEmpty(), "the replay succeeded and discarded the entry");
     List<EventEnvelope> events = store.eventsFor("test:a1");
     assertEquals(1, events.size());
@@ -2168,7 +2207,7 @@ class DeadLetterRetryRunnerTest {
             .build();
 
     var thrown =
-        assertThrows(IllegalStateException.class, () -> runner.retry(CommandId.of("cmd-1")));
+        assertThrows(IllegalStateException.class, () -> runner.retry(CommandId.of("cmd-1"), true));
 
     assertEquals("dead letter store unavailable", thrown.getMessage());
     assertEquals(0, dlq.all().getFirst().dlqAttempts(), "nothing was recorded");
@@ -2184,15 +2223,15 @@ class DeadLetterRetryRunnerTest {
     var runner = runner();
 
     Thread.currentThread().interrupt();
-    boolean result;
+    DeadLetterRetryRunner.RetryOutcome result;
     boolean stillInterrupted;
     try {
-      result = runner.retry(CommandId.of("cmd-1"));
+      result = runner.retry(CommandId.of("cmd-1"), true);
     } finally {
       stillInterrupted = Thread.interrupted();
     }
 
-    assertTrue(result);
+    assertEquals(DeadLetterRetryRunner.RetryOutcome.REPLAYED, result);
     assertTrue(stillInterrupted, "the caller's interrupt status must be preserved");
     assertTrue(dlq.all().isEmpty(), "the replay completed and discarded the entry");
   }
@@ -2203,7 +2242,9 @@ class DeadLetterRetryRunnerTest {
     // exhaustion counter and ERROR fired when the entry crossed maxRetries; a click that fails
     // again is not another permanently lost command and must not page as one.
     var metrics = new RecordingStreamRuneMetrics();
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
     dlq.updateAttempts(CommandId.of("cmd-1"), 3, Instant.now()); // exhausted and retained
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
@@ -2212,8 +2253,8 @@ class DeadLetterRetryRunnerTest {
     var runner = runnerWithMetrics(metrics);
     var appender = attachRunnerLogAppender();
     try {
-      runner.retry(CommandId.of("cmd-1"));
-      runner.retry(CommandId.of("cmd-1"));
+      runner.retry(CommandId.of("cmd-1"), true);
+      runner.retry(CommandId.of("cmd-1"), true);
 
       assertEquals(0, metrics.count("command.dlqExhausted"), "no second exhaustion sample");
       assertEquals(5, dlq.all().getFirst().dlqAttempts(), "each failed retry is still recorded");
@@ -2405,11 +2446,16 @@ class DeadLetterRetryRunnerTest {
           }
 
           @Override
-          public java.util.List<DeadLetterEntry> readRetryable(int maxAttempts, int limit) {
+          public java.util.List<DeadLetterEntry> readRetryable(
+              int maxAttempts,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
             if (failuresLeft.getAndDecrement() > 0) {
               throw new RuntimeException("DLQ temporarily unreachable");
             }
-            return dlq.readRetryable(maxAttempts, limit);
+            return dlq.readRetryable(
+                maxAttempts, limit, includeUnkeyed, keyedFirstAttemptAtOrAfter);
           }
 
           @Override
@@ -2503,7 +2549,9 @@ class DeadLetterRetryRunnerTest {
     // ZERO backoff => first retry due at publishedAt itself. Stamp publishedAt at T0 (DLQ clock),
     // run the cycle with the runner's clock at EXACTLY T0. The boundary is inclusive (now is not
     // before lastActivity+backoff), so the entry is due at the exact instant — not one tick later.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     var queue = new InMemoryDeadLetterQueue(MutableClock.startingAt(T0));
     publishInto(queue, "cmd-1");
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
@@ -2519,7 +2567,9 @@ class DeadLetterRetryRunnerTest {
   void entryOneNanoBeforeBoundaryIsNotRetried() {
     // ZERO backoff => boundary is publishedAt (T0). With the runner's clock one nanosecond before
     // T0, now IS before lastActivity+backoff, so the entry is not yet due.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     var queue = new InMemoryDeadLetterQueue(MutableClock.startingAt(T0));
     publishInto(queue, "cmd-1");
 
@@ -2539,7 +2589,9 @@ class DeadLetterRetryRunnerTest {
     // FUTURE of the runner's clock. With ZERO backoff: anchored on lastAttemptAt the entry is not
     // due (now < lastAttemptAt); anchored on publishedAt it would be due (now >= publishedAt). The
     // entry staying un-retried proves lastAttemptAt wins.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     var queue = new InMemoryDeadLetterQueue(MutableClock.startingAt(T0));
     publishInto(queue, "cmd-1");
     Instant now = T0.plus(Duration.ofHours(1));
@@ -2567,7 +2619,9 @@ class DeadLetterRetryRunnerTest {
     //
     // Policy: 1s initial delay, x100 backoff. A never-attempted entry is due 1s after publish; an
     // entry with 3 attempts backs off 1s*100^3 (~11.5 days), so a 60s-old last attempt is not due.
-    policy = new DeadLetterRetryPolicy(10, Duration.ofSeconds(1), 100.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            10, Duration.ofSeconds(1), 100.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     var queue = new InMemoryDeadLetterQueue(MutableClock.startingAt(T0)); // publishedAt == T0
     // Three not-yet-due head entries: high attempts, last attempt 60s before T0, enormous backoff.
     // Their last-activity (T0-60s) is OLDER than the due entry's (its publishedAt T0), so under
@@ -2871,9 +2925,10 @@ class DeadLetterRetryRunnerTest {
       }
 
       @Override
-      public List<DeadLetterEntry> readRetryable(int maxRetries, int limit) {
+      public List<DeadLetterEntry> readRetryable(
+          int maxRetries, int limit, boolean includeUnkeyed, Instant keyedFirstAttemptAtOrAfter) {
         reads.incrementAndGet();
-        return dlq.readRetryable(maxRetries, limit);
+        return dlq.readRetryable(maxRetries, limit, includeUnkeyed, keyedFirstAttemptAtOrAfter);
       }
 
       @Override
@@ -3159,9 +3214,9 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
     // The NON-leader replica performs an on-demand retry — it must still execute.
-    boolean retried = runnerWithLeadership(dlq, standbyView).retry(CommandId.of("cmd-1"));
+    var retried = runnerWithLeadership(dlq, standbyView).retry(CommandId.of("cmd-1"), true);
 
-    assertTrue(retried);
+    assertEquals(DeadLetterRetryRunner.RetryOutcome.REPLAYED, retried);
     assertTrue(dlq.all().isEmpty(), "on-demand retry succeeded and discarded the entry");
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
   }
@@ -3229,7 +3284,9 @@ class DeadLetterRetryRunnerTest {
     // recordDeadLetterExhausted ran bare AFTER updateAttempts had already bumped the
     // entry to maxRetries. A throwing backend therefore skipped the discard — and since
     // readRetryable filters dlq_attempts < maxRetries, no later poll ever touched the entry again.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, true);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, true, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
     dlq.updateAttempts(CommandId.of("cmd-1"), 2, Instant.now()); // next failure hits maxRetries=3
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
@@ -3247,7 +3304,9 @@ class DeadLetterRetryRunnerTest {
     // a command was permanently lost (the counter is the thing that just failed). It ran after the
     // bare metric call, so a throwing backend lost it — permanently, because the exhausted entry
     // is never re-read by readRetryable.
-    policy = new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false);
+    policy =
+        new DeadLetterRetryPolicy(
+            3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
     dlq.updateAttempts(CommandId.of("cmd-1"), 2, Instant.now()); // next failure hits maxRetries=3
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);

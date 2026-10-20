@@ -509,7 +509,7 @@ class OffRequestAuthorizationTest {
         new Thread(
             () -> {
               try {
-                runner.retry((org.streamrune.core.types.CommandId) commandId);
+                runner.retry((org.streamrune.core.types.CommandId) commandId, true);
               } catch (Throwable t) {
                 error.set(t);
               }

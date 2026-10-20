@@ -1,0 +1,941 @@
+package org.streamrune.runtime;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.Test;
+import org.streamrune.core.AggregateHistory;
+import org.streamrune.core.AggregateState;
+import org.streamrune.core.Command;
+import org.streamrune.core.CommandBus;
+import org.streamrune.core.DeadLetterQueue;
+import org.streamrune.core.DeadLetterRetryPolicy;
+import org.streamrune.core.DeadLetterRetryPolicy.UnkeyedReplay;
+import org.streamrune.core.Decider;
+import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventStore;
+import org.streamrune.core.EventStoreException;
+import org.streamrune.core.StreamRuneMetrics;
+import org.streamrune.core.types.AggregateId;
+import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.CommandId;
+import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.Version;
+import org.streamrune.runtime.DeadLetterRetryRunner.RetryOutcome;
+import org.streamrune.test.InMemoryCommandInbox;
+import org.streamrune.test.InMemoryDeadLetterQueue;
+import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.MutableClock;
+
+/**
+ * When a dead-letter replay is a second execution of a command its caller already completed.
+ *
+ * <p>Two shapes, both driven through the real command bus, command inbox and retry runner:
+ *
+ * <ul>
+ *   <li>an <b>unkeyed</b> relative command ("adjust stock by +50") fails on infrastructure, its
+ *       caller retries it successfully, and the scheduled retry then replays the dead-letter entry
+ *       — nothing pairs the replay with the caller's retry, so the delta would be applied twice;
+ *   <li>a <b>keyed</b> command's caller retries successfully under the same key, the inbox
+ *       retention sweeper later prunes that key's row, and an operator replays the retained entry —
+ *       the inbox no longer recognises the key, so the command would execute again.
+ * </ul>
+ */
+class DeadLetterReplaySafetyTest {
+
+  private static final AggregateType PRODUCT = AggregateType.of("product");
+  private static final Duration INBOX_WINDOW = Duration.ofDays(7);
+  private static final ObjectMapper MAPPER = new ObjectMapper();
+
+  record AdjustStock(String productId, int delta) implements Command {}
+
+  sealed interface StockEvent extends DomainEvent {
+    record StockAdjusted(int delta) implements StockEvent {}
+  }
+
+  record Stock(int units) implements AggregateState {}
+
+  /** Relative: every execution adds its delta to whatever the stock is now. */
+  static final class StockDecider implements Decider<AdjustStock, Stock, StockEvent> {
+    @Override
+    public Stock initialState() {
+      return new Stock(100);
+    }
+
+    @Override
+    public List<StockEvent> decide(AdjustStock command, Stock state) {
+      return List.of(new StockEvent.StockAdjusted(command.delta()));
+    }
+
+    @Override
+    public Stock evolve(Stock state, StockEvent event) {
+      return new Stock(state.units() + ((StockEvent.StockAdjusted) event).delta());
+    }
+  }
+
+  /** Fails the next {@code failures} appends, keyed or not, with a transient store fault. */
+  static final class FailingAppends implements EventStore {
+    private final EventStore delegate;
+    private final AtomicInteger failures;
+
+    FailingAppends(EventStore delegate, int failures) {
+      this.delegate = delegate;
+      this.failures = new AtomicInteger(failures);
+    }
+
+    private void maybeFail(StreamId streamId) {
+      if (failures.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+        throw new EventStoreException("seeded transient append failure for stream: " + streamId);
+      }
+    }
+
+    @Override
+    public AppendResult append(
+        StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
+      maybeFail(streamId);
+      return delegate.append(streamId, events, expectedVersion);
+    }
+
+    @Override
+    public IdempotentAppendResult appendWithKey(
+        StreamId streamId,
+        List<EventEnvelope> events,
+        Version expectedVersion,
+        IdempotencyKey idempotencyKey,
+        String commandType) {
+      maybeFail(streamId);
+      return delegate.appendWithKey(streamId, events, expectedVersion, idempotencyKey, commandType);
+    }
+
+    @Override
+    public AggregateHistory load(StreamId streamId) {
+      return delegate.load(streamId);
+    }
+
+    @Override
+    public AggregateHistory load(StreamId streamId, int expectedSnapshotVersion) {
+      return delegate.load(streamId, expectedSnapshotVersion);
+    }
+
+    @Override
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      return delegate.saveSnapshot(
+          streamId, version, state, snapshotVersion, snapshotPurgeGeneration);
+    }
+
+    @Override
+    public GlobalOffset lastGlobalOffset() {
+      return delegate.lastGlobalOffset();
+    }
+
+    @Override
+    public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
+      return delegate.readGlobalStream(afterOffset, maxCount);
+    }
+
+    @Override
+    public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
+      return delegate.readStream(streamId, afterVersion, maxCount);
+    }
+  }
+
+  /** Records the stale-replay refusals the runner reports. */
+  static final class RecordingMetrics implements StreamRuneMetrics {
+    final List<String> staleBlocked = new ArrayList<>();
+    final List<Long> awaitingOperator = new ArrayList<>();
+
+    @Override
+    public void recordDeadLetterStaleReplayBlocked(String commandType) {
+      staleBlocked.add(commandType);
+    }
+
+    @Override
+    public void recordDlqAwaitingOperator(long awaiting) {
+      awaitingOperator.add(awaiting);
+    }
+
+    long lastAwaiting() {
+      assertFalse(awaitingOperator.isEmpty(), "the gauge was sampled");
+      return awaitingOperator.getLast();
+    }
+  }
+
+  /** One bus + inbox + DLQ + runner, wired as the integrations wire them. */
+  static final class Harness {
+    final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
+    final InMemoryEventStore store;
+    final MutableClock runnerClock = MutableClock.startingAt(Instant.now());
+    // The queue stamps publishedAt from the runner's clock, so "due" is decided on one timeline.
+    final InMemoryDeadLetterQueue dlq = new InMemoryDeadLetterQueue(runnerClock);
+    final RecordingMetrics metrics = new RecordingMetrics();
+    final VirtualThreadCommandBus bus;
+    final DeadLetterRetryRunner runner;
+
+    Harness(boolean withInbox, int appendFailures, DeadLetterRetryPolicy policy) {
+      store =
+          withInbox ? new InMemoryEventStore().withCommandInbox(inbox) : new InMemoryEventStore();
+      var busBuilder =
+          VirtualThreadCommandBus.builder()
+              .eventStore(new FailingAppends(store, appendFailures))
+              .deadLetterQueue(dlq)
+              .objectMapper(MAPPER)
+              .register(
+                  PRODUCT,
+                  AdjustStock.class,
+                  c -> AggregateId.of(c.productId()),
+                  new StockDecider());
+      if (withInbox) {
+        busBuilder.commandInbox(inbox);
+      }
+      bus = busBuilder.build();
+      var runnerBuilder =
+          DeadLetterRetryRunner.builder()
+              .deadLetterQueue(dlq)
+              .commandBus(bus)
+              .objectMapper(MAPPER)
+              .pollInterval(Duration.ofMinutes(1))
+              .clock(runnerClock)
+              .metrics(metrics)
+              .inboxRetentionMaxAge(INBOX_WINDOW)
+              .registerCommand(AdjustStock.class);
+      if (policy != null) {
+        runnerBuilder.policy(policy);
+      }
+      runner = runnerBuilder.build();
+    }
+
+    int units(String productId) {
+      int units = 100;
+      for (var envelope :
+          store.readStream(
+              StreamId.of(PRODUCT, AggregateId.of(productId)), Version.initial(), 1000)) {
+        units += ((StockEvent.StockAdjusted) envelope.event()).delta();
+      }
+      return units;
+    }
+
+    DeadLetterQueue.DeadLetterEntry onlyEntry() {
+      assertEquals(1, dlq.all().size(), "exactly one dead-letter entry expected");
+      return dlq.all().getFirst();
+    }
+
+    void publish(
+        String commandId, AdjustStock command, Instant firstAttemptAt, IdempotencyKey key) {
+      try {
+        dlq.publish(
+            new DeadLetterQueue.DeadLetterPublishRequest(
+                MAPPER.writeValueAsString(command),
+                AdjustStock.class.getName(),
+                CommandId.of(commandId),
+                StreamId.of(PRODUCT, AggregateId.of(command.productId())),
+                EventStoreException.class.getName(),
+                "seeded",
+                1,
+                firstAttemptAt,
+                null,
+                null,
+                null,
+                key));
+      } catch (Exception e) {
+        throw new IllegalStateException(e);
+      }
+    }
+  }
+
+  private static DeadLetterRetryPolicy immediate(UnkeyedReplay unkeyedReplay) {
+    return new DeadLetterRetryPolicy(5, Duration.ZERO, 2.0, false, unkeyedReplay);
+  }
+
+  private static IdempotencyKey key(String value) {
+    return IdempotencyKey.of(value);
+  }
+
+  // ── Unkeyed: the client's own retry, then the scheduled replay ────────────────────────────────
+
+  @Test
+  void
+      unkeyedRelativeCommand_clientRetrySucceeds_thenTheDefaultScheduledRetry_doesNotApplyItAgain() {
+    // No policy: the runner runs the production default.
+    var h = new Harness(true, 1, null);
+    var restock = new AdjustStock("p-1", 50);
+
+    // The first attempt hits a transient store fault: dead-lettered, and the caller sees it fail.
+    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+    assertEquals(100, h.units("p-1"));
+    assertNull(h.onlyEntry().idempotencyKey(), "the command ran unkeyed");
+
+    // The caller (an admin re-sending the request, a retrying client) tries again and succeeds.
+    h.bus.execute(restock);
+    assertEquals(150, h.units("p-1"));
+
+    // Long after every backoff of the default ladder has elapsed, the scheduled retry runs.
+    h.runnerClock.advance(Duration.ofHours(2));
+    h.runner.processBatch();
+    h.runnerClock.advance(Duration.ofHours(2));
+    h.runner.processBatch();
+
+    assertEquals(150, h.units("p-1"), "the restock is applied once, not twice");
+    assertEquals(0, h.onlyEntry().dlqAttempts(), "the entry waits for an operator, untouched");
+  }
+
+  @Test
+  void unkeyedRelativeCommand_underAutomaticUnkeyedReplay_isAppliedTwice_theDocumentedHazard() {
+    var h = new Harness(true, 1, immediate(UnkeyedReplay.AUTOMATIC));
+    var restock = new AdjustStock("p-1", 50);
+    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+    h.bus.execute(restock);
+
+    h.runner.processBatch();
+
+    assertEquals(
+        200,
+        h.units("p-1"),
+        "AUTOMATIC is the explicit opt-in: a relative command's replay after the caller's own"
+            + " retry is a second execution");
+    assertTrue(h.dlq.all().isEmpty());
+  }
+
+  @Test
+  void unkeyedEntry_operatorRetryWithoutForce_isRefused_withForce_replaysIt() {
+    var h = new Harness(true, 1, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    var restock = new AdjustStock("p-1", 50);
+    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+    var commandId = h.onlyEntry().commandId();
+
+    assertEquals(RetryOutcome.NOT_DEDUPLICATED, h.runner.retry(commandId));
+    assertEquals(100, h.units("p-1"));
+    assertEquals(0, h.onlyEntry().dlqAttempts(), "a refusal leaves the entry unchanged");
+
+    // The operator checked: the caller never retried, so the restock is missing.
+    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(commandId, true));
+
+    assertEquals(150, h.units("p-1"));
+    assertTrue(h.dlq.all().isEmpty());
+  }
+
+  @Test
+  void unkeyedRelativeCommand_clientRetrySucceeds_thenAnOperatorClicksRetry_isNotAppliedAgain() {
+    // The admin page's Retry button under the shipped defaults: the caller already re-sent the
+    // restock, and nothing on the entry shows it.
+    var h = new Harness(true, 1, null);
+    var restock = new AdjustStock("p-1", 50);
+    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+    h.bus.execute(restock);
+    assertEquals(150, h.units("p-1"));
+    var commandId = h.onlyEntry().commandId();
+
+    assertEquals(RetryOutcome.NOT_DEDUPLICATED, h.runner.retry(commandId));
+
+    assertEquals(150, h.units("p-1"), "the restock is applied once, not twice");
+    assertEquals(0, h.onlyEntry().dlqAttempts());
+  }
+
+  @Test
+  void aKeyedEntryOnABusWithoutAnInbox_operatorRetryWithoutForce_isRefused() {
+    var h = new Harness(false, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    h.publish("keyed-1", new AdjustStock("p-1", 50), Instant.now(), key("k-1"));
+
+    assertEquals(RetryOutcome.NOT_DEDUPLICATED, h.runner.retry(CommandId.of("keyed-1")));
+    assertEquals(100, h.units("p-1"));
+    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(CommandId.of("keyed-1"), true));
+    assertEquals(150, h.units("p-1"));
+  }
+
+  @Test
+  void keyedEntry_isStillReplayedAutomatically_underTheDefaultPolicy() {
+    var h = new Harness(true, 1, null);
+    var restock = new AdjustStock("p-1", 50);
+    var key = key("restock-p-1-1");
+    assertThrows(EventStoreException.class, () -> h.bus.execute(restock, key));
+
+    h.runnerClock.advance(Duration.ofHours(2));
+    h.runner.processBatch();
+
+    assertEquals(150, h.units("p-1"));
+    assertTrue(h.dlq.all().isEmpty(), "the keyed entry was replayed on the schedule");
+    // The caller's own retry under the same key meets the inbox row the replay wrote.
+    assertTrue(h.bus.execute(restock, key).idempotentReplay());
+    assertEquals(150, h.units("p-1"));
+  }
+
+  @Test
+  void aBacklogOfUnkeyedEntries_neverStarvesTheKeyedEntryBehindIt() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    // More unkeyed entries than the runner's over-fetched page (batch 10 x 10), all published
+    // before the keyed one — so all ahead of it in least-recently-active order.
+    for (int i = 0; i < 150; i++) {
+      h.publish("unkeyed-" + i, new AdjustStock("u-" + i, 1), Instant.now(), null);
+    }
+    h.publish("keyed-1", new AdjustStock("k-1", 7), Instant.now(), key("k-1"));
+
+    h.runner.processBatch();
+
+    assertEquals(107, h.units("k-1"), "the keyed entry is replayed despite the backlog ahead");
+    assertEquals(150, h.dlq.all().size(), "every unkeyed entry still waits for an operator");
+    assertEquals(100, h.units("u-0"));
+  }
+
+  @Test
+  void aStoreThatIgnoresTheKeyFilter_stillNeverHasItsUnkeyedEntriesReplayedOnTheSchedule() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    // A third-party store that returns every retryable entry whatever includeUnkeyed says.
+    DeadLetterQueue lax =
+        new DeadLetterQueue() {
+          @Override
+          public void publish(DeadLetterPublishRequest request) {
+            h.dlq.publish(request);
+          }
+
+          @Override
+          public List<DeadLetterEntry> read(int limit) {
+            return h.dlq.read(limit);
+          }
+
+          @Override
+          public void discard(CommandId commandId) {
+            h.dlq.discard(commandId);
+          }
+
+          @Override
+          public void updateAttempts(CommandId commandId, int dlqAttempts, Instant lastAttemptAt) {
+            h.dlq.updateAttempts(commandId, dlqAttempts, lastAttemptAt);
+          }
+
+          @Override
+          public List<DeadLetterEntry> readRetryable(
+              int maxRetries,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
+            return h.dlq.readRetryable(maxRetries, limit, true, null);
+          }
+        };
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(lax)
+            .commandBus(h.bus)
+            .objectMapper(MAPPER)
+            .policy(immediate(UnkeyedReplay.OPERATOR_ONLY))
+            .registerCommand(AdjustStock.class)
+            .build();
+    h.publish("unkeyed-1", new AdjustStock("p-1", 50), Instant.now(), null);
+
+    runner.processBatch();
+
+    assertEquals(100, h.units("p-1"));
+    assertEquals(0, h.onlyEntry().dlqAttempts());
+  }
+
+  @Test
+  void aBusWithoutAnInbox_replaysNothingOnTheSchedule_underOperatorOnly() {
+    var h = new Harness(false, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    // Even a keyed entry: without an inbox its replay would run unkeyed, deduplicated by nothing.
+    h.publish("keyed-1", new AdjustStock("p-1", 50), Instant.now(), key("k-1"));
+
+    h.runner.processBatch();
+    h.runner.processBatch();
+
+    assertEquals(100, h.units("p-1"));
+    assertEquals(0, h.onlyEntry().dlqAttempts());
+  }
+
+  @Test
+  void aBusWithoutAnInbox_underOperatorOnly_doesNotEvenReadTheQueue() {
+    var h = new Harness(false, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    DeadLetterQueue unreadable =
+        new DeadLetterQueue() {
+          @Override
+          public void publish(DeadLetterPublishRequest request) {}
+
+          @Override
+          public List<DeadLetterEntry> read(int limit) {
+            return List.of();
+          }
+
+          @Override
+          public void discard(CommandId commandId) {}
+
+          @Override
+          public List<DeadLetterEntry> readRetryable(
+              int maxRetries,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
+            throw new AssertionError("nothing can be replayed automatically; no read is due");
+          }
+        };
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(unreadable)
+            .commandBus(h.bus)
+            .objectMapper(MAPPER)
+            .policy(immediate(UnkeyedReplay.OPERATOR_ONLY))
+            .registerCommand(AdjustStock.class)
+            .build();
+
+    assertDoesNotThrow(runner::processBatch);
+  }
+
+  // ── Keyed: the inbox window ───────────────────────────────────────────────────────────────────
+
+  @Test
+  void keyedCommand_clientRetrySucceeds_inboxRowPruned_operatorRetryTenDaysLater_isRefused() {
+    var h = new Harness(true, 1, null);
+    var reserve = new AdjustStock("p-1", -3);
+    var key = key("reserve-o-1");
+
+    // Day 0: the keyed command is dead-lettered, then the caller's retry under the same key
+    // succeeds and writes the inbox row.
+    assertThrows(EventStoreException.class, () -> h.bus.execute(reserve, key));
+    assertFalse(h.bus.execute(reserve, key).idempotentReplay());
+    assertEquals(97, h.units("p-1"));
+    var commandId = h.onlyEntry().commandId();
+
+    // Day 10: the inbox sweeper (window 7 days) has pruned the row.
+    h.runnerClock.advance(Duration.ofDays(10));
+    assertEquals(1, h.inbox.deleteProcessedBefore(h.runnerClock.instant().minus(INBOX_WINDOW)));
+
+    // The operator clicks Retry on the retained entry.
+    assertEquals(RetryOutcome.STALE_REPLAY_BLOCKED, h.runner.retry(commandId));
+
+    assertEquals(97, h.units("p-1"), "the reservation is not applied a second time");
+    var entry = h.onlyEntry();
+    assertEquals(0, entry.dlqAttempts(), "a refusal leaves the entry unchanged");
+    assertNull(entry.lastAttemptAt());
+    assertEquals(List.of("AdjustStock"), h.metrics.staleBlocked);
+  }
+
+  @Test
+  void staleKeyedEntry_forcedOperatorRetry_runsTheCommandAgain_atLeastOnceAcknowledged() {
+    var h = new Harness(true, 1, null);
+    var restock = new AdjustStock("p-1", 50);
+    assertThrows(EventStoreException.class, () -> h.bus.execute(restock, key("restock-p-1-1")));
+    var commandId = h.onlyEntry().commandId();
+    h.runnerClock.advance(Duration.ofDays(8));
+
+    // The operator checked: the caller never retried, the restock is missing.
+    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(commandId, true));
+
+    assertEquals(150, h.units("p-1"));
+    assertTrue(h.dlq.all().isEmpty());
+    assertTrue(h.metrics.staleBlocked.isEmpty(), "a forced replay is not a refusal");
+  }
+
+  @Test
+  void staleKeyedEntry_isNotReplayedOnTheSchedule_andStaysForAnOperator() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    Instant now = h.runnerClock.instant();
+    h.publish("stale", new AdjustStock("p-1", 50), now.minus(Duration.ofDays(8)), key("k-stale"));
+    h.publish("fresh", new AdjustStock("p-2", 50), now.minus(Duration.ofDays(6)), key("k-fresh"));
+
+    h.runner.processBatch();
+
+    assertEquals(100, h.units("p-1"), "the stale entry is not replayed on the schedule");
+    assertEquals(150, h.units("p-2"), "the fresh keyed entry is replayed");
+    var stale = h.onlyEntry();
+    assertEquals(CommandId.of("stale"), stale.commandId());
+    assertEquals(0, stale.dlqAttempts(), "skipping is not a failed attempt");
+    assertNull(stale.lastAttemptAt());
+    assertTrue(
+        h.metrics.staleBlocked.isEmpty(),
+        "the schedule skips it like a not-due entry; it is counted by the gauge, not per cycle");
+    h.runner.processBatch();
+    assertEquals(1, h.metrics.lastAwaiting(), "the stale entry awaits an operator");
+  }
+
+  @Test
+  void staleKeyedEntriesAtTheHead_doNotTakeBatchSlots_theFreshEntryBehindThemIsReplayed() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    Instant now = h.runnerClock.instant();
+    // Never attempted and published first, so they sort ahead of the fresh entry; ten of them fill
+    // a whole batch (the default batch size is ten).
+    for (int i = 0; i < 10; i++) {
+      h.publish(
+          "stale-" + i,
+          new AdjustStock("s-" + i, 1),
+          now.minus(Duration.ofDays(8)),
+          key("k-stale-" + i));
+    }
+    h.runnerClock.advance(Duration.ofSeconds(1));
+    h.publish("fresh", new AdjustStock("f-1", 50), h.runnerClock.instant(), key("k-fresh"));
+
+    for (int cycle = 0; cycle < 3; cycle++) {
+      h.runner.processBatch();
+    }
+
+    assertEquals(150, h.units("f-1"), "the fresh keyed entry is replayed in the first cycle");
+    assertEquals(10, h.dlq.all().size(), "the stale entries stay for an operator");
+    assertTrue(h.dlq.all().stream().allMatch(e -> e.dlqAttempts() == 0));
+    assertTrue(h.metrics.staleBlocked.isEmpty(), "no refusal counted per entry per cycle");
+    assertEquals(10, h.metrics.lastAwaiting());
+  }
+
+  @Test
+  void moreStaleKeyedEntriesThanAPage_doNotHideTheFreshEntryBehindThem() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    Instant now = h.runnerClock.instant();
+    // More than the over-fetched page (batch 10 x 10): without the store-side cutoff they would
+    // fill every page the schedule reads.
+    for (int i = 0; i < 110; i++) {
+      h.publish(
+          "stale-" + i,
+          new AdjustStock("s-" + i, 1),
+          now.minus(Duration.ofDays(8)),
+          key("k-stale-" + i));
+    }
+    h.runnerClock.advance(Duration.ofSeconds(1));
+    h.publish("fresh", new AdjustStock("f-1", 50), h.runnerClock.instant(), key("k-fresh"));
+
+    for (int cycle = 0; cycle < 3; cycle++) {
+      h.runner.processBatch();
+    }
+
+    assertEquals(150, h.units("f-1"), "the fresh keyed entry is replayed");
+    assertEquals(110, h.dlq.all().size());
+    assertEquals(110, h.metrics.lastAwaiting());
+    assertTrue(h.metrics.staleBlocked.isEmpty());
+  }
+
+  @Test
+  void aStoreThatIgnoresTheStaleCutoff_stillHasItsStaleEntriesSkippedWithoutABatchSlot() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    DeadLetterQueue lax =
+        new DeadLetterQueue() {
+          @Override
+          public void publish(DeadLetterPublishRequest request) {
+            h.dlq.publish(request);
+          }
+
+          @Override
+          public List<DeadLetterEntry> read(int limit) {
+            return h.dlq.read(limit);
+          }
+
+          @Override
+          public void discard(CommandId commandId) {
+            h.dlq.discard(commandId);
+          }
+
+          @Override
+          public void updateAttempts(CommandId commandId, int dlqAttempts, Instant lastAttemptAt) {
+            h.dlq.updateAttempts(commandId, dlqAttempts, lastAttemptAt);
+          }
+
+          @Override
+          public List<DeadLetterEntry> readRetryable(
+              int maxRetries, int limit, boolean includeUnkeyed, Instant cutoff) {
+            return h.dlq.readRetryable(maxRetries, limit, includeUnkeyed, null);
+          }
+        };
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(lax)
+            .commandBus(h.bus)
+            .objectMapper(MAPPER)
+            .policy(immediate(UnkeyedReplay.OPERATOR_ONLY))
+            .clock(h.runnerClock)
+            .inboxRetentionMaxAge(INBOX_WINDOW)
+            .registerCommand(AdjustStock.class)
+            .build();
+    Instant now = h.runnerClock.instant();
+    for (int i = 0; i < 10; i++) {
+      h.publish(
+          "stale-" + i,
+          new AdjustStock("s-" + i, 1),
+          now.minus(Duration.ofDays(8)),
+          key("k-stale-" + i));
+    }
+    h.runnerClock.advance(Duration.ofSeconds(1));
+    h.publish("fresh", new AdjustStock("f-1", 50), h.runnerClock.instant(), key("k-fresh"));
+
+    runner.processBatch();
+
+    assertEquals(150, h.units("f-1"));
+    assertEquals(100, h.units("s-0"));
+    assertTrue(h.dlq.all().stream().allMatch(e -> e.dlqAttempts() == 0));
+  }
+
+  // ── Operator retry under AUTOMATIC, and who forced it ────────────────────────────────────────
+
+  @Test
+  void underAutomatic_anOperatorRetryOfAnUnkeyedEntryIsNotRefused_likeTheSchedule() {
+    var h = new Harness(true, 1, immediate(UnkeyedReplay.AUTOMATIC));
+    var restock = new AdjustStock("p-1", 50);
+    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+
+    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(h.onlyEntry().commandId()));
+    assertEquals(150, h.units("p-1"));
+  }
+
+  @Test
+  void underAutomatic_anOperatorRetryOnABusWithoutAnInboxIsNotRefused() {
+    var h = new Harness(false, 0, immediate(UnkeyedReplay.AUTOMATIC));
+    h.publish("keyed-1", new AdjustStock("p-1", 50), Instant.now(), key("k-1"));
+
+    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(CommandId.of("keyed-1")));
+  }
+
+  @Test
+  void underAutomatic_aStaleKeyedEntryIsStillRefused() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.AUTOMATIC));
+    h.publish(
+        "stale",
+        new AdjustStock("p-1", 1),
+        h.runnerClock.instant().minus(Duration.ofDays(8)),
+        key("k-stale"));
+
+    assertEquals(RetryOutcome.STALE_REPLAY_BLOCKED, h.runner.retry(CommandId.of("stale")));
+  }
+
+  @Test
+  void aForcedReplayNamesWhoForcedIt_orUnknown() throws Exception {
+    var logger =
+        (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(DeadLetterRetryRunner.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    try {
+      var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+      h.publish("unkeyed", new AdjustStock("p-1", 1), Instant.now(), null);
+      h.publish(
+          "stale",
+          new AdjustStock("p-2", 1),
+          h.runnerClock.instant().minus(Duration.ofDays(8)),
+          key("k-stale"));
+      var operator =
+          new org.streamrune.core.StreamRuneContext.RequestContext(
+              null,
+              org.streamrune.core.types.UserId.of("ops-7"),
+              org.streamrune.core.types.CorrelationId.of("corr-ops"),
+              Instant.now(),
+              null);
+
+      var unkeyed =
+          ScopedValue.where(org.streamrune.core.StreamRuneContext.CURRENT, operator)
+              .call(() -> h.runner.retry(CommandId.of("unkeyed"), true));
+      var stale = h.runner.retry(CommandId.of("stale"), true);
+
+      assertEquals(RetryOutcome.REPLAYED, unkeyed);
+      assertEquals(RetryOutcome.REPLAYED, stale);
+      var forced =
+          appender.list.stream()
+              .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+              .filter(m -> m.startsWith("Forced replay"))
+              .toList();
+      assertEquals(2, forced.size(), forced.toString());
+      assertTrue(
+          forced.get(0).contains("unkeyed") && forced.get(0).contains("by ops-7"), forced.get(0));
+      assertTrue(
+          forced.get(1).contains("stale") && forced.get(1).contains("by unknown"), forced.get(1));
+      // The operator is named in the log only; the replay itself runs without the caller's context.
+      assertNull(
+          h.store
+              .readStream(StreamId.of(PRODUCT, AggregateId.of("p-1")), Version.initial(), 10)
+              .getFirst()
+              .metadata()
+              .userId());
+    } finally {
+      logger.detachAppender(appender);
+    }
+  }
+
+  // ── streamrune.dlq.awaiting_operator ─────────────────────────────────────────────────────────
+
+  @Test
+  void awaitingOperator_countsUnkeyedEntriesUnderOperatorOnly_notExhaustedOnes_notFreshKeyedOnes() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    Instant now = h.runnerClock.instant();
+    h.publish("u-1", new AdjustStock("u-1", 1), now, null);
+    h.publish("u-2", new AdjustStock("u-2", 1), now, null);
+    h.publish("u-exhausted", new AdjustStock("u-3", 1), now, null);
+    h.dlq.updateAttempts(CommandId.of("u-exhausted"), 5, now);
+    // Fresh keyed: replayed on the schedule, never awaiting. Stale keyed: awaiting.
+    h.publish("k-stale", new AdjustStock("k-1", 1), now.minus(Duration.ofDays(8)), key("k-s"));
+
+    h.runner.processBatch();
+
+    assertEquals(3, h.metrics.lastAwaiting(), "two unkeyed and one stale keyed entry");
+  }
+
+  @Test
+  void awaitingOperator_isZeroUnderAutomaticWithoutAnInboxWindow() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.AUTOMATIC));
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(h.dlq)
+            .commandBus(h.bus)
+            .objectMapper(MAPPER)
+            .policy(
+                new DeadLetterRetryPolicy(
+                    5, Duration.ofDays(1), 2.0, false, UnkeyedReplay.AUTOMATIC))
+            .clock(h.runnerClock)
+            .metrics(h.metrics)
+            .registerCommand(AdjustStock.class)
+            .build();
+    h.publish("u-1", new AdjustStock("u-1", 1), h.runnerClock.instant(), null);
+
+    runner.processBatch();
+
+    assertEquals(0, h.metrics.lastAwaiting(), "everything is replayed on the schedule");
+  }
+
+  @Test
+  void awaitingOperator_onABusWithoutAnInbox_countsKeyedEntriesToo() {
+    var h = new Harness(false, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    h.publish("keyed-1", new AdjustStock("p-1", 1), Instant.now(), key("k-1"));
+    h.publish("unkeyed-1", new AdjustStock("p-2", 1), Instant.now(), null);
+
+    h.runner.processBatch();
+
+    assertEquals(2, h.metrics.lastAwaiting());
+  }
+
+  @Test
+  void awaitingOperator_degradesQuietlyForAStoreWithoutSupport() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    var counted = new java.util.concurrent.atomic.AtomicInteger();
+    DeadLetterQueue noCount =
+        new DeadLetterQueue() {
+          @Override
+          public void publish(DeadLetterPublishRequest request) {}
+
+          @Override
+          public List<DeadLetterEntry> read(int limit) {
+            return List.of();
+          }
+
+          @Override
+          public void discard(CommandId commandId) {}
+
+          @Override
+          public List<DeadLetterEntry> readRetryable(
+              int maxRetries,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
+            return List.of();
+          }
+
+          @Override
+          public long countAwaitingOperator(
+              int maxRetries, boolean countUnkeyed, Instant keyedFirstAttemptBefore) {
+            counted.incrementAndGet();
+            return DeadLetterQueue.super.countAwaitingOperator(
+                maxRetries, countUnkeyed, keyedFirstAttemptBefore);
+          }
+        };
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(noCount)
+            .commandBus(h.bus)
+            .objectMapper(MAPPER)
+            .policy(immediate(UnkeyedReplay.OPERATOR_ONLY))
+            .metrics(h.metrics)
+            .registerCommand(AdjustStock.class)
+            .build();
+
+    assertDoesNotThrow(runner::processBatch);
+    assertDoesNotThrow(runner::processBatch);
+
+    assertEquals(1, counted.get(), "the sample is disabled after the first refusal");
+    assertTrue(h.metrics.awaitingOperator.isEmpty());
+  }
+
+  @Test
+  void theWindowIsMeasuredFromFirstAttemptAt_inclusiveAtTheBoundary() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    Instant now = h.runnerClock.instant();
+    h.publish("edge", new AdjustStock("p-1", 1), now.minus(INBOX_WINDOW), key("k-edge"));
+    h.publish(
+        "past", new AdjustStock("p-2", 1), now.minus(INBOX_WINDOW).minusMillis(1), key("k-past"));
+
+    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(CommandId.of("edge")));
+    assertEquals(RetryOutcome.STALE_REPLAY_BLOCKED, h.runner.retry(CommandId.of("past")));
+  }
+
+  @Test
+  void anUnprunedInbox_zeroOrNegativeOrUnsetWindow_refusesNothing() {
+    for (Duration window : new Duration[] {null, Duration.ZERO, Duration.ofDays(-1)}) {
+      var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+      var runner =
+          DeadLetterRetryRunner.builder()
+              .deadLetterQueue(h.dlq)
+              .commandBus(h.bus)
+              .objectMapper(MAPPER)
+              .clock(h.runnerClock)
+              .inboxRetentionMaxAge(window)
+              .registerCommand(AdjustStock.class)
+              .build();
+      h.publish(
+          "old",
+          new AdjustStock("p-1", 1),
+          h.runnerClock.instant().minus(Duration.ofDays(400)),
+          key("k-old"));
+
+      assertEquals(RetryOutcome.REPLAYED, runner.retry(CommandId.of("old")), "window " + window);
+    }
+  }
+
+  @Test
+  void theStaleGuardDoesNotApplyToUnkeyedEntries_nothingDeduplicatesThemAnyway() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.AUTOMATIC));
+    h.publish(
+        "old-unkeyed",
+        new AdjustStock("p-1", 1),
+        h.runnerClock.instant().minus(Duration.ofDays(30)),
+        null);
+
+    // AUTOMATIC replays it on the schedule whatever its age.
+    h.runner.processBatch();
+
+    assertEquals(101, h.units("p-1"));
+    assertTrue(h.dlq.all().isEmpty());
+  }
+
+  @Test
+  void retryOutcomes_notFoundAndFailedAndAdmissionRefused() {
+    var h = new Harness(true, 2, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    assertEquals(RetryOutcome.NOT_FOUND, h.runner.retry(CommandId.of("absent")));
+
+    var restock = new AdjustStock("p-1", 50);
+    assertThrows(EventStoreException.class, () -> h.bus.execute(restock, key("k-1")));
+    var commandId = h.onlyEntry().commandId();
+    // The second seeded failure hits the replay.
+    assertEquals(RetryOutcome.FAILED, h.runner.retry(commandId));
+    assertEquals(1, h.onlyEntry().dlqAttempts());
+
+    h.bus.close();
+    assertEquals(RetryOutcome.ADMISSION_REFUSED, h.runner.retry(commandId));
+    assertEquals(1, h.onlyEntry().dlqAttempts(), "a refused admission is not an attempt");
+  }
+
+  @Test
+  void builderRejectsANullPolicy() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                DeadLetterRetryRunner.builder()
+                    .deadLetterQueue(new InMemoryDeadLetterQueue())
+                    .commandBus(org.mockito.Mockito.mock(CommandBus.class))
+                    .objectMapper(MAPPER)
+                    .policy(null)
+                    .build());
+    assertTrue(ex.getMessage().contains("policy"), ex.getMessage());
+  }
+}

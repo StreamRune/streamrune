@@ -1329,7 +1329,11 @@ public class StreamRuneAutoConfiguration {
                     properties.deadLetter().maxRetries(),
                     java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()),
                     2.0,
-                    false))
+                    false,
+                    properties.deadLetter().unkeyedReplayPolicy()))
+            // The window the inbox retention sweeper prunes with: a keyed entry older than it is
+            // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
+            .inboxRetentionMaxAge(properties.inbox().retentionMaxAge())
             .pollInterval(java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()));
 
     registrationProvider
@@ -1393,15 +1397,15 @@ public class StreamRuneAutoConfiguration {
 
   /**
    * Registers a {@link DeadLetterRetentionSweeper} that prunes command dead-letter-queue entries
-   * older than {@code streamrune.dead-letter.retention-max-age} (default 30 days). A DLQ entry
-   * holds the full command payload (encrypted where {@code @Encrypted} fields apply per) — this
-   * bounds how long that payload remains queryable, a GDPR storage-limitation concern. Created for
-   * every {@link org.streamrune.core.DeadLetterQueue} bean — the framework registers none itself,
-   * so that is always one the application supplied — because the command bus dead-letters into
-   * whichever queue bean exists. Unlike {@link #streamRuneDeadLetterRetryRunner} it is therefore
-   * <em>not</em> gated on {@code streamrune.dead-letter.enabled}, which switches only the automatic
-   * retry: an operator who turns replays off and relies on the admin retry would otherwise keep
-   * every exhausted command's payload for ever. A zero or negative {@code retention-max-age} is the
+   * older than {@code streamrune.dead-letter.retention-max-age} (default 7 days). A DLQ entry holds
+   * the full command payload (encrypted where {@code @Encrypted} fields apply per) — this bounds
+   * how long that payload remains queryable, a GDPR storage-limitation concern. Created for every
+   * {@link org.streamrune.core.DeadLetterQueue} bean — the framework registers none itself, so that
+   * is always one the application supplied — because the command bus dead-letters into whichever
+   * queue bean exists. Unlike {@link #streamRuneDeadLetterRetryRunner} it is therefore <em>not</em>
+   * gated on {@code streamrune.dead-letter.enabled}, which switches only the automatic retry: an
+   * operator who turns replays off and relies on the admin retry would otherwise keep every
+   * exhausted command's payload for ever. A zero or negative {@code retention-max-age} is the
    * switch that turns pruning off (the sweeper then logs that at start). Gated on the generic
    * interface rather than a Postgres-specific type — an implementation that does not support
    * retention pruning throws {@code UnsupportedOperationException} from {@code deleteOlderThan}, so

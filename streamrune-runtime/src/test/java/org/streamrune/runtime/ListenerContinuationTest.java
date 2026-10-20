@@ -734,7 +734,9 @@ class ListenerContinuationTest {
             .deadLetterQueue(harness.dlq)
             .commandBus(harness.bus)
             .objectMapper(harness.mapper)
-            .policy(new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false))
+            .policy(
+                new DeadLetterRetryPolicy(
+                    3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC))
             .pollInterval(Duration.ofMinutes(1))
             .registerCommand(Capture.class)
             .build()) {

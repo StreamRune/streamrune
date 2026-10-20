@@ -321,11 +321,23 @@ public interface StreamRuneQuarkusProperties {
      * How long to keep command dead-letter-queue entries (which hold command payloads, encrypted
      * where {@code @Encrypted} fields apply) before the {@link
      * org.streamrune.runtime.DeadLetterRetentionSweeper} deletes them. Zero or negative disables
-     * retention pruning. Independent of {@link #enabled()}. Use ISO-8601 duration syntax, e.g.
-     * {@code PT720H} (30 days).
+     * retention pruning. Independent of {@link #enabled()}. Must not exceed {@code
+     * streamrune.inbox.retention-max-age} whenever a command inbox is configured: an entry that
+     * outlives its key's inbox row would execute its command again on a retry (startup fails
+     * otherwise). Use ISO-8601 duration syntax, e.g. {@code PT168H} (7 days).
      */
-    @WithDefault("PT720H")
+    @WithDefault("PT168H")
     Duration retentionMaxAge();
+
+    /**
+     * Whether the automatic retry replays entries of commands that ran without an idempotency key:
+     * {@code operator-only} (the default) leaves them in the queue for an operator to retry or
+     * discard; {@code automatic} replays them like keyed entries — a second execution whenever the
+     * caller already retried the command successfully. Read through {@link
+     * org.streamrune.integration.DeadLetterUnkeyedReplaySetting}; any other value fails startup.
+     */
+    @WithDefault("operator-only")
+    String unkeyedReplay();
   }
 
   /** Metrics section, {@code streamrune.metrics.*}. */

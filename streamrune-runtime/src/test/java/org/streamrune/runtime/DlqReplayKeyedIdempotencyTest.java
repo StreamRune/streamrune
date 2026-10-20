@@ -181,7 +181,13 @@ class DlqReplayKeyedIdempotencyTest {
             .deadLetterQueue(dlq)
             .commandBus(bus)
             .objectMapper(mapper)
-            .policy(new DeadLetterRetryPolicy(3, Duration.ZERO, 2.0, false))
+            .policy(
+                new DeadLetterRetryPolicy(
+                    3,
+                    Duration.ZERO,
+                    2.0,
+                    false,
+                    DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY))
             .pollInterval(Duration.ofMinutes(1))
             // registerCommand keys by the fully-qualified class name: this test drives the REAL
             // bus, which persists command.getClass().getName() on the DLQ entry, so

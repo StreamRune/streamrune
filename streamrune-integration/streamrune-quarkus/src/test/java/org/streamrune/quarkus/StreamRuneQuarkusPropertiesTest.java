@@ -40,6 +40,9 @@ class StreamRuneQuarkusPropertiesTest {
     assertTrue(p.deadLetter().enabled());
     assertEquals(5, p.deadLetter().maxRetries());
     assertEquals(60000L, p.deadLetter().retryIntervalMs());
+    // The inbox window: a keyed entry must not outlive the inbox row that deduplicates its replay.
+    assertEquals(Duration.ofDays(7), p.deadLetter().retentionMaxAge());
+    assertEquals("operator-only", p.deadLetter().unkeyedReplay());
     assertTrue(p.metrics().enabled());
     assertEquals("streamrune", p.metrics().prefix());
     assertTrue(p.validationEnabled());

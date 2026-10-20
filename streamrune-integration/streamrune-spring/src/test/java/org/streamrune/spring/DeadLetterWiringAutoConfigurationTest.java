@@ -102,6 +102,46 @@ class DeadLetterWiringAutoConfigurationTest {
         });
   }
 
+  @Test
+  void deadLetterRetryRunnerLeavesUnkeyedEntriesToAnOperatorAndKnowsTheInboxWindow_byDefault() {
+    runner.run(
+        ctx -> {
+          assertThat(ctx).hasNotFailed();
+          var dlqRunner = ctx.getBean(DeadLetterRetryRunner.class);
+          assertThat(dlqRunner.policy().unkeyedReplay())
+              .isEqualTo(org.streamrune.core.DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY);
+          assertThat(dlqRunner.inboxRetentionMaxAge()).isEqualTo(java.time.Duration.ofDays(7));
+        });
+  }
+
+  @Test
+  void deadLetterRetryRunnerHonoursTheConfiguredUnkeyedReplayAndInboxWindow() {
+    runner
+        .withPropertyValues(
+            "streamrune.dead-letter.unkeyed-replay=automatic",
+            "streamrune.inbox.retention-max-age=14d")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              var dlqRunner = ctx.getBean(DeadLetterRetryRunner.class);
+              assertThat(dlqRunner.policy().unkeyedReplay())
+                  .isEqualTo(org.streamrune.core.DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
+              assertThat(dlqRunner.inboxRetentionMaxAge()).isEqualTo(java.time.Duration.ofDays(14));
+            });
+  }
+
+  @Test
+  void anUnknownUnkeyedReplayValueFailsStartup() {
+    runner
+        .withPropertyValues("streamrune.dead-letter.unkeyed-replay=sometimes")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasStackTraceContaining("streamrune.dead-letter.unkeyed-replay");
+            });
+  }
+
   private static Object getField(Object target, String fieldName) {
     try {
       var field = target.getClass().getDeclaredField(fieldName);
@@ -456,9 +496,9 @@ class DeadLetterWiringAutoConfigurationTest {
                       null,
                       null));
 
-              boolean retried = retryRunner.retry(commandId);
+              var retried = retryRunner.retry(commandId, true);
 
-              assertThat(retried).isTrue();
+              assertThat(retried).isEqualTo(DeadLetterRetryRunner.RetryOutcome.REPLAYED);
               assertThat(executed)
                   .as(
                       "decider must actually execute — the command type must resolve via the"
@@ -524,7 +564,8 @@ class DeadLetterWiringAutoConfigurationTest {
                       null,
                       null));
 
-              assertThat(retryRunner.retry(commandId)).isTrue();
+              assertThat(retryRunner.retry(commandId, true))
+                  .isEqualTo(DeadLetterRetryRunner.RetryOutcome.REPLAYED);
               assertThat(executed)
                   .as("the concrete command of the sealed registration must resolve and execute")
                   .isTrue();
@@ -601,9 +642,9 @@ class DeadLetterWiringAutoConfigurationTest {
                       null,
                       null));
 
-              boolean retried = retryRunner.retry(commandId);
+              var retried = retryRunner.retry(commandId, true);
 
-              assertThat(retried).isTrue();
+              assertThat(retried).isEqualTo(DeadLetterRetryRunner.RetryOutcome.REPLAYED);
               assertThat(capturedEmail.get())
                   .as(
                       "the auto-configured runner's replay mapper must be crypto-aware even when the"

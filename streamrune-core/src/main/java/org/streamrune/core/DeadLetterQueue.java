@@ -57,7 +57,7 @@ public interface DeadLetterQueue {
    *     the retry runner replays under the ORIGINAL key: a keyed command that failed on transient
    *     infra then reconciles a DLQ replay AND the client's own at-least-once redelivery against
    *     the same {@link CommandInbox} row, so the events are produced exactly once. Unkeyed
-   *     commands store null and replay under a synthetic {@code dlq-replay:<commandId>} key.
+   *     commands store null: nothing can deduplicate their replay against a retry by the caller.
    */
   record DeadLetterPublishRequest(
       String commandPayload,
@@ -142,8 +142,10 @@ public interface DeadLetterQueue {
    * @param idempotencyKey the caller-supplied {@link IdempotencyKey} the command originally ran
    *     under, or null if it ran unkeyed. When present, the retry runner replays under this key so
    *     a cross-instance duplicate replay AND the client's at-least-once redelivery reconcile
-   *     against the same {@link CommandInbox} row (events produced exactly once). When null the
-   *     runner falls back to a synthetic {@code dlq-replay:<commandId>} key. The PostgreSQL {@code
+   *     against the same {@link CommandInbox} row (events produced exactly once), as long as the
+   *     inbox still holds that row. When null the runner's scheduled retry leaves the entry to an
+   *     operator unless its policy replays unkeyed entries automatically, and a replay runs under a
+   *     synthetic {@code dlq-replay:<commandId>} key. The PostgreSQL {@code
    *     dead_letter_queue.idempotency_key} column is part of the shipped schema, so every stored
    *     entry records its key and null always means the command ran unkeyed.
    */
@@ -251,13 +253,22 @@ public interface DeadLetterQueue {
   /**
    * Reads entries eligible for DLQ retry, ordered by least-recently-active first — ascending {@code
    * COALESCE(lastAttemptAt, publishedAt)} (a never-retried entry sorts by its {@code publishedAt}).
-   * Only entries with {@code dlqAttempts < maxRetries} are returned.
+   * Only entries with {@code dlqAttempts < maxRetries} are returned; unless {@code includeUnkeyed}
+   * is {@code true}, only entries that carry an {@link DeadLetterEntry#idempotencyKey() idempotency
+   * key}; and, when {@code keyedFirstAttemptAtOrAfter} is non-null, a keyed entry only if its
+   * {@code firstAttemptAt} is at or after it (an unkeyed entry is not affected by the cutoff).
    *
    * <p>The ordering puts the entries most likely to be past their retry backoff at the front so a
    * recently-retried, still-backing-off entry cannot head-of-line block genuinely-due entries
    * behind it. The caller ({@code DeadLetterRetryRunner}) evaluates the per-entry backoff window
    * and over-fetches beyond its retry batch size, so returning a not-yet-due entry here is expected
    * — it is simply skipped that cycle.
+   *
+   * <p>Both filters belong to the store, not the caller: a runner that leaves unkeyed entries, or
+   * keyed entries older than the command-inbox window, to an operator never touches them, so they
+   * keep their place at the head of this ordering for as long as they are retained. Filtering them
+   * out after the read would let a backlog of them fill every page and starve the keyed entries
+   * behind it.
    *
    * <p>The default implementation throws {@link UnsupportedOperationException}: scheduled DLQ retry
    * is an optional capability, and an implementation must override this method (with {@link
@@ -266,14 +277,19 @@ public interface DeadLetterQueue {
    * @param maxRetries maximum number of DLQ retry attempts allowed; entries at or above this
    *     threshold are excluded
    * @param limit maximum number of entries to return
+   * @param includeUnkeyed whether entries without an idempotency key are returned too; {@code
+   *     false} returns keyed entries only
+   * @param keyedFirstAttemptAtOrAfter the earliest {@code firstAttemptAt} of a keyed entry to
+   *     return, or {@code null} to return keyed entries of any age
    * @return list of retryable dead letter entries, may be empty
    * @throws UnsupportedOperationException if the implementation does not track DLQ retry attempts
    */
-  default List<DeadLetterEntry> readRetryable(int maxRetries, int limit) {
+  default List<DeadLetterEntry> readRetryable(
+      int maxRetries, int limit, boolean includeUnkeyed, Instant keyedFirstAttemptAtOrAfter) {
     throw new UnsupportedOperationException(
         getClass().getName()
-            + " does not support DLQ retry tracking — override readRetryable(int, int) to"
-            + " return retry-eligible entries");
+            + " does not support DLQ retry tracking — override readRetryable(int, int, boolean,"
+            + " Instant) to return retry-eligible entries");
   }
 
   /**
@@ -296,6 +312,33 @@ public interface DeadLetterQueue {
         getClass().getName()
             + " does not support countPending() — override it to enable the command DLQ depth"
             + " gauge (streamrune.dlq.pending).");
+  }
+
+  /**
+   * Counts the entries the scheduled retry will never replay and that are not exhausted — entries
+   * with {@code dlqAttempts < maxRetries} that are either unkeyed (when {@code countUnkeyed}) or
+   * keyed with {@code firstAttemptAt} strictly before {@code keyedFirstAttemptBefore} (when it is
+   * non-null). Read-only, like {@link #countPending()}. The {@code DeadLetterRetryRunner} samples
+   * it each poll cycle as the {@code streamrune.dlq.awaiting_operator} gauge: every entry it counts
+   * waits for an operator to retry or discard it, and none of them ever reaches {@code
+   * streamrune.dlq.exhausted}.
+   *
+   * <p>The default throws {@link UnsupportedOperationException}: a store that does not support it
+   * is simply excluded from the gauge (the runner degrades gracefully); retry is unaffected.
+   *
+   * @param maxRetries entries at or above this many DLQ attempts are exhausted and not counted
+   * @param countUnkeyed whether entries without an idempotency key count
+   * @param keyedFirstAttemptBefore keyed entries first received strictly before this instant count;
+   *     {@code null} counts no keyed entry
+   * @return the number of entries awaiting an operator
+   * @throws UnsupportedOperationException if the implementation does not support counting
+   */
+  default long countAwaitingOperator(
+      int maxRetries, boolean countUnkeyed, Instant keyedFirstAttemptBefore) {
+    throw new UnsupportedOperationException(
+        getClass().getName()
+            + " does not support countAwaitingOperator(int, boolean, Instant) — override it to"
+            + " enable the streamrune.dlq.awaiting_operator gauge.");
   }
 
   /**

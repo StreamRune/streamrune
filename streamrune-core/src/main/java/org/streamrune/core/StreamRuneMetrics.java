@@ -130,6 +130,19 @@ public interface StreamRuneMetrics {
   default void recordDeadLetterExhausted(String commandType) {}
 
   /**
+   * Records a dead-letter replay the retry runner refused because the entry's command ran under an
+   * idempotency key and the entry is older than the command-inbox retention window: the inbox may
+   * already have pruned the row that would deduplicate the replay against the caller's own retry,
+   * so a replay could execute the command a second time. Nothing was executed and the entry is
+   * unchanged. Emitted on every refusal of an operator retry without {@code force}; the scheduled
+   * retry never reads such an entry and counts it in {@code streamrune.dlq.awaiting_operator}
+   * instead. See {@link org.streamrune.core.metrics.MetricNames#DLQ_STALE_REPLAY_BLOCKED}.
+   *
+   * @param commandType simple class name of the command
+   */
+  default void recordDeadLetterStaleReplayBlocked(String commandType) {}
+
+  /**
    * Records time spent waiting to acquire an aggregate lock.
    *
    * @param durationNanos wait duration in nanoseconds
@@ -796,6 +809,18 @@ public interface StreamRuneMetrics {
    * @param pending the number of queued dead-letter entries (never negative)
    */
   default void recordDlqBacklog(long pending) {}
+
+  /**
+   * Records the number of command dead-letter entries the retry runner will never replay on its
+   * schedule and that are not exhausted — unkeyed entries under {@code UnkeyedReplay.OPERATOR_ONLY}
+   * and keyed entries older than the command-inbox retention window. Reported as the latest sampled
+   * value (the {@code DeadLetterRetryRunner} samples it each poll cycle). Each of them waits for an
+   * operator; alert on a value above zero. See {@link
+   * org.streamrune.core.metrics.MetricNames#DLQ_AWAITING_OPERATOR}.
+   *
+   * @param awaiting the number of entries awaiting an operator
+   */
+  default void recordDlqAwaitingOperator(long awaiting) {}
 
   /**
    * Records the outbox relay's current consecutive poll-cycle failure count — {@code 0} when the
