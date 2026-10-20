@@ -112,6 +112,8 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
           + "dlq_attempts, last_attempt_at, correlation_id, user_id, trace_id, idempotency_key "
           + "FROM dead_letter_queue WHERE dlq_attempts < ? "
           + "AND (? OR idempotency_key IS NOT NULL) "
+          + "AND (idempotency_key IS NULL OR CAST(? AS TIMESTAMPTZ) IS NULL "
+          + "OR first_attempt_at >= CAST(? AS TIMESTAMPTZ)) "
           + "ORDER BY COALESCE(last_attempt_at, published_at) ASC LIMIT ? "
           + "FOR UPDATE SKIP LOCKED";
 
@@ -233,13 +235,18 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
   }
 
   @Override
-  public List<DeadLetterEntry> readRetryable(int maxRetries, int limit, boolean includeUnkeyed) {
+  public List<DeadLetterEntry> readRetryable(
+      int maxRetries, int limit, boolean includeUnkeyed, Instant keyedFirstAttemptAtOrAfter) {
     List<DeadLetterEntry> results = new ArrayList<>();
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_RETRYABLE)) {
+      Timestamp cutoff =
+          keyedFirstAttemptAtOrAfter == null ? null : Timestamp.from(keyedFirstAttemptAtOrAfter);
       ps.setInt(1, maxRetries);
       ps.setBoolean(2, includeUnkeyed);
-      ps.setInt(3, limit);
+      ps.setTimestamp(3, cutoff);
+      ps.setTimestamp(4, cutoff);
+      ps.setInt(5, limit);
       try (var rs = ps.executeQuery()) {
         while (rs.next()) {
           results.add(readEntry(rs));

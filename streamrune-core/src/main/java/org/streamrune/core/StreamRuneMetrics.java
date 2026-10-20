@@ -134,8 +134,9 @@ public interface StreamRuneMetrics {
    * idempotency key and the entry is older than the command-inbox retention window: the inbox may
    * already have pruned the row that would deduplicate the replay against the caller's own retry,
    * so a replay could execute the command a second time. Nothing was executed and the entry is
-   * unchanged. Emitted on every refusal — by the scheduled retry and by an operator retry without
-   * {@code force}. See {@link org.streamrune.core.metrics.MetricNames#DLQ_STALE_REPLAY_BLOCKED}.
+   * unchanged. Emitted on every refusal of an operator retry without {@code force}; the scheduled
+   * retry never reads such an entry and counts it in {@code streamrune.dlq.awaiting_operator}
+   * instead. See {@link org.streamrune.core.metrics.MetricNames#DLQ_STALE_REPLAY_BLOCKED}.
    *
    * @param commandType simple class name of the command
    */

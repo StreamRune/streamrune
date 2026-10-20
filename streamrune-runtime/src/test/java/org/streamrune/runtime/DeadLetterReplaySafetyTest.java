@@ -416,8 +416,11 @@ class DeadLetterReplaySafetyTest {
 
           @Override
           public List<DeadLetterEntry> readRetryable(
-              int maxRetries, int limit, boolean includeUnkeyed) {
-            return h.dlq.readRetryable(maxRetries, limit, true);
+              int maxRetries,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
+            return h.dlq.readRetryable(maxRetries, limit, true, null);
           }
         };
     var runner =
@@ -467,7 +470,10 @@ class DeadLetterReplaySafetyTest {
 
           @Override
           public List<DeadLetterEntry> readRetryable(
-              int maxRetries, int limit, boolean includeUnkeyed) {
+              int maxRetries,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
             throw new AssertionError("nothing can be replayed automatically; no read is due");
           }
         };
@@ -577,6 +583,177 @@ class DeadLetterReplaySafetyTest {
     assertEquals(10, h.metrics.lastAwaiting());
   }
 
+  @Test
+  void moreStaleKeyedEntriesThanAPage_doNotHideTheFreshEntryBehindThem() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    Instant now = h.runnerClock.instant();
+    // More than the over-fetched page (batch 10 x 10): without the store-side cutoff they would
+    // fill every page the schedule reads.
+    for (int i = 0; i < 110; i++) {
+      h.publish(
+          "stale-" + i,
+          new AdjustStock("s-" + i, 1),
+          now.minus(Duration.ofDays(8)),
+          key("k-stale-" + i));
+    }
+    h.runnerClock.advance(Duration.ofSeconds(1));
+    h.publish("fresh", new AdjustStock("f-1", 50), h.runnerClock.instant(), key("k-fresh"));
+
+    for (int cycle = 0; cycle < 3; cycle++) {
+      h.runner.processBatch();
+    }
+
+    assertEquals(150, h.units("f-1"), "the fresh keyed entry is replayed");
+    assertEquals(110, h.dlq.all().size());
+    assertEquals(110, h.metrics.lastAwaiting());
+    assertTrue(h.metrics.staleBlocked.isEmpty());
+  }
+
+  @Test
+  void aStoreThatIgnoresTheStaleCutoff_stillHasItsStaleEntriesSkippedWithoutABatchSlot() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    DeadLetterQueue lax =
+        new DeadLetterQueue() {
+          @Override
+          public void publish(DeadLetterPublishRequest request) {
+            h.dlq.publish(request);
+          }
+
+          @Override
+          public List<DeadLetterEntry> read(int limit) {
+            return h.dlq.read(limit);
+          }
+
+          @Override
+          public void discard(CommandId commandId) {
+            h.dlq.discard(commandId);
+          }
+
+          @Override
+          public void updateAttempts(CommandId commandId, int dlqAttempts, Instant lastAttemptAt) {
+            h.dlq.updateAttempts(commandId, dlqAttempts, lastAttemptAt);
+          }
+
+          @Override
+          public List<DeadLetterEntry> readRetryable(
+              int maxRetries, int limit, boolean includeUnkeyed, Instant cutoff) {
+            return h.dlq.readRetryable(maxRetries, limit, includeUnkeyed, null);
+          }
+        };
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(lax)
+            .commandBus(h.bus)
+            .objectMapper(MAPPER)
+            .policy(immediate(UnkeyedReplay.OPERATOR_ONLY))
+            .clock(h.runnerClock)
+            .inboxRetentionMaxAge(INBOX_WINDOW)
+            .registerCommand(AdjustStock.class)
+            .build();
+    Instant now = h.runnerClock.instant();
+    for (int i = 0; i < 10; i++) {
+      h.publish(
+          "stale-" + i,
+          new AdjustStock("s-" + i, 1),
+          now.minus(Duration.ofDays(8)),
+          key("k-stale-" + i));
+    }
+    h.runnerClock.advance(Duration.ofSeconds(1));
+    h.publish("fresh", new AdjustStock("f-1", 50), h.runnerClock.instant(), key("k-fresh"));
+
+    runner.processBatch();
+
+    assertEquals(150, h.units("f-1"));
+    assertEquals(100, h.units("s-0"));
+    assertTrue(h.dlq.all().stream().allMatch(e -> e.dlqAttempts() == 0));
+  }
+
+  // ── Operator retry under AUTOMATIC, and who forced it ────────────────────────────────────────
+
+  @Test
+  void underAutomatic_anOperatorRetryOfAnUnkeyedEntryIsNotRefused_likeTheSchedule() {
+    var h = new Harness(true, 1, immediate(UnkeyedReplay.AUTOMATIC));
+    var restock = new AdjustStock("p-1", 50);
+    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+
+    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(h.onlyEntry().commandId()));
+    assertEquals(150, h.units("p-1"));
+  }
+
+  @Test
+  void underAutomatic_anOperatorRetryOnABusWithoutAnInboxIsNotRefused() {
+    var h = new Harness(false, 0, immediate(UnkeyedReplay.AUTOMATIC));
+    h.publish("keyed-1", new AdjustStock("p-1", 50), Instant.now(), key("k-1"));
+
+    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(CommandId.of("keyed-1")));
+  }
+
+  @Test
+  void underAutomatic_aStaleKeyedEntryIsStillRefused() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.AUTOMATIC));
+    h.publish(
+        "stale",
+        new AdjustStock("p-1", 1),
+        h.runnerClock.instant().minus(Duration.ofDays(8)),
+        key("k-stale"));
+
+    assertEquals(RetryOutcome.STALE_REPLAY_BLOCKED, h.runner.retry(CommandId.of("stale")));
+  }
+
+  @Test
+  void aForcedReplayNamesWhoForcedIt_orUnknown() throws Exception {
+    var logger =
+        (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(DeadLetterRetryRunner.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    try {
+      var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+      h.publish("unkeyed", new AdjustStock("p-1", 1), Instant.now(), null);
+      h.publish(
+          "stale",
+          new AdjustStock("p-2", 1),
+          h.runnerClock.instant().minus(Duration.ofDays(8)),
+          key("k-stale"));
+      var operator =
+          new org.streamrune.core.StreamRuneContext.RequestContext(
+              null,
+              org.streamrune.core.types.UserId.of("ops-7"),
+              org.streamrune.core.types.CorrelationId.of("corr-ops"),
+              Instant.now(),
+              null);
+
+      var unkeyed =
+          ScopedValue.where(org.streamrune.core.StreamRuneContext.CURRENT, operator)
+              .call(() -> h.runner.retry(CommandId.of("unkeyed"), true));
+      var stale = h.runner.retry(CommandId.of("stale"), true);
+
+      assertEquals(RetryOutcome.REPLAYED, unkeyed);
+      assertEquals(RetryOutcome.REPLAYED, stale);
+      var forced =
+          appender.list.stream()
+              .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+              .filter(m -> m.startsWith("Forced replay"))
+              .toList();
+      assertEquals(2, forced.size(), forced.toString());
+      assertTrue(
+          forced.get(0).contains("unkeyed") && forced.get(0).contains("by ops-7"), forced.get(0));
+      assertTrue(
+          forced.get(1).contains("stale") && forced.get(1).contains("by unknown"), forced.get(1));
+      // The operator is named in the log only; the replay itself runs without the caller's context.
+      assertNull(
+          h.store
+              .readStream(StreamId.of(PRODUCT, AggregateId.of("p-1")), Version.initial(), 10)
+              .getFirst()
+              .metadata()
+              .userId());
+    } finally {
+      logger.detachAppender(appender);
+    }
+  }
+
   // ── streamrune.dlq.awaiting_operator ─────────────────────────────────────────────────────────
 
   @Test
@@ -647,7 +824,10 @@ class DeadLetterReplaySafetyTest {
 
           @Override
           public List<DeadLetterEntry> readRetryable(
-              int maxRetries, int limit, boolean includeUnkeyed) {
+              int maxRetries,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
             return List.of();
           }
 

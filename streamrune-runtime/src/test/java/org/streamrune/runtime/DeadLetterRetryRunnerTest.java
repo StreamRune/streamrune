@@ -1571,8 +1571,12 @@ class DeadLetterRetryRunnerTest {
 
           @Override
           public java.util.List<DeadLetterEntry> readRetryable(
-              int maxAttempts, int limit, boolean includeUnkeyed) {
-            return dlq.readRetryable(maxAttempts, limit, includeUnkeyed);
+              int maxAttempts,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
+            return dlq.readRetryable(
+                maxAttempts, limit, includeUnkeyed, keyedFirstAttemptAtOrAfter);
           }
 
           @Override
@@ -2443,11 +2447,15 @@ class DeadLetterRetryRunnerTest {
 
           @Override
           public java.util.List<DeadLetterEntry> readRetryable(
-              int maxAttempts, int limit, boolean includeUnkeyed) {
+              int maxAttempts,
+              int limit,
+              boolean includeUnkeyed,
+              Instant keyedFirstAttemptAtOrAfter) {
             if (failuresLeft.getAndDecrement() > 0) {
               throw new RuntimeException("DLQ temporarily unreachable");
             }
-            return dlq.readRetryable(maxAttempts, limit, includeUnkeyed);
+            return dlq.readRetryable(
+                maxAttempts, limit, includeUnkeyed, keyedFirstAttemptAtOrAfter);
           }
 
           @Override
@@ -2918,9 +2926,9 @@ class DeadLetterRetryRunnerTest {
 
       @Override
       public List<DeadLetterEntry> readRetryable(
-          int maxRetries, int limit, boolean includeUnkeyed) {
+          int maxRetries, int limit, boolean includeUnkeyed, Instant keyedFirstAttemptAtOrAfter) {
         reads.incrementAndGet();
-        return dlq.readRetryable(maxRetries, limit, includeUnkeyed);
+        return dlq.readRetryable(maxRetries, limit, includeUnkeyed, keyedFirstAttemptAtOrAfter);
       }
 
       @Override

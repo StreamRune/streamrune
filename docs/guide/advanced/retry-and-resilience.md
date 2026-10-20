@@ -129,7 +129,7 @@ or `automatic`; any other value fails startup). Choose `automatic` only when eve
 be dead-lettered is idempotent by construction — re-running it after a successful retry by its caller
 changes nothing: an absolute "set stock to 150", or a create whose aggregate id the caller chose
 (the decider rejects the second create). The store filters entries the runner will not replay out
-of its read (`DeadLetterQueue.readRetryable(maxRetries, limit, includeUnkeyed)`), so a backlog of
+of its read (`DeadLetterQueue.readRetryable(maxRetries, limit, includeUnkeyed, keyedFirstAttemptAtOrAfter)`), so a backlog of
 unkeyed entries never starves the keyed ones behind it.
 
 **Give commands an idempotency key.** A command that can fail on infrastructure and that a caller
@@ -162,9 +162,12 @@ retry completed it on day 0.
 The runner therefore refuses to replay a keyed entry whose command was first received
 (`firstAttemptAt`) longer ago than the inbox window it is given
 (`Builder.inboxRetentionMaxAge(Duration)`; the integrations pass `streamrune.inbox.retention-max-age`).
-Nothing is executed and the entry is left unchanged. The scheduled retry skips such an entry like
-one whose backoff has not elapsed — it takes no slot of the batch, so fresh keyed entries behind it
-are replayed — logs one summary WARN per cycle and counts it in `streamrune.dlq.awaiting_operator`.
+Nothing is executed and the entry is left unchanged. The scheduled retry does not read such an
+entry: the store leaves keyed entries with `firstAttemptAt` before `now - window` out of the page
+(the `keyedFirstAttemptAtOrAfter` cutoff of `readRetryable`), so however many there are, they take
+no slot and fresh keyed entries behind them are replayed; `streamrune.dlq.awaiting_operator` counts
+them. (One a store returns anyway is skipped like an entry whose backoff has not elapsed, with one
+summary WARN per cycle.)
 `retry(commandId)` refuses it with `STALE_REPLAY_BLOCKED`, a WARN naming the entry and the window,
 and `streamrune.dlq.stale_replay_blocked`. The remedy is a decision by an operator: if the
 command's effect is present, discard the entry; if it is not, `retry(commandId, true)` replays it
@@ -314,13 +317,19 @@ window, and returns a `RetryOutcome`: `REPLAYED` (the bus accepted the command a
 discarded), `FAILED` (it failed again or could not be replayed; the attempt is recorded),
 `ADMISSION_REFUSED` (the bus is closing or saturated; the entry is unchanged),
 `STALE_REPLAY_BLOCKED` (see [Stale keyed entries](#stale-keyed-entries)), `NOT_DEDUPLICATED` or
-`NOT_FOUND`. `NOT_DEDUPLICATED` refuses an entry whose replay nothing can pair with a retry its
-caller may already have made — it ran without an idempotency key, or the bus has no command inbox:
-the operator cannot see from the entry whether that retry happened, so replaying on a click would
-bring back the double execution the schedule avoids. Both refusals leave the entry unchanged and are
-lifted by `retry(commandId, true)` after the operator has checked that the command's effect is
-absent. An admin endpoint maps them to a conflict the operator resolves (asking for confirmation
-before it forces), not to an error. The replay runs on a fresh virtual thread
+`NOT_FOUND`. Without `force` it refuses exactly the entries the schedule leaves to an operator.
+Under `unkeyedReplay = OPERATOR_ONLY`, `NOT_DEDUPLICATED` refuses an entry whose replay nothing can
+pair with a retry its caller may already have made — it ran without an idempotency key, or the bus
+has no command inbox: the operator cannot see from the entry whether that retry happened, so
+replaying on a click would bring back the double execution the schedule avoids. Under `AUTOMATIC`
+the application has accepted that hazard, the schedule replays such an entry, and so does
+`retry(commandId)`. A stale keyed entry is refused under either policy. Both refusals leave the
+entry unchanged and are lifted by `retry(commandId, true)` after the operator has checked that the
+command's effect is absent; the forced replay's WARN names the user bound to the calling thread
+(`unknown` when none). An admin endpoint maps the refusals to a conflict the operator resolves
+(asking for confirmation before it forces), not to an error, and **audits the force** — who forced
+which entry, and why — since `force` is the one decision that accepts a possible second
+execution. The replay runs on a fresh virtual thread
 that `retry` waits for, so it carries exactly what a scheduled replay carries. Nothing the calling
 thread has bound reaches it — not the admin request's user, correlation id, baggage or captured
 authorities, not a saga-dispatch marker or a dispatch cause, not an inheritable thread-local — so

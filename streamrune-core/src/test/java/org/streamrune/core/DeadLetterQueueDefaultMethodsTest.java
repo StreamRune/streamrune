@@ -59,7 +59,8 @@ class DeadLetterQueueDefaultMethodsTest {
   void readRetryableDefault_throwsUnsupportedOperation() {
     var dlq = new MinimalDeadLetterQueue();
     var ex =
-        assertThrows(UnsupportedOperationException.class, () -> dlq.readRetryable(3, 10, true));
+        assertThrows(
+            UnsupportedOperationException.class, () -> dlq.readRetryable(3, 10, true, null));
     assertTrue(ex.getMessage().contains("readRetryable"), ex.getMessage());
     assertTrue(ex.getMessage().contains(MinimalDeadLetterQueue.class.getName()), ex.getMessage());
   }

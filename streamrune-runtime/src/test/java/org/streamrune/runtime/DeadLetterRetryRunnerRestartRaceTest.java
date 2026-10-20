@@ -2,6 +2,7 @@ package org.streamrune.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
@@ -30,7 +31,7 @@ class DeadLetterRetryRunnerRestartRaceTest {
     var pollThread = new AtomicReference<Thread>();
     var entered = new CountDownLatch(1);
     DeadLetterQueue blockingDlq = mock(DeadLetterQueue.class);
-    when(blockingDlq.readRetryable(anyInt(), anyInt(), anyBoolean()))
+    when(blockingDlq.readRetryable(anyInt(), anyInt(), anyBoolean(), any()))
         .thenAnswer(RestartRaceTestSupport.parkThenSlowShutdown(pollThread, entered, List.of()));
     // A bus with a command inbox: under the default policy the runner reads keyed entries only,
     // and reads nothing at all from a bus without one.

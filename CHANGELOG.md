@@ -298,15 +298,17 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `DeadLetterRetryPolicy.DEFAULT` the scheduled retry replays keyed entries only and leaves the rest
   to an operator; `DeadLetterRetryPolicy.unkeyedReplay()` (`OPERATOR_ONLY` / `AUTOMATIC`) and
   `streamrune.dead-letter.unkeyed-replay` (`operator-only` / `automatic`) choose. The store filters
-  the scheduled read (`DeadLetterQueue.readRetryable(maxRetries, limit, includeUnkeyed)`), so a
+  the scheduled read (`DeadLetterQueue.readRetryable(maxRetries, limit, includeUnkeyed,
+  keyedFirstAttemptAtOrAfter)`), so a
   backlog of unkeyed entries never starves the keyed ones. A keyed entry first received longer ago
   than the inbox retention window (`Builder.inboxRetentionMaxAge`, which the integrations set from
-  `streamrune.inbox.retention-max-age`) is refused, on the schedule and on `retry(commandId)` alike
-  (skipped on the schedule without taking a batch slot; refused by `retry(commandId)` with
-  `STALE_REPLAY_BLOCKED`, a WARN and `streamrune.dlq.stale_replay_blocked`), until an operator either
-  discards it or forces it with `retry(commandId, true)`. An operator's `retry(commandId)` of an
-  entry the inbox cannot deduplicate at all — unkeyed, or on a bus without an inbox — is refused
-  the same way (`NOT_DEDUPLICATED`) unless forced. The gauge `streamrune.dlq.awaiting_operator`
+  `streamrune.inbox.retention-max-age`) is left out of the scheduled read, and an operator's
+  `retry(commandId)` refuses it (`STALE_REPLAY_BLOCKED`, a WARN, `streamrune.dlq.stale_replay_blocked`),
+  until an operator either discards it or forces it with `retry(commandId, true)`. Under
+  `OPERATOR_ONLY`, an operator's `retry(commandId)` of an entry the inbox cannot deduplicate at all
+  — unkeyed, or on a bus without an inbox — is refused the same way (`NOT_DEDUPLICATED`) unless
+  forced; under `AUTOMATIC` it is replayed, as on the schedule. A forced replay's WARN names the
+  user bound to the calling thread. The gauge `streamrune.dlq.awaiting_operator`
   (`DeadLetterQueue.countAwaitingOperator`) counts the entries the schedule will never replay; and
   the integrations refuse to start when
   `streamrune.dead-letter.retention-max-age` exceeds `streamrune.inbox.retention-max-age` with a

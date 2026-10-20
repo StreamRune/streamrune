@@ -124,7 +124,7 @@ class InMemoryDeadLetterQueueTest {
     dlq.publish(request("cmd-2", "Exhausted"));
     dlq.updateAttempts(CommandId.of("cmd-2"), 3, Instant.now());
 
-    var retryable = dlq.readRetryable(3, 10, true);
+    var retryable = dlq.readRetryable(3, 10, true, null);
     assertEquals(1, retryable.size());
     assertEquals("Eligible", retryable.getFirst().commandType());
   }
@@ -147,10 +147,10 @@ class InMemoryDeadLetterQueueTest {
             null,
             IdempotencyKey.of("k-1")));
 
-    var keyedOnly = dlq.readRetryable(3, 10, false);
+    var keyedOnly = dlq.readRetryable(3, 10, false, null);
     assertEquals(1, keyedOnly.size());
     assertEquals("Keyed", keyedOnly.getFirst().commandType());
-    assertEquals(2, dlq.readRetryable(3, 10, true).size());
+    assertEquals(2, dlq.readRetryable(3, 10, true, null).size());
   }
 
   @Test
@@ -184,11 +184,44 @@ class InMemoryDeadLetterQueueTest {
   }
 
   @Test
+  void readRetryableWithACutoffLeavesOutOldKeyedEntriesButNotUnkeyedOnes() {
+    Instant now = Instant.now();
+    dlq.publish(request("unkeyed-old", "UnkeyedOld"));
+    for (String[] row : new String[][] {{"k-old", "8"}, {"k-edge", "7"}, {"k-fresh", "0"}}) {
+      dlq.publish(
+          new DeadLetterQueue.DeadLetterPublishRequest(
+              "{}",
+              row[0],
+              CommandId.of(row[0]),
+              StreamId.of(TYPE, AggregateId.of("s1")),
+              "Err",
+              "msg",
+              1,
+              now.minus(Duration.ofDays(Long.parseLong(row[1]))),
+              null,
+              null,
+              null,
+              IdempotencyKey.of(row[0])));
+    }
+    Instant cutoff = now.minus(Duration.ofDays(7));
+
+    var types =
+        dlq.readRetryable(5, 10, true, cutoff).stream()
+            .map(DeadLetterQueue.DeadLetterEntry::commandType)
+            .toList();
+    assertFalse(types.contains("k-old"), "a keyed entry before the cutoff is left out");
+    assertTrue(types.contains("k-edge"), "the cutoff itself is included");
+    assertTrue(types.contains("k-fresh"));
+    assertTrue(types.contains("UnkeyedOld"), "the cutoff does not apply to unkeyed entries");
+    assertEquals(4, dlq.readRetryable(5, 10, true, null).size());
+  }
+
+  @Test
   void readRetryableOrdersOldestFirst() {
     dlq.publish(request("cmd-1", "First"));
     dlq.publish(request("cmd-2", "Second"));
 
-    var retryable = dlq.readRetryable(5, 10, true);
+    var retryable = dlq.readRetryable(5, 10, true, null);
     assertEquals("First", retryable.get(0).commandType());
     assertEquals("Second", retryable.get(1).commandType());
   }
@@ -198,7 +231,7 @@ class InMemoryDeadLetterQueueTest {
     for (int i = 0; i < 5; i++) {
       dlq.publish(request("cmd-" + i, "Cmd"));
     }
-    assertEquals(3, dlq.readRetryable(5, 3, true).size());
+    assertEquals(3, dlq.readRetryable(5, 3, true, null).size());
   }
 
   @Test
@@ -209,16 +242,17 @@ class InMemoryDeadLetterQueueTest {
     // across retry cycles is driven by dlqAttempts gating (and discard), not by claiming.
     dlq.publish(request("cmd-1", "Eligible"));
 
-    assertEquals(1, dlq.readRetryable(3, 10, true).size(), "first poll returns the eligible entry");
+    assertEquals(
+        1, dlq.readRetryable(3, 10, true, null).size(), "first poll returns the eligible entry");
     assertEquals(
         1,
-        dlq.readRetryable(3, 10, true).size(),
+        dlq.readRetryable(3, 10, true, null).size(),
         "a second sequential poll returns it again — readRetryable does not claim");
 
     // Bumping dlqAttempts to the limit is what removes it from the retryable set.
     dlq.updateAttempts(CommandId.of("cmd-1"), 3, Instant.now());
     assertTrue(
-        dlq.readRetryable(3, 10, true).isEmpty(),
+        dlq.readRetryable(3, 10, true, null).isEmpty(),
         "exhausted entry drops out of the retryable set via dlqAttempts gating");
   }
 

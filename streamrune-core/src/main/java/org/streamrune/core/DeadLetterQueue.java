@@ -253,9 +253,10 @@ public interface DeadLetterQueue {
   /**
    * Reads entries eligible for DLQ retry, ordered by least-recently-active first — ascending {@code
    * COALESCE(lastAttemptAt, publishedAt)} (a never-retried entry sorts by its {@code publishedAt}).
-   * Only entries with {@code dlqAttempts < maxRetries} are returned, and — unless {@code
-   * includeUnkeyed} is {@code true} — only entries that carry an {@link
-   * DeadLetterEntry#idempotencyKey() idempotency key}.
+   * Only entries with {@code dlqAttempts < maxRetries} are returned; unless {@code includeUnkeyed}
+   * is {@code true}, only entries that carry an {@link DeadLetterEntry#idempotencyKey() idempotency
+   * key}; and, when {@code keyedFirstAttemptAtOrAfter} is non-null, a keyed entry only if its
+   * {@code firstAttemptAt} is at or after it (an unkeyed entry is not affected by the cutoff).
    *
    * <p>The ordering puts the entries most likely to be past their retry backoff at the front so a
    * recently-retried, still-backing-off entry cannot head-of-line block genuinely-due entries
@@ -263,10 +264,11 @@ public interface DeadLetterQueue {
    * and over-fetches beyond its retry batch size, so returning a not-yet-due entry here is expected
    * — it is simply skipped that cycle.
    *
-   * <p>The key filter belongs to the store, not the caller: a runner that leaves unkeyed entries to
-   * an operator never touches them, so they keep their place at the head of this ordering for as
-   * long as they are retained. Filtering them out after the read would let a backlog of them fill
-   * every page and starve the keyed entries behind it.
+   * <p>Both filters belong to the store, not the caller: a runner that leaves unkeyed entries, or
+   * keyed entries older than the command-inbox window, to an operator never touches them, so they
+   * keep their place at the head of this ordering for as long as they are retained. Filtering them
+   * out after the read would let a backlog of them fill every page and starve the keyed entries
+   * behind it.
    *
    * <p>The default implementation throws {@link UnsupportedOperationException}: scheduled DLQ retry
    * is an optional capability, and an implementation must override this method (with {@link
@@ -277,14 +279,17 @@ public interface DeadLetterQueue {
    * @param limit maximum number of entries to return
    * @param includeUnkeyed whether entries without an idempotency key are returned too; {@code
    *     false} returns keyed entries only
+   * @param keyedFirstAttemptAtOrAfter the earliest {@code firstAttemptAt} of a keyed entry to
+   *     return, or {@code null} to return keyed entries of any age
    * @return list of retryable dead letter entries, may be empty
    * @throws UnsupportedOperationException if the implementation does not track DLQ retry attempts
    */
-  default List<DeadLetterEntry> readRetryable(int maxRetries, int limit, boolean includeUnkeyed) {
+  default List<DeadLetterEntry> readRetryable(
+      int maxRetries, int limit, boolean includeUnkeyed, Instant keyedFirstAttemptAtOrAfter) {
     throw new UnsupportedOperationException(
         getClass().getName()
-            + " does not support DLQ retry tracking — override readRetryable(int, int, boolean) to"
-            + " return retry-eligible entries");
+            + " does not support DLQ retry tracking — override readRetryable(int, int, boolean,"
+            + " Instant) to return retry-eligible entries");
   }
 
   /**

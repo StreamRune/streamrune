@@ -819,7 +819,7 @@ class PostgresDeadLetterQueueTest {
             null));
     dlq.updateAttempts(cmd2, 3, Instant.now());
 
-    var retryable = dlq.readRetryable(3, 10, true);
+    var retryable = dlq.readRetryable(3, 10, true, null);
     assertEquals(1, retryable.size());
     assertEquals("Eligible", retryable.getFirst().commandType());
   }
@@ -845,10 +845,10 @@ class PostgresDeadLetterQueueTest {
               id.equals(keyed) ? IdempotencyKey.of("k-keyed") : null));
     }
 
-    var keyedOnly = dlq.readRetryable(3, 10, false);
+    var keyedOnly = dlq.readRetryable(3, 10, false, null);
     assertEquals(1, keyedOnly.size());
     assertEquals("Keyed", keyedOnly.getFirst().commandType());
-    assertEquals(2, dlq.readRetryable(3, 10, true).size());
+    assertEquals(2, dlq.readRetryable(3, 10, true, null).size());
   }
 
   @Test
@@ -892,6 +892,45 @@ class PostgresDeadLetterQueueTest {
   }
 
   @Test
+  void readRetryableWithACutoffLeavesOutOldKeyedEntriesButNotUnkeyedOnes() {
+    Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+    String[][] rows = {
+      {"7c000000-0000-0000-0000-000000000001", null, "8", "UnkeyedOld"},
+      {"7c000000-0000-0000-0000-000000000002", "k-old", "8", "KeyedOld"},
+      {"7c000000-0000-0000-0000-000000000003", "k-edge", "7", "KeyedEdge"},
+      {"7c000000-0000-0000-0000-000000000004", "k-fresh", "0", "KeyedFresh"},
+    };
+    for (String[] row : rows) {
+      dlq.publish(
+          new DeadLetterQueue.DeadLetterPublishRequest(
+              "{}",
+              row[3],
+              CommandId.of(row[0]),
+              TestStreams.stream("s1"),
+              "Err",
+              "msg",
+              1,
+              now.minus(java.time.Duration.ofDays(Long.parseLong(row[2]))),
+              null,
+              null,
+              null,
+              row[1] == null ? null : IdempotencyKey.of(row[1])));
+    }
+    Instant cutoff = now.minus(java.time.Duration.ofDays(7));
+
+    var types =
+        dlq.readRetryable(5, 10, true, cutoff).stream()
+            .map(DeadLetterQueue.DeadLetterEntry::commandType)
+            .toList();
+    assertFalse(types.contains("KeyedOld"), "a keyed entry before the cutoff is left out");
+    assertTrue(types.contains("KeyedEdge"), "the cutoff itself is included");
+    assertTrue(types.contains("KeyedFresh"));
+    assertTrue(types.contains("UnkeyedOld"), "the cutoff does not apply to unkeyed entries");
+    assertEquals(4, dlq.readRetryable(5, 10, true, null).size());
+    assertEquals(2, dlq.readRetryable(5, 10, false, cutoff).size());
+  }
+
+  @Test
   void readRetryableOrdersOldestFirst() throws Exception {
     var cmd1 = CommandId.of("80000000-0000-0000-0000-000000000001");
     dlq.publish(
@@ -925,7 +964,7 @@ class PostgresDeadLetterQueueTest {
             null,
             null));
 
-    var retryable = dlq.readRetryable(5, 10, true);
+    var retryable = dlq.readRetryable(5, 10, true, null);
     assertEquals(2, retryable.size());
     assertEquals("First", retryable.get(0).commandType());
     assertEquals("Second", retryable.get(1).commandType());
@@ -975,7 +1014,7 @@ class PostgresDeadLetterQueueTest {
     // recent activity, so under COALESCE ordering it sorts last despite being published first.
     dlq.updateAttempts(older, 1, Instant.now().plus(java.time.Duration.ofHours(1)));
 
-    var retryable = dlq.readRetryable(5, 10, true);
+    var retryable = dlq.readRetryable(5, 10, true, null);
     assertEquals(2, retryable.size());
     assertEquals(
         "Newer",
@@ -1005,7 +1044,7 @@ class PostgresDeadLetterQueueTest {
               null,
               null));
     }
-    assertEquals(3, dlq.readRetryable(5, 3, true).size());
+    assertEquals(3, dlq.readRetryable(5, 3, true, null).size());
   }
 
   @Test
@@ -1148,7 +1187,7 @@ class PostgresDeadLetterQueueTest {
             TraceId.of("trace-retry-1"),
             null));
 
-    var entry = dlq.readRetryable(5, 10, true).getFirst();
+    var entry = dlq.readRetryable(5, 10, true, null).getFirst();
     assertNotNull(entry.correlationId());
     assertEquals("corr-retry-1", entry.correlationId().value());
     assertEquals("user-retry-1", entry.userId().value());
