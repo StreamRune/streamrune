@@ -858,17 +858,19 @@ A replica reads only what its own code understands, and three rules decide what 
   the class declares but the payload lacks binds as `null` (or the primitive default).
 
 The rule that follows: **every change to an event payload's shape bumps the event's schema
-version**, an added field included. A replica still on the previous release then meets the first
+version**, an added field included. A shape change is anything that changes what binds: an added,
+removed, renamed or retyped field, a new enum constant, a new polymorphic subtype, and a field
+added to a nested record — the last bumps every event type that embeds the record. A replica still on the previous release then meets the first
 rule, a transient pause, instead of the third, a halt or a misread. Only the new release's replicas
 read the new events, and they read the old ones through the upcaster.
 
 The first replica of a new release that appends such an event creates a window in which every
 replica still on the previous release is behind. What those replicas do in the window:
 
-| What the old replica does | Schema-version bump (`EventSchemaAheadException`) | New event type (`UnknownEventTypeException`) | Shape change without a bump (`EventDeserializationException`) |
+| What the old replica does | Schema-version bump (`EventSchemaAheadException`) | New event type (`UnknownEventTypeException`) | Shape change without a bump |
 |---|---|---|---|
-| A command that loads an aggregate carrying a newer event | fails, is dead-lettered, does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker | fails, is dead-lettered, does not count toward the breaker |
-| A projection or subscription it leads | stops at the first newer event and retries it (lag, no quarantine) until the replica is upgraded; its lease then passes to an upgraded replica | halts after the read-poison bound (5 consecutive failures by default) with health `DOWN`, until the replica is upgraded | halts after the read-poison bound with health `DOWN` (an added or renamed field); a removed field reads as `null` with no failure at all |
+| A command that loads an aggregate carrying a newer event | fails, is dead-lettered, does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker | an added or renamed field fails with `EventDeserializationException`, is dead-lettered and does not count toward the breaker; a removed field binds as `null` and the command decides on it with no failure |
+| A projection or subscription it leads | stops at the first newer event and retries it (lag, no quarantine) until the replica is upgraded; its lease then passes to an upgraded replica | halts after the read-poison bound (5 consecutive failures by default) with health `DOWN`, until the replica is upgraded | halts after the read-poison bound with health `DOWN` (an added or renamed field, `EventDeserializationException`); a removed field reads as `null` with no failure at all |
 | Every other command | runs normally | runs normally | runs normally |
 
 Dead-lettered commands replay once their entry is retried on an upgraded replica: the retry runner
@@ -883,7 +885,9 @@ Choose the procedure by the kind of change:
    `EventUpcaster` bean with an integration, or with `PostgresEventStore.builder().upcasters(...)`)
    whose step for the old version makes the stored payload bind to the new class:
    - an **added** field needs no rewrite — make it nullable, or default it in the record's compact
-     constructor — so the step returns the payload unchanged;
+     constructor — so the step returns the payload unchanged. A primitive whose default is not
+     `0`/`false` is the exception: the compact constructor cannot tell an absent key from a stored
+     `0`, so the step writes the default (`eventData.putIfAbsent("priority", 5)`);
    - a **removed** field must be dropped from the payload (`eventData.remove("note")`), or the
      strict read of an old event fails on it;
    - a **renamed** field moves the value (`eventData.put("total", eventData.remove("amount"))`);
