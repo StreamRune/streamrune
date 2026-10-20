@@ -53,18 +53,22 @@ import software.amazon.awssdk.services.kms.model.NotFoundException;
  * [12-byte nonce][AES-256-GCM ciphertext][16-byte tag]
  * </pre>
  *
- * with the GCM associated data {@code header || sha256hex(subjectId)}, where the header is every
- * byte before the nonce. A value is therefore bound to its subject twice: KMS refuses to unwrap the
- * data key under another subject's context, and the GCM tag fails for another subject even if a
- * data key were unwrapped. The {@link CryptoEngine} contract carries no field identity, so values
- * of one subject are not bound to the field they were written for — on every backend.
+ * with the GCM associated data {@code magic || version || sha256hex(subjectId)}. A value is
+ * therefore bound to its subject twice: KMS refuses to unwrap the data key under another subject's
+ * context, and the GCM tag fails for another subject even if a data key were unwrapped. The wrapped
+ * data key is not part of the associated data — it authenticates itself, since any other wrapped
+ * key yields another data key and the tag fails — so a migration to another CMK re-wraps each data
+ * key in place with {@code kms:ReEncrypt} (same encryption context) and leaves the AES-GCM layer
+ * alone. The {@link CryptoEngine} contract carries no field identity, so values of one subject are
+ * not bound to the field they were written for — on every backend.
  *
  * <p><b>Data-key cache.</b> The engine keeps a bounded in-process cache ({@link
  * Builder#dataKeyCacheMaximumSize(int)}, default {@value #DEFAULT_DATA_KEY_CACHE_MAXIMUM_SIZE}
  * entries for encryption and as many for decryption; {@code 0} disables it): per subject, the data
  * key it encrypts under, and the data keys it unwrapped. Each entry lives at most {@link
- * Builder#dataKeyCacheExpireAfterWrite(Duration)} (default 5 minutes) after it was stored, and an
- * encrypting key is replaced after {@value #MAX_ENCRYPTIONS_PER_DATA_KEY} values, far below the
+ * Builder#dataKeyCacheExpireAfterWrite(Duration)} (default 5 minutes) after it was stored — expired
+ * entries leave the heap at the next store or eviction, and at a lookup at most once a second — and
+ * an encrypting key is replaced after {@value #MAX_ENCRYPTIONS_PER_DATA_KEY} values, far below the
  * 2<sup>32</sup> random-nonce limit of AES-GCM. A subject therefore costs one {@code
  * GenerateDataKey} per window on the replica that writes it and one {@code Decrypt} per data key
  * and window on each replica that reads it. With the cache disabled every value costs one KMS call,
@@ -153,6 +157,14 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
 
   /** Magic, version byte and the two-byte wrapped-key length. */
   private static final int FIXED_HEADER_LENGTH = MAGIC.length + 1 + 2;
+
+  /**
+   * The header bytes in the GCM associated data: magic and version. The wrapped data key and its
+   * length stay out, so a CMK migration can re-wrap the key in place ({@code kms:ReEncrypt})
+   * without touching the AES-GCM layer; a substituted wrapped key yields another data key and the
+   * tag fails anyway.
+   */
+  private static final int AAD_HEADER_LENGTH = MAGIC.length + 1;
 
   private static final int MAX_WRAPPED_KEY_LENGTH = 0xFFFF;
   private static final int NONCE_LENGTH = 12;
@@ -580,7 +592,7 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
     try {
       Cipher cipher = CIPHER.get();
       cipher.init(Cipher.ENCRYPT_MODE, dataKey.key(), new GCMParameterSpec(TAG_LENGTH * 8, nonce));
-      cipher.updateAAD(result, 0, headerLength);
+      cipher.updateAAD(result, 0, AAD_HEADER_LENGTH);
       cipher.updateAAD(subjectBinding(subjectId));
       cipher.doFinal(plaintext, 0, plaintext.length, result, headerLength + NONCE_LENGTH);
       return result;
@@ -598,7 +610,7 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
           Cipher.DECRYPT_MODE,
           key,
           new GCMParameterSpec(TAG_LENGTH * 8, ciphertext, headerLength, NONCE_LENGTH));
-      cipher.updateAAD(ciphertext, 0, headerLength);
+      cipher.updateAAD(ciphertext, 0, AAD_HEADER_LENGTH);
       cipher.updateAAD(subjectBinding(subjectId));
       int bodyStart = headerLength + NONCE_LENGTH;
       return cipher.doFinal(ciphertext, bodyStart, ciphertext.length - bodyStart);

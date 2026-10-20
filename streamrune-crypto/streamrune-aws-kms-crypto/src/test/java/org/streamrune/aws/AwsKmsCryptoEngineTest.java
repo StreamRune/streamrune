@@ -328,6 +328,28 @@ class AwsKmsCryptoEngineTest {
   }
 
   @Test
+  void everyStoreSweeps_evenRightAfterALookupSwept() {
+    AtomicLong now = new AtomicLong(0);
+    var peer = clockedEngine(now);
+    var stale = SubjectId.of("customer-stale-store");
+    byte[] staleBlob = peer.encrypt(stale, bytes("pii"));
+    byte[] otherBlob = engine.encrypt(SubjectId.of("customer-elsewhere"), bytes("x"));
+    now.addAndGet(Duration.ofMinutes(5).toNanos() - Duration.ofMillis(500).toNanos());
+    peer.decrypt(stale, staleBlob); // a lookup that sweeps: stale is still live
+
+    now.addAndGet(Duration.ofMillis(600).toNanos()); // stale has expired; no lookup sweep is due
+    peer.encrypt(SubjectId.of("customer-new"), bytes("v")); // stores an encrypting key
+    assertFalse(peer.holdsDataKeysOf(stale), "storing an encrypting key sweeps");
+
+    byte[] staleAgain = peer.encrypt(stale, bytes("pii"));
+    now.addAndGet(Duration.ofMinutes(5).toNanos() - Duration.ofMillis(500).toNanos());
+    peer.decrypt(stale, staleAgain); // sweeps; stale's new keys are still live
+    now.addAndGet(Duration.ofMillis(600).toNanos());
+    peer.decrypt(SubjectId.of("customer-elsewhere"), otherBlob); // stores an unwrapped key
+    assertFalse(peer.holdsDataKeysOf(stale), "storing an unwrapped key sweeps");
+  }
+
+  @Test
   void deleteKeySweepsExpiredKeysOfOtherSubjects() {
     AtomicLong now = new AtomicLong(0);
     var peer = clockedEngine(now);

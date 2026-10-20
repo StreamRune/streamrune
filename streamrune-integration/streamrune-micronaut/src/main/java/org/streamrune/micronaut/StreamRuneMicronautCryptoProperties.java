@@ -86,7 +86,25 @@ public record StreamRuneMicronautCryptoProperties(
    *
    * @param region the AWS region; required when the AWS KMS backend is enabled
    * @param kmsKeyId the AWS KMS key ID; required when the AWS KMS backend is enabled
+   * @param dataKeyCache the engine's cache of plaintext data keys ({@code
+   *     streamrune.crypto.aws.data-key-cache.*}); off whenever {@code
+   *     streamrune.crypto.cache.enabled=false}
    */
   @ConfigurationProperties("aws")
-  public record AwsConfig(@Nullable String region, @Nullable String kmsKeyId) {}
+  public record AwsConfig(
+      @Nullable String region, @Nullable String kmsKeyId, DataKeyCacheConfig dataKeyCache) {
+
+    /**
+     * The AWS KMS engine's data-key cache. Binds {@code streamrune.crypto.aws.data-key-cache.*}.
+     *
+     * @param maximumSize entries per data-key map (default 1000); {@code 0} disables the data-key
+     *     cache, so every value costs one KMS call
+     * @param expireAfterWrite how long a cached data key lives after it was stored (default 5
+     *     minutes); must be positive
+     */
+    @ConfigurationProperties("data-key-cache")
+    public record DataKeyCacheConfig(
+        @Bindable(defaultValue = "1000") int maximumSize,
+        @Bindable(defaultValue = "5m") Duration expireAfterWrite) {}
+  }
 }

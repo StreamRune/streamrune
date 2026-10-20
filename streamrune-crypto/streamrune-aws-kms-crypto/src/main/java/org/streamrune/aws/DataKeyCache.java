@@ -23,6 +23,15 @@ import org.streamrune.core.types.SubjectId;
  * moved is dropped, so a key fetched while a forget was in progress is not cached after that
  * forget's eviction.
  *
+ * <p><b>Expired entries leave the heap without a lookup.</b> A replica that did not run a forget
+ * never looks the forgotten subject up again (the tombstone refuses first), so expiry checked on
+ * lookup alone would keep its keys until size pressure pushed them out. Every store and every
+ * eviction therefore sweeps both maps of expired entries, and so does a lookup when the last sweep
+ * is at least {@link #SWEEP_INTERVAL_NANOS} old: on a replica that encrypts or decrypts anything,
+ * an expired key leaves the heap within a second of its expiry. A replica that does neither keeps
+ * it until it next does — the cache owns no thread. A sweep walks at most {@code 2 * maximumSize}
+ * entries.
+ *
  * <p>All methods synchronize on the cache. None of them calls out of the process.
  */
 final class DataKeyCache {
@@ -65,6 +74,9 @@ final class DataKeyCache {
 
   private record UnwrappedKey(SecretKey key, long storedAt) {}
 
+  /** The least time between two sweeps a lookup runs: one second. */
+  static final long SWEEP_INTERVAL_NANOS = 1_000_000_000L;
+
   private final int maximumSize;
   private final long expireAfterWriteNanos;
   private final long maxEncryptionsPerKey;
@@ -72,6 +84,7 @@ final class DataKeyCache {
   private final Map<SubjectId, EncryptionKey> encryptionKeys;
   private final Map<UnwrapKey, UnwrappedKey> unwrappedKeys;
   private long epoch;
+  private long lastSweep;
 
   DataKeyCache(
       int maximumSize,
@@ -84,6 +97,7 @@ final class DataKeyCache {
     this.nanoClock = nanoClock;
     this.encryptionKeys = lru(maximumSize);
     this.unwrappedKeys = lru(maximumSize);
+    this.lastSweep = nanoClock.getAsLong();
   }
 
   private static <K, V> Map<K, V> lru(int maximumSize) {
@@ -109,11 +123,27 @@ final class DataKeyCache {
     return nanoClock.getAsLong() - storedAt >= expireAfterWriteNanos;
   }
 
+  /** Removes every expired entry from both maps. */
+  private void sweepExpired() {
+    long now = nanoClock.getAsLong();
+    lastSweep = now;
+    encryptionKeys.values().removeIf(k -> now - k.storedAt >= expireAfterWriteNanos);
+    unwrappedKeys.values().removeIf(k -> now - k.storedAt >= expireAfterWriteNanos);
+  }
+
+  /** Sweeps when the last sweep is at least {@link #SWEEP_INTERVAL_NANOS} old. */
+  private void sweepIfDue() {
+    if (nanoClock.getAsLong() - lastSweep >= SWEEP_INTERVAL_NANOS) {
+      sweepExpired();
+    }
+  }
+
   /**
    * The subject's cached data key with one encryption taken from its budget, or null when there is
    * none, it expired, or its budget is spent (the entry is then dropped).
    */
   synchronized EncryptionKey takeEncryptionKey(SubjectId subject) {
+    sweepIfDue();
     EncryptionKey cached = encryptionKeys.get(subject);
     if (cached == null) {
       return null;
@@ -131,6 +161,7 @@ final class DataKeyCache {
    * decryption, unless a forget evicted anything since {@code epochSeen}.
    */
   synchronized void storeEncryptionKey(SubjectId subject, EncryptionKey key, long epochSeen) {
+    sweepExpired();
     if (maximumSize == 0 || epochSeen != epoch) {
       return;
     }
@@ -141,6 +172,7 @@ final class DataKeyCache {
 
   /** The data key unwrapped earlier for this subject and wrapped form, or null. */
   synchronized SecretKey unwrappedKey(SubjectId subject, byte[] wrapped) {
+    sweepIfDue();
     UnwrapKey id = new UnwrapKey(subject, wrapped);
     UnwrappedKey cached = unwrappedKeys.get(id);
     if (cached == null) {
@@ -156,6 +188,7 @@ final class DataKeyCache {
   /** Caches an unwrapped data key unless a forget evicted anything since {@code epochSeen}. */
   synchronized void storeUnwrappedKey(
       SubjectId subject, byte[] wrapped, SecretKey key, long epochSeen) {
+    sweepExpired();
     if (maximumSize == 0 || epochSeen != epoch) {
       return;
     }
@@ -171,6 +204,7 @@ final class DataKeyCache {
   /** Drops every data key of the subject; a store that read an earlier epoch is dropped too. */
   synchronized void evict(SubjectId subject) {
     epoch++;
+    sweepExpired();
     encryptionKeys.remove(subject);
     unwrappedKeys.keySet().removeIf(id -> id.subject.equals(subject));
   }

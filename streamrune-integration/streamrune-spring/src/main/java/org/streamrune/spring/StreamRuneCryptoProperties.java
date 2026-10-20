@@ -70,6 +70,19 @@ public record StreamRuneCryptoProperties(
   /**
    * @param region the AWS region; required when the AWS KMS backend is enabled
    * @param kmsKeyId the AWS KMS key id; required when the AWS KMS backend is enabled
+   * @param dataKeyCache the engine's cache of plaintext data keys ({@code
+   *     streamrune.crypto.aws.data-key-cache.*}); off whenever {@code
+   *     streamrune.crypto.cache.enabled=false}
    */
-  public record Aws(String region, String kmsKeyId) {}
+  public record Aws(String region, String kmsKeyId, @DefaultValue DataKeyCache dataKeyCache) {
+
+    /**
+     * @param maximumSize entries per data-key map (default 1000); {@code 0} disables the data-key
+     *     cache, so every value costs one KMS call
+     * @param expireAfterWrite how long a cached data key lives after it was stored (default 5
+     *     minutes); must be positive
+     */
+    public record DataKeyCache(
+        @DefaultValue("1000") int maximumSize, @DefaultValue("5m") Duration expireAfterWrite) {}
+  }
 }

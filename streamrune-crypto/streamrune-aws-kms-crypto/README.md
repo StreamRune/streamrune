@@ -8,6 +8,17 @@ AWS KMS-backed `CryptoEngine` implementation, using envelope encryption under on
 - AWS credentials configured (env vars, ~/.aws/credentials, IAM role)
 - `kms:GenerateDataKey`, `kms:Decrypt`, `kms:DescribeKey` IAM permissions on the CMK (`kms:Encrypt` is not used)
 
+All subject binding in KMS rides on the encryption context the engine supplies. To make the CMK
+itself refuse a call without it, add a condition to the key policy statement that grants
+`kms:GenerateDataKey` and `kms:Decrypt` to the application's role:
+
+```json
+"Condition": {
+  "ForAllValues:StringEquals": { "kms:EncryptionContextKeys": ["streamrune-subject"] },
+  "Null": { "kms:EncryptionContext:streamrune-subject": "false" }
+}
+```
+
 ## Usage
 
 ```java
@@ -43,8 +54,17 @@ boolean exists = engine.isKeyAvailable(subject);
 ```
 
 The Spring, Quarkus and Micronaut integrations wire a `JdbcForgottenSubjectStore` on the
-application `DataSource` automatically, with the default data-key cache; without a `DataSource`
-the engine does not build.
+application `DataSource` automatically; without a `DataSource` the engine does not build. They set
+the data-key cache from two keys, with the same names, defaults and validation in all three:
+
+| Key | Default | Effect |
+|---|---|---|
+| `streamrune.crypto.aws.data-key-cache.maximum-size` | `1000` | entries per data-key map; `0` disables the data-key cache; a negative value fails startup |
+| `streamrune.crypto.aws.data-key-cache.expire-after-write` | 5 minutes (`5m` on Spring and Micronaut, `PT5M` on Quarkus, which takes strict ISO-8601 like its other crypto cache durations) | lifetime of a cached data key; zero or negative fails startup |
+
+`streamrune.crypto.cache.enabled=false` — the no-cache posture — also turns the data-key cache off
+(`maximum-size` is then ignored): neither decrypted plaintext nor a plaintext data key is kept in
+heap, and every value costs one KMS call.
 
 ## Envelope Encryption
 
@@ -61,10 +81,13 @@ and the configured key id, then decrypts locally. KMS only ever sees data keys, 
 [nonce: 12 bytes][AES-256-GCM ciphertext][tag: 16 bytes]
 ```
 
-The GCM associated data is every byte before the nonce followed by `sha256hex(subjectId)`. A value
-is bound to its subject twice: KMS refuses to unwrap the data key under another subject's
+The GCM associated data is the magic and the version byte followed by `sha256hex(subjectId)`. A
+value is bound to its subject twice: KMS refuses to unwrap the data key under another subject's
 encryption context, and the GCM tag fails for another subject even if a data key were unwrapped. A
-ciphertext is therefore never readable as another subject's. The `CryptoEngine` contract carries
+ciphertext is therefore never readable as another subject's. The wrapped data key and its length
+are not part of the associated data: any other wrapped key yields another data key, so the tag
+fails anyway, and leaving it out lets a CMK migration re-wrap the key in place (see *Key
+rotation*). The `CryptoEngine` contract carries
 no field identity, so the values of one subject are not bound to the field they were written for —
 on every backend.
 
@@ -87,7 +110,11 @@ with `CryptoMappingException`.
 The engine keeps a bounded in-process cache: per subject, the data key it encrypts under, and the
 data keys it unwrapped, each map at most `dataKeyCacheMaximumSize` entries (default 1,000,
 least-recently-used first out) and each entry at most `dataKeyCacheExpireAfterWrite` (default
-5 minutes) after it was stored, however often it is used.
+5 minutes) after it was stored, however often it is used. Expired entries are swept from both maps
+at every cache store and every `deleteKey`, and at a lookup when the last sweep is at least a
+second old — so on a replica that encrypts or decrypts anything, an expired key, a forgotten
+subject's included, leaves the heap within a second of its expiry. The cache owns no thread: a
+replica that serves no encrypt or decrypt at all keeps expired keys until it next does.
 
 | Operation | KMS calls |
 |---|---|
@@ -96,8 +123,10 @@ least-recently-used first out) and each entry at most `dataKeyCacheExpireAfterWr
 | encrypt or decrypt, cache off (`dataKeyCacheMaximumSize(0)`) | one call per value, and every value carries its own data key |
 | `isKeyAvailable` | one `DescribeKey` |
 
-The cache holds plaintext data keys in the process heap. The expiry bounds how long; `deleteKey`
-drops the forgotten subject's keys at once on the replica that runs it. It never decides whether a
+The cache holds plaintext data keys in the process heap. The expiry and the sweeps bound how long;
+`deleteKey` drops the forgotten subject's keys at once on the replica that runs it. The engine
+zeroes its own copy of the key bytes it gets from KMS; the SDK's response buffers and the
+`SecretKeySpec` the cache holds are not zeroed and stay in heap until garbage collection. It never decides whether a
 key is used: see below. `CachedCryptoEngine` in front of this engine still saves the local
 decryption and the tombstone read on a cache hit.
 
@@ -107,9 +136,23 @@ decryption and the tombstone read on a cache hit.
   backing key of the CMK, and new data keys are wrapped under the current one.
 - **Data keys** rotate on their own: a new one per subject after each cache window or 2^24 values.
   Ciphertext keeps the data key it was written with.
-- **Moving to another CMK** (a new `kmsKeyId`) leaves earlier ciphertext wrapped under the old CMK:
-  `decrypt` pins the configured key id, so it fails with the bare `CryptoOperationException`
-  (`IncorrectKeyException`) until that data is re-encrypted.
+- **Moving to another CMK** (a new `kmsKeyId`): `decrypt` pins the configured key id, so a value
+  whose data key is wrapped under the old CMK fails with the bare `CryptoOperationException`
+  (`IncorrectKeyException`) until its data key is re-wrapped. The AES-GCM layer does not change, so
+  the migration re-wraps each data key in place:
+  1. For each stored value, read the wrapped data key from the envelope (the two length bytes after
+     `SRKC` and the version byte, then that many bytes).
+  2. Call `kms:ReEncrypt` with that blob, `SourceKeyId` = the old CMK, `DestinationKeyId` = the new
+     CMK, and `SourceEncryptionContext` = `DestinationEncryptionContext` =
+     `{"streamrune-subject": sha256hex(subjectId)}`.
+  3. Write the envelope back with the new wrapped key and its length; the nonce, the ciphertext and
+     the tag stay as they are.
+  4. Start the application with `kmsKeyId` pointing at the new CMK. Run steps 1-3 while the
+     application is stopped: the engine reads values under its configured key only, and a running
+     engine keeps writing values under the old one. Keep the old CMK enabled until every value is
+     re-wrapped.
+
+  A forgotten subject's values can be skipped: they stay unreadable either way.
 
 ## Key Deletion & Terminal Erasure
 
@@ -117,7 +160,7 @@ A single CMK wraps the data keys of all subjects, so **there is no per-subject K
 
 - `deleteKey(subjectId)` records the tombstone (idempotent) and drops the subject's cached data keys on this replica.
 - After erasure, `decrypt(subjectId, …)` throws `KeyNotFoundException` — which `CryptoShreddingModule` maps to `"[REDACTED]"` — and `encrypt(subjectId, …)` throws `SubjectForgottenException`, matching the filesystem and PostgreSQL backends.
-- Both read the tombstone on every call, before they look at the data-key cache or call KMS. The tombstone store is shared, so a data key another replica still caches is never used for a subject forgotten anywhere; it only stays in that replica's heap until its entry expires.
+- Both read the tombstone on every call, before they look at the data-key cache or call KMS. The tombstone store is shared, so a data key another replica still caches is never used for a subject forgotten anywhere; it only stays in that replica's heap until the sweep after its expiry (see *Data-key cache and cost*).
 - `reinstate(subjectId)` clears the tombstone for legitimate re-registration. On this engine that is a full un-erasure (see *Known Limitations*), so call it through `ForgetSubjectService.reinstate(subjectId, requester)`, which records it in the audit log as `GDPR_REINSTATE`; the engine method alone writes no audit record.
 
 The auto-wired `ForgetSubjectService` therefore completes on KMS: the crypto-shred step succeeds and the registered read-model purgers run.
@@ -180,6 +223,8 @@ implementation("org.streamrune:streamrune-aws-kms-crypto:1.0.0-alpha-SNAPSHOT")
 ## Known Limitations
 
 - **Erasure durability equals the tombstone store** — the shared CMK is immutable, so `deleteKey()` records a per-subject tombstone rather than deleting a key. `reinstate(subjectId)` makes pre-erasure ciphertext readable again, because the CMK was never destroyed.
-- **Data keys in heap** — cached plaintext data keys live in the process heap for up to `dataKeyCacheExpireAfterWrite`; a heap dump of a running replica exposes them. Disable the cache (`dataKeyCacheMaximumSize(0)`) where that matters more than KMS cost and latency.
+- **Data keys in heap** — cached plaintext data keys live in the process heap for up to `dataKeyCacheExpireAfterWrite` plus the time to the next sweep (a second on a replica that encrypts or decrypts anything); a heap dump of a running replica exposes them. Disable the cache (`dataKeyCacheMaximumSize(0)`, or `streamrune.crypto.cache.enabled=false` through an integration) where that matters more than KMS cost and latency.
+- **No single-flight** — concurrent encrypts for one subject on a cache miss each call `GenerateDataKey`; the last one's key is cached, the others live on in their own values. Cost only.
+- **One monitor** — the data-key cache synchronizes every operation on one lock (about a microsecond each).
 - **Latency** — a cache miss is a network call to AWS.
 - **Cost** — AWS KMS charges per API call; see *Data-key cache and cost*.
