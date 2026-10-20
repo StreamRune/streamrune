@@ -560,6 +560,16 @@ deployment of such a change therefore has a window in which the replicas on the 
 refuse every event the upgraded replicas wrote. The procedure, and what the old replicas do in the
 window, is in the production guide:
 [rolling out an event-schema change](../guide/production.md#rolling-out-an-event-schema-change).
+A new event type is different: a replica that has not registered it fails the read with
+`UnknownEventTypeException`, which stays read poison, so its projections halt. Deploy the readers
+of a new type before any writer emits it.
+
+**Event payloads are read tolerantly.** A stored payload property the event class does not declare
+is ignored, so an added field needs no upcaster and no version bump; a renamed, removed or retyped
+field does. `strictEventPayloads(true)` on `PostgresEventStore.builder()` or
+`PostgresEventStoreFactory` (`streamrune.event-store.strict-event-payloads=true` in the
+integrations, `withStrictEventPayloads(true)` on `InMemoryEventStore`) makes such a property fail
+with `EventDeserializationException`. Snapshot state is always read strictly.
 
 ---
 

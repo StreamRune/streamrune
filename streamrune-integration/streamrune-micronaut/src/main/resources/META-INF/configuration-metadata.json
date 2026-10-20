@@ -85,6 +85,12 @@
       "defaultValue": "5s"
     },
     {
+      "name": "streamrune.event-store.strict-event-payloads",
+      "type": "java.lang.Boolean",
+      "description": "Read event payloads strictly: a stored payload property the event class does not declare fails to bind. Off by default, so such a property is ignored; snapshot state is always read strictly",
+      "defaultValue": false
+    },
+    {
       "name": "streamrune.event-store.statement-timeout",
       "type": "java.time.Duration",
       "description": "Bound on every statement the event store runs, applied per transaction or per statement (never on the pooled session); 0s sets none",

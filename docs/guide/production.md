@@ -843,54 +843,74 @@ Running more than one instance of the same application is fully supported, and t
 
 ### Rolling out an event-schema change
 
-A replica reads only what its own code understands, and two rules decide what that is:
+A replica reads only what its own code understands, and three rules decide what that is:
 
 - **The stored `schema_version` must not be above the reader's.** A store stamps every appended
   event with the `currentVersion()` of its upcaster for the type (1 without one), and a store whose
   chain stops below the stored version refuses the event with `EventSchemaAheadException`.
-- **The stored payload must bind to the reader's event class.** The event store's `ObjectMapper`
-  fails on a property the class does not declare (Jackson's default), so a payload that carries a
-  field the reader's class lacks fails with `EventDeserializationException` — deterministic read
-  poison, which halts a projection after its read-poison bound.
+- **The stored event type must be registered with the reader.** A type the reader's
+  `EventTypeRegistry` does not know fails with `UnknownEventTypeException`. It stays deterministic
+  read poison on purpose: nothing stored tells "a newer release wrote it" apart from "this
+  application forgot to register it", and a missing registration must fail loudly.
+- **The stored payload must bind to the reader's event class.** The event store reads event
+  payloads as a tolerant reader: a property the class does not declare is ignored, so an added
+  field does not stop an older replica. Under `streamrune.event-store.strict-event-payloads=true`
+  (`strictEventPayloads(true)` on the store or factory) such a property fails with
+  `EventDeserializationException`, deterministic read poison. Snapshot state is always read
+  strictly; a snapshot that does not bind is discarded and the events replay.
 
 The first replica of a new release that appends such an event creates a window in which every
 replica still on the previous release is behind. What those replicas do in the window:
 
-| What the old replica does | Schema-version bump (`EventSchemaAheadException`) | Unknown property (`EventDeserializationException`) |
-|---|---|---|
-| A command that loads an aggregate carrying a newer event | fails, is dead-lettered, does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker |
-| A projection or subscription it leads | stops at the first newer event and retries it (lag, no quarantine) until the replica is upgraded; its lease then passes to an upgraded replica | halts after the read-poison bound (5 consecutive failures by default) with health `DOWN`, until the replica is upgraded |
-| Every other command | runs normally | runs normally |
+| What the old replica does | Schema-version bump (`EventSchemaAheadException`) | New event type (`UnknownEventTypeException`) | Added field, strict payloads only (`EventDeserializationException`) |
+|---|---|---|---|
+| A command that loads an aggregate carrying a newer event | fails, is dead-lettered, does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker | fails, is dead-lettered, does not count toward the breaker |
+| A projection or subscription it leads | stops at the first newer event and retries it (lag, no quarantine) until the replica is upgraded; its lease then passes to an upgraded replica | halts after the read-poison bound (5 consecutive failures by default) with health `DOWN`, until the replica is upgraded | halts after the read-poison bound with health `DOWN`, until the replica is upgraded |
+| Every other command | runs normally | runs normally | runs normally |
+
+Under the default tolerant reader an added field changes nothing on the old replicas: they read the
+event without it. Both replicas must run a StreamRune release that reads tolerantly.
 
 Dead-lettered commands replay once their entry is retried on an upgraded replica: the retry runner
 is leased, so its automatic attempts run where the lease is, and an entry that exhausted its
 attempts during a long rollout is retried by the operator (`retry(commandId)`) afterwards.
 
-Choose one of these procedures for a release that changes an event's shape:
+Choose the procedure by the kind of change:
 
-1. **Stop and switch.** Stop every replica of the previous release, then start the new release
+1. **An added field: one release.** Make the field nullable, or default it in the record's compact
+   constructor for the events stored without it, and leave the type's upcaster version unchanged.
+   The old replicas ignore the field; the new ones read the old events with the default. With
+   strict payloads switched on, use procedure 4 instead.
+2. **A new event type: readers first.** Release A registers the type (its class in the
+   `EventTypeRegistry`, and whatever the projections and sagas do with it) and emits it nowhere;
+   roll A out completely. Release B emits it. A replica that has not registered the type halts its
+   projections on the first such event, so no writer may emit it while such a replica runs.
+3. **A renamed, removed or retyped field: an upcaster and a version bump.** A tolerant reader
+   cannot make these safe: an old class would bind a renamed field as missing. Register an upcaster
+   step that rewrites the old payload and raise its `currentVersion()`. Old replicas then refuse the
+   new events with `EventSchemaAheadException`, and you either accept that window (procedure 5) or
+   stop and switch (procedure 4).
+4. **Stop and switch.** Stop every replica of the previous release, then start the new release
    (a blue/green cutover that stops the old fleet before the new one serves writes, or a scale to
-   zero). No replica is ever behind. Use it for a renamed or removed field, a changed type, or any
-   change an older class cannot read.
-2. **Additive change in two releases (tolerant reader first).** For a new field only:
-   - release A annotates the event record with `@JsonIgnoreProperties(ignoreUnknown = true)` and
-     changes nothing else; roll it out completely;
-   - release B adds the field (nullable, or defaulted in the record's compact constructor for
-     events stored without it) and leaves the type's upcaster version unchanged, so it keeps
-     stamping the version A stamps; replicas still on A ignore the field, and B's replicas read A's
-     events with the default.
-
-   Add an upcaster later only when a step must rewrite old payloads; that release is again a
-   schema-version bump (procedure 1, or accept procedure 3's window).
-3. **Accept the window.** Roll the release out replica by replica and keep the window short. The old
-   replicas fail the commands that load an aggregate with a newer event and lag on the projections
-   they lead, as in the table above; nothing is quarantined, the circuit breaker stays closed, and
-   the dead-lettered commands replay on the upgraded replicas. Send traffic to the upgraded
+   zero). No replica is ever behind.
+5. **Accept the window.** Roll the release out replica by replica and keep the window short. For a
+   schema-version bump or an added field nothing is quarantined: the old replicas fail the commands
+   that load an aggregate with a newer event and lag on the projections they lead, the circuit
+   breaker stays closed, and the dead-lettered commands replay on the upgraded replicas. A new event
+   type, or an added field under strict payloads, halts the old replicas' leading projections after
+   the read-poison bound instead: use procedure 2 or 4 for those. Send traffic to the upgraded
    replicas first where the load balancer allows it.
 
-A store wired with fewer upcasters than another store that writes the same database is behind
-permanently, not for a rollout: register the same upcasters on every event store of the
-application.
+A release that bumps a schema version can only be rolled forward once it has stored an event at
+the new version: roll back only together with a reader that reaches that version, or every replica
+of the older release refuses those events for good. In the same way, a store wired with fewer
+upcasters than another store that writes the same database is behind permanently, not for a
+rollout: register the same upcasters on every event store of the application.
+
+To catch, in a test suite, an event class that no longer reads what it writes or an upcaster step
+that writes a misspelled key (which the tolerant reader would bind as a default), use
+`StrictEventPayloads.assertRoundTrips(event)` and `StrictEventPayloads.upcastStrictly(...)` from
+`streamrune-test`, or switch strict payloads on for the test profile.
 
 ### Write capacity: one global write lane
 

@@ -327,6 +327,7 @@ public class StreamRuneAutoConfiguration {
               + LogSanitizer.sanitizeFreeText(e.getMessage()),
           e);
     }
+    factory.strictEventPayloads(properties.eventStore().strictEventPayloads());
 
     CryptoEngine cryptoEngine;
     try {

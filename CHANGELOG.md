@@ -220,8 +220,19 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   (`CommandFailureClassification.isReaderBehindStoredSchema`), and `ReadPoisonClassifier` and
   `ProjectionErrorClassifier.DEFAULT` treat it as transient whatever frame wraps it, so a replica on
   the previous release stops at a newer event and retries it instead of quarantining it. The
-  production guide describes how to roll out an event-schema change (stop and switch, an additive
-  change in two releases, or a rolling window).
+  production guide describes how to roll out each kind of event-schema change (an added field, a new
+  event type, a rename through an upcaster) and what the replicas still on the previous release do
+  meanwhile.
+- Event payloads are read as a tolerant reader: a stored payload property the event class does not
+  declare is ignored, so a replica on an older release reads the events a newer release wrote with an
+  added field. `strictEventPayloads(true)` on `PostgresEventStore.Builder` and
+  `PostgresEventStoreFactory`, `InMemoryEventStore.withStrictEventPayloads(true)` and
+  `streamrune.event-store.strict-event-payloads=true` on Spring, Quarkus and Micronaut make such a
+  property fail with `EventDeserializationException`. Only event payloads are read tolerantly: event
+  metadata and snapshot state stay strict (a snapshot that does not bind is discarded and the events
+  replay), as do saga state, dead-letter payloads and read models, which are read and written back.
+  `StrictEventPayloads` in `streamrune-test` checks an event's strict round trip and an upcaster's
+  output against the event class.
 - `SimpleEventTypeRegistry` maps event-type and state-type names to classes; the `StreamRune`
   builder's `registerEventType` / `registerStateType` maintain one for you.
 - `PostgresSnapshotStorePurger` — the `SnapshotPurger` for `snapshot_store`: purges the snapshots

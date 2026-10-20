@@ -82,4 +82,22 @@ class EventStoreStatementTimeoutPropertyTest {
     assertThat(factory).isInstanceOf(PostgresEventStoreFactory.class);
     return ReflectionTestUtils.getField(factory, "statementTimeout");
   }
+
+  @Test
+  void eventPayloadsAreReadTolerantlyByDefault_andStrictlyWhenConfigured() {
+    runner.run(
+        ctx ->
+            assertThat(
+                    ReflectionTestUtils.getField(
+                        ctx.getBean(EventStoreFactory.class), "strictEventPayloads"))
+                .isEqualTo(false));
+    runner
+        .withPropertyValues("streamrune.event-store.strict-event-payloads=true")
+        .run(
+            ctx ->
+                assertThat(
+                        ReflectionTestUtils.getField(
+                            ctx.getBean(EventStoreFactory.class), "strictEventPayloads"))
+                    .isEqualTo(true));
+  }
 }

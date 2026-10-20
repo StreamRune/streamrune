@@ -95,7 +95,8 @@ class StreamRuneConfigValidatorTest {
             Duration.ofSeconds(1),
             "auto",
             "required",
-            "operator-only");
+            "operator-only",
+            false);
     var ctx = mock(ApplicationContext.class);
     var validator = new StreamRuneConfigValidator(props, ctx);
     var ex =
@@ -155,7 +156,8 @@ class StreamRuneConfigValidatorTest {
         Duration.ofSeconds(1),
         "auto",
         "required",
-        "operator-only");
+        "operator-only",
+        false);
   }
 
   /**
@@ -264,7 +266,8 @@ class StreamRuneConfigValidatorTest {
             Duration.ofSeconds(1),
             "auto",
             "required",
-            "operator-only");
+            "operator-only",
+            false);
     var ctx = mock(ApplicationContext.class);
     when(ctx.containsBean(org.streamrune.core.outbox.OutboxStore.class)).thenReturn(false);
     var validator = new StreamRuneConfigValidator(props, ctx);
@@ -328,7 +331,8 @@ class StreamRuneConfigValidatorTest {
         Duration.ofSeconds(1),
         "auto",
         "required",
-        "operator-only");
+        "operator-only",
+        false);
   }
 
   @Test
@@ -502,7 +506,8 @@ class StreamRuneConfigValidatorTest {
         Duration.ofSeconds(1),
         "auto",
         "required",
-        "operator-only");
+        "operator-only",
+        false);
   }
 
   // ── Command dead-letter retention vs inbox retention ──────────────────────────────────────────

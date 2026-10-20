@@ -120,7 +120,8 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofSeconds(1),
         "auto",
         "required",
-        "operator-only");
+        "operator-only",
+        false);
   }
 
   @Test
@@ -199,7 +200,8 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofSeconds(1),
         "auto",
         "required",
-        "operator-only");
+        "operator-only",
+        false);
   }
 
   private static StreamRuneMetrics metricsOf(OutboxPoller poller) throws Exception {

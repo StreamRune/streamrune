@@ -161,6 +161,7 @@ public class StreamRuneProducers {
               + LogSanitizer.sanitizeFreeText(e.getMessage()),
           e);
     }
+    factory.strictEventPayloads(properties.eventStore().strictEventPayloads());
 
     if (cryptoEngineInstance.isAmbiguous()) {
       throw new IllegalStateException(

@@ -49,6 +49,9 @@ streamrune.stripe-count=1024
 # bound on every event-store statement (per transaction or statement, never on the
 # Agroal session); PT0S sets none
 streamrune.event-store.statement-timeout=PT30S
+# true: a stored event payload property the event class does not declare fails the read
+# (default false: it is ignored; snapshot state is always read strictly)
+streamrune.event-store.strict-event-payloads=false
 # build-time flag: decides whether the CachingQueryBus bean exists
 streamrune.query-cache.enabled=false
 # build-time flag: decides whether SseController and its event feed exist (default false;
