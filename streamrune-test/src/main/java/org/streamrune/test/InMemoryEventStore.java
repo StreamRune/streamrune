@@ -24,6 +24,7 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventDeserializationException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
@@ -647,11 +648,10 @@ public final class InMemoryEventStore implements EventStore {
       // Mirrors PostgresEventStore so the double cannot mask the divergence.
       int currentVersion = upcasterChain != null ? upcasterChain.currentVersion(eventType) : 1;
       if (stored.schemaVersion() > currentVersion) {
-        // A stored version ABOVE the reader's current version is never legitimate — it means this
-        // store is missing the upcasters this type was written with (a chainless reader always
-        // reads 1), or has been downgraded. Reading on would silently mis-bind the payload. Fail
-        // closed.
-        throw new EventStoreException(
+        // A newer writer stamped it (a replica of the next release, or a store with upcasters
+        // this one lacks). Reading on would silently mis-bind the payload. Fail closed with the
+        // dedicated retry-later type, mirroring PostgresEventStore.
+        throw new EventSchemaAheadException(
             "Event type "
                 + LogSanitizer.sanitizeForLog(eventType.name())
                 + " for stream "
@@ -660,11 +660,12 @@ public final class InMemoryEventStore implements EventStore {
                 + stored.schemaVersion()
                 + " but this event store's upcaster chain only reaches version "
                 + currentVersion
-                + ". A stored version above the reader's current version means this"
-                + " store is missing the upcasters this event type was written with, or has been"
-                + " downgraded; reading it would silently mis-bind the payload. Register the"
-                + " upcasters for this type, or ensure no chainless or older event store wrote to"
-                + " this store.");
+                + ". A newer writer stamped it: either a replica of a newer release of this"
+                + " application, or an event store wired with upcasters this one lacks. Reading"
+                + " it would silently mis-bind the payload, so the read is refused.",
+            eventType,
+            stored.schemaVersion(),
+            currentVersion);
       }
       if (upcasterChain != null && stored.schemaVersion() < currentVersion) {
         // Deserialize to map, upcast, then bind to the target class. convertValue() binds the

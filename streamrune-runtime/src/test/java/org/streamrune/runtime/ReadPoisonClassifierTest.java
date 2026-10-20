@@ -165,4 +165,31 @@ class ReadPoisonClassifierTest {
                 new IllegalArgumentException("malformed upcaster output")));
     assertThat(ReadPoisonClassifier.isDeterministicReadPoison(e)).isTrue();
   }
+
+  // ---- A reader behind the stored schema retries: during a rolling deployment the replicas on the
+  // previous release must stop at the newer events, never quarantine them. ----
+
+  @Test
+  void aReaderBehindTheStoredSchema_isTransient() {
+    var e =
+        new org.streamrune.core.EventSchemaAheadException(
+            "OrderPlaced is stored at schema_version 2",
+            new org.streamrune.core.types.EventType("OrderPlaced"),
+            2,
+            1);
+    assertThat(ReadPoisonClassifier.isDeterministicReadPoison(e)).isFalse();
+  }
+
+  @Test
+  void aReaderBehindTheStoredSchema_outranksADeterministicFrameAroundIt() {
+    var e =
+        new EventDeserializationException(
+            "Failed to deserialize event data for stream: order-1",
+            new org.streamrune.core.EventSchemaAheadException(
+                "OrderPlaced is stored at schema_version 2",
+                new org.streamrune.core.types.EventType("OrderPlaced"),
+                2,
+                1));
+    assertThat(ReadPoisonClassifier.isDeterministicReadPoison(e)).isFalse();
+  }
 }

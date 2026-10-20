@@ -837,6 +837,57 @@ Running more than one instance of the same application is fully supported, and t
 > reads, projections, and *per-aggregate* command concurrency — but **not** the global append rate.
 > Plan write capacity against the single write lane below before sizing a write-heavy cluster.
 
+### Rolling out an event-schema change
+
+A replica reads only what its own code understands, and two rules decide what that is:
+
+- **The stored `schema_version` must not be above the reader's.** A store stamps every appended
+  event with the `currentVersion()` of its upcaster for the type (1 without one), and a store whose
+  chain stops below the stored version refuses the event with `EventSchemaAheadException`.
+- **The stored payload must bind to the reader's event class.** The event store's `ObjectMapper`
+  fails on a property the class does not declare (Jackson's default), so a payload that carries a
+  field the reader's class lacks fails with `EventDeserializationException` — deterministic read
+  poison, which halts a projection after its read-poison bound.
+
+The first replica of a new release that appends such an event creates a window in which every
+replica still on the previous release is behind. What those replicas do in the window:
+
+| What the old replica does | Schema-version bump (`EventSchemaAheadException`) | Unknown property (`EventDeserializationException`) |
+|---|---|---|
+| A command that loads an aggregate carrying a newer event | fails, is dead-lettered, does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker |
+| A projection or subscription it leads | stops at the first newer event and retries it (lag, no quarantine) until the replica is upgraded; its lease then passes to an upgraded replica | halts after the read-poison bound (5 consecutive failures by default) with health `DOWN`, until the replica is upgraded |
+| Every other command | runs normally | runs normally |
+
+Dead-lettered commands replay once their entry is retried on an upgraded replica: the retry runner
+is leased, so its automatic attempts run where the lease is, and an entry that exhausted its
+attempts during a long rollout is retried by the operator (`retry(commandId)`) afterwards.
+
+Choose one of these procedures for a release that changes an event's shape:
+
+1. **Stop and switch.** Stop every replica of the previous release, then start the new release
+   (a blue/green cutover that stops the old fleet before the new one serves writes, or a scale to
+   zero). No replica is ever behind. Use it for a renamed or removed field, a changed type, or any
+   change an older class cannot read.
+2. **Additive change in two releases (tolerant reader first).** For a new field only:
+   - release A annotates the event record with `@JsonIgnoreProperties(ignoreUnknown = true)` and
+     changes nothing else; roll it out completely;
+   - release B adds the field (nullable, or defaulted in the record's compact constructor for
+     events stored without it) and leaves the type's upcaster version unchanged, so it keeps
+     stamping the version A stamps; replicas still on A ignore the field, and B's replicas read A's
+     events with the default.
+
+   Add an upcaster later only when a step must rewrite old payloads; that release is again a
+   schema-version bump (procedure 1, or accept procedure 3's window).
+3. **Accept the window.** Roll the release out replica by replica and keep the window short. The old
+   replicas fail the commands that load an aggregate with a newer event and lag on the projections
+   they lead, as in the table above; nothing is quarantined, the circuit breaker stays closed, and
+   the dead-lettered commands replay on the upgraded replicas. Send traffic to the upgraded
+   replicas first where the load balancer allows it.
+
+A store wired with fewer upcasters than another store that writes the same database is behind
+permanently, not for a rollout: register the same upcasters on every event store of the
+application.
+
 ### Write capacity: one global write lane
 
 Every append — to *any* aggregate or stream — reserves its global offsets from the single row of

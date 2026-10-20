@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.sql.SQLException;
 import org.streamrune.core.EventDeserializationException;
+import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
@@ -39,6 +40,11 @@ import org.streamrune.core.crypto.SubjectForgottenException;
  *   <li>{@link SubjectForgottenException} anywhere ⇒ <b>POISON</b> (short-circuit). The subject was
  *       crypto-shredded; no retry can ever read it back — the same verdict every sibling classifier
  *       reaches.
+ *   <li>{@link EventSchemaAheadException} anywhere ⇒ <b>TRANSIENT</b> (short-circuit). The event is
+ *       stored at a {@code schema_version} above the one this reader's upcaster chain reaches: a
+ *       replica on the previous release reading what the next release wrote. It reads fine once the
+ *       replica is upgraded, so a projection or subscription stops at that event and retries it
+ *       instead of quarantining it, whatever frame wraps it.
  *   <li>{@link UnknownEventTypeException} / {@link EventDeserializationException} / {@link
  *       CryptoMappingException} ⇒ flag <b>deterministic</b>, keep walking. The first is a registry
  *       lookup that re-fails identically; the second is the store's own typed frame for a stored
@@ -84,6 +90,9 @@ public final class ReadPoisonClassifier {
     for (Throwable t = readError; t != null && remaining-- > 0; t = t.getCause()) {
       if (t instanceof SubjectForgottenException) {
         return true;
+      }
+      if (t instanceof EventSchemaAheadException) {
+        return false;
       }
       if (t instanceof UnknownEventTypeException
           || t instanceof EventDeserializationException

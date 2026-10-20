@@ -109,8 +109,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * clause). The two predicates are no longer IDENTICAL, by design — a deterministic per-aggregate
    * stored-data failure ({@link CommandFailureClassification#isDeterministicPerAggregate}) IS
    * dead-lettered here (the entry, marked by its {@code errorType}, is the durable operator signal)
-   * while it is excluded from the breaker's threshold. See the {@link CommandFailureClassification}
-   * matrix.
+   * while it is excluded from the breaker's threshold, and so is a reader behind the stored schema
+   * ({@link CommandFailureClassification#isReaderBehindStoredSchema}), whose replay succeeds on an
+   * upgraded replica. See the {@link CommandFailureClassification} matrix.
    */
   public static final Predicate<Throwable> DEFAULT_DLQ_ELIGIBLE =
       CommandFailureClassification.DLQ_ELIGIBLE;

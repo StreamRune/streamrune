@@ -213,7 +213,15 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `schema_version` below the chain's version is upcast one step at a time before the payload is bound
   to its class. The stored version records the writer's chain, not the payload shape, so upcaster
   steps keep values the payload already has (`putIfAbsent`). A store refuses to read an event stored
-  at a schema version above what its chain reaches rather than mis-binding it.
+  at a schema version above what its chain reaches rather than mis-binding it, with
+  `EventSchemaAheadException` (`eventType()`, `storedVersion()`, `readerVersion()`): an
+  `EventStoreException`, not an `EventDeserializationException`, classified as retry-later. A command
+  that fails with it is dead-lettered and does not count toward the circuit breaker
+  (`CommandFailureClassification.isReaderBehindStoredSchema`), and `ReadPoisonClassifier` and
+  `ProjectionErrorClassifier.DEFAULT` treat it as transient whatever frame wraps it, so a replica on
+  the previous release stops at a newer event and retries it instead of quarantining it. The
+  production guide describes how to roll out an event-schema change (stop and switch, an additive
+  change in two releases, or a rolling window).
 - `SimpleEventTypeRegistry` maps event-type and state-type names to classes; the `StreamRune`
   builder's `registerEventType` / `registerStateType` maintain one for you.
 - `PostgresSnapshotStorePurger` — the `SnapshotPurger` for `snapshot_store`: purges the snapshots

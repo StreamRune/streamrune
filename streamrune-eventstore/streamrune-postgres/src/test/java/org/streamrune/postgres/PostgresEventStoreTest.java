@@ -976,10 +976,16 @@ class PostgresEventStoreTest {
 
     var ex =
         assertThrows(
-            EventStoreException.class,
+            org.streamrune.core.EventSchemaAheadException.class,
             () -> storeWithChain.load(TestStreams.stream("stream-ahead")));
     assertTrue(ex.getMessage().contains("upcaster chain only reaches"), ex.getMessage());
     assertTrue(ex.getMessage().contains("TestEvent"), ex.getMessage());
+    assertEquals(new EventType("TestEvent"), ex.eventType());
+    assertEquals(3, ex.storedVersion());
+    assertEquals(2, ex.readerVersion());
+    assertFalse(
+        org.streamrune.core.CommandFailureClassification.BREAKER_ELIGIBLE.test(ex),
+        "a reader behind the stored schema must not count toward the circuit breaker");
   }
 
   @Test
@@ -1024,10 +1030,12 @@ class PostgresEventStoreTest {
 
     var ex =
         assertThrows(
-            EventStoreException.class,
+            org.streamrune.core.EventSchemaAheadException.class,
             () -> chainlessStore.load(TestStreams.stream("stream-ahead-chainless")));
     assertTrue(ex.getMessage().contains("upcaster chain only reaches"), ex.getMessage());
     assertTrue(ex.getMessage().contains("TestEvent"), ex.getMessage());
+    assertEquals(2, ex.storedVersion());
+    assertEquals(1, ex.readerVersion());
   }
 
   @Test

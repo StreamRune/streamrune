@@ -129,6 +129,26 @@ class CircuitBreakerCommandInterceptorTest {
   }
 
   @Test
+  void a_reader_behind_the_stored_schema_is_not_counted_by_default() {
+    // A replica still on the previous release during a rolling deployment of a schema bump: every
+    // command that loads an aggregate the upgraded replicas wrote fails, but the store answered and
+    // the rest of the bus is healthy. Opening the bus-global circuit would reject every command of
+    // this replica for the whole rollout.
+    var cb = new CircuitBreakerCommandInterceptor(1, Duration.ofMinutes(5));
+    for (int i = 0; i < 5; i++) {
+      cb.onError(
+          CTX,
+          new org.streamrune.core.EventSchemaAheadException(
+              "OrderPlaced is stored at schema_version 2",
+              new org.streamrune.core.types.EventType("OrderPlaced"),
+              2,
+              1));
+    }
+    assertEquals("CLOSED", cb.circuitState());
+    assertTrue(cb.before(CTX));
+  }
+
+  @Test
   void custom_failure_predicate_controls_what_counts() {
     var cb =
         new CircuitBreakerCommandInterceptor(

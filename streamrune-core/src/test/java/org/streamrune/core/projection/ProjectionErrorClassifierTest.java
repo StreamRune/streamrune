@@ -247,4 +247,17 @@ class ProjectionErrorClassifierTest {
         Duration.ofSeconds(2),
         () -> assertThat(classifier.classify(wrapper)).isEqualTo(ProjectionErrorClass.TRANSIENT));
   }
+
+  @Test
+  void aReaderBehindTheStoredSchema_isTransient_evenUnderADeterministicFrame() {
+    var schemaAhead =
+        new org.streamrune.core.EventSchemaAheadException(
+            "OrderPlaced is stored at schema_version 2",
+            new org.streamrune.core.types.EventType("OrderPlaced"),
+            2,
+            1);
+    assertThat(classifier.classify(schemaAhead)).isEqualTo(ProjectionErrorClass.TRANSIENT);
+    assertThat(classifier.classify(new EventDeserializationException("wrapped", schemaAhead)))
+        .isEqualTo(ProjectionErrorClass.TRANSIENT);
+  }
 }

@@ -543,6 +543,24 @@ upcaster is stamped 1, and every later read runs the 1→2 step on a payload tha
 field. Write every step so it keeps what the payload already has: `putIfAbsent` for a new field
 with a default, never an unconditional `put`, which would replace the real value on every read.
 
+**A stored version above the reader's is refused with `EventSchemaAheadException`.** The read
+fails closed rather than binding a newer-shaped payload to an older class. The exception
+(an `EventStoreException`, deliberately not an `EventDeserializationException`) carries
+`eventType()`, `storedVersion()` and `readerVersion()`, and is classified as retry-later:
+
+| Consumer | Verdict |
+|---|---|
+| Command bus dead letter queue | dead-lettered (a replay on an upgraded replica succeeds) |
+| Circuit breaker | **not** counted (the store answered; this replica's code is behind) |
+| `ReadPoisonClassifier`, `ProjectionErrorClassifier.DEFAULT` | transient: the projection or subscription stops at that event and retries it, never quarantines it |
+
+**Deployment order.** Registering an upcaster whose `currentVersion()` is `n` makes that node
+*write* `n` at once, and a node whose chain stops below `n` cannot read those events. A rolling
+deployment of such a change therefore has a window in which the replicas on the previous release
+refuse every event the upgraded replicas wrote. The procedure, and what the old replicas do in the
+window, is in the production guide:
+[rolling out an event-schema change](../guide/production.md#rolling-out-an-event-schema-change).
+
 ---
 
 ### 4.5 SnapshotMigration
