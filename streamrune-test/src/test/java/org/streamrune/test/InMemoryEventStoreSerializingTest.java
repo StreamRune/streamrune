@@ -56,7 +56,11 @@ class InMemoryEventStoreSerializingTest {
   record Unmappable(Object payload) implements DomainEvent {}
 
   /** Shape-incompatible with {@link Added} — deserializing Added JSON into this fails. */
-  record Incompatible(int totallyDifferent) implements DomainEvent {}
+  /**
+   * Binds "sku" as a number: the stored text does not convert. (A property the class does not
+   * declare would only be ignored: event payloads are read tolerantly.)
+   */
+  record Incompatible(int sku) implements DomainEvent {}
 
   record CartState(int items) implements AggregateState {}
 
