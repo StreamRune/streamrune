@@ -197,12 +197,12 @@ Two supported shapes:
 
 ## Retention
 
-Inbox rows are pruned by a background `InboxRetentionSweeper` (a virtual-thread loop) so the table does not grow without bound. Retention is auto-configured across all three frameworks:
+Inbox rows are pruned by a background `InboxRetentionSweeper` (a virtual-thread loop) so the table does not grow without bound. Retention is auto-configured across all three frameworks. Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
 
 | Framework | Property | Default |
 |---|---|---|
 | Spring | `streamrune.inbox.retention-max-age` | `7d` |
-| Quarkus | `streamrune.inbox.retention-max-age` (via `StreamRuneQuarkusProperties.inbox().retentionMaxAge()`) | `PT168H` |
+| Quarkus | `streamrune.inbox.retention-max-age` (via `StreamRuneQuarkusProperties.inbox().retentionMaxAge()`) | `7d` |
 | Micronaut | `streamrune.inbox.retention-max-age` | `7d` |
 
 The default window is **7 days**, chosen to comfortably exceed realistic broker-redelivery and subscription-replay horizons. **Do not shrink this below your actual redelivery window** — a pruned key can no longer prevent a genuine duplicate, so a redelivery arriving after its key was swept would re-execute the command. A zero or negative value disables pruning entirely (`InboxRetentionSweeper.start()` becomes a no-op).

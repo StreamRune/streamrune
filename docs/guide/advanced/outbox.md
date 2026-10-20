@@ -246,7 +246,7 @@ Because an in-flight failure **holds the claim**, a sustained post-hand-off outa
 
 `OutboxPoller` samples `streamrune.outbox.in_flight` (the `IN_PROGRESS` count) every poll cycle, alongside the pending backlog. It is a **separate series on purpose**: counting `IN_PROGRESS` into `streamrune.outbox.pending` would silently change what every dashboard and alert already written against that series means. A healthy relay shows a small, constantly-churning value (at most one claimed batch per relay) — alert on it staying high across several poll intervals. In the logs the same condition emits **one aggregated `WARN` per cycle** (naming how many of the claimed entries were left in flight), mirroring the transport `WARN` above rather than one line per entry.
 
-**Framework properties** (Spring `@ConfigurationProperties`, Quarkus `@ConfigMapping`, Micronaut `@ConfigurationProperties`) — all three expose the ladder, wired into the auto-configured poller's `RetryPolicy`:
+**Framework properties** (Spring `@ConfigurationProperties`, Quarkus `@ConfigMapping`, Micronaut `@ConfigurationProperties`) — all three expose the ladder, wired into the auto-configured poller's `RetryPolicy`. Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
 
 | Property | Default | Notes |
 |---|---|---|
@@ -342,14 +342,14 @@ A `FAILED` entry is **unresolved**, not a dead end: the relay never writes to it
 
 ### Retention
 
-Delivered and skipped outbox entries are pruned by a background `OutboxRetentionSweeper`, auto-configured across Spring, Quarkus, and Micronaut whenever the outbox is enabled (`streamrune.outbox.enabled=true`) and the outbox store bean is present (a `PostgresOutboxStore` bean on Spring and Quarkus, any `OutboxStore` bean on Micronaut). It runs hourly and calls `OutboxStore.deleteDelivered(cutoff)` and, independently, `OutboxStore.deleteSkipped(cutoff)` (see [FAILED lifecycle](#failed-lifecycle) above) — the constructor takes both windows: `new OutboxRetentionSweeper(store, deliveredMaxAge, skippedMaxAge, interval, clock, metrics)`; pass `Duration.ZERO` as `skippedMaxAge` to disable SKIPPED retention. There is no FAILED retention and no way to configure one: the framework never deletes an unresolved FAILED row.
+Delivered and skipped outbox entries are pruned by a background `OutboxRetentionSweeper`, auto-configured across Spring, Quarkus, and Micronaut whenever the outbox is enabled (`streamrune.outbox.enabled=true`) and the outbox store bean is present (a `PostgresOutboxStore` bean on Spring and Quarkus, any `OutboxStore` bean on Micronaut). It runs hourly and calls `OutboxStore.deleteDelivered(cutoff)` and, independently, `OutboxStore.deleteSkipped(cutoff)` (see [FAILED lifecycle](#failed-lifecycle) above) — the constructor takes both windows: `new OutboxRetentionSweeper(store, deliveredMaxAge, skippedMaxAge, interval, clock, metrics)`; pass `Duration.ZERO` as `skippedMaxAge` to disable SKIPPED retention. There is no FAILED retention and no way to configure one: the framework never deletes an unresolved FAILED row. Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
 
 | Framework | Property | Default |
 |---|---|---|
 | Spring / Micronaut | `streamrune.outbox.retention-max-age` | `7d` |
 | Spring / Micronaut | `streamrune.outbox.skipped-retention-max-age` | `30d` |
-| Quarkus | `streamrune.outbox.retention-max-age` (via `StreamRuneQuarkusProperties.outbox().retentionMaxAge()`) | `PT168H` |
-| Quarkus | `streamrune.outbox.skipped-retention-max-age` (via `StreamRuneQuarkusProperties.outbox().skippedRetentionMaxAge()`) | `PT720H` |
+| Quarkus | `streamrune.outbox.retention-max-age` (via `StreamRuneQuarkusProperties.outbox().retentionMaxAge()`) | `7d` |
+| Quarkus | `streamrune.outbox.skipped-retention-max-age` (via `StreamRuneQuarkusProperties.outbox().skippedRetentionMaxAge()`) | `30d` |
 
 Zero or negative disables pruning for that window independently of the other. Each sweep that removes at least one row records `streamrune.outbox.swept_rows` (DELIVERED) or `streamrune.outbox.skipped_swept` (SKIPPED); a `StreamRuneMetrics` bean is wired in automatically when present (falls back to a no-op when absent).
 

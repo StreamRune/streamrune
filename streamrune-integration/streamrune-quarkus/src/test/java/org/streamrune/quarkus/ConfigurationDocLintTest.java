@@ -18,6 +18,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.integration.tck.ConfigurationDocs;
 import org.streamrune.integration.tck.ConfigurationOracle;
 import org.streamrune.integration.tck.ConfigurationOracle.KeyNaming;
@@ -74,6 +75,19 @@ class ConfigurationDocLintTest {
     bound.putAll(
         ConfigurationOracle.ofConfigMapping(
             crypto, StreamRuneQuarkusCryptoProperties.class, "streamrune.crypto", SMALLRYE));
+    // StreamRuneCryptoProducers binds the crypto cache expiries as ISO-8601 text and parses them
+    // itself; an unset cache expire-after-write leaves CachedCryptoEngine's mandatory ceiling.
+    bound.put(
+        "streamrune.crypto.aws.data-key-cache.expire-after-write",
+        DefaultRendering.render(Duration.parse(crypto.aws().dataKeyCache().expireAfterWriteRaw())));
+    bound.put(
+        "streamrune.crypto.cache.expire-after-write",
+        DefaultRendering.render(
+            crypto
+                .cache()
+                .expireAfterWriteRaw()
+                .map(Duration::parse)
+                .orElse(CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE)));
     ConfigurationOracle.Merged merged = ConfigurationOracle.merge(bound, LOOKUPS);
     oracle = merged.keys();
     conflicts = merged.conflicts();
@@ -88,7 +102,8 @@ class ConfigurationDocLintTest {
     assertEquals("100", oracle.get("streamrune.snapshot-every-n-events"));
     assertEquals("1000", oracle.get("streamrune.subscription.health.lag-threshold"));
     assertEquals("—", oracle.get("streamrune.crypto.aws.kms-key-id"));
-    assertEquals("PT5M", oracle.get("streamrune.crypto.aws.data-key-cache.expire-after-write"));
+    assertEquals("5m", oracle.get("streamrune.crypto.aws.data-key-cache.expire-after-write"));
+    assertEquals("5m", oracle.get("streamrune.crypto.cache.expire-after-write"));
     assertEquals("false", oracle.get("streamrune.crypto.vault.enabled"));
 
     docs = ConfigurationDocs.read(ConfigurationDocs.repositoryRoot(), README);
@@ -111,6 +126,55 @@ class ConfigurationDocLintTest {
     assertNoProblems(
         "key(s) missing from " + README + ", the Quarkus configuration reference",
         ConfigurationDocs.missingFrom(named, oracle));
+  }
+
+  /**
+   * The README's {@code application.properties} listing sets every key to its default: bound with
+   * the listing as its only source, each mapping reads as it reads with no source at all.
+   */
+  @Test
+  void theReadmeListingSetsEveryKeyToItsDefault() throws Exception {
+    Map<String, String> listing = new TreeMap<>();
+    List<String> lines = Files.readAllLines(ConfigurationDocs.repositoryRoot().resolve(README));
+    int start = lines.indexOf("## Configuration");
+    assertTrue(start >= 0, "the README's ## Configuration section must be found");
+    int fence = start;
+    while (!lines.get(fence).strip().equals("```properties")) {
+      fence++;
+    }
+    for (int i = fence + 1; !lines.get(i).strip().equals("```"); i++) {
+      String line = lines.get(i).strip();
+      if (!line.isEmpty() && !line.startsWith("#")) {
+        listing.put(line.substring(0, line.indexOf('=')), line.substring(line.indexOf('=') + 1));
+      }
+    }
+    Map<String, String> mapped = new TreeMap<>();
+    Map<String, String> cryptoMapped = new TreeMap<>();
+    listing.forEach(
+        (key, value) -> {
+          if (key.startsWith("streamrune.crypto.")) {
+            cryptoMapped.put(key, value);
+          } else if (!key.startsWith("streamrune.projections.")) {
+            mapped.put(key, value);
+          }
+        });
+    assertTrue(listing.size() > 50, "the listing must be found: " + listing);
+    assertEquals(
+        ConfigurationOracle.ofConfigMapping(
+            TestProperties.defaults(), StreamRuneQuarkusProperties.class, "streamrune", SMALLRYE),
+        ConfigurationOracle.ofConfigMapping(
+            TestProperties.of(mapped), StreamRuneQuarkusProperties.class, "streamrune", SMALLRYE));
+    assertEquals(
+        ConfigurationOracle.ofConfigMapping(
+            TestProperties.crypto(Map.of()),
+            StreamRuneQuarkusCryptoProperties.class,
+            "streamrune.crypto",
+            SMALLRYE),
+        ConfigurationOracle.ofConfigMapping(
+            TestProperties.crypto(cryptoMapped),
+            StreamRuneQuarkusCryptoProperties.class,
+            "streamrune.crypto",
+            SMALLRYE));
   }
 
   @Test

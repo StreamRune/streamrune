@@ -38,25 +38,107 @@ implementation("org.streamrune:streamrune-quarkus:1.0.0-alpha-SNAPSHOT")
 
 ## Configuration
 
-All keys live under the `streamrune.` prefix and bind through
-`StreamRuneQuarkusProperties` (`@ConfigMapping`):
+All keys live under the `streamrune.` prefix and bind through `StreamRuneQuarkusProperties` and
+`StreamRuneQuarkusCryptoProperties` (`@ConfigMapping`); the
+[configuration reference](../../docs/guide/configuration.md) says what each one does. The listing
+below sets every key to its default, durations in ISO-8601, the form SmallRye Config reads; a key
+without a default and the keys of one projection are commented out. A `.properties` comment must
+start its own line — text after a value is part of the value.
 
 ```properties
+# Commands, locking and retries
 streamrune.snapshot-every-n-events=100
 streamrune.retry-max-attempts=3
+streamrune.retry-initial-delay-ms=50
+streamrune.retry-backoff-multiplier=2.0
 streamrune.lock-timeout=PT5S
 streamrune.stripe-count=1024
+streamrune.max-in-flight-async-commands=10000
+streamrune.circuit-breaker-failure-threshold=5
+streamrune.circuit-breaker-cooldown=PT30S
+streamrune.validation-enabled=true
+streamrune.security.trust-user-id-header=false
+# streamrune.metadata.baggage-allowlist=
+
+# Event store, projections and subscriptions
+streamrune.event-store.schema.auto-initialize=true
 # bound on every event-store statement (per transaction or statement, never on the
 # Agroal session); PT0S sets none
 streamrune.event-store.statement-timeout=PT30S
+streamrune.polling-interval-ms=5000
+streamrune.polling-jitter-ms=1000
+streamrune.projections.auto-discovery.enabled=true
+# streamrune.projections.<name>.enabled=true
+# streamrune.projections.<name>.error-strategy=
+streamrune.projection-dlq-enabled=false
+streamrune.subscription.health.lag-threshold=1000
+streamrune.subscription.single-active-consumer.enabled=true
+streamrune.subscription.single-active-consumer.lease-ttl=PT15S
+streamrune.event-audit-enabled=false
 # build-time flag: decides whether the CachingQueryBus bean exists
 streamrune.query-cache.enabled=false
-# build-time flag: decides whether SseController and its event feed exist (default false;
-# deny-all SseAuthorizer unless you produce your own)
+
+# Sagas
+streamrune.saga.enabled=true
+streamrune.saga.forward-fence=auto
+streamrune.saga.compensation-retry-enabled=true
+streamrune.saga.compensation-retry-interval=PT60S
+streamrune.saga.compensation-retry-give-up-after=PT1H
+streamrune.saga.dead-letter-retention-max-age=PT168H
+
+# Command inbox and dead letters
+streamrune.inbox.retention-max-age=PT168H
+streamrune.dead-letter.enabled=true
+streamrune.dead-letter.max-retries=5
+streamrune.dead-letter.retry-interval-ms=60000
+streamrune.dead-letter.retention-max-age=PT168H
+streamrune.dead-letter.unkeyed-replay=operator-only
+
+# Transactional outbox
+streamrune.outbox.enabled=false
+streamrune.outbox.batch-size=100
+streamrune.outbox.flush-interval-ms=5000
+streamrune.outbox.retry-max-attempts=10
+streamrune.outbox.retry-initial-delay-ms=1000
+streamrune.outbox.retry-multiplier=2.0
+streamrune.outbox.retention-max-age=PT168H
+streamrune.outbox.skipped-retention-max-age=PT720H
+
+# Server-Sent Events
+# build-time flag: decides whether SseController and its event feed exist (deny-all
+# SseAuthorizer unless you produce your own)
 streamrune.sse.enabled=false
+streamrune.sse.timeout=PT5M
+streamrune.sse.keep-alive-interval=PT30S
 # how often the SSE feed reads the global stream: the usual commit-to-frame delay; at least
 # PT0.001S
 streamrune.sse.polling-interval=PT1S
+
+# Metrics and startup
+streamrune.metrics.enabled=true
+streamrune.metrics.prefix=streamrune
+streamrune.startup-log=true
+
+# GDPR and encryption
+streamrune.gdpr.snapshot-purge=required
+streamrune.crypto.cache.enabled=true
+streamrune.crypto.cache.maximum-size=10000
+# streamrune.crypto.cache.expire-after-write=  (unset: CachedCryptoEngine's ceiling of PT5M applies)
+# streamrune.crypto.cache.expire-after-access=
+# crypto engine selection is fixed at build time (see below)
+streamrune.crypto.filesystem.enabled=false
+streamrune.crypto.filesystem.key-directory=/var/lib/streamrune/keys
+streamrune.crypto.postgres.enabled=false
+streamrune.crypto.postgres.table-name=encryption_keys
+streamrune.crypto.vault.enabled=false
+streamrune.crypto.vault.address=http://localhost:8200
+# streamrune.crypto.vault.token=
+streamrune.crypto.vault.engine-mount=transit
+streamrune.crypto.aws.enabled=false
+# streamrune.crypto.aws.region=
+# streamrune.crypto.aws.kms-key-id=
+streamrune.crypto.aws.data-key-cache.maximum-size=1000
+streamrune.crypto.aws.data-key-cache.expire-after-write=PT5M
 ```
 
 ### Server-Sent Events
@@ -353,8 +435,9 @@ nothing. This contract is identical across the Spring, Quarkus, and Micronaut in
   binding gets a generated client proxy or interceptor subclass, and Quarkus can generate it only
   by removing that `final` at build time. With the property set to `false` the build fails because
   the proxy cannot be created.
-- **Crypto engine selection is build-time** — `streamrune.crypto.<backend>.enabled` is read by
-  `@IfBuildProperty`; overriding it to `false` at runtime fails fast at startup.
+- **Crypto engine selection is build-time** — `streamrune.crypto.filesystem.enabled` and the
+  `postgres`, `vault` and `aws` switches are read by `@IfBuildProperty`; overriding one to `false` at
+  runtime fails fast at startup.
 - **Native image** — `StreamRuneReflectionConfig` registers the framework's own value types
   and records, and the module
   ships `META-INF/native-image/org.streamrune/streamrune-quarkus/reachability-metadata.json` with the

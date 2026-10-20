@@ -128,7 +128,7 @@ CommandAuthorizationPolicy.denyAll("Not allowed in tests")
 
 ## Configuration
 
-Authorization itself is code-based; the one property is where the request identity comes from:
+Authorization itself is code-based; the one property is where the request identity comes from. Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
 
 | Property | Default | Meaning |
 |---|---|---|

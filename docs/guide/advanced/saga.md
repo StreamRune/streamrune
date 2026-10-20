@@ -737,6 +737,8 @@ This window **must not exceed** `streamrune.inbox.retention-max-age` (default 7 
 
 ## Configuration
 
+Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
+
 Sagas need a `SagaStore` and a `SagaDeadLetterStore`; Spring, Quarkus, and Micronaut all auto-configure PostgreSQL-backed implementations when a `DataSource` bean is available:
 
 | Framework | Property | Default | Effect |
@@ -764,7 +766,7 @@ Command-inbox retention (shared with all effectively-once command dispatch, incl
 | Framework | Property | Default |
 |---|---|---|
 | Spring | `streamrune.inbox.retention-max-age` | `7d` |
-| Quarkus | `streamrune.inbox.retention-max-age` (via `StreamRuneQuarkusProperties.inbox().retentionMaxAge()`) | `PT168H` |
+| Quarkus | `streamrune.inbox.retention-max-age` (via `StreamRuneQuarkusProperties.inbox().retentionMaxAge()`) | `7d` |
 | Micronaut | `streamrune.inbox.retention-max-age` | `7d` |
 
 Do not shrink this below your actual redelivery window — a pruned key can no longer prevent a genuine duplicate. Zero or negative disables pruning.
@@ -774,7 +776,7 @@ Saga dead-letter retention is auto-configured via `SagaDeadLetterRetentionSweepe
 | Framework | Property | Default |
 |---|---|---|
 | Spring | `streamrune.saga.dead-letter-retention-max-age` | `7d` |
-| Quarkus | `streamrune.saga.dead-letter-retention-max-age` (via `StreamRuneQuarkusProperties.saga().deadLetterRetentionMaxAge()`) | `PT168H` |
+| Quarkus | `streamrune.saga.dead-letter-retention-max-age` (via `StreamRuneQuarkusProperties.saga().deadLetterRetentionMaxAge()`) | `7d` |
 | Micronaut | `streamrune.saga.dead-letter-retention-max-age` | `7d` |
 
 This window **must not exceed** `streamrune.inbox.retention-max-age` (a mid-compensation dead-letter that outlives its inbox dedup keys re-executes an already-succeeded compensation on replay — a double refund). The boot-time `SagaRetentionValidator` **fails fast** on a config that raises it above the inbox window (or disables dead-letter pruning while inbox pruning is on), and `SagaDeadLetterReplayer` refuses at runtime to resume a faulted compensation whose episode claim (`saga_state.episode_claimed_at`, which every write that enters `COMPENSATING` stamps; a row in an episode without it is refused with `SagaUnstampedCompensationEpisodeException`, never measured from `updated_at`) is older than the inbox window (`STALE_COMPENSATION_BLOCKED`). It is therefore both a correctness bound and a GDPR storage-limitation concern — see [Discarding and retention](#discarding-and-retention) above.

@@ -97,6 +97,8 @@ The in-memory test double takes the same migrations via `InMemoryEventStore.with
 
 ## Configuration
 
+Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
+
 | Framework | Property | Default |
 |---|---|---|
 | Spring | `streamrune.snapshot-every-n-events` | 100 |

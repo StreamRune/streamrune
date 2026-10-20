@@ -588,6 +588,8 @@ try {
 
 ## Configuration
 
+Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
+
 | Property | Spring | Quarkus | Micronaut | Default |
 |---|---|---|---|---|
 | Max retry attempts | `streamrune.retry-max-attempts` | `streamrune.retry-max-attempts` | `streamrune.retry-max-attempts` | 3 |
