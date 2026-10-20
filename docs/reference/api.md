@@ -543,6 +543,34 @@ upcaster is stamped 1, and every later read runs the 1→2 step on a payload tha
 field. Write every step so it keeps what the payload already has: `putIfAbsent` for a new field
 with a default, never an unconditional `put`, which would replace the real value on every read.
 
+**A stored version above the reader's is refused with `EventSchemaAheadException`.** The read
+fails closed rather than binding a newer-shaped payload to an older class. The exception
+(an `EventStoreException`, deliberately not an `EventDeserializationException`) carries
+`eventType()`, `storedVersion()` and `readerVersion()`, and is classified as retry-later:
+
+| Consumer | Verdict |
+|---|---|
+| Command bus dead letter queue | dead-lettered (a replay on an upgraded replica succeeds) |
+| Circuit breaker | **not** counted (the store answered; this replica's code is behind) |
+| `ReadPoisonClassifier`, `ProjectionErrorClassifier.DEFAULT` | transient: the projection or subscription stops at that event and retries it, never quarantines it |
+
+**Every shape change bumps the version.** Payloads bind strictly: a property the event class does
+not declare fails the read with `EventDeserializationException`, which is read poison. Bump the
+type's schema version for every change to its payload's shape, an added field included; the version
+is the upcaster's `currentVersion()`, so a bump needs an upcaster even when its step returns the
+payload unchanged (an added, nullable field). A removed field's step drops the key; a renamed one
+moves it.
+
+**Deployment order.** Registering an upcaster whose `currentVersion()` is `n` makes that node
+*write* `n` at once, and a node whose chain stops below `n` cannot read those events. A rolling
+deployment of such a change therefore has a window in which the replicas on the previous release
+refuse every event the upgraded replicas wrote, and retry it. The procedure, and what the old
+replicas do in the window, is in the production guide:
+[rolling out an event-schema change](../guide/production.md#rolling-out-an-event-schema-change).
+A new event type is different: a replica that has not registered it fails the read with
+`UnknownEventTypeException`, which stays read poison, so its projections halt. Deploy the readers
+of a new type before any writer emits it.
+
 ---
 
 ### 4.5 SnapshotMigration

@@ -44,6 +44,10 @@ public interface ProjectionErrorClassifier {
    *       succeed. It typically surfaces buried — {@code JdbcProjectionRepository} wraps the
    *       Jackson {@code JsonMappingException} carrying it into an {@code EventStoreException} —
    *       which is exactly why the old first-frame-ESE rule retried it forever.
+   *   <li>{@link org.streamrune.core.EventSchemaAheadException} anywhere ⇒ <b>TRANSIENT</b>
+   *       (short-circuit). A stored event is at a {@code schema_version} above this reader's
+   *       upcaster chain — a replica on the previous release during a rolling deployment. It reads
+   *       fine once the replica is upgraded, so it is never quarantined, whatever frame wraps it.
    *   <li>{@link org.streamrune.core.EventDeserializationException} / {@link
    *       org.streamrune.core.UnknownEventTypeException} / {@link
    *       org.streamrune.core.crypto.CryptoMappingException} ⇒ flag <b>deterministic</b>, keep
@@ -91,6 +95,10 @@ public interface ProjectionErrorClassifier {
     for (Throwable t = error; t != null && remaining-- > 0; t = t.getCause()) {
       if (t instanceof org.streamrune.core.crypto.SubjectForgottenException) {
         return ProjectionErrorClass.POISON;
+      }
+      if (t instanceof org.streamrune.core.EventSchemaAheadException) {
+        // This reader is behind the stored schema: the event reads fine once it is upgraded.
+        return ProjectionErrorClass.TRANSIENT;
       }
       if (t instanceof org.streamrune.core.EventDeserializationException
           || t instanceof org.streamrune.core.UnknownEventTypeException

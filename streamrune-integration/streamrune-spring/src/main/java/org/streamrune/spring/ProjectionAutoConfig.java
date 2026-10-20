@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -24,6 +25,7 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.ProjectionConfig;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
@@ -343,6 +345,10 @@ public class ProjectionAutoConfig {
       ProjectionConfig.Mode effectiveMode = pc.mode();
       if (effectiveMode != mode) continue;
 
+      if (mode != ProjectionConfig.Mode.INLINE) {
+        requireNotACglibProxiedBaseProjection(entry.getKey(), bean);
+      }
+
       ProjectionErrorStrategy strategy =
           parseStrategy(env.getProperty(prefix + "error-strategy"), pc.errorStrategy(), name);
       String cron = pc.cron();
@@ -350,6 +356,36 @@ public class ProjectionAutoConfig {
       entries.add(new DiscoveredEntry(name, bean, cron, strategy, pc.deliveryMode()));
     }
     return entries;
+  }
+
+  /**
+   * Refuses a {@link BaseProjection} bean that Spring AOP proxies with CGLIB: an aspect applies to
+   * the class (a class-level {@code @Transactional}, {@code @Async}, {@code @Validated}, a metrics
+   * or tracing aspect, a scoped proxy), so the bean the context holds is a generated subclass that
+   * forwards each overridable method to the real projection. {@link BaseProjection#process(List,
+   * org.streamrune.core.projection.ProjectionRepository)} is final, so the subclass cannot forward
+   * it: a runner's call runs it on the proxy instance itself, whose fields were never initialised,
+   * and the first batch fails with a {@link NullPointerException}. An {@code INLINE} projection is
+   * not refused: the inline interceptor calls the one-argument {@code process}, which the proxy
+   * forwards.
+   *
+   * <p>The proxy is refused, not unwrapped. Handing the runner the target behind it would run the
+   * projection without the advice the application put on it, and nothing would say so.
+   */
+  private static void requireNotACglibProxiedBaseProjection(String beanName, Projection bean) {
+    if (bean instanceof BaseProjection && AopUtils.isCglibProxy(bean)) {
+      throw new IllegalStateException(
+          "Projection bean '"
+              + LogSanitizer.sanitizeForLog(beanName)
+              + "' is a CGLIB proxy of BaseProjection subclass "
+              + AopUtils.getTargetClass(bean).getName()
+              + ": an aspect applies to the class. BaseProjection.process(List,"
+              + " ProjectionRepository) is final, so the proxy cannot forward it, and the runner's"
+              + " call would run it on the uninitialised proxy and fail on the first batch. Move"
+              + " the advice off the projection class (into a bean the projection calls), or"
+              + " implement Projection directly, overriding both process methods and"
+              + " writesThroughRepository(), so that the proxy forwards every call.");
+    }
   }
 
   private static ProjectionErrorStrategy parseStrategy(

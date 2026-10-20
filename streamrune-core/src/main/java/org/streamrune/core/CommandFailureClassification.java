@@ -31,8 +31,20 @@ import org.streamrune.core.saga.SagaForwardFencedException;
  *   <tr><td>deterministic per-aggregate stored-data failure ({@link #isDeterministicPerAggregate}:
  *       {@link EventDeserializationException} / {@link UnknownEventTypeException} anywhere)</td>
  *       <td><b>YES</b></td><td><b>NO</b></td><td>a typed {@link EventStoreException}</td></tr>
+ *   <tr><td>reader behind the stored schema ({@link #isReaderBehindStoredSchema}: {@link
+ *       EventSchemaAheadException} anywhere)</td>
+ *       <td><b>YES</b></td><td><b>NO</b></td><td>the typed {@link EventSchemaAheadException}</td></tr>
  *   <tr><td>infrastructure (everything else)</td><td>yes</td><td>yes</td><td>the failure</td></tr>
  * </table>
+ *
+ * <p>Why the reader-behind row splits the same way, for a different reason: a replica on the
+ * previous release reads an event the next release wrote at a higher {@code schema_version} and
+ * refuses it. The store answered, so the refusal carries no infrastructure-health evidence, and
+ * during a rolling deployment it fails every command of that replica that loads such an aggregate —
+ * counting it would open the bus-global circuit and reject the replica's healthy traffic for the
+ * whole rollout (breaker: NO). Unlike the deterministic row it heals by itself: the same command
+ * succeeds on an upgraded replica, so the dead-letter entry replays fine once the rollout is done
+ * (DLQ: YES).
  *
  * <p>Why the middle row diverges: a corrupt stored payload or a missing event-type registration is
  * a final fact about ONE aggregate's stored data — the store, pool and network answered perfectly,
@@ -100,14 +112,16 @@ public final class CommandFailureClassification {
 
   /**
    * The breaker's question, answered: a failure counts toward the threshold only when it carries
-   * actual infrastructure-health evidence — so neither a permanent rejection nor a {@link
-   * #isDeterministicPerAggregate deterministic per-aggregate stored-data failure} counts (the
-   * latter is a final fact about one aggregate's stored bytes, produced by a perfectly healthy
-   * store). The default for {@code CircuitBreakerCommandInterceptor.INFRASTRUCTURE_FAILURES}. See
-   * the class javadoc's matrix for why this deliberately differs from {@link #DLQ_ELIGIBLE}.
+   * actual infrastructure-health evidence — so neither a permanent rejection, nor a {@link
+   * #isDeterministicPerAggregate deterministic per-aggregate stored-data failure} (a final fact
+   * about one aggregate's stored bytes, produced by a perfectly healthy store), nor a {@link
+   * #isReaderBehindStoredSchema reader behind the stored schema} (this replica's code is older than
+   * the stored event) counts. The default for {@code
+   * CircuitBreakerCommandInterceptor.INFRASTRUCTURE_FAILURES}. See the class javadoc's matrix for
+   * why this deliberately differs from {@link #DLQ_ELIGIBLE}.
    */
   public static final Predicate<Throwable> BREAKER_ELIGIBLE =
-      DLQ_ELIGIBLE.and(t -> !isDeterministicPerAggregate(t));
+      DLQ_ELIGIBLE.and(t -> !isDeterministicPerAggregate(t) && !isReaderBehindStoredSchema(t));
 
   private CommandFailureClassification() {}
 
@@ -137,6 +151,24 @@ public final class CommandFailureClassification {
     Throwable c = error;
     for (int depth = 0; c != null && depth < MAX_CAUSE_DEPTH; depth++, c = c.getCause()) {
       if (c instanceof EventDeserializationException || c instanceof UnknownEventTypeException) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * True when {@code error}'s cause chain (bounded) carries an {@link EventSchemaAheadException}:
+   * the store answered, but a stored event of the aggregate is at a {@code schema_version} above
+   * the one this reader's upcaster chain reaches — the replica runs an older release than the one
+   * that wrote the event (a rolling deployment of a schema bump), or is missing an upcaster. The
+   * command succeeds on a reader that is not behind, so it is dead-lettered for replay; it carries
+   * no infrastructure-health evidence, so it does not count toward the circuit breaker.
+   */
+  public static boolean isReaderBehindStoredSchema(Throwable error) {
+    Throwable c = error;
+    for (int depth = 0; c != null && depth < MAX_CAUSE_DEPTH; depth++, c = c.getCause()) {
+      if (c instanceof EventSchemaAheadException) {
         return true;
       }
     }

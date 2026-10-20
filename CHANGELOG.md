@@ -213,7 +213,24 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `schema_version` below the chain's version is upcast one step at a time before the payload is bound
   to its class. The stored version records the writer's chain, not the payload shape, so upcaster
   steps keep values the payload already has (`putIfAbsent`). A store refuses to read an event stored
-  at a schema version above what its chain reaches rather than mis-binding it.
+  at a schema version above what its chain reaches rather than mis-binding it, with
+  `EventSchemaAheadException` (`eventType()`, `storedVersion()`, `readerVersion()`): an
+  `EventStoreException`, not an `EventDeserializationException`, classified as retry-later. A command
+  that fails with it is dead-lettered and does not count toward the circuit breaker
+  (`CommandFailureClassification.isReaderBehindStoredSchema`), and `ReadPoisonClassifier` and
+  `ProjectionErrorClassifier.DEFAULT` treat it as transient whatever frame wraps it, so a replica on
+  the previous release stops at a newer event and retries it instead of quarantining it.
+- Event payloads bind strictly: a stored property the event class does not declare fails the read
+  with `EventDeserializationException`. Every change to an event payload's shape, an added field
+  included, therefore bumps the type's schema version through its upcaster (a step that returns the
+  payload unchanged suffices for an added, nullable field), so a replica on the previous release
+  pauses with `EventSchemaAheadException` instead of misreading. The production guide describes the
+  rollout of each kind of change — a payload change, a new event type (readers first, since
+  `UnknownEventTypeException` stays read poison), a state-class change (bump `snapshotVersion`) —
+  and what the replicas still on the previous release do meanwhile. `EventPayloadAssertions` in
+  `streamrune-test` (`assertRoundTrips`, `assertUpcastBinds`) catches, at test time, an event class
+  that does not read what it writes and an upcaster step that writes a key the event class does not
+  declare.
 - `SimpleEventTypeRegistry` maps event-type and state-type names to classes; the `StreamRune`
   builder's `registerEventType` / `registerStateType` maintain one for you.
 - `PostgresSnapshotStorePurger` — the `SnapshotPurger` for `snapshot_store`: purges the snapshots
@@ -436,6 +453,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   without extending `BaseProjection` must also override `writesThroughRepository()` to return `true`
   (the delivery policy refuses a `TRANSACTIONAL_LOCAL`/`EXTERNAL_EFFECT` registration otherwise), and
   no projection class needs registering for native-image reflection on this account.
+- Spring refuses at startup a `CONTINUOUS` or `SCHEDULED` projection bean that is a CGLIB proxy of
+  a `BaseProjection` subclass (an aspect applies to the class): the final two-argument `process`
+  cannot be forwarded and would run on the uninitialised proxy. The proxy is refused, not unwrapped,
+  so no advice is silently dropped. On Quarkus such a proxied subclass needs
+  `quarkus.arc.transform-unproxyable-classes=true`, the default.
 - Decorators `TracingProjectionDecorator`, `ValidatingProjectionDecorator` and `CacheAwareProjection`
   forward `process(List, ProjectionRepository)`, `writesThroughRepository()`, `writeTarget()` and
   `processDeadLetterReplay(List, ProjectionRepository)` to their delegate.
@@ -692,7 +714,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   empty `compensate()` list → `FAILED`; a transient failure or a veto → the episode stays
   `COMPENSATING` and is re-driven under the same keys by a redelivered correlated event, by
   `SagaTimeoutRunner`, or by the leadership-gated `SagaCompensationRetrySweeper` (default on, interval
-  60 s, give-up horizon 1 h → `FAULTED`).
+  60 s, give-up horizon 1 h → `FAULTED`). The sweeper faults past the horizon only a saga it
+  re-drove in the cycle just before; a cycle that re-drives nothing (standby, a failed store read)
+  leaves no such evidence, so after a restart, a store outage or a standby period longer than the
+  horizon every due saga gets one real re-drive before it can be faulted.
 - `SagaTimeoutRunner` serves forward timeouts (by start instant) and `COMPENSATING` re-picks (by last
   write) as two populations interleaved in each batch, retries a failing poll with capped exponential
   backoff (up to one minute, jittered), and refuses at `build()` a decider without a `timeout()`, a
@@ -815,9 +840,14 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `streamrune.outbox.skipped-retention-max-age` (30 days); `FAILED` is never pruned. Integration
   properties: `streamrune.outbox.enabled` (default `false`), `batch-size` (100), `flush-interval-ms`
   (5000), `retry-max-attempts` (10), `retry-initial-delay-ms` (1000), `retry-multiplier` (2.0). On
-  Micronaut, startup fails when an `OutboxEventMapper` is paired with a store the event store cannot
-  write in the append transaction, or when `streamrune.outbox.enabled=true` has no `OutboxStore` or no
-  `OutboxPublisher`.
+  all three integrations startup fails when `streamrune.outbox.enabled=true` has no `OutboxStore`
+  (the message names `PostgresOutboxStore`; the broker modules ship publishers only) or has neither
+  an `OutboxPublisher` nor an application `OutboxPoller`, since nothing would relay the entries the
+  event store writes; the messages are shared (`OutboxWiringMessages`), and say that an application
+  whose outbox table an external relay reads sets `streamrune.outbox.enabled=false` (the property
+  switches the framework's relay, not the event store's write). Quarkus says so when more than one
+  publisher bean matches, and when the only publisher beans carry a qualifier. On Micronaut, startup also fails when an `OutboxEventMapper` is paired with a
+  store the event store cannot write in the append transaction.
 
 ### GDPR — encryption at rest and crypto-shredding
 

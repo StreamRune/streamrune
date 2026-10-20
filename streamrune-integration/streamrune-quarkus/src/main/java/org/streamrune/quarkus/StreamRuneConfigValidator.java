@@ -5,6 +5,7 @@ import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.enterprise.inject.Instance;
+import jakarta.enterprise.inject.spi.BeanManager;
 import jakarta.interceptor.Interceptor;
 
 /**
@@ -15,6 +16,8 @@ import jakarta.interceptor.Interceptor;
 public class StreamRuneConfigValidator {
   private final StreamRuneQuarkusProperties properties;
   private final Instance<org.streamrune.core.outbox.OutboxStore> outboxStore;
+  private final Instance<org.streamrune.core.outbox.OutboxPublisher> outboxPublisher;
+  private final BeanManager beanManager;
   private final Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore;
   private final Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService;
   private final Instance<org.streamrune.core.CommandInbox> commandInbox;
@@ -24,12 +27,16 @@ public class StreamRuneConfigValidator {
   public StreamRuneConfigValidator(
       StreamRuneQuarkusProperties properties,
       Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
+      Instance<org.streamrune.core.outbox.OutboxPublisher> outboxPublisher,
+      BeanManager beanManager,
       Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore,
       Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService,
       Instance<org.streamrune.core.CommandInbox> commandInbox,
       Instance<org.streamrune.core.DeadLetterQueue> deadLetterQueue) {
     this.properties = properties;
     this.outboxStore = outboxStore;
+    this.outboxPublisher = outboxPublisher;
+    this.beanManager = beanManager;
     this.sagaDeadLetterStore = sagaDeadLetterStore;
     this.forgetSubjectService = forgetSubjectService;
     this.commandInbox = commandInbox;
@@ -46,7 +53,15 @@ public class StreamRuneConfigValidator {
       Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore,
       Instance<org.streamrune.core.CommandInbox> commandInbox,
       Instance<org.streamrune.core.DeadLetterQueue> deadLetterQueue) {
-    this(properties, outboxStore, sagaDeadLetterStore, null, commandInbox, deadLetterQueue);
+    this(
+        properties,
+        outboxStore,
+        null,
+        null,
+        sagaDeadLetterStore,
+        null,
+        commandInbox,
+        deadLetterQueue);
   }
 
   /** A validator without a command inbox or dead letter queue — for tests of the other checks. */
@@ -55,18 +70,40 @@ public class StreamRuneConfigValidator {
       Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
       Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore,
       Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService) {
-    this(properties, outboxStore, sagaDeadLetterStore, forgetSubjectService, null, null);
+    this(
+        properties, outboxStore, null, null, sagaDeadLetterStore, forgetSubjectService, null, null);
   }
 
   /**
    * A validator that does not build the forget service on the startup event — for tests of the
-   * other checks.
+   * outbox checks.
+   */
+  StreamRuneConfigValidator(
+      StreamRuneQuarkusProperties properties,
+      Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
+      Instance<org.streamrune.core.outbox.OutboxPublisher> outboxPublisher,
+      BeanManager beanManager,
+      Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore) {
+    this(
+        properties,
+        outboxStore,
+        outboxPublisher,
+        beanManager,
+        sagaDeadLetterStore,
+        null,
+        null,
+        null);
+  }
+
+  /**
+   * A validator for tests of the checks that do not involve the outbox: it sees no publisher and no
+   * poller, so it refuses an enabled outbox.
    */
   StreamRuneConfigValidator(
       StreamRuneQuarkusProperties properties,
       Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
       Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore) {
-    this(properties, outboxStore, sagaDeadLetterStore, null, null, null);
+    this(properties, outboxStore, null, null, sagaDeadLetterStore, null, null, null);
   }
 
   /**
@@ -81,6 +118,8 @@ public class StreamRuneConfigValidator {
   protected StreamRuneConfigValidator() {
     this.properties = null;
     this.outboxStore = null;
+    this.outboxPublisher = null;
+    this.beanManager = null;
     this.sagaDeadLetterStore = null;
     this.forgetSubjectService = null;
     this.commandInbox = null;
@@ -167,10 +206,38 @@ public class StreamRuneConfigValidator {
     if (forgetSubjectService != null && forgetSubjectService.isResolvable()) {
       forgetSubjectService.get();
     }
-    if (properties.outbox().enabled() && !outboxStore.isResolvable()) {
-      throw new IllegalStateException(
-          "Outbox enabled but no OutboxStore found. "
-              + "Add streamrune-kafka-outbox or streamrune-rabbitmq-outbox to your classpath.");
+    if (properties.outbox().enabled()) {
+      if (!outboxStore.isResolvable()) {
+        throw new IllegalStateException(org.streamrune.integration.OutboxWiringMessages.noStore());
+      }
+      // Without a publisher the framework poller is never produced, so the entries the event
+      // store writes would stay PENDING with nothing relaying them. An application poller brings
+      // its own.
+      boolean publisher = outboxPublisher != null && outboxPublisher.isResolvable();
+      boolean applicationPoller =
+          beanManager != null
+              && StreamRuneLifecycle.applicationOwns(
+                  beanManager,
+                  org.streamrune.runtime.OutboxPoller.class,
+                  StreamRuneProducers.FRAMEWORK_OUTBOX_POLLER);
+      if (!publisher && !applicationPoller) {
+        // The framework producer resolves the publisher the same way, so an ambiguous or only
+        // qualified publisher relays nothing either; say which it is.
+        String message;
+        if (outboxPublisher != null && outboxPublisher.isAmbiguous()) {
+          message = org.streamrune.integration.OutboxWiringMessages.ambiguousPublisher();
+        } else if (beanManager != null
+            && !beanManager
+                .getBeans(
+                    org.streamrune.core.outbox.OutboxPublisher.class,
+                    jakarta.enterprise.inject.Any.Literal.INSTANCE)
+                .isEmpty()) {
+          message = org.streamrune.integration.OutboxWiringMessages.qualifiedPublisherOnly();
+        } else {
+          message = org.streamrune.integration.OutboxWiringMessages.noPublisher();
+        }
+        throw new IllegalStateException(message);
+      }
     }
     // The command dead-letter twin of the saga check below: a keyed entry must not outlive the
     // inbox row that deduplicates its replay. Checked whenever both stores resolve to a real

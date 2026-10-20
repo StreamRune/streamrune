@@ -137,7 +137,11 @@ class SubscriptionLeadershipAutoConfigurationTest {
         .withPropertyValues("streamrune.outbox.enabled=true")
         .withBean(
             org.streamrune.core.outbox.OutboxStore.class,
-            () -> mock(org.streamrune.core.outbox.OutboxStore.class))
+            SpringTestMocks::outboxStoreStatingOrderingMode)
+        // An enabled outbox needs something that relays it, or the boot is refused.
+        .withBean(
+            org.streamrune.core.outbox.OutboxPublisher.class,
+            () -> mock(org.streamrune.core.outbox.OutboxPublisher.class))
         .run(
             ctx ->
                 assertThat(ctx).hasSingleBean(org.streamrune.runtime.OutboxFailedReplayer.class));

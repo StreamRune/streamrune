@@ -28,6 +28,7 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventDeserializationException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
@@ -2205,6 +2206,27 @@ public final class PostgresEventStore implements EventStore {
   }
 
   /**
+   * The message of the refusal to read an event stored at a {@code schema_version} above this
+   * reader's: names the type, the stream and both versions, and the two ways it arises.
+   */
+  static String schemaAheadMessage(
+      String eventType, String stream, int storedVersion, int readerVersion) {
+    return "Event type "
+        + eventType
+        + " for stream "
+        + stream
+        + " is stored at schema_version "
+        + storedVersion
+        + " but this event store's upcaster chain only reaches version "
+        + readerVersion
+        + ". A newer writer stamped it: either a replica of a newer release of this application"
+        + " (a rolling deployment that bumps this event's schema is in progress, and this replica"
+        + " reads it once it is upgraded), or an event store wired with upcasters this one lacks."
+        + " Reading it would silently mis-bind the payload, so the read is refused; register the"
+        + " same upcasters on every event store that reads this database.";
+  }
+
+  /**
    * Deserializes a {@link RawEventRow} into an {@link EventEnvelope} — identical
    * readValue/convertValue/upcast logic as before, just reading from the record's Strings instead
    * of a {@link ResultSet}. Touches no JDBC connection: callers invoke this AFTER the connection
@@ -2241,26 +2263,21 @@ public final class PostgresEventStore implements EventStore {
       // on the chain-PRESENT path, left open on this null-chain sibling.
       int currentVersion = upcasterChain != null ? upcasterChain.currentVersion(eventType) : 1;
       if (schemaVersion > currentVersion) {
-        // A stored version ABOVE the reader's current version is never legitimate — it means this
-        // store is mis-wired (missing the upcasters this type was written with, so currentVersion()
-        // reads 1 for a type persisted at 2+ — a chainless reader always reads 1) or has been
-        // downgraded. Reading on would silently mis-bind a newer-shaped payload to an older class,
-        // or skip an upcast the real chain still owes — durable, recurring corruption with no
-        // signal. Fail closed, naming the type and both versions, instead of falling through here.
-        throw new EventStoreException(
-            "Event type "
-                + LogSanitizer.sanitizeForLog(eventType.name())
-                + " for stream "
-                + row.streamText()
-                + " is stored at schema_version "
-                + schemaVersion
-                + " but this event store's upcaster chain only reaches version "
-                + currentVersion
-                + ". A stored version above the reader's current version means this"
-                + " store is missing the upcasters this event type was written with, or has been"
-                + " downgraded; reading it would silently mis-bind the payload. Register the"
-                + " upcasters for this type, or ensure no chainless or older event store wrote to"
-                + " this database.");
+        // A stored version ABOVE the reader's current version means a newer writer stamped it: a
+        // replica of the next release during a rolling deployment, or a store wired with upcasters
+        // this one lacks. Reading on would silently mis-bind a newer-shaped payload to an older
+        // class, or skip an upcast the real chain still owes. Fail closed with the dedicated type:
+        // the refusal is about THIS reader, so it is retry-later (dead-lettered, never counted by
+        // the circuit breaker, never quarantined by a projection) — see EventSchemaAheadException.
+        throw new EventSchemaAheadException(
+            schemaAheadMessage(
+                LogSanitizer.sanitizeForLog(eventType.name()),
+                row.streamText(),
+                schemaVersion,
+                currentVersion),
+            eventType,
+            schemaVersion,
+            currentVersion);
       }
       if (upcasterChain != null && schemaVersion < currentVersion) {
         // Deserialize to map, upcast, then bind to the target class. convertValue() binds the

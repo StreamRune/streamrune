@@ -72,19 +72,14 @@ public class StreamRuneConfigValidator implements ApplicationEventListener<Start
     }
     if (properties.outboxEnabled()) {
       if (!ctx.containsBean(org.streamrune.core.outbox.OutboxStore.class)) {
-        throw new IllegalStateException(
-            "Outbox enabled but no OutboxStore found. Declare a PostgresOutboxStore bean"
-                + " (streamrune-postgres); streamrune-kafka-outbox and streamrune-rabbitmq-outbox"
-                + " provide only the OutboxPublisher.");
+        throw new IllegalStateException(org.streamrune.integration.OutboxWiringMessages.noStore());
       }
       // Without a publisher the framework poller is never created, so the entries the event store
       // writes would stay PENDING with nothing relaying them. An application poller brings its own.
       if (!ctx.containsBean(org.streamrune.core.outbox.OutboxPublisher.class)
           && !ctx.containsBean(org.streamrune.runtime.OutboxPoller.class)) {
         throw new IllegalStateException(
-            "Outbox enabled but no OutboxPublisher found, so no OutboxPoller can relay the outbox"
-                + " entries. Declare an OutboxPublisher bean (streamrune-kafka-outbox,"
-                + " streamrune-rabbitmq-outbox or an HttpOutboxPublisher).");
+            org.streamrune.integration.OutboxWiringMessages.noPublisher());
       }
     }
     // The framework's event store binds the outbox store when it is built, and an application

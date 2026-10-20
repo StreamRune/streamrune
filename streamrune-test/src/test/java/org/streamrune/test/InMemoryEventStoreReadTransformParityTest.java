@@ -17,7 +17,6 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
-import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.UnknownEventTypeException;
@@ -221,7 +220,7 @@ class InMemoryEventStoreReadTransformParityTest {
     // a second, chainless/older store read the same data. Stored 2 > reader's 1 → fail closed.
     store.withUpcasters(List.of(upcaster("Other", 2)));
 
-    var ex = assertThrows(EventStoreException.class, () -> store.load(s));
+    var ex = assertThrows(org.streamrune.core.EventSchemaAheadException.class, () -> store.load(s));
     assertTrue(ex.getMessage().contains("Evolving"), ex.getMessage());
   }
 
@@ -248,8 +247,10 @@ class InMemoryEventStoreReadTransformParityTest {
     // the same data). Stored 2 > a chainless reader's known current version 1 → must fail closed.
     store.withUpcasters(null);
 
-    var ex = assertThrows(EventStoreException.class, () -> store.load(s));
+    var ex = assertThrows(org.streamrune.core.EventSchemaAheadException.class, () -> store.load(s));
     assertTrue(ex.getMessage().contains("Evolving"), ex.getMessage());
+    assertEquals(2, ex.storedVersion());
+    assertEquals(1, ex.readerVersion());
   }
 
   // === Retired snapshot-type discard on read ===

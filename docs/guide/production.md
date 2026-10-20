@@ -841,6 +841,110 @@ Running more than one instance of the same application is fully supported, and t
 > reads, projections, and *per-aggregate* command concurrency — but **not** the global append rate.
 > Plan write capacity against the single write lane below before sizing a write-heavy cluster.
 
+### Rolling out an event-schema change
+
+A replica reads only what its own code understands, and three rules decide what that is:
+
+- **The stored `schema_version` must not be above the reader's.** A store stamps every appended
+  event with the `currentVersion()` of its upcaster for the type (1 without one), and a store whose
+  chain stops below the stored version refuses the event with `EventSchemaAheadException`. This
+  refusal is retry-later: it never quarantines anything.
+- **The stored event type must be registered with the reader.** A type the reader's
+  `EventTypeRegistry` does not know fails with `UnknownEventTypeException`. It is deterministic read
+  poison on purpose: nothing stored tells "a newer release wrote it" apart from "this application
+  forgot to register it", and a missing registration must fail loudly.
+- **The stored payload must bind strictly to the reader's event class.** A property the class does
+  not declare fails with `EventDeserializationException`, also deterministic read poison. A property
+  the class declares but the payload lacks binds as `null` (or the primitive default).
+
+The rule that follows: **every change to an event payload's shape bumps the event's schema
+version**, an added field included. A shape change is anything that changes what binds: an added,
+removed, renamed or retyped field, a new enum constant, a new polymorphic subtype, and a field
+added to a nested record — the last bumps every event type that embeds the record. A replica still on the previous release then meets the first
+rule, a transient pause, instead of the third, a halt or a misread. Only the new release's replicas
+read the new events, and they read the old ones through the upcaster.
+
+The first replica of a new release that appends such an event creates a window in which every
+replica still on the previous release is behind. What those replicas do in the window:
+
+| What the old replica does | Schema-version bump (`EventSchemaAheadException`) | New event type (`UnknownEventTypeException`) | Shape change without a bump |
+|---|---|---|---|
+| A command that loads an aggregate carrying a newer event | fails, is dead-lettered, does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker | an added or renamed field fails with `EventDeserializationException`, is dead-lettered and does not count toward the breaker; a removed field binds as `null` and the command decides on it with no failure |
+| A projection or subscription it leads | stops at the first newer event and retries it (lag, no quarantine) until the replica is upgraded; its lease then passes to an upgraded replica | halts after the read-poison bound (5 consecutive failures by default) with health `DOWN`, until the replica is upgraded | halts after the read-poison bound with health `DOWN` (an added or renamed field, `EventDeserializationException`); a removed field reads as `null` with no failure at all |
+| Every other command | runs normally | runs normally | runs normally |
+
+Dead-lettered commands replay once their entry is retried on an upgraded replica: the retry runner
+is leased, so its automatic attempts run where the lease is, and an entry that exhausted its
+attempts during a long rollout is retried by the operator (`retry(commandId)`) afterwards.
+
+Choose the procedure by the kind of change:
+
+1. **An event payload changes shape: bump its schema version.** The version is the
+   `currentVersion()` of the type's `EventUpcaster`, so a bump always needs one, even when nothing
+   is transformed: without an upcaster the type is version 1. Register one per type (as an
+   `EventUpcaster` bean with an integration, or with `PostgresEventStore.builder().upcasters(...)`)
+   whose step for the old version makes the stored payload bind to the new class:
+   - an **added** field needs no rewrite — make it nullable, or default it in the record's compact
+     constructor — so the step returns the payload unchanged. A primitive whose default is not
+     `0`/`false` is the exception: the compact constructor cannot tell an absent key from a stored
+     `0`, so the step writes the default (`eventData.putIfAbsent("priority", 5)`);
+   - a **removed** field must be dropped from the payload (`eventData.remove("note")`), or the
+     strict read of an old event fails on it;
+   - a **renamed** field moves the value (`eventData.put("total", eventData.remove("amount"))`);
+   - a **retyped** field converts it.
+
+   ```java
+   public final class OrderPlacedUpcaster implements EventUpcaster {
+     @Override
+     public EventType eventType() {
+       return new EventType("OrderPlaced");
+     }
+
+     @Override
+     public int currentVersion() {
+       return 2;
+     }
+
+     @Override
+     public Map<String, Object> upcast(Map<String, Object> eventData, int fromVersion) {
+       // 1 -> 2 added the optional giftMessage field: an old payload binds as it is.
+       return eventData;
+     }
+   }
+   ```
+
+   The next change of the same type raises `currentVersion()` to 3 and adds the step for
+   `fromVersion == 2` to the same upcaster: one upcaster owns every step of its type. In a test,
+   `EventPayloadAssertions.assertUpcastBinds(upcaster, oldPayload, 1, OrderPlaced.class)` from
+   `streamrune-test` checks that a step's output binds to the new class, and
+   `EventPayloadAssertions.assertRoundTrips(event)` that the class reads what it writes. Then roll
+   out replica by replica (procedure 4) or stop and switch (procedure 5).
+2. **A new event type: readers first.** Release A registers the type (its class in the
+   `EventTypeRegistry`, and whatever the projections and sagas do with it) and emits it nowhere;
+   roll A out completely. Release B emits it. A replica that has not registered the type halts its
+   projections on the first such event, so no writer may emit it while such a replica runs.
+3. **The aggregate's state class changes shape: bump `snapshotVersion`.** A snapshot is bound
+   strictly too, but a field the state class gained binds as `null` from a snapshot the previous
+   release wrote, and that snapshot then stands in for the events it covers. Raise the
+   `snapshotVersion` of the `SnapshotPolicy` in the same release (`SnapshotPolicy.everyNEvents(100,
+   2)`; the integrations' default policy is version 1, so declare a `SnapshotPolicy` bean): each
+   release then discards the other's snapshots and replays the events, or migrates them through a
+   `SnapshotMigration`. See [snapshot versioning](advanced/snapshot-versioning.md).
+4. **Roll out replica by replica.** For a schema-version bump nothing is quarantined: the old
+   replicas fail the commands that load an aggregate with a newer event and lag on the projections
+   they lead, the circuit breaker stays closed, and the dead-lettered commands replay on the
+   upgraded replicas. Keep the window short, and send traffic to the upgraded replicas first where
+   the load balancer allows it. A new event type is the exception: use procedure 2.
+5. **Stop and switch.** Stop every replica of the previous release, then start the new release
+   (a blue/green cutover that stops the old fleet before the new one serves writes, or a scale to
+   zero). No replica is ever behind.
+
+A release that bumps a schema version can only be rolled forward once it has stored an event at
+the new version: roll back only together with a reader that reaches that version, or every replica
+of the older release refuses those events for good. In the same way, a store wired with fewer
+upcasters than another store that writes the same database is behind permanently, not for a
+rollout: register the same upcasters on every event store of the application.
+
 ### Write capacity: one global write lane
 
 Every append — to *any* aggregate or stream — reserves its global offsets from the single row of

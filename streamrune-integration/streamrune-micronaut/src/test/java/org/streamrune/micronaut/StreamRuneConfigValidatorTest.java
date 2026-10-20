@@ -444,6 +444,12 @@ class StreamRuneConfigValidatorTest {
             IllegalStateException.class,
             () -> validator.onApplicationEvent(mock(StartupEvent.class)));
     assertTrue(ex.getMessage().contains("OutboxPublisher"), ex.getMessage());
+    assertTrue(
+        ex.getMessage()
+            .contains(
+                "If an external relay reads the outbox table, set"
+                    + " streamrune.outbox.enabled=false"),
+        ex.getMessage());
   }
 
   @Test

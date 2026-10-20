@@ -65,6 +65,11 @@ public final class CircuitBreakerCommandInterceptor implements CommandIntercepto
    * stored bytes, produced by a perfectly healthy store: counting it let a single wedged aggregate,
    * hammered by a client retry loop or a DLQ replayer, open the circuit for the whole bus. It stays
    * DLQ-eligible — see the {@link CommandFailureClassification} matrix for the full split.
+   *
+   * <p>Excludes a reader behind the stored schema too ({@link
+   * CommandFailureClassification#isReaderBehindStoredSchema}): during a rolling deployment that
+   * bumps an event schema, a replica on the previous release fails every command that loads an
+   * aggregate the upgraded replicas wrote, while its store and every other aggregate are healthy.
    */
   public static final Predicate<Throwable> INFRASTRUCTURE_FAILURES =
       CommandFailureClassification.BREAKER_ELIGIBLE;

@@ -183,12 +183,18 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
   /**
    * Saga ids this sweeper actually re-drove in the immediately-preceding cycle. The give-up horizon
    * is only honored for a saga that appears here — i.e. one this sweeper has already made at least
-   * one real re-drive attempt for. Without this, process downtime longer than {@code giveUpAfter}
-   * would make the episode's age exceed the horizon on the very first post- restart cycle and
-   * CAS-FAULT a recoverable COMPENSATING saga with zero attempts. A fresh sweeper instance (new
-   * process) starts empty, so every saga is guaranteed one attempt after a restart; self-pruning
-   * because only ids re-driven last cycle carry over (bounded by {@code batchSize}). Only ever
-   * touched by the single sweep thread (or a test thread), never concurrently.
+   * one real re-drive attempt for. Without this, downtime longer than {@code giveUpAfter} would
+   * make the episode's age exceed the horizon on the very first cycle back and CAS-FAULT a
+   * recoverable COMPENSATING saga with zero attempts. The evidence expires with the cycle that
+   * produced it: {@link #sweepOnce()} replaces it on every exit, so a cycle that re-drives nothing
+   * — standby at the leadership gate, a failed {@code findCompensating}, retry switched off —
+   * leaves it empty. Every saga therefore gets one real attempt after a restart, an outage of the
+   * store or a standby period alike; bounded by {@code batchSize}. Because the evidence is one
+   * cycle deep, more than {@code batchSize} due sagas that keep failing rotate through the batches
+   * (a re-drive moves a saga to the back of the {@code updated_at} order), so one saga is seldom in
+   * two consecutive batches and the horizon may not apply to it; the inbox-retention key-age guard
+   * then ends the episode. Only ever touched by the single sweep thread (or a test thread), never
+   * concurrently.
    */
   private volatile java.util.Set<org.streamrune.core.saga.SagaId> previouslyReDriven =
       java.util.Set.of();
@@ -443,43 +449,51 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
    * tests can drive a single cycle synchronously with a fixed clock, without a background thread.
    */
   void sweepOnce() {
-    // Sample the COMPENSATING backlog gauge each cycle BEFORE the leadership gate, so every
-    // replica (leader or standby) reports the same backlog — a stalled/dead leader is then visible
-    // both via the driver-liveness health check AND a climbing streamrune.saga.compensating gauge.
-    sampleBacklog();
-    // With compensation retry switched off this sweeper is sampling-only. The two saga
-    // backlog gauges above are emitted nowhere else, so the knob must stop the RE-DRIVE (below),
-    // not the observability. No lease is taken either — sampling is per-replica by design.
-    if (!compensationRetryEnabled) {
-      return;
-    }
-    // Single-active-consumer gate: only the leader for this saga type polls and re-drives. A
-    // non-leader returns before reading a single row (no findCompensating, no re-drive), so N
-    // replicas never all re-drive the same episode. NOOP (single-instance default) always hands out
-    // a lease. Re-drives are command-inbox idempotent, so no fencing epoch is threaded — the lease
-    // gate alone suffices.
-    //
-    // A sweeper of a runner that carries a lease follows that lease instead: it re-drives only
-    // while a subscription of this process anchors the lease and leads, so the replica that
-    // delivers the saga type is the one that retries its compensations.
-    if (follower != null) {
-      if (!follower.mayAct()) {
-        return;
-      }
-    } else if (leadership.tryAcquire(consumerName).isEmpty()) {
-      return;
-    }
-    Instant now = clock.instant();
-    Instant dueCutoff = now.minus(retryInterval);
-    List<SagaStore.CompensatingSaga> due =
-        sagaStore.findCompensating(sagaType, dueCutoff, batchSize);
-    // Collect the ids we re-drive THIS cycle; it becomes next cycle's "already attempted" evidence.
+    // The ids this cycle re-drives become the next cycle's give-up evidence — and only the next
+    // cycle's. Every exit stamps them, the early returns and a failed findCompensating included, so
+    // a cycle that re-drives nothing leaves no evidence behind: after an outage or a standby period
+    // longer than giveUpAfter, the first cycle that reaches the loop again re-drives every due saga
+    // once instead of faulting the ones re-driven before the pause.
     java.util.Set<org.streamrune.core.saga.SagaId> reDrivenThisCycle =
         java.util.concurrent.ConcurrentHashMap.newKeySet();
-    for (SagaStore.CompensatingSaga cs : due) {
-      reDrive(cs, now, reDrivenThisCycle);
+    try {
+      // Sample the COMPENSATING backlog gauge each cycle BEFORE the leadership gate, so every
+      // replica (leader or standby) reports the same backlog — a stalled/dead leader is then
+      // visible both via the driver-liveness health check AND a climbing
+      // streamrune.saga.compensating gauge.
+      sampleBacklog();
+      // With compensation retry switched off this sweeper is sampling-only. The two saga
+      // backlog gauges above are emitted nowhere else, so the knob must stop the RE-DRIVE (below),
+      // not the observability. No lease is taken either — sampling is per-replica by design.
+      if (!compensationRetryEnabled) {
+        return;
+      }
+      // Single-active-consumer gate: only the leader for this saga type polls and re-drives. A
+      // non-leader returns before reading a single row (no findCompensating, no re-drive), so N
+      // replicas never all re-drive the same episode. NOOP (single-instance default) always hands
+      // out a lease. Re-drives are command-inbox idempotent, so no fencing epoch is threaded — the
+      // lease gate alone suffices.
+      //
+      // A sweeper of a runner that carries a lease follows that lease instead: it re-drives only
+      // while a subscription of this process anchors the lease and leads, so the replica that
+      // delivers the saga type is the one that retries its compensations.
+      if (follower != null) {
+        if (!follower.mayAct()) {
+          return;
+        }
+      } else if (leadership.tryAcquire(consumerName).isEmpty()) {
+        return;
+      }
+      Instant now = clock.instant();
+      Instant dueCutoff = now.minus(retryInterval);
+      List<SagaStore.CompensatingSaga> due =
+          sagaStore.findCompensating(sagaType, dueCutoff, batchSize);
+      for (SagaStore.CompensatingSaga cs : due) {
+        reDrive(cs, now, reDrivenThisCycle);
+      }
+    } finally {
+      previouslyReDriven = reDrivenThisCycle;
     }
-    previouslyReDriven = reDrivenThisCycle;
   }
 
   /**
@@ -606,8 +620,9 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
             && Duration.between(episodeAnchor, now).compareTo(inboxRetentionMaxAge) > 0;
     // Only honor the give-up horizon for a saga this sweeper already re-drove at least
     // once (in the immediately-preceding cycle). A saga past the horizon on its first sight — e.g.
-    // after process downtime longer than giveUpAfter — is re-driven, not faulted, so a saga stuck
-    // solely because of downtime gets a real recovery attempt before it can be quarantined.
+    // after a restart, a store outage or a standby period longer than giveUpAfter — is re-driven,
+    // not faulted, so a saga stuck solely because of downtime gets a real recovery attempt before
+    // it can be quarantined.
     boolean pastHorizon = Duration.between(episodeAnchor, now).compareTo(giveUpAfter) > 0;
     boolean giveUp = staleKeys || (pastHorizon && previouslyReDriven.contains(cs.sagaId()));
     StepOutcome outcome;

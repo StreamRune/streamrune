@@ -58,11 +58,18 @@ public class StreamRuneConfigValidator implements SmartInitializingSingleton {
     }
     boolean outboxEnabled =
         env.getProperty("streamrune.outbox.enabled", Boolean.class, properties.outbox().enabled());
-    if (outboxEnabled
-        && ctx.getBeansOfType(org.streamrune.core.outbox.OutboxStore.class).isEmpty()) {
-      throw new IllegalStateException(
-          "Outbox enabled but no OutboxStore found. "
-              + "Add streamrune-kafka-outbox or streamrune-rabbitmq-outbox to your classpath.");
+    if (outboxEnabled) {
+      if (ctx.getBeanNamesForType(org.streamrune.core.outbox.OutboxStore.class).length == 0) {
+        throw new IllegalStateException(org.streamrune.integration.OutboxWiringMessages.noStore());
+      }
+      // The framework's poller is conditional on an OutboxPublisher bean, so without one the
+      // entries the event store writes would stay PENDING with nothing relaying them and health
+      // UP. An application poller brings its own publisher.
+      if (ctx.getBeanNamesForType(org.streamrune.core.outbox.OutboxPublisher.class).length == 0
+          && ctx.getBeanNamesForType(org.streamrune.runtime.OutboxPoller.class).length == 0) {
+        throw new IllegalStateException(
+            org.streamrune.integration.OutboxWiringMessages.noPublisher());
+      }
     }
     // The saga dead-letter-retention <= inbox-retention invariant is a
     // REPLAY-safety invariant — it protects SagaDeadLetterReplayer, not the compensation-retry

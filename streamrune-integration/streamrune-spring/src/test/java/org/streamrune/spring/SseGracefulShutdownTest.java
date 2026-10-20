@@ -3,18 +3,23 @@ package org.streamrune.spring;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.autoconfigure.context.LifecycleAutoConfiguration;
@@ -79,35 +84,86 @@ class SseGracefulShutdownTest {
       assertThat(response.statusCode()).isEqualTo(200);
       awaitOneOpenStream(controller);
 
-      CompletableFuture<byte[]> body =
+      long started = System.nanoTime();
+      CompletableFuture<Body> body =
           CompletableFuture.supplyAsync(
               () -> {
+                ByteArrayOutputStream received = new ByteArrayOutputStream();
                 try (InputStream in = response.body()) {
-                  return in.readAllBytes();
+                  in.transferTo(received);
+                  return new Body(received, null, Duration.ofNanos(System.nanoTime() - started));
                 } catch (IOException e) {
-                  throw new UncheckedIOException(e);
+                  return new Body(received, e, Duration.ofNanos(System.nanoTime() - started));
                 }
               });
+      // What the context logs while it closes, to show in the failure message: when graceful
+      // shutdown commenced and completed, how many streams the controller ended, and anything the
+      // web server reported.
+      ListAppender<ILoggingEvent> shutdownLog = new ListAppender<>();
+      shutdownLog.start();
+      Logger root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+      root.addAppender(shutdownLog);
 
-      long started = System.nanoTime();
-      context.close();
-      closed = true;
-      Duration shutdown = Duration.ofNanos(System.nanoTime() - started);
+      Duration shutdown;
+      try {
+        long closing = System.nanoTime();
+        context.close();
+        closed = true;
+        shutdown = Duration.ofNanos(System.nanoTime() - closing);
+      } finally {
+        root.detachAppender(shutdownLog);
+      }
 
       assertThat(shutdown)
           .as(
               "a connected SSE client must not hold graceful shutdown for the %s phase timeout",
               PHASE_TIMEOUT)
           .isLessThan(PHASE_TIMEOUT.dividedBy(2));
-      assertThat(body.get(5, TimeUnit.SECONDS))
-          .as("the client's stream ends normally (it reconnects elsewhere) instead of being cut")
-          .isNotNull();
+      Body ended = body.get(5, TimeUnit.SECONDS);
+      assertThat(ended.failure())
+          .as(
+              "the client's stream ends normally (it reconnects elsewhere) instead of being cut;"
+                  + " the client read %s after %s, the shutdown took %s and logged:%n%s",
+              ended.describeReceived(), ended.after(), shutdown, describe(shutdownLog))
+          .isNull();
       assertThat(controller.activeCountForTest()).isZero();
     } finally {
       if (!closed) {
         context.close();
       }
       client.shutdownNow();
+    }
+  }
+
+  /** What the client read before its stream ended, and how: normally or with {@code failure}. */
+  private record Body(ByteArrayOutputStream received, IOException failure, Duration after) {
+    String describeReceived() {
+      return received.size()
+          + " byte(s) "
+          + new String(received.toByteArray(), StandardCharsets.UTF_8)
+              .replace("\n", "\\n")
+              .replace("\r", "\\r");
+    }
+  }
+
+  private static String describe(ListAppender<ILoggingEvent> log) {
+    synchronized (log) {
+      StringBuilder lines = new StringBuilder();
+      for (ILoggingEvent e : log.list) {
+        lines
+            .append("  ")
+            .append(e.getInstant())
+            .append(' ')
+            .append(e.getThreadName())
+            .append(' ')
+            .append(e.getLevel())
+            .append(' ')
+            .append(e.getLoggerName())
+            .append(": ")
+            .append(e.getFormattedMessage())
+            .append(System.lineSeparator());
+      }
+      return lines.toString();
     }
   }
 

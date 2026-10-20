@@ -255,6 +255,22 @@ stopped by the framework — you own its lifecycle. To supply and fully manage y
 `streamrune.projections.auto-discovery.enabled=false`; the framework then assembles and starts
 nothing. This contract is identical across the Spring, Quarkus, and Micronaut integrations.
 
+**A `BaseProjection` must not be a CGLIB proxy.** When an aspect applies to a projection class
+(a class-level `@Transactional`, `@Async` or `@Validated`, a metrics or tracing aspect, a scoped
+proxy), the bean in the context is a generated subclass that forwards each overridable method to
+the real projection. `BaseProjection.process(List, ProjectionRepository)` is final, so it cannot be
+forwarded: a runner's call would run it on the uninitialised proxy and fail on the first batch. The
+auto-configuration therefore refuses a `CONTINUOUS` or `SCHEDULED` projection bean that is a CGLIB
+proxy of a `BaseProjection` subclass, naming the bean; it does not unwrap the proxy, which would run
+the projection without its advice. Move the advice into a bean the projection calls, or implement
+`Projection` directly and override both `process` methods and `writesThroughRepository()`. An
+`INLINE` projection is not affected: the inline interceptor calls the one-argument `process`.
+The check covers the projection beans the auto-configuration discovers. A projection the
+application hands to a runner it builds itself (`streamrune.projections.auto-discovery.enabled=false`),
+including one wrapped in `TracingProjectionDecorator`, `ValidatingProjectionDecorator` or
+`CacheAwareProjection`, is the application's to keep free of such proxies: the decorators forward
+the two-argument `process` to what they wrap.
+
 `ScopedValueFilter` is registered only in servlet web applications
 (`@ConditionalOnWebApplication(SERVLET)`), so a headless worker
 (`WebApplicationType.NONE`) boots without a servlet API on the classpath.

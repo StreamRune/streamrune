@@ -11,6 +11,7 @@ import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.SagaType;
 
 /**
@@ -173,6 +174,10 @@ class CommandFailureClassificationTest {
                 true,
                 false),
             new Row(new UnknownEventTypeException("event type", "Gone", List.of("K")), true, false),
+            // a reader behind the stored schema: DLQ yes (a replay on an upgraded replica
+            // succeeds), breaker NO (the store answered; this replica's code is behind).
+            new Row(schemaAhead(), true, false),
+            new Row(new RuntimeException("outer", schemaAhead()), true, false),
             // infrastructure: counted by both.
             new Row(new EventStoreException("conn refused"), true, true),
             new Row(new OptimisticLockException("conflict"), true, true),
@@ -188,5 +193,62 @@ class CommandFailureClassificationTest {
           CommandFailureClassification.BREAKER_ELIGIBLE.test(row.error()),
           "breaker eligibility for " + name);
     }
+  }
+
+  // ---- A reader behind the stored schema (rolling deployment of a schema bump) ----
+
+  @Test
+  void aReaderBehindTheStoredSchemaIsRetryLater_notPermanent_notDeterministic() {
+    var refusal = schemaAhead();
+
+    assertTrue(CommandFailureClassification.isReaderBehindStoredSchema(refusal));
+    assertTrue(
+        CommandFailureClassification.isReaderBehindStoredSchema(
+            new RuntimeException("a retry decorator re-wrapped it", refusal)));
+    assertFalse(CommandFailureClassification.isPermanentRejection(refusal));
+    assertFalse(CommandFailureClassification.isDeterministicPerAggregate(refusal));
+    assertTrue(CommandFailureClassification.DLQ_ELIGIBLE.test(refusal));
+    assertFalse(CommandFailureClassification.BREAKER_ELIGIBLE.test(refusal));
+  }
+
+  @Test
+  void onlyTheSchemaAheadRefusalIsInTheReaderBehindFamily() {
+    assertFalse(
+        CommandFailureClassification.isReaderBehindStoredSchema(new EventStoreException("down")));
+    assertFalse(
+        CommandFailureClassification.isReaderBehindStoredSchema(
+            new EventDeserializationException("corrupt", new IllegalArgumentException("m"))));
+    assertFalse(CommandFailureClassification.isReaderBehindStoredSchema(null));
+    RuntimeException a = new RuntimeException("a");
+    RuntimeException b = new RuntimeException("b", a);
+    a.initCause(b);
+    assertFalse(CommandFailureClassification.isReaderBehindStoredSchema(a));
+  }
+
+  @Test
+  void theSchemaAheadRefusalCarriesTheTypeAndBothVersions() {
+    var refusal = schemaAhead();
+
+    assertEquals(new EventType("OrderPlaced"), refusal.eventType());
+    assertEquals(2, refusal.storedVersion());
+    assertEquals(1, refusal.readerVersion());
+    assertTrue(EventStoreException.class.isAssignableFrom(EventSchemaAheadException.class));
+    assertFalse(
+        EventDeserializationException.class.isAssignableFrom(EventSchemaAheadException.class),
+        "a deserialization subtype would make the read path quarantine the newer events");
+  }
+
+  @Test
+  void aSchemaAheadRefusalNeedsAStoredVersionAboveTheReaders() {
+    org.junit.jupiter.api.Assertions.assertThrows(
+        IllegalArgumentException.class,
+        () -> new EventSchemaAheadException("m", new EventType("OrderPlaced"), 2, 2));
+    org.junit.jupiter.api.Assertions.assertThrows(
+        NullPointerException.class, () -> new EventSchemaAheadException("m", null, 2, 1));
+  }
+
+  private static EventSchemaAheadException schemaAhead() {
+    return new EventSchemaAheadException(
+        "OrderPlaced is stored at schema_version 2", new EventType("OrderPlaced"), 2, 1);
   }
 }

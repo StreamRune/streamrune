@@ -405,6 +405,109 @@ class ProjectionAutoConfigTest {
             });
   }
 
+  // ---- A BaseProjection behind a CGLIB proxy ----
+
+  @Test
+  void aCglibProxyOverABaseProjection_runsTheFinalProcessOnTheUninitialisedProxy() {
+    // Why the refusal below exists: CGLIB cannot override BaseProjection's final two-argument
+    // process, so it runs on the proxy instance itself, whose fields were never initialised.
+    AloBaseBean proxy = cglibProxyOf(new AloBaseBean(new InMemoryProjectionRepository()));
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> proxy.process(List.of(), new InMemoryProjectionRepository()))
+        .isInstanceOf(NullPointerException.class);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"continuous", "scheduled"})
+  void aCglibProxiedBaseProjection_isRefusedAtStartup_naming_theBeanAndTheRemedy(String mode) {
+    runner
+        .withUserConfiguration(
+            mode.equals("continuous")
+                ? CglibProxiedContinuousConfig.class
+                : CglibProxiedScheduledConfig.class)
+        .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasStackTraceContaining("Projection bean 'proxiedProjection'")
+                  .hasStackTraceContaining("is a CGLIB proxy of BaseProjection subclass")
+                  .hasStackTraceContaining("process(List, ProjectionRepository) is final")
+                  .hasStackTraceContaining("implement Projection directly");
+            });
+  }
+
+  @Test
+  void aCglibProxiedBaseProjection_inInlineMode_boots_becauseInlineCallsTheOneArgumentProcess() {
+    runner
+        .withUserConfiguration(CglibProxiedInlineConfig.class)
+        .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
+        .run(ctx -> assertThat(ctx).hasSingleBean(InlineProjectionInterceptor.class));
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T> T cglibProxyOf(T target) {
+    ProxyFactory factory = new ProxyFactory(target);
+    factory.setProxyTargetClass(true);
+    return (T) factory.getProxy();
+  }
+
+  @Configuration
+  static class CglibProxiedContinuousConfig {
+    @Bean
+    AloBaseBean proxiedProjection() {
+      return cglibProxyOf(new AloBaseBean(new InMemoryProjectionRepository()));
+    }
+  }
+
+  @Configuration
+  static class CglibProxiedScheduledConfig {
+    @Bean
+    SchedAloBaseBean proxiedProjection() {
+      return cglibProxyOf(new SchedAloBaseBean(new InMemoryProjectionRepository()));
+    }
+  }
+
+  @Configuration
+  static class CglibProxiedInlineConfig {
+    @Bean
+    InlineBaseBean proxiedProjection() {
+      return cglibProxyOf(new InlineBaseBean(new InMemoryProjectionRepository()));
+    }
+  }
+
+  @ProjectionConfig(
+      name = "sched_alo_base",
+      mode = ProjectionConfig.Mode.SCHEDULED,
+      cron = "0 0 * * * *",
+      deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+  static class SchedAloBaseBean extends BaseProjection {
+    public SchedAloBaseBean(ProjectionRepository repo) {
+      super(repo, "sched_alo_base");
+    }
+
+    @Override
+    public void process(List<EventEnvelope> b) {
+      save("row", "v");
+    }
+  }
+
+  @ProjectionConfig(
+      name = "inline_base",
+      mode = ProjectionConfig.Mode.INLINE,
+      deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+  static class InlineBaseBean extends BaseProjection {
+    public InlineBaseBean(ProjectionRepository repo) {
+      super(repo, "inline_base");
+    }
+
+    @Override
+    public void process(List<EventEnvelope> b) {
+      save("row", "v");
+    }
+  }
+
   @Test
   void tlBaseProjection_overTheProcessorBean_boots() {
     runner
