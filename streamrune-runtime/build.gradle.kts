@@ -92,3 +92,23 @@ val jmhSmokeTestTask = tasks.register<Test>("jmhSmokeTest") {
 tasks.named("check") {
     dependsOn(jmhSmokeTestTask)
 }
+
+// RelayComponentNamesDocLintTest reads the production guide and the three integrations' health
+// sources as text (docLintTest, see the root build): declared, so an edit to any of them re-runs it.
+tasks.named<Test>("docLintTest") {
+    inputs
+        .files(
+            rootDir.resolve("docs/guide/production.md"),
+            rootDir.resolve(
+                "streamrune-integration/streamrune-spring/src/main/java/org/streamrune/spring/" +
+                    "StreamRuneAutoConfiguration.java"),
+            rootDir.resolve(
+                "streamrune-integration/streamrune-quarkus/src/main/java/org/streamrune/quarkus/" +
+                    "StreamRuneHealthCheck.java"),
+            rootDir.resolve(
+                "streamrune-integration/streamrune-micronaut/src/main/java/org/streamrune/micronaut/" +
+                    "StreamRuneHealthIndicator.java"),
+        )
+        .withPropertyName("healthDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
