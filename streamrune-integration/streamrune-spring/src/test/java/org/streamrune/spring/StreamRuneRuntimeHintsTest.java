@@ -72,28 +72,6 @@ class StreamRuneRuntimeHintsTest {
   }
 
   /**
-   * {@link org.streamrune.core.projection.Projection#writesThroughRepository()} resolves {@code
-   * process(List, ProjectionRepository)} with {@code getClass().getMethod(...)}; the method is
-   * declared by {@code Projection} (the default) or by {@code BaseProjection} (final). A native
-   * image finds it only on a type registered for reflection — the Quarkus and Micronaut binaries
-   * failed to build their transactional projection runner without it, and the Spring starter wires
-   * the auto-configured {@code JdbcProjectionRepository} as the transactional processor, which is
-   * what makes the runner ask.
-   */
-  @Test
-  void registersTheProjectionTypesWhoseProcessMethodIsResolvedReflectively() {
-    for (Class<?> type :
-        List.of(
-            org.streamrune.core.projection.Projection.class,
-            org.streamrune.core.projection.BaseProjection.class)) {
-      assertThat(
-              reflection().onType(type).withMemberCategory(MemberCategory.INVOKE_DECLARED_METHODS))
-          .as("%s is registered with its declared methods", type.getSimpleName())
-          .accepts(hints);
-    }
-  }
-
-  /**
    * Schema auto-initialization reads every shipped migration script by name, and a native image
    * holds only the resources registered at build time; Flyway reads its own {@code version.txt}
    * when it starts. The expected scripts are read from the class path, so a script added to a

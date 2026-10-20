@@ -24,9 +24,7 @@ import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxStatus;
-import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.LateDataPolicy;
-import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeadLetterEntry;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionErrorClass;
@@ -66,13 +64,6 @@ import org.streamrune.core.types.Version;
  *
  * <p>All value types and core records need constructor and field access for JSON serialisation and
  * ORM mapping when compiled to a native image.
- *
- * <p><b>Projections.</b> {@link Projection#writesThroughRepository()} resolves {@code process(List,
- * ProjectionRepository)} with {@code getClass().getMethod(...)}, which a native image answers only
- * from types registered for reflection; the method is declared by {@link Projection} (the default)
- * or {@link BaseProjection} (final), so both are registered here. An application projection that
- * declares {@code process(List, ProjectionRepository)} itself must register its own class too: the
- * image sees a method declaration only on a type registered for reflection.
  *
  * <p><b>HikariCP.</b> The framework builds small HikariCP pools of its own for its dedicated
  * connections (the notification subscription's and the crypto forget signal's LISTEN connections,
@@ -161,9 +152,5 @@ import org.streamrune.core.types.Version;
       ProjectionDeliveryMode.class,
       LoadedSaga.class,
       SagaStatus.class,
-      // Projection types whose process(List, ProjectionRepository) is resolved reflectively by
-      // Projection#writesThroughRepository (2)
-      Projection.class,
-      BaseProjection.class,
     })
 public final class StreamRuneReflectionConfig {}

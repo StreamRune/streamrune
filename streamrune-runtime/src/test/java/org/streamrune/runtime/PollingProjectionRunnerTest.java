@@ -281,6 +281,11 @@ class PollingProjectionRunnerTest {
           public void process(List<EventEnvelope> batch, ProjectionRepository repository) {
             received.add(repository);
           }
+
+          @Override
+          public boolean writesThroughRepository() {
+            return true;
+          }
         };
 
     runner.run(ProjectionName.of("tx-proj"), projection, TRANSACTIONAL_LOCAL);

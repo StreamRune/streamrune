@@ -58,7 +58,5 @@
   {"name": "org.streamrune.core.projection.ProjectionErrorStrategy", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.projection.ProjectionDeliveryMode", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.saga.LoadedSaga", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
-  {"name": "org.streamrune.core.saga.SagaStatus", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
-  {"name": "org.streamrune.core.projection.Projection", "allDeclaredMethods": true},
-  {"name": "org.streamrune.core.projection.BaseProjection", "allDeclaredMethods": true}
+  {"name": "org.streamrune.core.saga.SagaStatus", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true}
 ]

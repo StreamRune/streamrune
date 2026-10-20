@@ -310,7 +310,7 @@ class MultiProjectionRunnerTest {
     assertEquals(1, processed.size());
   }
 
-  /** Overrides the 2-arg overload, so {@code writesThroughRepository()} reports {@code true}. */
+  /** Overrides the 2-arg overload and declares it through {@code writesThroughRepository()}. */
   private static final class WriteThroughProjection implements Projection {
     final CopyOnWriteArrayList<EventEnvelope> processed = new CopyOnWriteArrayList<>();
 
@@ -322,6 +322,11 @@ class MultiProjectionRunnerTest {
     @Override
     public void process(List<EventEnvelope> batch, ProjectionRepository repository) {
       process(batch);
+    }
+
+    @Override
+    public boolean writesThroughRepository() {
+      return true;
     }
   }
 

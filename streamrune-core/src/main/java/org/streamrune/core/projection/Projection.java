@@ -46,41 +46,35 @@ public interface Projection {
   }
 
   /**
-   * Reports whether {@link #process(List, ProjectionRepository)} actually writes through the
-   * supplied repository, rather than silently falling back to {@link #process(List)} via the
-   * inherited default above. A transactional runner — one whose {@link
+   * Declares whether this projection overrides {@link #process(List, ProjectionRepository)} and
+   * writes through the repository it is handed, rather than falling back to {@link #process(List)}
+   * via the inherited default above. A transactional runner — one whose {@link
    * AtomicBatchProcessor#supportsFencing()} is {@code true} — consults this when a projection is
    * registered, to refuse one that would silently downgrade the runner's promised atomicity
    * (projection writes committing in the SAME transaction as the checkpoint save) to an undeclared
    * at-least-once.
    *
-   * <p>The default answers by reflection: {@code true} iff the 2-arg {@code process} is NOT the
-   * inherited default on this object's concrete class ({@link java.lang.reflect.Method#isDefault()}
-   * on the resolved method). <b>Decorators MUST override this and forward to their delegate's
-   * answer</b> — exactly like {@link #processDeadLetterReplay(List, ProjectionRepository)} below —
-   * because a decorator that overrides {@code process(List, ProjectionRepository)} only to forward
-   * the call (as every shipped decorator does) makes the reflective check {@code true} on the
-   * DECORATOR's own class regardless of whether the WRAPPED projection actually writes through the
-   * repository. The shipped decorators ({@code TracingProjectionDecorator}, {@code
-   * ValidatingProjectionDecorator}, {@code CacheAwareProjection}) forward it.
+   * <p>The default answers {@code false}, the truth for a projection that implements only {@link
+   * #process(List)}. <b>Override it to return {@code true} when you override {@link #process(List,
+   * ProjectionRepository)}</b>; {@link BaseProjection} does, so its subclasses need not. The answer
+   * is a declaration, not something inferred from the class: the object the container hands the
+   * runner can be a generated subclass or proxy of the bean (an interceptor subclass, a CGLIB
+   * proxy) whose class declares {@code process(List, ProjectionRepository)} whether or not the
+   * bean's own class does, so reading the concrete class would answer {@code true} for a projection
+   * that writes nowhere through the handed repository.
    *
-   * @return {@code true} if the 2-arg {@code process} is overridden by this class or, for a
-   *     decorator, transitively by the innermost delegate
+   * <p><b>Decorators MUST override this and forward to their delegate's answer</b> — exactly like
+   * {@link #processDeadLetterReplay(List, ProjectionRepository)} below — because a decorator
+   * overrides {@code process(List, ProjectionRepository)} only to forward the call (as every
+   * shipped decorator does), and the inherited {@code false} would then hide a delegate that does
+   * write through the repository. The shipped decorators ({@code TracingProjectionDecorator},
+   * {@code ValidatingProjectionDecorator}, {@code CacheAwareProjection}) forward it.
+   *
+   * @return {@code true} if this projection writes through the repository handed to {@link
+   *     #process(List, ProjectionRepository)} or, for a decorator, if its delegate does
    */
   default boolean writesThroughRepository() {
-    try {
-      return !getClass().getMethod("process", List.class, ProjectionRepository.class).isDefault();
-    } catch (NoSuchMethodException e) {
-      // Unreachable on a JVM (the interface declares the method). A GraalVM native image throws
-      // it when neither this class nor Projection/BaseProjection is registered for reflection.
-      throw new IllegalStateException(
-          "process(List, ProjectionRepository) cannot be resolved reflectively on "
-              + getClass().getName()
-              + " — in a GraalVM native image, register Projection, BaseProjection and this"
-              + " projection class for reflection with their methods (the StreamRune integrations"
-              + " register the first two)",
-          e);
-    }
+    return false;
   }
 
   /**

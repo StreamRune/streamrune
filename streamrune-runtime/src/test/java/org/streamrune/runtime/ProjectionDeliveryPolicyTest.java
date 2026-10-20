@@ -44,6 +44,25 @@ class ProjectionDeliveryPolicyTest {
     public void process(List<EventEnvelope> batch, ProjectionRepository repository) {
       repository.save(ProjectionName.of("x"), "id", "row");
     }
+
+    @Override
+    public boolean writesThroughRepository() {
+      return true;
+    }
+  }
+
+  /**
+   * Overrides the two-argument process but does not declare it: the policy takes the declaration at
+   * its word, so the refusal names writesThroughRepository() as the missing piece.
+   */
+  private static final class UndeclaredWriteThrough implements Projection {
+    @Override
+    public void process(List<EventEnvelope> batch) {}
+
+    @Override
+    public void process(List<EventEnvelope> batch, ProjectionRepository repository) {
+      repository.save(ProjectionName.of("x"), "id", "row");
+    }
   }
 
   private static BaseProjection over(ProjectionRepository repo) {
@@ -81,6 +100,17 @@ class ProjectionDeliveryPolicyTest {
         .hasMessageContaining("does not write through the handed repository")
         .hasMessageContaining("INHERITED DEFAULT")
         .hasMessageContaining("declare AT_LEAST_ONCE_IDEMPOTENT");
+  }
+
+  @ParameterizedTest
+  @EnumSource(names = {"TRANSACTIONAL_LOCAL", "EXTERNAL_EFFECT"})
+  void transactionalMode_withAnUndeclaredWriteThroughProjection_isRefused_namingTheDeclaration(
+      ProjectionDeliveryMode mode) {
+    var processor = new InMemoryProjectionRepository();
+    assertThatThrownBy(() -> require(new UndeclaredWriteThrough(), mode, processor))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("does not write through the handed repository")
+        .hasMessageContaining("override writesThroughRepository() to return true");
   }
 
   @ParameterizedTest

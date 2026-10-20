@@ -134,6 +134,15 @@ public abstract class BaseProjection implements Projection {
   }
 
   /**
+   * Always {@code true}: the final {@link #process(List, ProjectionRepository)} above routes every
+   * {@code save()/findById()/delete()} call through the repository it is handed.
+   */
+  @Override
+  public boolean writesThroughRepository() {
+    return true;
+  }
+
+  /**
    * The captured repository: what the {@code save()/findById()/delete()} helpers use outside a
    * batch.
    */

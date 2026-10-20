@@ -346,8 +346,8 @@ nothing. This contract is identical across the Spring, Quarkus, and Micronaut in
   Start the call outside the transaction, or on its own thread.
 - **Crypto engine selection is build-time** — `streamrune.crypto.<backend>.enabled` is read by
   `@IfBuildProperty`; overriding it to `false` at runtime fails fast at startup.
-- **Native image** — `StreamRuneReflectionConfig` registers the framework's own value types,
-  records and the projection types `Projection#writesThroughRepository` reflects on, and the module
+- **Native image** — `StreamRuneReflectionConfig` registers the framework's own value types
+  and records, and the module
   ships `META-INF/native-image/org.streamrune/streamrune-quarkus/reachability-metadata.json` with the
   HikariCP metadata the framework's dedicated LISTEN and lock connections need (the event store
   borrows from your Agroal pool; Quarkus ships no HikariCP metadata; without
@@ -375,9 +375,8 @@ nothing. This contract is identical across the Spring, Quarkus, and Micronaut in
   dependencies (`jboss-vfs`, `org.osgi.core`), so the build failed with *Discovered unresolved
   type during parsing: org.jboss.vfs.VirtualFileFilter*. The substitution leaves out those two
   branches, which a native image's class path can never take, and keeps Flyway's others; nothing
-  changes on the JVM. The application registers its own records with `@RegisterForReflection`,
-  plus any projection class that declares `process(List, ProjectionRepository)` itself. **Sealed
-  command/event interfaces need a `{"type": "…"}` entry in the application's
+  changes on the JVM. The application registers its own records with `@RegisterForReflection`.
+  **Sealed command/event interfaces need a `{"type": "…"}` entry in the application's
   `META-INF/native-image/<groupId>/<artifactId>/reachability-metadata.json`**:
   `@RegisterForReflection` on a sealed type writes a legacy `reflect-config.json` entry without its
   permitted subclasses, so the image reports the type as sealed with none, and the dead-letter

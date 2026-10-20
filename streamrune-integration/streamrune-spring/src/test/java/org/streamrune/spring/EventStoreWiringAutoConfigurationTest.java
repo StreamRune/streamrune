@@ -251,6 +251,11 @@ class EventStoreWiringAutoConfigurationTest {
 
     @Override
     public void process(List<EventEnvelope> batch, ProjectionRepository repository) {}
+
+    @Override
+    public boolean writesThroughRepository() {
+      return true;
+    }
   }
 
   private static EventUpcaster upcaster(String eventType) {
