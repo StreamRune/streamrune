@@ -170,7 +170,7 @@ too), on references to private review material and on history wording: a reviewe
 numbered roadmap stage, work deferred to the roadmap, and outside test sources and code samples the
 state before or after a fix and the words that narrate an earlier behaviour (the test's javadoc
 lists them). It also fails on a space before a period in prose (javadoc, and markdown outside fenced
-blocks), and it reads a phrase on across a line break, so a reflowed comment does not hide one.
+blocks), and it reads a phrase across a line break, so a reflowed comment does not hide one.
 Write a state as it is: "cannot", "is not", "has lost it", and "the clock that computes" for a
 purpose. Its failure message lists every offending `file:line` with the rule it breaks. The other
 repository-wide ratchets:
