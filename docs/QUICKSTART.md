@@ -577,15 +577,21 @@ domain events — as long as that path serializes with the `CryptoEngine`:
   dispatch rebuilds one from a `saga_id` read out of `saga_state`, and rejecting there would burn a
   DLQ entry's whole retry ladder and terminally fail an in-flight saga. Ids already in the log, the
   DLQ or the saga store are read back verbatim.
-- **DLQ retention is bounded.** The `streamrune.dead-letter.retention-max-age` property (default 30
+- **DLQ retention is bounded.** The `streamrune.dead-letter.retention-max-age` property (default 7
   days) prunes `dead_letter_queue` rows older than the window for any `DeadLetterQueue` bean you
   declare — even with `streamrune.dead-letter.enabled=false`, which turns off only the automatic
   retry runner — mirroring `streamrune.saga.dead-letter-retention-max-age` (see
-  `docs/guide/production.md`'s "Retention and GDPR" section). Zero or negative disables pruning
-  **for this property**; the same is NOT true of
-  `streamrune.saga.dead-letter-retention-max-age` — zero/negative there means unbounded retention,
-  which with the default inbox retention window violates `SagaRetentionValidator`'s invariant and
-  makes the application refuse to start. See production.md's retention table for the details.
+  `docs/guide/production.md`'s "Retention and GDPR" section). Like the saga window it must not
+  exceed `streamrune.inbox.retention-max-age` when a command inbox is configured, so a retried
+  keyed entry always finds its inbox row; zero or negative means unbounded retention, which with
+  the default inbox window makes the application refuse to start. See production.md's retention
+  table for the details.
+- **Unkeyed dead-lettered commands wait for an operator.** The automatic retry replays an entry
+  only when its command ran under an idempotency key: an unkeyed command's caller may already have
+  retried it successfully, and a replay would apply it twice. Dispatch commands a caller may retry
+  with `execute(command, key)`; `streamrune.dead-letter.unkeyed-replay=automatic` restores automatic
+  replay for applications whose commands are all idempotent by construction (see
+  `docs/guide/advanced/retry-and-resilience.md`).
 - **Snapshots resume after forget.** Snapshotting a forgotten subject's state writes `[REDACTED]`
   instead of throwing, so snapshot cadence resumes rather than forcing full replay from genesis on
   every load. New PII for an already-forgotten subject (not merely re-persisting redacted state)

@@ -531,7 +531,7 @@ replayed (see [Retry and resilience](retry-and-resilience.md)).
 A command that carries personal data **without** `@Encrypted` is stored as plaintext. Annotating
 only the events it produces is not enough: the queued copy keeps the name and email readable after
 the key is deleted, until the retention sweeper (`streamrune.dead-letter.retention-max-age`, default
-30 days) deletes the row. Annotate the personal data on the command exactly as on its events:
+7 days) deletes the row. Annotate the personal data on the command exactly as on its events:
 
 ```java
 public record RegisterCustomer(
