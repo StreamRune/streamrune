@@ -105,3 +105,15 @@ tasks.named<Test>("test") {
         },
     )
 }
+
+// MetricNamesDocLintTest reads the guides and the integration-api README (docLintTest, see the root
+// build): declared, so an edit to either re-runs it.
+tasks.named<Test>("docLintTest") {
+    inputs
+        .files(
+            fileTree(rootDir.resolve("docs/guide")) { include("**/*.md") },
+            rootDir.resolve("streamrune-integration/streamrune-integration-api/README.md"),
+        )
+        .withPropertyName("meterDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
