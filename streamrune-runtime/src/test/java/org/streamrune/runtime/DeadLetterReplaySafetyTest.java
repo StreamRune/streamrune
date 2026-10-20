@@ -406,6 +406,40 @@ class DeadLetterReplaySafetyTest {
     assertEquals(0, h.onlyEntry().dlqAttempts());
   }
 
+  @Test
+  void aBusWithoutAnInbox_underOperatorOnly_doesNotEvenReadTheQueue() {
+    var h = new Harness(false, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    DeadLetterQueue unreadable =
+        new DeadLetterQueue() {
+          @Override
+          public void publish(DeadLetterPublishRequest request) {}
+
+          @Override
+          public List<DeadLetterEntry> read(int limit) {
+            return List.of();
+          }
+
+          @Override
+          public void discard(CommandId commandId) {}
+
+          @Override
+          public List<DeadLetterEntry> readRetryable(
+              int maxRetries, int limit, boolean includeUnkeyed) {
+            throw new AssertionError("nothing can be replayed automatically; no read is due");
+          }
+        };
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(unreadable)
+            .commandBus(h.bus)
+            .objectMapper(MAPPER)
+            .policy(immediate(UnkeyedReplay.OPERATOR_ONLY))
+            .registerCommand(AdjustStock.class)
+            .build();
+
+    assertDoesNotThrow(runner::processBatch);
+  }
+
   // ── Keyed: the inbox window ───────────────────────────────────────────────────────────────────
 
   @Test
