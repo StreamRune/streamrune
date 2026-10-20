@@ -5,6 +5,7 @@ import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.enterprise.inject.Instance;
+import jakarta.enterprise.inject.spi.BeanManager;
 import jakarta.interceptor.Interceptor;
 
 /**
@@ -15,6 +16,8 @@ import jakarta.interceptor.Interceptor;
 public class StreamRuneConfigValidator {
   private final StreamRuneQuarkusProperties properties;
   private final Instance<org.streamrune.core.outbox.OutboxStore> outboxStore;
+  private final Instance<org.streamrune.core.outbox.OutboxPublisher> outboxPublisher;
+  private final BeanManager beanManager;
   private final Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore;
   private final Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService;
 
@@ -22,10 +25,14 @@ public class StreamRuneConfigValidator {
   public StreamRuneConfigValidator(
       StreamRuneQuarkusProperties properties,
       Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
+      Instance<org.streamrune.core.outbox.OutboxPublisher> outboxPublisher,
+      BeanManager beanManager,
       Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore,
       Instance<org.streamrune.runtime.gdpr.ForgetSubjectService> forgetSubjectService) {
     this.properties = properties;
     this.outboxStore = outboxStore;
+    this.outboxPublisher = outboxPublisher;
+    this.beanManager = beanManager;
     this.sagaDeadLetterStore = sagaDeadLetterStore;
     this.forgetSubjectService = forgetSubjectService;
   }
@@ -37,8 +44,21 @@ public class StreamRuneConfigValidator {
   StreamRuneConfigValidator(
       StreamRuneQuarkusProperties properties,
       Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
+      Instance<org.streamrune.core.outbox.OutboxPublisher> outboxPublisher,
+      BeanManager beanManager,
       Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore) {
-    this(properties, outboxStore, sagaDeadLetterStore, null);
+    this(properties, outboxStore, outboxPublisher, beanManager, sagaDeadLetterStore, null);
+  }
+
+  /**
+   * A validator for tests of the checks that do not involve the outbox: it sees no publisher and no
+   * poller, so it refuses an enabled outbox.
+   */
+  StreamRuneConfigValidator(
+      StreamRuneQuarkusProperties properties,
+      Instance<org.streamrune.core.outbox.OutboxStore> outboxStore,
+      Instance<org.streamrune.core.saga.SagaDeadLetterStore> sagaDeadLetterStore) {
+    this(properties, outboxStore, null, null, sagaDeadLetterStore, null);
   }
 
   /**
@@ -53,6 +73,8 @@ public class StreamRuneConfigValidator {
   protected StreamRuneConfigValidator() {
     this.properties = null;
     this.outboxStore = null;
+    this.outboxPublisher = null;
+    this.beanManager = null;
     this.sagaDeadLetterStore = null;
     this.forgetSubjectService = null;
   }
@@ -129,10 +151,29 @@ public class StreamRuneConfigValidator {
     if (forgetSubjectService != null && forgetSubjectService.isResolvable()) {
       forgetSubjectService.get();
     }
-    if (properties.outbox().enabled() && !outboxStore.isResolvable()) {
-      throw new IllegalStateException(
-          "Outbox enabled but no OutboxStore found. "
-              + "Add streamrune-kafka-outbox or streamrune-rabbitmq-outbox to your classpath.");
+    if (properties.outbox().enabled()) {
+      if (!outboxStore.isResolvable()) {
+        throw new IllegalStateException(
+            "Outbox enabled but no OutboxStore found. Declare a PostgresOutboxStore bean"
+                + " (streamrune-postgres); streamrune-kafka-outbox and streamrune-rabbitmq-outbox"
+                + " provide only the OutboxPublisher.");
+      }
+      // Without a publisher the framework poller is never produced, so the entries the event
+      // store writes would stay PENDING with nothing relaying them. An application poller brings
+      // its own.
+      boolean publisher = outboxPublisher != null && outboxPublisher.isResolvable();
+      boolean applicationPoller =
+          beanManager != null
+              && StreamRuneLifecycle.applicationOwns(
+                  beanManager,
+                  org.streamrune.runtime.OutboxPoller.class,
+                  StreamRuneProducers.FRAMEWORK_OUTBOX_POLLER);
+      if (!publisher && !applicationPoller) {
+        throw new IllegalStateException(
+            "Outbox enabled but no OutboxPublisher found, so no OutboxPoller can relay the outbox"
+                + " entries. Declare an OutboxPublisher bean (streamrune-kafka-outbox,"
+                + " streamrune-rabbitmq-outbox or an HttpOutboxPublisher).");
+      }
     }
     // The saga dead-letter-retention <= inbox-retention invariant is a
     // REPLAY-safety invariant — it protects SagaDeadLetterReplayer, not the compensation-retry

@@ -115,7 +115,7 @@ class StreamRuneConfigValidatorTest {
     when(forget.get()).thenThrow(new IllegalStateException("no snapshot purger"));
     var validator =
         new StreamRuneConfigValidator(
-            TestProperties.defaults(), unsatisfied(), unsatisfied(), forget);
+            TestProperties.defaults(), unsatisfied(), unsatisfied(), null, unsatisfied(), forget);
     var ex =
         assertThrows(
             IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
@@ -163,16 +163,86 @@ class StreamRuneConfigValidatorTest {
     var ex =
         assertThrows(
             IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
-    assertTrue(ex.getMessage().contains("OutboxStore"));
+    // The only OutboxStore is PostgresOutboxStore; the broker modules ship publishers.
+    assertTrue(ex.getMessage().contains("no OutboxStore found"), ex.getMessage());
+    assertTrue(
+        ex.getMessage().contains("Declare a PostgresOutboxStore bean (streamrune-postgres)"),
+        ex.getMessage());
+    assertTrue(ex.getMessage().contains("provide only the OutboxPublisher"), ex.getMessage());
   }
 
   @Test
-  void outboxEnabledWithStorePassesWithoutException() {
+  void outboxEnabledWithStoreAndPublisherPassesWithoutException() {
     var props = TestProperties.of(Map.of("streamrune.outbox.enabled", "true"));
     var validator =
         new StreamRuneConfigValidator(
-            props, satisfied(mock(org.streamrune.core.outbox.OutboxStore.class)), unsatisfied());
+            props,
+            satisfied(mock(org.streamrune.core.outbox.OutboxStore.class)),
+            satisfied(mock(org.streamrune.core.outbox.OutboxPublisher.class)),
+            beanManagerWithOutboxPollers(),
+            unsatisfied());
     assertDoesNotThrow(() -> validator.validate(mock(StartupEvent.class)));
+  }
+
+  /**
+   * Without a publisher the framework's poller is never produced, so the entries the event store
+   * writes would stay {@code PENDING} for ever. This was a WARN; it refuses the boot now, as on
+   * Spring and Micronaut.
+   */
+  @Test
+  void outboxEnabledWithStoreButNoPublisherThrows() {
+    var props = TestProperties.of(Map.of("streamrune.outbox.enabled", "true"));
+    var validator =
+        new StreamRuneConfigValidator(
+            props,
+            satisfied(mock(org.streamrune.core.outbox.OutboxStore.class)),
+            unsatisfied(),
+            beanManagerWithOutboxPollers(frameworkPoller()),
+            unsatisfied());
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
+    assertTrue(ex.getMessage().contains("no OutboxPublisher found"), ex.getMessage());
+    assertTrue(
+        ex.getMessage().contains("no OutboxPoller can relay the outbox entries"), ex.getMessage());
+  }
+
+  @Test
+  void outboxEnabledWithoutPublisherButWithAnApplicationPollerPasses() {
+    var props = TestProperties.of(Map.of("streamrune.outbox.enabled", "true"));
+    jakarta.enterprise.inject.spi.Bean<?> applicationPoller =
+        mock(jakarta.enterprise.inject.spi.Bean.class);
+    when(applicationPoller.getQualifiers())
+        .thenReturn(java.util.Set.of(jakarta.enterprise.inject.Default.Literal.INSTANCE));
+    var validator =
+        new StreamRuneConfigValidator(
+            props,
+            satisfied(mock(org.streamrune.core.outbox.OutboxStore.class)),
+            unsatisfied(),
+            beanManagerWithOutboxPollers(frameworkPoller(), applicationPoller),
+            unsatisfied());
+    assertDoesNotThrow(() -> validator.validate(mock(StartupEvent.class)));
+  }
+
+  /** The framework's own poller definition: the {@code @Named} producer, always present. */
+  private static jakarta.enterprise.inject.spi.Bean<?> frameworkPoller() {
+    jakarta.enterprise.inject.spi.Bean<?> bean = mock(jakarta.enterprise.inject.spi.Bean.class);
+    when(bean.getQualifiers())
+        .thenReturn(
+            java.util.Set.of(
+                jakarta.enterprise.inject.literal.NamedLiteral.of(
+                    StreamRuneProducers.FRAMEWORK_OUTBOX_POLLER)));
+    return bean;
+  }
+
+  private static jakarta.enterprise.inject.spi.BeanManager beanManagerWithOutboxPollers(
+      jakarta.enterprise.inject.spi.Bean<?>... beans) {
+    var beanManager = mock(jakarta.enterprise.inject.spi.BeanManager.class);
+    when(beanManager.getBeans(
+            org.mockito.ArgumentMatchers.eq(org.streamrune.runtime.OutboxPoller.class),
+            org.mockito.ArgumentMatchers.<java.lang.annotation.Annotation>any()))
+        .thenReturn(java.util.Set.of(beans));
+    return beanManager;
   }
 
   @Test

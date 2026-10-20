@@ -804,9 +804,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `streamrune.outbox.skipped-retention-max-age` (30 days); `FAILED` is never pruned. Integration
   properties: `streamrune.outbox.enabled` (default `false`), `batch-size` (100), `flush-interval-ms`
   (5000), `retry-max-attempts` (10), `retry-initial-delay-ms` (1000), `retry-multiplier` (2.0). On
-  Micronaut, startup fails when an `OutboxEventMapper` is paired with a store the event store cannot
-  write in the append transaction, or when `streamrune.outbox.enabled=true` has no `OutboxStore` or no
-  `OutboxPublisher`.
+  all three integrations startup fails when `streamrune.outbox.enabled=true` has no `OutboxStore`
+  (the message names `PostgresOutboxStore`; the broker modules ship publishers only) or has neither
+  an `OutboxPublisher` nor an application `OutboxPoller`, since nothing would relay the entries the
+  event store writes. On Micronaut, startup also fails when an `OutboxEventMapper` is paired with a
+  store the event store cannot write in the append transaction.
 
 ### GDPR — encryption at rest and crypto-shredding
 

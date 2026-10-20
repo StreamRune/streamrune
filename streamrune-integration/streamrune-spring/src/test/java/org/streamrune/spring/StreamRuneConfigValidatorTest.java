@@ -99,8 +99,62 @@ class StreamRuneConfigValidatorTest {
         .run(
             ctx -> {
               assertThat(ctx).hasFailed();
-              assertThat(ctx.getStartupFailure()).hasMessageContaining("OutboxStore");
+              // The only OutboxStore is PostgresOutboxStore; the broker modules ship publishers.
+              assertThat(ctx.getStartupFailure())
+                  .hasMessageContaining("no OutboxStore found")
+                  .hasMessageContaining("Declare a PostgresOutboxStore bean (streamrune-postgres)")
+                  .hasMessageContaining("provide only the OutboxPublisher");
             });
+  }
+
+  /**
+   * The event store writes an outbox entry in every append transaction once a store and a mapper
+   * are declared, but the framework's poller exists only with a publisher. Without one the entries
+   * would stay {@code PENDING} for ever while health reads {@code UP}.
+   */
+  @Test
+  void failsWhenOutboxEnabledWithStoreAndMapperButNoPublisher() {
+    runner
+        .withPropertyValues("streamrune.outbox.enabled=true")
+        .withBean(
+            org.streamrune.core.outbox.OutboxStore.class,
+            SpringTestMocks::outboxStoreStatingOrderingMode)
+        .withBean(
+            org.streamrune.core.outbox.OutboxEventMapper.class,
+            () -> mock(org.streamrune.core.outbox.OutboxEventMapper.class))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasMessageContaining("no OutboxPublisher found")
+                  .hasMessageContaining("no OutboxPoller can relay the outbox entries");
+            });
+  }
+
+  @Test
+  void bootsWhenOutboxEnabledWithoutPublisherButWithAnApplicationPoller() {
+    runner
+        .withPropertyValues("streamrune.outbox.enabled=true")
+        .withBean(
+            org.streamrune.core.outbox.OutboxStore.class,
+            SpringTestMocks::outboxStoreStatingOrderingMode)
+        .withBean(
+            org.streamrune.runtime.OutboxPoller.class,
+            () -> mock(org.streamrune.runtime.OutboxPoller.class))
+        .run(ctx -> assertThat(ctx).hasNotFailed());
+  }
+
+  @Test
+  void bootsWhenOutboxEnabledWithStoreAndPublisher() {
+    runner
+        .withPropertyValues("streamrune.outbox.enabled=true")
+        .withBean(
+            org.streamrune.core.outbox.OutboxStore.class,
+            SpringTestMocks::outboxStoreStatingOrderingMode)
+        .withBean(
+            org.streamrune.core.outbox.OutboxPublisher.class,
+            () -> mock(org.streamrune.core.outbox.OutboxPublisher.class))
+        .run(ctx -> assertThat(ctx).hasNotFailed());
   }
 
   @Test

@@ -324,6 +324,15 @@ public class StreamRuneLifecycle {
 
   /** Whether a bean of {@code type} other than the framework's named one exists. */
   private boolean applicationOwns(Class<?> type, String frameworkBeanName) {
+    return applicationOwns(beanManager, type, frameworkBeanName);
+  }
+
+  /**
+   * Whether {@code beanManager} knows a bean of {@code type} other than the framework's bean named
+   * {@code frameworkBeanName}: the application supplies its own, which it starts and stops. Reads
+   * the bean definitions only; no bean is created.
+   */
+  static boolean applicationOwns(BeanManager beanManager, Class<?> type, String frameworkBeanName) {
     for (Bean<?> bean : beanManager.getBeans(type, Any.Literal.INSTANCE)) {
       boolean framework =
           bean.getQualifiers().stream()
