@@ -1100,7 +1100,7 @@ class StreamRuneMicronautModuleTest {
             null,
             null));
 
-    var retried = runner.retry(commandId);
+    var retried = runner.retry(commandId, true);
 
     assertEquals(org.streamrune.runtime.DeadLetterRetryRunner.RetryOutcome.REPLAYED, retried);
     assertTrue(

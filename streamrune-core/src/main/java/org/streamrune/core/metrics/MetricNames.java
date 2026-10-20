@@ -80,6 +80,16 @@ public final class MetricNames {
   public static final String DLQ_PENDING = "streamrune.dlq.pending";
 
   /**
+   * Command dead-letter entries the retry runner will never replay on its schedule and that are not
+   * exhausted: unkeyed entries under {@code UnkeyedReplay.OPERATOR_ONLY} (nothing can deduplicate
+   * their replay against a retry by the caller), and keyed entries first received longer ago than
+   * the command-inbox retention window. Every one of them waits for an operator to retry or discard
+   * it, and none ever reaches {@link #DLQ_EXHAUSTED}. Gauge, sampled by the {@code
+   * DeadLetterRetryRunner} each poll cycle; alert on a value above zero. Untagged.
+   */
+  public static final String DLQ_AWAITING_OPERATOR = "streamrune.dlq.awaiting_operator";
+
+  /**
    * Consecutive poll-cycle failures of the outbox relay ({@code OutboxPoller}) — a gauge, {@code 0}
    * when the last cycle succeeded, rising while the relay is in backoff-retry (store/broker
    * unreachable). A nonzero value means the relay is DEGRADED but still running; combine with the

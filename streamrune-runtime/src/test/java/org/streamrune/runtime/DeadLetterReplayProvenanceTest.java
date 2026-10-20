@@ -268,7 +268,7 @@ class DeadLetterReplayProvenanceTest {
                 assertEquals(1, StreamRuneContext.cause().sagaOrigin().hop());
                 assertEquals(
                     DeadLetterRetryRunner.RetryOutcome.REPLAYED,
-                    harness.runner.retry(CommandId.of("cmd-pay-1")));
+                    harness.runner.retry(CommandId.of("cmd-pay-1"), true));
               });
       assertNoProvenance(harness.stored("pay-1"));
       assertEquals(UserId.of("alice"), harness.stored("pay-1").getFirst().metadata().userId());
@@ -283,7 +283,7 @@ class DeadLetterReplayProvenanceTest {
               () ->
                   assertEquals(
                       DeadLetterRetryRunner.RetryOutcome.REPLAYED,
-                      harness.runner.retry(CommandId.of("cmd-pay-2"))));
+                      harness.runner.retry(CommandId.of("cmd-pay-2"), true)));
       assertNoProvenance(harness.stored("pay-2"));
 
       // From a task that carried a cause across a thread boundary.
@@ -291,7 +291,7 @@ class DeadLetterReplayProvenanceTest {
           () ->
               assertEquals(
                   DeadLetterRetryRunner.RetryOutcome.REPLAYED,
-                  harness.runner.retry(CommandId.of("cmd-pay-3")));
+                  harness.runner.retry(CommandId.of("cmd-pay-3"), true));
       Runnable wrapped =
           StreamRuneContext.continuing(sagaCausedEvent()).call(() -> StreamRuneContext.wrap(retry));
       Thread thread = new Thread(wrapped);

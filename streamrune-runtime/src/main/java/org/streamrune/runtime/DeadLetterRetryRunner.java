@@ -90,21 +90,26 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * can be deduplicated against the caller: the entry carries the caller's idempotency key and the
  * bus has a command inbox. Every other entry is replayed on the schedule only under {@link
  * DeadLetterRetryPolicy.UnkeyedReplay#AUTOMATIC}; under the default {@link
- * DeadLetterRetryPolicy.UnkeyedReplay#OPERATOR_ONLY} it waits for an operator's {@link
- * #retry(CommandId)} or discard. The store filters such entries out of the scheduled read ({@link
- * DeadLetterQueue#readRetryable(int, int, boolean)}), so a backlog of them never starves the keyed
- * entries behind it.
+ * DeadLetterRetryPolicy.UnkeyedReplay#OPERATOR_ONLY} it waits for an operator's forced {@link
+ * #retry(CommandId, boolean)} or discard — an on-demand {@link #retry(CommandId)} without {@code
+ * force} refuses it ({@link RetryOutcome#NOT_DEDUPLICATED}), because the operator, too, cannot see
+ * from the entry whether the caller already retried. The store filters such entries out of the
+ * scheduled read ({@link DeadLetterQueue#readRetryable(int, int, boolean)}), so a backlog of them
+ * never starves the keyed entries behind it, and the {@code streamrune.dlq.awaiting_operator} gauge
+ * counts them ({@link DeadLetterQueue#countAwaitingOperator}).
  *
  * <p><b>Stale keyed entries are refused.</b> A keyed replay is deduplicated only while the command
  * inbox still holds the key's row, and the inbox retention sweeper deletes rows older than its
  * window. When the runner is told that window ({@link Builder#inboxRetentionMaxAge(Duration)}), it
- * refuses to replay a keyed entry whose command was first received longer ago than the window —
- * {@link RetryOutcome#STALE_REPLAY_BLOCKED}, a WARN and {@code streamrune.dlq.stale_replay_blocked}
- * — on the scheduled path and on {@link #retry(CommandId)} alike, and leaves the entry unchanged.
- * The age is measured from {@link DeadLetterQueue.DeadLetterEntry#firstAttemptAt()}, the earliest
- * instant at which the dead-lettered attempt, or a retry the caller made after it, could have
- * written that row. An operator who has checked that the command's effect is absent passes {@code
- * force} ({@link #retry(CommandId, boolean)}); an operator who finds it present discards the entry.
+ * refuses to replay a keyed entry whose command was first received longer ago than the window — on
+ * the scheduled path it is skipped like a not-due entry (no write, no batch slot, one summary WARN
+ * per cycle, counted in {@code streamrune.dlq.awaiting_operator}); {@link #retry(CommandId)}
+ * refuses it with {@link RetryOutcome#STALE_REPLAY_BLOCKED}, a WARN and {@code
+ * streamrune.dlq.stale_replay_blocked}. Either way the entry is left unchanged. The age is measured
+ * from {@link DeadLetterQueue.DeadLetterEntry#firstAttemptAt()}, the earliest instant at which the
+ * dead-lettered attempt, or a retry the caller made after it, could have written that row. An
+ * operator who has checked that the command's effect is absent passes {@code force} ({@link
+ * #retry(CommandId, boolean)}); an operator who finds it present discards the entry.
  *
  * <p>An unresolvable command type (no class registered for the entry's {@code commandType}) is
  * treated as a failed attempt like any other failure — it bumps {@code dlqAttempts} and ages toward
@@ -203,6 +208,14 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      * {@code force}.
      */
     STALE_REPLAY_BLOCKED,
+    /**
+     * An on-demand retry without {@code force} of an entry whose replay cannot be deduplicated
+     * against a retry its caller may already have made: the command ran without an idempotency key,
+     * or the bus has no command inbox. If that retry succeeded, a replay is a second execution.
+     * Nothing was executed and the entry is unchanged. Check whether the command's effect is
+     * present: discard the entry if it is, retry it with {@code force} if it is not.
+     */
+    NOT_DEDUPLICATED,
     /** No entry matched the command id. */
     NOT_FOUND
   }
@@ -226,6 +239,14 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   // Set false the first time countPending() throws UnsupportedOperationException (a store that does
   // not support counting), so the depth gauge degrades gracefully without retrying every cycle.
   private volatile boolean backlogSamplingSupported = true;
+  private volatile boolean awaitingSamplingSupported = true;
+
+  /**
+   * A cutoff after every {@code firstAttemptAt} a store can hold: passed to {@link
+   * DeadLetterQueue#countAwaitingOperator} to count every keyed entry. Within PostgreSQL's {@code
+   * timestamptz} range, unlike {@link Instant#MAX}.
+   */
+  private static final Instant EVERY_KEYED_ENTRY = Instant.parse("9999-12-31T23:59:59Z");
 
   private DeadLetterRetryRunner(
       DeadLetterQueue deadLetterQueue,
@@ -396,12 +417,13 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
    * context, then discarded on success or have its attempt count bumped on failure, exactly like
    * {@link #processBatch()}. This is a genuine re-execution, not a discard.
    *
-   * <p>An unkeyed entry is replayed whatever {@link DeadLetterRetryPolicy#unkeyedReplay()} says:
-   * the policy governs only the scheduled retry, and this call is the operator's decision. Nothing
-   * deduplicates it against a retry its caller may already have made, so check the command's effect
-   * first. A keyed entry older than the inbox retention window is refused ({@link
-   * RetryOutcome#STALE_REPLAY_BLOCKED}); {@link #retry(CommandId, boolean)} with {@code force}
-   * replays it.
+   * <p>Two kinds of entry are refused without {@code force}, both leaving the entry unchanged: one
+   * whose replay cannot be deduplicated against a retry its caller may already have made — it ran
+   * without an idempotency key, or the bus has no command inbox ({@link
+   * RetryOutcome#NOT_DEDUPLICATED}) — and a keyed entry older than the inbox retention window
+   * ({@link RetryOutcome#STALE_REPLAY_BLOCKED}). {@link #retry(CommandId, boolean)} with {@code
+   * force} replays either. An admin UI asks the operator to confirm that the command's effect is
+   * absent before it forces.
    *
    * <p><b>The replay never runs as the caller.</b> It executes on a fresh virtual thread, which
    * this method waits for, so it sees exactly what a scheduled replay sees on the poll thread: the
@@ -423,16 +445,18 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   }
 
   /**
-   * {@link #retry(CommandId)}, optionally lifting the stale-key refusal.
+   * {@link #retry(CommandId)}, optionally lifting its two refusals ({@link
+   * RetryOutcome#NOT_DEDUPLICATED}, {@link RetryOutcome#STALE_REPLAY_BLOCKED}).
    *
-   * <p>{@code force} is the operator's acknowledgement that the inbox can no longer deduplicate the
+   * <p>{@code force} is the operator's acknowledgement that the inbox cannot deduplicate the
    * replay: the command runs again even if the caller's own retry already produced its effect. Pass
    * it only after checking that the effect is absent; when it is present, discard the entry
-   * instead. A forced replay of a stale entry is logged at WARN. {@code force} changes nothing
+   * instead. A forced replay of such an entry is logged at WARN. {@code force} changes nothing
    * else.
    *
    * @param commandId the command id of the entry to retry
-   * @param force whether to replay a keyed entry older than the inbox retention window
+   * @param force whether to replay an entry the inbox cannot deduplicate — unkeyed, on a bus
+   *     without an inbox, or keyed and older than the inbox retention window
    * @return what the replay did; {@link RetryOutcome#NOT_FOUND} when no entry matched the id
    * @throws RuntimeException the failure to record the replay's outcome on the entry (a dead letter
    *     store error), rethrown on the calling thread
@@ -546,6 +570,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     var entries = deadLetterQueue.readRetryable(policy.maxRetries(), fetchLimit, includeUnkeyed);
     Instant now = clock.instant();
     int processed = 0;
+    int staleSkipped = 0;
     for (var entry : entries) {
       if (processed >= batchSize) {
         break;
@@ -568,10 +593,30 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         // them replayed on the schedule. Skipped without a write, so it stays for an operator.
         continue;
       }
+      if (isStaleKeyedReplay(entry, now)) {
+        // Past the inbox window: never replayed on the schedule, however long it waits. Skipped
+        // like a not-due entry — no write, no batch slot — so fresh keyed entries behind it are
+        // replayed; it is counted in streamrune.dlq.awaiting_operator and summarized once below.
+        staleSkipped++;
+        continue;
+      }
       if (isDue(entry, now)) {
         processEntry(entry, false, false);
         processed++;
       }
+    }
+    if (staleSkipped > 0) {
+      LOG.warn(
+          "{} keyed DLQ entr{} of this cycle's page {} first received longer ago than the"
+              + " command-inbox retention window ({}): the inbox may no longer deduplicate a replay,"
+              + " so the schedule does not replay {}. Each awaits an operator — discard it if its"
+              + " effect is present, otherwise retry it with force (streamrune.dlq.awaiting_operator"
+              + " counts them).",
+          staleSkipped,
+          staleSkipped == 1 ? "y" : "ies",
+          staleSkipped == 1 ? "was" : "were",
+          inboxRetentionMaxAge,
+          staleSkipped == 1 ? "it" : "them");
     }
   }
 
@@ -592,6 +637,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     recordMetric(
         "recordDlqRetryDegradation",
         () -> metrics.recordDlqRetryDegradation(consecutiveFailures()));
+    sampleAwaitingOperator();
     if (!backlogSamplingSupported) {
       return;
     }
@@ -607,6 +653,53 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       // value this cycle; the degradation gauge above still surfaces sustained trouble.
       LOG.warn(
           "Failed to sample command DLQ depth this cycle: {}",
+          LogSanitizer.sanitizeFreeText(e.getMessage()));
+    }
+  }
+
+  /**
+   * Reports {@code streamrune.dlq.awaiting_operator}: the entries the schedule will never replay
+   * and that are not exhausted. Which entries those are follows the same rules as {@link
+   * #processBatch()}: under {@code OPERATOR_ONLY} every unkeyed entry — and, on a bus without a
+   * command inbox, every keyed one too — and, with an inbox window, every keyed entry first
+   * received before {@code now - window} ({@link #isStaleKeyedReplay}). Degrades like the depth
+   * gauge: a store without {@link DeadLetterQueue#countAwaitingOperator} disables the sample after
+   * its first {@link UnsupportedOperationException}, and a transient failure is logged and
+   * swallowed.
+   */
+  private void sampleAwaitingOperator() {
+    if (!awaitingSamplingSupported) {
+      return;
+    }
+    boolean operatorOnly =
+        policy.unkeyedReplay() == DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY;
+    boolean inbox = commandBus.supportsIdempotentExecution();
+    Instant keyedBefore;
+    if (!inbox) {
+      // Without an inbox no replay is deduplicated: under OPERATOR_ONLY every keyed entry waits
+      // too; under AUTOMATIC every entry is replayed and none waits.
+      keyedBefore = operatorOnly ? EVERY_KEYED_ENTRY : null;
+    } else {
+      keyedBefore =
+          inboxRetentionMaxAge == null ? null : clock.instant().minus(inboxRetentionMaxAge);
+    }
+    if (!operatorOnly && keyedBefore == null) {
+      recordMetric("recordDlqAwaitingOperator", () -> metrics.recordDlqAwaitingOperator(0));
+      return;
+    }
+    try {
+      long awaiting =
+          deadLetterQueue.countAwaitingOperator(policy.maxRetries(), operatorOnly, keyedBefore);
+      recordMetric("recordDlqAwaitingOperator", () -> metrics.recordDlqAwaitingOperator(awaiting));
+    } catch (UnsupportedOperationException _) {
+      awaitingSamplingSupported = false;
+      LOG.debug(
+          "DeadLetterQueue {} does not support countAwaitingOperator(); the"
+              + " streamrune.dlq.awaiting_operator gauge is disabled",
+          deadLetterQueue.getClass().getSimpleName());
+    } catch (RuntimeException e) {
+      LOG.warn(
+          "Failed to sample the command DLQ entries awaiting an operator this cycle: {}",
           LogSanitizer.sanitizeFreeText(e.getMessage()));
     }
   }
@@ -652,7 +745,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   /**
    * Replays one entry and reports what happened.
    *
-   * @param force whether to lift the stale-key refusal (operator path only; the schedule never
+   * @param force whether to lift the two on-demand refusals (operator path only; the schedule never
    *     forces)
    * @param onDemand whether an operator's {@link #retry} triggered the replay, for the log lines
    */
@@ -661,7 +754,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     // Before anything else: a stale keyed entry must not reach the bus, and the refusal leaves the
     // entry exactly as it was (no attempt bump — the entry has not failed, it cannot be replayed
     // safely), so a crash at any point here converges trivially: the rerun refuses again.
-    if (isStaleKeyedReplay(entry)) {
+    if (isStaleKeyedReplay(entry, clock.instant())) {
       if (!force) {
         LOG.warn(
             "Refusing to replay DLQ entry {} ({}): its command ran under an idempotency key and"
@@ -688,10 +781,29 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
           entry.firstAttemptAt(),
           inboxRetentionMaxAge);
     } else if (onDemand && !isDeduplicatedAgainstCaller(entry)) {
-      LOG.info(
-          "Operator replay of DLQ entry {} ({}) without an idempotency key the command inbox can"
-              + " match: if its caller already retried it successfully, this replay executes the"
-              + " command a second time.",
+      // Nothing pairs this replay with a retry its caller may already have made: no idempotency
+      // key, or no command inbox to look it up in. The operator cannot see from here whether that
+      // retry happened, so the replay waits for an explicit force, exactly like a stale key. The
+      // refusal writes nothing (a rerun refuses again).
+      if (!force) {
+        String why =
+            commandBus.supportsIdempotentExecution()
+                ? "the command ran without an idempotency key"
+                : "the command bus has no command inbox";
+        LOG.warn(
+            "Refusing to replay DLQ entry {} ({}) on demand without force: {}, so a replay cannot be"
+                + " deduplicated against a retry its caller may already have made — if that retry"
+                + " succeeded, the replay executes the command a second time. Check whether its"
+                + " effect is present: if it is, discard the entry; if it is not, retry it with"
+                + " force.",
+            LogSanitizer.sanitizeForLog(entry.commandId().value()),
+            entry.commandType(),
+            why);
+        return RetryOutcome.NOT_DEDUPLICATED;
+      }
+      LOG.warn(
+          "Forced replay of DLQ entry {} ({}) that cannot be deduplicated against its caller's own"
+              + " retry: the command runs again even if that retry already produced its effect.",
           LogSanitizer.sanitizeForLog(entry.commandId().value()),
           entry.commandType());
     }
@@ -881,10 +993,10 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
    * caller wrote has {@code processed_at >= firstAttemptAt}, so while {@code firstAttemptAt +
    * window} has not passed, that row is still there.
    */
-  private boolean isStaleKeyedReplay(DeadLetterQueue.DeadLetterEntry entry) {
+  private boolean isStaleKeyedReplay(DeadLetterQueue.DeadLetterEntry entry, Instant now) {
     return inboxRetentionMaxAge != null
         && isDeduplicatedAgainstCaller(entry)
-        && entry.firstAttemptAt().plus(inboxRetentionMaxAge).isBefore(clock.instant());
+        && entry.firstAttemptAt().plus(inboxRetentionMaxAge).isBefore(now);
   }
 
   /**

@@ -31,6 +31,9 @@ class StreamRuneConfigValidatorTest {
     Instance<T> inst = mock(Instance.class);
     when(inst.isResolvable()).thenReturn(true);
     when(inst.get()).thenReturn(value);
+    Instance.Handle<T> handle = mock(Instance.Handle.class);
+    when(handle.get()).thenReturn(value);
+    when(inst.getHandle()).thenReturn(handle);
     return inst;
   }
 
@@ -396,6 +399,29 @@ class StreamRuneConfigValidatorTest {
             satisfied(mock(org.streamrune.core.CommandInbox.class)),
             satisfied(null));
     assertDoesNotThrow(() -> nullQueue.validate(mock(StartupEvent.class)));
+  }
+
+  @Test
+  void theRetentionCheckDestroysTheDependentInstancesItResolved() {
+    @SuppressWarnings("unchecked")
+    Instance<org.streamrune.core.CommandInbox> inbox = mock(Instance.class);
+    @SuppressWarnings("unchecked")
+    Instance.Handle<org.streamrune.core.CommandInbox> handle = mock(Instance.Handle.class);
+    when(inbox.isResolvable()).thenReturn(true);
+    when(inbox.getHandle()).thenReturn(handle);
+    when(handle.get()).thenReturn(mock(org.streamrune.core.CommandInbox.class));
+    var validator =
+        new StreamRuneConfigValidator(
+            TestProperties.defaults(),
+            unsatisfied(),
+            unsatisfied(),
+            inbox,
+            satisfied(mock(org.streamrune.core.DeadLetterQueue.class)));
+
+    validator.validate(mock(StartupEvent.class));
+
+    org.mockito.Mockito.verify(handle).close();
+    org.mockito.Mockito.verify(inbox, org.mockito.Mockito.never()).get();
   }
 
   @Test

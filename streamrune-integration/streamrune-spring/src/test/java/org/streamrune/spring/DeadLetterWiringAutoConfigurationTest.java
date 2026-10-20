@@ -496,7 +496,7 @@ class DeadLetterWiringAutoConfigurationTest {
                       null,
                       null));
 
-              var retried = retryRunner.retry(commandId);
+              var retried = retryRunner.retry(commandId, true);
 
               assertThat(retried).isEqualTo(DeadLetterRetryRunner.RetryOutcome.REPLAYED);
               assertThat(executed)
@@ -564,7 +564,7 @@ class DeadLetterWiringAutoConfigurationTest {
                       null,
                       null));
 
-              assertThat(retryRunner.retry(commandId))
+              assertThat(retryRunner.retry(commandId, true))
                   .isEqualTo(DeadLetterRetryRunner.RetryOutcome.REPLAYED);
               assertThat(executed)
                   .as("the concrete command of the sealed registration must resolve and execute")
@@ -642,7 +642,7 @@ class DeadLetterWiringAutoConfigurationTest {
                       null,
                       null));
 
-              var retried = retryRunner.retry(commandId);
+              var retried = retryRunner.retry(commandId, true);
 
               assertThat(retried).isEqualTo(DeadLetterRetryRunner.RetryOutcome.REPLAYED);
               assertThat(capturedEmail.get())

@@ -852,6 +852,46 @@ class PostgresDeadLetterQueueTest {
   }
 
   @Test
+  void countAwaitingOperatorCountsUnkeyedAndOldKeyedEntriesButNotExhaustedOnes() {
+    Instant now = Instant.now();
+    Instant old = now.minus(java.time.Duration.ofDays(8));
+    String[][] rows = {
+      {"7b000000-0000-0000-0000-000000000001", null, "now"},
+      {"7b000000-0000-0000-0000-000000000002", null, "now"},
+      {"7b000000-0000-0000-0000-000000000003", "k-old", "old"},
+      {"7b000000-0000-0000-0000-000000000004", "k-fresh", "now"},
+    };
+    for (String[] row : rows) {
+      dlq.publish(
+          new DeadLetterQueue.DeadLetterPublishRequest(
+              "{}",
+              "Cmd",
+              CommandId.of(row[0]),
+              TestStreams.stream("s1"),
+              "Err",
+              "msg",
+              1,
+              row[2].equals("old") ? old : now,
+              null,
+              null,
+              null,
+              row[1] == null ? null : IdempotencyKey.of(row[1])));
+    }
+    // An exhausted unkeyed entry is the exhausted alert's, not this count's.
+    dlq.updateAttempts(CommandId.of("7b000000-0000-0000-0000-000000000002"), 5, now);
+    Instant cutoff = now.minus(java.time.Duration.ofDays(7));
+
+    assertEquals(2, dlq.countAwaitingOperator(5, true, cutoff));
+    assertEquals(1, dlq.countAwaitingOperator(5, true, null), "no keyed entry without a cutoff");
+    assertEquals(1, dlq.countAwaitingOperator(5, false, cutoff), "the old keyed entry only");
+    assertEquals(0, dlq.countAwaitingOperator(5, false, null));
+    assertEquals(
+        3,
+        dlq.countAwaitingOperator(5, true, Instant.parse("9999-12-31T23:59:59Z")),
+        "a far-future cutoff counts every keyed entry");
+  }
+
+  @Test
   void readRetryableOrdersOldestFirst() throws Exception {
     var cmd1 = CommandId.of("80000000-0000-0000-0000-000000000001");
     dlq.publish(

@@ -91,6 +91,20 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
   }
 
   @Override
+  public long countAwaitingOperator(
+      int maxRetries, boolean countUnkeyed, Instant keyedFirstAttemptBefore) {
+    return entries.stream()
+        .filter(e -> e.dlqAttempts() < maxRetries)
+        .filter(
+            e ->
+                e.idempotencyKey() == null
+                    ? countUnkeyed
+                    : keyedFirstAttemptBefore != null
+                        && e.firstAttemptAt().isBefore(keyedFirstAttemptBefore))
+        .count();
+  }
+
+  @Override
   public void discard(CommandId commandId) {
     Objects.requireNonNull(commandId, "commandId is required");
     entries.removeIf(e -> e.commandId().equals(commandId));

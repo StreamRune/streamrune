@@ -198,6 +198,8 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
    */
   private final AtomicLong dlqPending = new AtomicLong();
 
+  private final AtomicLong dlqAwaitingOperator = new AtomicLong();
+
   /**
    * Projection dead-letter backlog: un-replayed dead-letter entries across all projections, sampled
    * once per cycle by the projection runners and updated in place (gauge semantics, last write
@@ -453,6 +455,12 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
     Gauge.builder(meter(MetricNames.DLQ_PENDING), dlqPending, AtomicLong::doubleValue)
         .description(
             "Current command dead-letter-queue depth (entries queued for retry/inspection)")
+        .register(registry);
+    Gauge.builder(
+            meter(MetricNames.DLQ_AWAITING_OPERATOR), dlqAwaitingOperator, AtomicLong::doubleValue)
+        .description(
+            "Command dead-letter entries the retry runner will never replay on its schedule"
+                + " (unkeyed, or keyed past the inbox window); each awaits an operator")
         .register(registry);
     Gauge.builder(
             meter(MetricNames.PROJECTIONS_DEAD_LETTER_BACKLOG),
@@ -1183,6 +1191,11 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   @Override
   public void recordDlqBacklog(long pending) {
     dlqPending.set(pending);
+  }
+
+  @Override
+  public void recordDlqAwaitingOperator(long awaiting) {
+    dlqAwaitingOperator.set(awaiting);
   }
 
   @Override

@@ -810,6 +810,18 @@ public interface StreamRuneMetrics {
   default void recordDlqBacklog(long pending) {}
 
   /**
+   * Records the number of command dead-letter entries the retry runner will never replay on its
+   * schedule and that are not exhausted — unkeyed entries under {@code UnkeyedReplay.OPERATOR_ONLY}
+   * and keyed entries older than the command-inbox retention window. Reported as the latest sampled
+   * value (the {@code DeadLetterRetryRunner} samples it each poll cycle). Each of them waits for an
+   * operator; alert on a value above zero. See {@link
+   * org.streamrune.core.metrics.MetricNames#DLQ_AWAITING_OPERATOR}.
+   *
+   * @param awaiting the number of entries awaiting an operator
+   */
+  default void recordDlqAwaitingOperator(long awaiting) {}
+
+  /**
    * Records the outbox relay's current consecutive poll-cycle failure count — {@code 0} when the
    * last cycle succeeded, rising while the relay is degraded (in backoff-retry). Reported as a
    * gauge sampled each poll cycle so a stalled-but-alive relay is visible on the metrics endpoint,

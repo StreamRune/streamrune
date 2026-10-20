@@ -214,7 +214,18 @@ public class StreamRuneConfigValidator {
     }
   }
 
+  /**
+   * Whether {@code instance} resolves to a non-null bean. Resolved through a handle that is closed
+   * at once: for a {@code @Dependent} producer — the framework's command inbox is one — that
+   * destroys the instance this check created, instead of leaving it to live as long as the
+   * validator.
+   */
   private static boolean resolvesToInstance(Instance<?> instance) {
-    return instance != null && instance.isResolvable() && instance.get() != null;
+    if (instance == null || !instance.isResolvable()) {
+      return false;
+    }
+    try (var handle = instance.getHandle()) {
+      return handle.get() != null;
+    }
   }
 }

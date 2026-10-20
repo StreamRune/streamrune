@@ -138,12 +138,18 @@ request (an `Idempotency-Key` header, a client-generated operation id) — see
 [Idempotency](idempotency.md). Then the caller's retry is deduplicated, a dead-letter entry is
 replayed automatically and safely, and nobody has to decide anything by hand.
 
-**An unkeyed entry waiting for an operator.** The bus logs nothing beyond the failure it throws, and
-the entry is counted in `streamrune.dlq.pending`; it is never counted as exhausted. Alert on a
-`dlq.pending` that stays above zero for longer than the automatic ladder takes. For each entry,
-check whether the command's effect is present — the caller may have retried — and then call
-`discard(commandId)` on the queue if it is, or `retry(commandId)` on the runner if it is not. An
-entry nobody decides is pruned by the retention sweeper after `streamrune.dead-letter.retention-max-age`.
+**An entry waiting for an operator.** An unkeyed entry, and a keyed entry past the inbox window
+(below), is never replayed on the schedule and never counted as exhausted. The runner samples them
+each cycle as the gauge `streamrune.dlq.awaiting_operator` (`DeadLetterQueue.countAwaitingOperator`;
+a store without it leaves the gauge at zero, like `dlq.pending`) — **alert on it above zero**.
+`dlq.pending` is no substitute: it also counts exhausted entries, which the default policy keeps for
+the whole retention window. For each waiting entry, check whether the command's effect is present —
+the caller may have retried — and then call `discard(commandId)` on the queue if it is, or
+`retry(commandId, true)` on the runner if it is not. An entry nobody decides is pruned by the
+retention sweeper after `streamrune.dead-letter.retention-max-age`. The gauge is not folded into the
+relay health: the backlog is the same on every replica and is work for a person, not a fault of the
+process, and a health signal that took every replica out of readiness for it would turn a queue into
+an outage.
 
 #### Stale keyed entries
 
@@ -156,15 +162,26 @@ retry completed it on day 0.
 The runner therefore refuses to replay a keyed entry whose command was first received
 (`firstAttemptAt`) longer ago than the inbox window it is given
 (`Builder.inboxRetentionMaxAge(Duration)`; the integrations pass `streamrune.inbox.retention-max-age`).
-The refusal applies to the scheduled retry and to `retry(commandId)` alike: nothing is executed, the
-entry is left unchanged, a WARN names the entry and the window, and
-`streamrune.dlq.stale_replay_blocked` is counted. The remedy is a decision by an operator: if the
+Nothing is executed and the entry is left unchanged. The scheduled retry skips such an entry like
+one whose backoff has not elapsed — it takes no slot of the batch, so fresh keyed entries behind it
+are replayed — logs one summary WARN per cycle and counts it in `streamrune.dlq.awaiting_operator`.
+`retry(commandId)` refuses it with `STALE_REPLAY_BLOCKED`, a WARN naming the entry and the window,
+and `streamrune.dlq.stale_replay_blocked`. The remedy is a decision by an operator: if the
 command's effect is present, discard the entry; if it is not, `retry(commandId, true)` replays it
 anyway — `force` acknowledges that the inbox can no longer deduplicate it, and the forced replay is
 logged at WARN. The age is measured from `firstAttemptAt` because no row the dead-lettered attempt
-or a later retry by its caller wrote can be older. One case it does not cover: a key that had
-already succeeded *before* the dead-lettered attempt was received (the dead-lettered attempt was
-itself a retry that failed on infrastructure) is deduplicated only while that earlier row lasts.
+or a later retry by its caller wrote can be older.
+
+Two limits of the measurement. **Clocks:** `firstAttemptAt` comes from the clock of the replica
+that dispatched the command, `processed_at` from the database's, and the sweeper and the runner use
+their own replicas' clocks; there is no allowance for skew between them, so keep them synchronized
+(NTP) — a skew of δ leaves a sliver of δ at the window's edge. **An overlapping duplicate:** a
+command whose key had already been recorded when it ran is answered from the inbox, and one whose
+inbox lookup fails is not dead-lettered at all, so an entry for an already-succeeded key arises only
+when the dead-lettered attempt overlapped the successful one (its lookup missed, then its own claim
+failed on infrastructure). Such an entry's dedup row is up to one command's duration (lock wait plus
+the caller's timeout) older than its `firstAttemptAt`, and that is the uncovered width — not the
+caller's retry horizon.
 
 The integrations also refuse to start when `streamrune.dead-letter.retention-max-age` is longer than
 `streamrune.inbox.retention-max-age` and both a `CommandInbox` and a `DeadLetterQueue` are
@@ -296,10 +313,14 @@ For an on-demand single retry (e.g. an operator clicking "Retry" in an admin UI)
 window, and returns a `RetryOutcome`: `REPLAYED` (the bus accepted the command and the entry was
 discarded), `FAILED` (it failed again or could not be replayed; the attempt is recorded),
 `ADMISSION_REFUSED` (the bus is closing or saturated; the entry is unchanged),
-`STALE_REPLAY_BLOCKED` (see [Stale keyed entries](#stale-keyed-entries); `retry(commandId, true)`
-lifts it) or `NOT_FOUND`. It replays an unkeyed entry whatever `unkeyedReplay` says — that policy
-governs only the schedule — so check first whether the caller already retried. An admin endpoint
-maps `STALE_REPLAY_BLOCKED` to a conflict the operator resolves, not to an error. The replay runs on a fresh virtual thread
+`STALE_REPLAY_BLOCKED` (see [Stale keyed entries](#stale-keyed-entries)), `NOT_DEDUPLICATED` or
+`NOT_FOUND`. `NOT_DEDUPLICATED` refuses an entry whose replay nothing can pair with a retry its
+caller may already have made — it ran without an idempotency key, or the bus has no command inbox:
+the operator cannot see from the entry whether that retry happened, so replaying on a click would
+bring back the double execution the schedule avoids. Both refusals leave the entry unchanged and are
+lifted by `retry(commandId, true)` after the operator has checked that the command's effect is
+absent. An admin endpoint maps them to a conflict the operator resolves (asking for confirmation
+before it forces), not to an error. The replay runs on a fresh virtual thread
 that `retry` waits for, so it carries exactly what a scheduled replay carries. Nothing the calling
 thread has bound reaches it — not the admin request's user, correlation id, baggage or captured
 authorities, not a saga-dispatch marker or a dispatch cause, not an inheritable thread-local — so

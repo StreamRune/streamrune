@@ -155,10 +155,21 @@ class DeadLetterReplaySafetyTest {
   /** Records the stale-replay refusals the runner reports. */
   static final class RecordingMetrics implements StreamRuneMetrics {
     final List<String> staleBlocked = new ArrayList<>();
+    final List<Long> awaitingOperator = new ArrayList<>();
 
     @Override
     public void recordDeadLetterStaleReplayBlocked(String commandType) {
       staleBlocked.add(commandType);
+    }
+
+    @Override
+    public void recordDlqAwaitingOperator(long awaiting) {
+      awaitingOperator.add(awaiting);
+    }
+
+    long lastAwaiting() {
+      assertFalse(awaitingOperator.isEmpty(), "the gauge was sampled");
+      return awaitingOperator.getLast();
     }
   }
 
@@ -298,17 +309,49 @@ class DeadLetterReplaySafetyTest {
   }
 
   @Test
-  void unkeyedEntry_operatorRetry_replaysIt_thePolicyGovernsOnlyTheSchedule() {
+  void unkeyedEntry_operatorRetryWithoutForce_isRefused_withForce_replaysIt() {
     var h = new Harness(true, 1, immediate(UnkeyedReplay.OPERATOR_ONLY));
     var restock = new AdjustStock("p-1", 50);
     assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
     var commandId = h.onlyEntry().commandId();
 
+    assertEquals(RetryOutcome.NOT_DEDUPLICATED, h.runner.retry(commandId));
+    assertEquals(100, h.units("p-1"));
+    assertEquals(0, h.onlyEntry().dlqAttempts(), "a refusal leaves the entry unchanged");
+
     // The operator checked: the caller never retried, so the restock is missing.
-    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(commandId));
+    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(commandId, true));
 
     assertEquals(150, h.units("p-1"));
     assertTrue(h.dlq.all().isEmpty());
+  }
+
+  @Test
+  void unkeyedRelativeCommand_clientRetrySucceeds_thenAnOperatorClicksRetry_isNotAppliedAgain() {
+    // The admin page's Retry button under the shipped defaults: the caller already re-sent the
+    // restock, and nothing on the entry shows it.
+    var h = new Harness(true, 1, null);
+    var restock = new AdjustStock("p-1", 50);
+    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+    h.bus.execute(restock);
+    assertEquals(150, h.units("p-1"));
+    var commandId = h.onlyEntry().commandId();
+
+    assertEquals(RetryOutcome.NOT_DEDUPLICATED, h.runner.retry(commandId));
+
+    assertEquals(150, h.units("p-1"), "the restock is applied once, not twice");
+    assertEquals(0, h.onlyEntry().dlqAttempts());
+  }
+
+  @Test
+  void aKeyedEntryOnABusWithoutAnInbox_operatorRetryWithoutForce_isRefused() {
+    var h = new Harness(false, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    h.publish("keyed-1", new AdjustStock("p-1", 50), Instant.now(), key("k-1"));
+
+    assertEquals(RetryOutcome.NOT_DEDUPLICATED, h.runner.retry(CommandId.of("keyed-1")));
+    assertEquals(100, h.units("p-1"));
+    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(CommandId.of("keyed-1"), true));
+    assertEquals(150, h.units("p-1"));
   }
 
   @Test
@@ -494,12 +537,143 @@ class DeadLetterReplaySafetyTest {
 
     h.runner.processBatch();
 
-    assertEquals(100, h.units("p-1"), "the stale entry is refused on the schedule too");
+    assertEquals(100, h.units("p-1"), "the stale entry is not replayed on the schedule");
     assertEquals(150, h.units("p-2"), "the fresh keyed entry is replayed");
     var stale = h.onlyEntry();
     assertEquals(CommandId.of("stale"), stale.commandId());
-    assertEquals(0, stale.dlqAttempts(), "the refusal is not a failed attempt");
-    assertEquals(List.of("AdjustStock"), h.metrics.staleBlocked);
+    assertEquals(0, stale.dlqAttempts(), "skipping is not a failed attempt");
+    assertNull(stale.lastAttemptAt());
+    assertTrue(
+        h.metrics.staleBlocked.isEmpty(),
+        "the schedule skips it like a not-due entry; it is counted by the gauge, not per cycle");
+    h.runner.processBatch();
+    assertEquals(1, h.metrics.lastAwaiting(), "the stale entry awaits an operator");
+  }
+
+  @Test
+  void staleKeyedEntriesAtTheHead_doNotTakeBatchSlots_theFreshEntryBehindThemIsReplayed() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    Instant now = h.runnerClock.instant();
+    // Never attempted and published first, so they sort ahead of the fresh entry; ten of them fill
+    // a whole batch (the default batch size is ten).
+    for (int i = 0; i < 10; i++) {
+      h.publish(
+          "stale-" + i,
+          new AdjustStock("s-" + i, 1),
+          now.minus(Duration.ofDays(8)),
+          key("k-stale-" + i));
+    }
+    h.runnerClock.advance(Duration.ofSeconds(1));
+    h.publish("fresh", new AdjustStock("f-1", 50), h.runnerClock.instant(), key("k-fresh"));
+
+    for (int cycle = 0; cycle < 3; cycle++) {
+      h.runner.processBatch();
+    }
+
+    assertEquals(150, h.units("f-1"), "the fresh keyed entry is replayed in the first cycle");
+    assertEquals(10, h.dlq.all().size(), "the stale entries stay for an operator");
+    assertTrue(h.dlq.all().stream().allMatch(e -> e.dlqAttempts() == 0));
+    assertTrue(h.metrics.staleBlocked.isEmpty(), "no refusal counted per entry per cycle");
+    assertEquals(10, h.metrics.lastAwaiting());
+  }
+
+  // ── streamrune.dlq.awaiting_operator ─────────────────────────────────────────────────────────
+
+  @Test
+  void awaitingOperator_countsUnkeyedEntriesUnderOperatorOnly_notExhaustedOnes_notFreshKeyedOnes() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    Instant now = h.runnerClock.instant();
+    h.publish("u-1", new AdjustStock("u-1", 1), now, null);
+    h.publish("u-2", new AdjustStock("u-2", 1), now, null);
+    h.publish("u-exhausted", new AdjustStock("u-3", 1), now, null);
+    h.dlq.updateAttempts(CommandId.of("u-exhausted"), 5, now);
+    // Fresh keyed: replayed on the schedule, never awaiting. Stale keyed: awaiting.
+    h.publish("k-stale", new AdjustStock("k-1", 1), now.minus(Duration.ofDays(8)), key("k-s"));
+
+    h.runner.processBatch();
+
+    assertEquals(3, h.metrics.lastAwaiting(), "two unkeyed and one stale keyed entry");
+  }
+
+  @Test
+  void awaitingOperator_isZeroUnderAutomaticWithoutAnInboxWindow() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.AUTOMATIC));
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(h.dlq)
+            .commandBus(h.bus)
+            .objectMapper(MAPPER)
+            .policy(
+                new DeadLetterRetryPolicy(
+                    5, Duration.ofDays(1), 2.0, false, UnkeyedReplay.AUTOMATIC))
+            .clock(h.runnerClock)
+            .metrics(h.metrics)
+            .registerCommand(AdjustStock.class)
+            .build();
+    h.publish("u-1", new AdjustStock("u-1", 1), h.runnerClock.instant(), null);
+
+    runner.processBatch();
+
+    assertEquals(0, h.metrics.lastAwaiting(), "everything is replayed on the schedule");
+  }
+
+  @Test
+  void awaitingOperator_onABusWithoutAnInbox_countsKeyedEntriesToo() {
+    var h = new Harness(false, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    h.publish("keyed-1", new AdjustStock("p-1", 1), Instant.now(), key("k-1"));
+    h.publish("unkeyed-1", new AdjustStock("p-2", 1), Instant.now(), null);
+
+    h.runner.processBatch();
+
+    assertEquals(2, h.metrics.lastAwaiting());
+  }
+
+  @Test
+  void awaitingOperator_degradesQuietlyForAStoreWithoutSupport() {
+    var h = new Harness(true, 0, immediate(UnkeyedReplay.OPERATOR_ONLY));
+    var counted = new java.util.concurrent.atomic.AtomicInteger();
+    DeadLetterQueue noCount =
+        new DeadLetterQueue() {
+          @Override
+          public void publish(DeadLetterPublishRequest request) {}
+
+          @Override
+          public List<DeadLetterEntry> read(int limit) {
+            return List.of();
+          }
+
+          @Override
+          public void discard(CommandId commandId) {}
+
+          @Override
+          public List<DeadLetterEntry> readRetryable(
+              int maxRetries, int limit, boolean includeUnkeyed) {
+            return List.of();
+          }
+
+          @Override
+          public long countAwaitingOperator(
+              int maxRetries, boolean countUnkeyed, Instant keyedFirstAttemptBefore) {
+            counted.incrementAndGet();
+            return DeadLetterQueue.super.countAwaitingOperator(
+                maxRetries, countUnkeyed, keyedFirstAttemptBefore);
+          }
+        };
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(noCount)
+            .commandBus(h.bus)
+            .objectMapper(MAPPER)
+            .policy(immediate(UnkeyedReplay.OPERATOR_ONLY))
+            .metrics(h.metrics)
+            .registerCommand(AdjustStock.class)
+            .build();
+
+    assertDoesNotThrow(runner::processBatch);
+    assertDoesNotThrow(runner::processBatch);
+
+    assertEquals(1, counted.get(), "the sample is disabled after the first refusal");
+    assertTrue(h.metrics.awaitingOperator.isEmpty());
   }
 
   @Test
@@ -546,7 +720,11 @@ class DeadLetterReplaySafetyTest {
         h.runnerClock.instant().minus(Duration.ofDays(30)),
         null);
 
-    assertEquals(RetryOutcome.REPLAYED, h.runner.retry(CommandId.of("old-unkeyed")));
+    // AUTOMATIC replays it on the schedule whatever its age.
+    h.runner.processBatch();
+
+    assertEquals(101, h.units("p-1"));
+    assertTrue(h.dlq.all().isEmpty());
   }
 
   @Test

@@ -285,7 +285,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   fields read `[REDACTED]`, is leadership-gated, and offers an on-demand `retry(CommandId)` that runs
   on its own virtual thread with the context recorded on the entry, never the operator's identity,
   correlation, baggage, saga marker or dispatch cause, and returns a `RetryOutcome` (`REPLAYED`,
-  `FAILED`, `ADMISSION_REFUSED`, `STALE_REPLAY_BLOCKED`, `NOT_FOUND`). A replay restores user,
+  `FAILED`, `ADMISSION_REFUSED`, `STALE_REPLAY_BLOCKED`, `NOT_DEDUPLICATED`, `NOT_FOUND`). A replay restores user,
   correlation id and trace id and never a saga origin or a causation id; a command dispatched with a
   dispatch cause bound (a saga's own dispatch, or a `StreamRuneContext.continuing` reaction to a
   stored event) is not dead-lettered, its caller retries it. `DeadLetterRetentionSweeper` prunes
@@ -302,8 +302,13 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   backlog of unkeyed entries never starves the keyed ones. A keyed entry first received longer ago
   than the inbox retention window (`Builder.inboxRetentionMaxAge`, which the integrations set from
   `streamrune.inbox.retention-max-age`) is refused, on the schedule and on `retry(commandId)` alike
-  (`STALE_REPLAY_BLOCKED`, a WARN, `streamrune.dlq.stale_replay_blocked`), until an operator either
-  discards it or forces it with `retry(commandId, true)`; and the integrations refuse to start when
+  (skipped on the schedule without taking a batch slot; refused by `retry(commandId)` with
+  `STALE_REPLAY_BLOCKED`, a WARN and `streamrune.dlq.stale_replay_blocked`), until an operator either
+  discards it or forces it with `retry(commandId, true)`. An operator's `retry(commandId)` of an
+  entry the inbox cannot deduplicate at all — unkeyed, or on a bus without an inbox — is refused
+  the same way (`NOT_DEDUPLICATED`) unless forced. The gauge `streamrune.dlq.awaiting_operator`
+  (`DeadLetterQueue.countAwaitingOperator`) counts the entries the schedule will never replay; and
+  the integrations refuse to start when
   `streamrune.dead-letter.retention-max-age` exceeds `streamrune.inbox.retention-max-age` with a
   `CommandInbox` and a `DeadLetterQueue` configured.
 

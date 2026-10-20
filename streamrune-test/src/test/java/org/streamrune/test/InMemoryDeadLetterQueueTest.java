@@ -154,6 +154,36 @@ class InMemoryDeadLetterQueueTest {
   }
 
   @Test
+  void countAwaitingOperatorCountsUnkeyedAndOldKeyedEntriesButNotExhaustedOnes() {
+    Instant now = Instant.now();
+    dlq.publish(request("u-1", "Unkeyed"));
+    dlq.publish(request("u-exhausted", "Unkeyed"));
+    dlq.updateAttempts(CommandId.of("u-exhausted"), 5, now);
+    for (String[] row : new String[][] {{"k-old", "8"}, {"k-fresh", "0"}}) {
+      dlq.publish(
+          new DeadLetterQueue.DeadLetterPublishRequest(
+              "{}",
+              "Keyed",
+              CommandId.of(row[0]),
+              StreamId.of(TYPE, AggregateId.of("s1")),
+              "Err",
+              "msg",
+              1,
+              now.minus(Duration.ofDays(Long.parseLong(row[1]))),
+              null,
+              null,
+              null,
+              IdempotencyKey.of(row[0])));
+    }
+    Instant cutoff = now.minus(Duration.ofDays(7));
+
+    assertEquals(2, dlq.countAwaitingOperator(5, true, cutoff));
+    assertEquals(1, dlq.countAwaitingOperator(5, true, null));
+    assertEquals(1, dlq.countAwaitingOperator(5, false, cutoff));
+    assertEquals(0, dlq.countAwaitingOperator(5, false, null));
+  }
+
+  @Test
   void readRetryableOrdersOldestFirst() {
     dlq.publish(request("cmd-1", "First"));
     dlq.publish(request("cmd-2", "Second"));

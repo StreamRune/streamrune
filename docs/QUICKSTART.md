@@ -588,8 +588,10 @@ domain events — as long as that path serializes with the `CryptoEngine`:
   table for the details.
 - **Unkeyed dead-lettered commands wait for an operator.** The automatic retry replays an entry
   only when its command ran under an idempotency key: an unkeyed command's caller may already have
-  retried it successfully, and a replay would apply it twice. Dispatch commands a caller may retry
-  with `execute(command, key)`; `streamrune.dead-letter.unkeyed-replay=automatic` restores automatic
+  retried it successfully, and a replay would apply it twice. An operator's `retry(commandId)` of
+  such an entry is refused too (`NOT_DEDUPLICATED`) until it is forced with `retry(commandId, true)`,
+  and `streamrune.dlq.awaiting_operator` counts the entries waiting. Dispatch commands a caller may
+  retry with `execute(command, key)`; `streamrune.dead-letter.unkeyed-replay=automatic` restores automatic
   replay for applications whose commands are all idempotent by construction (see
   `docs/guide/advanced/retry-and-resilience.md`).
 - **Snapshots resume after forget.** Snapshotting a forgotten subject's state writes `[REDACTED]`

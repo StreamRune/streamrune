@@ -310,6 +310,33 @@ public interface DeadLetterQueue {
   }
 
   /**
+   * Counts the entries the scheduled retry will never replay and that are not exhausted — entries
+   * with {@code dlqAttempts < maxRetries} that are either unkeyed (when {@code countUnkeyed}) or
+   * keyed with {@code firstAttemptAt} strictly before {@code keyedFirstAttemptBefore} (when it is
+   * non-null). Read-only, like {@link #countPending()}. The {@code DeadLetterRetryRunner} samples
+   * it each poll cycle as the {@code streamrune.dlq.awaiting_operator} gauge: every entry it counts
+   * waits for an operator to retry or discard it, and none of them ever reaches {@code
+   * streamrune.dlq.exhausted}.
+   *
+   * <p>The default throws {@link UnsupportedOperationException}: a store that does not support it
+   * is simply excluded from the gauge (the runner degrades gracefully); retry is unaffected.
+   *
+   * @param maxRetries entries at or above this many DLQ attempts are exhausted and not counted
+   * @param countUnkeyed whether entries without an idempotency key count
+   * @param keyedFirstAttemptBefore keyed entries first received strictly before this instant count;
+   *     {@code null} counts no keyed entry
+   * @return the number of entries awaiting an operator
+   * @throws UnsupportedOperationException if the implementation does not support counting
+   */
+  default long countAwaitingOperator(
+      int maxRetries, boolean countUnkeyed, Instant keyedFirstAttemptBefore) {
+    throw new UnsupportedOperationException(
+        getClass().getName()
+            + " does not support countAwaitingOperator(int, boolean, Instant) — override it to"
+            + " enable the streamrune.dlq.awaiting_operator gauge.");
+  }
+
+  /**
    * Deletes entries published strictly before {@code cutoff}, returning the number of rows removed.
    * Used by the retention sweeper to bound how long failed-command payloads (including any
    * encrypted PII) remain queryable — a GDPR storage-limitation concern, not a correctness one.

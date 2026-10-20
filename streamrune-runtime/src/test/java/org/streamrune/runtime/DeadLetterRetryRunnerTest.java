@@ -1934,7 +1934,7 @@ class DeadLetterRetryRunnerTest {
               return null;
             });
 
-    var result = runner().retry(CommandId.of("cmd-1"));
+    var result = runner().retry(CommandId.of("cmd-1"), true);
 
     assertEquals(
         DeadLetterRetryRunner.RetryOutcome.REPLAYED,
@@ -1951,7 +1951,7 @@ class DeadLetterRetryRunnerTest {
     // The queue is non-empty but has no entry with this id — retry must not execute anything.
     publishTestEntry("cmd-present");
 
-    var result = runner().retry(CommandId.of("cmd-absent"));
+    var result = runner().retry(CommandId.of("cmd-absent"), true);
 
     assertEquals(
         DeadLetterRetryRunner.RetryOutcome.NOT_FOUND,
@@ -1969,7 +1969,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
         .thenThrow(new RuntimeException("still broken"));
 
-    var result = runner().retry(CommandId.of("cmd-1"));
+    var result = runner().retry(CommandId.of("cmd-1"), true);
 
     // The failure is reported, and reflected in the entry's state.
     assertEquals(
@@ -2020,7 +2020,7 @@ class DeadLetterRetryRunnerTest {
 
     var result =
         ScopedValue.where(StreamRuneContext.CURRENT, operatorContext())
-            .call(() -> runner.retry(CommandId.of("cmd-1")));
+            .call(() -> runner.retry(CommandId.of("cmd-1"), true));
 
     assertEquals(DeadLetterRetryRunner.RetryOutcome.REPLAYED, result);
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
@@ -2046,7 +2046,7 @@ class DeadLetterRetryRunnerTest {
     var runner = runner();
 
     ScopedValue.where(StreamRuneContext.CURRENT, operatorContext())
-        .call(() -> runner.retry(CommandId.of("cmd-1")));
+        .call(() -> runner.retry(CommandId.of("cmd-1"), true));
 
     RequestContext ctx = observed.get();
     assertNotNull(ctx, "the recorded context is rebound for the replay");
@@ -2080,7 +2080,7 @@ class DeadLetterRetryRunnerTest {
     try {
       ScopedValue.where(StreamRuneContext.CURRENT, operatorContext())
           .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
-          .call(() -> runner.retry(CommandId.of("cmd-1")));
+          .call(() -> runner.retry(CommandId.of("cmd-1"), true));
     } finally {
       callerSecurity.remove();
     }
@@ -2145,7 +2145,7 @@ class DeadLetterRetryRunnerTest {
 
     var result =
         ScopedValue.where(StreamRuneContext.CURRENT, operatorContext())
-            .call(() -> realRunner.retry(CommandId.of("cmd-boot-1")));
+            .call(() -> realRunner.retry(CommandId.of("cmd-boot-1"), true));
 
     assertEquals(DeadLetterRetryRunner.RetryOutcome.REPLAYED, result);
     assertTrue(realDlq.all().isEmpty(), "the replay succeeded and discarded the entry");
@@ -2203,7 +2203,7 @@ class DeadLetterRetryRunnerTest {
             .build();
 
     var thrown =
-        assertThrows(IllegalStateException.class, () -> runner.retry(CommandId.of("cmd-1")));
+        assertThrows(IllegalStateException.class, () -> runner.retry(CommandId.of("cmd-1"), true));
 
     assertEquals("dead letter store unavailable", thrown.getMessage());
     assertEquals(0, dlq.all().getFirst().dlqAttempts(), "nothing was recorded");
@@ -2222,7 +2222,7 @@ class DeadLetterRetryRunnerTest {
     DeadLetterRetryRunner.RetryOutcome result;
     boolean stillInterrupted;
     try {
-      result = runner.retry(CommandId.of("cmd-1"));
+      result = runner.retry(CommandId.of("cmd-1"), true);
     } finally {
       stillInterrupted = Thread.interrupted();
     }
@@ -2249,8 +2249,8 @@ class DeadLetterRetryRunnerTest {
     var runner = runnerWithMetrics(metrics);
     var appender = attachRunnerLogAppender();
     try {
-      runner.retry(CommandId.of("cmd-1"));
-      runner.retry(CommandId.of("cmd-1"));
+      runner.retry(CommandId.of("cmd-1"), true);
+      runner.retry(CommandId.of("cmd-1"), true);
 
       assertEquals(0, metrics.count("command.dlqExhausted"), "no second exhaustion sample");
       assertEquals(5, dlq.all().getFirst().dlqAttempts(), "each failed retry is still recorded");
@@ -3206,7 +3206,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
     // The NON-leader replica performs an on-demand retry — it must still execute.
-    var retried = runnerWithLeadership(dlq, standbyView).retry(CommandId.of("cmd-1"));
+    var retried = runnerWithLeadership(dlq, standbyView).retry(CommandId.of("cmd-1"), true);
 
     assertEquals(DeadLetterRetryRunner.RetryOutcome.REPLAYED, retried);
     assertTrue(dlq.all().isEmpty(), "on-demand retry succeeded and discarded the entry");
