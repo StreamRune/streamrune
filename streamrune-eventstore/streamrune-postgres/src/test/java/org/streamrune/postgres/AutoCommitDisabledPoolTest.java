@@ -347,7 +347,9 @@ class AutoCommitDisabledPoolTest {
 
     new PostgresSnapshotStorePurger(pool, subject -> List.of(stream))
         .purge(SubjectId.of("customer-1"));
-    assertEquals(0, count("SELECT COUNT(*) FROM snapshot_store"));
+    // The purged stream keeps a row without a state; the purge committed on a manual pool.
+    assertEquals(0, count("SELECT COUNT(*) FROM snapshot_store WHERE state_payload IS NOT NULL"));
+    assertEquals(1, count("SELECT COUNT(*) FROM snapshot_store WHERE purge_generation = 1"));
   }
 
   // --- saga state ---------------------------------------------------------------------------
