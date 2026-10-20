@@ -205,7 +205,8 @@ class InternalTrackerIdRatchetTest {
               + "|(?<!\\b(?:is|are|was|were|be|been|being) )"
               + "(?<!\\b(?:is|are|was|were|be|been|being) [a-z]{1,20}ly )used to)\\b"
               + "|\\bbefore this,"
-              + "|\\bexactly as before\\b(?!\\s+(?:the|a|an|its|this|that|their|any|each|every)\\b)");
+              + "|\\bexactly as before\\b"
+              + "(?!\\s+(?:the|a|an|its|this|that|their|any|each|every)\\b)");
 
   /**
    * Work deferred to the project roadmap ("on the" followed by "roadmap"), in any letter case:
