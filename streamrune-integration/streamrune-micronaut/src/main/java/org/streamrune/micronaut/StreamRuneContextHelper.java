@@ -1,12 +1,26 @@
 package org.streamrune.micronaut;
 
+import io.micronaut.http.context.ServerRequestContext;
 import org.streamrune.core.StreamRuneContext;
 
 /**
- * Helper for accessing StreamRuneContext in environments where ScopedValue doesn't propagate
- * automatically (e.g., in reactive contexts).
+ * The request context of the request the calling thread serves, on the threads where {@link
+ * StreamRuneContext#CURRENT} is not bound.
  *
- * <p>This provides a ThreadLocal-based fallback for code that can't use ScopedValue directly.
+ * <p>{@link StreamRuneContextFilter} binds {@code CURRENT} around the rest of the filter chain, on
+ * the thread the filter runs on. Micronaut can run the route on another thread, outside that
+ * binding: a Netty event loop when the request body arrives after the request head (the default
+ * {@code streamed} server type), or the executor of a controller annotated {@code @ExecuteOn}.
+ * There {@link #get()} still answers the request's context: from the request itself ({@link
+ * #ofCurrentRequest()}), which Micronaut makes current on every thread a route runs on, and
+ * otherwise from this class's {@code ThreadLocal} mirror, which the filter's propagated context
+ * element sets on the threads Micronaut propagates that context to. The request comes first: it
+ * travels with the request and cannot name another one, whatever a thread was left holding.
+ *
+ * <p>The command bus and the query bus this module builds take the context from {@link #get()} when
+ * {@code CURRENT} is not bound, so a command or a query is authorized, audited and recorded as the
+ * request's caller on every thread. Code of your own that reads the caller outside a bus dispatch —
+ * in a controller, before it dispatches — reads it here, not from {@code CURRENT}.
  */
 public final class StreamRuneContextHelper {
 
@@ -15,25 +29,51 @@ public final class StreamRuneContextHelper {
   private StreamRuneContextHelper() {}
 
   /**
-   * Get the current context from ThreadLocal.
+   * The request context of the request the calling thread serves: {@link #ofCurrentRequest()}, or
+   * the {@code ThreadLocal} mirror when no current request carries one.
    *
-   * @return the current context or null if not set
+   * @return the context, or {@code null} when the thread serves no request that carries one (a
+   *     background thread, a request the filter did not run for)
    */
   public static StreamRuneContext.RequestContext get() {
-    return CONTEXT.get();
+    StreamRuneContext.RequestContext ofRequest = ofCurrentRequest();
+    return ofRequest != null ? ofRequest : CONTEXT.get();
   }
 
   /**
-   * Set the context in ThreadLocal.
+   * The context {@link StreamRuneContextFilter} stored on the request the calling thread serves
+   * (its request attribute {@link StreamRuneContextFilter#CONTEXT_ATTRIBUTE}), found through
+   * Micronaut's {@link ServerRequestContext#currentRequest()}.
+   *
+   * @return the context, or {@code null} when no request is current on this thread or the current
+   *     request carries none
+   */
+  public static StreamRuneContext.RequestContext ofCurrentRequest() {
+    return ServerRequestContext.currentRequest()
+        .map(StreamRuneContextFilter::requestContextOf)
+        .orElse(null);
+  }
+
+  /**
+   * Sets the {@code ThreadLocal} mirror. Only the filter's propagated context element writes it.
    *
    * @param ctx the context to set
    */
-  public static void set(StreamRuneContext.RequestContext ctx) {
+  static void set(StreamRuneContext.RequestContext ctx) {
     CONTEXT.set(ctx);
   }
 
-  /** Remove the context from ThreadLocal. */
-  public static void remove() {
+  /** Removes the {@code ThreadLocal} mirror. Only the filter's propagated context element does. */
+  static void remove() {
     CONTEXT.remove();
+  }
+
+  /**
+   * The {@code ThreadLocal} mirror alone, without the fallback to the current request: what the
+   * filter's propagated element saves and restores, so that it never leaves a value behind on a
+   * pooled thread.
+   */
+  static StreamRuneContext.RequestContext mirrored() {
+    return CONTEXT.get();
   }
 }

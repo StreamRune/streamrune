@@ -578,7 +578,9 @@ class StreamRuneMicronautModuleTest {
     AuditStore auditStore = mock(AuditStore.class);
 
     QueryBus result = module.queryBus(simpleBus, cachingBus, auditStore);
-    assertInstanceOf(AuditingQueryBus.class, result);
+    assertInstanceOf(
+        AuditingQueryBus.class,
+        assertInstanceOf(UnboundRequestContextQueryBus.class, result).delegate());
   }
 
   @Test
@@ -587,7 +589,7 @@ class StreamRuneMicronautModuleTest {
     var simpleBus = new SimpleQueryBus();
 
     QueryBus result = module.queryBus(simpleBus, null, null);
-    assertSame(simpleBus, result);
+    assertSame(simpleBus, assertInstanceOf(UnboundRequestContextQueryBus.class, result).delegate());
   }
 
   @Test
@@ -597,7 +599,9 @@ class StreamRuneMicronautModuleTest {
     AuditStore auditStore = mock(AuditStore.class);
 
     QueryBus result = module.queryBus(simpleBus, null, auditStore);
-    assertInstanceOf(AuditingQueryBus.class, result);
+    assertInstanceOf(
+        AuditingQueryBus.class,
+        assertInstanceOf(UnboundRequestContextQueryBus.class, result).delegate());
   }
 
   @Test
@@ -607,7 +611,8 @@ class StreamRuneMicronautModuleTest {
     var cachingBus = CachingQueryBus.builder().delegate(simpleBus).build();
 
     QueryBus result = module.queryBus(simpleBus, cachingBus, null);
-    assertSame(cachingBus, result);
+    assertSame(
+        cachingBus, assertInstanceOf(UnboundRequestContextQueryBus.class, result).delegate());
   }
 
   @Test

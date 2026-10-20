@@ -910,6 +910,18 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   build when a registered command declares `@RequireRole`/`@RequirePermission` and no
   `AnnotationAuthorizationInterceptor` is in its own chain; the Spring, Quarkus and Micronaut startup
   checks read the chain of every command bus bean, also one the application builds itself.
+- Micronaut: the request's caller reaches every command and query on every thread Micronaut runs a
+  route on. A route whose body arrives after the request head (the default `streamed` server type)
+  runs on a Netty event loop, and an `@ExecuteOn` controller on its executor under either server
+  type, both outside the request filter's `ScopedValue` binding. The module's command bus binds the
+  context the filter stored on the request for a dispatch that starts with
+  `StreamRuneContext.CURRENT` unbound (`VirtualThreadCommandBus.Builder#unboundRequestContext`,
+  asked on entry to `execute` and at submission in `executeAsync`), its `QueryBus` bean does the
+  same (`UnboundRequestContextQueryBus`), a saga replay (`SagaDeadLetterReplayer`) run from such a
+  route records the operator, and `StreamRuneContextHelper.get()` answers the request's context
+  first. A bound context is never replaced, and a dispatch with no request current runs without
+  one. A task Micronaut propagates the request to (`@ExecuteOn`, `@Async`, a Micronaut executor)
+  dispatches as the caller of that request, also after the response was sent.
 - Off-thread authorization: request-scoped resolvers are evaluated once at the request edge and the
   result travels in `RequestContext.authority()`, so `executeAsync` authorizes like synchronous
   execution; a dead-letter replay runs under a recorded system principal. The captured authority is
@@ -1158,7 +1170,8 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   helper binds; with an origin bound the stored correlation id is the origin's reserved one; a
   dispatch bound to a reserved correlation id that is not the bound origin's is refused with
   `ReservedCorrelationIdException` and stores nothing; a task wrapped inside a saga dispatch is not
-  refused on another thread; a context bound to `null` is not refused for its correlation id. A
+  refused on another thread; a context bound to `null` is no context (the command executes with no
+  user and a correlation id of the bus's own). A
   hand-written `CommandBus` test double is such a bus: it makes the reserved-id check only when it
   calls `StreamRuneContext.requireNoForeignReservedCorrelationId()`, and `InMemoryCommandBus` does.
 - Every PostgreSQL-backed suite of the framework runs on PostgreSQL 18 in the default build and on 17

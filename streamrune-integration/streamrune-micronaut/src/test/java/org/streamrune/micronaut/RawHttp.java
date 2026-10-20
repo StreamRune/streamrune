@@ -9,7 +9,8 @@ import java.util.Locale;
 
 /**
  * One HTTP/1.1 request written to a socket byte for byte, for what an HTTP client library does not
- * send: the same header on two lines, a header with an empty value.
+ * send: the same header on two lines, a header with an empty value, a body that arrives well after
+ * the request head.
  */
 final class RawHttp {
 
@@ -36,6 +37,37 @@ final class RawHttp {
   }
 
   /**
+   * Sends {@code POST path} with a {@code text/plain} {@code body}, writing the request head,
+   * flushing it, and writing the body {@code bodyDelayMillis} later, so the server has routed the
+   * request before its body arrives. Reads the answer until the server closes the connection.
+   */
+  static Answer postWithDelayedBody(
+      int port, String path, List<String> headerLines, String body, long bodyDelayMillis)
+      throws Exception {
+    byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
+    try (Socket socket = new Socket("localhost", port)) {
+      socket.setSoTimeout(10_000);
+      socket.setTcpNoDelay(true);
+      StringBuilder request = new StringBuilder();
+      request.append("POST ").append(path).append(" HTTP/1.1\r\n");
+      request.append("Host: localhost\r\n");
+      request.append("Connection: close\r\n");
+      request.append("Content-Type: text/plain\r\n");
+      request.append("Content-Length: ").append(bodyBytes.length).append("\r\n");
+      for (String line : headerLines) {
+        request.append(line).append("\r\n");
+      }
+      request.append("\r\n");
+      socket.getOutputStream().write(request.toString().getBytes(StandardCharsets.ISO_8859_1));
+      socket.getOutputStream().flush();
+      Thread.sleep(bodyDelayMillis);
+      socket.getOutputStream().write(bodyBytes);
+      socket.getOutputStream().flush();
+      return readAnswer(socket);
+    }
+  }
+
+  /**
    * Sends {@code POST path} with {@code headerLines} written exactly as given, each on a line of
    * its own and in order, and reads the answer until the server closes the connection.
    */
@@ -53,18 +85,22 @@ final class RawHttp {
       request.append("\r\n");
       socket.getOutputStream().write(request.toString().getBytes(StandardCharsets.ISO_8859_1));
       socket.getOutputStream().flush();
-      ByteArrayOutputStream received = new ByteArrayOutputStream();
-      InputStream in = socket.getInputStream();
-      byte[] chunk = new byte[4096];
-      for (int read = in.read(chunk); read != -1; read = in.read(chunk)) {
-        received.write(chunk, 0, read);
-      }
-      String response = received.toString(StandardCharsets.ISO_8859_1);
-      int blank = response.indexOf("\r\n\r\n");
-      String head = blank < 0 ? response : response.substring(0, blank);
-      String body = blank < 0 ? "" : response.substring(blank + 4);
-      int status = Integer.parseInt(head.split(" ", 3)[1]);
-      return new Answer(status, head.toLowerCase(Locale.ROOT), body);
+      return readAnswer(socket);
     }
+  }
+
+  private static Answer readAnswer(Socket socket) throws Exception {
+    ByteArrayOutputStream received = new ByteArrayOutputStream();
+    InputStream in = socket.getInputStream();
+    byte[] chunk = new byte[4096];
+    for (int read = in.read(chunk); read != -1; read = in.read(chunk)) {
+      received.write(chunk, 0, read);
+    }
+    String response = received.toString(StandardCharsets.ISO_8859_1);
+    int blank = response.indexOf("\r\n\r\n");
+    String head = blank < 0 ? response : response.substring(0, blank);
+    String body = blank < 0 ? "" : response.substring(blank + 4);
+    int status = Integer.parseInt(head.split(" ", 3)[1]);
+    return new Answer(status, head.toLowerCase(Locale.ROOT), body);
   }
 }

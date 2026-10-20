@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -155,6 +156,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   private final StreamRuneMetrics metrics;
   private final List<CommandInterceptor> interceptors;
   private final UnaryOperator<Runnable> asyncTaskWrapper;
+  private final Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
   private final Clock clock;
   private final CommandInbox commandInbox;
   private final Predicate<Throwable> dlqEligible;
@@ -181,6 +183,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       StreamRuneMetrics metrics,
       List<CommandInterceptor> interceptors,
       UnaryOperator<Runnable> asyncTaskWrapper,
+      Supplier<StreamRuneContext.RequestContext> unboundRequestContext,
       Clock clock,
       CommandInbox commandInbox,
       Predicate<Throwable> dlqEligible,
@@ -198,6 +201,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
     this.interceptors = List.copyOf(interceptors);
     this.asyncTaskWrapper = asyncTaskWrapper;
+    this.unboundRequestContext = unboundRequestContext;
     this.clock = clock != null ? clock : Clock.systemUTC();
     this.commandInbox = commandInbox;
     this.dlqEligible = dlqEligible != null ? dlqEligible : DEFAULT_DLQ_ELIGIBLE;
@@ -226,7 +230,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       throw new CommandBusClosedException("Command bus is closed, cannot accept new commands");
     }
     try {
-      return executeCounted(command, null);
+      return executeCountedInTheCallersContext(command, null);
     } finally {
       inFlightCommands.decrementAndGet();
     }
@@ -271,10 +275,54 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       throw new CommandBusClosedException("Command bus is closed, cannot accept new commands");
     }
     try {
-      return executeCounted(command, key);
+      return executeCountedInTheCallersContext(command, key);
     } finally {
       inFlightCommands.decrementAndGet();
     }
+  }
+
+  /**
+   * Runs {@link #executeCounted} on the calling thread, with {@link StreamRuneContext#CURRENT}
+   * bound to the {@link Builder#unboundRequestContext(Supplier) unbound-request-context source}'s
+   * answer when nothing binds it here. Every reader of the context in the dispatch — the
+   * correlation id the bus chooses, the interceptors, the events' metadata — then sees that one
+   * context.
+   */
+  private <C extends Command> CommandResult executeCountedInTheCallersContext(
+      C command, IdempotencyKey key) {
+    StreamRuneContext.RequestContext fromSource = requestContextOfAnUnboundCaller();
+    if (fromSource == null) {
+      return executeCounted(command, key);
+    }
+    return ScopedValue.where(StreamRuneContext.CURRENT, fromSource)
+        .call(() -> executeCounted(command, key));
+  }
+
+  /**
+   * The request context of the caller on this thread: {@link StreamRuneContext#CURRENT} when it is
+   * bound, otherwise the {@link Builder#unboundRequestContext(Supplier) source}'s answer. {@link
+   * SagaCommandDispatch} reads the ambient context of a saga dispatch through it, so a saga replay
+   * an operator runs from a request records the operator on every thread the source reaches.
+   *
+   * @return the context, or {@code null} when there is none
+   */
+  StreamRuneContext.RequestContext callerRequestContext() {
+    return StreamRuneContext.CURRENT.isBound()
+        ? StreamRuneContext.CURRENT.get()
+        : requestContextOfAnUnboundCaller();
+  }
+
+  /**
+   * The request context the {@link Builder#unboundRequestContext(Supplier) source} answers for the
+   * calling thread when {@link StreamRuneContext#CURRENT} is not bound on it; {@code null} when
+   * {@code CURRENT} is bound (to whatever value), when no source is configured, and when the source
+   * answers none.
+   */
+  private StreamRuneContext.RequestContext requestContextOfAnUnboundCaller() {
+    if (unboundRequestContext == null || StreamRuneContext.CURRENT.isBound()) {
+      return null;
+    }
+    return unboundRequestContext.get();
   }
 
   /**
@@ -655,7 +703,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED} and
    * {@link StreamRuneContext#CAUSE} are re-bound on the new thread, and the configured {@link
    * Builder#asyncTaskWrapper(UnaryOperator) asyncTaskWrapper} can capture other thread-bound state
-   * such as the current OpenTelemetry context.
+   * such as the current OpenTelemetry context. When {@code CURRENT} is not bound at submission, the
+   * {@link Builder#unboundRequestContext(Supplier) unbound-request-context source} is asked on the
+   * submitting thread, and the command runs under its answer.
    */
   @Override
   public <C extends Command> CompletableFuture<CommandResult> executeAsync(C command) {
@@ -759,7 +809,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    */
   private <C extends Command> Runnable prepareAsyncTask(
       C command, CompletableFuture<CommandResult> future, AdmissionSlot slot) {
-    var capturedCtx = StreamRuneContext.CURRENT.isBound() ? StreamRuneContext.CURRENT.get() : null;
+    var capturedCtx =
+        StreamRuneContext.CURRENT.isBound()
+            ? StreamRuneContext.CURRENT.get()
+            : requestContextOfAnUnboundCaller();
     var capturedDlqReplay = DLQ_REPLAY.isBound() ? DLQ_REPLAY.get() : null;
     var capturedSagaOwned =
         StreamRuneContext.SAGA_OWNED.isBound() ? StreamRuneContext.SAGA_OWNED.get() : null;
@@ -1383,8 +1436,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     CorrelationId correlationId = null;
     UserId userId = null;
     TraceId traceId = null;
-    if (StreamRuneContext.CURRENT.isBound()) {
-      StreamRuneContext.RequestContext ctx = StreamRuneContext.CURRENT.get();
+    // capture(): a context bound to null is no context.
+    StreamRuneContext.RequestContext ctx = StreamRuneContext.capture();
+    if (ctx != null) {
       correlationId = ctx.correlationId();
       userId = ctx.userId();
       traceId = ctx.traceId();
@@ -1526,8 +1580,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     SagaOrigin origin = cause == null ? null : cause.sagaOrigin();
     CausationId causation = cause == null ? null : cause.causationId();
 
-    if (StreamRuneContext.CURRENT.isBound()) {
-      StreamRuneContext.RequestContext ctx = StreamRuneContext.CURRENT.get();
+    // capture(): a context bound to null is no context.
+    StreamRuneContext.RequestContext ctx = StreamRuneContext.capture();
+    if (ctx != null) {
       return new EventMetadata(
           eventId,
           commandId,
@@ -1712,6 +1767,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     private StreamRuneMetrics metrics;
     private final List<CommandInterceptor> interceptors = new ArrayList<>();
     private UnaryOperator<Runnable> asyncTaskWrapper;
+    private Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
     private Clock clock;
     private CommandInbox commandInbox;
     private Predicate<Throwable> dlqEligible;
@@ -1903,6 +1959,40 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
+     * Sets where the bus takes the caller's request context from for a command dispatched on a
+     * thread where {@link StreamRuneContext#CURRENT} is not bound. Not set (the default), such a
+     * command runs with no request context: no user, a correlation id the bus generates.
+     *
+     * <p>For a web framework that can run a request handler on a thread outside the binding its
+     * request filter made, such as a Micronaut route that resumes on a Netty event loop once its
+     * body has arrived. The Micronaut integration sets it to the context its request filter stored
+     * on the request the calling thread serves.
+     *
+     * <p>The bus asks the source once per dispatch, on the dispatching thread, before anything in
+     * the dispatch reads the context: on entry to {@link VirtualThreadCommandBus#execute(Command)}
+     * and {@link VirtualThreadCommandBus#execute(Command, IdempotencyKey)}, and at submission in
+     * {@link VirtualThreadCommandBus#executeAsync}. It binds the answer as {@code CURRENT} for the
+     * whole dispatch, exactly as if the caller had bound it, so the correlation id, the
+     * interceptors (authorization, audit) and the events' metadata all see the same context. The
+     * source is never asked while {@code CURRENT} is bound, whatever it is bound to ({@code null}
+     * included), so a binding a caller, a saga or a replay made is never replaced. A {@code null}
+     * answer leaves the dispatch without a context, as without a source. An exception it throws
+     * fails the dispatch before any interceptor runs.
+     *
+     * <p>The source must answer only with the context of the request the calling thread serves, and
+     * {@code null} on any other thread: whatever it answers is the identity the command is
+     * authorized and audited as.
+     *
+     * @param unboundRequestContext the source; {@code null} removes it
+     * @return this builder
+     */
+    public Builder unboundRequestContext(
+        Supplier<StreamRuneContext.RequestContext> unboundRequestContext) {
+      this.unboundRequestContext = unboundRequestContext;
+      return this;
+    }
+
+    /**
      * Sets the {@link Clock} used to stamp each produced event's {@link EventMetadata#timestamp()}
      * at append time. Defaults to {@link Clock#systemUTC()}. Inject a fixed or stepping clock in
      * tests to assert append-time stamping. The clock is read once per produced event, so events of
@@ -2030,6 +2120,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           metrics,
           interceptors,
           asyncTaskWrapper,
+          unboundRequestContext,
           clock,
           commandInbox,
           dlqEligible,

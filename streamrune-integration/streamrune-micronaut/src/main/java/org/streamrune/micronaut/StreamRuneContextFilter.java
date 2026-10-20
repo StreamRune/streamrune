@@ -64,8 +64,13 @@ import org.streamrune.integration.RequestIdentityPolicy;
  *       ScopedValue} bindings cannot follow.
  *   <li>The context is the request attribute {@link #CONTEXT_ATTRIBUTE}, which goes wherever the
  *       request goes: a filter behind this one that runs on another executor can take the route to
- *       a thread neither of the two above reaches. The {@link SseController} reads the caller of a
- *       subscription there ({@link #requestContextOf(HttpRequest)}).
+ *       a thread neither of the two above reaches, and so can Micronaut itself — a route whose
+ *       request body arrives after the request head (the default {@code streamed} server type) runs
+ *       on a Netty event loop once the body is read, and a controller annotated {@code ExecuteOn}
+ *       on that executor. The {@link SseController} reads the caller of a subscription there
+ *       ({@link #requestContextOf(HttpRequest)}); {@link StreamRuneContextHelper#get()} answers it
+ *       first, and the command bus, the query bus and the saga dispatch of the module bind {@code
+ *       CURRENT} from it for a dispatch that starts where {@code CURRENT} is not bound.
  * </ul>
  *
  * <p><b>Authorization identity (security):</b> the request-context {@code userId} is the identity
@@ -394,7 +399,9 @@ public class StreamRuneContextFilter implements Ordered {
 
     @Override
     public StreamRuneContext.RequestContext updateThreadContext() {
-      var previous = StreamRuneContextHelper.get();
+      // The mirror alone: the request fallback of get() would save the request's context as the
+      // previous value and put it back on this thread after the request.
+      var previous = StreamRuneContextHelper.mirrored();
       StreamRuneContextHelper.set(ctx);
       return previous;
     }

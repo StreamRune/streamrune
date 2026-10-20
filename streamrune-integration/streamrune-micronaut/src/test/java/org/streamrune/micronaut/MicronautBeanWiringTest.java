@@ -485,7 +485,9 @@ class MicronautBeanWiringTest {
   @Test
   void queryBusComposesCachingLayer_whenEnabled() {
     try (var ctx = ApplicationContext.run(Map.of("streamrune.query-cache.enabled", "true"))) {
-      var bus = ctx.getBean(QueryBus.class);
+      var bus =
+          assertInstanceOf(UnboundRequestContextQueryBus.class, ctx.getBean(QueryBus.class))
+              .delegate();
       assertInstanceOf(org.streamrune.runtime.CachingQueryBus.class, bus);
       assertNotNull(ctx.getBean(org.streamrune.runtime.CacheInvalidator.class));
     }
@@ -494,7 +496,10 @@ class MicronautBeanWiringTest {
   @Test
   void queryBusIsSimpleBus_whenNoCachingOrAudit() {
     try (var ctx = ApplicationContext.run()) {
-      assertSame(ctx.getBean(SimpleQueryBus.class), ctx.getBean(QueryBus.class));
+      assertSame(
+          ctx.getBean(SimpleQueryBus.class),
+          assertInstanceOf(UnboundRequestContextQueryBus.class, ctx.getBean(QueryBus.class))
+              .delegate());
     }
   }
 
@@ -551,7 +556,9 @@ class MicronautBeanWiringTest {
     try (var ctx =
         ApplicationContext.run(
             Map.of("spec.name", "framework-query-bus", "streamrune.query-cache.enabled", "true"))) {
-      var bus = ctx.getBean(QueryBus.class);
+      var bus =
+          assertInstanceOf(UnboundRequestContextQueryBus.class, ctx.getBean(QueryBus.class))
+              .delegate();
       assertInstanceOf(
           org.streamrune.runtime.AuditingQueryBus.class,
           bus,
