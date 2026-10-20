@@ -24,3 +24,16 @@ dependencies {
     // the rest of this block (module-info requires org.slf4j).
     api(libs.slf4j.api)
 }
+
+// TestKitDocLintTest reads the testing guide, this module's README and its own main sources (the
+// list of public types) (docLintTest, see the root build): declared, so an edit re-runs it.
+tasks.named<Test>("docLintTest") {
+    inputs
+        .files(
+            rootDir.resolve("docs/guide/testing.md"),
+            file("README.md"),
+            fileTree("src/main/java") { include("**/*.java") },
+        )
+        .withPropertyName("kitDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
