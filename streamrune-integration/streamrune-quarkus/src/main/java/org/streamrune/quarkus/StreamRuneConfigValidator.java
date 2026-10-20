@@ -223,10 +223,20 @@ public class StreamRuneConfigValidator {
       if (!publisher && !applicationPoller) {
         // The framework producer resolves the publisher the same way, so an ambiguous or only
         // qualified publisher relays nothing either; say which it is.
-        throw new IllegalStateException(
-            outboxPublisher != null && outboxPublisher.isAmbiguous()
-                ? org.streamrune.integration.OutboxWiringMessages.ambiguousPublisher()
-                : org.streamrune.integration.OutboxWiringMessages.noPublisher());
+        String message;
+        if (outboxPublisher != null && outboxPublisher.isAmbiguous()) {
+          message = org.streamrune.integration.OutboxWiringMessages.ambiguousPublisher();
+        } else if (beanManager != null
+            && !beanManager
+                .getBeans(
+                    org.streamrune.core.outbox.OutboxPublisher.class,
+                    jakarta.enterprise.inject.Any.Literal.INSTANCE)
+                .isEmpty()) {
+          message = org.streamrune.integration.OutboxWiringMessages.qualifiedPublisherOnly();
+        } else {
+          message = org.streamrune.integration.OutboxWiringMessages.noPublisher();
+        }
+        throw new IllegalStateException(message);
       }
     }
     // The command dead-letter twin of the saga check below: a keyed entry must not outlive the

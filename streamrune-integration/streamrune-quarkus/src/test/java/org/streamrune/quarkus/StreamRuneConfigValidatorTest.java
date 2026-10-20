@@ -241,6 +241,42 @@ class StreamRuneConfigValidatorTest {
     assertTrue(ex.getMessage().contains("streamrune.outbox.enabled=false"), ex.getMessage());
   }
 
+  /**
+   * A publisher declared only with a qualifier is not the one the framework's poller resolves. The
+   * message says that a publisher exists but carries a qualifier, not that there is none.
+   */
+  @Test
+  void outboxEnabledWithOnlyAQualifiedPublisherThrows_sayingItCarriesAQualifier() {
+    var props = TestProperties.of(Map.of("streamrune.outbox.enabled", "true"));
+    jakarta.enterprise.inject.spi.Bean<?> qualifiedPublisher =
+        mock(jakarta.enterprise.inject.spi.Bean.class);
+    when(qualifiedPublisher.getQualifiers())
+        .thenReturn(
+            java.util.Set.of(
+                jakarta.enterprise.inject.literal.NamedLiteral.of("kafka"),
+                jakarta.enterprise.inject.Any.Literal.INSTANCE));
+    var beanManager = beanManagerWithOutboxPollers(frameworkPoller());
+    when(beanManager.getBeans(
+            org.mockito.ArgumentMatchers.eq(org.streamrune.core.outbox.OutboxPublisher.class),
+            org.mockito.ArgumentMatchers.<java.lang.annotation.Annotation>any()))
+        .thenReturn(java.util.Set.of(qualifiedPublisher));
+    var validator =
+        new StreamRuneConfigValidator(
+            props,
+            satisfied(mock(org.streamrune.core.outbox.OutboxStore.class)),
+            unsatisfied(),
+            beanManager,
+            unsatisfied());
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
+    assertFalse(ex.getMessage().contains("no OutboxPublisher found"), ex.getMessage());
+    assertTrue(
+        ex.getMessage().contains("an OutboxPublisher bean exists only with a qualifier"),
+        ex.getMessage());
+    assertTrue(ex.getMessage().contains("streamrune.outbox.enabled=false"), ex.getMessage());
+  }
+
   @Test
   void outboxEnabledWithoutPublisherButWithAnApplicationPollerPasses() {
     var props = TestProperties.of(Map.of("streamrune.outbox.enabled", "true"));

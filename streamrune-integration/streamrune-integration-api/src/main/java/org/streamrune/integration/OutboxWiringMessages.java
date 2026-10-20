@@ -46,6 +46,21 @@ public final class OutboxWiringMessages {
   }
 
   /**
+   * The outbox is enabled and the only {@code OutboxPublisher} beans carry a qualifier, so the
+   * framework's poller, which resolves the default one, finds none; no application {@code
+   * OutboxPoller} bean exists.
+   *
+   * @return the message
+   */
+  public static String qualifiedPublisherOnly() {
+    return "Outbox enabled but an OutboxPublisher bean exists only with a qualifier, and the"
+        + " framework's OutboxPoller resolves the OutboxPublisher without one, so nothing relays"
+        + " the outbox entries. Declare the OutboxPublisher without a qualifier, or declare your"
+        + " own OutboxPoller."
+        + EXTERNAL_RELAY;
+  }
+
+  /**
    * The outbox is enabled and more than one {@code OutboxPublisher} bean matches, so the
    * framework's poller cannot pick one; no application {@code OutboxPoller} bean exists.
    *
