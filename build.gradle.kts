@@ -14,6 +14,7 @@ plugins {
     id("jacoco-report-aggregation")
     alias(libs.plugins.spotless) apply false
     alias(libs.plugins.jmh) apply false
+    alias(libs.plugins.pitest) apply false
     alias(libs.plugins.graalvm) apply false
     alias(libs.plugins.versions)
     alias(libs.plugins.version.catalog.update)
@@ -1695,4 +1696,48 @@ tasks.register("quickCheck") {
     dependsOn("spotlessCheck", subprojects.map { "${it.path}:spotlessCheck" })
     dependsOn(dockerFreeModules.map { "$it:test" })
     finalizedBy(testSummary)
+}
+
+// ── Mutation testing, on demand ──────────────────────────────────────────────────────────────
+//
+// `./gradlew :streamrune-core:pitest` (or `:streamrune-runtime:pitest`) runs PIT over the module:
+// it changes the compiled code one small mutation at a time, runs the tests that cover the changed
+// line against each mutant, and reports every mutant no test detects. Not part of `check`.
+// `-PpitestTargets=` narrows the mutated classes and `-PpitestTests=` the tests run against them
+// (comma-separated globs, both `org.streamrune.*` by default):
+//
+//     ./gradlew :streamrune-runtime:pitest -PpitestTargets=org.streamrune.runtime.saga.* \
+//         -PpitestTests=org.streamrune.runtime.saga.*
+//
+// The repository-text ratchets are left out of the tests: they read files rather than exercise
+// the mutated code, and LogSinkPolicyRatchetTest needs a system property only the `test` task
+// supplies. The module's own `testRuntimeOnly` launcher is the one PIT uses, so the plugin adds
+// none of its own and the `test` task's inputs stay as they are.
+val mutationTestedModules = setOf(":streamrune-core", ":streamrune-runtime")
+val pitEngineVersion = libs.versions.pitest.asProvider().get()
+val pitJunit5PluginVersion = libs.versions.pitest.junit5.plugin.get()
+
+configure(subprojects.filter { it.path in mutationTestedModules }) {
+    apply(plugin = "info.solidsoft.pitest")
+    val globs = { property: String ->
+        providers
+            .gradleProperty(property)
+            .map { value -> value.split(',').map { it.trim() }.filter { it.isNotEmpty() } }
+            .orElse(listOf("org.streamrune.*"))
+    }
+    configure<info.solidsoft.gradle.pitest.PitestPluginExtension> {
+        pitestVersion.set(pitEngineVersion)
+        junit5PluginVersion.set(pitJunit5PluginVersion)
+        addJUnitPlatformLauncher.set(false)
+        targetClasses.set(globs("pitestTargets"))
+        targetTests.set(globs("pitestTests"))
+        excludedTestClasses.set(listOf("org.streamrune.*RatchetTest"))
+        threads.set(4)
+        outputFormats.set(listOf("HTML", "XML"))
+        timestampedReports.set(false)
+    }
+    tasks.named("pitest") {
+        val report = layout.buildDirectory.file("reports/pitest/index.html")
+        doLast { logger.lifecycle("Mutation report: ${report.get().asFile}") }
+    }
 }
