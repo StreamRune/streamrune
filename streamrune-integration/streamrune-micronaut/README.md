@@ -344,11 +344,8 @@ enable constraint validation — non-introspected commands are skipped with a on
 ## Native image
 
 The module ships `META-INF/native-image/org.streamrune/streamrune-micronaut/reflect-config.json`
-for the framework's own value types and records, plus `Projection` and `BaseProjection`, whose
-`process(List, ProjectionRepository)` `Projection#writesThroughRepository` resolves with
-`getMethod` (without them the image throws `NoSuchMethodException` and the lifecycle cannot build
-the projection runner). Its `@Requires(condition = ...)` classes hold no state: Micronaut keeps a
-condition instance in the compile-time annotation metadata, which the image stores in its heap, and
+for the framework's own value types and records. Its `@Requires(condition = ...)` classes hold no
+state: Micronaut keeps a condition instance in the compile-time annotation metadata, which the image stores in its heap, and
 a framework enum held there failed the build (*An object of type
 'org.streamrune.core.ProjectionConfig$Mode' was found in the image heap*); `ArchitectureTest` keeps
 it that way.
@@ -365,8 +362,7 @@ need no entry: native-image registers the providers of a `ServiceLoader` lookup 
 `FlywayNativeImageMetadataTest` checks the list against the Flyway on the class path.
 
 The application registers its own records (a `reflect-config.json` of its own, or `@TypeHint` /
-`@ReflectiveAccess`), plus any projection class that declares `process(List,
-ProjectionRepository)` itself. **Sealed command/event interfaces need a `{"type": "…"}` entry in the
+`@ReflectiveAccess`). **Sealed command/event interfaces need a `{"type": "…"}` entry in the
 application's `META-INF/native-image/<groupId>/<artifactId>/reachability-metadata.json`**:
 `@TypeHint` and `@ReflectiveAccess` register a type through `RuntimeReflection.register(Class)`,
 which leaves its permitted subclasses unregistered (measured on Micronaut 4.10 / GraalVM CE

@@ -245,7 +245,7 @@ class ScheduledProjectionRunnerTest {
     Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> processed.size() == 1);
   }
 
-  /** Overrides the 2-arg overload, so {@code writesThroughRepository()} reports {@code true}. */
+  /** Overrides the 2-arg overload and declares it through {@code writesThroughRepository()}. */
   private static final class WriteThroughProjection implements Projection {
     final ConcurrentLinkedQueue<EventEnvelope> processed = new ConcurrentLinkedQueue<>();
 
@@ -258,6 +258,11 @@ class ScheduledProjectionRunnerTest {
     public void process(
         List<EventEnvelope> batch, org.streamrune.core.projection.ProjectionRepository repository) {
       process(batch);
+    }
+
+    @Override
+    public boolean writesThroughRepository() {
+      return true;
     }
   }
 

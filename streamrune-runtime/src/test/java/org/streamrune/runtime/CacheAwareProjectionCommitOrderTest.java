@@ -166,6 +166,11 @@ class CacheAwareProjectionCommitOrderTest {
             repository.save(NAME, ((OrderPlaced) envelope.event()).orderId(), envelope.event());
           }
         }
+
+        @Override
+        public boolean writesThroughRepository() {
+          return true;
+        }
       };
 
   private static EventEnvelope orderPlaced(StreamId streamId, String orderId) {

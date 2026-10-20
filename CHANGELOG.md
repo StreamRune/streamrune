@@ -333,8 +333,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   fencing processor; the non-transactional two-commit processor is reachable only as
   `AtomicBatchProcessor.nonAtomicAtLeastOnce()`, which refuses a non-zero leadership epoch.
 - `ProjectionDeliveryPolicy` checks each registration at `build()`/`run()`, before any event is read:
-  `TRANSACTIONAL_LOCAL`/`EXTERNAL_EFFECT` need a fencing processor, a projection that writes through
-  the handed repository (`writesThroughRepository()`) and — when the projection exposes
+  `TRANSACTIONAL_LOCAL`/`EXTERNAL_EFFECT` need a fencing processor, a projection that declares it
+  writes through the handed repository (`writesThroughRepository()`) and — when the projection exposes
   `Projection.writeTarget()` (`BaseProjection` returns its repository, the decorators forward it) — a
   processor whose `writesTo(target)` is true, compared by `ProjectionRepository.writeTargetIdentity()`
   (a `JdbcProjectionRepository`'s identity is its `(DataSource, ObjectMapper)` pair, so a bean proxy
@@ -407,6 +407,13 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `OffsetStore.reset(name)` is the deliberate rewind for a rebuild.
 - `WindowedProjection` — time-windowed aggregation over `Window(start, end)`, `WindowSink`,
   `LateDataPolicy` (`DROP`, `REOPEN`), self-fencing on the highest offset it has accumulated.
+- `Projection.writesThroughRepository()` is a declaration, `false` by default and `true` in
+  `BaseProjection`; it is never inferred from the concrete class, because the class a container hands
+  the runner can be a generated interceptor subclass (Quarkus, Micronaut) that declares every
+  method of the bean. A custom projection that overrides `process(List, ProjectionRepository)`
+  without extending `BaseProjection` must also override `writesThroughRepository()` to return `true`
+  (the delivery policy refuses a `TRANSACTIONAL_LOCAL`/`EXTERNAL_EFFECT` registration otherwise), and
+  no projection class needs registering for native-image reflection on this account.
 - Decorators `TracingProjectionDecorator`, `ValidatingProjectionDecorator` and `CacheAwareProjection`
   forward `process(List, ProjectionRepository)`, `writesThroughRepository()`, `writeTarget()` and
   `processDeadLetterReplay(List, ProjectionRepository)` to their delegate.
@@ -1294,9 +1301,9 @@ Each statement below is a property of the shipped code and holds under the state
 - **`INLINE` projections have no checkpoint, no dead letters and no replay** — a failing `process` is
   logged and the command still succeeds.
 - **Write-through is declared, not fully verified.** For a projection that exposes no
-  `writeTarget()`, `writesThroughRepository()` answers by reflection whether the two-argument
-  `process` is overridden, not whether the override writes through the handed repository. In a native
-  image such a projection class must be registered for reflection.
+  `writeTarget()`, the runner takes `writesThroughRepository()` at its word: it does not check that
+  the two-argument `process` writes through the handed repository rather than through a repository
+  the projection captured itself.
 - **The circuit breaker is per-JVM, in-memory state**; each replica opens and closes independently.
 - **`SnapshotPolicy` is global per `VirtualThreadCommandBus`.**
 - **Subscriptions are at-least-once across `pause()`/`resume()`**; listeners must be idempotent.

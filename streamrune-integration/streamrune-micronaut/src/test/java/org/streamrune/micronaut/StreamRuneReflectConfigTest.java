@@ -2,17 +2,13 @@ package org.streamrune.micronaut;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -60,35 +56,6 @@ class StreamRuneReflectConfigTest {
             "framework types reachable/derived from code but NOT registered in reflect-config.json"
                 + " for native-image reflection")
         .isEmpty();
-  }
-
-  /**
-   * {@link org.streamrune.core.projection.Projection#writesThroughRepository()} resolves {@code
-   * process(List, ProjectionRepository)} with {@code getClass().getMethod(...)}; the method is
-   * declared by {@code Projection} (the default) or by {@code BaseProjection} (final). A native
-   * image finds it only on a type whose methods are registered for reflection — measured on GraalVM
-   * CE 25.0.1: without these entries the demo's Micronaut binary refused to start ({@code
-   * NoSuchMethodException: ...DiscoverableProductProjection.process(java.util.List,
-   * ...ProjectionRepository)} while the lifecycle built the projection runner).
-   */
-  @Test
-  void registersTheProjectionTypesWhoseProcessMethodIsResolvedReflectively() throws IOException {
-    Map<String, JsonNode> byName = new LinkedHashMap<>();
-    for (JsonNode entry : new ObjectMapper().readTree(readReflectConfig())) {
-      byName.put(entry.path("name").asText(), entry);
-    }
-
-    for (Class<?> type :
-        List.of(
-            org.streamrune.core.projection.Projection.class,
-            org.streamrune.core.projection.BaseProjection.class)) {
-      assertThat(byName)
-          .as("reflect-config.json entry for %s", type.getName())
-          .containsKey(type.getName());
-      assertThat(byName.get(type.getName()).path("allDeclaredMethods").asBoolean())
-          .as("%s declared methods registered", type.getName())
-          .isTrue();
-    }
   }
 
   /** Parses the {@code "name"} entries of reflect-config.json into loaded classes. */

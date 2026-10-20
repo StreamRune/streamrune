@@ -228,8 +228,18 @@ registration it hands the processor's transaction-scoped repository, for an
 `AT_LEAST_ONCE_IDEMPOTENT` registration it hands `null`. `org.streamrune.core.projection.BaseProjection`
 overrides it and routes its `save()`/`findById()`/`delete()` helpers through the handed repository,
 or through the repository it was constructed with when it is handed `null`. Which of the two a
-registration gets is its [delivery mode](#delivery-modes--what-a-projection-promises). Inside
-`process`, write only through these helpers: the `repository` field is the repository the
+registration gets is its [delivery mode](#delivery-modes--what-a-projection-promises).
+
+A projection declares that it writes through the handed repository with
+`Projection.writesThroughRepository()`: `false` by default, `true` in `BaseProjection`. **A
+projection that overrides the two-argument `process` itself, without extending `BaseProjection`,
+must also override `writesThroughRepository()` to return `true`.** The runner takes that answer at
+its word: it is not read back from the class, because the object a container hands the runner can be
+a generated subclass of the bean (an interceptor subclass in Quarkus or Micronaut) whose class
+declares the two-argument `process` whether or not the projection does. A `TRANSACTIONAL_LOCAL` or
+`EXTERNAL_EFFECT` projection that does not declare it is refused at startup.
+
+Inside `process`, write only through these helpers: the `repository` field is the repository the
 projection was constructed with, outside the checkpoint transaction, so a `repository.delete(...)`
 there misses a row the same batch inserted and, on JDBC, can wait forever on a row lock the batch
 holds.
@@ -260,9 +270,9 @@ table; a projection that saves under another name, or two runners in one JVM, ar
 invalidation) must forward more than `process`: it must also override `writesThroughRepository()`,
 `writeTarget()` and `processDeadLetterReplay(List, ProjectionRepository)` and return its delegate's
 answer. Inherited,
-each answers for the wrapper instead of the projection it wraps — the reflective
-`writesThroughRepository()` default inspects the wrapper's own class, so a wrapper that forwards the
-two-arg `process` reads as write-through even around a projection that is not; the default
+each answers for the wrapper instead of the projection it wraps — the default
+`writesThroughRepository()` is `false`, so a wrapper that forwards the two-arg `process` reads as
+not writing through even around a projection that does; the default
 `writeTarget()` is empty, so the startup check can no longer verify that the delegate writes to the
 runner's processor; and the default `processDeadLetterReplay`
 reports "applied" for a dead-lettered range a self-fencing delegate ignored, so the
@@ -376,10 +386,11 @@ or `EXTERNAL_EFFECT` registration:
 
 - runs under a processor whose `supportsFencing()` is `false`, such as `nonAtomicAtLeastOnce()` —
   it cannot put the read-model write and the checkpoint in one transaction;
-- does not write through the handed repository — its `process(List, ProjectionRepository)` is the
-  inherited default, which ignores the repository and falls back to `process(List)`. Extend
-  `BaseProjection`, or override the two-argument `process` and write through the repository it is
-  given;
+- does not write through the handed repository — `writesThroughRepository()` answers `false`, so its
+  `process(List, ProjectionRepository)` is taken to be the inherited default, which ignores the
+  repository and falls back to `process(List)`. Extend `BaseProjection`, or override the
+  two-argument `process`, write through the repository it is given and override
+  `writesThroughRepository()` to return `true`;
 - exposes a `Projection.writeTarget()` (a `BaseProjection` returns the repository it was constructed
   with) that is not the processor's store. The two are compared through
   `ProjectionRepository.writeTargetIdentity()`, which a bean proxy forwards, so a proxied bean on

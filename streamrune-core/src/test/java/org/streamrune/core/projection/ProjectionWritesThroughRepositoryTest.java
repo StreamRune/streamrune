@@ -15,13 +15,15 @@ import org.streamrune.core.Versioned;
 import org.streamrune.core.types.ProjectionName;
 
 /**
- * {@link Projection#writesThroughRepository()}'s reflective default — {@code true} iff the 2-arg
- * {@code process(List, ProjectionRepository)} is NOT the inherited interface default on the
- * concrete class.
+ * {@link Projection#writesThroughRepository()} is a declaration: {@code false} unless the
+ * projection says otherwise, and {@code true} for {@link BaseProjection}. It is never inferred from
+ * the concrete class, because a class generated around the bean (an interceptor subclass, a proxy)
+ * declares every method of the bean and would make the inference answer {@code true} for a
+ * projection that writes nowhere through the handed repository.
  */
 class ProjectionWritesThroughRepositoryTest {
 
-  /** A lambda only ever implements the 1-arg overload — the 2-arg one is the inherited default. */
+  /** A lambda only ever implements the 1-arg overload. */
   @Test
   void lambdaProjection_reportsFalse() {
     Projection lambda = batch -> {};
@@ -38,9 +40,29 @@ class ProjectionWritesThroughRepositoryTest {
     assertFalse(new PlainProjection().writesThroughRepository());
   }
 
-  /** A class that overrides the 2-arg process(List, ProjectionRepository) reports true. */
+  /**
+   * Overriding the 2-arg process does not by itself make the projection a write-through one: the
+   * class must also declare it. This is what keeps a generated subclass, which overrides the 2-arg
+   * process of a projection that implements only the 1-arg one, from reading as write-through.
+   */
   @Test
-  void classOverridingTwoArgProcess_reportsTrue() {
+  void classOverridingTwoArgProcessWithoutDeclaring_reportsFalse() {
+    class PlainProjection implements Projection {
+      @Override
+      public void process(List<EventEnvelope> batch) {}
+    }
+    class GeneratedSubclassLikeProjection extends PlainProjection {
+      @Override
+      public void process(List<EventEnvelope> batch, ProjectionRepository repository) {
+        super.process(batch, repository);
+      }
+    }
+    assertFalse(new GeneratedSubclassLikeProjection().writesThroughRepository());
+  }
+
+  /** A class that overrides the 2-arg process and declares it reports true. */
+  @Test
+  void classOverridingTwoArgProcessAndDeclaringIt_reportsTrue() {
     class TransactionalProjection implements Projection {
       @Override
       public void process(List<EventEnvelope> batch) {
@@ -49,6 +71,11 @@ class ProjectionWritesThroughRepositoryTest {
 
       @Override
       public void process(List<EventEnvelope> batch, ProjectionRepository repository) {}
+
+      @Override
+      public boolean writesThroughRepository() {
+        return true;
+      }
     }
     assertTrue(new TransactionalProjection().writesThroughRepository());
   }
