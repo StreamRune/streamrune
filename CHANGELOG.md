@@ -678,7 +678,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   empty `compensate()` list → `FAILED`; a transient failure or a veto → the episode stays
   `COMPENSATING` and is re-driven under the same keys by a redelivered correlated event, by
   `SagaTimeoutRunner`, or by the leadership-gated `SagaCompensationRetrySweeper` (default on, interval
-  60 s, give-up horizon 1 h → `FAULTED`).
+  60 s, give-up horizon 1 h → `FAULTED`). The sweeper faults past the horizon only a saga it
+  re-drove in the cycle just before; a cycle that re-drives nothing (standby, a failed store read)
+  leaves no such evidence, so after a restart, a store outage or a standby period longer than the
+  horizon every due saga gets one real re-drive before it can be faulted.
 - `SagaTimeoutRunner` serves forward timeouts (by start instant) and `COMPENSATING` re-picks (by last
   write) as two populations interleaved in each batch, retries a failing poll with capped exponential
   backoff (up to one minute, jittered), and refuses at `build()` a decider without a `timeout()`, a

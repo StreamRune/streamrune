@@ -886,6 +886,139 @@ class SagaCompensationRetrySweeperTest {
   }
 
   @Test
+  void anOutageSpanningGiveUpAfter_doesNotFaultOnTheFirstCycleBack_storeFailures() {
+    // One real re-drive, then the store is unreachable for longer than giveUpAfter: every cycle in
+    // the outage fails at findCompensating. The re-drive before the outage is not evidence about
+    // the cycle right before the recovery, so the first cycle back re-drives instead of faulting.
+    driveIntoStuckCompensating(2); // fails on the start path and on the first re-drive
+    var outage = new java.util.concurrent.atomic.AtomicBoolean();
+    var sweeper =
+        SagaCompensationRetrySweeper.<FakeSagaState>builder()
+            .sagaRunner(runner)
+            .sagaStore(failingFindCompensating(sagaStore, outage))
+            .leadership(SubscriptionLeadership.NOOP)
+            .retryInterval(Duration.ofSeconds(60))
+            .giveUpAfter(Duration.ofMinutes(30))
+            .clock(clock)
+            .metrics(metrics)
+            .build();
+
+    clock.advance(Duration.ofSeconds(61));
+    sweeper.sweepOnce(); // a real re-drive; undo-2 fails again
+    assertThat(statusOf(sagaId)).isEqualTo(SagaStatus.COMPENSATING);
+    assertThat(metrics.compensationRetries.get()).isEqualTo(1);
+
+    outage.set(true);
+    for (int i = 0; i < 70; i++) {
+      clock.advance(Duration.ofSeconds(61));
+      org.assertj.core.api.Assertions.assertThatThrownBy(sweeper::sweepOnce)
+          .hasMessageContaining("store unreachable");
+    }
+    outage.set(false);
+    clock.advance(Duration.ofSeconds(61)); // well past giveUpAfter since the claim
+
+    sweeper.sweepOnce();
+
+    assertThat(statusOf(sagaId))
+        .as("the first cycle after the outage re-drives (undo-2 now succeeds), it does not fault")
+        .isEqualTo(SagaStatus.COMPENSATED);
+    assertThat(metrics.faulted.get()).isZero();
+    assertThat(metrics.compensationRetries.get()).isEqualTo(2);
+  }
+
+  @Test
+  void aStandbyPeriodSpanningGiveUpAfter_doesNotFaultOnTheFirstCycleAsLeader() {
+    // The same through the leadership gate: one re-drive as leader, then a standby period longer
+    // than giveUpAfter, then the lease comes back.
+    driveIntoStuckCompensating(2);
+    var leadership = new ToggleLeadership(true);
+    var sweeper = sweeper(leadership, Duration.ofSeconds(60), Duration.ofMinutes(30));
+
+    clock.advance(Duration.ofSeconds(61));
+    sweeper.sweepOnce(); // a real re-drive as leader; undo-2 fails again
+    assertThat(metrics.compensationRetries.get()).isEqualTo(1);
+
+    leadership.leader = false;
+    for (int i = 0; i < 70; i++) {
+      clock.advance(Duration.ofSeconds(61));
+      sweeper.sweepOnce();
+    }
+    leadership.leader = true;
+    clock.advance(Duration.ofSeconds(61));
+
+    sweeper.sweepOnce();
+
+    assertThat(statusOf(sagaId))
+        .as("the first cycle as leader again re-drives, it does not fault")
+        .isEqualTo(SagaStatus.COMPENSATED);
+    assertThat(metrics.faulted.get()).isZero();
+    assertThat(metrics.compensationRetries.get()).isEqualTo(2);
+  }
+
+  @Test
+  void aCompensationThatKeepsFailingAfterAnOutage_isStillFaulted_oneCycleLater() {
+    // Expiring the evidence must not disable the give-up bound: after the outage the saga gets one
+    // real re-drive, and when that fails too the next cycle faults it.
+    bus.failTransientlyNTimes("do-1", 1);
+    bus.failTransientlyForever("undo-2");
+    runner.asEventListener().onEvents(List.of(startEnvelope("x", 0L)));
+    var outage = new java.util.concurrent.atomic.AtomicBoolean();
+    var sweeper =
+        SagaCompensationRetrySweeper.<FakeSagaState>builder()
+            .sagaRunner(runner)
+            .sagaStore(failingFindCompensating(sagaStore, outage))
+            .leadership(SubscriptionLeadership.NOOP)
+            .retryInterval(Duration.ofSeconds(60))
+            .giveUpAfter(Duration.ofMinutes(30))
+            .clock(clock)
+            .metrics(metrics)
+            .build();
+    clock.advance(Duration.ofSeconds(61));
+    sweeper.sweepOnce();
+    outage.set(true);
+    clock.advance(Duration.ofHours(1));
+    org.assertj.core.api.Assertions.assertThatThrownBy(sweeper::sweepOnce)
+        .hasMessageContaining("store unreachable");
+    outage.set(false);
+
+    clock.advance(Duration.ofSeconds(61));
+    sweeper.sweepOnce(); // re-drives after the outage
+    assertThat(statusOf(sagaId)).isEqualTo(SagaStatus.COMPENSATING);
+    clock.advance(Duration.ofSeconds(61));
+    sweeper.sweepOnce(); // re-driven in the cycle just before: the give-up horizon applies
+
+    assertThat(statusOf(sagaId)).isEqualTo(SagaStatus.FAULTED);
+    assertThat(metrics.compensationRetries.get()).isEqualTo(2);
+    assertThat(metrics.faulted.get()).isEqualTo(1);
+  }
+
+  private SagaStatus statusOf(SagaId id) {
+    return sagaStore
+        .load(id, SagaType.fromClass(FakeSagaState.class), FakeSagaState.class)
+        .orElseThrow()
+        .status();
+  }
+
+  /** {@code delegate}, except that {@code findCompensating} throws while {@code outage} is set. */
+  private static SagaStore failingFindCompensating(
+      SagaStore delegate, java.util.concurrent.atomic.AtomicBoolean outage) {
+    return (SagaStore)
+        java.lang.reflect.Proxy.newProxyInstance(
+            SagaStore.class.getClassLoader(),
+            new Class<?>[] {SagaStore.class},
+            (proxy, method, args) -> {
+              if (outage.get() && method.getName().equals("findCompensating")) {
+                throw new IllegalStateException("store unreachable");
+              }
+              try {
+                return method.invoke(delegate, args);
+              } catch (java.lang.reflect.InvocationTargetException e) {
+                throw e.getCause();
+              }
+            });
+  }
+
+  @Test
   void downtimePastGiveUpAfter_stillFaultsOnTheSecondCycleIfCompensationKeepsFailing() {
     // The one-re-drive-before-give-up rule must not disable the poison bound: a compensation that
     // keeps failing after downtime is still FAULTED — just on the cycle AFTER its guaranteed first
