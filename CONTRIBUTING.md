@@ -7,6 +7,9 @@ Contributor License Agreement (CLA) is in place, **we do not accept external cod
 (pull requests with code). Bug reports, reproducers, questions and feature ideas are very welcome —
 please open an issue. Security problems: see `SECURITY.md`.
 
+The build and test commands, the conventions and the known pitfalls of this repository are in
+`AGENTS.md`, written for coding agents and people alike.
+
 ## Licensing of Contributions
 
 By contributing to StreamRune, you agree that your contributions are

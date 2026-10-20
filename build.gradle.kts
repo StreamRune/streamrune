@@ -2,6 +2,9 @@
 // the `java` extension and Gradle's deprecated `Dependencies.module(...)` helper.
 import java.lang.module.FindException
 import java.lang.module.ModuleFinder
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.jar.Manifest
 import java.util.zip.ZipFile
@@ -11,6 +14,7 @@ plugins {
     id("jacoco-report-aggregation")
     alias(libs.plugins.spotless) apply false
     alias(libs.plugins.jmh) apply false
+    alias(libs.plugins.pitest) apply false
     alias(libs.plugins.graalvm) apply false
     alias(libs.plugins.versions)
     alias(libs.plugins.version.catalog.update)
@@ -94,6 +98,189 @@ private object BrA17SupertypeCheck {
             .toList()
 }
 
+// ── Test summary — one file per test task, one line per build ────────────────────────────────
+//
+// Every Test task writes a plain-text summary into its module's build directory:
+// build/test-summary.txt for the `test` task, build/test-summary-<task>.txt for any other test task.
+// It holds the totals, one line per failure (`Class#method — the first line of the exception, joined
+// with the lines after it when it ends in a colon — the first stack frame in org.streamrune`) and the
+// ten slowest tests. The root task `testSummary` collects the summaries of the test tasks in the
+// current task graph into build/reports/test-summary.txt and prints one line. Every test task,
+// `check`, `build` and `quickCheck` are finalized by it, so that line closes every test run, a
+// failing one included.
+//
+// A nested object for the reason BrA17SupertypeCheck gives: the listener is stored in the
+// configuration cache, so it must not reference the script instance.
+private object TestSummary {
+    const val AGGREGATE = "reports/test-summary.txt"
+    private const val SLOWEST = 10
+    private const val MESSAGE_LIMIT = 300
+    private val TOTALS =
+        Regex(
+            """^\S+ — (\d+) tests, \d+ passed, (\d+) failed, \d+ skipped""" +
+                """(?:, (\d+) failures? outside a test)?""")
+
+    /** The summary file of a test task, relative to its project's build directory. */
+    fun fileName(testTaskName: String): String =
+        if (testTaskName == "test") "test-summary.txt" else "test-summary-$testTaskName.txt"
+
+    /** Collects one test task's results and writes its summary when the run ends. */
+    class Listener(private val taskPath: String, private val output: File) : TestListener {
+        private var durations = ArrayList<Pair<String, Long>>()
+        private var failures = ArrayList<String>()
+        private var outsideFailures = 0
+
+        override fun beforeSuite(suite: TestDescriptor) {
+            if (suite.parent == null) {
+                synchronized(this) {
+                    durations = ArrayList()
+                    failures = ArrayList()
+                    outsideFailures = 0
+                }
+            }
+        }
+
+        override fun beforeTest(testDescriptor: TestDescriptor) {}
+
+        override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+            val name = "${testDescriptor.className}#${testDescriptor.name}"
+            synchronized(this) {
+                if (result.resultType != TestResult.ResultType.SKIPPED) {
+                    durations.add(name to (result.endTime - result.startTime))
+                }
+                if (result.resultType == TestResult.ResultType.FAILURE) {
+                    failures.add(failureLine(name, result))
+                }
+            }
+        }
+
+        override fun afterSuite(suite: TestDescriptor, result: TestResult) {
+            // A failure the suite carries itself belongs to no single test, and Gradle's test
+            // counts leave it out: a test JVM that stops fails the whole run while its unfinished
+            // test counts as skipped. It is listed under the suite's name and counted on its own.
+            // (A test class whose setup throws reaches afterTest as a failed `initializationError`.)
+            if (result.exceptions.isNotEmpty()) {
+                synchronized(this) {
+                    failures.add(failureLine(suite.className ?: suite.name, result))
+                    outsideFailures++
+                }
+            }
+            if (suite.parent == null) {
+                write(result)
+            }
+        }
+
+        private fun write(result: TestResult) {
+            val (failed, slowest, outside) =
+                synchronized(this) {
+                    Triple(
+                        failures.toList(),
+                        durations.sortedByDescending { it.second }.take(SLOWEST),
+                        outsideFailures)
+                }
+            val outsideCount =
+                when (outside) {
+                    0 -> ""
+                    1 -> ", 1 failure outside a test"
+                    else -> ", $outside failures outside a test"
+                }
+            val text =
+                buildString {
+                    appendLine(
+                        "$taskPath — ${result.testCount} tests, ${result.successfulTestCount} " +
+                            "passed, ${result.failedTestCount} failed, ${result.skippedTestCount} " +
+                            "skipped$outsideCount " +
+                            "(${duration(result.endTime - result.startTime)}, ${now()})")
+                    failed.forEach { appendLine("  FAILED $it") }
+                    if (slowest.isNotEmpty()) {
+                        appendLine("  slowest:")
+                        slowest.forEach { (test, millis) -> appendLine("    ${duration(millis)}  $test") }
+                    }
+                }
+            output.parentFile.mkdirs()
+            output.writeText(text)
+        }
+    }
+
+    private fun failureLine(name: String, result: TestResult): String {
+        val failure = result.exception ?: return name
+        val lines = failure.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val head = lines.firstOrNull() ?: return name
+        // A first line that ends in a colon continues on the next ones: AssertJ starts its message
+        // on the line after the exception's class ("java.lang.AssertionError:", then "expected: 6"
+        // and "but was: 5"), so the lines are joined into one.
+        val first = if (head.endsWith(":")) lines.joinToString(" ") else head
+        val message = if (first.length > MESSAGE_LIMIT) first.take(MESSAGE_LIMIT) + "…" else first
+        val frame =
+            generateSequence(failure) { it.cause }
+                .take(10)
+                .flatMap { it.stackTrace.asSequence() }
+                .firstOrNull { it.className.startsWith("org.streamrune.") }
+        return buildString {
+            append(name).append(" — ").append(message)
+            if (frame != null) {
+                append(" — ${frame.className}.${frame.methodName}(${frame.fileName}:${frame.lineNumber})")
+            }
+        }
+    }
+
+    private fun duration(millis: Long): String =
+        if (millis < 1000) "${millis}ms" else String.format(Locale.ROOT, "%.1fs", millis / 1000.0)
+
+    // The local time a summary is written: a build that stops before a test task runs leaves that
+    // task's summary, and the aggregate, from an earlier run, and the time says so.
+    private fun now(): String =
+        LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+
+    /**
+     * Writes the collected summaries to [output] and returns the total test count and the failure
+     * count: failed tests plus failures outside a test.
+     */
+    fun aggregate(summaries: List<File>, output: File): Pair<Int, Int> {
+        val texts = summaries.filter { it.isFile }.map { it.readText().trimEnd() }
+        var tests = 0
+        var failed = 0
+        texts.forEach { text ->
+            TOTALS.find(text.lineSequence().first())?.let {
+                tests += it.groupValues[1].toInt()
+                failed += it.groupValues[2].toInt() + (it.groupValues[3].toIntOrNull() ?: 0)
+            }
+        }
+        output.parentFile.mkdirs()
+        output.writeText(
+            buildString {
+                appendLine("$tests tests, $failed failed — ${texts.size} test task(s), ${now()}")
+                texts.forEach { appendLine().appendLine(it) }
+            })
+        return tests to failed
+    }
+}
+
+// ── quickCheck — the fast lane ───────────────────────────────────────────────────────────────
+//
+// The modules whose tests need no Docker: `quickCheck` (registered at the end of this file) runs
+// exactly their test tasks. A module joins the list only when none of its tests starts a container.
+val dockerFreeModules =
+    setOf(
+        ":streamrune-core",
+        ":streamrune-runtime",
+        ":streamrune-test",
+        ":streamrune-crypto:streamrune-crypto-api",
+        ":streamrune-crypto:streamrune-filesystem-crypto",
+        ":streamrune-integration:streamrune-integration-api")
+
+// The JaCoCo report finalizes every Test task (subprojects below). A build that requests quickCheck
+// and nothing else leaves the report out of its task graph, so the fast lane never waits for a
+// coverage report it does not read; `quickCheck build` writes the reports as usual, and so does an
+// abbreviated name (`qC`), which this check does not recognise. The requested task names are part of
+// the configuration cache key. Only the report leaves: the JaCoCo agent stays in the test JVMs, so a
+// test task quickCheck runs has the inputs the same task has in `build`, and a `build` after a green
+// quickCheck reuses those results.
+val quickCheckOnly =
+    gradle.startParameter.taskNames.filterNot { it.startsWith("-") }.let { requested ->
+        requested.isNotEmpty() && requested.all { it.substringAfterLast(':') == "quickCheck" }
+    }
+
 // ── PostgreSQL 17+ — one test-image switch, one CI leg per end of the supported range ───────
 //
 // StreamRune declares PostgreSQL 17 or newer. A declaration nobody tests is a guess, so every
@@ -153,8 +340,19 @@ subprojects {
 
     tasks.withType<Test> {
         useJUnitPlatform()
-        finalizedBy(tasks.named("jacocoTestReport"))
+        if (!quickCheckOnly) {
+            finalizedBy(tasks.named("jacocoTestReport"))
+        }
+        // A declared output, so a result served UP-TO-DATE or from the build cache keeps the
+        // summary of the run that produced it.
+        val summary = layout.buildDirectory.file(TestSummary.fileName(name))
+        outputs.file(summary).withPropertyName("testSummary")
+        addTestListener(TestSummary.Listener(path, summary.get().asFile))
+        // Every test run ends with the one-line summary of the root project's `testSummary`.
+        finalizedBy(":testSummary")
     }
+
+    listOf("check", "build").forEach { tasks.named(it) { finalizedBy(":testSummary") } }
 
     // The PostgreSQL-backed modules compile the shared PostgresTestImage into their tests and
     // forward -PpostgresImage to every test JVM they start (the broker-tagged e2e task included).
@@ -256,8 +454,9 @@ subprojects {
         testImplementation(libs.findLibrary("archunit-junit5").get())
     }
 
+    // `check` runs spotlessCheck (Spotless's default), so `build` fails on a formatting violation;
+    // the pre-commit hook runs the same check before every commit.
     configure<com.diffplug.gradle.spotless.SpotlessExtension> {
-        setEnforceCheck(false) // JDK 25+ spotless/guava: skip lint failures
         java {
             googleJavaFormat("1.34.1")
             removeUnusedImports()
@@ -1471,13 +1670,107 @@ tasks.named("check") { dependsOn(verifyPostgresTestImage) }
 
 // The shared test-support sources live in no module, so no module's spotless can own them (see
 // the PostgreSQL-backed modules' wiring in `subprojects`); the root project formats them with the
-// same formatter the modules use.
+// same formatter the modules use; the root's `check` runs its spotlessCheck as the modules' do.
 apply(plugin = "com.diffplug.spotless")
 configure<com.diffplug.gradle.spotless.SpotlessExtension> {
-    setEnforceCheck(false) // same JDK 25+ spotless/guava lint-failure workaround as the modules
     java {
         target("gradle/test-support/**/*.java")
         googleJavaFormat("1.34.1")
         removeUnusedImports()
+    }
+}
+
+// ── testSummary and quickCheck ──────────────────────────────────────────────────────────────
+//
+// The summary files of the test tasks in this build's task graph. The list is set once the graph
+// is ready (whenReady below); the configuration cache stores it with the graph, so a build that
+// reuses the cache entry collects the same files.
+val testSummaryFiles = objects.listProperty<String>()
+
+// testSummary declares no inputs or outputs on purpose: it is the printer, so it runs in every build
+// that has it in its graph. An up-to-date check would let it skip and print nothing.
+val testSummary =
+    tasks.register("testSummary") {
+        group = "verification"
+        description =
+            "Collects the summaries of this build's test tasks into " +
+                "build/${TestSummary.AGGREGATE} and prints one line."
+        val summaries = testSummaryFiles
+        val aggregate = layout.buildDirectory.file(TestSummary.AGGREGATE)
+        mustRunAfter(subprojects.map { it.tasks.withType<Test>() })
+        doLast {
+            val (tests, failed) =
+                TestSummary.aggregate(summaries.get().map(::File), aggregate.get().asFile)
+            logger.lifecycle("$tests tests, $failed failed — see build/${TestSummary.AGGREGATE}")
+        }
+    }
+
+gradle.taskGraph.whenReady {
+    testSummaryFiles.set(
+        allTasks.filterIsInstance<Test>().sortedBy { it.path }.map {
+            it.project.layout.buildDirectory.file(TestSummary.fileName(it.name)).get().asFile.path
+        })
+}
+
+listOf("test", "check", "build").forEach { tasks.named(it) { finalizedBy(testSummary) } }
+
+// The fast lane for the edit-compile-test loop: compiles every source set of every module (main,
+// test and runtime's JMH benchmarks, as `check` does), runs spotlessCheck (the root's and every
+// module's) and the tests of dockerFreeModules. JaCoCo report and verification and Javadoc are not
+// in its task graph (quickCheckOnly), and the Testcontainers suites are left to `build`. Every task
+// it runs is one that `build` runs too. A green quickCheck is a fast signal, not a substitute:
+// `./gradlew build` runs before every pull request.
+tasks.register("quickCheck") {
+    group = "verification"
+    description =
+        "Compiles every module, runs spotlessCheck and the tests of the Docker-free modules; " +
+            "skips JaCoCo and Javadoc."
+    dependsOn(subprojects.map { it.tasks.withType<JavaCompile>() })
+    dependsOn("spotlessCheck", subprojects.map { "${it.path}:spotlessCheck" })
+    dependsOn(dockerFreeModules.map { "$it:test" })
+    finalizedBy(testSummary)
+}
+
+// ── Mutation testing, on demand ──────────────────────────────────────────────────────────────
+//
+// `./gradlew :streamrune-core:pitest` (or `:streamrune-runtime:pitest`) runs PIT over the module:
+// it changes the compiled code one small mutation at a time, runs the tests that cover the changed
+// line against each mutant, and reports every mutant no test detects. Not part of `check`.
+// `-PpitestTargets=` narrows the mutated classes and `-PpitestTests=` the tests run against them
+// (comma-separated globs, both `org.streamrune.*` by default):
+//
+//     ./gradlew :streamrune-runtime:pitest -PpitestTargets=org.streamrune.runtime.saga.* \
+//         -PpitestTests=org.streamrune.runtime.saga.*
+//
+// The repository-text ratchets are left out of the tests: they read files rather than exercise
+// the mutated code, and LogSinkPolicyRatchetTest needs a system property only the `test` task
+// supplies. The module's own `testRuntimeOnly` launcher is the one PIT uses, so the plugin adds
+// none of its own and the `test` task's inputs stay as they are.
+val mutationTestedModules = setOf(":streamrune-core", ":streamrune-runtime")
+val pitEngineVersion = libs.versions.pitest.asProvider().get()
+val pitJunit5PluginVersion = libs.versions.pitest.junit5.plugin.get()
+
+configure(subprojects.filter { it.path in mutationTestedModules }) {
+    apply(plugin = "info.solidsoft.pitest")
+    val globs = { property: String ->
+        providers
+            .gradleProperty(property)
+            .map { value -> value.split(',').map { it.trim() }.filter { it.isNotEmpty() } }
+            .orElse(listOf("org.streamrune.*"))
+    }
+    configure<info.solidsoft.gradle.pitest.PitestPluginExtension> {
+        pitestVersion.set(pitEngineVersion)
+        junit5PluginVersion.set(pitJunit5PluginVersion)
+        addJUnitPlatformLauncher.set(false)
+        targetClasses.set(globs("pitestTargets"))
+        targetTests.set(globs("pitestTests"))
+        excludedTestClasses.set(listOf("org.streamrune.*RatchetTest"))
+        threads.set(4)
+        outputFormats.set(listOf("HTML", "XML"))
+        timestampedReports.set(false)
+    }
+    tasks.named("pitest") {
+        val report = layout.buildDirectory.file("reports/pitest/index.html")
+        doLast { logger.lifecycle("Mutation report: ${report.get().asFile}") }
     }
 }

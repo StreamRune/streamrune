@@ -75,6 +75,10 @@ assertj = "3.27.7"
 archunit = "1.5.1"
 wiremock = "3.12.1"
 awaitility = "4.2.2"
+# Mutation testing, on demand (the `pitest` task of streamrune-core and streamrune-runtime): the PIT
+# engine and its JUnit Platform plugin, which runs the project's JUnit 5 tests against each mutant.
+pitest = "1.30.0"
+pitest-junit5-plugin = "1.2.3"
 
 # Benchmarks
 jmh = "1.37"
@@ -82,6 +86,7 @@ jmh = "1.37"
 # Build plugins
 spotless = "7.1.0"
 jmh-plugin = "0.7.3"
+pitest-plugin = "1.19.0"
 graalvm = "0.10.6"
 versions-plugin = "0.54.0"
 version-catalog-update = "1.1.1"
@@ -211,6 +216,7 @@ testcontainers-pg = ["testcontainers-postgresql", "testcontainers-junit"]
 [plugins]
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 jmh = { id = "me.champeau.jmh", version.ref = "jmh-plugin" }
+pitest = { id = "info.solidsoft.pitest", version.ref = "pitest-plugin" }
 graalvm = { id = "org.graalvm.buildtools.native", version.ref = "graalvm" }
 versions = { id = "com.github.ben-manes.versions", version.ref = "versions-plugin" }
 version-catalog-update = { id = "nl.littlerobots.version-catalog-update", version.ref = "version-catalog-update" }

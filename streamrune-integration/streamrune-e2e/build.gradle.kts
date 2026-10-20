@@ -97,7 +97,8 @@ val brokerTest by tasks.registering(Test::class) {
     outputs.upToDateWhen { false }
     // The root build finalizes every Test task with `jacocoTestReport`, which `dependsOn("test")` —
     // that would drag the default Postgres-only `test` run along whenever `brokerTest` is invoked.
-    // This module has no main sources to cover, so a coverage report is meaningless here; clear the
-    // finalizer so `brokerTest` runs ONLY the broker-tagged tests, standalone.
-    setFinalizedBy(emptyList<Any>())
+    // This module has no main sources to cover, so a coverage report is meaningless here; replace the
+    // finalizers so `brokerTest` runs ONLY the broker-tagged tests, standalone, and keep the one that
+    // prints the test summary (the root project's `testSummary`).
+    setFinalizedBy(listOf(":testSummary"))
 }
