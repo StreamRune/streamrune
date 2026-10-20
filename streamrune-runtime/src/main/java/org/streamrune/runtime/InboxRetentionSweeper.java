@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandInbox;
 import org.streamrune.core.StreamRuneMetrics;
+import org.streamrune.runtime.health.RelayComponentNames;
 
 /**
  * Background sweeper that prunes command-inbox rows processed before a configured retention window.
@@ -36,7 +37,7 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
   private static final Logger LOG = LoggerFactory.getLogger(InboxRetentionSweeper.class);
 
   /** Component and thread name; also what {@link #name()} reports. */
-  private static final String NAME = "inbox-retention-sweeper";
+  private static final String NAME = RelayComponentNames.INBOX_RETENTION_SWEEPER;
 
   private static final Duration MAX_FAILURE_BACKOFF = Duration.ofSeconds(60);
 

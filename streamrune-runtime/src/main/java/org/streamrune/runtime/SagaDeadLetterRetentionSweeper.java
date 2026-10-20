@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.SagaDeadLetterStore;
+import org.streamrune.runtime.health.RelayComponentNames;
 
 /**
  * Background sweeper that prunes {@code saga_dead_letters} rows faulted before a configured
@@ -65,7 +66,7 @@ public final class SagaDeadLetterRetentionSweeper implements RetentionSweeper {
   private static final Logger LOG = LoggerFactory.getLogger(SagaDeadLetterRetentionSweeper.class);
 
   /** Component and thread name; also what {@link #name()} reports. */
-  private static final String NAME = "saga-dead-letter-retention-sweeper";
+  private static final String NAME = RelayComponentNames.SAGA_DEAD_LETTER_RETENTION_SWEEPER;
 
   private static final Duration MAX_FAILURE_BACKOFF = Duration.ofSeconds(60);
 

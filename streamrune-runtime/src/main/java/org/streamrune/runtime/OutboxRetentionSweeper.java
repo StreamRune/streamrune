@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.runtime.health.RelayComponentNames;
 
 /**
  * Background sweeper that prunes delivered and, independently, operator-skipped ({@code SKIPPED})
@@ -38,7 +39,7 @@ public final class OutboxRetentionSweeper implements RetentionSweeper {
   private static final Logger LOG = LoggerFactory.getLogger(OutboxRetentionSweeper.class);
 
   /** Component and thread name; also what {@link #name()} reports. */
-  private static final String NAME = "outbox-retention-sweeper";
+  private static final String NAME = RelayComponentNames.OUTBOX_RETENTION_SWEEPER;
 
   private static final Duration MAX_FAILURE_BACKOFF = Duration.ofSeconds(60);
 

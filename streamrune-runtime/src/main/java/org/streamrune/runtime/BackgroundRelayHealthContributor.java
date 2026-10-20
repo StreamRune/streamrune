@@ -6,6 +6,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.crypto.CryptoForgetSignal;
+import org.streamrune.runtime.health.RelayComponentNames;
 
 /**
  * Aggregates the liveness/degradation of the background relay threads — the outbox relay ({@link
@@ -89,8 +90,6 @@ public class BackgroundRelayHealthContributor {
     }
   }
 
-  private static final String CRYPTO_FORGET_COMPONENT = "crypto-forget-listen";
-
   private final List<RelayStatusSource> sources = new CopyOnWriteArrayList<>();
 
   /** The forget channels registered so far, in order; guarded by itself. */
@@ -105,7 +104,7 @@ public class BackgroundRelayHealthContributor {
         new RelayStatusSource() {
           @Override
           public String name() {
-            return "outbox-relay";
+            return RelayComponentNames.OUTBOX_RELAY;
           }
 
           @Override
@@ -134,7 +133,7 @@ public class BackgroundRelayHealthContributor {
         new RelayStatusSource() {
           @Override
           public String name() {
-            return "dead-letter-retry";
+            return RelayComponentNames.DEAD_LETTER_RETRY;
           }
 
           @Override
@@ -178,9 +177,10 @@ public class BackgroundRelayHealthContributor {
         new RelayStatusSource() {
           @Override
           public String name() {
-            return "saga-compensation-retry:"
-                + sweeper.sagaTypeName()
-                + (sweeper.isCompensationRetryEnabled() ? "" : ":sampling-only");
+            return RelayComponentNames.sagaCompensationRetry(sweeper.sagaTypeName())
+                + (sweeper.isCompensationRetryEnabled()
+                    ? ""
+                    : RelayComponentNames.SAMPLING_ONLY_SUFFIX);
           }
 
           @Override
@@ -228,7 +228,7 @@ public class BackgroundRelayHealthContributor {
         new RelayStatusSource() {
           @Override
           public String name() {
-            return "saga-timeout:" + runner.sagaTypeName();
+            return RelayComponentNames.sagaTimeout(runner.sagaTypeName());
           }
 
           @Override
@@ -305,7 +305,7 @@ public class BackgroundRelayHealthContributor {
         new RelayStatusSource() {
           @Override
           public String name() {
-            return "sse-event-feed";
+            return RelayComponentNames.SSE_EVENT_FEED;
           }
 
           @Override
@@ -369,8 +369,8 @@ public class BackgroundRelayHealthContributor {
       cryptoForgetSignals.add(signal);
       String name =
           cryptoForgetSignals.size() == 1
-              ? CRYPTO_FORGET_COMPONENT
-              : CRYPTO_FORGET_COMPONENT + "-" + cryptoForgetSignals.size();
+              ? RelayComponentNames.CRYPTO_FORGET_LISTEN
+              : RelayComponentNames.CRYPTO_FORGET_LISTEN + "-" + cryptoForgetSignals.size();
       registerCryptoForgetComponent(name, signal);
     }
   }
