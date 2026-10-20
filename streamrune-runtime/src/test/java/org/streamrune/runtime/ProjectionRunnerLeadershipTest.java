@@ -730,6 +730,16 @@ class ProjectionRunnerLeadershipTest {
           }
 
           @Override
+          public boolean saveSnapshot(
+              StreamId streamId,
+              Version version,
+              org.streamrune.core.AggregateState state,
+              int snapshotVersion,
+              long snapshotPurgeGeneration) {
+            throw new UnsupportedOperationException("this test store keeps no snapshots");
+          }
+
+          @Override
           public List<EventEnvelope> readStream(
               StreamId streamId, Version afterVersion, int maxCount) {
             throw new UnsupportedOperationException();
@@ -903,6 +913,16 @@ class ProjectionRunnerLeadershipTest {
           public void saveSnapshot(
               StreamId streamId, Version version, org.streamrune.core.AggregateState state) {
             throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public boolean saveSnapshot(
+              StreamId streamId,
+              Version version,
+              org.streamrune.core.AggregateState state,
+              int snapshotVersion,
+              long snapshotPurgeGeneration) {
+            throw new UnsupportedOperationException("this test store keeps no snapshots");
           }
 
           @Override

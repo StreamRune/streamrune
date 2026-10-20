@@ -375,7 +375,12 @@ public final class SseEventFeed implements AutoCloseable {
     }
 
     @Override
-    public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
       throw globalStreamOnly();
     }
 

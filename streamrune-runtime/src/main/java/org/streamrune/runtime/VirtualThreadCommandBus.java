@@ -1584,6 +1584,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       // nothing and is not counted.
       if (stored) {
         recordMetric(metrics::recordSnapshotCreated, "recordSnapshotCreated");
+      } else {
+        recordMetric(metrics::recordSnapshotRefused, "recordSnapshotRefused");
       }
     }
   }

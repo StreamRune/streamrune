@@ -28,8 +28,15 @@ import org.streamrune.core.types.SubjectId;
  * {@code @Encrypted} fields in the clear, is never stored after it. The purge and the save upsert
  * one primary key, so the database serializes them on every replica, with any {@code
  * AggregateLocker}. The first command that loads after the purge sees the new generation and
- * snapshots again, from events whose {@code @Encrypted} fields now read {@code [REDACTED]}. A
- * loaded row without a state is no snapshot: the load replays the stream's events.
+ * snapshots again, from events whose {@code @Encrypted} fields read {@code [REDACTED]} on a replica
+ * whose decrypt cache no longer holds the subject's plaintext (a peer's cache keeps it until the
+ * forget signal evicts it; see the GDPR guide). A loaded row without a state is no snapshot: the
+ * load replays the stream's events.
+ *
+ * <p><b>Rows stay.</b> A purge leaves one row per stream the mapping names, with {@code version}
+ * {@code 0} and no state, including a stream that never had a snapshot or does not exist. Do not
+ * delete these rows by hand while commands may be in flight: the deleted row's generation is lost,
+ * and a command that loaded the stream before the purge can store its snapshot again.
  *
  * <p><b>Why this exists.</b> {@link org.streamrune.runtime.gdpr.ForgetSubjectService#forget} does
  * two things: crypto-shred the subject's key, then run every REGISTERED {@link SubjectDataPurger}.
@@ -87,7 +94,8 @@ public final class PostgresSnapshotStorePurger implements SnapshotPurger {
   // (aggregate_type, aggregate_id) pairs, each served by the primary key. DISTINCT, because an
   // upsert may not touch one row twice; ORDER BY, so two purges of overlapping streams lock their
   // rows in one order.
-  private static final String PURGE_SNAPSHOTS =
+  // Package-private: the tests hold this statement open in a transaction of their own.
+  static final String PURGE_SNAPSHOTS =
       "INSERT INTO snapshot_store AS s (aggregate_type, aggregate_id, version, state_type,"
           + " state_payload, purge_generation)"
           + " SELECT DISTINCT k.aggregate_type, k.aggregate_id, 0, NULL, NULL::jsonb, 1"

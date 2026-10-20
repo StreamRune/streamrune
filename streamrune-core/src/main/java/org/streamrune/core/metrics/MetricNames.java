@@ -211,6 +211,13 @@ public final class MetricNames {
   public static final String SNAPSHOTS_LOADED = "streamrune.snapshots.loaded";
 
   /**
+   * Snapshot saves the event store refused because a GDPR forget purged the stream's snapshot after
+   * the command loaded it. Nothing was written; the next command on the stream snapshots again. A
+   * nonzero value means forgets raced commands on the same aggregates.
+   */
+  public static final String SNAPSHOTS_REFUSED = "streamrune.snapshots.refused";
+
+  /**
    * Stored snapshots discarded on load. The aggregate is rebuilt by replaying all events from the
    * beginning instead of wedging. Tagged by {@link #TAG_REASON}: {@code deserialize_failure} (the
    * payload could not be deserialized — a plain Jackson/IO failure, e.g. an aggregate-state field

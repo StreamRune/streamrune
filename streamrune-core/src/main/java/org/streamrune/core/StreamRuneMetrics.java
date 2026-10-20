@@ -187,6 +187,14 @@ public interface StreamRuneMetrics {
   default void recordSnapshotLoaded() {}
 
   /**
+   * Records a snapshot save the event store refused because the stream's snapshot was purged by a
+   * GDPR forget after the command loaded it (see {@code EventStore#saveSnapshot(StreamId, Version,
+   * AggregateState, int, long)}). Emitted by the command bus. See {@link
+   * org.streamrune.core.metrics.MetricNames#SNAPSHOTS_REFUSED}.
+   */
+  default void recordSnapshotRefused() {}
+
+  /**
    * Records a stored snapshot that was DISCARDED on load, so the aggregate was rebuilt by replaying
    * its events (the source of truth) from the beginning instead of permanently failing to load. Two
    * causes, told apart by {@code reason}: {@code "deserialize_failure"} — the payload could not be

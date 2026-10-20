@@ -127,6 +127,16 @@ class PollingEventSubscriptionDrainTest {
     }
 
     @Override
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      throw new UnsupportedOperationException("this test store keeps no snapshots");
+    }
+
+    @Override
     public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
       throw new UnsupportedOperationException();
     }

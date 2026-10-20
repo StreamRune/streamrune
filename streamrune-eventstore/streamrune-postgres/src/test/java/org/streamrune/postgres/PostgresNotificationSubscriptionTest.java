@@ -879,6 +879,16 @@ class PostgresNotificationSubscriptionTest {
               org.streamrune.core.AggregateState state) {}
 
           @Override
+          public boolean saveSnapshot(
+              org.streamrune.core.types.StreamId streamId,
+              org.streamrune.core.types.Version version,
+              org.streamrune.core.AggregateState state,
+              int snapshotVersion,
+              long snapshotPurgeGeneration) {
+            throw new UnsupportedOperationException("this test store keeps no snapshots");
+          }
+
+          @Override
           public java.util.List<org.streamrune.core.EventEnvelope> readGlobalStream(
               org.streamrune.core.types.GlobalOffset afterOffset, int maxCount) {
             readCalled.set(true);
@@ -945,6 +955,16 @@ class PostgresNotificationSubscriptionTest {
           @Override
           public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
             throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public boolean saveSnapshot(
+              StreamId streamId,
+              Version version,
+              AggregateState state,
+              int snapshotVersion,
+              long snapshotPurgeGeneration) {
+            throw new UnsupportedOperationException("this test store keeps no snapshots");
           }
 
           @Override
@@ -1016,6 +1036,16 @@ class PostgresNotificationSubscriptionTest {
           @Override
           public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
             throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public boolean saveSnapshot(
+              StreamId streamId,
+              Version version,
+              AggregateState state,
+              int snapshotVersion,
+              long snapshotPurgeGeneration) {
+            throw new UnsupportedOperationException("this test store keeps no snapshots");
           }
 
           @Override
@@ -1285,6 +1315,16 @@ class PostgresNotificationSubscriptionTest {
     @Override
     public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
       throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      throw new UnsupportedOperationException("this test store keeps no snapshots");
     }
 
     @Override

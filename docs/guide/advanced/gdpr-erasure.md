@@ -599,11 +599,12 @@ and raises its `purge_generation`, and creates the row in that form for a stream
 snapshot yet. Every load reads the generation with the snapshot row, and the command bus saves the
 snapshot with the generation its load saw. The save is one conditional upsert that writes only while
 the row still has that generation, so a state loaded before the purge is never stored after it; the
-command itself succeeds, and the store logs at INFO that the snapshot was not stored. The purge and
+command itself succeeds, the store logs at INFO that the snapshot was not stored, and the bus counts
+it in `streamrune.snapshots.refused`. The purge and
 the save upsert the same primary key, so PostgreSQL serializes them on every replica, whichever
 `AggregateLocker` the command bus uses. A row without a state is no snapshot: the next command
-replays the stream's events, which now read `[REDACTED]` in their `@Encrypted` fields, and its
-snapshot is stored again. A purge that fails, or a process that dies during it, leaves either every
+replays the stream's events, whose `@Encrypted` fields read `[REDACTED]` on a replica whose cache no
+longer holds the subject's plaintext (see the next paragraph), and its snapshot is stored again. A purge that fails, or a process that dies during it, leaves either every
 stream of the subject purged or none (one statement), and calling `forget` again converges.
 
 This holds as long as a load after the purge cannot decrypt the subject's fields. On the replica
@@ -612,6 +613,20 @@ decrypted before the forget stays cached until the forget signal evicts it (see 
 cannot hear does* above): a command on that replica in this interval loads the subject's data in
 the clear even after the purge, and its snapshot is stored. Keep the forget signal wired, or set
 `streamrune.crypto.cache.enabled=false`, if that interval matters to you.
+
+**Rows without a state, and deleting rows by hand.** After a forget, `snapshot_store` keeps one row
+per stream the mapping named, with `version` `0`, no `state_type` and no `state_payload`, including
+streams that never had a snapshot and streams that do not exist (a forget of an unknown subject id
+whose mapping derives the stream from the id). These rows are markers, not snapshots: an ad-hoc
+query that lists snapshots filters them with `WHERE state_payload IS NOT NULL`. Do not delete them
+by hand while commands may be in flight: a deleted row loses its generation, so a command that
+loaded the stream before the forget can store its snapshot again. Purge through
+`ForgetSubjectService`, which keeps the row.
+
+A save that names no load — `saveSnapshot(streamId, version, state)` or `saveSnapshot(streamId,
+version, state, snapshotVersion)`, which a test or a tool may call — saves at generation `0` and
+throws `IllegalStateException` on a stream whose snapshot was ever purged; load the stream and save
+with `AggregateHistory.snapshotPurgeGeneration()` instead.
 
 A store of your own that keeps snapshots implements the same guard: its `SnapshotPurger` must make
 every save of a state loaded before the purge write nothing, which is what
@@ -706,6 +721,19 @@ projection writes for which subject. Close the window in the projection, in one 
   projection reaches that event, and the event's handler removes what the page wrote. It also covers
   a projection that is far behind and a rebuild. The purger still runs at once for rows that are
   already there.
+
+  **Precondition: no event after the forgotten event carries the subject's data.** The handler runs
+  once; an event appended after it whose `@Encrypted` fields still decrypt — because it was
+  encrypted while the key existed — is written by the projection after the handler ran, and
+  nothing removes it. On the subject's own stream the decider closes this by refusing every command
+  once the state is forgotten. For the subject's data on other streams (an order that carries the
+  customer's address), choose one:
+  - append the forgotten event after `forget` returns: every later `encrypt` for the subject is
+    refused, so no event after it can carry the subject's data;
+  - let the projection treat the subject as forgotten from that event on: it records the subject
+    and refuses or redacts every later write for it;
+  - combine with the second way below, which covers every event up to the head read after the
+    forget.
 - **Run the purgers again once the projections have passed the forget.** Read the head of the
   global stream after `forget` returns (`EventStore.lastGlobalOffset()`), wait until the checkpoint
   of every projection that keeps the subject's data (`OffsetStore.getLastOffset(name)`) is at or
@@ -715,7 +743,10 @@ projection writes for which subject. Close the window in the projection, in one 
   a new leader moves the checkpoint past the head; the event above covers that too.
 
 `fullyErased()` cannot see either window: it reports that the key is deleted, that every registered
-purger succeeded and that the query cache is evicted, at the moment `forget` returns. Tell the data
+purger succeeded and that the query cache is evicted, at the moment `forget` returns. Nor does it
+cover a peer replica whose `CachedCryptoEngine` still holds the subject's plaintext until the forget
+signal evicts it (see *What a replica that cannot hear does* above): a snapshot or a projection page
+built there from that cache after the forget holds the subject's data in the clear. Tell the data
 subject the erasure is complete once `fullyErased()` is `true` and the projections are closed in
 one of the two ways above.
 
@@ -795,7 +826,7 @@ runbook for the audit-log queries.
 | `CachedCryptoEngine` TTL | `.expireAfterWrite(Duration)` | bounds how long decrypted PII stays cached (default 5 minutes) |
 | `streamrune.crypto.cache.enabled` | Spring/Quarkus/Micronaut property (default `true`) | when `false`, the `CachedCryptoEngine` wrapper is skipped entirely on all three integrations, so no decrypted PII is ever retained in heap — the deliberate no-cache GDPR posture, stronger than shortening the TTL |
 | `ForgetSubjectService.builder().queryCache(bus)` | auto-wired by the integrations when `streamrune.query-cache.enabled=true` | every `forget(...)` evicts the `CachingQueryBus` after its last purger, in this process (see *Cached query answers are evicted*) |
-| `SnapshotPurger` among `purgers(...)`, or `withoutSnapshotPurge()` | required by `ForgetSubjectService.Builder.build()` | the forget deletes the subject's snapshots (`PostgresSnapshotStorePurger` for `snapshot_store`), or the application states it has never stored one; neither, or both, is refused (see *Aggregate snapshots*) |
+| `SnapshotPurger` among `purgers(...)`, or `withoutSnapshotPurge()` | required by `ForgetSubjectService.Builder.build()` | the forget purges the subject's snapshots (`PostgresSnapshotStorePurger` for `snapshot_store`, which keeps each row without a state), or the application states it has never stored one; neither, or both, is refused (see *Aggregate snapshots*) |
 | `streamrune.gdpr.snapshot-purge` | Spring/Quarkus/Micronaut property: `required` (default) or `none` | `required`: the auto-configured `ForgetSubjectService` needs a `SnapshotPurger` bean or startup fails; `none`: built with `withoutSnapshotPurge()` (refused beside a `SnapshotPurger` bean) |
 
 ### Startup fail-fast

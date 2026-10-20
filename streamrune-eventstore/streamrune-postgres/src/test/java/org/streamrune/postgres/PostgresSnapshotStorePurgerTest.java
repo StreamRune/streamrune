@@ -246,6 +246,87 @@ class PostgresSnapshotStorePurgerTest {
     assertEquals(1, purgeGeneration(stream), "a save never changes the purge generation");
   }
 
+  /** Runs the purge statement in a transaction the caller commits; returns the rows it touched. */
+  private static int purgeUncommitted(java.sql.Connection conn, StreamId stream) throws Exception {
+    try (var ps = conn.prepareStatement(PostgresSnapshotStorePurger.PURGE_SNAPSHOTS)) {
+      ps.setArray(1, conn.createArrayOf("varchar", new String[] {stream.aggregateType().value()}));
+      ps.setArray(2, conn.createArrayOf("varchar", new String[] {stream.aggregateId().value()}));
+      return ps.executeUpdate();
+    }
+  }
+
+  /** Starts {@code save} and asserts it waits on the purge's row lock. */
+  private static java.util.concurrent.CompletableFuture<Boolean> saveBlockedBehindThePurge(
+      java.util.function.Supplier<Boolean> save) throws Exception {
+    var future = java.util.concurrent.CompletableFuture.supplyAsync(save);
+    assertThrows(
+        java.util.concurrent.TimeoutException.class,
+        () -> future.get(700, java.util.concurrent.TimeUnit.MILLISECONDS),
+        "the save must wait for the uncommitted purge of the same row");
+    return future;
+  }
+
+  /**
+   * A save that meets a purge still in flight on the same row waits for it, then sees the raised
+   * generation and writes nothing.
+   */
+  @Test
+  void aSaveBehindAnUncommittedPurgeOfTheRowWritesNothingOnceThePurgeCommits() throws Exception {
+    StreamId stream = TestStreams.stream("order-save-behind-purge");
+    store.saveSnapshot(stream, new Version(1), new PurgerTestState("plain-old"));
+    long seen = store.load(stream).snapshotPurgeGeneration();
+    try (var purgeTx = dataSource.getConnection()) {
+      purgeTx.setAutoCommit(false);
+      assertEquals(1, purgeUncommitted(purgeTx, stream));
+      var save =
+          saveBlockedBehindThePurge(
+              () ->
+                  store.saveSnapshot(
+                      stream, new Version(2), new PurgerTestState("plain-stale"), 1, seen));
+      purgeTx.commit();
+      assertFalse(save.get(10, java.util.concurrent.TimeUnit.SECONDS));
+    }
+    assertTrue(remainingSnapshotStreamIds().isEmpty());
+    assertEquals(1, purgeGeneration(stream));
+  }
+
+  /**
+   * The first snapshot of a stream racing a purge that finds no row: the purge inserts the row
+   * first, and the save, which saw no row (generation 0), writes nothing.
+   */
+  @Test
+  void theFirstSnapshotOfAStreamLosesToAPurgeThatInsertedTheRowFirst() throws Exception {
+    StreamId stream = TestStreams.stream("order-first-snapshot-vs-purge");
+    try (var purgeTx = dataSource.getConnection()) {
+      purgeTx.setAutoCommit(false);
+      assertEquals(1, purgeUncommitted(purgeTx, stream));
+      var save =
+          saveBlockedBehindThePurge(
+              () ->
+                  store.saveSnapshot(
+                      stream, new Version(1), new PurgerTestState("plain-first"), 1, 0));
+      purgeTx.commit();
+      assertFalse(save.get(10, java.util.concurrent.TimeUnit.SECONDS));
+    }
+    assertTrue(remainingSnapshotStreamIds().isEmpty());
+    assertEquals(1, purgeGeneration(stream));
+  }
+
+  /** A save that names no load refuses loudly on a purged stream instead of returning silently. */
+  @Test
+  void aSaveWithoutALoadOnAPurgedStreamThrows() throws Exception {
+    StreamId stream = TestStreams.stream("order-tool-save-after-purge");
+    new PostgresSnapshotStorePurger(dataSource, subjectId -> List.of(stream))
+        .purge(SubjectId.of("subject-tool"));
+
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () -> store.saveSnapshot(stream, new Version(1), new PurgerTestState("v1")));
+    assertTrue(ex.getMessage().contains("purged by a GDPR forget"), ex.getMessage());
+    assertTrue(remainingSnapshotStreamIds().isEmpty());
+  }
+
   /**
    * The forget service's builder refuses a service without a {@link
    * org.streamrune.core.gdpr.SnapshotPurger} unless the application states it stores no snapshots;

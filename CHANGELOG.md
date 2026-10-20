@@ -14,7 +14,9 @@ code — no annotation magic, no hidden behavior. This entry describes what the 
 Build workflow passes on it and published only to the Maven Central snapshot repository
 (`https://central.sonatype.com/repository/maven-snapshots/`), not to Maven Central itself. Snapshot
 artifacts are not signed, and the API, the database schema and the configuration keys can change in
-any later snapshot without a migration path. Every module shares the `org.streamrune` group and the
+any later snapshot without a migration path. A schema change edits the baseline migrations in
+place, so a database created by an earlier snapshot fails Flyway's checksum validation: recreate it
+(with Docker Compose, `docker compose down -v`) when you move to a newer snapshot. Every module shares the `org.streamrune` group and the
 `1.0.0-alpha-SNAPSHOT` version and ships with sources and Javadoc jars.
 
 ```kotlin
@@ -222,8 +224,14 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   snapshotPurgeGeneration)`, which returns whether the snapshot was stored), and `PostgresEventStore`
   writes only while the row still has that generation, in one conditional upsert. A command in
   flight across a forget therefore never stores the state it loaded before the forget, on any
-  replica and with any `AggregateLocker`; the next command snapshots again. A refused save is logged
-  at INFO and not counted in `streamrune.snapshots.created`.
+  replica and with any `AggregateLocker`; the next command snapshots again, from events whose
+  `@Encrypted` fields read `[REDACTED]` on a replica whose decrypt cache no longer holds the
+  subject's plaintext. A refused save is logged at INFO, counted in `streamrune.snapshots.refused`
+  and not in `streamrune.snapshots.created`. The purge-aware `saveSnapshot` is the one save every
+  `EventStore` implements; the three- and four-argument overloads save at generation `0` and throw
+  `IllegalStateException` on a stream whose snapshot was purged. A purged stream keeps a row with
+  `version` `0` and no state; deleting such rows by hand while commands are in flight lets a stale
+  snapshot back in.
 
 ### Command bus, idempotency and the command inbox
 
@@ -873,9 +881,13 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   guide lists them and recommends an `AuthenticatedUserResolver` that returns an opaque id.
 - `ForgetResult.fullyErased()` describes the moment `forget` returns. A projection page decrypted
   before the key deletion and written after the purgers is outside it; the GDPR guide gives the two
-  ways to close it (the projection deletes the subject's rows on an event that says the subject is
-  forgotten, or `forget` is called again once the projections have passed the head of the global
-  stream read after the forget).
+  ways to close it: the projection deletes the subject's rows on an event that says the subject is
+  forgotten, provided no later event carries the subject's data (the subject's decider refuses
+  commands once forgotten; for data on other streams, append that event after `forget` returns, or
+  let the projection treat the subject as forgotten from that event on, or combine with the second
+  way); or `forget` is called again once the projections have passed the head of the global stream
+  read after the forget. A peer replica whose decrypt cache still holds the subject's plaintext until
+  the forget signal evicts it is outside it too.
 - `streamrune.crypto.subject_redacted` and `streamrune.crypto.keystore_systemic_failure` distinguish
   lawful per-subject redaction from a wiped or misconfigured key store.
 

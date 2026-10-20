@@ -163,6 +163,7 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
 
   private final Counter snapshotsCreated;
   private final Counter snapshotsLoaded;
+  private final Counter snapshotsRefused;
   private final Counter cryptoSubjectRedacted;
   private final Counter cryptoKeystoreSystemicFailure;
 
@@ -340,6 +341,12 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
     this.snapshotsLoaded =
         Counter.builder(meter(MetricNames.SNAPSHOTS_LOADED))
             .description("Total snapshots loaded during aggregate reconstruction")
+            .register(registry);
+    this.snapshotsRefused =
+        Counter.builder(meter(MetricNames.SNAPSHOTS_REFUSED))
+            .description(
+                "Snapshot saves refused because a GDPR forget purged the stream's snapshot after"
+                    + " the command loaded it")
             .register(registry);
     this.cryptoSubjectRedacted =
         Counter.builder(meter(MetricNames.CRYPTO_SUBJECT_REDACTED))
@@ -735,6 +742,11 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   @Override
   public void recordSnapshotLoaded() {
     snapshotsLoaded.increment();
+  }
+
+  @Override
+  public void recordSnapshotRefused() {
+    snapshotsRefused.increment();
   }
 
   @Override

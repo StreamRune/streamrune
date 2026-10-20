@@ -39,9 +39,21 @@ class EventStoreDefaultMethodsTest {
       throw new UnsupportedOperationException();
     }
 
+    /** The saves the defaults delegate here: snapshot version and purge generation. */
+    final List<String> saves = new java.util.ArrayList<>();
+
+    /** What the purge-aware save answers. */
+    boolean stored = true;
+
     @Override
-    public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
-      throw new AssertionError("3-arg saveSnapshot must not be reached by the versioned default");
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      saves.add(snapshotVersion + "/" + snapshotPurgeGeneration);
+      return stored;
     }
 
     @Override
@@ -108,67 +120,38 @@ class EventStoreDefaultMethodsTest {
   }
 
   @Test
-  void versionedSaveSnapshotDefault_failsFastInsteadOfDroppingTheVersion() {
+  void unversionedSaveSnapshotDefault_savesAtSchemaVersionOneAndGenerationZero() {
     var store = new MinimalEventStore();
+    store.saveSnapshot(StreamId.of(TYPE, AggregateId.of("s1")), new Version(3), new DummyState());
+    assertEquals(List.of("1/0"), store.saves);
+  }
+
+  @Test
+  void versionedSaveSnapshotDefault_savesAtGenerationZero() {
+    var store = new MinimalEventStore();
+    store.saveSnapshot(
+        StreamId.of(TYPE, AggregateId.of("s1")), new Version(3), new DummyState(), 2);
+    assertEquals(List.of("2/0"), store.saves);
+  }
+
+  /**
+   * A save at generation 0 that the store refuses means a forget purged the stream's snapshot: the
+   * void overloads say so instead of returning as if the snapshot were stored.
+   */
+  @Test
+  void versionedSaveSnapshotDefault_throwsWhenTheStoreRefusesBecauseOfAPurge() {
+    var store = new MinimalEventStore();
+    store.stored = false;
+    var stream = StreamId.of(TYPE, AggregateId.of("s1"));
     var ex =
         assertThrows(
-            UnsupportedOperationException.class,
-            () ->
-                store.saveSnapshot(
-                    StreamId.of(TYPE, AggregateId.of("s1")), new Version(3), new DummyState(), 2));
-    assertTrue(ex.getMessage().contains("snapshot schema versioning"), ex.getMessage());
-  }
-
-  @Test
-  void versionedSaveSnapshotDefault_rejectsSnapshotVersionBelowOne() {
-    var store = new MinimalEventStore();
-    for (int invalid : new int[] {0, -1}) {
-      var ex =
-          assertThrows(
-              IllegalArgumentException.class,
-              () ->
-                  store.saveSnapshot(
-                      StreamId.of(TYPE, AggregateId.of("s1")),
-                      new Version(3),
-                      new DummyState(),
-                      invalid));
-      assertTrue(ex.getMessage().contains("snapshotVersion must be >= 1"), ex.getMessage());
-    }
-  }
-
-  /** A store that keeps no purge record writes through the versioned save and reports it stored. */
-  @Test
-  void purgeAwareSaveSnapshotDefault_delegatesToTheVersionedSaveAndReportsStored() {
-    var saved = new java.util.ArrayList<Integer>();
-    EventStore store =
-        new MinimalEventStore() {
-          @Override
-          public void saveSnapshot(
-              StreamId streamId, Version version, AggregateState state, int snapshotVersion) {
-            saved.add(snapshotVersion);
-          }
-        };
-
-    assertTrue(
-        store.saveSnapshot(
-            StreamId.of(TYPE, AggregateId.of("s1")), new Version(3), new DummyState(), 2, 4));
-    assertEquals(List.of(2), saved);
-  }
-
-  @Test
-  void purgeAwareSaveSnapshotDefault_rejectsANegativeGeneration() {
-    var store = new MinimalEventStore();
-    var ex =
-        assertThrows(
-            IllegalArgumentException.class,
-            () ->
-                store.saveSnapshot(
-                    StreamId.of(TYPE, AggregateId.of("s1")),
-                    new Version(3),
-                    new DummyState(),
-                    1,
-                    -1));
-    assertTrue(ex.getMessage().contains("snapshotPurgeGeneration"), ex.getMessage());
+            IllegalStateException.class,
+            () -> store.saveSnapshot(stream, new Version(3), new DummyState(), 2));
+    assertTrue(ex.getMessage().contains("purged by a GDPR forget"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("snapshotPurgeGeneration()"), ex.getMessage());
+    assertThrows(
+        IllegalStateException.class,
+        () -> store.saveSnapshot(stream, new Version(3), new DummyState()));
   }
 
   @Test
@@ -288,6 +271,16 @@ class EventStoreDefaultMethodsTest {
     @Override
     public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
       throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      throw new UnsupportedOperationException("this test store keeps no snapshots");
     }
 
     @Override

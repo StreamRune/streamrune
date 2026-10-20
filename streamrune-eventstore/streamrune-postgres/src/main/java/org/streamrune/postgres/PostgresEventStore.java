@@ -1909,25 +1909,6 @@ public final class PostgresEventStore implements EventStore {
     }
   }
 
-  @Override
-  public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
-    saveSnapshot(streamId, version, state, 1);
-  }
-
-  /**
-   * {@inheritDoc}
-   *
-   * <p>Saves with purge generation {@code 0}, see {@link #saveSnapshot(StreamId, Version,
-   * AggregateState, int, long)}: a snapshot whose type does not round-trip through the registry is
-   * refused there, before anything is written, since it would otherwise fail (or silently rehydrate
-   * the wrong class) only later, at load time.
-   */
-  @Override
-  public void saveSnapshot(
-      StreamId streamId, Version version, AggregateState state, int snapshotVersion) {
-    saveSnapshot(streamId, version, state, snapshotVersion, 0);
-  }
-
   /**
    * {@inheritDoc}
    *
@@ -1941,8 +1922,9 @@ public final class PostgresEventStore implements EventStore {
    * with it). {@link PostgresSnapshotStorePurger} upserts the same row and raises its generation,
    * so the purge and this save are serialized by the primary key and a save from a state loaded
    * before the purge writes nothing. A refused save is logged at INFO and returns {@code false}.
-   * The four-argument {@code saveSnapshot} saves with generation {@code 0}: a snapshot of a stream
-   * never purged.
+   * The three- and four-argument {@code saveSnapshot} save with generation {@code 0} and throw
+   * {@link IllegalStateException} when the stream's snapshot was ever purged (see {@link
+   * EventStore#saveSnapshot(StreamId, Version, AggregateState, int)}).
    */
   @Override
   public boolean saveSnapshot(
@@ -2011,10 +1993,12 @@ public final class PostgresEventStore implements EventStore {
           PostgresTransactions.commitIfManual(conn, "snapshot save", c -> ps.executeUpdate());
       if (written == 0) {
         log.info(
-            "Snapshot of stream {} at version {} not stored: the stream's snapshot was purged"
-                + " after the state was loaded (a GDPR forget); the next command snapshots again",
+            "Snapshot of stream {} at version {} not stored: its snapshot_store row no longer has"
+                + " purge generation {}, so a GDPR forget purged the stream's snapshot after the"
+                + " state being saved was loaded; the next command loads and snapshots again",
             shownStream,
-            version.value());
+            version.value(),
+            snapshotPurgeGeneration);
         return false;
       }
       return true;

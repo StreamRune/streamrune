@@ -57,10 +57,15 @@ public record ForgetResult(
    * was decrypted before the key was deleted and is written after the purgers ran: neither the key
    * deletion nor a purger reaches data a projection holds in memory. A projection closes that
    * window by deleting the subject's rows when it handles an event that says the subject is
-   * forgotten, or the application calls {@code forget} again once every such projection's
-   * checkpoint has passed the head of the global stream read after the forget (see the GDPR guide).
-   * Request identities ({@code userId} in event metadata, the audit logs and the dead-letter queue)
-   * are outside erasure by design.
+   * forgotten, provided no later event carries the subject's data (the subject's decider refuses
+   * commands once it is forgotten; for the subject's data on other streams, append that event after
+   * {@code forget} returns, or let the projection treat the subject as forgotten from that event
+   * on), or the application calls {@code forget} again once every such projection's checkpoint has
+   * passed the head of the global stream read after the forget (see the GDPR guide). It does not
+   * cover a peer replica whose decrypt cache still holds the subject's plaintext until the forget
+   * signal evicts it: a snapshot or projection page built there from that cache holds the subject's
+   * data. Request identities ({@code userId} in event metadata, the audit logs and the dead-letter
+   * queue) are outside erasure by design.
    */
   public boolean fullyErased() {
     return keyDeleted

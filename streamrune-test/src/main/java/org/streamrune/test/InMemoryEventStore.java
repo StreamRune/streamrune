@@ -713,14 +713,21 @@ public final class InMemoryEventStore implements EventStore {
     }
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>This store has no {@code SnapshotPurger} and keeps no purge record: every load reports
+   * generation {@code 0}, and the snapshot is stored whatever {@code snapshotPurgeGeneration} says,
+   * so this method always returns {@code true}. The purge guard is exercised against {@code
+   * PostgresEventStore}.
+   */
   @Override
-  public void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
-    saveSnapshot(streamId, version, state, 1);
-  }
-
-  @Override
-  public void saveSnapshot(
-      StreamId streamId, Version version, AggregateState state, int snapshotVersion) {
+  public boolean saveSnapshot(
+      StreamId streamId,
+      Version version,
+      AggregateState state,
+      int snapshotVersion,
+      long snapshotPurgeGeneration) {
     Objects.requireNonNull(streamId, "streamId is required");
     if (state == null) {
       throw new IllegalArgumentException("state must not be null");
@@ -728,9 +735,13 @@ public final class InMemoryEventStore implements EventStore {
     if (snapshotVersion < 1) {
       throw new IllegalArgumentException("snapshotVersion must be >= 1");
     }
+    if (snapshotPurgeGeneration < 0) {
+      throw new IllegalArgumentException(
+          "snapshotPurgeGeneration must not be negative, got " + snapshotPurgeGeneration);
+    }
     if (objectMapper == null) {
       snapshots.put(streamId, new Snapshot(version, snapshotVersion, state, null, null));
-      return;
+      return true;
     }
     // Serializing mode: validate the simple-name registry contract and store the SERIALIZED form
     // (JSON / ciphertext), exactly like PostgresEventStore.saveSnapshot. Deserialization —
@@ -769,6 +780,7 @@ public final class InMemoryEventStore implements EventStore {
           e);
     }
     snapshots.put(streamId, new Snapshot(version, snapshotVersion, null, stateJson, stateType));
+    return true;
   }
 
   /**

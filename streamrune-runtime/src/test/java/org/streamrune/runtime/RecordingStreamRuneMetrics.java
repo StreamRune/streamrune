@@ -109,6 +109,11 @@ final class RecordingStreamRuneMetrics implements StreamRuneMetrics {
     inc("snapshot.loaded");
   }
 
+  @Override
+  public void recordSnapshotRefused() {
+    inc("snapshot.refused");
+  }
+
   // --- Projections ---
 
   @Override

@@ -60,11 +60,11 @@ import org.streamrune.runtime.gdpr.ForgetResult.PurgeOutcome;
  * <p><b>What a returned forget does not reach.</b> The steps above act on what is stored when they
  * run. A projection page decrypted before {@code deleteKey} and written after the purgers ran puts
  * the subject's data back into a read model, and no step here can reach it: the projection must
- * delete the subject's rows when it handles an event that says the subject is forgotten, or the
- * application calls {@code forget} again once its projections have passed the forget (see {@link
- * ForgetResult#fullyErased()} and the GDPR guide). A command in flight cannot do the same to a
- * snapshot: the snapshot save refuses a state loaded before the purge (see {@code
- * PostgresSnapshotStorePurger}).
+ * delete the subject's rows when it handles an event that says the subject is forgotten (provided
+ * no later event carries the subject's data), or the application calls {@code forget} again once
+ * its projections have passed the forget (see {@link ForgetResult#fullyErased()} and the GDPR
+ * guide). A command in flight cannot do the same to a snapshot: the snapshot save refuses a state
+ * loaded before the purge (see {@code PostgresSnapshotStorePurger}).
  *
  * <p><b>Snapshots must be purged too, or stated absent.</b> An aggregate snapshot stores the
  * aggregate's state with every field not marked {@code @Encrypted} in the clear, so deleting the

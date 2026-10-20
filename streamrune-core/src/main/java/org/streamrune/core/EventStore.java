@@ -72,8 +72,17 @@ public interface EventStore {
    */
   AppendResult append(StreamId streamId, List<EventEnvelope> events, Version expectedVersion);
 
-  /** Persists a snapshot of the aggregate state at the given version. */
-  void saveSnapshot(StreamId streamId, Version version, AggregateState state);
+  /**
+   * Persists a snapshot of the aggregate state at the given version, at snapshot schema version
+   * {@code 1}, of a stream whose snapshot was never purged. Calls {@link #saveSnapshot(StreamId,
+   * Version, AggregateState, int)} with {@code 1}.
+   *
+   * @throws IllegalStateException if the stream's snapshot was purged (see {@link
+   *     #saveSnapshot(StreamId, Version, AggregateState, int, long)})
+   */
+  default void saveSnapshot(StreamId streamId, Version version, AggregateState state) {
+    saveSnapshot(streamId, version, state, 1);
+  }
 
   /**
    * Reserved {@code expectedSnapshotVersion} value: never consult a stored snapshot at all — the
@@ -147,37 +156,35 @@ public interface EventStore {
 
   /**
    * Persists a snapshot of the aggregate state at the given version, tagged with the given snapshot
-   * schema version.
-   *
-   * <p>The default implementation throws {@link UnsupportedOperationException}: silently dropping
-   * {@code snapshotVersion} would persist an untagged snapshot that a later versioned {@link
-   * #load(StreamId, int)} could not validate. Implementations that store snapshot schema versions
-   * must override this method and must reject {@code snapshotVersion < 1} with {@link
-   * IllegalArgumentException} — {@code 0} is reserved by {@code load(StreamId, int)} as the
-   * skip-the-check value and must never be persisted as a schema version.
+   * schema version, of a stream whose snapshot was never purged: calls {@link
+   * #saveSnapshot(StreamId, Version, AggregateState, int, long)} with purge generation {@code 0}.
+   * Use it where no load stands behind the state (a test, a tool); the command bus uses the
+   * purge-aware method with the generation of its load.
    *
    * @param streamId the stream to snapshot
    * @param version the event version at which the snapshot was taken
    * @param state the state to persist
    * @param snapshotVersion the schema version of {@code state} (must be >= 1)
    * @throws IllegalArgumentException if {@code snapshotVersion < 1}
-   * @throws UnsupportedOperationException if the implementation does not support snapshot schema
-   *     versioning
+   * @throws IllegalStateException if the stream's snapshot was purged, so the store refused a save
+   *     at generation {@code 0}: load the stream and save with {@link
+   *     AggregateHistory#snapshotPurgeGeneration()}
    */
   default void saveSnapshot(
       StreamId streamId, Version version, AggregateState state, int snapshotVersion) {
-    if (snapshotVersion < 1) {
-      throw new IllegalArgumentException("snapshotVersion must be >= 1, got " + snapshotVersion);
+    if (!saveSnapshot(streamId, version, state, snapshotVersion, 0)) {
+      throw new IllegalStateException(
+          "Snapshot of stream "
+              + org.streamrune.core.types.LogSanitizer.sanitizeForLog(streamId.value())
+              + " not stored: the stream's snapshot was purged by a GDPR forget, so a save at"
+              + " purge generation 0 is refused. Load the stream and save with"
+              + " AggregateHistory.snapshotPurgeGeneration().");
     }
-    throw new UnsupportedOperationException(
-        getClass().getName()
-            + " does not support snapshot schema versioning — override"
-            + " saveSnapshot(StreamId, Version, AggregateState, int) to persist snapshotVersion");
   }
 
   /**
    * Persists a snapshot of a state built from a load, unless the stream's snapshot was purged since
-   * that load. This is the method the command bus calls.
+   * that load. This is the method the command bus calls, and the one every store implements.
    *
    * <p><b>Why the purge generation.</b> A command loads its aggregate, decides and appends, and
    * snapshots the resulting state afterwards. A forget can run in between: it deletes the subject's
@@ -187,14 +194,14 @@ public interface EventStore {
    * after the forget reported the snapshot purged. {@code snapshotPurgeGeneration} is the
    * generation the command's load saw ({@link AggregateHistory#snapshotPurgeGeneration()}); a purge
    * raises the stream's generation, and a save whose generation is no longer the stream's writes
-   * nothing. The next command loads after the purge, sees the new generation, and its snapshot is
-   * stored.
+   * nothing and returns {@code false}. The next command loads after the purge, sees the new
+   * generation, and its snapshot is stored.
    *
-   * <p>A store whose snapshots a {@code SnapshotPurger} purges must override this method, and the
-   * comparison and the write must be one atomic step against the purge (for {@code
-   * PostgresEventStore}, one conditional upsert on the row the purge also writes). The default
-   * keeps no purge record: it calls {@link #saveSnapshot(StreamId, Version, AggregateState, int)}
-   * and returns {@code true}.
+   * <p>A store whose snapshots a {@code SnapshotPurger} purges makes the comparison and the write
+   * one atomic step against the purge (for {@code PostgresEventStore}, one conditional upsert on
+   * the row the purge also writes). A store without a purge record returns {@code true} after
+   * storing, whatever the generation. A store that keeps no snapshots throws {@link
+   * UnsupportedOperationException}.
    *
    * @param streamId the stream to snapshot
    * @param version the event version at which the snapshot was taken
@@ -206,19 +213,12 @@ public interface EventStore {
    * @throws IllegalArgumentException if {@code snapshotVersion < 1} or {@code
    *     snapshotPurgeGeneration < 0}
    */
-  default boolean saveSnapshot(
+  boolean saveSnapshot(
       StreamId streamId,
       Version version,
       AggregateState state,
       int snapshotVersion,
-      long snapshotPurgeGeneration) {
-    if (snapshotPurgeGeneration < 0) {
-      throw new IllegalArgumentException(
-          "snapshotPurgeGeneration must not be negative, got " + snapshotPurgeGeneration);
-    }
-    saveSnapshot(streamId, version, state, snapshotVersion);
-    return true;
-  }
+      long snapshotPurgeGeneration);
 
   /**
    * Returns the head of the global stream: the highest global offset assigned in this event store

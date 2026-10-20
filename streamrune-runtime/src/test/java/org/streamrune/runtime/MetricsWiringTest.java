@@ -237,6 +237,17 @@ class MetricsWiringTest {
         StreamId streamId, Version version, AggregateState state, int snapshotVersion) {}
 
     @Override
+    public boolean saveSnapshot(
+        StreamId streamId,
+        Version version,
+        AggregateState state,
+        int snapshotVersion,
+        long snapshotPurgeGeneration) {
+      saveSnapshot(streamId, version, state, snapshotVersion);
+      return true;
+    }
+
+    @Override
     public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
       return streams.values().stream()
           .flatMap(List::stream)
@@ -508,6 +519,7 @@ class MetricsWiringTest {
 
     assertEquals(List.of(5L), generationsSaved, "the save carries the generation the load saw");
     assertEquals(0, metrics.count("snapshot.created"), "a refused save created no snapshot");
+    assertEquals(1, metrics.count("snapshot.refused"), "a refused save is counted as refused");
   }
 
   // ==================== Query bus ====================
