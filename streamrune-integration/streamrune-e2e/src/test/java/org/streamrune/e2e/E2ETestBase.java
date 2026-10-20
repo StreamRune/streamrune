@@ -279,5 +279,10 @@ abstract class E2ETestBase {
         repository.save(projectionName, id, new AppliedRow(offset, n, priorApplyCount + 1));
       }
     }
+
+    @Override
+    public boolean writesThroughRepository() {
+      return true;
+    }
   }
 }

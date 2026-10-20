@@ -74,6 +74,11 @@ class ProjectionDeliveryModeRunnerTest {
       }
       process(batch);
     }
+
+    @Override
+    public boolean writesThroughRepository() {
+      return true;
+    }
   }
 
   static final ProjectionRepository NULL_MARKER = new InMemoryProjectionRepository();

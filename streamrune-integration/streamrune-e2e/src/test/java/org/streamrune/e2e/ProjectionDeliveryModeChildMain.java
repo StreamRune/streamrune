@@ -146,6 +146,11 @@ public final class ProjectionDeliveryModeChildMain {
                 }
               });
         }
+
+        @Override
+        public boolean writesThroughRepository() {
+          return true;
+        }
       };
     }
     return batch -> {

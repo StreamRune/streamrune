@@ -86,8 +86,7 @@ final class ProjectionDeliveryPolicy {
               + " AT_LEAST_ONCE_IDEMPOTENT or EXTERNAL_EFFECT (there is no default)");
     }
     if (!mode.writesInCheckpointTransaction()) {
-      // The write target first: a projection without one never reaches the reflective
-      // writesThroughRepository(), which this mode needs only for the INFO line's verdict.
+      // writesThroughRepository() matters in this mode only for the INFO line's verdict.
       boolean upgradeAvailable =
           processor.supportsFencing()
               && projection.writeTarget().map(processor::writesTo).orElse(false)
@@ -119,12 +118,14 @@ final class ProjectionDeliveryPolicy {
               + mode
               + " under a transactional AtomicBatchProcessor ("
               + processorLabel(processor)
-              + "), but it does not write through the handed repository: its process(List,"
-              + " ProjectionRepository) is the INHERITED DEFAULT, which ignores the repository and"
-              + " falls back to process(List), so its read-model writes would commit outside the"
-              + " checkpoint's transaction. Extend BaseProjection or override process(List,"
-              + " ProjectionRepository) and write through the supplied repository, or declare"
-              + " AT_LEAST_ONCE_IDEMPOTENT.");
+              + "), but it does not write through the handed repository: its"
+              + " writesThroughRepository() answers false, so its process(List, ProjectionRepository) is taken to"
+              + " be the INHERITED DEFAULT, which ignores the repository and falls back to"
+              + " process(List), and its read-model writes would commit outside the checkpoint's"
+              + " transaction. Extend BaseProjection, or override process(List,"
+              + " ProjectionRepository), write through the supplied repository and override"
+              + " writesThroughRepository() to return true (a decorator forwards it to the projection"
+              + " it wraps), or declare AT_LEAST_ONCE_IDEMPOTENT.");
     }
     Optional<ProjectionRepository> target = projection.writeTarget();
     if (target.isEmpty()) {

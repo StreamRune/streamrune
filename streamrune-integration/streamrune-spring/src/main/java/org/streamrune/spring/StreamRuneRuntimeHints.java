@@ -30,9 +30,7 @@ import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxStatus;
-import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.LateDataPolicy;
-import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeadLetterEntry;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionErrorClass;
@@ -197,14 +195,7 @@ public class StreamRuneRuntimeHints implements RuntimeHintsRegistrar {
           ProjectionErrorStrategy.class,
           ProjectionDeliveryMode.class,
           LoadedSaga.class,
-          SagaStatus.class,
-          // Projection types whose process(List, ProjectionRepository) — the default on Projection,
-          // the final override on BaseProjection — Projection#writesThroughRepository() resolves
-          // with getClass().getMethod(...) when a transactional processor (the starter's
-          // JdbcProjectionRepository) is wired. Unregistered, a native image throws
-          // NoSuchMethodException there at startup, as the Quarkus and Micronaut binaries did (2)
-          Projection.class,
-          BaseProjection.class);
+          SagaStatus.class);
 
   /**
    * Class-path resources the framework reads at startup, as resource patterns.

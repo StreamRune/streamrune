@@ -122,25 +122,6 @@ class StreamRuneReflectionConfigTest {
   }
 
   /**
-   * {@link org.streamrune.core.projection.Projection#writesThroughRepository()} resolves {@code
-   * process(List, ProjectionRepository)} with {@code getClass().getMethod(...)}; the method is
-   * declared by {@code Projection} (the default) or by {@code BaseProjection} (final). A native
-   * image finds it only on a type registered for reflection — measured: without these registrations
-   * the demo's Quarkus binary failed to build its transactional projection runner ({@code
-   * NoSuchMethodException ... process(java.util.List, ...ProjectionRepository)}).
-   */
-  @Test
-  void registersTheProjectionTypesWhoseProcessMethodIsResolvedReflectively() {
-    var annotation = StreamRuneReflectionConfig.class.getAnnotation(RegisterForReflection.class);
-
-    assertThat(List.of(annotation.targets()))
-        .contains(
-            org.streamrune.core.projection.Projection.class,
-            org.streamrune.core.projection.BaseProjection.class);
-    assertThat(annotation.methods()).isTrue();
-  }
-
-  /**
    * Completeness parity check DERIVED FROM CODE: every {@code @JsonValue} value type in {@code
    * org.streamrune.core.types} plus every framework record/enum reachable through the registered
    * DTOs' components must appear in {@code @RegisterForReflection}. Unlike an annotation-presence

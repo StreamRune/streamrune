@@ -758,16 +758,11 @@ A script missing from the image fails `initializeSchema()` and `create()` with a
 `IllegalStateException` that names it, before anything is written. Your application's own Flyway
 migrations are yours to register.
 
-**Projections that declare `process(List, ProjectionRepository)` themselves.** For a
-`TRANSACTIONAL_LOCAL` or `EXTERNAL_EFFECT` registration under a transactional processor (the
-`JdbcProjectionRepository` bean), and for an `AT_LEAST_ONCE_IDEMPOTENT` registration whose
-`writeTarget()` is that processor's repository (only to choose the startup INFO line's verdict), the
-runner asks `Projection#writesThroughRepository()`, which resolves that method with
-`getClass().getMethod(...)`. All three integrations register `Projection` and `BaseProjection`
-for it; an application projection that declares the two-argument overload itself must be
-registered too, or the image resolves the inherited default and the runner refuses a transactional
-registration as not writing through its repository (an at-least-once one only loses the INFO
-line's hint). `registerDomainPackages` covers it when the projection lives in a scanned package.
+**Projections that declare `process(List, ProjectionRepository)` themselves.** The runner asks
+`Projection#writesThroughRepository()` whether a projection writes through the handed repository,
+and that answer is a declaration the projection makes, not a reflective lookup, so it needs no
+registration in the image. A projection that overrides the two-argument overload without extending
+`BaseProjection` also overrides `writesThroughRepository()` to return `true`.
 
 **Quarkus.** Register your records with `@RegisterForReflection(targets = {...})` on a class of
 your application; `StreamRuneReflectionConfig` and the HikariCP metadata the Quarkus integration
