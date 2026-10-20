@@ -499,8 +499,7 @@ final class SagaCommandDispatch {
         // SagaCompensationRetrySweeper's age-based give-up -> FAULTED like any other transient
         // compensation failure. Terminalizing FAILED on the argument that "a veto is
         // deterministic, re-driving would spin forever" would be wrong: a veto is a load-shedding
-        // GATE, and
-        // the two ways it can be wrong are not symmetric: staying COMPENSATING through a
+        // GATE, and the two ways it can be wrong are not symmetric: staying COMPENSATING through a
         // maintenance window costs a bounded dwell and then actually issues the refund, whereas
         // terminalizing abandoned the undo permanently for a gate that lifts in minutes. What is
         // unchanged is the guarantee that a veto is never COMPENSATED.

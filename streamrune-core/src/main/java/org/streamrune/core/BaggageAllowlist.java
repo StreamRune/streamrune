@@ -106,15 +106,14 @@ public final class BaggageAllowlist {
    * whose value does not survive it. Returns an immutable map.
    *
    * <p>A {@link #filter(Map, Set)} scoped to keys only would drop non-allowlisted keys but copy
-   * allowlisted entries' values <em>verbatim</em>. With {@link #ROLE_BAGGAGE_KEY} allowlisted by
-   * default, an unauthenticated caller could send {@code baggage: role=<a victim's national id /
-   * free-text medical note / 8 KB of anything>} — or the {@code X-User-Role} header, which each
-   * framework filter adds AFTER calling {@code filter} (now only in the trusted-gateway mode) — and
-   * that value was written into the append-only, plaintext {@code event_stream.metadata} column of
-   * every event the command produced. That column is outside crypto-shredding's reach and the
-   * framework offers no API to rewrite or delete it, so a GDPR Article-17 erasure cannot remove the
-   * injected data. The class javadoc's promise ("any caller can smuggle arbitrary data — including
-   * PII — permanently into the immutable event log") was only half kept.
+   * allowlisted entries' values <em>verbatim</em>. With {@link #ROLE_BAGGAGE_KEY} on an allowlist,
+   * an unauthenticated caller could send {@code baggage: role=<a victim's national id / free-text
+   * medical note / 8 KB of anything>} — or the {@code X-User-Role} header, which each framework
+   * filter adds AFTER calling {@code filter} (only in the trusted-gateway mode) — and that value
+   * would be written into the append-only, plaintext {@code event_stream.metadata} column of every
+   * event the command produces. That column is outside crypto-shredding's reach and the framework
+   * offers no API to rewrite or delete it, so a GDPR Article-17 erasure cannot remove the injected
+   * data.
    *
    * <p>{@link StreamRuneContext.RequestContext} applies this to whatever baggage it is handed, so
    * the post-{@code filter} merge is closed at the boundary every path crosses on the way to {@code

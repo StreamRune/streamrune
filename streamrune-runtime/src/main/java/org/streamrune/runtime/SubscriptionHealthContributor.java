@@ -168,8 +168,8 @@ public final class SubscriptionHealthContributor {
     // other metrics call site in the runners ("metric failures never disrupt projection
     // processing"); an Error still propagates, and run() now registers inside its try so even that
     // hits the finally bookkeeping.
-    // registerSubscriptionLagGauge is not the only unwrapped metrics call in the projection
-    // stack: computeHealth()'s recordSubscriptionLag below is guarded the same way.
+    // registerSubscriptionLagGauge is not the only metrics call of the projection stack that needs
+    // this guard: computeHealth()'s recordSubscriptionLag below is guarded the same way.
     try {
       metrics.registerSubscriptionLagGauge(SubscriptionName.of(name), () -> currentLag(name));
     } catch (RuntimeException e) {
