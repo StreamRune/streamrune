@@ -922,9 +922,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * self-block on it until {@link Builder#lockTimeout(Duration) lock timeout} per retry attempt
    * instead of re-entering (see its javadoc for the resulting lock-pool sizing consequence). A
    * different thread — or a nested dispatch against a DIFFERENT stream, including another aggregate
-   * type with the same id value — still contends for a real, independent acquisition exactly as
-   * before, bounded by the same lock timeout, so a stuck after() callback still fails through the
-   * existing {@link LockException}/retry path rather than hanging indefinitely.
+   * type with the same id value — still contends for a real, independent acquisition, bounded by
+   * the same lock timeout, so a stuck after() callback still fails through the existing {@link
+   * LockException}/retry path rather than hanging indefinitely.
    *
    * @param postCommitAfterPhase invoked, still under the stream lock, with the {@link
    *     CommandResult} of every attempt that reaches a return statement inside the locked section
@@ -1840,7 +1840,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * nothing is attempted for the rejected command. A command frees its slot before its future
      * completes, so a caller that awaits each result before submitting the next command needs a
      * budget of only one. The synchronous {@link #execute} path is NOT gated by this budget; it is
-     * bounded by the caller's own threads instead, exactly as before.
+     * bounded by the caller's own threads instead.
      *
      * <p>This is a memory/queueing safety valve, not a measured throughput or latency SLO — the
      * default is deliberately generic (see the constant's javadoc). Size it to your own measured

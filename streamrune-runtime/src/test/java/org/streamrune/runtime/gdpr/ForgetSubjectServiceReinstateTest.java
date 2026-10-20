@@ -281,7 +281,7 @@ class ForgetSubjectServiceReinstateTest {
   /**
    * Crash point: the engine lifted the tombstone and the SUCCESS row was not written (the audit
    * store failed, or the JVM died between the two). A re-run converges: the engine's reinstate is a
-   * no-op on a subject that is no longer forgotten, and the re-run writes the missing SUCCESS row.
+   * no-op on a subject that is not forgotten, and the re-run writes the missing SUCCESS row.
    */
   @Test
   void reinstate_rerunAfterTheSuccessRowWasLost_recordsTheReinstate() {

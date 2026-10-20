@@ -62,7 +62,7 @@ import org.streamrune.core.types.UserId;
  *       {@code honorDlqReplaySystemPrincipal} is on, and {@link
  *       UserRoleResolver#requiresRequestContext()} says the resolver provably cannot answer on this
  *       thread: allow, RECORDED. See the safety argument below.
- *   <li><b>Otherwise</b> — {@code resolver.resolve(userId)} and enforce, exactly as before. A
+ *   <li><b>Otherwise</b> — {@code resolver.resolve(userId)} and enforce: the ordinary check. A
  *       resolver that is a pure function of the {@code userId} therefore keeps being consulted on
  *       every path, including DLQ replay, so a genuine role revocation still denies a queued
  *       command.

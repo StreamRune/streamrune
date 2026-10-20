@@ -159,15 +159,15 @@ public final class SubscriptionHealthContributor {
     // production: a PrometheusMeterRegistry rejects a meter whose id collides with an existing
     // collector using different label keys (classic when the app also emits
     // streamrune.subscriptions.lag), a user MeterFilter can throw, and a registry mid-shutdown
-    // throws IllegalStateException. Propagating meant NO health entry was ever published for the
-    // projection AND — because ContinuousProjectionRunner.run() called this from its standby-view
-    // registration — the exception escaped run() entirely: running stuck true, the runDone latch
-    // never counted down (close() then blocked its full 30s timeout), and markTerminalError never
-    // ran, so /health reported UP over a read model that processed nothing. Health tracking must
+    // throws IllegalStateException. Propagating would publish NO health entry for the projection
+    // AND, because ContinuousProjectionRunner.run() calls this from its standby-view registration,
+    // let the exception escape run() entirely: running stuck true, the runDone latch never counting
+    // down (close() then blocking its full 30s timeout), and markTerminalError never running, so
+    // /health would report UP over a read model that processes nothing. Health tracking must
     // degrade to "no lag meter", never to "no entry". Catches RuntimeException, matching every
     // other metrics call site in the runners ("metric failures never disrupt projection
-    // processing"); an Error still propagates, and run() now registers inside its try so even that
-    // hits the finally bookkeeping.
+    // processing"); an Error still propagates, and run() registers inside its try so even that hits
+    // the finally bookkeeping.
     // registerSubscriptionLagGauge is not the only metrics call of the projection stack that needs
     // this guard: computeHealth()'s recordSubscriptionLag below is guarded the same way.
     try {
@@ -247,17 +247,17 @@ public final class SubscriptionHealthContributor {
    * <p><b>A failed read must not look healthy.</b> Swallowing every {@link RuntimeException} and
    * returning {@code 0}, silently, would report the value a perfectly caught-up subscription
    * reports. So a {@code statement_timeout} on {@code lastGlobalOffset()}, a revoked {@code
-   * projection_offset} SELECT grant, or a momentarily exhausted pool made every scrape read lag=0
-   * while the projection made no progress and the backlog grew — and {@code
-   * docs/guide/production.md}'s "alert on rising {@code streamrune.subscriptions.lag}" was
+   * projection_offset} SELECT grant, or a momentarily exhausted pool would make every scrape read
+   * lag=0 while the projection makes no progress and the backlog grows — and {@code
+   * docs/guide/production.md}'s "alert on rising {@code streamrune.subscriptions.lag}" would be
    * structurally unfirable during exactly the store trouble it exists to catch, with no log line to
    * correlate against.
    *
-   * <p>The gauge now HOLDS ITS LAST KNOWN VALUE on a read failure and a WARN naming the
-   * subscription is logged for the scrape — the same discipline as {@code
-   * OutboxPoller.sampleObservability} / {@code DeadLetterRetryRunner.sampleObservability}, whose
-   * backlog gauges also hold rather than reset. Before the first successful sample there is no last
-   * known value and 0 is reported, accompanied by that WARN.
+   * <p>The gauge HOLDS ITS LAST KNOWN VALUE on a read failure and a WARN naming the subscription is
+   * logged for the scrape — the same discipline as {@code OutboxPoller.sampleObservability} /
+   * {@code DeadLetterRetryRunner.sampleObservability}, whose backlog gauges also hold rather than
+   * reset. Before the first successful sample there is no last known value and 0 is reported,
+   * accompanied by that WARN.
    *
    * <p>An {@link UnsupportedOperationException} from the store is not a failure but a permanent
    * capability gap (the store cannot report its head at all): that path returns 0 without a WARN,

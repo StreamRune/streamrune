@@ -20,10 +20,10 @@ package org.streamrune.runtime;
  *
  * <h2>Taxonomy: a veto is EVIDENCE-FREE, not a rejection</h2>
  *
- * <p>This does not extend {@link org.streamrune.core.DomainException} — the permanent-rejection
- * bucket — on the reasoning that a veto is "deterministic, exactly like a thrown {@code
- * AuthorizationException}". That would put it in direct contradiction with the circuit breaker's
- * own rule: a VETOED callback "carries no evidence" for the circuit breaker, because nothing was
+ * <p>Extending {@link org.streamrune.core.DomainException} — the permanent-rejection bucket — on
+ * the reasoning that a veto is "deterministic, exactly like a thrown {@code
+ * AuthorizationException}" would put it in direct contradiction with the circuit breaker's own
+ * rule: a VETOED callback "carries no evidence" for the circuit breaker, because nothing was
  * executed and no infrastructure was touched, so the breaker must neither close on it nor reset its
  * failure count. Both cannot be right about the same signal, and the consequence of the permanent
  * reading was concrete: one load-shedding window (a rate limiter, a maintenance-mode kill switch)

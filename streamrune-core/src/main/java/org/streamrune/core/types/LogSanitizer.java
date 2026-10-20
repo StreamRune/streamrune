@@ -54,9 +54,9 @@ package org.streamrune.core.types;
  * <ul>
  *   <li><b>{@code Zl} / {@code Zp}</b> — U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR.
  *       Inert under a plain pattern layout, but a JSON-encoding appender's output is normally
- *       consumed by a JavaScript runtime, where both terminate a string literal, and several log
- *       viewers render them as hard line breaks — the same forged-line outcome CR/LF is stripped
- *       for.
+ *       consumed by a JavaScript runtime, where both are line terminators (and ended a string
+ *       literal in every runtime before ES2019), and several log viewers render them as hard line
+ *       breaks — the same forged-line outcome CR/LF is stripped for.
  *   <li><b>{@code Cf}</b> — format characters. U+202E RIGHT-TO-LEFT OVERRIDE visually reverses
  *       everything after it, so an identifier can be made to read in a console as an entirely
  *       different one; the zero-width characters and bidi isolates in the same category hide or

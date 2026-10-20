@@ -27,9 +27,9 @@ import org.streamrune.core.types.UserId;
  * delegate's handler on every call, so any authorization the handler performs internally already
  * runs unconditionally.
  *
- * <p>Absent (the default — no authorizer configured), {@code CachingQueryBus} behaves exactly as
- * before: caching is purely a performance optimization with no authorization opinion of its own,
- * and any authorization must live entirely inside the handler (with the cache-hit caveat above).
+ * <p>Absent (the default — no authorizer configured), {@code CachingQueryBus} runs no authorization
+ * check: caching is purely a performance optimization with no authorization opinion of its own, and
+ * any authorization must live entirely inside the handler (with the cache-hit caveat above).
  *
  * @see Authorization
  */

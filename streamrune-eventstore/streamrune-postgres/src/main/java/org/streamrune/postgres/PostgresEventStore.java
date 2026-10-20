@@ -289,13 +289,13 @@ public final class PostgresEventStore implements EventStore {
   private final PostgresCommandInbox commandInbox;
   private final StatementTimeout statementTimeout;
 
-  // Set on the FIRST call to warnIfLegacySnapshotExists, regardless of outcome, so the probe
-  // query itself runs at most ONCE per store instance for its whole lifetime. Before this flag
-  // existed, the only early-return was legacySnapshotWarned (below), which is set ONLY when a
-  // legacy row is FOUND — so on the default never() deployment with zero snapshot_store rows (the
-  // common case: an app that never configured snapshots), every single aggregate load paid an
-  // extra pool checkout + query, forever. This flag decouples "have we probed" from "did we find
-  // anything", which is what makes the probe actually one-shot.
+  // Set on the FIRST call to warnIfLegacySnapshotExists, regardless of outcome, so the probe query
+  // itself runs at most ONCE per store instance for its whole lifetime. With legacySnapshotWarned
+  // (below) as the only early-return — set ONLY when a legacy row is FOUND — every single aggregate
+  // load on the default never() deployment with zero snapshot_store rows (the common case: an app
+  // that never configured snapshots) would pay an extra pool checkout + query, forever. This flag
+  // decouples "have we probed" from "did we find anything", which is what makes the probe actually
+  // one-shot.
   private final AtomicBoolean legacySnapshotProbed = new AtomicBoolean(false);
 
   // Set once this instance has warned that snapshot_store still has a row — a leftover
@@ -1046,13 +1046,13 @@ public final class PostgresEventStore implements EventStore {
    * at DEBUG and swallowed: it must never affect the load it rides along with.
    *
    * <p>{@code legacySnapshotProbed} makes this method run its query body AT MOST ONCE per store
-   * instance, regardless of outcome. Before this, the only guard was {@code legacySnapshotWarned},
-   * set only when a row was FOUND — so on the default {@code never()} deployment with zero {@code
-   * snapshot_store} rows (an app that never configured snapshots, the common case and the exact
-   * population with nothing to find), every single aggregate load paid an extra pool checkout
-   * outside the read transaction plus this query, forever. The probe is table-wide rather than
-   * per-stream ({@link #SNAPSHOT_STATE_TYPE_FOR_WARNING}): the warning is about the table, not
-   * about whichever stream happened to trigger the one shot.
+   * instance, regardless of outcome. With {@code legacySnapshotWarned} as the only guard — set only
+   * when a row is FOUND — every single aggregate load on the default {@code never()} deployment
+   * with zero {@code snapshot_store} rows (an app that never configured snapshots, the common case
+   * and the exact population with nothing to find) would pay an extra pool checkout outside the
+   * read transaction plus this query, forever. The probe is table-wide rather than per-stream
+   * ({@link #SNAPSHOT_STATE_TYPE_FOR_WARNING}): the warning is about the table, not about whichever
+   * stream happened to trigger the one shot.
    */
   private void warnIfLegacySnapshotExists() {
     if (!legacySnapshotProbed.compareAndSet(false, true)) {
@@ -1995,8 +1995,9 @@ public final class PostgresEventStore implements EventStore {
       if (written == 0) {
         log.info(
             "Snapshot of stream {} at version {} not stored: its snapshot_store row carries"
-                + " a purge generation other than {}, so a GDPR forget purged the stream's snapshot after the"
-                + " state being saved was loaded; the next command loads and snapshots again",
+                + " a purge generation other than {}, so a GDPR forget purged the stream's"
+                + " snapshot after the state being saved was loaded; the next command loads and"
+                + " snapshots again",
             shownStream,
             version.value(),
             snapshotPurgeGeneration);

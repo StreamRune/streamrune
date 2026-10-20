@@ -39,10 +39,11 @@ import org.streamrune.core.types.SagaType;
  * null} of any of them is the same caller bug, rejected with {@link IllegalArgumentException}
  * (naming the argument) before any I/O — never a {@link NullPointerException} (the in-memory store
  * would raise one for the applied event), never a storage failure the saga runtime retries as
- * infrastructure forever (the Postgres store raised one for a status, a cutoff and an age bound),
- * never a state stored as a JSON {@code null}, and never a query silently answering "nothing" for a
- * {@code null} filter. {@code SagaStoreContract} pins all of it for every implementation. Primitive
- * arguments ({@code expectedVersion}, {@code limit}, the shield flag) cannot be {@code null}.
+ * infrastructure forever (the Postgres store would raise one for a status, a cutoff and an age
+ * bound), never a state stored as a JSON {@code null}, and never a query silently answering
+ * "nothing" for a {@code null} filter. {@code SagaStoreContract} pins all of it for every
+ * implementation. Primitive arguments ({@code expectedVersion}, {@code limit}, the shield flag)
+ * cannot be {@code null}.
  */
 public interface SagaStore {
 

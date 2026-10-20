@@ -46,17 +46,17 @@ public final class StreamRune implements CommandBus, AutoCloseable {
   private final VirtualThreadCommandBus commandBus;
   private final List<ProjectionRegistration> projections;
 
-  // Exactly one of these two is non-null, matching
-  // resolveProjectionRunners()'s mutual exclusion of projectionRunner(...) /
-  // projectionRunnerFactory(...). projectionRunner is the caller-supplied SHARED instance used for
-  // every registration (the caller's responsibility to supply one capable of multiplexing distinct
-  // projection names if there is more than one registration). projectionRunnersByRegistration is
-  // populated ONLY for the factory form — one FRESH instance per registerProjection call, same
-  // order/size as `projections` — so a one-projection-per-instance runner (the only shipped
-  // continuous runner, ContinuousProjectionRunner) works correctly with more than one registration
-  // through the factory: before this, the factory was invoked once and startProjections() called
-  // run() on that single instance for every registration, so registration #2 (and any later one)
-  // always hit IllegalStateException("Runner already running") and never ran.
+  // Exactly one of these two is non-null, matching resolveProjectionRunners()'s mutual exclusion of
+  // projectionRunner(...) / projectionRunnerFactory(...). projectionRunner is the caller-supplied
+  // SHARED instance used for every registration (the caller's responsibility to supply one capable
+  // of multiplexing distinct projection names if there is more than one registration).
+  // projectionRunnersByRegistration is populated ONLY for the factory form — one FRESH instance per
+  // registerProjection call, same order/size as `projections` — so a one-projection-per-instance
+  // runner (the only shipped continuous runner, ContinuousProjectionRunner) works correctly with
+  // more than one registration through the factory. A factory invoked once would leave
+  // startProjections() calling run() on that single instance for every registration, so
+  // registration #2 (and any later one) would always hit IllegalStateException("Runner already
+  // running") and never run.
   private final ProjectionRunner projectionRunner;
   private final List<ProjectionRunner> projectionRunnersByRegistration;
 
@@ -914,13 +914,13 @@ public final class StreamRune implements CommandBus, AutoCloseable {
       if (projectionRunnerFactory != null) {
         // One factory call per registration, so a one-projection-per-instance runner (e.g.
         // ContinuousProjectionRunner) gets its OWN instance per registered projection instead of
-        // being asked to multiplex — the previous behavior (factory invoked once, that single
-        // instance reused for every registration) meant registration #2 (and any later one)
-        // always hit that runner's own "already running" guard and never ran. At least ONE call
-        // regardless of registration count, so build() still eagerly validates the factory
-        // (null-check below) and threads eventStore/subscriptionConfig into it exactly as before
-        // even with zero registrations — that lone result is simply never paired with a
-        // registration to run, and is still closed like any other on stopProjections()/close().
+        // being asked to multiplex — a factory invoked once, its single instance reused for every
+        // registration, would make registration #2 (and any later one) always hit that runner's own
+        // "already running" guard and never run. At least ONE call regardless of registration
+        // count, so build() still eagerly validates the factory (null-check below) and threads
+        // eventStore/subscriptionConfig into it even with zero registrations — that lone result is
+        // simply never paired with a registration to run, and is still closed like any other on
+        // stopProjections()/close().
         int runnerCount = Math.max(1, projections.size());
         List<ProjectionRunner> perRegistration = new ArrayList<>(runnerCount);
         for (int i = 0; i < runnerCount; i++) {

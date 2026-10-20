@@ -852,8 +852,8 @@ public final class OutboxPoller implements AutoCloseable {
   }
 
   /**
-   * Returns whether the relay's poll thread is currently alive. A started relay whose thread is no
-   * longer alive died unexpectedly (e.g. an {@link Error} escaped the poll loop) — see {@link
+   * Returns whether the relay's poll thread is currently alive. A started relay whose thread is not
+   * alive died unexpectedly (e.g. an {@link Error} escaped the poll loop) — see {@link
    * #isStarted()}.
    */
   public boolean isAlive() {

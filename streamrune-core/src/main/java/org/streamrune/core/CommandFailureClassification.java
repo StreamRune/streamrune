@@ -59,13 +59,13 @@ import org.streamrune.core.saga.SagaForwardFencedException;
  *
  * <p>The predicates are not inline lambdas of the two consumers, because two copies drift: a DLQ
  * predicate that excludes a crypto-shredded ({@link SubjectForgottenException}) subject beside a
- * breaker predicate that does not reads as a mirror and is not. That asymmetry is reachable: a
- * batch replay or client retry loop over commands for GDPR-erased subjects produces consecutive
- * failures that the DLQ correctly refuses to record and such a breaker counts, opening the global
- * circuit against infrastructure that was never unhealthy. Both consumers derive from this one
- * class — {@link #DLQ_ELIGIBLE} and {@link #BREAKER_ELIGIBLE} share {@link #isPermanentRejection},
- * and their only difference is the deliberate, documented middle row above — so a clause cannot be
- * added to one and forgotten in the other.
+ * breaker predicate that does not reads as a mirror and is not. That asymmetry would be reachable:
+ * a batch replay or client retry loop over commands for GDPR-erased subjects would produce
+ * consecutive failures that the DLQ correctly refuses to record and such a breaker would count,
+ * opening the global circuit against infrastructure that was never unhealthy. Both consumers derive
+ * from this one class — {@link #DLQ_ELIGIBLE} and {@link #BREAKER_ELIGIBLE} share {@link
+ * #isPermanentRejection}, and their only difference is the deliberate, documented middle row above
+ * — so a clause cannot be added to one and forgotten in the other.
  *
  * <p>What counts as a permanent rejection:
  *

@@ -169,7 +169,7 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
    *
    * <p>If the factory throws, the channel logs a {@code WARN} and stays publish-only.
    *
-   * @param dataSource the shared application {@code DataSource}, which publishes
+   * @param dataSource the shared application {@code DataSource}, the one publishes go through
    * @param listenDataSourceFactory opens the dedicated pool to listen on
    * @throws IllegalArgumentException if either argument is null
    */

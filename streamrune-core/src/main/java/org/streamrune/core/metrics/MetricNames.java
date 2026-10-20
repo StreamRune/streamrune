@@ -145,10 +145,10 @@ public final class MetricNames {
    * name, {@code streamrune.events.duration}: an append-latency alert is written against the
    * documented series, so the constant is the contract the emitted name follows.
    *
-   * <p><b>Emission:</b> the timer was registered under this name but had no recording call, so the
-   * series existed at {@code count=0} and the alert remained unfirable. The command bus now samples
-   * every append that carries events, on both the success and the failure path; a keyed zero-event
-   * inbox claim appends nothing and is not sampled.
+   * <p><b>Emission:</b> the command bus samples every append that carries events, on both the
+   * success and the failure path; a keyed zero-event inbox claim appends nothing and is not
+   * sampled. Registered without a recording call, the series would exist at {@code count=0} and an
+   * alert on it would never fire.
    */
   public static final String EVENTS_DURATION = "streamrune.events.duration";
 

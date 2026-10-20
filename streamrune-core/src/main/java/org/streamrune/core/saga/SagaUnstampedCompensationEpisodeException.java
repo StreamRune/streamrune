@@ -18,8 +18,8 @@ import org.streamrune.core.types.LogSanitizer;
  * idempotency keys are scoped by {@code episode_version}, and the key-age guards measure from
  * {@code episode_claimed_at}. Without it the runtime would have to guess both: re-derive the keys
  * from a row version that a fault→replay cycle has moved (re-executing a committed compensation — a
- * double refund) and measure key age from a last-write instant the fault itself refreshed. It no
- * longer guesses; the episode is refused.
+ * double refund) and measure key age from a last-write instant the fault itself refreshed. It does
+ * not guess; the episode is refused.
  *
  * <p>Where it surfaces, nothing is dispatched: the event-path resume raises it as poison (the
  * triggering event is quarantined and the saga marked {@code FAULTED}); {@code

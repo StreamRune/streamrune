@@ -557,8 +557,9 @@ subprojects {
         // `compileOnly` project dependency is invisible in the published POM ENTIRELY (not even at
         // `runtime` scope, which `implementation` at least gets), so a public supertype leaking from
         // one is strictly worse than the `implementation` case, and a check of `implementation`
-        // alone would not see it (streamrune-postgres's compileOnly(project(":streamrune-runtime")),
-        // for example, would leak through PostgresNotificationSubscription / HybridEventSubscription).
+        // alone would not see it (a compileOnly(project(":streamrune-runtime")) in
+        // streamrune-postgres, for example, would leak through PostgresNotificationSubscription /
+        // HybridEventSubscription).
         val nonApiProjectDepPaths: Set<String> =
             (configurations.getByName("implementation").dependencies
                 .withType(ProjectDependency::class.java).map { it.path }.toSet() +
@@ -796,14 +797,14 @@ subprojects {
         // ── Every published archive carries the licence texts ──────────────────────
         //
         // BSL 1.1's own Terms require "You must conspicuously display this License on each original
-        // or modified copy of the Licensed Work". Before this, every published archive held exactly
-        // two META-INF entries — the directory and MANIFEST.MF — and the removal of the BSL copyright
-        // headers from the sources stripped the per-file headers and the spotless
-        // licenseHeaderFile rule, so the sources jar carried nothing either. That left the POM as
-        // the sole licence signal in the entire distribution, and made LICENSE-COMMERCIAL.md — which
-        // the POM's <comments> tells a reader to consult — a dangling pointer to a file that existed
-        // in no artifact and at no URL. All three texts now ship inside every archive, so the grant
-        // is readable from the artifact alone, offline, with no network round-trip.
+        // or modified copy of the Licensed Work". Without this block every published archive would
+        // hold exactly two META-INF entries — the directory and MANIFEST.MF — and, since the
+        // sources carry no per-file licence headers (and spotless no licenseHeaderFile rule), the
+        // sources jar would carry nothing either. That would leave the POM as the sole licence
+        // signal in the entire distribution, and make LICENSE-COMMERCIAL.md — which the POM's
+        // <comments> tells a reader to consult — a pointer to a file no artifact contains. All
+        // three texts ship inside every archive, so the grant is readable from the artifact alone,
+        // offline, with no network round-trip.
         //
         // The three archives the `maven` publication ships come from three different mechanisms:
         // `jar` from the `java` plugin, `sourcesJar` from java.withSourcesJar() (which vanniktech's
@@ -1267,7 +1268,7 @@ subprojects {
                     // certify, exactly the tag<->artifact mismatch this task exists to prevent.
                     // Scoped to `src/main/` and `src/test/` specifically (not merely "untracked
                     // anywhere") so scratchpad/, build/, and other non-source untracked paths stay
-                    // tolerated exactly as before.
+                    // tolerated, as Arm 4 tolerates them.
                     val (untrackedExit, untrackedOutput) =
                         git("ls-files", "--others", "--exclude-standard")
                     if (untrackedExit != 0) {

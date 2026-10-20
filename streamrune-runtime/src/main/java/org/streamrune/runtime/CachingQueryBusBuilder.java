@@ -67,9 +67,8 @@ public final class CachingQueryBusBuilder {
   /**
    * Sets the {@link QueryAuthorizer} consulted on every dispatch of a {@code @Cacheable} query —
    * hit or miss — before the cache is ever touched. Optional; when absent (or {@code null}) no
-   * authorization check runs here and behavior is unchanged from before this option existed — see
-   * {@link QueryAuthorizer} for why one is usually needed once caching is turned on for a query
-   * whose results depend on the caller's access.
+   * authorization check runs here — see {@link QueryAuthorizer} for why one is usually needed once
+   * caching is turned on for a query whose results depend on the caller's access.
    *
    * @param authorizer the authorizer to consult; {@code null} disables the check
    * @return this builder

@@ -13,10 +13,11 @@ import java.util.Set;
  * non-canonical values: {@code Boolean.parseBoolean} treats <em>only</em> {@code "true"} as {@code
  * true}, so {@code on}/{@code yes}/{@code 1} all read as {@code false}; Micronaut's typed {@code
  * Boolean} converter reads {@code yes}/{@code y}/{@code on}/{@code true} as {@code true} but {@code
- * 1} as {@code false}; SmallRye reads {@code 1}/{@code y}/{@code t} as {@code true}. The same
- * {@code enabled=on} therefore enabled a projection on Micronaut but silently disabled it on
- * Spring/Quarkus. Routing every integration through this one method makes the interpretation
- * identical on all three runtimes.
+ * 1} as {@code false}; SmallRye reads {@code 1}/{@code y}/{@code t} as {@code true}. With {@code
+ * Boolean.parseBoolean} on Spring and Quarkus and the typed converter on Micronaut, the same {@code
+ * enabled=on} would enable a projection on Micronaut and silently disable it on Spring/Quarkus.
+ * Routing every integration through this one method makes the interpretation identical on all three
+ * runtimes.
  *
  * <p><b>Canonical interpretation</b> (case-insensitive, surrounding whitespace ignored):
  *

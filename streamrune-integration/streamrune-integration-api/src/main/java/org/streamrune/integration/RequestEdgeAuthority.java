@@ -58,8 +58,8 @@ public final class RequestEdgeAuthority {
    * would otherwise start failing for a reason it never depended on. The exception is reported to
    * {@code onCaptureFailure} (each integration passes its own logger — this module deliberately has
    * no logging dependency) and {@code ctx} is returned unchanged, so authorization falls back to
-   * calling the resolver at command time exactly as it did before this capture existed and the same
-   * failure resurfaces there, attached to the command it belongs to.
+   * calling the resolver at command time, as it does without a capture, and the same failure
+   * resurfaces there, attached to the command it belongs to.
    *
    * @param ctx the request context built from the inbound request; {@code null} is returned as-is
    * @param resolver the configured resolver, or {@code null} when none is wired

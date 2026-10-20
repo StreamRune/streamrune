@@ -231,27 +231,26 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       } else {
         lastError.set(null);
       }
-      // Register a read-only view of THIS RUNNER with the health contributor before the
-      // leadership loop starts, so the projection is visible in /health from the first tick — even
-      // on a replica that never wins the lease. Registered only inside
-      // subscribeToLiveEvents, a permanent standby would register nothing at all: when NO replica
-      // can lead (a terminal standDownTerminally after a heartbeat Error, or a runtime REVOKE on
-      // subscription_leases) every replica's /health would report UP with no entry for the
-      // projection
-      // while the read model was frozen indefinitely. The live-subscription registration below
-      // REPLACES this view while LIVE (for the richer lifecycle + delivery-error signal) and the
-      // standby view is restored on the way back out. Mirrors ScheduledProjectionRunner, which
-      // registers at start() and keeps the entry through SLEEPING/standby ticks.
+      // Register a read-only view of THIS RUNNER with the health contributor before the leadership
+      // loop starts, so the projection is visible in /health from the first tick — even on a
+      // replica that never wins the lease. Registered only inside subscribeToLiveEvents, a
+      // permanent standby would register nothing at all: when NO replica can lead (a terminal
+      // standDownTerminally after a heartbeat Error, or a runtime REVOKE on subscription_leases)
+      // every replica's /health would report UP with no entry for the projection while the read
+      // model stays frozen indefinitely. The live-subscription registration below REPLACES this
+      // view while LIVE (for the richer lifecycle + delivery-error signal) and the standby view is
+      // restored on the way back out. Mirrors ScheduledProjectionRunner, which registers at start()
+      // and keeps the entry through SLEEPING/standby ticks.
       //
-      // This call MUST sit INSIDE the try. Run between claiming the runner
-      // and the try, anything it threw would escape run() without touching the catch(Throwable)/
-      // finally: the runner would stay claimed (every later run() failing with "Runner already
-      // running"), done never counted down (a later close() blocking its
-      // full CLOSE_JOIN_TIMEOUT), and state/markTerminalError never ran — /health reported UP while
-      // the projection processed nothing, on a single-replica deployment forever. The concrete
-      // thrower was SubscriptionHealthContributor.register's bare
-      // metrics.registerSubscriptionLagGauge (now log-and-continue for RuntimeException); this
-      // placement additionally covers any residual Error or future registration side effect.
+      // This call MUST sit INSIDE the try. Run between claiming the runner and the try, anything it
+      // threw would escape run() without touching the catch(Throwable)/finally: the runner would
+      // stay claimed (every later run() failing with "Runner already running"), done would never
+      // count down (a later close() blocking its full CLOSE_JOIN_TIMEOUT), and
+      // state/markTerminalError would never run — /health would report UP while the projection
+      // processes nothing, on a single-replica deployment forever.
+      // SubscriptionHealthContributor.register logs and continues when
+      // metrics.registerSubscriptionLagGauge throws a RuntimeException; this placement also covers
+      // an Error from it or any future registration side effect.
       registerStandbyHealthView(projectionName);
       // Outer leadership loop: only the single-active-consumer leader for this name reads,
       // processes, and advances the offset. A non-leader sits in STANDBY, retrying acquisition at
@@ -364,10 +363,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       } finally {
         if (state.get() != ProjectionState.ERROR) {
           state.set(ProjectionState.STOPPED);
-          // A deliberate CLEAN stop drops out of the health view, exactly as before —
-          // a stopped projection is not a frozen one. This is the single unregistration point
-          // for every clean exit (an unregistration in subscribeToLiveEvents would miss the
-          // stop-while-STANDBY and stop-during-catch-up paths).
+          // A deliberate CLEAN stop drops out of the health view — a stopped projection is not a
+          // frozen one. This is the single unregistration point for every clean exit (an
+          // unregistration in subscribeToLiveEvents would miss the stop-while-STANDBY and
+          // stop-during-catch-up paths, which never reach it).
           if (healthContributor != null) {
             healthContributor.unregister(projectionName.value());
           }
@@ -832,9 +831,9 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           if (errorHandler != null) {
             errorHandler.accept(e);
           }
-          // Catch-up is not health-silent — a dead-lettered or skipped chunk would leave the
-          // standby health view at 0 errors (UP) while the checkpoint advanced past it. Record the
-          // error BEFORE the strategy, exactly like ScheduledProjectionRunner.
+          // Catch-up must not be health-silent: a dead-lettered or skipped chunk would otherwise
+          // leave the standby health view at 0 errors (UP) while the checkpoint advances past it.
+          // Record the error BEFORE the strategy, exactly like ScheduledProjectionRunner.
           recordHealthError(projectionName);
           ErrorAction action =
               handleBatchError(projectionName, chunk, e, consecutiveProcessingFailures);

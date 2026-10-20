@@ -1087,8 +1087,8 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
     // destroyed for this subject (1 for a never-erased subject — whose key file is then written
     // in the 32-byte format). Read under the per-subject stripe lock, so it cannot interleave
     // with an in-JVM deleteKey's max-merge; a cross-process erasure racing this mint is caught by
-    // the post-mint tombstone re-check exactly as before (the erased key is removed / the mint is
-    // refused), so a stale-generation key never survives an overlapping erasure.
+    // the post-mint tombstone re-check (the erased key is removed / the mint is refused), so a
+    // stale-generation key never survives an overlapping erasure.
     int version = nextKeyVersion(subjectId);
     try {
       List<Path> publishDirectories = createDirectoriesForPublish(path.getParent());

@@ -101,11 +101,11 @@ public interface CommandBus {
    *       success (e.g. HTTP 200 OK), <b>never</b> to a rejection.
    * </ul>
    *
-   * <p>Before this discriminator existed, {@link CommandResult#shortCircuited()} alone could not
-   * tell these apart, so an application returning an error on {@code shortCircuited() == true}
-   * would misreport an idempotent replay (a success) as a rejection. Prefer {@link
-   * CommandResult#vetoed()} / {@link CommandResult#idempotentReplay()} over raw {@link
-   * CommandResult#shortCircuited()} when the distinction matters.
+   * <p>{@link CommandResult#shortCircuited()} alone cannot tell these apart: an application
+   * returning an error on {@code shortCircuited() == true} would misreport an idempotent replay (a
+   * success) as a rejection. Prefer {@link CommandResult#vetoed()} / {@link
+   * CommandResult#idempotentReplay()} over raw {@link CommandResult#shortCircuited()} when the
+   * distinction matters.
    */
   enum ShortCircuitReason {
     /** The command ran to completion (or produced no events); this is not a short-circuit. */

@@ -56,16 +56,14 @@ public class StreamRuneConfigValidator implements ApplicationEventListener<Start
     // value", and the operator must learn it at startup rather than under contention. Identical
     // check and message on Spring and Quarkus.
     //
-    // The rule covers the (0ms, 1ms) band too, which a negative check alone lets through.
-    // Micronaut accepts "PT0.0005S"; the value is positive, so a negative check passes it, and
-    // PgAdvisoryLocker
-    // would turn it into lock_timeout = '0ms' — PostgreSQL's spelling of DISABLED, i.e. wait
-    // forever —
-    // while LocalStripedLocker on the same value makes a single attempt. Delegated to
-    // AggregateLocker#requireValidTimeout so the five enforcement points (two lockers, three boot
-    // validators) share ONE rule and ONE message and cannot drift apart the way the negative arm's
-    // three hand-copied checks could; the IAE is translated to the IllegalStateException this
-    // validator contracts to throw.
+    // The rule covers the (0ms, 1ms) band too, which a negative check alone lets through. Micronaut
+    // accepts "PT0.0005S"; the value is positive, so a negative check passes it, and
+    // PgAdvisoryLocker would turn it into lock_timeout = '0ms' — PostgreSQL's spelling of DISABLED,
+    // i.e. wait forever — while LocalStripedLocker on the same value makes a single attempt.
+    // Delegated to AggregateLocker#requireValidTimeout so the five enforcement points (two lockers,
+    // three boot validators) share ONE rule and ONE message and cannot drift apart the way the
+    // negative arm's three hand-copied checks could; the IAE is translated to the
+    // IllegalStateException this validator contracts to throw.
     java.time.Duration lockTimeout = properties.lockTimeout();
     try {
       org.streamrune.core.AggregateLocker.requireValidTimeout(

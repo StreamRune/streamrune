@@ -605,8 +605,8 @@ command itself succeeds, the store logs at INFO that the snapshot was not stored
 it in `streamrune.snapshots.refused`. The purge and
 the save upsert the same primary key, so PostgreSQL serializes them on every replica, whichever
 `AggregateLocker` the command bus uses. A row without a state is no snapshot: the next command
-replays the stream's events, whose `@Encrypted` fields read `[REDACTED]` on a replica whose cache no
-longer holds the subject's plaintext (see the next paragraph), and its snapshot is stored again. A purge that fails, or a process that dies during it, leaves either every
+replays the stream's events, whose `@Encrypted` fields read `[REDACTED]` on a replica whose cache does
+not hold the subject's plaintext (see the next paragraph), and its snapshot is stored again. A purge that fails, or a process that dies during it, leaves either every
 stream of the subject purged or none (one statement), and calling `forget` again converges.
 
 This holds as long as a load after the purge cannot decrypt the subject's fields. On the replica
