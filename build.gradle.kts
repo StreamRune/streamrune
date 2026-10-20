@@ -270,6 +270,23 @@ val dockerFreeModules =
         ":streamrune-integration:streamrune-integration-api",
         ":streamrune-integration:streamrune-integration-tck")
 
+// ── Doc-lint tests ───────────────────────────────────────────────────────────────────────────
+//
+// A doc-lint test (a test class named `*DocLintTest`) holds a guide, a README or a metadata file
+// against the code that is its oracle: the metrics table against MetricNames, the configuration
+// docs against the properties types. It runs in its module's `docLintTest` task instead of `test`,
+// and each module declares the documents it reads as that task's inputs, so an edit to a guide
+// re-runs these few tests and not the module's whole suite. None needs Docker: `check` runs them
+// and so does quickCheck.
+val docLintModules =
+    setOf(
+        ":streamrune-core",
+        ":streamrune-runtime",
+        ":streamrune-test",
+        ":streamrune-integration:streamrune-spring",
+        ":streamrune-integration:streamrune-quarkus",
+        ":streamrune-integration:streamrune-micronaut")
+
 // The JaCoCo report finalizes every Test task (subprojects below). A build that requests quickCheck
 // and nothing else leaves the report out of its task graph, so the fast lane never waits for a
 // coverage report it does not read; `quickCheck build` writes the reports as usual, and so does an
@@ -1720,19 +1737,41 @@ listOf("test", "check", "build").forEach { tasks.named(it) { finalizedBy(testSum
 
 // The fast lane for the edit-compile-test loop: compiles every source set of every module (main,
 // test and runtime's JMH benchmarks, as `check` does), runs spotlessCheck (the root's and every
-// module's) and the tests of dockerFreeModules. JaCoCo report and verification and Javadoc are not
-// in its task graph (quickCheckOnly), and the Testcontainers suites are left to `build`. Every task
-// it runs is one that `build` runs too. A green quickCheck is a fast signal, not a substitute:
-// `./gradlew build` runs before every pull request.
+// module's), the tests of dockerFreeModules and the doc-lint tests of docLintModules. JaCoCo report
+// and verification and Javadoc are not in its task graph (quickCheckOnly), and the Testcontainers
+// suites are left to `build`. Every task it runs is one that `build` runs too. A green quickCheck is
+// a fast signal, not a substitute: `./gradlew build` runs before every pull request.
 tasks.register("quickCheck") {
     group = "verification"
     description =
-        "Compiles every module, runs spotlessCheck and the tests of the Docker-free modules; " +
-            "skips JaCoCo and Javadoc."
+        "Compiles every module, runs spotlessCheck, the tests of the Docker-free modules and " +
+            "the doc-lint tests; skips JaCoCo and Javadoc."
     dependsOn(subprojects.map { it.tasks.withType<JavaCompile>() })
     dependsOn("spotlessCheck", subprojects.map { "${it.path}:spotlessCheck" })
     dependsOn(dockerFreeModules.map { "$it:test" })
+    dependsOn(docLintModules.map { "$it:docLintTest" })
     finalizedBy(testSummary)
+}
+
+configure(subprojects.filter { it.path in docLintModules }) {
+    val testSourceSet = the<SourceSetContainer>()["test"]
+    val docLintTest =
+        tasks.register<Test>("docLintTest") {
+            group = "verification"
+            description = "Runs the doc-lint tests: the guides and READMEs against the code they describe."
+            testClassesDirs = testSourceSet.output.classesDirs
+            classpath = testSourceSet.runtimeClasspath
+            // Jupiter only: the ArchUnit engine does not apply the class filter and would run the
+            // module's architecture rules here a second time.
+            useJUnitPlatform { includeEngines("junit-jupiter") }
+            filter { includeTestsMatching("*DocLintTest") }
+            // The JaCoCo report of the module depends on `test`; as a finalizer it would drag the
+            // whole suite into a standalone doc-lint run. Coverage is measured by `test`, so only
+            // the summary finalizer stays (the same choice as streamrune-e2e's brokerTest).
+            setFinalizedBy(listOf(":testSummary"))
+        }
+    tasks.named<Test>("test") { filter { excludeTestsMatching("*DocLintTest") } }
+    tasks.named("check") { dependsOn(docLintTest) }
 }
 
 // ── Mutation testing, on demand ──────────────────────────────────────────────────────────────
