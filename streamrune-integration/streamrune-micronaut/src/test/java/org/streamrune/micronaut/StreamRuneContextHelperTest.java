@@ -55,16 +55,29 @@ class StreamRuneContextHelperTest {
   }
 
   @Test
-  void theThreadLocalMirrorWinsOverTheCurrentRequest() {
+  void theCurrentRequestWinsOverAThreadLocalMirrorLeftOnTheThread() {
+    // A mirror left behind on a pooled thread can never name the caller of the request the thread
+    // serves now: the request's own context comes first.
+    var ofRequest = context("corr-request", "bob");
+    var seen = new AtomicReference<StreamRuneContext.RequestContext>();
+    StreamRuneContextHelper.set(context("corr-stale", "mallory"));
+
+    ServerRequestContext.with(
+        requestCarrying(ofRequest), () -> seen.set(StreamRuneContextHelper.get()));
+
+    assertSame(ofRequest, seen.get());
+  }
+
+  @Test
+  void theMirrorAnswersWhenNoCurrentRequestCarriesAContext() {
     var mirrored = context("corr-mirror", "alice");
     var seen = new AtomicReference<StreamRuneContext.RequestContext>();
     StreamRuneContextHelper.set(mirrored);
 
-    ServerRequestContext.with(
-        requestCarrying(context("corr-request", "alice")),
-        () -> seen.set(StreamRuneContextHelper.get()));
+    ServerRequestContext.with(requestCarrying(null), () -> seen.set(StreamRuneContextHelper.get()));
 
     assertSame(mirrored, seen.get());
+    assertSame(mirrored, StreamRuneContextHelper.get(), "no request current at all");
   }
 
   @Test

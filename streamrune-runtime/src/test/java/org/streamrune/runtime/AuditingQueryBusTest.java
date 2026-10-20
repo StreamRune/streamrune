@@ -83,6 +83,20 @@ class AuditingQueryBusTest {
   }
 
   @Test
+  void aContextBoundToNullIsAuditedAsNoContext() {
+    delegate.register(FindUserById.class, q -> new FindUserByIdResult("Dave"));
+
+    ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+        .run(() -> bus.dispatch(new FindUserById("u10")));
+
+    ArgumentCaptor<AuditEntry> captor = ArgumentCaptor.forClass(AuditEntry.class);
+    verify(auditStore).save(captor.capture());
+    assertThat(captor.getValue().userId()).isNull();
+    assertThat(captor.getValue().correlationId()).isNull();
+    assertThat(captor.getValue().outcome()).isEqualTo(AuditOutcome.SUCCESS);
+  }
+
+  @Test
   void nonAuditableQueryDoesNotSaveEntry() {
     delegate.register(NonAuditableQuery.class, q -> new NonAuditableResult("data"));
 

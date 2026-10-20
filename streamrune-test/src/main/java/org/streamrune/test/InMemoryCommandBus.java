@@ -256,8 +256,10 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
     if (cause != null && cause.sagaOrigin() != null) {
       return cause.sagaOrigin().correlationId();
     }
-    if (StreamRuneContext.CURRENT.isBound()) {
-      return StreamRuneContext.CURRENT.get().correlationId();
+    // capture(): a context bound to null is no context.
+    StreamRuneContext.RequestContext context = StreamRuneContext.capture();
+    if (context != null) {
+      return context.correlationId();
     }
     return IdGenerator.generateCorrelationId();
   }
@@ -284,8 +286,8 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
     StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
     SagaOrigin origin = cause == null ? null : cause.sagaOrigin();
     CausationId causation = cause == null ? null : cause.causationId();
-    if (StreamRuneContext.CURRENT.isBound()) {
-      StreamRuneContext.RequestContext ctx = StreamRuneContext.CURRENT.get();
+    StreamRuneContext.RequestContext ctx = StreamRuneContext.capture();
+    if (ctx != null) {
       return new EventMetadata(
           eventId,
           commandId,

@@ -2,6 +2,7 @@ package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.DynamicTest.dynamicTest;
@@ -390,36 +391,24 @@ public abstract class CommandBusProvenanceContract {
 
   /**
    * {@code ScopedValue.where(CURRENT, StreamRuneContext.capture())} on a thread with nothing bound
-   * binds the context to {@code null}. The check of the correlation id passes such a binding: the
-   * dispatch is not refused with {@link ReservedCorrelationIdException}.
-   *
-   * <p>What a bus does with the binding after that is its own. The shipped buses fail where they
-   * read the context, with a {@link NullPointerException}; a bus that takes a context bound to
-   * {@code null} for no context executes the command. Either way a failed dispatch stores nothing,
-   * and nothing stored carries a reserved correlation id.
+   * binds the context to {@code null}. A bus takes such a binding for no context: it executes the
+   * command as it would with nothing bound — no user, a correlation id of its own that is not
+   * reserved, no saga origin — and does not refuse it with {@link ReservedCorrelationIdException}.
    */
   @Test
-  public void aContextBoundToNull_isNotRefusedForItsCorrelationId() {
+  public void aContextBoundToNull_isNoContext() {
     InMemoryEventStore eventStore = new InMemoryEventStore();
     CommandBus bus = newBus(eventStore);
     try {
-      RuntimeException failure = null;
-      try {
-        ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
-            .run(() -> bus.execute(new Mark(AGGREGATE_ID)));
-      } catch (RuntimeException e) {
-        failure = e;
-      }
+      ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+          .run(() -> bus.execute(new Mark(AGGREGATE_ID)));
 
-      assertFalse(
-          failure instanceof ReservedCorrelationIdException,
-          "a context bound to null names no correlation id, so there is none to refuse");
       List<EventEnvelope> stored = eventStore.readGlobalStream(GlobalOffset.initial(), 10);
-      if (failure != null) {
-        assertEquals(List.of(), stored, "a failed dispatch stores nothing");
-      }
+      assertEquals(2, stored.size(), "the command executes");
       for (EventEnvelope envelope : stored) {
+        assertNull(envelope.metadata().userId());
         assertNull(envelope.metadata().sagaOrigin());
+        assertNotNull(envelope.metadata().correlationId());
         assertFalse(IdConstraints.isReserved(envelope.metadata().correlationId().value()));
       }
     } finally {

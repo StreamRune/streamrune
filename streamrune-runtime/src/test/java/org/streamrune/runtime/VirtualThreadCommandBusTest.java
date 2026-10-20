@@ -630,6 +630,40 @@ class VirtualThreadCommandBusTest {
     assertEquals("corr-1", dlqEntries.getFirst().correlationId().value());
   }
 
+  @Test
+  void aContextBoundToNullIsDeadLetteredAsNoContext() {
+    var store = new InMemoryEventStore();
+    var dlq = new InMemoryDeadLetterQueue();
+    var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(store)
+            .locker(new LocalStripedLocker(16))
+            .retryPolicy(new RetryPolicy(1, Duration.ofMillis(1), 1.0))
+            .deadLetterQueue(dlq)
+            .objectMapper(new ObjectMapper())
+            .register(
+                FAILING,
+                FailingCommand.class,
+                cmd ->
+                    switch (cmd) {
+                      case FailingCommand.Fail c -> AggregateId.of(c.id());
+                    },
+                new InfraFailingDecider())
+            .build();
+
+    ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+        .run(
+            () ->
+                assertThrows(
+                    RuntimeException.class,
+                    () -> bus.execute(new FailingCommand.Fail("fail-null"))));
+
+    var entries = dlq.read(10);
+    assertEquals(1, entries.size(), "the command is dead-lettered, not lost to a context read");
+    assertNull(entries.getFirst().userId());
+    assertNull(entries.getFirst().traceId());
+  }
+
   /** Command carrying one {@code @Encrypted} PII field, keyed off {@code customerId}. */
   record PiiCommand(
       String customerId,

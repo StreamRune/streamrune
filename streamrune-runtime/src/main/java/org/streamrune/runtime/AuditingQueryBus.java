@@ -176,13 +176,9 @@ public final class AuditingQueryBus implements QueryBus {
   }
 
   private static UserId currentUserId() {
-    if (StreamRuneContext.CURRENT.isBound()) {
-      StreamRuneContext.RequestContext ctx = StreamRuneContext.CURRENT.get();
-      if (ctx != null) {
-        return ctx.userId();
-      }
-    }
-    return null;
+    // capture(): a context bound to null is no context.
+    StreamRuneContext.RequestContext ctx = StreamRuneContext.capture();
+    return ctx == null ? null : ctx.userId();
   }
 
   /**

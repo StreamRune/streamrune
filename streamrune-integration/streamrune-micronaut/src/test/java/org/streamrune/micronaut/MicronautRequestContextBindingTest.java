@@ -29,6 +29,7 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.Authorization;
 import org.streamrune.core.AuthorizationException;
 import org.streamrune.core.Command;
+import org.streamrune.core.CommandInbox;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
@@ -40,13 +41,23 @@ import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.audit.Auditable;
+import org.streamrune.core.saga.SagaCommand;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrchestrator;
+import org.streamrune.core.saga.SagaState;
+import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.UserId;
 import org.streamrune.runtime.DeciderRegistration;
+import org.streamrune.runtime.SagaDeadLetterReplayer;
+import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.VirtualThreadCommandBus;
+import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.InMemorySagaDeadLetterStore;
+import org.streamrune.test.InMemorySagaStore;
 import reactor.core.publisher.Mono;
 
 /**
@@ -71,6 +82,9 @@ import reactor.core.publisher.Mono;
  *   <li>the {@code @Auditable} query's handler sees the user, and its audit row names the user;
  *   <li>{@link StreamRuneContextHelper#get()} answers the request's context.
  * </ul>
+ *
+ * <p>A saga dead-letter replay an operator runs from such a route records the operator in the
+ * replayed commands' events and audit rows, and keeps the saga's own origin.
  *
  * <p>An unauthenticated request on the same path stays anonymous, and a dispatch with no request at
  * all (a background thread) stays anonymous: nothing is invented.
@@ -158,6 +172,35 @@ class MicronautRequestContextBindingTest {
     }
   }
 
+  // ---- saga dead-letter replay ------------------------------------------------------------------
+
+  @Test
+  void aSagaReplayFromARouteWhoseBodyArrivesAfterTheHeadRecordsTheOperator() throws Exception {
+    try (EmbeddedServer server = boot(null)) {
+      String flowId = faultedFlow(server);
+
+      var answer = postWithDelayedBody(server, "/binding/replay/plain", flowId, "bob");
+
+      assertThat(answer.status()).as(answer.body()).isEqualTo(200);
+      assertReplayedAs(server, flowId, "bob");
+    }
+  }
+
+  @Test
+  void aSagaReplayFromAnExecuteOnRouteRecordsTheOperator() {
+    try (EmbeddedServer server = boot("full_content");
+        HttpClient client = HttpClient.create(server.getURL())) {
+      String flowId = faultedFlow(server);
+      var request =
+          HttpRequest.POST("/binding/replay/blocking", flowId)
+              .contentType(MediaType.TEXT_PLAIN_TYPE)
+              .header(HeaderAuthenticationFixture.HEADER, "bob");
+
+      assertThat(client.toBlocking().exchange(request, String.class).code()).isEqualTo(200);
+      assertReplayedAs(server, flowId, "bob");
+    }
+  }
+
   // ---- no request -------------------------------------------------------------------------------
 
   @Test
@@ -209,12 +252,71 @@ class MicronautRequestContextBindingTest {
 
   private static RawHttp.Answer postWithDelayedBody(
       EmbeddedServer server, String path, String authenticatedAs) throws Exception {
+    return postWithDelayedBody(server, path, "payload", authenticatedAs);
+  }
+
+  private static RawHttp.Answer postWithDelayedBody(
+      EmbeddedServer server, String path, String body, String authenticatedAs) throws Exception {
     List<String> headers =
         authenticatedAs == null
             ? List.of()
             : List.of(HeaderAuthenticationFixture.HEADER + ": " + authenticatedAs);
-    return RawHttp.postWithDelayedBody(
-        server.getPort(), path, headers, "payload", BODY_DELAY_MILLIS);
+    return RawHttp.postWithDelayedBody(server.getPort(), path, headers, body, BODY_DELAY_MILLIS);
+  }
+
+  /**
+   * Opens a flow outside any request whose saga faults on its {@code Prepared}: the saga row is
+   * {@code FAULTED} and owns one dead-letter entry, which a route then replays.
+   */
+  private static String faultedFlow(EmbeddedServer server) {
+    SagaHarness saga = server.getApplicationContext().getBean(SagaHarness.class);
+    String flowId = "flow-" + UUID.randomUUID();
+    saga.saga.poisonPreparedFor = flowId;
+    server
+        .getApplicationContext()
+        .getBean(VirtualThreadCommandBus.class)
+        .execute(new FlowCommand.OpenFlow(flowId));
+    saga.deliver();
+    assertThat(saga.deadLetters.all()).as("precondition: the saga faulted").hasSize(1);
+    return flowId;
+  }
+
+  /**
+   * Asserts that the replay ran outside the filter's binding (the precondition), and that the
+   * command the replayed step dispatched carries {@code operator} in its event's metadata and its
+   * audit row, and the saga's origin.
+   */
+  private static void assertReplayedAs(EmbeddedServer server, String flowId, String operator) {
+    ApplicationContext context = server.getApplicationContext();
+    SagaHarness saga = context.getBean(SagaHarness.class);
+    assertThat(saga.replayRanInsideTheFiltersBinding)
+        .as("precondition: the replay ran outside the filter's ScopedValue binding")
+        .containsExactly(false);
+    assertThat(saga.deadLetters.all()).as("the replay drained the entry").isEmpty();
+
+    List<EventEnvelope> finished =
+        context.getBean(EventStore.class).readGlobalStream(GlobalOffset.initial(), 1000).stream()
+            .filter(envelope -> envelope.event() instanceof FlowEvent.Finished)
+            .filter(envelope -> envelope.aggregateId().value().equals(flowId))
+            .toList();
+    assertThat(finished).hasSize(1);
+    var metadata = finished.getFirst().metadata();
+    assertThat(metadata.userId()).as("the operator of the replay").isEqualTo(UserId.of(operator));
+    assertThat(metadata.sagaOrigin()).as("the saga's origin").isNotNull();
+    assertThat(metadata.sagaOrigin().sagaId()).isEqualTo(SagaHarness.sagaIdOf(flowId));
+    assertThat(commandAuditUserIds(context, flowId, FlowCommand.Finish.class))
+        .as("the replayed command's audit row")
+        .containsExactly(operator);
+  }
+
+  private static List<String> commandAuditUserIds(
+      ApplicationContext context, String aggregateId, Class<?> commandType) {
+    return context.getBean(RecordingAuditStore.class).entries.stream()
+        .filter(
+            entry -> entry.aggregateId() != null && entry.aggregateId().value().equals(aggregateId))
+        .filter(entry -> entry.commandType().contains(commandType.getSimpleName()))
+        .map(entry -> entry.userId() == null ? null : entry.userId().value())
+        .toList();
   }
 
   /**
@@ -326,11 +428,28 @@ class MicronautRequestContextBindingTest {
     private final QueryBus queryBus;
     private final Observations observations;
 
+    private final SagaHarness saga;
+
     BindingController(
-        VirtualThreadCommandBus commandBus, QueryBus queryBus, Observations observations) {
+        VirtualThreadCommandBus commandBus,
+        QueryBus queryBus,
+        Observations observations,
+        SagaHarness saga) {
       this.commandBus = commandBus;
       this.queryBus = queryBus;
       this.observations = observations;
+      this.saga = saga;
+    }
+
+    @Post(value = "/replay/plain", consumes = MediaType.TEXT_PLAIN)
+    HttpResponse<String> replayPlain(@Body String flowId) {
+      return saga.replayFromARoute(flowId);
+    }
+
+    @Post(value = "/replay/blocking", consumes = MediaType.TEXT_PLAIN)
+    @ExecuteOn(TaskExecutors.BLOCKING)
+    HttpResponse<String> replayBlocking(@Body String flowId) {
+      return saga.replayFromARoute(flowId);
     }
 
     @Post(value = "/plain", consumes = MediaType.TEXT_PLAIN)
@@ -376,9 +495,31 @@ class MicronautRequestContextBindingTest {
   @Requires(property = "spec.name", value = SPEC)
   static class Fixtures {
 
+    private final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
+    private final InMemorySagaStore sagaStore = new InMemorySagaStore();
+
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+    }
+
+    @Singleton
+    CommandInbox commandInbox() {
+      return inbox;
+    }
+
+    @Singleton
+    SagaHarness sagaHarness(VirtualThreadCommandBus commandBus, EventStore eventStore) {
+      return new SagaHarness(commandBus, eventStore, sagaStore);
+    }
+
+    @Singleton
+    DeciderRegistration<FlowCommand, ProbeState, FlowEvent> flowRegistration() {
+      return new DeciderRegistration<>(
+          AggregateType.of("binding_flow"),
+          FlowCommand.class,
+          command -> AggregateId.of(command.flowId()),
+          new FlowDecider());
     }
 
     @Singleton
@@ -457,6 +598,168 @@ class MicronautRequestContextBindingTest {
     @Override
     public ProbeState evolve(ProbeState state, ProbeEvent event) {
       return state;
+    }
+  }
+
+  // ---- the saga a route replays -----------------------------------------------------------------
+
+  sealed interface FlowCommand extends Command {
+    String flowId();
+
+    record OpenFlow(String flowId) implements FlowCommand {}
+
+    record Prepare(String flowId) implements FlowCommand {}
+
+    record Finish(String flowId) implements FlowCommand {}
+  }
+
+  sealed interface FlowEvent extends DomainEvent {
+    record Opened(String flowId) implements FlowEvent {}
+
+    record Prepared(String flowId) implements FlowEvent {}
+
+    record Finished(String flowId) implements FlowEvent {}
+  }
+
+  static class FlowDecider implements Decider<FlowCommand, ProbeState, FlowEvent> {
+    @Override
+    public ProbeState initialState() {
+      return new ProbeState();
+    }
+
+    @Override
+    public List<FlowEvent> decide(FlowCommand command, ProbeState state) {
+      return switch (command) {
+        case FlowCommand.OpenFlow open -> List.of(new FlowEvent.Opened(open.flowId()));
+        case FlowCommand.Prepare prepare -> List.of(new FlowEvent.Prepared(prepare.flowId()));
+        case FlowCommand.Finish finish -> List.of(new FlowEvent.Finished(finish.flowId()));
+      };
+    }
+
+    @Override
+    public ProbeState evolve(ProbeState state, FlowEvent event) {
+      return state;
+    }
+  }
+
+  record FlowState(SagaStatus status, String flowId) implements SagaState {}
+
+  /**
+   * Opens on {@code Opened} and dispatches {@code Prepare}; on {@code Prepared} dispatches {@code
+   * Finish}. Refuses the {@code Prepared} of {@link #poisonPreparedFor}, so that step faults into a
+   * dead-letter entry a route replays once the poison is lifted.
+   */
+  static final class FlowSaga implements SagaOrchestrator<FlowState> {
+    volatile String poisonPreparedFor;
+
+    @Override
+    public Class<FlowState> stateType() {
+      return FlowState.class;
+    }
+
+    @Override
+    public FlowState initialState(SagaId sagaId) {
+      return new FlowState(SagaStatus.STARTED, null);
+    }
+
+    @Override
+    public boolean isStartEvent(EventEnvelope event) {
+      return event.event() instanceof FlowEvent.Opened;
+    }
+
+    @Override
+    public SagaId extractSagaId(EventEnvelope event) {
+      return SagaHarness.sagaIdOf(((FlowEvent.Opened) event.event()).flowId());
+    }
+
+    @Override
+    public FlowState evolve(FlowState state, EventEnvelope event) {
+      return switch (event.event()) {
+        case FlowEvent.Opened opened -> new FlowState(SagaStatus.RUNNING, opened.flowId());
+        case FlowEvent.Prepared prepared -> {
+          if (prepared.flowId().equals(poisonPreparedFor)) {
+            throw new IllegalStateException("evolve refuses this event");
+          }
+          yield state;
+        }
+        case FlowEvent.Finished _ -> new FlowState(SagaStatus.COMPLETED, state.flowId());
+        default -> state;
+      };
+    }
+
+    @Override
+    public List<SagaCommand> handle(FlowState state, EventEnvelope event) {
+      AggregateId flow = new AggregateId(state.flowId());
+      return switch (event.event()) {
+        case FlowEvent.Opened _ ->
+            List.of(SagaCommand.of(new FlowCommand.Prepare(state.flowId()), flow));
+        case FlowEvent.Prepared _ ->
+            List.of(SagaCommand.of(new FlowCommand.Finish(state.flowId()), flow));
+        default -> List.of();
+      };
+    }
+
+    @Override
+    public List<SagaCommand> compensate(
+        FlowState state, Throwable failure, SagaCommand failedCommand) {
+      return List.of();
+    }
+  }
+
+  /**
+   * The saga over the module's command bus: a runner fed from the event store as a subscription
+   * would, its dead-letter store and the replayer an operator's route calls.
+   */
+  static final class SagaHarness {
+    final FlowSaga saga = new FlowSaga();
+    final InMemorySagaDeadLetterStore deadLetters;
+    final List<Boolean> replayRanInsideTheFiltersBinding = new CopyOnWriteArrayList<>();
+    private final EventStore eventStore;
+    private final SagaRunner<FlowState> runner;
+    private final SagaDeadLetterReplayer replayer;
+    private GlobalOffset checkpoint = GlobalOffset.initial();
+
+    SagaHarness(
+        VirtualThreadCommandBus commandBus, EventStore eventStore, InMemorySagaStore sagaStore) {
+      this.eventStore = eventStore;
+      this.deadLetters = new InMemorySagaDeadLetterStore(sagaStore);
+      this.runner =
+          SagaRunner.<FlowState>builder()
+              .orchestrator(saga)
+              .sagaStore(sagaStore)
+              .commandBus(commandBus)
+              .sagaDeadLetterStore(deadLetters)
+              .build();
+      this.replayer =
+          SagaDeadLetterReplayer.builder()
+              .sagaDeadLetterStore(deadLetters)
+              .sagaStore(sagaStore)
+              .eventStore(eventStore)
+              .sagaRunner(runner)
+              .build();
+    }
+
+    static SagaId sagaIdOf(String flowId) {
+      return SagaId.of("binding-flow-saga-" + flowId);
+    }
+
+    /** Feeds the runner every event stored since the last call, until no new event appears. */
+    synchronized void deliver() {
+      while (true) {
+        List<EventEnvelope> batch = eventStore.readGlobalStream(checkpoint, 100);
+        if (batch.isEmpty()) {
+          return;
+        }
+        runner.asEventListener().onEvents(batch);
+        checkpoint = batch.getLast().globalOffset();
+      }
+    }
+
+    /** What an operator's route does: lifts the fault and drains the saga's dead letters. */
+    HttpResponse<String> replayFromARoute(String flowId) {
+      replayRanInsideTheFiltersBinding.add(StreamRuneContext.CURRENT.isBound());
+      saga.poisonPreparedFor = null;
+      return HttpResponse.ok(replayer.replayAll(sagaIdOf(flowId)).toString());
     }
   }
 }

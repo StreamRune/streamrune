@@ -171,9 +171,10 @@ public final class CachingQueryBus implements QueryBus {
    * integration whose filter wraps the handler in a {@code ScopedValue.where(CURRENT, ctx)}. On
    * Quarkus the sole binding is the STATIC {@code StreamRuneRequestFilter.callWithContext} helper
    * the application must call by hand (nothing in the framework calls it for the query path), and
-   * on Micronaut any {@code @ExecuteOn} or reactive route whose body runs off the filter thread is
-   * unbound as well. On those runtimes a {@code @Cacheable} USER-scoped query silently cross-served
-   * authenticated users' data.
+   * on Micronaut a route that runs off the filter thread is unbound unless the query goes through
+   * the module's {@code QueryBus} bean, which binds the request's context for it. And every entry
+   * point outside a request (a scheduled job, a subscription thread) is unbound on every runtime.
+   * There a {@code @Cacheable} USER-scoped query silently cross-served authenticated users' data.
    *
    * <p>The two ways to be wrong are not symmetric: bypassing costs a delegate dispatch that could
    * have been a hit, while sharing discloses one user's rows to another. If the answer genuinely

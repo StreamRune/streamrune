@@ -68,9 +68,9 @@ import org.streamrune.integration.RequestIdentityPolicy;
  *       request body arrives after the request head (the default {@code streamed} server type) runs
  *       on a Netty event loop once the body is read, and a controller annotated {@code ExecuteOn}
  *       on that executor. The {@link SseController} reads the caller of a subscription there
- *       ({@link #requestContextOf(HttpRequest)}); {@link StreamRuneContextHelper#get()} falls back
- *       to it, and the command bus and the query bus the module builds bind {@code CURRENT} from it
- *       for a dispatch that starts where {@code CURRENT} is not bound.
+ *       ({@link #requestContextOf(HttpRequest)}); {@link StreamRuneContextHelper#get()} answers it
+ *       first, and the command bus, the query bus and the saga dispatch of the module bind {@code
+ *       CURRENT} from it for a dispatch that starts where {@code CURRENT} is not bound.
  * </ul>
  *
  * <p><b>Authorization identity (security):</b> the request-context {@code userId} is the identity

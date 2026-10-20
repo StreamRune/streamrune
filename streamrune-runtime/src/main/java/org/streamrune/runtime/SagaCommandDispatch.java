@@ -63,7 +63,12 @@ final class SagaCommandDispatch {
    * #episodeCompensationKey}), so the form of the correlation id takes no part in what the command
    * inbox deduplicates. The trace id, the user id and the baggage of the stored events are those of
    * the ambient context of the thread that commits the command (none on a subscription thread, an
-   * operator's on a replay run from a request).
+   * operator's on a replay run from a request). The ambient context is {@link
+   * StreamRuneContext#CURRENT}, or — with a {@link VirtualThreadCommandBus} and {@code CURRENT}
+   * unbound — the bus's {@link VirtualThreadCommandBus.Builder#unboundRequestContext
+   * unbound-request-context source}, so a replay run from a request on a thread outside the request
+   * filter's binding records the operator too. It contributes nothing else: the saga's correlation
+   * id, {@link StreamRuneContext#SAGA_OWNED} and the saga origin are bound as always.
    *
    * <p><b>A VETO is never a silent success.</b> A user {@link
    * org.streamrune.core.CommandInterceptor} whose {@code before()} returns {@code false}
@@ -149,7 +154,13 @@ final class SagaCommandDispatch {
       IdempotencyKey key,
       boolean forwardFenced) {
     Objects.requireNonNull(origin, "origin is required");
-    StreamRuneContext.RequestContext ambient = StreamRuneContext.capture();
+    // The bus's view of the caller: CURRENT when bound, else (VirtualThreadCommandBus) its
+    // unbound-request-context source — the request an operator replays a saga from, on a thread
+    // outside the request filter's binding. Null on every background entry point either way.
+    StreamRuneContext.RequestContext ambient =
+        commandBus instanceof VirtualThreadCommandBus bus
+            ? bus.callerRequestContext()
+            : StreamRuneContext.capture();
     StreamRuneContext.RequestContext ctx =
         new StreamRuneContext.RequestContext(
             ambient != null ? ambient.traceId() : null,

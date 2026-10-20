@@ -304,6 +304,20 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * {@code CURRENT} is bound (to whatever value), when no source is configured, and when the source
    * answers none.
    */
+  /**
+   * The request context of the caller on this thread: {@link StreamRuneContext#CURRENT} when it is
+   * bound, otherwise the {@link Builder#unboundRequestContext(Supplier) source}'s answer. {@link
+   * SagaCommandDispatch} reads the ambient context of a saga dispatch through it, so a saga replay
+   * an operator runs from a request records the operator on every thread the source reaches.
+   *
+   * @return the context, or {@code null} when there is none
+   */
+  StreamRuneContext.RequestContext callerRequestContext() {
+    return StreamRuneContext.CURRENT.isBound()
+        ? StreamRuneContext.CURRENT.get()
+        : requestContextOfAnUnboundCaller();
+  }
+
   private StreamRuneContext.RequestContext requestContextOfAnUnboundCaller() {
     if (unboundRequestContext == null || StreamRuneContext.CURRENT.isBound()) {
       return null;
@@ -1422,8 +1436,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     CorrelationId correlationId = null;
     UserId userId = null;
     TraceId traceId = null;
-    if (StreamRuneContext.CURRENT.isBound()) {
-      StreamRuneContext.RequestContext ctx = StreamRuneContext.CURRENT.get();
+    // capture(): a context bound to null is no context.
+    StreamRuneContext.RequestContext ctx = StreamRuneContext.capture();
+    if (ctx != null) {
       correlationId = ctx.correlationId();
       userId = ctx.userId();
       traceId = ctx.traceId();
@@ -1565,8 +1580,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     SagaOrigin origin = cause == null ? null : cause.sagaOrigin();
     CausationId causation = cause == null ? null : cause.causationId();
 
-    if (StreamRuneContext.CURRENT.isBound()) {
-      StreamRuneContext.RequestContext ctx = StreamRuneContext.CURRENT.get();
+    // capture(): a context bound to null is no context.
+    StreamRuneContext.RequestContext ctx = StreamRuneContext.capture();
+    if (ctx != null) {
       return new EventMetadata(
           eventId,
           commandId,

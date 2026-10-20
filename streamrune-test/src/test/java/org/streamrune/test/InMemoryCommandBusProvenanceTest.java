@@ -1,7 +1,6 @@
 package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -51,16 +50,16 @@ class InMemoryCommandBusProvenanceTest extends CommandBusProvenanceContract {
    * where it reads the context, as {@code VirtualThreadCommandBus} does, and stores nothing.
    */
   @Test
-  void aContextBoundToNull_failsWhereTheBusReadsTheContext() {
+  void aContextBoundToNull_executesAsNoContext() {
     InMemoryEventStore eventStore = new InMemoryEventStore();
     InMemoryCommandBus bus = bus(eventStore);
 
-    assertThrows(
-        NullPointerException.class,
-        () ->
-            ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
-                .run(() -> bus.execute(new Mark("null-context-1"))));
+    ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+        .run(() -> bus.execute(new Mark("null-context-1")));
 
-    assertEquals(List.of(), eventStore.readGlobalStream(GlobalOffset.initial(), 10));
+    List<EventEnvelope> stored = eventStore.readGlobalStream(GlobalOffset.initial(), 10);
+    assertEquals(2, stored.size());
+    assertEquals(
+        stored.get(0).metadata().correlationId(), stored.get(1).metadata().correlationId());
   }
 }

@@ -69,7 +69,7 @@ comes from — see [Request identity](#request-identity).
 | `StreamRuneContextFilter` | HTTP filter that builds the request context — `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)) — and binds `StreamRuneContext.CURRENT` around the request; answers `400` to an id the request edge refuses |
 | `StreamRuneRequestIdentityValidator` | Startup listener: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |
 | `StreamRuneAuthorizationValidator` | Startup listener: refuses startup when a command bus registers `@RequireRole`/`@RequirePermission` commands without an `AnnotationAuthorizationInterceptor` in its chain |
-| `StreamRuneContextHelper` | The request context of the request the calling thread serves, where `StreamRuneContext.CURRENT` is not bound: a ThreadLocal mirror kept in sync by Micronaut's `PropagatedContext`, and otherwise the context the filter stored on the current request (see [Context Propagation](#context-propagation)) |
+| `StreamRuneContextHelper` | The request context of the request the calling thread serves, where `StreamRuneContext.CURRENT` is not bound: the context the filter stored on the current request, and otherwise a ThreadLocal mirror kept in sync by Micronaut's `PropagatedContext` (see [Context Propagation](#context-propagation)) |
 | `UnboundRequestContextQueryBus` | The `QueryBus` bean's outer layer: a query dispatched where `StreamRuneContext.CURRENT` is not bound runs under the request's context (see [Context Propagation](#context-propagation)) |
 | `StreamRuneLifecycle` | Starts `MultiProjectionRunner`, `ScheduledProjectionRunner`, `OutboxPoller`, the outbox, inbox, saga dead-letter and command dead-letter retention sweepers, and `DeadLetterRetryRunner` on context startup and closes them on shutdown |
 | `SseEventFeedLifecycle` | With `streamrune.sse.enabled=true`: starts the `SseEventFeed` that publishes stored events to the SSE endpoint on `StartupEvent` and stops it when the context closes; independent of `streamrune.runner-lifecycle-enabled` |
@@ -293,6 +293,10 @@ The framework's own readers of the caller cover every row, under either server t
 - **Queries.** The `QueryBus` bean is an `UnboundRequestContextQueryBus` over the composed chain:
   the query audit and the handler (`Authorization.currentUserId()`, `requireOwner`) see the
   caller.
+- **Saga replays.** `SagaDeadLetterReplayer` (`replay`, `resumeFaulted`, `compensateFaulted`)
+  called from a route records the operator in the replayed commands' events and audit rows: the
+  saga dispatch takes its ambient context from the same source when `CURRENT` is not bound. The
+  saga's own correlation id, its origin and the saga system principal are bound as always.
 - **Server-Sent Events.** The endpoint reads the caller from the request attribute.
 
 A binding that is there is never replaced: on the filter's thread, inside a saga's dispatch or a
@@ -300,14 +304,21 @@ replay, the bound context is used. A dispatch with no request current (a backgro
 scheduled job, a thread you start yourself without Micronaut's propagation) runs without a context,
 as before; nothing invents an identity.
 
+The converse holds as well: a task Micronaut propagates the request to — an `@ExecuteOn` or
+`@Async` method, a task on a Micronaut executor, a Micronaut-instrumented Reactor pipeline — runs
+as the caller of the request that started it, also after the response was sent. A command such a
+task dispatches is authorized and audited as that caller. To dispatch as the system from such a
+task, start it on a thread of your own, or bind a context yourself.
+
 What the module does not reach, and you handle:
 
 - **Your own code that reads the caller outside a bus dispatch** — in a controller before it
   dispatches, or in a service it calls directly. Read `StreamRuneContextHelper.get()` there:
   `StreamRuneContext.CURRENT`, `StreamRuneContext.capture()` and `Authorization.currentUserId()`
-  are unbound on the rows marked **not** above. `get()` answers the ThreadLocal mirror when
-  Micronaut's `PropagatedContext` has set it on the thread, and otherwise the request's attribute;
-  it is `null` on a thread that serves no request.
+  are unbound on the rows marked **not** above. `get()` answers the context the filter stored on
+  the current request, and otherwise the ThreadLocal mirror Micronaut's `PropagatedContext` sets on
+  the threads it propagates the filter's context to; it is `null` on a thread that serves no
+  request.
 - **A bus you build yourself.** An application-defined `VirtualThreadCommandBus` or `QueryBus` bean
   replaces the module's. Build the command bus with
   `.unboundRequestContext(StreamRuneContextHelper::get)` and wrap the query bus in

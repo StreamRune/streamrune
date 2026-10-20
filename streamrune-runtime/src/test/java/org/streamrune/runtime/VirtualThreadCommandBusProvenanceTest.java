@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -318,10 +319,9 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
   // ==== A context bound to null ====
 
   @Test
-  void aContextBoundToNull_runsItsInterceptorsAndFailsWhereTheBusReadsTheContext() {
+  void aContextBoundToNull_runsAsNoContextAndIsAudited() {
     // ScopedValue.where(CURRENT, StreamRuneContext.capture()) with nothing bound binds null. The
-    // check of the correlation id passes it; the command reaches its interceptors, fails with the
-    // NullPointerException of the first read of the context, and is audited as a failure.
+    // bus reads it as no context: the command executes with no user and is audited as a success.
     List<AuditEntry> audit = new java.util.concurrent.CopyOnWriteArrayList<>();
     InMemoryEventStore eventStore = new InMemoryEventStore();
     try (VirtualThreadCommandBus bus =
@@ -335,16 +335,17 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
                 AGGREGATE_TYPE, Mark.class, CommandBusProvenanceContract::aggregateIdOf, DECIDER)
             .build()) {
 
-      assertThrows(
-          NullPointerException.class,
-          () ->
-              ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
-                  .run(() -> bus.execute(new Mark("null-context-1"))));
+      ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+          .run(() -> bus.execute(new Mark("null-context-1")));
     }
 
-    assertEquals(List.of(), eventStore.readGlobalStream(GlobalOffset.initial(), 10));
+    List<EventEnvelope> stored = eventStore.readGlobalStream(GlobalOffset.initial(), 10);
+    assertEquals(2, stored.size());
+    assertNull(stored.getFirst().metadata().userId());
     assertEquals(1, audit.size());
-    assertEquals(AuditOutcome.FAILURE, audit.getFirst().outcome());
+    assertEquals(AuditOutcome.SUCCESS, audit.getFirst().outcome());
+    assertNull(audit.getFirst().userId());
+    assertEquals(stored.getFirst().metadata().correlationId(), audit.getFirst().correlationId());
     // A context bound to null names no correlation id, so the bus generated the row's.
     assertNotNull(audit.getFirst().correlationId());
     assertFalse(IdConstraints.isReserved(audit.getFirst().correlationId().value()));
