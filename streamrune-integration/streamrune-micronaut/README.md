@@ -323,6 +323,9 @@ What the module does not reach, and you handle:
   replaces the module's. Build the command bus with
   `.unboundRequestContext(StreamRuneContextHelper::get)` and wrap the query bus in
   `new UnboundRequestContextQueryBus(bus, StreamRuneContextHelper::get)` to keep this behaviour.
+  A saga runner reads the caller of a replay through the bus only when its command bus is that
+  `VirtualThreadCommandBus` itself; given a wrapper or the `StreamRune` facade, a replay from a
+  route marked **not** above records no operator.
 
 The module logs no warning for the `streamed` server type: every framework path above works under
 it. The server type still decides where a plain controller blocks. Under `streamed`, a plain

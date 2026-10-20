@@ -299,12 +299,6 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
-   * The request context the {@link Builder#unboundRequestContext(Supplier) source} answers for the
-   * calling thread when {@link StreamRuneContext#CURRENT} is not bound on it; {@code null} when
-   * {@code CURRENT} is bound (to whatever value), when no source is configured, and when the source
-   * answers none.
-   */
-  /**
    * The request context of the caller on this thread: {@link StreamRuneContext#CURRENT} when it is
    * bound, otherwise the {@link Builder#unboundRequestContext(Supplier) source}'s answer. {@link
    * SagaCommandDispatch} reads the ambient context of a saga dispatch through it, so a saga replay
@@ -318,6 +312,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         : requestContextOfAnUnboundCaller();
   }
 
+  /**
+   * The request context the {@link Builder#unboundRequestContext(Supplier) source} answers for the
+   * calling thread when {@link StreamRuneContext#CURRENT} is not bound on it; {@code null} when
+   * {@code CURRENT} is bound (to whatever value), when no source is configured, and when the source
+   * answers none.
+   */
   private StreamRuneContext.RequestContext requestContextOfAnUnboundCaller() {
     if (unboundRequestContext == null || StreamRuneContext.CURRENT.isBound()) {
       return null;
