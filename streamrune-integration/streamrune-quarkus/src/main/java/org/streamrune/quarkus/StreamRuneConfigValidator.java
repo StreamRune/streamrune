@@ -138,8 +138,8 @@ public class StreamRuneConfigValidator {
   // resolution (io.quarkus.arc.processor.ObserverInfo.create) reads @Priority from
   // Annotations.getParameterAnnotations(...) on the observed-event parameter only — a method-level
   // @Priority compiles (CDI 4 permits @Priority on a method, for producer/alternative
-  // prioritization) but is silently ignored for observer ordering, so this annotation previously
-  // had no effect on dispatch order at all. `public` (not package-private), for the same
+  // prioritization) but is silently ignored for observer ordering, so on the method it would
+  // have no effect on dispatch order at all. `public` (not package-private), for the same
   // cross-classloader reason as the constructor above: the observer invoker Arc generates is a
   // separate class that may live in a different classloader.
   public void validate(
@@ -151,22 +151,23 @@ public class StreamRuneConfigValidator {
     }
     // streamrune.lock-timeout is handed verbatim to whichever AggregateLocker is wired
     // and nothing on the wiring path rejects it (VirtualThreadCommandBus.Builder takes it as-is).
-    // A NEGATIVE value therefore used to mean two different things: LocalStripedLocker (the
-    // auto-configured default) did tryLock(negativeMillis) — one attempt, no wait — while
-    // PgAdvisoryLocker (the documented multi-replica upgrade) substituted a hardcoded 30s default
-    // and BLOCKED. Moving to multi-replica silently changed the behaviour of an unchanged config.
+    // A NEGATIVE value would therefore mean two different things: LocalStripedLocker (the
+    // auto-configured default) does tryLock(negativeMillis) — one attempt, no wait — while
+    // PgAdvisoryLocker (the documented multi-replica upgrade) would substitute a 30s default
+    // and BLOCK. Moving to multi-replica would silently change the behaviour of an unchanged
+    // config.
     // The frozen rule is "zero means do not wait; a negative duration is never a valid StreamRune
     // value", and the operator must learn it at startup rather than under contention. Identical
     // check and message on Spring and Micronaut.
     //
-    // The rule now also covers the (0ms, 1ms) band the negative check let through.
-    // Quarkus accepts "PT0.0005S"; the value is positive, so it passed here, and PgAdvisoryLocker
-    // turned it into lock_timeout = '0ms' — PostgreSQL's spelling of DISABLED, i.e. wait forever —
-    // while LocalStripedLocker on the same value made a single attempt. Delegated to
-    // AggregateLocker#requireValidTimeout so the five enforcement points (two lockers, three boot
-    // validators) share ONE rule and ONE message and cannot drift apart the way the negative arm's
-    // three hand-copied checks could; the IAE is translated to the IllegalStateException this
-    // validator contracts to throw.
+    // The rule covers the (0ms, 1ms) band too, which a negative check alone lets through. Quarkus
+    // accepts "PT0.0005S"; the value is positive, so a negative check passes it, and
+    // PgAdvisoryLocker would turn it into lock_timeout = '0ms' — PostgreSQL's spelling of DISABLED,
+    // i.e. wait forever — while LocalStripedLocker on the same value makes a single attempt.
+    // Delegated to AggregateLocker#requireValidTimeout so the five enforcement points (two lockers,
+    // three boot validators) share ONE rule and ONE message and cannot drift apart the way the
+    // negative arm's three hand-copied checks could; the IAE is translated to the
+    // IllegalStateException this validator contracts to throw.
     java.time.Duration lockTimeout = properties.lockTimeout();
     try {
       org.streamrune.core.AggregateLocker.requireValidTimeout(
@@ -253,8 +254,8 @@ public class StreamRuneConfigValidator {
     // sweeper — so it MUST be validated whenever saga dead-letter replay support is configured (a
     // SagaDeadLetterStore bean is present), independent of
     // streamrune.saga.compensation-retry-enabled (SagaCompensationRetryLifecycle.startSweepers(),
-    // the only other place this fires, used to return early when that knob was off; the
-    // knob now only switches its sweepers to sampling-only). Validating here keeps the fail-fast
+    // the only other place this fires, runs whatever that knob says, which only switches its
+    // sweepers to sampling-only). Validating here keeps the fail-fast
     // independent of startSweepers(), which returns before its own check when no SagaRunner beans
     // exist or no SagaStore resolves, so a deployment with replay support but without those beans
     // still fails fast.

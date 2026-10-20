@@ -142,22 +142,22 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
   /**
    * {@inheritDoc}
    *
-   * <p>A negative timeout used to be replaced by this locker's hardcoded 30-second default and then
-   * BLOCK, while {@code LocalStripedLocker} — the auto-configured default — passed the same value
-   * to {@code tryLock} and did not wait at all. One {@code streamrune.lock-timeout}, two
-   * behaviours, selected by which locker happened to be wired. It is now rejected here (before any
-   * connection is checked out, so no pool slot can leak) and at boot by all three integrations. A
-   * {@code null} timeout still falls back to that 30-second default: that is a programmatic-wiring
-   * omission, not an operator-supplied value — no property binding can produce it.
+   * <p>A negative timeout replaced by a hardcoded 30-second default would BLOCK here, while {@code
+   * LocalStripedLocker} — the auto-configured default — passes the same value to {@code tryLock}
+   * and does not wait at all: one {@code streamrune.lock-timeout}, two behaviours, selected by
+   * which locker happens to be wired. It is rejected here (before any connection is checked out, so
+   * no pool slot can leak) and at boot by all three integrations. A {@code null} timeout still
+   * falls back to that 30-second default: that is a programmatic-wiring omission, not an
+   * operator-supplied value — no property binding can produce it.
    *
-   * <p>A positive SUB-MILLISECOND timeout is rejected on the same terms, here and at boot. It used
-   * to survive every check — positive, so not the negative arm; not {@code isZero()}, so it routed
-   * to {@link #acquireBlocking} — where {@code toMillis()} truncated it to {@code SET LOCAL
-   * lock_timeout = '0ms'}, PostgreSQL's spelling of DISABLED. A configured 0.5 ms bound became
-   * {@code pg_advisory_xact_lock} waiting forever, one pinned pool connection per command thread,
-   * while the auto-configured {@code LocalStripedLocker} on the identical value made a single
-   * attempt. Rejection happens before {@code getConnection()} for the same reason the negative arm
-   * does: nothing has been checked out, so no pool slot can leak.
+   * <p>A positive SUB-MILLISECOND timeout is rejected on the same terms, here and at boot.
+   * Unchecked, it would survive every other test — positive, so not the negative arm; not {@code
+   * isZero()}, so it would route to {@link #acquireBlocking} — where {@code toMillis()} truncates
+   * it to {@code SET LOCAL lock_timeout = '0ms'}, PostgreSQL's spelling of DISABLED. A configured
+   * 0.5 ms bound would become {@code pg_advisory_xact_lock} waiting forever, one pinned pool
+   * connection per command thread, while the auto-configured {@code LocalStripedLocker} on the
+   * identical value makes a single attempt. Rejection happens before {@code getConnection()} for
+   * the same reason the negative arm does: nothing has been checked out, so no pool slot can leak.
    */
   @Override
   public AutoCloseable acquireLock(StreamId streamId, Duration timeout) {
@@ -181,7 +181,7 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
     // A single guard over EVERYTHING from setAutoCommit through the
     // successful lock releases the already-checked-out connection on ANY throwable, not just
     // SQLException — a RuntimeException from a proxying/instrumented pool's setAutoCommit (the arm
-    // that previously caught only SQLException), or an Error (OOME, a lazy driver LinkageError)
+    // a catch of SQLException alone misses), or an Error (OOME, a lazy driver LinkageError)
     // from the lock attempt. Without this the pool slot leaks permanently and, after maxPoolSize
     // such events, the whole command path deadlocks long after the fault cleared.
     try {

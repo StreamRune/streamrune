@@ -28,10 +28,10 @@ import org.streamrune.core.types.StreamId;
  *   <li>If {@code before()} returns {@code false}, the command is <em>not</em> executed. The bus
  *       returns a short-circuit result whose {@link CommandBus.CommandResult#shortCircuitedBy()}
  *       names the rejecting interceptor. {@code after()} is then called in reverse order only on
- *       interceptors whose {@code before()} previously returned {@code true}, with that (never
- *       {@code null}) short-circuit result. {@link #onError(CommandContext, Throwable)} is NOT
- *       called — a short-circuit is a decision, not a failure. The short-circuiting interceptor
- *       receives no further callback.
+ *       interceptors whose {@code before()} returned {@code true}, with that (never {@code null})
+ *       short-circuit result. {@link #onError(CommandContext, Throwable)} is NOT called — a
+ *       short-circuit is a decision, not a failure. The short-circuiting interceptor receives no
+ *       further callback.
  *   <li>If {@code before()} throws, the exception propagates to the caller and {@code onError()} is
  *       called in reverse order only on interceptors whose {@code before()} completed (returned
  *       {@code true}). Neither the throwing interceptor nor interceptors that never ran are

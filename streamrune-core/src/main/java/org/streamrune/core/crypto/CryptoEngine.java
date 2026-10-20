@@ -124,7 +124,7 @@ public interface CryptoEngine {
   void deleteKey(SubjectId subjectId);
 
   /**
-   * Lifts the terminal-erasure tombstone for a previously forgotten subject, allowing {@link
+   * Lifts the terminal-erasure tombstone for a forgotten subject, allowing {@link
    * #encrypt(SubjectId, byte[])} to mint a fresh key again for legitimate re-registration.
    *
    * <p>This is the explicit escape hatch from terminal erasure. After a completed erasure on

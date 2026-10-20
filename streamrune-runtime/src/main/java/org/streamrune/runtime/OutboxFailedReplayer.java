@@ -110,8 +110,8 @@ public final class OutboxFailedReplayer {
 
   /**
    * Replays one {@code FAILED} entry: {@code FAILED → PENDING} at its original position (same row,
-   * same {@code seq}). One statement; a rerun finds the row no longer {@code FAILED} and returns
-   * {@link ReplayOutcome#NOT_FAILED}.
+   * same {@code seq}). One statement; a rerun finds the row in another status than {@code FAILED}
+   * and returns {@link ReplayOutcome#NOT_FAILED}.
    */
   public ReplayOutcome replay(OutboxEntryId id) {
     Objects.requireNonNull(id, "id is required");

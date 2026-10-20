@@ -257,9 +257,9 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
       // RuntimeException gets the SAME degradation, not just SQLException. The failure
       // class the heartbeat already documents as expected and retryable — a
       // wrapped/routing/lazy DataSource throwing IllegalStateException from getConnection() —
-      // previously escaped here into the runners, which call tryAcquire BARE on their tick paths:
-      // ContinuousProjectionRunner died terminally (state=ERROR via its catch(Throwable)) and
-      // ScheduledProjectionRunner's loop thread died silently as STOPPED — a transient blip became
+      // would escape here into the runners, which call tryAcquire BARE on their tick paths:
+      // ContinuousProjectionRunner would die terminally (state=ERROR via its catch(Throwable)) and
+      // ScheduledProjectionRunner's loop thread silently as STOPPED — a transient blip would become
       // a permanent, per-replica, restart-requiring outage. An Error is deliberately NOT caught:
       // swallowing an OOME/StackOverflowError as "standby" would mask a fatal JVM condition, and
       // the runners' own Error discipline terminates loudly with

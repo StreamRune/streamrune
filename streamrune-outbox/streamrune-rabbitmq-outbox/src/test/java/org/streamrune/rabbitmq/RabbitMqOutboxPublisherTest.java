@@ -1544,18 +1544,18 @@ class RabbitMqOutboxPublisherTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Regression tests for concurrency defects (FIX 1, FIX 3)
+  // Regression tests for the confirm-listener and timeout-sweep races
   // ---------------------------------------------------------------------------
 
   /**
-   * FIX 1 regression: register-before-send.
+   * Register-before-send.
    *
    * <p>Simulates a broker ack arriving synchronously on the same thread that calls basicPublish —
-   * i.e., the ConfirmListener fires DURING the basicPublish invocation, before outstanding.put()
-   * used to happen. Before FIX 1, the seqNo was not yet in the outstanding map when the listener
-   * fired, so the entry's latch slot was never counted down → the entry ended up in failed
-   * (timeout). After FIX 1, the entry is registered BEFORE basicPublish, so the listener finds it
-   * and counts the latch down correctly → the entry is confirmed.
+   * i.e., the ConfirmListener fires DURING the basicPublish invocation, before a put() after the
+   * send would run. A seqNo put into the outstanding map after the send would be missing when the
+   * listener fires, so the entry's latch slot would never be counted down → the entry would end up
+   * in failed (timeout). The entry is registered BEFORE basicPublish, so the listener finds it and
+   * counts the latch down correctly → the entry is confirmed.
    */
   @Test
   void publishBatch_confirm_arriving_during_publish_is_registered_and_confirmed() throws Exception {
@@ -1573,7 +1573,7 @@ class RabbitMqOutboxPublisherTest {
     var entry = OutboxEntry.pending(OutboxEntryId.of("race-1"), "{}", "OrderCreated");
 
     // Stub basicPublish to fire the ConfirmListener synchronously (simulates confirm arriving
-    // before basicPublish returns — the worst-case race that FIX 1 eliminates).
+    // before basicPublish returns — the worst-case race register-before-send eliminates).
     doAnswer(
             invocation -> {
               // seqNo 1 was assigned by getNextPublishSeqNo() before this call.
@@ -1599,18 +1599,18 @@ class RabbitMqOutboxPublisherTest {
   }
 
   /**
-   * FIX 3 regression: the batch timeout sweep must complete without throwing even when the confirm
-   * thread already settled (and removed from {@code outstanding}) some of the batch's entries.
-   * Historically the sweep did a per-entry {@code outstanding.remove(seqNoOf(...))} where {@code
-   * seqNoOf} could return {@code null} and NPE; the sweep now removes by id via {@code
-   * values().removeIf}, which is null-safe and tolerant of concurrent settles by design.
+   * The batch timeout sweep must complete without throwing even when the confirm thread already
+   * settled (and removed from {@code outstanding}) some of the batch's entries. Historically the
+   * sweep did a per-entry {@code outstanding.remove(seqNoOf(...))} where {@code seqNoOf} could
+   * return {@code null} and NPE; the sweep now removes by id via {@code values().removeIf}, which
+   * is null-safe and tolerant of concurrent settles by design.
    *
    * <p>Deterministic setup (no timing races — this test was flaky when it raced acks against a
    * fixed {@code Thread.sleep}): e1 is acked the instant it is published. Production registers each
-   * entry in {@code outstanding} BEFORE calling {@code basicPublish} (FIX 1), so seqNo 1 is already
-   * tracked inside the publish stub and the ack lands within the confirm window every time. e2 is
-   * never acked, so the confirm latch times out and the sweep runs over it: it must not throw, e1
-   * must be confirmed, and e2 must fail with a {@link TimeoutException}.
+   * entry in {@code outstanding} BEFORE calling {@code basicPublish} (register-before-send), so
+   * seqNo 1 is already tracked inside the publish stub and the ack lands within the confirm window
+   * every time. e2 is never acked, so the confirm latch times out and the sweep runs over it: it
+   * must not throw, e1 must be confirmed, and e2 must fail with a {@link TimeoutException}.
    */
   @Test
   void publishBatch_timeout_path_does_not_throw_npe_when_entry_already_removed() throws Exception {
@@ -1628,8 +1628,8 @@ class RabbitMqOutboxPublisherTest {
     var e1 = OutboxEntry.pending(OutboxEntryId.of("npe-1"), "{}", "Event");
     var e2 = OutboxEntry.pending(OutboxEntryId.of("npe-2"), "{}", "Event");
 
-    // Ack e1 deterministically the moment it is published — it is already in `outstanding` (FIX 1
-    // registers before basicPublish), so no race against a fixed sleep. e2 is left unacked so the
+    // Ack e1 deterministically the moment it is published — it is already in `outstanding` (it is
+    // registered before basicPublish), so no race against a fixed sleep. e2 is left unacked so the
     // confirm latch times out and the sweep processes it.
     var firstPublish = new AtomicBoolean(true);
     doAnswer(
@@ -1642,7 +1642,8 @@ class RabbitMqOutboxPublisherTest {
         .when(channel)
         .basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
 
-    // Timeout sweep must run for e2 without throwing — FIX 3 guards outstanding.remove(null).
+    // Timeout sweep must run for e2 without throwing — the sweep must not call
+    // outstanding.remove(null).
     var result = assertDoesNotThrow(() -> publisher.publishBatch(List.of(e1, e2)));
 
     // e1 acked before timeout → confirmed; e2 never confirmed → failed (TimeoutException).
@@ -1704,7 +1705,7 @@ class RabbitMqOutboxPublisherTest {
                 }
                 if (k == batchSize) {
                   // Settle the last entry too, while its own basicPublish is still in flight
-                  // (FIX 1 registered its seq in `outstanding` before this call).
+                  // (its seq is in `outstanding` before this call).
                   confirmThread
                       .submit(
                           () -> {

@@ -355,6 +355,101 @@
       "type": "java.time.Duration",
       "description": "How long a cached plaintext data key lives after it was stored; must be positive. Expired keys leave the heap at the next cache store or eviction, or at a lookup at most once a second.",
       "defaultValue": "5m"
+    },
+    {
+      "name": "streamrune.event-store.schema.auto-initialize",
+      "type": "java.lang.Boolean",
+      "description": "Whether the framework's Flyway migrations run at startup.",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.inbox.retention-max-age",
+      "type": "java.time.Duration",
+      "description": "How long processed command-inbox rows are kept; 0 or negative keeps them.",
+      "defaultValue": "7d"
+    },
+    {
+      "name": "streamrune.max-in-flight-async-commands",
+      "type": "java.lang.Integer",
+      "description": "executeAsync commands admitted and not yet complete beyond which the next one is refused.",
+      "defaultValue": 10000
+    },
+    {
+      "name": "streamrune.metadata.baggage-allowlist",
+      "type": "java.util.List<java.lang.String>",
+      "description": "OpenTelemetry baggage keys a request may carry into event metadata; none by default."
+    },
+    {
+      "name": "streamrune.outbox.retention-max-age",
+      "type": "java.time.Duration",
+      "description": "How long delivered entries are kept; 0 or negative keeps them.",
+      "defaultValue": "7d"
+    },
+    {
+      "name": "streamrune.outbox.retry-initial-delay-ms",
+      "type": "java.lang.Long",
+      "description": "First retry delay, in milliseconds; it grows by the multiplier, up to 60s.",
+      "defaultValue": 1000
+    },
+    {
+      "name": "streamrune.outbox.retry-max-attempts",
+      "type": "java.lang.Integer",
+      "description": "Delivery attempts a rejected entry may accrue before it is FAILED.",
+      "defaultValue": 10
+    },
+    {
+      "name": "streamrune.outbox.retry-multiplier",
+      "type": "java.lang.Double",
+      "description": "Factor by which the retry delay grows with each attempt.",
+      "defaultValue": 2.0
+    },
+    {
+      "name": "streamrune.projections.auto-discovery.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the integration builds and starts the runners of the @ProjectionConfig projections.",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.query-cache.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the CachingQueryBus is created.",
+      "defaultValue": false
+    },
+    {
+      "name": "streamrune.saga.compensation-retry-enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the compensation-retry sweeper re-drives stuck compensations; false leaves it sampling the gauges.",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.saga.compensation-retry-give-up-after",
+      "type": "java.time.Duration",
+      "description": "How long a saga may stay COMPENSATING before the sweeper faults it.",
+      "defaultValue": "1h"
+    },
+    {
+      "name": "streamrune.saga.compensation-retry-interval",
+      "type": "java.time.Duration",
+      "description": "How often the sweeper re-drives, and the age an episode reaches before it is re-driven.",
+      "defaultValue": "1m"
+    },
+    {
+      "name": "streamrune.saga.dead-letter-retention-max-age",
+      "type": "java.time.Duration",
+      "description": "How long saga dead letters are kept; at most the inbox window.",
+      "defaultValue": "7d"
+    },
+    {
+      "name": "streamrune.sse.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the Server-Sent Events endpoint and its feed exist.",
+      "defaultValue": false
+    },
+    {
+      "name": "streamrune.subscription.single-active-consumer.lease-ttl",
+      "type": "java.time.Duration",
+      "description": "How long a lease outlives its last renewal: the bound on failover.",
+      "defaultValue": "15s"
     }
   ]
 }

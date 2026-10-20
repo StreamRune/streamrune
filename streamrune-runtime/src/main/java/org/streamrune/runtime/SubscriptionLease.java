@@ -29,7 +29,7 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
  * it leads everywhere, has no anchor and issues no statement.
  *
  * <p>The anchor writes one {@code INFO} line each time this process takes the lease ({@code ... now
- * leads}) and each time a check finds it gone ({@code ... no longer leads}), naming the lease; a
+ * leads}) and each time a check finds it gone ({@code ... has lost it}), naming the lease; a
  * standby's polls, a leader's steady polls and a deliberate {@linkplain Anchor#close() close} write
  * none. Logger: {@code org.streamrune.runtime.SubscriptionLease}.
  */
@@ -164,7 +164,7 @@ public final class SubscriptionLease {
   public final class Anchor implements AutoCloseable {
     private volatile boolean closed;
     // The role this anchor last reported in the log: true from the line "now leads" until the line
-    // "no longer leads" (or its close). Written by the polling thread, reset by close().
+    // "has lost it" (or its close). Written by the polling thread, reset by close().
     private volatile boolean leading;
     private boolean attempted;
     private long lastAttemptNanos;
@@ -238,7 +238,7 @@ public final class SubscriptionLease {
       if (leading) {
         leading = false;
         log.info(
-            "Lease '{}': this process no longer leads it (the lease is gone; it stands by until it"
+            "Lease '{}': this process has lost it (the lease is gone; it stands by until it"
                 + " takes it again)",
             name);
       }

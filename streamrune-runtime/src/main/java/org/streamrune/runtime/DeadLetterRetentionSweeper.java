@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.StreamRuneMetrics;
+import org.streamrune.runtime.health.RelayComponentNames;
 
 /**
  * Background sweeper that prunes {@code dead_letter_queue} rows published before a configured
@@ -40,7 +41,7 @@ public final class DeadLetterRetentionSweeper implements RetentionSweeper {
   private static final Logger LOG = LoggerFactory.getLogger(DeadLetterRetentionSweeper.class);
 
   /** Component and thread name; also what {@link #name()} reports. */
-  private static final String NAME = "dead-letter-retention-sweeper";
+  private static final String NAME = RelayComponentNames.DEAD_LETTER_RETENTION_SWEEPER;
 
   private static final Duration MAX_FAILURE_BACKOFF = Duration.ofSeconds(60);
 
@@ -58,7 +59,7 @@ public final class DeadLetterRetentionSweeper implements RetentionSweeper {
    * @param deadLetterQueue the command dead-letter queue to prune (required)
    * @param maxAge how far back to keep dead-letter entries; zero or negative disables retention
    * @param interval how often to sweep; must be positive
-   * @param clock clock used to compute the cutoff instant (required)
+   * @param clock the clock the cutoff instant is computed from (required)
    * @param metrics metrics collector (required; pass {@link StreamRuneMetrics#NOOP} to disable)
    */
   public DeadLetterRetentionSweeper(

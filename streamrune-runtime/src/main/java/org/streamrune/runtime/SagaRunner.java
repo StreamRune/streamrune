@@ -127,7 +127,7 @@ import org.streamrune.core.types.StreamId;
  * episode version the saga persists {@code COMPENSATING} at (see {@link
  * SagaCommandDispatch#episodeCompensationKey}). If the correlated event is redelivered and the
  * runner processes it again, the bus finds the key already in the command inbox and returns the
- * previously recorded result without re-running the handler or re-persisting events.
+ * recorded result without re-running the handler or re-persisting events.
  *
  * <p><b>Concurrency:</b> Saga writes are CAS-protected ({@link SagaStore#createGenesisPending},
  * {@link SagaStore#applyEvent}, {@link SagaStore#claimCompensating}, {@link SagaStore#update},
@@ -1011,7 +1011,7 @@ public final class SagaRunner<S extends SagaState> {
    * <p>Loads the saga, then:
    *
    * <ul>
-   *   <li>if it is no longer {@code COMPENSATING} — a concurrent event-path/timeout resume already
+   *   <li>if it is not {@code COMPENSATING} — a concurrent event-path/timeout resume already
    *       terminalized it, or it was deleted — returns {@link StepOutcome#NOT_COMPENSATING};
    *   <li>if {@code giveUp} is set (the sweeper's durable, age-based poison bound was exceeded),
    *       CAS-writes the saga {@code FAULTED} at its current version (halted → excluded from future

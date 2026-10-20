@@ -58,8 +58,8 @@ public final class RequestEdgeAuthority {
    * would otherwise start failing for a reason it never depended on. The exception is reported to
    * {@code onCaptureFailure} (each integration passes its own logger — this module deliberately has
    * no logging dependency) and {@code ctx} is returned unchanged, so authorization falls back to
-   * calling the resolver at command time exactly as it did before this capture existed and the same
-   * failure resurfaces there, attached to the command it belongs to.
+   * calling the resolver at command time, as it does without a capture, and the same failure
+   * resurfaces there, attached to the command it belongs to.
    *
    * @param ctx the request context built from the inbound request; {@code null} is returned as-is
    * @param resolver the configured resolver, or {@code null} when none is wired
@@ -80,7 +80,7 @@ public final class RequestEdgeAuthority {
       // around the downstream chain afterwards, and on Quarkus there is no chain to wrap at all, so
       // a binding that outlived this call would either shadow the filter's or leak past the filter.
       // ctx cannot carry an authority yet (that is what this method produces), so a resolver that
-      // recursed into authorization would see the same null it saw before this fix — no new cycle.
+      // recursed into authorization would see no authority, as without this binding — no new cycle.
       return ScopedValue.where(StreamRuneContext.CURRENT, ctx)
           .call(() -> ctx.withAuthority(resolver.resolve(ctx.userId())));
     } catch (RuntimeException e) {

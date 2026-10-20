@@ -181,9 +181,9 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
     }
 
     // The authorization hook runs exactly where the production bus runs it — after
-    // the state is reconstructed and BEFORE decide. The published test-support bus used to skip it
-    // entirely, so a user's authz test (a guard that must reject a foreign owner) passed
-    // false-green against this bus and only failed in production. A throwing guard propagates
+    // the state is reconstructed and BEFORE decide. A test-support bus that skipped it would let
+    // a user's authz test (a guard that must reject a foreign owner) pass false-green against it
+    // and fail only in production. A throwing guard propagates
     // as-is, exactly like VirtualThreadCommandBus: nothing is decided, nothing is appended.
     anyDecider.guard(command, state);
 

@@ -517,7 +517,7 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
       String operation, SubjectId subjectId, RuntimeException e) {
     if (e instanceof InvalidCiphertextException) {
       // Corrupted, tampered, wrapped under another subject's encryption context, or material KMS
-      // can no longer verify. Retrying can never succeed, so raise the CryptoMappingException
+      // cannot verify. Retrying can never succeed, so raise the CryptoMappingException
       // subtype the read-path classifiers treat as poison; the bare type reads to them as a KMS
       // OUTAGE and is retried forever.
       return new CryptoMappingException(

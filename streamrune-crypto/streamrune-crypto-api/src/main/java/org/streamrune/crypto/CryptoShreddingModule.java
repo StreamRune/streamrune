@@ -1442,10 +1442,11 @@ public final class CryptoShreddingModule extends SimpleModule {
    * plaintext on read — the pre-forget ciphertext-validation failure mode is eliminated. Only the
    * decrypted @Encrypted field values are swapped; every other token is replayed unchanged, so
    * nested and polymorphic records (whose own {@code @Encrypted} fields are handled by their own
-   * per-type deserializer, and whose type discriminator is preserved in the buffer) behave exactly
-   * as before. The one residual constraint is the genuinely unavoidable post-forget one: a
-   * crypto-shredded field decrypts to {@link #REDACTED}, which a format check may still reject —
-   * surfaced as an actionable {@link CryptoOperationException}.
+   * per-type deserializer, and whose type discriminator is preserved in the buffer) deserialize
+   * exactly as they would without this deserializer in front of them. The one residual constraint
+   * is the genuinely unavoidable post-forget one: a crypto-shredded field decrypts to {@link
+   * #REDACTED}, which a format check may still reject — surfaced as an actionable {@link
+   * CryptoOperationException}.
    */
   private final class DecryptingDeserializer extends DelegatingDeserializer {
 

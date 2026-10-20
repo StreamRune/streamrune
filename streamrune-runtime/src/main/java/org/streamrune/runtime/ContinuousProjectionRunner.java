@@ -231,26 +231,26 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       } else {
         lastError.set(null);
       }
-      // Register a read-only view of THIS RUNNER with the health contributor before the
-      // leadership loop starts, so the projection is visible in /health from the first tick — even
-      // on a replica that never wins the lease. Registration used to happen only inside
-      // subscribeToLiveEvents, so a permanent standby registered nothing at all: when NO replica
-      // can lead (a terminal standDownTerminally after a heartbeat Error, or a runtime REVOKE on
-      // subscription_leases) every replica's /health reported UP with no entry for the projection
-      // while the read model was frozen indefinitely. The live-subscription registration below
-      // REPLACES this view while LIVE (for the richer lifecycle + delivery-error signal) and the
-      // standby view is restored on the way back out. Mirrors ScheduledProjectionRunner, which
-      // registers at start() and keeps the entry through SLEEPING/standby ticks.
+      // Register a read-only view of THIS RUNNER with the health contributor before the leadership
+      // loop starts, so the projection is visible in /health from the first tick — even on a
+      // replica that never wins the lease. Registered only inside subscribeToLiveEvents, a
+      // permanent standby would register nothing at all: when NO replica can lead (a terminal
+      // standDownTerminally after a heartbeat Error, or a runtime REVOKE on subscription_leases)
+      // every replica's /health would report UP with no entry for the projection while the read
+      // model stays frozen indefinitely. The live-subscription registration below REPLACES this
+      // view while LIVE (for the richer lifecycle + delivery-error signal) and the standby view is
+      // restored on the way back out. Mirrors ScheduledProjectionRunner, which registers at start()
+      // and keeps the entry through SLEEPING/standby ticks.
       //
-      // This call MUST sit INSIDE the try. It used to run between claiming the runner
-      // and the try, so anything it threw escaped run() without touching the catch(Throwable)/
-      // finally: the runner stayed claimed (every later run() failed with "Runner already
-      // running"), done was never counted down (a later close() blocked its
-      // full CLOSE_JOIN_TIMEOUT), and state/markTerminalError never ran — /health reported UP while
-      // the projection processed nothing, on a single-replica deployment forever. The concrete
-      // thrower was SubscriptionHealthContributor.register's bare
-      // metrics.registerSubscriptionLagGauge (now log-and-continue for RuntimeException); this
-      // placement additionally covers any residual Error or future registration side effect.
+      // This call MUST sit INSIDE the try. Run between claiming the runner and the try, anything it
+      // threw would escape run() without touching the catch(Throwable)/finally: the runner would
+      // stay claimed (every later run() failing with "Runner already running"), done would never
+      // count down (a later close() blocking its full CLOSE_JOIN_TIMEOUT), and
+      // state/markTerminalError would never run — /health would report UP while the projection
+      // processes nothing, on a single-replica deployment forever.
+      // SubscriptionHealthContributor.register logs and continues when
+      // metrics.registerSubscriptionLagGauge throws a RuntimeException; this placement also covers
+      // an Error from it or any future registration side effect.
       registerStandbyHealthView(projectionName);
       // Outer leadership loop: only the single-active-consumer leader for this name reads,
       // processes, and advances the offset. A non-leader sits in STANDBY, retrying acquisition at
@@ -265,10 +265,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         }
         // Durably stamp the just-acquired epoch on the checkpoint row BEFORE reading
         // or processing anything. The epoch fence compares against the epoch STORED on the row,
-        // which only a committed advance used to stamp — so from this takeover until our first
-        // committed advance the row still carried the superseded leader's epoch, and ALL of that
+        // which a committed advance alone would stamp — so from this takeover until our first
+        // committed advance the row would carry the superseded leader's epoch, and ALL of that
         // leader's writes (including the SKIP/DLQ empty-batch forward-jumps the overlap and
-        // monotonic guards cannot see) passed the fence while its fail-open local lease view
+        // monotonic guards cannot see) would pass the fence while its fail-open local lease view
         // (the lease clock measures from a client-side instant recorded after the server-side
         // renew, so
         // a GC pause stretches it past DB lease expiry) still reported it leader. FAIL-CLOSED on
@@ -317,10 +317,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     } catch (Throwable e) {
       // Catch Throwable, not just Exception. An Error (AssertionError from user
       // mapping code, NoClassDefFoundError from a missing optional dependency, StackOverflowError
-      // on pathological data) thrown from process() during CATCH-UP previously escaped this catch —
-      // the finally then saw state != ERROR and set STOPPED WITHOUT marking terminal DOWN, so
-      // /health stayed UP forever while the read model was frozen (an earlier fix hardened only the
-      // LIVE poll thread). Set state=ERROR before rethrow so the finally marks the projection
+      // on pathological data) thrown from process() during CATCH-UP must not escape this catch —
+      // the finally would see state != ERROR and set STOPPED WITHOUT marking terminal DOWN, so
+      // /health would stay UP forever while the read model is frozen. Set state=ERROR before
+      // rethrow so the finally marks the projection
       // terminally DOWN, exactly like an Exception. compareAndSet keeps the more specific message
       // an inner error site already recorded; a clean stop/close returns normally and never reaches
       // this branch, so this does not clobber a clean pause/close (mirrors the LIVE poll thread's
@@ -339,10 +339,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       //
       // The SubscriptionLeadership contract requires resign to be no-throw for transient
       // failures — but the bookkeeping below must survive even a contract-breaking implementation.
-      // A resign throw used to truncate this finally: terminal-DOWN health marking skipped (a
-      // catch-up HALT then reported /health UP forever over a frozen read model), done.countDown()
-      // skipped (a subsequent close() blocked its full CLOSE_JOIN_TIMEOUT), the runner never
-      // released (permanently non-restartable: every later run() refused). So: a
+      // A resign throw must not truncate this finally: it would skip terminal-DOWN health marking
+      // (a catch-up HALT would report /health UP forever over a frozen read model), skip
+      // done.countDown() (a subsequent close() would block its full CLOSE_JOIN_TIMEOUT) and never
+      // release the runner (permanently non-restartable: every later run() refused). So: a
       // RuntimeException from resign is logged and swallowed here, and the state/health/latch
       // bookkeeping runs in a nested finally — even an Error unwinding out of resign completes it
       // before propagating.
@@ -363,10 +363,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       } finally {
         if (state.get() != ProjectionState.ERROR) {
           state.set(ProjectionState.STOPPED);
-          // A deliberate CLEAN stop drops out of the health view, exactly as before —
-          // a stopped projection is not a frozen one. This is now the single unregistration point
-          // for every clean exit (previously subscribeToLiveEvents unregistered, which missed the
-          // stop-while-STANDBY and stop-during-catch-up paths that never registered at all).
+          // A deliberate CLEAN stop drops out of the health view — a stopped projection is not a
+          // frozen one. This is the single unregistration point for every clean exit (an
+          // unregistration in subscribeToLiveEvents would miss the stop-while-STANDBY and
+          // stop-during-catch-up paths, which never reach it).
           if (healthContributor != null) {
             healthContributor.unregister(projectionName.value());
           }
@@ -427,8 +427,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         announcedStandby = true;
       }
       state.set(ProjectionState.STANDBY);
-      // The backlog is a global read-only count, so every replica samples it — a standby
-      // used to hold the gauge at whatever it last read as leader (or never emit it at all), the
+      // The backlog is a global read-only count, so every replica samples it — otherwise a standby
+      // would hold the gauge at whatever it last read as leader (or never emit it at all), the
       // same "every replica, before the leadership gate" rule DeadLetterRetryRunner applies.
       sampleDeadLetterBacklog();
       if (!sleepQuietly(standbyMillis)) {
@@ -467,9 +467,9 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * process.
    *
    * <p>Leadership is the discriminator, and it is the same question the runner already asks one
-   * instruction earlier. If this runner no longer holds the lease it was superseded — stand by, as
-   * it would have if {@code tryAcquire} had simply returned empty; the standby loop re-acquires at
-   * a fresh, higher epoch when the current leader goes away, and the stamp then succeeds. Only a
+   * instruction earlier. If this runner does not hold the lease it was superseded — stand by, as it
+   * would have if {@code tryAcquire} had simply returned empty; the standby loop re-acquires at a
+   * fresh, higher epoch when the current leader goes away, and the stamp then succeeds. Only a
    * regression observed while this runner STILL holds its lease is a true lease/checkpoint
    * divergence: the lease table can hand this name nothing higher, so no retry can ever help. See
    * {@link #stillLeader}: a leadership probe that cannot answer keeps the loud verdict.
@@ -687,7 +687,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
 
     while (isRunning()) {
       // Leadership can be lost between batches (leader connection blip / failover). Re-check before
-      // reading the next page; if we are no longer leader, stop catching up so the outer loop drops
+      // reading the next page; if we are not the leader, stop catching up so the outer loop drops
       // to STANDBY without advancing the offset. NOOP always returns true, so this is a no-op
       // there.
       if (leadership.current(projectionName.value()).isEmpty()) {
@@ -831,9 +831,9 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           if (errorHandler != null) {
             errorHandler.accept(e);
           }
-          // Catch-up used to be health-silent — a dead-lettered or skipped chunk left the
-          // standby health view at 0 errors (UP) while the checkpoint advanced past it. Record the
-          // error BEFORE the strategy, exactly like ScheduledProjectionRunner.
+          // Catch-up must not be health-silent: a dead-lettered or skipped chunk would otherwise
+          // leave the standby health view at 0 errors (UP) while the checkpoint advances past it.
+          // Record the error BEFORE the strategy, exactly like ScheduledProjectionRunner.
           recordHealthError(projectionName);
           ErrorAction action =
               handleBatchError(projectionName, chunk, e, consecutiveProcessingFailures);
@@ -971,7 +971,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           }
           return ErrorAction.RETRY_FROM_CHECKPOINT;
         }
-        // The gauge used to be sampled only from the LIVE wait loop, so it was blind
+        // Sampled only from the LIVE wait loop, the gauge would be blind
         // through exactly the phase in which a mass dead-lettering happens. Sample right after the
         // write.
         sampleDeadLetterBacklog();
@@ -1312,10 +1312,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     // pre-commit gate, and feeds each batch outcome to the health contributor itself
     // (recordHealthSuccess/recordHealthError). Both the default polling path AND the factory path
     // use THIS listener, so a factory-built HybridEventSubscription gets the identical pipeline.
-    // Previously the factory received the RAW projection and silently dropped the error strategy,
-    // atomic checkpoint, leadership gate, and health tracking — a poison live batch spun forever
-    // (offset frozen, nothing dead-lettered, health stuck UP), a crash double-applied, and a
-    // superseded split-brain leader had no pre-commit re-check.
+    // A factory handed the RAW projection would silently drop the error strategy, atomic
+    // checkpoint, leadership gate and health tracking — a poison live batch would spin forever
+    // (offset frozen, nothing dead-lettered, health stuck UP), a crash would double-apply, and a
+    // superseded split-brain leader would have no pre-commit re-check.
     //
     // Health is deliberately NOT layered on as a HealthTrackingEventListener wrapper any
     // more. The wrapper recorded a SUCCESS on every normal return — and the SKIP and DLQ arms of
@@ -1412,7 +1412,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           throw new IllegalStateException(
               "Live subscription for projection '"
                   + projectionName.value()
-                  + "' stopped unexpectedly — the projection is no longer receiving events");
+                  + "' stopped unexpectedly — the projection receives no events");
         }
         Thread.sleep(1000);
       }
@@ -1467,8 +1467,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * dead-lettered or skipped batch reads DEGRADED instead of being masked as a success by the
    * strategy's normal return. No-op when no contributor is wired. Mirrors {@code
    * ScheduledProjectionRunner.recordHealthError}. During catch-up the registered entry is the
-   * runner's standby view, so the error is visible there too — catch-up used to be health-silent
-   * entirely.
+   * runner's standby view, so the error is visible there too: catch-up is not health-silent.
    */
   private void recordHealthError(ProjectionName projectionName) {
     if (healthContributor != null) {
@@ -1481,7 +1480,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * streamrune.projections.dead_letter_backlog}) — the projection analog of {@code
    * DeadLetterRetryRunner.sampleObservability}. Called once per LIVE wait cycle, once per STANDBY
    * poll, on entering catch-up, and right after every successful dead-letter write on both the
-   * catch-up and live paths (the live loop used to be the sole call site, so the gauge was blind
+   * catch-up and live paths (with the live loop as the sole call site the gauge would be blind
    * through the whole catch-up phase). Skipped when no metrics or no dead-letter store is wired,
    * and the sample is disabled after the first {@link UnsupportedOperationException} from a store
    * that does not support {@code countPending()}. A transient count failure is logged and swallowed
@@ -1769,7 +1768,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           // the retry bound is rethrown so PollingEventSubscription does NOT advance and retries
           // the batch with backoff — no dead-letter if it recovers. A POISON error (or a TRANSIENT
           // that exhausted the bound) is dead-lettered, and we return normally so the subscription
-          // advances past the range and CONTINUES (behavior change: live DLQ no longer halts).
+          // advances past the range and CONTINUES (a live DLQ does not halt).
           ProjectionErrorClass errorClass = classifier.classify(e);
           if (errorClass == ProjectionErrorClass.TRANSIENT && errors < MAX_CONSECUTIVE_ERRORS) {
             logger.warn(

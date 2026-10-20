@@ -396,7 +396,7 @@ public final class SchemaValidator {
    * <p>"The remaining name" is load-bearing and now enforced: the inference holds only when EXACTLY
    * ONE reported name falls outside the fixed set. A set carrying a fourth table — a decorating
    * {@code CryptoEngine} adding its own, which {@code CachedCryptoEngine} makes possible by passing
-   * the delegate's set straight through — used to get the key-table columns applied to that table
+   * the delegate's set straight through — would get the key-table columns applied to that table
    * too, producing three bogus {@code Missing column} ERRORs and a boot abort on a schema that is
    * actually complete. When the difference is ambiguous, every unknown name falls back to
    * presence-only: losing a column check in an exotic topology is strictly better than failing a

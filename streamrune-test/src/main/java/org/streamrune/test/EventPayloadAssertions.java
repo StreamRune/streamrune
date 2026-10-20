@@ -12,10 +12,10 @@ import org.streamrune.core.upcasting.UpcasterChain;
 
 /**
  * Test-time checks of event payloads. The event stores bind stored payloads strictly, so an event
- * class that no longer reads what it writes, or an upcaster step that writes a misspelled key,
- * fails the read in production with {@code EventDeserializationException}. These methods surface
- * both in a test suite instead, with a mapper configured like the event store's (Java time support,
- * no crypto module, strict binding).
+ * class that does not read what it writes, or an upcaster step that writes a misspelled key, fails
+ * the read in production with {@code EventDeserializationException}. These methods surface both in
+ * a test suite instead, with a mapper configured like the event store's (Java time support, no
+ * crypto module, strict binding).
  *
  * <pre>{@code
  * EventPayloadAssertions.assertRoundTrips(new OrderPlaced("o-1", Money.of(10)));

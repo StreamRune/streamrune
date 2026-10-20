@@ -15,9 +15,8 @@ import org.streamrune.runtime.SagaTimeoutRunner;
  * <b>NOT</b> gated on {@code streamrune.saga.compensation-retry-enabled} and <b>NOT</b>
  * short-circuited by an empty set of {@code SagaRunner} beans.
  *
- * <p>Previously this registration lived in {@link SagaCompensationRetryLifecycle}, which returned
- * early when the compensation re-drive was disabled (and, before this fix, also when no {@code
- * SagaRunner} bean exists). In the documented "switch the re-drive off, rely on a
+ * <p>This registration does not live in {@link SagaCompensationRetryLifecycle}, which returns early
+ * when no {@code SagaRunner} bean exists. In the documented "switch the re-drive off, rely on a
  * SagaTimeoutRunner" config the timeout runner is the SOLE compensation driver, so its dead-thread
  * signal must survive independently of the sweeper — matching the Spring and Micronaut
  * integrations.

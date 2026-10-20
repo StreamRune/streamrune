@@ -159,18 +159,17 @@ public final class SubscriptionHealthContributor {
     // production: a PrometheusMeterRegistry rejects a meter whose id collides with an existing
     // collector using different label keys (classic when the app also emits
     // streamrune.subscriptions.lag), a user MeterFilter can throw, and a registry mid-shutdown
-    // throws IllegalStateException. Propagating meant NO health entry was ever published for the
-    // projection AND — because ContinuousProjectionRunner.run() called this from its standby-view
-    // registration — the exception escaped run() entirely: running stuck true, the runDone latch
-    // never counted down (close() then blocked its full 30s timeout), and markTerminalError never
-    // ran, so /health reported UP over a read model that processed nothing. Health tracking must
-    // degrade to "no lag meter", never to "no entry". Catches RuntimeException, matching every
-    // other metrics call site in the runners ("metric failures never disrupt projection
-    // processing"); an Error still propagates, and run() now registers inside its try so even that
-    // hits the finally bookkeeping.
-    // This comment used to claim registerSubscriptionLagGauge was "the ONLY unwrapped
-    // metrics call in the projection stack" — false even at the time: computeHealth()'s
-    // recordSubscriptionLag below was bare too, and is now guarded the same way.
+    // throws IllegalStateException. Propagating would publish NO health entry for the projection
+    // and, because ContinuousProjectionRunner.run() calls this from its standby-view registration
+    // inside its try, would end the run through its catch/finally: state ERROR, a synthetic
+    // terminal-DOWN entry from markTerminalError, the lease resigned — a projection that could
+    // process everything reported DOWN because a meter could not be registered. Health tracking
+    // must degrade to "no lag meter", never to "no entry" or to a dead projection. Catches
+    // RuntimeException, matching every other metrics call site in the runners ("metric failures
+    // never disrupt projection processing"); an Error still propagates, and run() registers inside
+    // its try so even that hits the finally bookkeeping.
+    // registerSubscriptionLagGauge is not the only metrics call of the projection stack that needs
+    // this guard: computeHealth()'s recordSubscriptionLag below is guarded the same way.
     try {
       metrics.registerSubscriptionLagGauge(SubscriptionName.of(name), () -> currentLag(name));
     } catch (RuntimeException e) {
@@ -245,20 +244,20 @@ public final class SubscriptionHealthContributor {
    * subscriptions.lag} supplier gauge so a metrics scrape reads current lag without a
    * health-endpoint scrape. Never throws into a scrape.
    *
-   * <p><b>A failed read must not look healthy.</b> This used to swallow every {@link
-   * RuntimeException} and return {@code 0}, silently, which is the value a perfectly caught-up
-   * subscription reports. So a {@code statement_timeout} on {@code lastGlobalOffset()}, a revoked
-   * {@code projection_offset} SELECT grant, or a momentarily exhausted pool made every scrape read
-   * lag=0 while the projection made no progress and the backlog grew — and {@code
-   * docs/guide/production.md}'s "alert on rising {@code streamrune.subscriptions.lag}" was
+   * <p><b>A failed read must not look healthy.</b> Swallowing every {@link RuntimeException} and
+   * returning {@code 0}, silently, would report the value a perfectly caught-up subscription
+   * reports. So a {@code statement_timeout} on {@code lastGlobalOffset()}, a revoked {@code
+   * projection_offset} SELECT grant, or a momentarily exhausted pool would make every scrape read
+   * lag=0 while the projection makes no progress and the backlog grows — and {@code
+   * docs/guide/production.md}'s "alert on rising {@code streamrune.subscriptions.lag}" would be
    * structurally unfirable during exactly the store trouble it exists to catch, with no log line to
    * correlate against.
    *
-   * <p>The gauge now HOLDS ITS LAST KNOWN VALUE on a read failure and a WARN naming the
-   * subscription is logged for the scrape — the same discipline as {@code
-   * OutboxPoller.sampleObservability} / {@code DeadLetterRetryRunner.sampleObservability}, whose
-   * backlog gauges also hold rather than reset. Before the first successful sample there is no last
-   * known value and 0 is reported, accompanied by that WARN.
+   * <p>The gauge HOLDS ITS LAST KNOWN VALUE on a read failure and a WARN naming the subscription is
+   * logged for the scrape — the same discipline as {@code OutboxPoller.sampleObservability} /
+   * {@code DeadLetterRetryRunner.sampleObservability}, whose backlog gauges also hold rather than
+   * reset. Before the first successful sample there is no last known value and 0 is reported,
+   * accompanied by that WARN.
    *
    * <p>An {@link UnsupportedOperationException} from the store is not a failure but a permanent
    * capability gap (the store cannot report its head at all): that path returns 0 without a WARN,
@@ -385,7 +384,7 @@ public final class SubscriptionHealthContributor {
     // subscription's entry) — the entire endpoint down over a metrics-backend hiccup that has
     // nothing to do with subscription health itself.
     //
-    // A PERSISTENTLY throwing sink used to WARN-with-stack-trace on every single call —
+    // A PERSISTENTLY throwing sink must not WARN-with-stack-trace on every single call —
     // i.e. once per subscription, every health() scrape — flooding the log at scrape cadence x N
     // subscriptions. One-shot latch per subscription, mirroring the class's own pushPathDeadWarned
     // / registration guard: warn once when the sink starts failing, stay

@@ -300,7 +300,7 @@ public abstract class OutboxStoreContract {
       store.save(pending("x2", B));
       failHead(store, "x2");
       assertTrue(store.resetFailedToPending(OutboxEntryId.of("x2")));
-      assertFalse(store.skipFailed(OutboxEntryId.of("x2"), "ops", "r"), "no longer FAILED");
+      assertFalse(store.skipFailed(OutboxEntryId.of("x2"), "ops", "r"), "the entry is not FAILED");
       assertEquals(OutboxStatus.PENDING, statusOf(store, "x2"));
     }
   }

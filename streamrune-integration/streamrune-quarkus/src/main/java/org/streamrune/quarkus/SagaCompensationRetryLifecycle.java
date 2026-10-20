@@ -172,9 +172,8 @@ public class SagaCompensationRetryLifecycle {
     }
     // Application-declared SagaTimeoutRunner beans are registered by the
     // ALWAYS-present SagaTimeoutRunnerHealthRegistrar, NOT here — this path is skipped by the saga
-    // kill switch and short-circuits on empty sagaRunners (and used to be withheld by
-    // compensation-retry-enabled), so registering timeout-runner health here would drop it in the
-    // no-SagaRunner config where the timeout runner still matters.
+    // kill switch and short-circuits on empty sagaRunners, so registering timeout-runner health
+    // here would drop it in the no-SagaRunner config where the timeout runner still matters.
     if (!sweepers.isEmpty()) {
       // Worded to cover both modes — with compensation-retry-enabled=false these sweepers
       // are sampling-only (backlog gauges, never re-drive), so an unconditional "durable

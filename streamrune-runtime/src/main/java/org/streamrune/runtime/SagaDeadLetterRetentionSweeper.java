@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.SagaDeadLetterStore;
+import org.streamrune.runtime.health.RelayComponentNames;
 
 /**
  * Background sweeper that prunes {@code saga_dead_letters} rows faulted before a configured
@@ -65,7 +66,7 @@ public final class SagaDeadLetterRetentionSweeper implements RetentionSweeper {
   private static final Logger LOG = LoggerFactory.getLogger(SagaDeadLetterRetentionSweeper.class);
 
   /** Component and thread name; also what {@link #name()} reports. */
-  private static final String NAME = "saga-dead-letter-retention-sweeper";
+  private static final String NAME = RelayComponentNames.SAGA_DEAD_LETTER_RETENTION_SWEEPER;
 
   private static final Duration MAX_FAILURE_BACKOFF = Duration.ofSeconds(60);
 
@@ -88,7 +89,7 @@ public final class SagaDeadLetterRetentionSweeper implements RetentionSweeper {
    * @param store the saga dead-letter store to prune (required)
    * @param maxAge how far back to keep quarantined entries; zero or negative disables retention
    * @param interval how often to sweep; must be positive
-   * @param clock clock used to compute the cutoff instant (required)
+   * @param clock the clock the cutoff instant is computed from (required)
    * @param metrics metrics collector (required; pass {@link StreamRuneMetrics#NOOP} to disable)
    */
   public SagaDeadLetterRetentionSweeper(

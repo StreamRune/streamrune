@@ -47,8 +47,7 @@ import org.streamrune.core.types.SubscriptionName;
  * bucket rather than changing the metric's shape — which after 1.0 would break every dashboard
  * written against it. The command-type family — {@code commands.retried}, {@code
  * commands.short.circuited}, {@code dlq.published}, {@code dlq.exhausted} — is tagged by {@code
- * command.type} on every series (the first three used to discard the type and emit bare), with a
- * null/blank type reported under the same sentinel.
+ * command.type} on every series, with a null/blank type reported under the same sentinel.
  *
  * <p><b>Emission status:</b> the untagged meters are registered eagerly at construction so they are
  * discoverable; a tagged meter is registered lazily, one time series per tag value, the first time
@@ -253,10 +252,10 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
             .register(registry);
     // The command-type family — commands.retried, commands.short.circuited, dlq.published
     // (and dlq.exhausted, registered lazily per type) — carries command.type on EVERY series. These
-    // three used to be registered BARE here while their record methods discarded the commandType
-    // the bus hands them (only recordDeadLetterExhausted tagged), so the per-type
-    // published↔exhausted join that DeadLetterRetryRunner and production.md describe was
-    // impossible: the published side had no command.type label at all. Same shape rule as the
+    // three are not registered BARE here: with record methods that drop the commandType the bus
+    // hands them, the per-type published↔exhausted join that DeadLetterRetryRunner and
+    // production.md describe would be impossible, the published side carrying no command.type
+    // label. Same shape rule as the
     // queries.* block below: eagerly registered under the UNKNOWN sentinel so the family is
     // discoverable from boot (rate() and its alert are evaluable before the first retry or
     // dead-letter) in its REAL tagged shape — never bare, which on a Prometheus registry would win
@@ -495,14 +494,12 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
    * Rebases a canonical {@link MetricNames} constant onto this collector's configured {@link
    * Builder#prefix(String) prefix} — the ONLY way meter names are constructed here.
    *
-   * <p>Names used to be assembled by string concatenation ({@code prefix + ".events.append
-   * .duration"}), so nothing tied an emitted meter to the constant operators build dashboards and
-   * PromQL alerts from: {@code MetricNames.EVENTS_DURATION} documented {@code
-   * streamrune.events.duration} while the timer registered {@code streamrune.events.append
-   * .duration}, and the documented series simply never existed — invisible to the compiler and to
-   * the test suite, which pinned the emitted name. Routing every registration through this method
-   * makes that class of drift impossible by construction: the constant IS the name, and a rename
-   * moves both sides at once.
+   * <p>Names are not assembled by string concatenation ({@code prefix + ".events.append
+   * .duration"}): nothing would tie an emitted meter to the constant operators build dashboards and
+   * PromQL alerts from, and a constant documenting one name while the timer registers another is
+   * invisible to the compiler and to a test that pins the emitted name. Routing every registration
+   * through this method makes that class of drift impossible by construction: the constant IS the
+   * name, and a rename moves both sides at once.
    *
    * <p>Package-private rather than private so the drift-guard test can exercise the rebasing and
    * the rejection directly; it is not part of the public API.
@@ -868,9 +865,9 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
 
   // queryType is the SOLE StreamRuneMetrics entry point for these four (there is no
   // no-arg sibling to fall back to, unlike commands/events/projections), so the queryType
-  // parameter must actually reach the registered meter. It used to be silently discarded — every
-  // call bumped the plain eagerly-registered counter/timer, and "which query is slow" or "which
-  // query's cache is thrashing" was unanswerable. The eager registrations in the constructor stay
+  // parameter must actually reach the registered meter. Discarding it would make every
+  // call bump the plain eagerly-registered counter/timer, and "which query is slow" or "which
+  // query's cache is thrashing" unanswerable. The eager registrations in the constructor stay
   // (so the meter names are discoverable from boot, matching every other meter in this class) but
   // are not incremented here, so sum() over the tagged series is not doubled —
   // and they carry the same query.type key, so they and these samples are one family.

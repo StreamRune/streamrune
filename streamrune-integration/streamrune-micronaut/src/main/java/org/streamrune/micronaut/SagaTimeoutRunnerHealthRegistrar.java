@@ -14,12 +14,10 @@ import org.streamrune.runtime.SagaTimeoutRunner;
  * <b>NOT</b> gated on {@code streamrune.saga.compensation-retry-enabled} and <b>NOT</b>
  * short-circuited by an empty set of {@code SagaRunner} beans.
  *
- * <p>Previously this registration lived in {@link SagaCompensationRetryLifecycle}, which was
- * disabled ({@code @Requires(notEquals="false")}) when the compensation re-drive was turned off,
- * and returns early when no {@code SagaRunner} bean exists. In the documented "switch the re-drive
- * off, rely on a SagaTimeoutRunner" config the timeout runner is the SOLE compensation driver, so
- * its dead-thread signal must survive independently of the sweeper — matching the Spring and
- * Quarkus integrations.
+ * <p>This registration does not live in {@link SagaCompensationRetryLifecycle}, which returns early
+ * when no {@code SagaRunner} bean exists. In the documented "switch the re-drive off, rely on a
+ * SagaTimeoutRunner" config the timeout runner is the SOLE compensation driver, so its dead-thread
+ * signal must survive independently of the sweeper — matching the Spring and Quarkus integrations.
  *
  * <p><b>Deliberately NOT gated on {@code streamrune.saga.enabled}.</b> The kill switch governs
  * <em>framework-driven</em> saga processing (subscription wiring, sweepers) — not observability of

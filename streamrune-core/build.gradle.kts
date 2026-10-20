@@ -16,7 +16,7 @@ dependencies {
 // ratchet exists to catch — changed none of :streamrune-core:test's declared inputs. With
 // `org.gradle.caching=true` (gradle.properties) and a build cache CI persists across runs, the
 // task went UP-TO-DATE locally and FROM-CACHE on CI: the enforcement never executed, the build
-// reported green, and the unsanitized sink shipped. Reproduced before this fix — a genuine
+// reported green, and the unsanitized sink shipped. Reproduced without these inputs — a genuine
 // violation planted in SagaTimeoutRunner left `> Task :streamrune-core:test UP-TO-DATE` and
 // BUILD SUCCESSFUL, while the same tree with `--rerun` failed the ratchet.
 //
@@ -104,4 +104,16 @@ tasks.named<Test>("test") {
             listOf("-Dstreamrune.logsink.declared-sources=${manifest.get().absolutePath}")
         },
     )
+}
+
+// MetricNamesDocLintTest reads the guides and the integration-api README (docLintTest, see the root
+// build): declared, so an edit to either re-runs it.
+tasks.named<Test>("docLintTest") {
+    inputs
+        .files(
+            fileTree(rootDir.resolve("docs/guide")) { include("**/*.md") },
+            rootDir.resolve("streamrune-integration/streamrune-integration-api/README.md"),
+        )
+        .withPropertyName("meterDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }

@@ -29,7 +29,7 @@ import org.streamrune.core.types.SagaType;
  * The recorded-recovery-state contract every {@link SagaStore} must honour. Run by {@code
  * InMemorySagaStoreContractTest} and {@code PostgresSagaStoreContractTest}: a store that passes
  * here can drive {@code SagaStepExecutor}, {@code SagaRunner} and {@code SagaDeadLetterReplayer};
- * the two shipped stores can no longer diverge unnoticed.
+ * the two shipped stores cannot diverge unnoticed.
  */
 public abstract class SagaStoreContract {
 

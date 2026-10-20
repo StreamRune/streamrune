@@ -30,8 +30,8 @@ import org.streamrune.core.types.LogSanitizer;
  * selector thread plus a per-request executor — and {@link #close()} releases it. Every DI
  * container invokes {@code close()} on an {@link AutoCloseable} bean by convention (Spring's
  * inferred destroy method, a Quarkus {@code @Disposes} / Micronaut {@code preDestroy = "close"}
- * producer), so a context refresh, a dev-mode live reload or a multi-context test suite no longer
- * strands the previous cycle's client. {@link #of(URI, HttpClient)} <em>borrows</em> a
+ * producer), so a context refresh, a dev-mode live reload or a multi-context test suite does not
+ * strand the previous cycle's client. {@link #of(URI, HttpClient)} <em>borrows</em> a
  * caller-supplied client instead: {@code close()} then leaves it untouched, because the caller who
  * built it is the one that closes it. This is the same owned-vs-borrowed split {@code
  * PgAdvisoryLocker} applies to its {@code ownedPool}; the two broker transports need no such split
@@ -148,7 +148,7 @@ public final class HttpOutboxPublisher implements OutboxPublisher, AutoCloseable
    *       anything: {@link FailureKind#TRANSPORT} (retried forever with backoff, never
    *       terminal-fails the backlog). Exactly {@link #isPreHandoff the enumerated set}, plus
    *       {@link java.net.http.HttpConnectTimeoutException} — checked <em>before</em> its
-   *       superclass {@link java.net.http.HttpTimeoutException} for that reason (Minor-1).
+   *       superclass {@link java.net.http.HttpTimeoutException} for that reason.
    *   <li><b>Post-hand-off or unclassifiable</b> — every other {@link java.io.IOException}, and a
    *       <em>non-connect</em> {@code HttpTimeoutException}: the request may have been fully sent
    *       and the receiver may be executing it right now (a connection reset or EOF while awaiting
@@ -187,7 +187,7 @@ public final class HttpOutboxPublisher implements OutboxPublisher, AutoCloseable
             : FailureKind.ENTRY;
       }
       if (c instanceof java.net.http.HttpConnectTimeoutException) {
-        // Minor-1: a CONNECT timeout fired before the request was handed off — the connection was
+        // A CONNECT timeout fired before the request was handed off — the connection was
         // never established, so nothing is in flight (identical to "connection refused"). Re-arm
         // and retry with backoff (TRANSPORT); do NOT hold the claim for a full lease. Must be
         // tested before HttpTimeoutException, its superclass.
@@ -225,7 +225,7 @@ public final class HttpOutboxPublisher implements OutboxPublisher, AutoCloseable
    * {@code endpoint} (fixed at construction) under the SAME credential; only the body and the two
    * {@code X-Outbox-*} headers differ. A status decided <em>before</em> those can matter is
    * therefore identical for the entire backlog. With the shipped ladder (10 attempts, 60s cap) a
-   * ~5-minute token rotation or an expired mTLS client certificate used to terminal-{@code FAILED}
+   * ~5-minute token rotation or an expired mTLS client certificate would terminal-{@code FAILED}
    * every entry it touched: permanent silent loss, plus the silent same-aggregate reorder that
    * follows once a {@code FAILED} head stops gating its higher-seq successors.
    *

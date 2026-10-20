@@ -60,10 +60,10 @@ dependencies {
 
 // The JMH plugin's `jmhJar` captures the `Project` instance in a task action, so storing the
 // configuration cache entry for any graph containing it fails with "cannot serialize object of
-// type 'org.gradle.api.internal.project.DefaultProject'". Before this, `./gradlew :streamrune-runtime:jmh`
-// could not complete at all: the benchmark jar was built and then the build failed on the cache
-// store. Declaring the incompatibility makes Gradle DEGRADE instead of fail — it disables the
-// configuration cache for that invocation and reports no problem.
+// type 'org.gradle.api.internal.project.DefaultProject'". Undeclared, that failure would stop
+// `./gradlew :streamrune-runtime:jmh` cold: the benchmark jar is built and then the build fails
+// on the cache store. Declaring the incompatibility makes Gradle DEGRADE instead of fail — it
+// disables the configuration cache for that invocation and reports no problem.
 //
 // The cost is bounded to benchmark runs. `jmhJar` is only ever in the graph when a developer asks
 // for `jmh`/`jmhJar` explicitly; `check` gates the benchmarks via `compileJmhJava`, which is config-cache clean, so the normal
@@ -91,4 +91,24 @@ val jmhSmokeTestTask = tasks.register<Test>("jmhSmokeTest") {
 
 tasks.named("check") {
     dependsOn(jmhSmokeTestTask)
+}
+
+// RelayComponentNamesDocLintTest reads the production guide and the three integrations' health
+// sources as text (docLintTest, see the root build): declared, so an edit to any of them re-runs it.
+tasks.named<Test>("docLintTest") {
+    inputs
+        .files(
+            rootDir.resolve("docs/guide/production.md"),
+            rootDir.resolve(
+                "streamrune-integration/streamrune-spring/src/main/java/org/streamrune/spring/" +
+                    "StreamRuneAutoConfiguration.java"),
+            rootDir.resolve(
+                "streamrune-integration/streamrune-quarkus/src/main/java/org/streamrune/quarkus/" +
+                    "StreamRuneHealthCheck.java"),
+            rootDir.resolve(
+                "streamrune-integration/streamrune-micronaut/src/main/java/org/streamrune/micronaut/" +
+                    "StreamRuneHealthIndicator.java"),
+        )
+        .withPropertyName("healthDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }

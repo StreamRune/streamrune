@@ -133,11 +133,13 @@ new SubscriptionConfig(
 
 All three integrations bind the **same** keys — `StreamRuneQuarkusProperties`'s class javadoc states this explicitly ("the same keys as the Spring and Micronaut integrations, so configuration is portable across runtimes"). `pollingIntervalMs`/`pollingJitterMs` are plain millisecond `long`s on all three (no `ms`/duration-string suffix), kebab-cased to `polling-interval-ms`/`polling-jitter-ms`:
 
+Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
+
 | Setting | Spring | Quarkus | Micronaut | Default |
 |---|---|---|---|---|
-| Polling interval | `streamrune.polling-interval-ms=5000` | `streamrune.polling-interval-ms=5000` | `streamrune.polling-interval-ms: 5000` | 5000ms |
-| Polling jitter | `streamrune.polling-jitter-ms=1000` | `streamrune.polling-jitter-ms=1000` | `streamrune.polling-jitter-ms: 1000` | 1000ms |
-| Health lag threshold (lag at which a running subscription reads `DEGRADED`; lag never reads `DOWN`) | `streamrune.subscription.health.lag-threshold=1000` | `streamrune.subscription.health.lag-threshold=1000` | `streamrune.subscription.health.lag-threshold: 1000` | 1000 events |
+| Polling interval | `streamrune.polling-interval-ms=5000` | `streamrune.polling-interval-ms=5000` | `streamrune.polling-interval-ms: 5000` | 5000 |
+| Polling jitter | `streamrune.polling-jitter-ms=1000` | `streamrune.polling-jitter-ms=1000` | `streamrune.polling-jitter-ms: 1000` | 1000 |
+| Health lag threshold (lag at which a running subscription reads `DEGRADED`; lag never reads `DOWN`) | `streamrune.subscription.health.lag-threshold=1000` | `streamrune.subscription.health.lag-threshold=1000` | `streamrune.subscription.health.lag-threshold: 1000` | 1000 |
 
 ## Caveats
 

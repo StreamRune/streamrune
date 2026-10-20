@@ -19,7 +19,7 @@ import org.postgresql.PGNotification;
 import org.streamrune.core.StreamRuneMetrics;
 
 /**
- * Verifies FIX 5: {@link PgNotificationListener} no longer permanently gives up after a small fixed
+ * Verifies that {@link PgNotificationListener} does not permanently give up after a small fixed
  * number of reconnects. It survives many more consecutive reconnect failures than the old cap of 5,
  * reconnects once the connection recovers, and emits a reconnect metric on each failure. A finite
  * {@code maxReconnectAttempts} still stops the listener (making the dead push path observable).

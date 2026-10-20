@@ -2084,9 +2084,9 @@ class MicronautBeanWiringTest {
    * {@code @Encrypted} field, with NO {@code CryptoEngine} bean anywhere in the container (not
    * auto-configured by default, unlike {@code AnnotationAuthorizationInterceptor} — verified: a
    * plain {@code ApplicationContext.run()} resolves zero {@code CryptoEngine} beans) — {@code
-   * SagaStateCryptoValidator} (always active, not spec.name-gated) fails fast on exactly this shape
-   * . Plus a mock {@link MultiProjectionRunner} under the name {@link StreamRuneLifecycle} injects,
-   * replacing {@link ProjectionFactory}'s own default (its producer backs off via {@code
+   * SagaStateCryptoValidator} (always active, not spec.name-gated) fails fast on exactly this
+   * shape. Plus a mock {@link MultiProjectionRunner} under the name {@link StreamRuneLifecycle}
+   * injects, replacing {@link ProjectionFactory}'s own default (its producer backs off via {@code
    * missingBeans}), so the test can observe whether it was ever started.
    */
   @Factory

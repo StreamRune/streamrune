@@ -202,7 +202,7 @@ public final class PostgresSagaStore implements SagaStore {
           + " THEN CAST(? AS TEXT) ELSE saga_state.episode_cause_event_id END ";
 
   // pre_fault_status = NULL on every plain CAS write -- a completed write means the
-  // row no longer resumes from a fault. claimCompensating is this statement with status =
+  // row does not resume from a fault. claimCompensating is this statement with status =
   // COMPENSATING: the stamp rides in EPISODE_STAMP_SET.
   private static final FenceChangingWrite UPDATE_CAS =
       new FenceChangingWrite(
@@ -501,8 +501,8 @@ public final class PostgresSagaStore implements SagaStore {
    * PostgresSagaStoreCryptoConnectionIT}.
    *
    * <p>The failure is classified as a STATE-CONVERSION failure, never as an {@link
-   * EventStoreException}. The blanket {@code catch (Exception)} that used to span serialization AND
-   * the JDBC call made a deterministic mapper failure — most naturally a {@code
+   * EventStoreException}. A blanket {@code catch (Exception)} spanning serialization AND the JDBC
+   * call would make a deterministic mapper failure — most naturally a {@code
    * CryptoOperationException} because an {@code @Encrypted} component's {@code subjectId} is still
    * null on a partially-populated mid-flow state — indistinguishable from a dropped connection.
    * {@code SagaRunner} treats {@code SagaStore} failures as infrastructure and lets them propagate

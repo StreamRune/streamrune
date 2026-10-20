@@ -54,17 +54,17 @@ import org.streamrune.core.types.SubjectId;
  * <p>This deliberately avoids a hard-coded allow-list: the expected set is computed from the actual
  * code, so a registry that omits a reachable type is caught exhaustively.
  *
- * <p>The exhaustive scan is the whole point, and it used to be missing. The expected set was {@code
+ * <p>The exhaustive scan is the whole point. An expected set of {@code
  * jsonValueTypesInCorePackage() ∪ reachableSerializableTypes(roots)} where the callers pass <em>the
- * registry itself</em> as {@code roots} — so the second source was seeded from the very thing it
- * was checking. A new serialised DTO outside {@code org.streamrune.core.types} that no
- * already-registered type happens to reference was in neither source, {@code missing} came back
- * empty, and all three parity tests passed green while the type shipped unregistered and blew up in
- * a native image on first touch. That was not hypothetical: seven public core records/enums ({@code
- * SagaStatus}, {@code LoadedSaga}, {@code LockMode}, {@code GdprAction}, {@code LateDataPolicy},
- * {@code ProjectionErrorClass}, {@code ProjectionErrorStrategy}) were unregistered in all three
- * registries and no test flagged them. A self-seeded expectation can only ever prove the registry
- * is closed under reachability, never that it is complete.
+ * registry itself</em> as {@code roots} seeds the second source from the very thing it checks. A
+ * new serialised DTO outside {@code org.streamrune.core.types} that no already-registered type
+ * happens to reference was in neither source, {@code missing} came back empty, and all three parity
+ * tests passed green while the type shipped unregistered and blew up in a native image on first
+ * touch. That was not hypothetical: seven public core records/enums ({@code SagaStatus}, {@code
+ * LoadedSaga}, {@code LockMode}, {@code GdprAction}, {@code LateDataPolicy}, {@code
+ * ProjectionErrorClass}, {@code ProjectionErrorStrategy}) were unregistered in all three registries
+ * and no test flagged them. A self-seeded expectation can only ever prove the registry is closed
+ * under reachability, never that it is complete.
  *
  * <p>There is deliberately <b>no opt-out list</b> (an explicit, code-reviewed list of types the
  * framework provably never JSON-serialises): an opt-out list is a second registry to keep in sync

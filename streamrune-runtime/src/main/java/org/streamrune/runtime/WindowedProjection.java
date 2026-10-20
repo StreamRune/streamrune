@@ -225,7 +225,7 @@ public final class WindowedProjection<W> implements Projection {
       return 0;
     }
 
-    // Snapshot watermark before this batch — used to determine if a window was already
+    // Snapshot watermark before this batch — it decides whether a window was already
     // closed past grace BEFORE this batch arrived (i.e. the event is truly late).
     Instant preBatchWatermark = watermark;
 

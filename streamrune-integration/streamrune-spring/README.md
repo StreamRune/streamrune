@@ -51,6 +51,9 @@ implementation("org.streamrune:streamrune-spring:1.0.0-alpha-SNAPSHOT")
 
 ## Configuration
 
+Every key and its default are in the [configuration reference](../../docs/guide/configuration.md);
+the ones most applications set:
+
 ```yaml
 streamrune:
   snapshot-every-n-events: 100

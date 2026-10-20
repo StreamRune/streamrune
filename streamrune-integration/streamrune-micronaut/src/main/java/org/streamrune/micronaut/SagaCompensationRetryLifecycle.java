@@ -38,10 +38,10 @@ import org.streamrune.runtime.SagaRunner;
  * always-leader (single instance).
  *
  * <p>Skipped entirely only when sagas are disabled ({@code streamrune.saga.enabled=false}). {@code
- * streamrune.saga.compensation-retry-enabled=false} no longer withholds this bean — the sweepers
- * are the sole emitters of {@code streamrune.saga.compensating} / {@code
- * streamrune.saga.faulted_rows}, so the knob is threaded into each sweeper as sampling-only mode
- * instead: the re-drive stops, the gauges stay live.
+ * streamrune.saga.compensation-retry-enabled=false} does not withhold this bean — the sweepers are
+ * the sole emitters of {@code streamrune.saga.compensating} / {@code streamrune.saga.faulted_rows},
+ * so the knob is threaded into each sweeper as sampling-only mode instead: the re-drive stops, the
+ * gauges stay live.
  */
 @Singleton
 @Requires(property = "streamrune.saga.enabled", value = "true", defaultValue = "true")
@@ -155,8 +155,7 @@ public class SagaCompensationRetryLifecycle
     }
     // Application-declared SagaTimeoutRunner beans are registered by the
     // ALWAYS-present SagaTimeoutRunnerHealthRegistrar, NOT here — this bean is skipped by the saga
-    // kill switch and returns early on empty sagaRunners (and used to be
-    // @Requires(notEquals="false") on compensation-retry-enabled), so registering timeout-runner
+    // kill switch and returns early on empty sagaRunners, so registering timeout-runner
     // health here would drop it in the no-SagaRunner config.
     if (!sweepers.isEmpty()) {
       // Worded to cover both modes — with compensation-retry-enabled=false these sweepers

@@ -289,13 +289,13 @@ public final class PostgresEventStore implements EventStore {
   private final PostgresCommandInbox commandInbox;
   private final StatementTimeout statementTimeout;
 
-  // Set on the FIRST call to warnIfLegacySnapshotExists, regardless of outcome, so the probe
-  // query itself runs at most ONCE per store instance for its whole lifetime. Before this flag
-  // existed, the only early-return was legacySnapshotWarned (below), which is set ONLY when a
-  // legacy row is FOUND — so on the default never() deployment with zero snapshot_store rows (the
-  // common case: an app that never configured snapshots), every single aggregate load paid an
-  // extra pool checkout + query, forever. This flag decouples "have we probed" from "did we find
-  // anything", which is what makes the probe actually one-shot.
+  // Set on the FIRST call to warnIfLegacySnapshotExists, regardless of outcome, so the probe query
+  // itself runs at most ONCE per store instance for its whole lifetime. With legacySnapshotWarned
+  // (below) as the only early-return — set ONLY when a legacy row is FOUND — every single aggregate
+  // load on the default never() deployment with zero snapshot_store rows (the common case: an app
+  // that never configured snapshots) would pay an extra pool checkout + query, forever. This flag
+  // decouples "have we probed" from "did we find anything", which is what makes the probe actually
+  // one-shot.
   private final AtomicBoolean legacySnapshotProbed = new AtomicBoolean(false);
 
   // Set once this instance has warned that snapshot_store still has a row — a leftover
@@ -698,7 +698,7 @@ public final class PostgresEventStore implements EventStore {
     // counterpart of SnapshotPolicy.never(). Skips the LOAD_SNAPSHOT query entirely rather than
     // reading-then-discarding, and takes a completely separate, simpler path: a snapshot left over
     // from before the policy switched to never() must never be deserialized (a stale schema, a
-    // decrypt attempt against possibly-rotated keys) let alone used to seed decide().
+    // decrypt attempt against possibly-rotated keys) let alone fed to decide().
     if (expectedSnapshotVersion == EventStore.IGNORE_SNAPSHOT) {
       return loadIgnoringSnapshot(streamId);
     }
@@ -1046,13 +1046,13 @@ public final class PostgresEventStore implements EventStore {
    * at DEBUG and swallowed: it must never affect the load it rides along with.
    *
    * <p>{@code legacySnapshotProbed} makes this method run its query body AT MOST ONCE per store
-   * instance, regardless of outcome. Before this, the only guard was {@code legacySnapshotWarned},
-   * set only when a row was FOUND — so on the default {@code never()} deployment with zero {@code
-   * snapshot_store} rows (an app that never configured snapshots, the common case and the exact
-   * population with nothing to find), every single aggregate load paid an extra pool checkout
-   * outside the read transaction plus this query, forever. The probe is now also table-wide rather
-   * than per-stream ({@link #SNAPSHOT_STATE_TYPE_FOR_WARNING}): the warning is about the table, not
-   * about whichever stream happened to trigger the one shot.
+   * instance, regardless of outcome. With {@code legacySnapshotWarned} as the only guard — set only
+   * when a row is FOUND — every single aggregate load on the default {@code never()} deployment
+   * with zero {@code snapshot_store} rows (an app that never configured snapshots, the common case
+   * and the exact population with nothing to find) would pay an extra pool checkout outside the
+   * read transaction plus this query, forever. The probe is table-wide rather than per-stream
+   * ({@link #SNAPSHOT_STATE_TYPE_FOR_WARNING}): the warning is about the table, not about whichever
+   * stream happened to trigger the one shot.
    */
   private void warnIfLegacySnapshotExists() {
     if (!legacySnapshotProbed.compareAndSet(false, true)) {
@@ -1104,9 +1104,9 @@ public final class PostgresEventStore implements EventStore {
 
   /**
    * Resolves the class for a stored snapshot {@code state_type}, returning {@code null} instead of
-   * throwing when the type is no longer registered. Used only on the migration path: a snapshot
-   * written under a state class that has since been retired from the registry is undeserializable,
-   * so it must be discarded (full replay) rather than crashing the load.
+   * throwing when the type is not registered. Used only on the migration path: a snapshot written
+   * under a state class that has since been retired from the registry is undeserializable, so it
+   * must be discarded (full replay) rather than crashing the load.
    */
   private Class<?> resolveStateTypeOrNull(String stateType) {
     try {
@@ -1135,10 +1135,10 @@ public final class PostgresEventStore implements EventStore {
    * org.streamrune.core.EventStore#append} no-op ONLY when {@code outboxEntries} is empty too.
    * Entries passed alongside an empty events list are <b>refused</b> with {@link
    * IllegalArgumentException}: this method's contract is atomic co-commit WITH the events, and
-   * there is nothing to co-commit with. Previously the empty-events early return fired before any
-   * transaction was opened, so the entries were silently discarded while the caller received a
-   * success result — permanent, undetectable loss of an explicitly-requested integration event.
-   * {@code outbox_events} rows are self-contained (no event or offset reference), so an entry CAN
+   * there is nothing to co-commit with. An early return for empty events, before any transaction
+   * opens, would discard the entries silently while the caller receives a success result —
+   * permanent, undetectable loss of an explicitly-requested integration event. {@code
+   * outbox_events} rows are self-contained (no event or offset reference), so an entry CAN
    * legitimately stand alone — persist it directly with {@link
    * org.streamrune.core.outbox.OutboxStore#save(org.streamrune.core.outbox.OutboxEntry)
    * OutboxStore.save(entry)}, one entry per call. That is a <em>standalone</em> write: the SPI has
@@ -1994,9 +1994,10 @@ public final class PostgresEventStore implements EventStore {
           PostgresTransactions.commitIfManual(conn, "snapshot save", c -> ps.executeUpdate());
       if (written == 0) {
         log.info(
-            "Snapshot of stream {} at version {} not stored: its snapshot_store row no longer has"
-                + " purge generation {}, so a GDPR forget purged the stream's snapshot after the"
-                + " state being saved was loaded; the next command loads and snapshots again",
+            "Snapshot of stream {} at version {} not stored: its snapshot_store row carries"
+                + " a purge generation other than {}, so a GDPR forget purged the stream's"
+                + " snapshot after the state being saved was loaded; the next command loads and"
+                + " snapshots again",
             shownStream,
             version.value(),
             snapshotPurgeGeneration);
@@ -2237,9 +2238,9 @@ public final class PostgresEventStore implements EventStore {
    * @throws EventDeserializationException when the stored row deterministically cannot be bound to
    *     its typed form — a Jackson parse/bind failure ({@link IOException}), a malformed upcaster
    *     output (Jackson's unchecked {@code IllegalArgumentException} from {@code convertValue}), a
-   *     user upcaster's own throw, or a deterministic {@link CryptoMappingException} (these used to
-   *     escape raw, so the caller saw what looked like its own bad input and every classifier
-   *     mis-binned a stored-data defect)
+   *     user upcaster's own throw, or a deterministic {@link CryptoMappingException} (escaping raw,
+   *     these would look to the caller like its own bad input and every classifier would mis-bin a
+   *     stored-data defect)
    * @throws EventStoreException (plain) when the chain carries a bare {@link
    *     CryptoOperationException} — a condition of the key store or the key (an outage, a disabled
    *     or inaccessible key), not of the stored event, which must keep classifying as an

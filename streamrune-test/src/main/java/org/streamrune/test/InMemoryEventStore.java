@@ -97,7 +97,7 @@ import org.streamrune.crypto.CryptoShreddingModule;
  *       plaintext PII.
  *   <li><b>Upcasting on read</b>: an event stored at an older schema version is upcast through the
  *       registered {@link #withUpcasters(List) upcaster chain} when it is read back.
- *   <li><b>Retired-type discard</b>: a snapshot whose stored state type is no longer registered is
+ *   <li><b>Retired-type discard</b>: a snapshot whose stored state type is not registered is
  *       discarded (full replay) instead of crashing the load.
  * </ul>
  *
@@ -289,7 +289,7 @@ public final class InMemoryEventStore implements EventStore {
     appendListeners.add(listener);
   }
 
-  /** Unregisters a previously registered append listener. Unknown listeners are ignored. */
+  /** Unregisters a registered append listener. Unknown listeners are ignored. */
   public void removeAppendListener(AppendListener listener) {
     Objects.requireNonNull(listener, "listener is required");
     appendListeners.remove(listener);
@@ -892,8 +892,8 @@ public final class InMemoryEventStore implements EventStore {
 
   /**
    * Resolves the class for a stored snapshot {@code state_type}, returning {@code null} instead of
-   * throwing when the type is no longer registered — so a snapshot written under a since-retired
-   * state class is discarded (full replay) rather than crashing the load, exactly like {@code
+   * throwing when the type is not registered — so a snapshot written under a since-retired state
+   * class is discarded (full replay) rather than crashing the load, exactly like {@code
    * PostgresEventStore.resolveStateTypeOrNull}.
    */
   private Class<?> resolveStateTypeOrNull(String stateType) {

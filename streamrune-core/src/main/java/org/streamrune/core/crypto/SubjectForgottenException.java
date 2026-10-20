@@ -21,9 +21,9 @@ package org.streamrune.core.crypto;
  * SubjectForgottenException} on an <em>encrypt</em> means "this write must not happen — the subject
  * was erased".
  *
- * <p>To legitimately re-register a previously forgotten subject, lift its tombstone explicitly via
- * {@link CryptoEngine#reinstate(org.streamrune.core.types.SubjectId) reinstate} — the only
- * re-registration path; no backend offers an engine-wide opt-out. Call it through {@code
+ * <p>To legitimately re-register a forgotten subject, lift its tombstone explicitly via {@link
+ * CryptoEngine#reinstate(org.streamrune.core.types.SubjectId) reinstate} — the only re-registration
+ * path; no backend offers an engine-wide opt-out. Call it through {@code
  * ForgetSubjectService.reinstate(SubjectId, UserId)} so the reinstate is recorded in the GDPR audit
  * trail; the engine method writes no audit record.
  */

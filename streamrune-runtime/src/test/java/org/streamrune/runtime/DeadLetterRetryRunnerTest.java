@@ -966,7 +966,7 @@ class DeadLetterRetryRunnerTest {
 
     // Rerun convergence: every further cycle repeats the same scan to the same outcome — still no
     // dispatch — and the attempt count climbs to exhaustion under the policy (maxRetries 3,
-    // discardAfterMaxRetries false: retained for inspection, no longer retried).
+    // discardAfterMaxRetries false: retained for inspection, not retried).
     runner.processBatch();
     runner.processBatch();
     runner.processBatch();

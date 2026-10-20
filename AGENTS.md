@@ -25,14 +25,16 @@ plain constructors, and the integrations use the same builders. It is one Gradle
 | `streamrune-integration/streamrune-spring`, `streamrune-quarkus`, `streamrune-micronaut` | The three integrations | yes |
 | `streamrune-integration/streamrune-spring-boot-starter` | The Spring Boot starter: dependencies only, no sources | — |
 | `streamrune-integration/streamrune-e2e` | End-to-end crash-recovery and broker suites, not published | yes |
+| `streamrune-integration/streamrune-integration-tck` | What the three integrations' tests share: the configuration oracle and the doc reading of their doc-lint tests; not published | no |
 | `streamrune-outbox/streamrune-kafka-outbox`, `streamrune-rabbitmq-outbox` | Transactional outbox publishers for Kafka and RabbitMQ | yes |
 
 Where each topic is written down:
 
 - `README.md`: the overview and the module table. `docs/QUICKSTART.md`: a first application.
 - `docs/guide/`: `concepts.md`, `getting-started.md`, `testing.md` (the test kit), `production.md`
-  (PostgreSQL setup, health checks, the metrics table, duration properties, operations runbooks)
-  and `advanced/`, one guide per feature (outbox, sagas, GDPR erasure, idempotency and more).
+  (PostgreSQL setup, health checks, the metrics table, duration properties, operations runbooks),
+  `configuration.md` (every configuration property and its default) and `advanced/`, one guide per
+  feature (outbox, sagas, GDPR erasure, idempotency and more).
 - Each module's `README.md`: its API and, for an integration, its configuration properties.
 - `docs/adr/`: architecture decisions. `docs/reference/api.md`: the API reference.
   `CHANGELOG.md`: what each version changes.
@@ -45,13 +47,14 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 
 | Command | What it runs | Typical wall time |
 |---|---|---|
-| `./gradlew quickCheck` | Compiles every source set of every module, runs `spotlessCheck` and the tests of the six modules whose tests need no Docker. No JaCoCo, no Javadoc, no Testcontainers. | about 3 minutes when the runtime tests run, under a minute when they are up to date |
+| `./gradlew quickCheck` | Compiles every source set of every module, runs `spotlessCheck`, the tests of the seven modules whose tests need no Docker and every doc-lint test. No JaCoCo, no Javadoc, no Testcontainers. | about 3 minutes when the runtime tests run, under a minute when they are up to date |
 | `./gradlew build` | What the `build` check runs in CI: every test suite, Javadoc, the coverage gates, `spotlessCheck` and the build's own verification tasks. Needs Docker. | about 7 minutes; `streamrune-postgres`'s suite is the longest |
 | `./gradlew :streamrune-core:test` | One module's tests | |
 | `./gradlew :streamrune-core:test --tests "DeadLetterRetryPolicyTest"` | One test class; `--tests` also takes a pattern such as `"*RetryPolicy*"` | |
 | `./gradlew :streamrune-integration:streamrune-spring:test` | A nested module's tests | |
 | `./gradlew postgresTest -PpostgresImage=postgres:17-alpine` | The PostgreSQL-backed suites on another server version, as the `postgres-17` check runs them | |
 | `./gradlew :streamrune-integration:streamrune-e2e:brokerTest` | The Kafka and RabbitMQ end-to-end suite, which is not part of `check` | |
+| `./gradlew docLintTest` | The doc-lint tests of every module (section 5); `check` and `quickCheck` run them too | seconds |
 | `./gradlew spotlessApply` | Formats the Java sources | |
 
 - **`quickCheck` is the inner loop, `build` is the gate.** A green `quickCheck` says nothing about
@@ -69,12 +72,15 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 - **Test summary.** Every test task writes `<module>/build/test-summary.txt` (for a test task not
   named `test`: `test-summary-<task>.txt`): the totals, one line per failure (the test, the first
   line of its exception, joined with the lines after it when it ends in a colon as an AssertJ
-  message does, and the first stack frame in `org.streamrune`) and the ten slowest tests. A failure
+  message does — each line cut to 120 characters, and a message longer than 600 cut in its middle,
+  so the verdict at its end stays — and the first stack frame in `org.streamrune`) and the ten slowest tests. A failure
   outside any test, such as a test JVM that stops, is listed under the run's name and counted on its
   own. Every test task, `check`, `build` and `quickCheck` ends with the line
   `N tests, F failed — see build/reports/test-summary.txt`, where F counts both kinds of failure;
-  that file collects the summaries of the run's test tasks. Each entry carries the time it was
-  written: a build that stops before a test task runs (a compile error, or an earlier failure
+  that file collects the summaries of the run's test tasks. A test task that fails for a reason of
+  its own prints the line too: with no test matching `--tests` it reads `0 tests, 0 failed`, and
+  Gradle's failure block below it says "No tests found for given includes". Each entry carries the
+  time it was written: a build that stops before a test task runs (a compile error, or an earlier failure
   without `--continue`) leaves that task's entry from an earlier run. Read the summary before the
   HTML reports under `build/reports/tests/`.
 - **Mutation testing.** `./gradlew :streamrune-core:pitest` and `./gradlew :streamrune-runtime:pitest`
@@ -159,9 +165,14 @@ build files, guides, commit messages and pull request descriptions. All of it fo
 - No space before a period.
 
 `InternalTrackerIdRatchetTest` in `streamrune-core` reads every `.java`, `.md` and build file in the
-repository and fails on tracker and review labels, on references to private review material and on
-history wording (a reviewer named by role, a numbered roadmap stage, the state before or after a
-fix outside test sources). Its failure message lists every offending `file:line`. The other
+repository and fails on tracker and review labels (review-finding labels included, in test sources
+too), on references to private review material and on history wording: a reviewer named by role, a
+numbered roadmap stage, work deferred to the roadmap, and outside test sources and code samples the
+state before or after a fix and the words that narrate an earlier behaviour (the test's javadoc
+lists them). It also fails on a space before a period in prose (javadoc, and markdown outside fenced
+blocks), and it reads a phrase across a line break, so a reflowed comment does not hide one.
+Write a state as it is: "cannot", "is not", "has lost it", and "the clock that computes" for a
+purpose. Its failure message lists every offending `file:line` with the rule it breaks. The other
 repository-wide ratchets:
 
 - `LogSinkPolicyRatchetTest` (`streamrune-core`): an identifier reaches a log record or a thread name
@@ -173,12 +184,23 @@ repository-wide ratchets:
 - `SagaStateWriteRatchetTest` (`streamrune-postgres`): every statement that writes `saga_state` is
   classified, and a write that can end a saga's forward phase takes the saga's fence lock.
 
-Prose that mirrors code changes in the same commit as the code:
+Prose that mirrors code changes in the same commit as the code; the doc-lint tests (`*DocLintTest`,
+run by `./gradlew docLintTest`, `check` and `quickCheck`) fail when it does not:
 
-- a meter constant in `MetricNames` and the `### Metrics` table of `docs/guide/production.md`;
-- a configuration property or its default and the integration README that lists it (and
-  `docs/guide/production.md` where it appears there);
-- a public type of the test kit and `docs/guide/testing.md` and `streamrune-test/README.md`;
+- a meter constant in `MetricNames` and the `### Metrics` table of `docs/guide/production.md`
+  (`MetricNamesDocLintTest`, which also checks the integration-api README's meter table and every
+  meter name in the guides);
+- a relay component name in `RelayComponentNames`, or an integration's health check name, and the
+  two health tables of `docs/guide/production.md` (`RelayComponentNamesDocLintTest`);
+- a public type of the test kit and `docs/guide/testing.md` and `streamrune-test/README.md`
+  (`TestKitDocLintTest`);
+- a configuration property or its default and `docs/guide/configuration.md`, the configuration
+  metadata of Spring and Micronaut (`additional-spring-configuration-metadata.json`,
+  `configuration-metadata.json`) and the Quarkus README's listing, and every guide table with a
+  `Default` column (`ConfigurationDocLintTest` in each integration). Its oracle is what the
+  integration binds and reads: the properties types as the framework binds them, every bean
+  condition and injected property, the keys looked up in code. A default is written the way the
+  configuration reference describes (`7d`, `1m`, `—` for none);
 - a change a user notices and `CHANGELOG.md`.
 
 ## 6. Pitfalls

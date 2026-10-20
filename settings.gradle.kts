@@ -23,6 +23,7 @@ include(
     "streamrune-integration:streamrune-micronaut",
     "streamrune-integration:streamrune-spring-boot-starter",
     "streamrune-integration:streamrune-e2e",
+    "streamrune-integration:streamrune-integration-tck",
     "streamrune-outbox:streamrune-kafka-outbox",
     "streamrune-outbox:streamrune-rabbitmq-outbox"
 )

@@ -39,7 +39,7 @@ public class BeanValidationInterceptor implements CommandInterceptor {
   /**
    * Creates a new interceptor with the given validator. May be null for a no-op.
    *
-   * @param validator the JSR-380 Validator used to validate commands, or null for a no-op
+   * @param validator the JSR-380 Validator that validates commands, or null for a no-op
    */
   public BeanValidationInterceptor(Validator validator) {
     this.validator = validator;

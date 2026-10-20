@@ -98,7 +98,7 @@ an erasure (on aws-kms all of it, see below), so make it an authorized decision:
 who asked, it does not check whether they may. The `SUCCESS` row is written after the tombstone is
 lifted; if that write fails, `reinstate` throws the audit store's failure with a note saying the
 tombstone is already lifted. Re-run `reinstate` once the audit store works — the engine's reinstate
-is a no-op on a subject that is no longer forgotten, so the re-run writes only the missing row — or
+is a no-op on a subject that is not forgotten, so the re-run writes only the missing row — or
 `forget` the subject again. A process that dies between the two steps leaves the same state, and the
 same re-run records it.
 
@@ -338,9 +338,9 @@ When the module is registered:
   runs. Only `@Encrypted` components are touched: every other component reads back exactly as
   it would without the module — a `BigDecimal` keeps its scale, an `Instant` or `Duration` its
   nanoseconds.
-- After the subject's key is deleted, decryption can no longer succeed and the component
+- After the subject's key is deleted, decryption cannot succeed and the component
   deserializes to the constant `CryptoShreddingModule.REDACTED` (`"[REDACTED]"`). The ciphertext in
-  the log is untouched — it is simply no longer recoverable.
+  the log is untouched — it is simply unrecoverable.
 
 You rarely register the module by hand. The event store does it for you when it is made
 crypto-aware (below), and the saga store does the same for saga state.
@@ -483,8 +483,8 @@ line, an audit summary, the refusal message or the `GdprExportException` message
 characters stripped, 64 characters at most); the `SubjectExport` keeps a name as the collector gave
 it, since it is the key a consumer parses.
 
-After a successful erasure, reading an event for the forgotten subject yields `[REDACTED]` where the
-PII used to be:
+After a successful erasure, reading an event for the forgotten subject yields `[REDACTED]` in place of the
+PII:
 
 ```java
 // Before forget:
@@ -605,8 +605,8 @@ command itself succeeds, the store logs at INFO that the snapshot was not stored
 it in `streamrune.snapshots.refused`. The purge and
 the save upsert the same primary key, so PostgreSQL serializes them on every replica, whichever
 `AggregateLocker` the command bus uses. A row without a state is no snapshot: the next command
-replays the stream's events, whose `@Encrypted` fields read `[REDACTED]` on a replica whose cache no
-longer holds the subject's plaintext (see the next paragraph), and its snapshot is stored again. A purge that fails, or a process that dies during it, leaves either every
+replays the stream's events, whose `@Encrypted` fields read `[REDACTED]` on a replica whose cache does
+not hold the subject's plaintext (see the next paragraph), and its snapshot is stored again. A purge that fails, or a process that dies during it, leaves either every
 stream of the subject purged or none (one statement), and calling `forget` again converges.
 
 This holds as long as a load after the purge cannot decrypt the subject's fields. On the replica

@@ -114,7 +114,12 @@ private object BrA17SupertypeCheck {
 private object TestSummary {
     const val AGGREGATE = "reports/test-summary.txt"
     private const val SLOWEST = 10
-    private const val MESSAGE_LIMIT = 300
+    // A joined message keeps every line, each cut to LINE_LIMIT, and a message longer than
+    // MESSAGE_LIMIT keeps its beginning and its end: AssertJ and JUnit put the verdict ("but some
+    // elements were not found: [51]", "but was: <5>") after the values they print, so cutting the
+    // end off would keep the values and drop the verdict.
+    private const val LINE_LIMIT = 120
+    private const val MESSAGE_LIMIT = 600
     private val TOTALS =
         Regex(
             """^\S+ — (\d+) tests, \d+ passed, (\d+) failed, \d+ skipped""" +
@@ -209,8 +214,14 @@ private object TestSummary {
         // A first line that ends in a colon continues on the next ones: AssertJ starts its message
         // on the line after the exception's class ("java.lang.AssertionError:", then "expected: 6"
         // and "but was: 5"), so the lines are joined into one.
-        val first = if (head.endsWith(":")) lines.joinToString(" ") else head
-        val message = if (first.length > MESSAGE_LIMIT) first.take(MESSAGE_LIMIT) + "…" else first
+        val first =
+            if (head.endsWith(":")) lines.joinToString(" ") { cut(it, LINE_LIMIT) } else head
+        val message =
+            if (first.length > MESSAGE_LIMIT) {
+                first.take(MESSAGE_LIMIT / 2) + " … " + first.takeLast(MESSAGE_LIMIT / 2)
+            } else {
+                first
+            }
         val frame =
             generateSequence(failure) { it.cause }
                 .take(10)
@@ -223,6 +234,9 @@ private object TestSummary {
             }
         }
     }
+
+    private fun cut(text: String, limit: Int): String =
+        if (text.length > limit) text.take(limit) + "…" else text
 
     private fun duration(millis: Long): String =
         if (millis < 1000) "${millis}ms" else String.format(Locale.ROOT, "%.1fs", millis / 1000.0)
@@ -267,7 +281,25 @@ val dockerFreeModules =
         ":streamrune-test",
         ":streamrune-crypto:streamrune-crypto-api",
         ":streamrune-crypto:streamrune-filesystem-crypto",
-        ":streamrune-integration:streamrune-integration-api")
+        ":streamrune-integration:streamrune-integration-api",
+        ":streamrune-integration:streamrune-integration-tck")
+
+// ── Doc-lint tests ───────────────────────────────────────────────────────────────────────────
+//
+// A doc-lint test (a test class named `*DocLintTest`) holds a guide, a README or a metadata file
+// against the code that is its oracle: the metrics table against MetricNames, the configuration
+// docs against the properties types. It runs in its module's `docLintTest` task instead of `test`,
+// and each module declares the documents it reads as that task's inputs, so an edit to a guide
+// re-runs these few tests and not the module's whole suite. None needs Docker: `check` runs them
+// and so does quickCheck.
+val docLintModules =
+    setOf(
+        ":streamrune-core",
+        ":streamrune-runtime",
+        ":streamrune-test",
+        ":streamrune-integration:streamrune-spring",
+        ":streamrune-integration:streamrune-quarkus",
+        ":streamrune-integration:streamrune-micronaut")
 
 // The JaCoCo report finalizes every Test task (subprojects below). A build that requests quickCheck
 // and nothing else leaves the report out of its task graph, so the fast lane never waits for a
@@ -524,10 +556,10 @@ subprojects {
         // `compileOnly` project deps are unioned in alongside `implementation` ones — a
         // `compileOnly` project dependency is invisible in the published POM ENTIRELY (not even at
         // `runtime` scope, which `implementation` at least gets), so a public supertype leaking from
-        // one is strictly worse than the `implementation` case this check originally covered, and
-        // was previously invisible to it (e.g. streamrune-postgres's
-        // compileOnly(project(":streamrune-runtime")), leaking through PostgresNotificationSubscription
-        // / HybridEventSubscription — fixed alongside this guard extension, not caught by it before).
+        // one is strictly worse than the `implementation` case, and a check of `implementation`
+        // alone would not see it (a compileOnly(project(":streamrune-runtime")) in
+        // streamrune-postgres, for example, would leak through PostgresNotificationSubscription /
+        // HybridEventSubscription).
         val nonApiProjectDepPaths: Set<String> =
             (configurations.getByName("implementation").dependencies
                 .withType(ProjectDependency::class.java).map { it.path }.toSet() +
@@ -671,6 +703,8 @@ subprojects {
     // sources (end-to-end crash-recovery tests). Publishing it would upload an
     // empty org.streamrune:streamrune-e2e jar to Maven Central — immutable
     // pollution — so it is excluded here alongside the umbrella parents.
+    // :streamrune-integration:streamrune-integration-tck holds what the three integrations' TESTS
+    // share (the configuration oracle); it is test infrastructure, not an API, and is excluded too.
     // (The Spring Boot starter, also sources-free, IS published on purpose: a
     // starter is a dependency-aggregator POM, the standard Spring Boot pattern.)
     val umbrellaPaths =
@@ -679,7 +713,8 @@ subprojects {
             ":streamrune-eventstore",
             ":streamrune-crypto",
             ":streamrune-outbox",
-            ":streamrune-integration:streamrune-e2e")
+            ":streamrune-integration:streamrune-e2e",
+            ":streamrune-integration:streamrune-integration-tck")
     if (project.path !in umbrellaPaths) {
         // ── Every published jar carries a stable JPMS module name ────────────────
         //
@@ -762,14 +797,14 @@ subprojects {
         // ── Every published archive carries the licence texts ──────────────────────
         //
         // BSL 1.1's own Terms require "You must conspicuously display this License on each original
-        // or modified copy of the Licensed Work". Before this, every published archive held exactly
-        // two META-INF entries — the directory and MANIFEST.MF — and the removal of the BSL copyright
-        // headers from the sources stripped the per-file headers and the spotless
-        // licenseHeaderFile rule, so the sources jar carried nothing either. That left the POM as
-        // the sole licence signal in the entire distribution, and made LICENSE-COMMERCIAL.md — which
-        // the POM's <comments> tells a reader to consult — a dangling pointer to a file that existed
-        // in no artifact and at no URL. All three texts now ship inside every archive, so the grant
-        // is readable from the artifact alone, offline, with no network round-trip.
+        // or modified copy of the Licensed Work". Without this block every published archive would
+        // hold exactly two META-INF entries — the directory and MANIFEST.MF — and, since the
+        // sources carry no per-file licence headers (and spotless no licenseHeaderFile rule), the
+        // sources jar would carry nothing either. That would leave the POM as the sole licence
+        // signal in the entire distribution, and make LICENSE-COMMERCIAL.md — which the POM's
+        // <comments> tells a reader to consult — a pointer to a file no artifact contains. All
+        // three texts ship inside every archive, so the grant is readable from the artifact alone,
+        // offline, with no network round-trip.
         //
         // The three archives the `maven` publication ships come from three different mechanisms:
         // `jar` from the `java` plugin, `sourcesJar` from java.withSourcesJar() (which vanniktech's
@@ -922,7 +957,7 @@ subprojects {
                 url.set("https://github.com/StreamRune/streamrune")
 
                 // <url> is the field tooling and lawyers follow, so it must resolve to the text
-                // that governs. It used to point at https://mariadb.com/bsl11/ — MariaDB's
+                // that governs. It does not point at https://mariadb.com/bsl11/, MariaDB's
                 // UNPARAMETERISED template. That page has no Parameters block, so its Terms'
                 // "The Licensor may make an Additional Use Grant, above, permitting limited
                 // production use" refers to nothing, and anyone following the URL concludes that
@@ -1233,7 +1268,7 @@ subprojects {
                     // certify, exactly the tag<->artifact mismatch this task exists to prevent.
                     // Scoped to `src/main/` and `src/test/` specifically (not merely "untracked
                     // anywhere") so scratchpad/, build/, and other non-source untracked paths stay
-                    // tolerated exactly as before.
+                    // tolerated, as Arm 4 tolerates them.
                     val (untrackedExit, untrackedOutput) =
                         git("ls-files", "--others", "--exclude-standard")
                     if (untrackedExit != 0) {
@@ -1270,7 +1305,7 @@ subprojects {
         // ── A release cannot ship without CI having actually passed ───────────
         //
         // A `v*` tag push starts build.yml and broker-e2e-test.yml, but starting is not the same
-        // as enforcing: nothing previously made a publish wait for or check either workflow's
+        // as enforcing: on its own, nothing makes a publish wait for or check either workflow's
         // result, so a release could be tagged and uploaded to the immutable Central Portal from a
         // commit whose test suite had never run at all, or had failed. verifyReleaseTag (above)
         // only proves git facts (the tag exists, on HEAD, on origin) — it has no notion of CI.
@@ -1716,19 +1751,41 @@ listOf("test", "check", "build").forEach { tasks.named(it) { finalizedBy(testSum
 
 // The fast lane for the edit-compile-test loop: compiles every source set of every module (main,
 // test and runtime's JMH benchmarks, as `check` does), runs spotlessCheck (the root's and every
-// module's) and the tests of dockerFreeModules. JaCoCo report and verification and Javadoc are not
-// in its task graph (quickCheckOnly), and the Testcontainers suites are left to `build`. Every task
-// it runs is one that `build` runs too. A green quickCheck is a fast signal, not a substitute:
-// `./gradlew build` runs before every pull request.
+// module's), the tests of dockerFreeModules and the doc-lint tests of docLintModules. JaCoCo report
+// and verification and Javadoc are not in its task graph (quickCheckOnly), and the Testcontainers
+// suites are left to `build`. Every task it runs is one that `build` runs too. A green quickCheck is
+// a fast signal, not a substitute: `./gradlew build` runs before every pull request.
 tasks.register("quickCheck") {
     group = "verification"
     description =
-        "Compiles every module, runs spotlessCheck and the tests of the Docker-free modules; " +
-            "skips JaCoCo and Javadoc."
+        "Compiles every module, runs spotlessCheck, the tests of the Docker-free modules and " +
+            "the doc-lint tests; skips JaCoCo and Javadoc."
     dependsOn(subprojects.map { it.tasks.withType<JavaCompile>() })
     dependsOn("spotlessCheck", subprojects.map { "${it.path}:spotlessCheck" })
     dependsOn(dockerFreeModules.map { "$it:test" })
+    dependsOn(docLintModules.map { "$it:docLintTest" })
     finalizedBy(testSummary)
+}
+
+configure(subprojects.filter { it.path in docLintModules }) {
+    val testSourceSet = the<SourceSetContainer>()["test"]
+    val docLintTest =
+        tasks.register<Test>("docLintTest") {
+            group = "verification"
+            description = "Runs the doc-lint tests: the guides and READMEs against the code they describe."
+            testClassesDirs = testSourceSet.output.classesDirs
+            classpath = testSourceSet.runtimeClasspath
+            // Jupiter only: the ArchUnit engine does not apply the class filter and would run the
+            // module's architecture rules here a second time.
+            useJUnitPlatform { includeEngines("junit-jupiter") }
+            filter { includeTestsMatching("*DocLintTest") }
+            // The JaCoCo report of the module depends on `test`; as a finalizer it would drag the
+            // whole suite into a standalone doc-lint run. Coverage is measured by `test`, so only
+            // the summary finalizer stays (the same choice as streamrune-e2e's brokerTest).
+            setFinalizedBy(listOf(":testSummary"))
+        }
+    tasks.named<Test>("test") { filter { excludeTestsMatching("*DocLintTest") } }
+    tasks.named("check") { dependsOn(docLintTest) }
 }
 
 // ── Mutation testing, on demand ──────────────────────────────────────────────────────────────

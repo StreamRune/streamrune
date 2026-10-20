@@ -67,6 +67,24 @@
     { "name": "streamrune.crypto.aws.region", "type": "java.lang.String", "description": "AWS region of the KMS key. Required when the AWS KMS engine is enabled." },
     { "name": "streamrune.crypto.aws.kms-key-id", "type": "java.lang.String", "description": "AWS KMS key id or ARN. Required when the AWS KMS engine is enabled." },
     { "name": "streamrune.crypto.aws.data-key-cache.maximum-size", "type": "java.lang.Integer", "defaultValue": 1000, "description": "Data keys the AWS KMS engine caches per map (one per subject for encryption, one per subject and data key for decryption); 0 disables the data-key cache, so every value costs one KMS call. Ignored (0) when streamrune.crypto.cache.enabled=false." },
-    { "name": "streamrune.crypto.aws.data-key-cache.expire-after-write", "type": "java.time.Duration", "defaultValue": "5m", "description": "How long a cached plaintext data key lives after it was stored; must be positive. Expired keys leave the heap at the next cache store or eviction, or at a lookup at most once a second." }
+    { "name": "streamrune.crypto.aws.data-key-cache.expire-after-write", "type": "java.time.Duration", "defaultValue": "5m", "description": "How long a cached plaintext data key lives after it was stored; must be positive. Expired keys leave the heap at the next cache store or eviction, or at a lookup at most once a second." },
+    { "name": "streamrune.inbox.retention-max-age", "type": "java.time.Duration", "defaultValue": "7d", "description": "How long processed command-inbox rows are kept; 0 or negative keeps them." },
+    { "name": "streamrune.max-in-flight-async-commands", "type": "java.lang.Integer", "defaultValue": 10000, "description": "executeAsync commands admitted and not yet complete beyond which the next one is refused." },
+    { "name": "streamrune.metadata.baggage-allowlist", "type": "java.util.List<java.lang.String>", "description": "OpenTelemetry baggage keys a request may carry into event metadata; none by default." },
+    { "name": "streamrune.outbox.retention-max-age", "type": "java.time.Duration", "defaultValue": "7d", "description": "How long delivered entries are kept; 0 or negative keeps them." },
+    { "name": "streamrune.outbox.retry-initial-delay-ms", "type": "java.lang.Long", "defaultValue": 1000, "description": "First retry delay, in milliseconds; it grows by the multiplier, up to 60s." },
+    { "name": "streamrune.outbox.retry-max-attempts", "type": "java.lang.Integer", "defaultValue": 10, "description": "Delivery attempts a rejected entry may accrue before it is FAILED." },
+    { "name": "streamrune.outbox.retry-multiplier", "type": "java.lang.Double", "defaultValue": 2.0, "description": "Factor by which the retry delay grows with each attempt." },
+    { "name": "streamrune.outbox.skipped-retention-max-age", "type": "java.time.Duration", "defaultValue": "30d", "description": "How long skipped entries are kept; 0 or negative keeps them." },
+    { "name": "streamrune.projections.auto-discovery.enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether the integration builds and starts the runners of the @ProjectionConfig projections." },
+    { "name": "streamrune.saga.compensation-retry-enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether the compensation-retry sweeper re-drives stuck compensations; false leaves it sampling the gauges." },
+    { "name": "streamrune.saga.compensation-retry-give-up-after", "type": "java.time.Duration", "defaultValue": "1h", "description": "How long a saga may stay COMPENSATING before the sweeper faults it." },
+    { "name": "streamrune.saga.compensation-retry-interval", "type": "java.time.Duration", "defaultValue": "1m", "description": "How often the sweeper re-drives, and the age an episode reaches before it is re-driven." },
+    { "name": "streamrune.saga.dead-letter-retention-max-age", "type": "java.time.Duration", "defaultValue": "7d", "description": "How long saga dead letters are kept; at most the inbox window." },
+    { "name": "streamrune.sse.enabled", "type": "java.lang.Boolean", "defaultValue": false, "description": "Whether the Server-Sent Events endpoint and its feed exist." },
+    { "name": "streamrune.sse.keep-alive-interval", "type": "java.time.Duration", "defaultValue": "30s", "description": "Interval of the keepalive comment frame; 0 or negative writes none." },
+    { "name": "streamrune.sse.polling-interval", "type": "java.time.Duration", "defaultValue": "1s", "description": "How often the feed reads the global stream; at least 1ms." },
+    { "name": "streamrune.sse.timeout", "type": "java.time.Duration", "defaultValue": "5m", "description": "How long a stream stays open; 0 or negative sets no timeout." },
+    { "name": "streamrune.subscription.single-active-consumer.lease-ttl", "type": "java.time.Duration", "defaultValue": "15s", "description": "How long a lease outlives its last renewal: the bound on failover." }
   ]
 }

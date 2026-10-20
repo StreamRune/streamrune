@@ -12,10 +12,10 @@ import org.streamrune.core.types.LogSanitizer;
  * <p>This is not a failure of the event or of the orchestrator: it is the durable record that the
  * event ARRIVED and was skipped. A FAULTED saga is quarantined pending an operator fix, not
  * finished, so the events that arrive during the FAULTED window are exactly the ones the saga still
- * needs. Before this entry existed they were dropped silently while the subscription checkpoint
- * advanced past them, so the eventual dead-letter replay of the original poison event re-drove the
- * saga from that one event and could never learn about the rest — a saga waiting forever for a
- * payment it had already received, until a timeout compensated a genuinely captured payment.
+ * needs. Dropped silently, they would leave the subscription checkpoint advancing past them, so the
+ * eventual dead-letter replay of the original poison event would re-drive the saga from that one
+ * event and never learn about the rest — a saga waiting forever for a payment it has already
+ * received, until a timeout compensates a genuinely captured payment.
  *
  * <p>With the entry present, {@code SagaDeadLetterReplayer.replayAll(sagaId)} — which drains a
  * saga's entries oldest-offset-first, deferring row-less-skipped entries until the saga's genesis

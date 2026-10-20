@@ -111,7 +111,7 @@ Keys are stored as **plaintext AES-256 bytes** on disk — there is no envelope 
 - An attacker (or backup/snapshot leak) with access to both the key directory and the event store obtains keys *and* ciphertext together. Keep the key directory on a separate volume with separate access controls from the database, or use `streamrune-vault-crypto` / `streamrune-aws-kms-crypto` so key material never touches application-accessible storage.
 - **Crypto-shredding is only as strong as backup hygiene** — any snapshot of the key directory taken *before* a subject was forgotten resurrects that subject's key on restore. Align snapshot retention with your GDPR erasure deadlines and never restore the key directory from a pre-forget snapshot. Restore `.forgotten` tombstones only together with the `.generation` records taken at the same point (see *Best Practices*).
 
-Envelope encryption (per-subject keys wrapped by a KEK held in Vault/KMS/HSM) is the standard remedy and is on the roadmap; until then the controls above are operational, not technical.
+Envelope encryption (per-subject keys wrapped by a KEK held in Vault/KMS/HSM) is the standard remedy; the AWS KMS engine (`streamrune-aws-kms-crypto`) uses it. With this engine the controls above are operational, not technical.
 
 ## Known Limitations
 

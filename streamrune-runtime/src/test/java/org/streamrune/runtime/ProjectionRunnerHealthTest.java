@@ -41,7 +41,7 @@ import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
 
 /**
- * Verifies FIX 3: the projection runners register their subscription with the {@link
+ * Verifies that the projection runners register their subscription with the {@link
  * SubscriptionHealthContributor} and feed delivery outcomes into it, so a real subscription with a
  * poison listener surfaces as errors/DOWN (not a silent always-UP) and the {@code
  * streamrune.subscriptions.lag} gauge is emitted.

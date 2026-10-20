@@ -249,9 +249,9 @@ public final class PostgresOutboxStore implements OutboxStore {
   // shares one clock with claimed_at (also stamped by the server's NOW() at claim time; see the
   // claim statements and INSERT). A relay whose JVM clock is skewed AHEAD of the DB therefore
   // cannot reclaim another relay's still-live, mid-publish claim — which would double-publish and
-  // reorder that aggregate fleet-wide, on every poll. The lease is bound in seconds. (Previously
-  // the cutoff was the relay's Instant.now() - lease, reintroducing exactly the distributed-writer
-  // clock skew the INSERT's NOW() was chosen to avoid.)
+  // reorder that aggregate fleet-wide, on every poll. The lease is bound in seconds. (A cutoff of
+  // the relay's Instant.now() - lease would reintroduce exactly the distributed-writer
+  // clock skew the INSERT's NOW() is chosen to avoid.)
   private static final String RECLAIM_EXPIRED =
       "UPDATE outbox_events SET status = 'PENDING', claimed_at = NULL, claimed_by = NULL "
           + "WHERE status = 'IN_PROGRESS' AND claimed_at < NOW() - make_interval(secs => ?)";

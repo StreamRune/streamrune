@@ -250,7 +250,7 @@ public final class ForgetSubjectService {
    * and the SUCCESS row is missing; a WARN says the same. This differs from {@link #forget}, which
    * swallows an audit failure after its irreversible crypto-shred: a reinstate can be undone, and
    * its caller must not carry on as if it were on record. Re-run {@code reinstate} once the audit
-   * store works (the engine's reinstate is a no-op on a subject that is no longer forgotten, so the
+   * store works (the engine's reinstate is a no-op on a subject that is not forgotten, so the
    * re-run only writes the missing row), or {@code forget} the subject again to restore the
    * erasure. A process that dies between the two steps leaves the same state, and the same re-run
    * records it.
@@ -282,7 +282,7 @@ public final class ForgetSubjectService {
     // The tombstone is lifted. Crash point: the process dies, or the audit store fails, before the
     // SUCCESS row lands, so the subject is reinstated but not on record. The audit failure
     // propagates (the caller must not carry on as if the reinstate were recorded), and a re-run
-    // converges: the engine's reinstate is a no-op on a subject that is no longer forgotten, so
+    // converges: the engine's reinstate is a no-op on a subject that is not forgotten, so
     // the re-run writes only the SUCCESS row. Pinned in ForgetSubjectServiceReinstateTest.
     try {
       auditWriter.write(
@@ -310,8 +310,8 @@ public final class ForgetSubjectService {
           action, AuditOutcome.FAILURE, subjectId, requesterUserId, failure.getMessage());
     } catch (Throwable auditFailure) {
       // Throwable here too: an Error from the audit store (an AssertionError, a LinkageError)
-      // used to escape this catch and REPLACE the engine's failure, so the caller saw an
-      // audit-store failure and lost the reason the operation failed. The audit failure rides
+      // must not escape this catch and REPLACE the engine's failure: the caller would see an
+      // audit-store failure and lose the reason the operation failed. The audit failure rides
       // along on it instead. A store that rethrows the very instance it was handed must not turn
       // this into an IllegalArgumentException ("Self-suppression not permitted").
       if (auditFailure != failure) {
@@ -654,7 +654,7 @@ public final class ForgetSubjectService {
               + " took effect (encrypt may mint a key for this subject again), but its SUCCESS"
               + " audit row was not written. To put it on record, re-run reinstate for this"
               + " subject once the audit store works: the engine's reinstate is a no-op on a"
-              + " subject that is no longer forgotten, so the re-run writes only the missing row."
+              + " subject that is not forgotten, so the re-run writes only the missing row."
               + " To undo it instead, forget the subject again.");
     }
   }

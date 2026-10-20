@@ -45,6 +45,8 @@ dependencies {
     // Testing
     testImplementation(libs.assertj.core)
     testImplementation(project(":streamrune-test"))
+    // The configuration oracle the doc-lint test holds the guides and the metadata against.
+    testImplementation(project(":streamrune-integration:streamrune-integration-tck"))
     // The boot test that runs a TRANSACTIONAL_LOCAL and an AT_LEAST_ONCE_IDEMPOTENT projection on one
     // runner awaits their writes; no other dependency puts Awaitility on this test classpath.
     testImplementation(libs.awaitility)
@@ -72,4 +74,17 @@ dependencies {
     // store checks the server version and migrates the schema when it is built).
     testImplementation(libs.postgresql)
     testImplementation(libs.bundles.testcontainers.pg)
+}
+
+// ConfigurationDocLintTest reads the guides, this module's README and its main sources (the keys it
+// reads in code) (docLintTest, see the root build): declared, so an edit to any of them re-runs it.
+tasks.named<Test>("docLintTest") {
+    inputs
+        .files(
+            fileTree(rootDir.resolve("docs/guide")) { include("**/*.md") },
+            file("README.md"),
+            fileTree("src/main/java") { include("**/*.java") },
+        )
+        .withPropertyName("configurationDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }

@@ -178,7 +178,7 @@ summary WARN per cycle.)
 `retry(commandId)` refuses it with `STALE_REPLAY_BLOCKED`, a WARN naming the entry and the window,
 and `streamrune.dlq.stale_replay_blocked`. The remedy is a decision by an operator: if the
 command's effect is present, discard the entry; if it is not, `retry(commandId, true)` replays it
-anyway — `force` acknowledges that the inbox can no longer deduplicate it, and the forced replay is
+anyway — `force` acknowledges that the inbox cannot deduplicate it, and the forced replay is
 logged at WARN. The age is measured from `firstAttemptAt` because no row the dead-lettered attempt
 or a later retry by its caller wrote can be older.
 
@@ -506,8 +506,8 @@ operator-triggered, with no polling loop.
   guard then resumes a stale compensation episode instead of refusing it — a compensation whose
   inbox key was already pruned executes again (see the saga guide).
 - `discard(SagaId, GlobalOffset)` removes an entry explicitly and, once the saga has no entry left,
-  clears its dead-letter shield. It is the remedy for `EVENT_NOT_FOUND` (the event store can no
-  longer read the entry's offset); `EVENT_NOT_FOUND`, `ENTRY_NOT_FOUND` and the `STALE_*` refusals
+  clears its dead-letter shield. It is the remedy for `EVENT_NOT_FOUND` (the event store cannot
+  read the entry's offset); `EVENT_NOT_FOUND`, `ENTRY_NOT_FOUND` and the `STALE_*` refusals
   leave the saga row unchanged.
 - A `FAULTED` saga with no entry left has nothing to drain, and no automatic driver selects a
   `FAULTED` row. `resumeFaulted(SagaId)` resumes a compensation episode the compensation-retry
@@ -587,6 +587,8 @@ try {
 ```
 
 ## Configuration
+
+Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
 
 | Property | Spring | Quarkus | Micronaut | Default |
 |---|---|---|---|---|

@@ -384,8 +384,8 @@ public final class HybridEventSubscription
    * has been without one for less than its 30 s reconnect grace. The listener reconnects with
    * capped backoff and, by default, never permanently gives up, so a routine reconnect does not
    * flip this; a connection that cannot be re-established within the grace does, until it is.
-   * Delivery continues via polling regardless; a {@code false} here means notifications are no
-   * longer lowering delivery latency and warrants attention.
+   * Delivery continues via polling regardless; a {@code false} here means notifications are not
+   * lowering delivery latency and warrants attention.
    */
   public boolean pushHealthy() {
     // With LISTEN/NOTIFY disabled (pollingOnly) there is no push path — report false

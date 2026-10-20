@@ -42,7 +42,7 @@ To retroactively sign off the most recent commit:
 ## Commit messages
 
 We use [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>`,
-for example `fix(outbox): release a claim the poller no longer holds`. Types: `feat`, `fix`, `docs`,
+for example `fix(outbox): release a claim once its lease expires`. Types: `feat`, `fix`, `docs`,
 `test`, `refactor`, `perf`, `build`, `ci`, `chore`. Run `git config commit.template .gitmessage`
 once to get the template in your editor.
 

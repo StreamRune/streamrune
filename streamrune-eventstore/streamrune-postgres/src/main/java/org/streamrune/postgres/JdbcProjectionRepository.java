@@ -859,10 +859,10 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * COMMIT has been issued, and are discarded if the transaction rolls back before that.
    *
    * <p>{@code CacheAwareProjection} registers its query-cache eviction here. Run before the commit,
-   * as it used to be, the eviction let a query landing between the projection's writes and the
-   * commit read the pre-batch rows (READ COMMITTED: the batch's writes are invisible to other
-   * connections until the commit) and cache them, and the cache then served the pre-batch read
-   * model until the entry's TTL ran out.
+   * the eviction would let a query landing between the projection's writes and the commit read the
+   * pre-batch rows (READ COMMITTED: the batch's writes are invisible to other connections until the
+   * commit) and cache them, and the cache would then serve the pre-batch read model until the
+   * entry's TTL ran out.
    *
    * <p>Crash and failure points:
    *
@@ -1338,18 +1338,17 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * (unfenced / NOOP leadership) is skipped entirely: there is nothing to fence and stamping would
    * only churn the row.
    *
-   * <p><b>A 0-row outcome is no longer silently accepted.</b> It used to be — the {@code
-   * executeUpdate()} result was discarded — which made "same epoch, already stamped"
-   * indistinguishable from "the epoch I was handed is BELOW the stored one". The second case is
-   * never benign: the caller then runs under an epoch {@link #rejectStaleEpoch} rejects on every
-   * commit, and the runners classify that rejection as a benign leadership/CAS signal, so the
-   * projection freezes permanently at INFO level while reporting itself LIVE and healthy. On 0 rows
-   * this now re-reads the stored epoch and, when it is strictly greater, throws {@link
-   * ProjectionEpochRegressionException}. The re-read is a separate statement, so it can observe an
-   * epoch newer than the one that actually beat us — harmless, because ANY stored epoch above ours
-   * means our epoch is not authoritative and the caller must stop either way. An equal stored epoch
-   * (the ordinary re-stamp) still returns quietly, and so does the vanishing case where the row was
-   * deleted between the two statements.
+   * <p><b>A 0-row outcome is not silently accepted.</b> Discarding the {@code executeUpdate()}
+   * result would make "same epoch, already stamped" indistinguishable from "the epoch I was handed
+   * is BELOW the stored one". The second case is never benign: the caller then runs under an epoch
+   * {@link #rejectStaleEpoch} rejects on every commit, and the runners classify that rejection as a
+   * benign leadership/CAS signal, so the projection freezes permanently at INFO level while
+   * reporting itself LIVE and healthy. On 0 rows this now re-reads the stored epoch and, when it is
+   * strictly greater, throws {@link ProjectionEpochRegressionException}. The re-read is a separate
+   * statement, so it can observe an epoch newer than the one that actually beat us — harmless,
+   * because ANY stored epoch above ours means our epoch is not authoritative and the caller must
+   * stop either way. An equal stored epoch (the ordinary re-stamp) still returns quietly, and so
+   * does the vanishing case where the row was deleted between the two statements.
    *
    * <p>Runs as a single statement on its own pooled connection (PgBouncer transaction-mode safe),
    * committed whatever autoCommit mode the pool hands out. If a concurrent {@code

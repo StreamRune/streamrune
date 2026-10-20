@@ -29,7 +29,7 @@ import org.streamrune.core.types.SubjectId;
  * one primary key, so the database serializes them on every replica, with any {@code
  * AggregateLocker}. The first command that loads after the purge sees the new generation and
  * snapshots again, from events whose {@code @Encrypted} fields read {@code [REDACTED]} on a replica
- * whose decrypt cache no longer holds the subject's plaintext (a peer's cache keeps it until the
+ * whose decrypt cache does not hold the subject's plaintext (a peer's cache keeps it until the
  * forget signal evicts it; see the GDPR guide). A loaded row without a state is no snapshot: the
  * load replays the stream's events.
  *

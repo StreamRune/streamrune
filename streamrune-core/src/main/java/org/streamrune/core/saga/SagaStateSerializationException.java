@@ -14,10 +14,10 @@ package org.streamrune.core.saga;
  * dead-letter row is written, and the subscription still reports itself RUNNING. Every saga of
  * every type on that subscription stops advancing until a human notices the log storm.
  *
- * <p>Before this type existed, both failure classes were wrapped in the same {@code
- * EventStoreException} by a blanket {@code catch (Exception)} spanning serialization <em>and</em>
- * the JDBC call, so no caller could tell them apart. Serialization now gets its own narrow catch
- * and this distinct type; the blanket wrap covers only the storage operation.
+ * <p>A blanket {@code catch (Exception)} spanning serialization <em>and</em> the JDBC call would
+ * wrap both failure classes in the same {@code EventStoreException}, and no caller could tell them
+ * apart. Serialization has its own narrow catch and this distinct type; the blanket wrap covers
+ * only the storage operation.
  *
  * <p><b>This type carries no verdict.</b> It says "the conversion failed", not "retrying is futile"
  * — the cause chain is what distinguishes the two, and classifying it is the caller's job (the same

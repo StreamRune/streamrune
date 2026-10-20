@@ -134,7 +134,8 @@ public interface StreamRuneQuarkusCryptoProperties {
     /**
      * Time after which an entry is expired, counted from when it was written. Strict ISO-8601
      * duration format (e.g. {@code PT5M}, {@code PT1H}) — Quarkus' {@code 5m} shorthand is not
-     * supported. Leave unset to disable.
+     * supported. Unset, the engine's mandatory ceiling applies, {@link
+     * org.streamrune.crypto.CachedCryptoEngine#DEFAULT_EXPIRE_AFTER_WRITE} (five minutes).
      */
     @WithName("expire-after-write")
     Optional<String> expireAfterWriteRaw();

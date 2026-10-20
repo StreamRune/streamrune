@@ -162,12 +162,12 @@ class HybridEventSubscriptionLifecycleTest {
     assertThrows(IllegalStateException.class, sub::pause);
   }
 
-  // ── Push-path liveness (FIX 5) ────────────────────────────────────────────
+  // ── Push-path liveness ────────────────────────────────────────────────────
 
   @Test
   void pushHealthy_trueWhileStarted_despiteFailingConnection() throws Exception {
-    // MockDataSource.getConnection() always throws. Before FIX 5 the listener gave up after 5
-    // reconnect attempts and pushHealthy() would flip to false within seconds. With unbounded
+    // MockDataSource.getConnection() always throws. A listener that gave up after 5 reconnect
+    // attempts would flip pushHealthy() to false within seconds. With unbounded
     // reconnect the listener is kept alive, so the push path stays observable as healthy while it
     // keeps retrying (delivery meanwhile continues via polling).
     var sub = createSubscription();

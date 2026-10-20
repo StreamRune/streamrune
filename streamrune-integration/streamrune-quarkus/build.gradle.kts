@@ -56,6 +56,8 @@ dependencies {
     testImplementation("io.smallrye:jandex:3.6.0")
     testImplementation(libs.assertj.core)
     testImplementation(project(":streamrune-test"))
+    // The configuration oracle the doc-lint test holds the guides and the metadata against.
+    testImplementation(project(":streamrune-integration:streamrune-integration-tck"))
     // The boot test of an at-least-once projection beside a TRANSACTIONAL_LOCAL one awaits its write.
     testImplementation(libs.awaitility)
     testImplementation(project(":streamrune-eventstore:streamrune-postgres"))
@@ -165,4 +167,17 @@ val verifyMicrometerVersion = tasks.register("verifyMicrometerVersion") {
 
 tasks.named("check") {
     dependsOn(verifyMicrometerVersion)
+}
+
+// ConfigurationDocLintTest reads the guides, this module's README and its main sources (the keys it
+// reads in code) (docLintTest, see the root build): declared, so an edit to any of them re-runs it.
+tasks.named<Test>("docLintTest") {
+    inputs
+        .files(
+            fileTree(rootDir.resolve("docs/guide")) { include("**/*.md") },
+            file("README.md"),
+            fileTree("src/main/java") { include("**/*.java") },
+        )
+        .withPropertyName("configurationDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }

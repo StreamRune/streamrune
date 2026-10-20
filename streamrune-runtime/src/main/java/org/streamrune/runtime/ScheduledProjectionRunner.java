@@ -95,7 +95,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
   // first (its offset did not advance). This state — living on the runner, not on the discarded
   // drain() stack frame — carries the chunk's own accumulated transient count across those
   // re-drains and resets when the offset advances (a new chunk). A whole-tick read/offset failure
-  // never touches it, so a read outage can no longer inflate a chunk's budget.
+  // never touches it, so a read outage cannot inflate a chunk's budget.
   private final ConcurrentHashMap<ProjectionName, ChunkTransientState> chunkTransientStates =
       new ConcurrentHashMap<>();
   // Per-projection count of consecutive deterministic read-poison failures at the current (stuck)
@@ -306,10 +306,10 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
 
         // Durably stamp the held epoch on the checkpoint row BEFORE this tick reads or
         // processes anything. The epoch fence compares against the epoch STORED on the row, which
-        // only a committed advance used to stamp — for a cron-cadence runner the takeover window
+        // a committed advance alone would stamp — for a cron-cadence runner the takeover window
         // (acquire -> first committed advance) could span a whole idle cron period, during which
         // the superseded leader's writes (including advanceCheckpointFenced's empty-batch
-        // forward-jumps) passed the fence. Stamping every leader tick is an idempotent 0-row
+        // forward-jumps) would pass the fence. Stamping every leader tick is an idempotent 0-row
         // no-op once stamped (the store's WHERE only fires on a strictly newer epoch). FAIL-CLOSED
         // on a stamp failure: skip the tick rather than process with the fence inert — the next
         // fire retries; with the DB down, the drain could not have proceeded anyway.
@@ -361,10 +361,10 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
       //
       // The SubscriptionLeadership contract requires resign to be no-throw for transient
       // failures — but the bookkeeping below must survive even a contract-breaking implementation.
-      // A resign throw used to truncate this finally: the STOPPED transition (or the terminal-DOWN
-      // health marking for an ERROR exit) was skipped, so the status view kept showing a dead
-      // projection as SLEEPING/RUNNING — and the throw replaced any in-flight failure, mislabeling
-      // the death in logs. A RuntimeException from resign is logged and swallowed; the
+      // A resign throw must not truncate this finally: the STOPPED transition (or the terminal-DOWN
+      // health marking for an ERROR exit) would be skipped, so the status view would keep showing a
+      // dead projection as SLEEPING/RUNNING — and the throw would replace any in-flight failure,
+      // mislabeling the death in logs. A RuntimeException from resign is logged and swallowed; the
       // state/health bookkeeping runs in a nested finally so even an Error unwinding out of resign
       // completes it before propagating.
       try {
@@ -529,7 +529,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
   private long drainWithRetry(ScheduledProjectionRegistration reg) {
     // Tick-level counter — drives whole-drain (tick) backoff for genuine infrastructure failures
     // (event-store read, offset-store access, or a DLQ-write blip that rethrows out of drain). It
-    // is NO LONGER used to seed any chunk's transient-retry budget: the per-chunk
+    // does not seed any chunk's transient-retry budget: the per-chunk
     // budget lives in chunkTransientStates and is position-local, so an infra outage that inflates
     // this counter cannot cause a chunk to be dead-lettered on its first transient failure.
     int consecutiveFailures = 0;
@@ -571,7 +571,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     long batches = 0;
     while (!stopping.get()) {
       // Re-check leadership before reading the next page: leadership can be lost mid-drain (leader
-      // connection blip / failover). If we are no longer the leader, stop draining this tick so a
+      // connection blip / failover). If we are not the leader, stop draining this tick so a
       // stale leader cannot advance offsets — the drain gates every offset-advancing write on live
       // leadership, matching ContinuousProjectionRunner's per-advance re-check. NOOP is always
       // leader, so this is a no-op for single-instance deployments.
@@ -642,7 +642,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
           // Route chunk processing through the AtomicBatchProcessor so
           // the read-model write and the offset checkpoint commit — or roll back — together,
           // exactly like ContinuousProjectionRunner/PollingProjectionRunner. A
-          // crash between processing and the checkpoint can no longer redeliver-and-double-apply
+          // crash between processing and the checkpoint cannot redeliver-and-double-apply
           // the chunk, and the in-transaction monotonic/overlap guard rejects a superseded
           // split-brain leader. What the updater receives is decided per registration by its
           // delivery mode: a TRANSACTIONAL_LOCAL / EXTERNAL_EFFECT registration gets the
@@ -794,7 +794,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    * <p><b>Poison-vs-transient.</b> Under DLQ the error is classified: a POISON batch is
    * dead-lettered and advanced past (the current behavior); a TRANSIENT infra blip is
    * <em>rethrown</em> (never dead-lettered, offset not advanced) so {@link #drainWithRetry} backs
-   * off and retries the whole tick — a blip no longer punches a permanent hole. Only after {@link
+   * off and retries the whole tick — a blip does not punch a permanent hole. Only after {@link
    * #DEFAULT_MAX_TRANSIENT_RETRIES} transient failures OF THE SAME CHUNK is the batch dead-lettered
    * and advanced past, so a genuinely stuck read-model does not spin forever. The transient budget
    * is per-CHUNK and fully DECOUPLED from the tick-level {@code consecutiveFailures} counter : it
@@ -1338,7 +1338,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
                 v.state, v.lastFireAt, v.nextFireAt, v.batchesProcessedLastFire, e.getMessage()));
   }
 
-  /** Clears a previously recorded transient error unless the projection is in ERROR state. */
+  /** Clears a recorded transient error unless the projection is in ERROR state. */
   private void clearTransientError(ProjectionName name) {
     statuses.compute(
         name,

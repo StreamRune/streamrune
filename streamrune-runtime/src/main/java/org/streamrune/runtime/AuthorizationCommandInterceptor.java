@@ -22,13 +22,13 @@ import org.streamrune.core.types.UserId;
  * RefundPayment}) — are dispatched from a subscription poll thread, a {@code SagaTimeoutRunner}
  * thread or the {@code SagaCompensationRetrySweeper} thread. None of those binds a {@link
  * StreamRuneContext} user: there is no logged-in caller driving a timeout or a crash-resume, and a
- * saga acts as the SYSTEM. This interceptor therefore used to hand the policy {@code userId ==
- * null} on every saga path — and the shape the guide documents ({@code if (userId == null) throw
- * new AuthorizationException("Authentication required")}) rejects that. Under {@code
- * SagaCommandDispatch} an {@code AuthorizationException} is a business rejection, so the saga
- * claim-first compensated and then had its <em>compensation</em> rejected by the same policy: the
- * episode terminalized with the refund never issued, with no dead-letter entry and an error that
- * reads like a legitimate authorization failure.
+ * saga acts as the SYSTEM. Handed {@code userId == null} on every saga path, a policy in the shape
+ * the guide documents ({@code if (userId == null) throw new AuthorizationException("Authentication
+ * required")}) would reject every saga command. Under {@code SagaCommandDispatch} an {@code
+ * AuthorizationException} is a business rejection, so the saga would claim-first compensate and
+ * then have its <em>compensation</em> rejected by the same policy: the episode would terminalize
+ * with the refund never issued, with no dead-letter entry and an error that reads like a legitimate
+ * authorization failure.
  *
  * <p>The system-principal rule closed exactly that hole for {@link
  * AnnotationAuthorizationInterceptor} and left this twin — its policy-based sibling,

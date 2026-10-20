@@ -301,7 +301,7 @@ class HttpOutboxPublisherTest {
 
   @Test
   void classifyFailure_connectTimeout_isTransport_notInFlight() {
-    // Minor-1: a CONNECT timeout means the request was never handed off to the endpoint — nothing
+    // A CONNECT timeout means the request was never handed off to the endpoint — nothing
     // is in flight, exactly like a "connection refused". It must re-arm/retry with backoff
     // (TRANSPORT), NOT wait out a full claim lease (IN_FLIGHT). HttpConnectTimeoutException is a
     // subclass of HttpTimeoutException, so it must be tested BEFORE its superclass.

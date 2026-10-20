@@ -30,6 +30,8 @@ dependencies {
 
     // Testing
     testImplementation(project(":streamrune-test"))
+    // The configuration oracle the doc-lint test holds the guides and the metadata against.
+    testImplementation(project(":streamrune-integration:streamrune-integration-tck"))
     // ProjectionAutoConfigTest boots a runner over real in-memory stores and awaits its delivery.
     testImplementation(libs.awaitility)
     testImplementation(libs.spring.security.core)
@@ -139,3 +141,16 @@ tasks.named<Test>("test") {
 }
 
 tasks.named("check") { dependsOn(noValidationProviderTest, optionalDependencyAbsentTest) }
+
+// ConfigurationDocLintTest reads the guides, this module's README and its main sources (the keys it
+// reads in code) (docLintTest, see the root build): declared, so an edit to any of them re-runs it.
+tasks.named<Test>("docLintTest") {
+    inputs
+        .files(
+            fileTree(rootDir.resolve("docs/guide")) { include("**/*.md") },
+            file("README.md"),
+            fileTree("src/main/java") { include("**/*.java") },
+        )
+        .withPropertyName("configurationDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}

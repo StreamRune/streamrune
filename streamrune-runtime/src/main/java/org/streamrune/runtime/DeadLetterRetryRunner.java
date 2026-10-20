@@ -205,7 +205,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     ADMISSION_REFUSED,
     /**
      * The entry's command ran under an idempotency key and was first received longer ago than the
-     * command-inbox retention window, so the inbox may no longer hold the row that deduplicates the
+     * command-inbox retention window, so the inbox might not hold the row that deduplicates the
      * replay against the caller's own retry. Nothing was executed and the entry is unchanged.
      * Reconcile: discard the entry when the command's effect is present, otherwise retry it with
      * {@code force}.
@@ -336,7 +336,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     // The SubscriptionLeadership contract requires resign to be no-throw for transient
     // failures, but close() must complete its lifecycle bookkeeping (the stuck warning and the
     // restartability reset below) even against a contract-breaking implementation — a resign throw
-    // used to escape close() into the shutting-down lifecycle adapter and leave the runner
+    // escaping close() into the shutting-down lifecycle adapter would leave the runner
     // permanently not-restartable.
     try {
       leadership.resign(CONSUMER_NAME);
@@ -599,7 +599,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       // acquire and here) must not keep processing entries oblivious to a fresh leader having
       // already taken over — re-check before EACH entry (SubscriptionLeadership#current is a
       // local check, not a re-acquisition round trip per its contract) and stop the moment this
-      // replica is no longer the leader, leaving the rest of the batch for whoever is.
+      // replica is not the leader, leaving the rest of the batch for whoever is.
       if (leadership.current(CONSUMER_NAME).isEmpty()) {
         LOG.warn(
             "Lost leadership for '{}' mid-batch; stopping before processing the remaining entries"
@@ -627,7 +627,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     if (staleSkipped > 0) {
       LOG.warn(
           "{} keyed DLQ entr{} of this cycle's page {} first received longer ago than the"
-              + " command-inbox retention window ({}): the inbox may no longer deduplicate a replay,"
+              + " command-inbox retention window ({}): the inbox might not deduplicate a replay,"
               + " so the schedule does not replay {}. Each awaits an operator — discard it if its"
               + " effect is present, otherwise retry it with force (streamrune.dlq.awaiting_operator"
               + " counts them).",
@@ -792,7 +792,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       }
       LOG.warn(
           "Forced replay of DLQ entry {} ({}) by {}, first received at {}, older than the"
-              + " command-inbox retention window ({}): the inbox may no longer deduplicate it, so"
+              + " command-inbox retention window ({}): the inbox might not deduplicate it, so"
               + " the command runs again even if its caller's own retry already produced its"
               + " effect.",
           LogSanitizer.sanitizeForLog(entry.commandId().value()),
@@ -1509,7 +1509,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       } else {
         LOG.error(
             "DLQ entry {} ({}) exhausted all {} retries — the command is permanently abandoned"
-                + " (retained for inspection, no longer retried); its domain events were never"
+                + " (retained for inspection, not retried); its domain events were never"
                 + " produced. Last error: {}",
             LogSanitizer.sanitizeForLog(entry.commandId().value()),
             entry.commandType(),

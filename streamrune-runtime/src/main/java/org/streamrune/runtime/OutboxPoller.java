@@ -417,7 +417,7 @@ public final class OutboxPoller implements AutoCloseable {
       Instant publishDeadline,
       Duration lease,
       boolean stopping) {
-    // FIX 4: pass an immutable snapshot to markDeliveredAll so any late mutation of the live set
+    // Pass an immutable snapshot to markDeliveredAll so any late mutation of the live set
     // from the publisher cannot affect the store call.
     if (!result.confirmed().isEmpty()) {
       var confirmed = List.copyOf(result.confirmed());
@@ -452,8 +452,8 @@ public final class OutboxPoller implements AutoCloseable {
     int entryFailures = 0;
     // The same per-cycle aggregation for IN_FLIGHT hand-offs. A stalled
     // backend that accepts the request and then drops the connection produces one IN_FLIGHT per
-    // claimed entry, which used to be one WARN per entry per cycle — the exact log flood
-    // removed on the transport path.
+    // claimed entry; one WARN per entry per cycle would be the exact log flood the transport
+    // path avoids.
     int inFlightFailures = 0;
     String lastInFlightError = null;
     // Entries whose publish was cut short by an interrupt: held like IN_FLIGHT, logged apart.
@@ -482,7 +482,7 @@ public final class OutboxPoller implements AutoCloseable {
         interruptedPublishes++;
       } else if (outcome.transportBackoff() != null) {
         transportFailures++;
-        // A null-error failure is binned TRANSPORT, so transport no longer implies a
+        // A null-error failure is binned TRANSPORT, so transport does not imply a
         // non-null exception — mirror recordFailure's placeholder message for the aggregation.
         lastTransportError = failure != null ? failure.getMessage() : "not confirmed by broker";
         lastTransportEntryId = entry.id(); // representative entry for the aggregated WARN
@@ -524,7 +524,7 @@ public final class OutboxPoller implements AutoCloseable {
     }
     if (transportFailures > 0) {
       // ONE aggregated WARN per cycle instead of one identical line per entry: a
-      // 100-entry backlog against a down broker used to emit 100 WARNs every poll interval. Names
+      // 100-entry backlog against a down broker would emit 100 WARNs every poll interval. Names
       // the outage streak and the longest deferral stamped this cycle, so the escalating cadence
       // (and the fact that it is capped) is visible to an operator watching the logs.
       // With the SPI's default-TRANSPORT classification this WARN may describe ONE
@@ -852,8 +852,8 @@ public final class OutboxPoller implements AutoCloseable {
   }
 
   /**
-   * Returns whether the relay's poll thread is currently alive. A started relay whose thread is no
-   * longer alive died unexpectedly (e.g. an {@link Error} escaped the poll loop) — see {@link
+   * Returns whether the relay's poll thread is currently alive. A started relay whose thread is not
+   * alive died unexpectedly (e.g. an {@link Error} escaped the poll loop) — see {@link
    * #isStarted()}.
    */
   public boolean isAlive() {
@@ -1065,7 +1065,7 @@ public final class OutboxPoller implements AutoCloseable {
       entryTransportStreaks.remove(entry.id());
     }
     if (!transitioned) {
-      // Lost lease: the entry is no longer IN_PROGRESS under this relay's claimedBy — another relay
+      // Lost lease: the entry is not IN_PROGRESS under this relay's claimedBy — another relay
       // already recorded its outcome (expected under failover). Benign no-op, never an error.
       LOG.warn(
           "Outbox entry {} failure not recorded: lease lost (claimed by another relay)",
@@ -1223,9 +1223,9 @@ public final class OutboxPoller implements AutoCloseable {
     }
 
     /**
-     * Sets the metrics collector. Optional; defaults to {@link StreamRuneMetrics#NOOP}. Used to
-     * emit {@link StreamRuneMetrics#recordOutboxDeliveryFailed()} when an entry reaches terminal
-     * {@code FAILED}.
+     * Sets the metrics collector. Optional; defaults to {@link StreamRuneMetrics#NOOP}. It emits
+     * {@link StreamRuneMetrics#recordOutboxDeliveryFailed()} when an entry reaches terminal {@code
+     * FAILED}.
      */
     public Builder metrics(StreamRuneMetrics metrics) {
       this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;

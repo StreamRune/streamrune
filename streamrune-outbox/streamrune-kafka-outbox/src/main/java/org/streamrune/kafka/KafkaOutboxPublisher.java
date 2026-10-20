@@ -339,12 +339,12 @@ public final class KafkaOutboxPublisher implements OutboxPublisher {
     private Builder() {}
 
     /**
-     * Supplies the producer configuration used to build the {@link #producer(KafkaProducer)} so the
-     * publisher can derive its {@link KafkaOutboxPublisher#inFlightHorizon() in-flight horizon}
-     * from the effective {@code max.block.ms} <b>+</b> {@code delivery.timeout.ms}. Pass the SAME
-     * {@code Map} / {@code Properties} used to construct the {@code KafkaProducer}. When unset — or
-     * when the map does not contain a key — Kafka's own defaults are assumed ({@link
-     * KafkaOutboxPublisher#DEFAULT_MAX_BLOCK 60s} + {@link
+     * Supplies the producer configuration the {@link #producer(KafkaProducer) producer} was built
+     * from so the publisher can derive its {@link KafkaOutboxPublisher#inFlightHorizon() in-flight
+     * horizon} from the effective {@code max.block.ms} <b>+</b> {@code delivery.timeout.ms}. Pass
+     * the SAME {@code Map} / {@code Properties} the {@code KafkaProducer} was constructed with.
+     * When unset — or when the map does not contain a key — Kafka's own defaults are assumed
+     * ({@link KafkaOutboxPublisher#DEFAULT_MAX_BLOCK 60s} + {@link
      * KafkaOutboxPublisher#DEFAULT_DELIVERY_TIMEOUT 120s} = a 180s horizon).
      *
      * <p>Setting either key such that their sum reaches the outbox claim lease makes {@code

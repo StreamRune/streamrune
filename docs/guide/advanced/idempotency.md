@@ -170,7 +170,7 @@ public interface CommandInbox {
 
 - `find` is the pre-execution lookup — a present `InboxResult` means the key was already processed and the recorded outcome should be returned instead of running the handler.
 - `deleteProcessedBefore` is the prune side, called by the retention sweeper (below).
-- `InboxResult` carries exactly enough to reconstruct the prior `CommandResult`: the command type (used to enforce the key-to-command binding), the resulting `StreamId`, the `finalVersion`, and the `GlobalOffset`s of the appended events.
+- `InboxResult` carries exactly enough to reconstruct the prior `CommandResult`: the command type (which enforces the key-to-command binding), the resulting `StreamId`, the `finalVersion`, and the `GlobalOffset`s of the appended events.
 
 The write side is deliberately *not* on this interface: a new inbox row is committed inside `EventStore.appendWithKey`, atomically with the events, so the `CommandInbox` never exposes an un-transactional write.
 
@@ -197,15 +197,15 @@ Two supported shapes:
 
 ## Retention
 
-Inbox rows are pruned by a background `InboxRetentionSweeper` (a virtual-thread loop) so the table does not grow without bound. Retention is auto-configured across all three frameworks:
+Inbox rows are pruned by a background `InboxRetentionSweeper` (a virtual-thread loop) so the table does not grow without bound. Retention is auto-configured across all three frameworks. Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
 
 | Framework | Property | Default |
 |---|---|---|
 | Spring | `streamrune.inbox.retention-max-age` | `7d` |
-| Quarkus | `streamrune.inbox.retention-max-age` (via `StreamRuneQuarkusProperties.inbox().retentionMaxAge()`) | `PT168H` |
+| Quarkus | `streamrune.inbox.retention-max-age` (via `StreamRuneQuarkusProperties.inbox().retentionMaxAge()`) | `7d` |
 | Micronaut | `streamrune.inbox.retention-max-age` | `7d` |
 
-The default window is **7 days**, chosen to comfortably exceed realistic broker-redelivery and subscription-replay horizons. **Do not shrink this below your actual redelivery window** — a pruned key can no longer prevent a genuine duplicate, so a redelivery arriving after its key was swept would re-execute the command. A zero or negative value disables pruning entirely (`InboxRetentionSweeper.start()` becomes a no-op).
+The default window is **7 days**, chosen to comfortably exceed realistic broker-redelivery and subscription-replay horizons. **Do not shrink this below your actual redelivery window** — a pruned key cannot prevent a genuine duplicate, so a redelivery arriving after its key was swept would re-execute the command. A zero or negative value disables pruning entirely (`InboxRetentionSweeper.start()` becomes a no-op).
 
 Unlike a GDPR storage-limitation retention window, the inbox window is a **correctness** setting: it must outlast the longest interval over which the same command could be redelivered.
 

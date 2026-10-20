@@ -50,7 +50,7 @@ class StreamRuneBenchmarkSmokeTest {
 
   @Test
   @DisplayName(
-      "eventStoreAppend runs twice without throwing (pin: the 2nd call used to throw OptimisticLockException)")
+      "eventStoreAppend runs twice without throwing (pin: the 2nd call must not throw OptimisticLockException)")
   void eventStoreAppendRunsTwice() {
     EventStoreState state = new EventStoreState();
     state.batchSize = 10;

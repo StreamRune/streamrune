@@ -242,7 +242,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   writes only while the row still has that generation, in one conditional upsert. A command in
   flight across a forget therefore never stores the state it loaded before the forget, on any
   replica and with any `AggregateLocker`; the next command snapshots again, from events whose
-  `@Encrypted` fields read `[REDACTED]` on a replica whose decrypt cache no longer holds the
+  `@Encrypted` fields read `[REDACTED]` on a replica whose decrypt cache does not hold the
   subject's plaintext. A refused save is logged at INFO, counted in `streamrune.snapshots.refused`
   and not in `streamrune.snapshots.created`. The purge-aware `saveSnapshot` is the one save every
   `EventStore` implements; the three- and four-argument overloads save at generation `0` and throw
@@ -1013,7 +1013,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   block — the servlet request thread on Spring, a worker thread with the request scope active on
   Quarkus, the blocking executor on Micronaut with the framework's request filter — so it can look
   ownership up in a database, and a refusal is the `403` response. It decides once, when the stream
-  opens; `streamrune.sse.timeout` ends every stream and is the bound on how long a revoked caller
+  opens; `streamrune.sse.timeout` (default `5m`) ends every stream and is the bound on how long a revoked caller
   keeps reading. The integration feeds the endpoint itself: one
   `SseEventFeed` per application instance, a polling subscription (`streamrune.sse.polling-interval`,
   default `1s`) that starts at the head of the global stream with the application, keeps no stored
@@ -1030,7 +1030,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   opens with one `: keepalive` comment frame, written as soon as the client is subscribed, so the
   response is committed at once and a client that has read the frame receives every event of the
   stream stored from then on while it stays connected; the same comment is written every
-  `streamrune.sse.keep-alive-interval`. Delivery is
+  `streamrune.sse.keep-alive-interval` (default `30s`, the same on Spring, Quarkus and Micronaut). Delivery is
   live, best-effort and at-most-once: only clients connected at that moment receive a frame, nothing
   is redelivered and `Last-Event-ID` is not honoured. `SseEventPublisher.publish(EventEnvelope)`
   routes an event by its own `streamId()`, so it cannot reach the subscribers of another stream.

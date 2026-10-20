@@ -30,8 +30,7 @@ import org.streamrune.core.crypto.Encrypted;
  * written — converts that silent data-corruption bug into an immediate, actionable failure.
  *
  * <p>This is a startup-time guard only: it does not change serialization behavior. When a {@link
- * CryptoEngine} is configured, {@link CryptoShreddingModule} continues to own encryption exactly as
- * before.
+ * CryptoEngine} is configured, the guard passes and {@link CryptoShreddingModule} owns encryption.
  */
 public final class CryptoConfigValidator {
 

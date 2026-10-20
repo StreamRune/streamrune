@@ -68,7 +68,7 @@ import org.streamrune.core.types.SagaType;
  * dispatch — the saga is simply left to whichever writer won. If the claim succeeds but the
  * terminal write later loses a race, the winner can be another timeout-runner replica resuming the
  * same episode, OR the event path resuming the same episode on a redelivered correlated event (it
- * no longer merely defers to a claimed/{@code COMPENSATING} saga — see {@link SagaStepExecutor});
+ * does not merely defer to a claimed/{@code COMPENSATING} saga — see {@link SagaStepExecutor});
  * either way the runner skips the terminal write silently (DEBUG log), since the per-episode keys
  * mean the winning party's dispatches are the ones that count and ours were harmlessly deduped. A
  * throwing {@code compensate()} on the timeout path has no triggering event to quarantine; {@link
@@ -378,9 +378,8 @@ public final class SagaTimeoutRunner<S extends SagaState> {
   }
 
   /**
-   * Whether the runner's poll thread is currently alive. A started runner whose thread is no longer
-   * alive died unexpectedly (e.g. an {@link Error} escaped the poll loop) — see {@link
-   * #isStarted()}.
+   * Whether the runner's poll thread is currently alive. A started runner whose thread is not alive
+   * died unexpectedly (e.g. an {@link Error} escaped the poll loop) — see {@link #isStarted()}.
    */
   public boolean isAlive() {
     Thread t = pollThread;

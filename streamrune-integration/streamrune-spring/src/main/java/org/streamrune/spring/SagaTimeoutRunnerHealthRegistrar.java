@@ -11,13 +11,13 @@ import org.streamrune.runtime.SagaTimeoutRunner;
  * streamrune.saga.compensation-retry-enabled} and <b>NOT</b> short-circuited by an empty set of
  * {@code SagaRunner} beans.
  *
- * <p>Previously the timeout-runner registration lived inside {@link
- * SagaCompensationRetryLifecycle}, which was disabled when the compensation re-drive was turned off
- * — the documented "switch the re-drive off, rely on a SagaTimeoutRunner" configuration. In that
- * config the timeout runner is the SOLE compensation driver, yet its poll thread dying left {@code
- * /health} UP while every timed-out saga stranded (refunds never issued). Registering here,
- * independently of the sweeper, restores the dead-driver signal in exactly the config where the
- * timeout runner matters most, and gives Spring / Quarkus / Micronaut identical behavior.
+ * <p>The timeout-runner registration does not live inside {@link SagaCompensationRetryLifecycle},
+ * which the saga kill switch skips and which does nothing without a {@code SagaRunner} bean. In the
+ * documented "switch the re-drive off, rely on a SagaTimeoutRunner" configuration the timeout
+ * runner is the SOLE compensation driver, and its poll thread dying must not leave {@code /health}
+ * UP while every timed-out saga strands (refunds never issued). Registering here, independently of
+ * the sweeper, keeps the dead-driver signal in exactly the config where the timeout runner matters
+ * most, and gives Spring / Quarkus / Micronaut identical behavior.
  *
  * <p>The beans are the application's: each is built with {@code
  * SagaTimeoutRunner.Builder.sagaRunner(...)}, naming the {@code SagaRunner} bean of its saga type,
