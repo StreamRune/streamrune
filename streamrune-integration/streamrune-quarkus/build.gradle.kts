@@ -56,6 +56,8 @@ dependencies {
     testImplementation("io.smallrye:jandex:3.6.0")
     testImplementation(libs.assertj.core)
     testImplementation(project(":streamrune-test"))
+    // The configuration oracle the doc-lint test holds the guides and the metadata against.
+    testImplementation(project(":streamrune-integration:streamrune-integration-tck"))
     // The boot test of an at-least-once projection beside a TRANSACTIONAL_LOCAL one awaits its write.
     testImplementation(libs.awaitility)
     testImplementation(project(":streamrune-eventstore:streamrune-postgres"))

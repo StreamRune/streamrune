@@ -45,6 +45,8 @@ dependencies {
     // Testing
     testImplementation(libs.assertj.core)
     testImplementation(project(":streamrune-test"))
+    // The configuration oracle the doc-lint test holds the guides and the metadata against.
+    testImplementation(project(":streamrune-integration:streamrune-integration-tck"))
     // The boot test that runs a TRANSACTIONAL_LOCAL and an AT_LEAST_ONCE_IDEMPOTENT projection on one
     // runner awaits their writes; no other dependency puts Awaitility on this test classpath.
     testImplementation(libs.awaitility)

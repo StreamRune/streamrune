@@ -30,6 +30,8 @@ dependencies {
 
     // Testing
     testImplementation(project(":streamrune-test"))
+    // The configuration oracle the doc-lint test holds the guides and the metadata against.
+    testImplementation(project(":streamrune-integration:streamrune-integration-tck"))
     // ProjectionAutoConfigTest boots a runner over real in-memory stores and awaits its delivery.
     testImplementation(libs.awaitility)
     testImplementation(libs.spring.security.core)

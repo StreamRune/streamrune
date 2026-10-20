@@ -267,7 +267,8 @@ val dockerFreeModules =
         ":streamrune-test",
         ":streamrune-crypto:streamrune-crypto-api",
         ":streamrune-crypto:streamrune-filesystem-crypto",
-        ":streamrune-integration:streamrune-integration-api")
+        ":streamrune-integration:streamrune-integration-api",
+        ":streamrune-integration:streamrune-integration-tck")
 
 // The JaCoCo report finalizes every Test task (subprojects below). A build that requests quickCheck
 // and nothing else leaves the report out of its task graph, so the fast lane never waits for a
@@ -671,6 +672,8 @@ subprojects {
     // sources (end-to-end crash-recovery tests). Publishing it would upload an
     // empty org.streamrune:streamrune-e2e jar to Maven Central — immutable
     // pollution — so it is excluded here alongside the umbrella parents.
+    // :streamrune-integration:streamrune-integration-tck holds what the three integrations' TESTS
+    // share (the configuration oracle); it is test infrastructure, not an API, and is excluded too.
     // (The Spring Boot starter, also sources-free, IS published on purpose: a
     // starter is a dependency-aggregator POM, the standard Spring Boot pattern.)
     val umbrellaPaths =
@@ -679,7 +682,8 @@ subprojects {
             ":streamrune-eventstore",
             ":streamrune-crypto",
             ":streamrune-outbox",
-            ":streamrune-integration:streamrune-e2e")
+            ":streamrune-integration:streamrune-e2e",
+            ":streamrune-integration:streamrune-integration-tck")
     if (project.path !in umbrellaPaths) {
         // ── Every published jar carries a stable JPMS module name ────────────────
         //
