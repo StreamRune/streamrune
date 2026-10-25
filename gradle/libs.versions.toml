@@ -23,7 +23,7 @@ postgresql = "42.7.10"
 # 11.13.3+ (so 12.x and 13.x) accept PostgreSQL 18 without the "Flyway upgrade recommended: PostgreSQL 18.x is
 # newer than this version of Flyway" WARN that 10.22.0 logged on every migration against the 18 the suite runs on.
 # The API in use (Flyway.configure()...migrate()) is the same across 10 - 13.
-flyway = "13.9.0"
+flyway = "13.11.1"
 graalvm-sdk = "23.1.2"
 slf4j = "2.0.16"
 # Test-only slf4j binding for log-assertion tests (capturing operator-facing log lines with a
