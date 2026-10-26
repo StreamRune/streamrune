@@ -154,16 +154,21 @@ class SagaFixtureTest {
   }
 
   @Test
-  void given_deliversItsEventsAsOneBatch_andTheNextStepExpectsOnlyItsOwnCommands() {
+  void given_deliversItsEventsInOneStep_andTheNextStepExpectsOnlyItsOwnCommands() {
     var fixture = fixture();
-    fixture.given(fixture.event(ORDER_1, new OrderPlaced("1")));
+    StreamId order2 = StreamId.of(ORDER, AggregateId.of("2"));
+    fixture.given(
+        fixture.event(ORDER_1, new OrderPlaced("1")), fixture.event(order2, new OrderPlaced("2")));
 
-    fixture.expectCommands(new ReserveStock("1"));
+    fixture.expectCommands(new ReserveStock("1"), new ReserveStock("2"));
     fixture.replyingTo(SAGA_1, new StockReserved("1")).expectCommands(new CapturePayment("1"));
     assertEquals(
-        List.of(new ReserveStock("1"), new CapturePayment("1")),
+        List.of(new ReserveStock("1"), new ReserveStock("2"), new CapturePayment("1")),
         fixture.dispatched(),
         "dispatched() keeps every command");
+    assertEquals(
+        List.of(GlobalOffset.of(1), GlobalOffset.of(2), GlobalOffset.of(3)),
+        fixture.delivered().stream().map(EventEnvelope::globalOffset).toList());
   }
 
   @Test

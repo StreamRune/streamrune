@@ -31,10 +31,11 @@ import org.streamrune.core.types.Version;
  * the recorded history instead of one rebuilt by hand.
  *
  * <pre>{@code
- * EventStreamFixtures.write(store, Path.of("src/test/resources/orders.json"));   // once
+ * Path file = Path.of("src/test/resources/orders.json");
+ * EventStreamFixtures.write(store, file);   // once, then check the file in
  *
  * var replayed = InMemoryEventStore.serializing(typeRegistry, null);
- * EventStreamFixtures.appendTo(replayed, EventStreamFixtures.read(Path.of("orders.json")));
+ * EventStreamFixtures.appendTo(replayed, EventStreamFixtures.read(file));
  * }</pre>
  *
  * <p><b>The file.</b> A JSON array, one object per event in global order: {@code streamId} ({@code

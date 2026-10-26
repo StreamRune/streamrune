@@ -44,6 +44,7 @@ import org.streamrune.runtime.SagaTimeoutRunner;
  * <pre>{@code
  * SagaFixture<OrderSaga.State> saga =
  *     SagaFixture.of(OrderSaga.State.class, builder -> builder.orchestrator(new OrderSaga()));
+ * StreamId order = StreamId.of(AggregateType.of("order"), AggregateId.of("1"));
  *
  * saga.when(order, new OrderPlaced("1"))
  *     .expectCommands(new ReserveStock("1"))
