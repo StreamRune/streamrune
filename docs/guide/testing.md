@@ -691,7 +691,10 @@ hands your code the saga's own `SagaRunner.Builder`, already wired with an `InMe
 `InMemorySagaDeadLetterStore`, a bus that records every command the saga dispatches and executes
 none, and a `MutableClock` at `SagaFixture.START`; you add the saga. Each step stores its events at
 the next global offset and delivers them as one page through `asEventListener()`, as a subscription
-does, and `expectCommands` reads the commands of the latest step:
+does, and `expectCommands` reads the commands of the latest step. The example is an order saga with
+a payment step and a 30-minute deadline, not the saga guide's: it reserves stock for a placed order,
+charges the payment once the stock is reserved, and releases the stock when the deadline passes
+before the payment is confirmed:
 
 ```java
 var decider = new OrderSagaDecider();   // a SagaDecider with timeout() of 30 minutes
@@ -743,8 +746,8 @@ saga.redeliver()                                             // the subscription
     .expectStatus(orderSaga, SagaStatus.RUNNING);
 ```
 
-The saga guide's quick example is tested this way (`SagaGuideQuickExampleTest` in
-`streamrune-runtime`).
+The saga guide shows the fixture on its own quick example, a saga without a deadline
+([Quick example](advanced/saga.md#quick-example)).
 
 ---
 
