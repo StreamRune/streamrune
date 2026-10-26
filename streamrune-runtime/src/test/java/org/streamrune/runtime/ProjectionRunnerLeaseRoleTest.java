@@ -5,7 +5,9 @@ import static org.awaitility.Awaitility.await;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.projection.AtomicBatchProcessor;
@@ -15,6 +17,7 @@ import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
@@ -168,6 +171,26 @@ class ProjectionRunnerLeaseRoleTest {
       runner.close();
       thread.join(10_000);
     }
+  }
+
+  /**
+   * Every view a projection runner registers keeps its errors through a standby, not only the one
+   * the lease-loss test above scrapes: the live view while the runner gives up its lease, and the
+   * scheduled runner's view between fires.
+   */
+  @Test
+  void everyHealthViewOfAProjectionRunner_keepsItsErrorsThroughAStandby() {
+    List<Class<?>> views =
+        Stream.of(ContinuousProjectionRunner.class, ScheduledProjectionRunner.class)
+            .flatMap(runner -> Arrays.stream(runner.getDeclaredClasses()))
+            .filter(SubscriptionLifecycle.class::isAssignableFrom)
+            .toList();
+
+    assertThat(views)
+        .extracting(Class::getSimpleName)
+        .containsExactlyInAnyOrder(
+            "RunnerHealthView", "LiveHealthView", "ScheduledSubscriptionView");
+    assertThat(views).allSatisfy(view -> assertThat(view).isAssignableTo(StandbyKeepsErrors.class));
   }
 
   @Test

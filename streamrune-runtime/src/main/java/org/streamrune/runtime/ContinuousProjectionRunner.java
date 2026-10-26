@@ -1637,12 +1637,13 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * <p>The view reports the role this runner plays under its lease ({@link RunnerLeaseRole}):
    * {@code STANDBY} while another replica leads, {@code LEADING} once this one holds the lease and
    * catches up. Its errors are holes in the shared read model, so they survive a standby ({@link
-   * LeaseRoleAware#errorsEndWithTheLease()} is {@code false}).
+   * StandbyKeepsErrors}).
    *
    * <p>The runner — not the health contributor — owns the lifecycle, so the mutating operations
    * throw.
    */
-  private final class RunnerHealthView implements SubscriptionLifecycle, LeaseRoleAware {
+  private final class RunnerHealthView
+      implements SubscriptionLifecycle, LeaseRoleAware, StandbyKeepsErrors {
 
     private final ProjectionName projectionName;
 
@@ -1653,11 +1654,6 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     @Override
     public LeaseRole leaseRole() {
       return RunnerLeaseRole.of(leadership, projectionName.value());
-    }
-
-    @Override
-    public boolean errorsEndWithTheLease() {
-      return false;
     }
 
     @Override
@@ -1701,10 +1697,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * {@code UNGATED} on a replica that leads under a lease. A runner without a lease reports the
    * subscription's own role ({@code UNGATED} for the default polling one, a factory-built
    * subscription's role when it delivers under a lease of its own). Its errors survive a standby,
-   * as the runner's own view's do.
+   * as the runner's own view's do ({@link StandbyKeepsErrors}).
    */
   private final class LiveHealthView
-      implements SubscriptionLifecycle, LeaseRoleAware, PushHealthAware {
+      implements SubscriptionLifecycle, LeaseRoleAware, PushHealthAware, StandbyKeepsErrors {
 
     private final ProjectionName projectionName;
     private final SubscriptionLifecycle live;
@@ -1720,11 +1716,6 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         return aware.leaseRole();
       }
       return RunnerLeaseRole.of(leadership, projectionName.value());
-    }
-
-    @Override
-    public boolean errorsEndWithTheLease() {
-      return false;
     }
 
     @Override

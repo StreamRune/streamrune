@@ -534,10 +534,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   role they play under their own lease for their whole run (`STANDBY` until they take it, then
   `LEADING`; `UNGATED` without one), the live subscription of a `ContinuousProjectionRunner`
   included, which holds no lease of its own; a runner's dead-lettered or skipped batches keep its
-  entry `DEGRADED` while it stands by (`LeaseRoleAware.errorsEndWithTheLease()`). A standby
-  subscription is `RUNNING` with no delivery errors and shares the leader's lag: `UP` while a
-  replica leads, `DEGRADED` on every replica once the shared lag crosses the threshold, never
-  `DOWN`. `PollingEventSubscription.Builder.healthContributor(...)` and
+  entry `DEGRADED` while it stands by. A standby subscription is `RUNNING` with no delivery errors
+  and shares the leader's lag: `UP` while a replica leads, `DEGRADED` on every replica once the
+  shared lag crosses the threshold, never `DOWN`. `PollingEventSubscription.Builder.healthContributor(...)` and
   `HybridEventSubscription.Builder.healthContributor(...)` register an application-built
   subscription with the `SubscriptionHealthContributor` on `start()` and unregister it on `close()`;
   a hybrid subscription registers itself, so a dead LISTEN/NOTIFY push path still reads `DEGRADED`.

@@ -216,9 +216,10 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    * meaningful; {@link #start()}, {@link #pause()}, and {@link #resume()} throw since the runner —
    * not the health contributor — owns the lifecycle. It reports the role the runner plays under its
    * lease ({@link RunnerLeaseRole}), and its errors — ticks that dead-lettered or skipped a chunk —
-   * survive a standby ({@link LeaseRoleAware#errorsEndWithTheLease()} is {@code false}).
+   * survive a standby ({@link StandbyKeepsErrors}).
    */
-  private final class ScheduledSubscriptionView implements SubscriptionLifecycle, LeaseRoleAware {
+  private final class ScheduledSubscriptionView
+      implements SubscriptionLifecycle, LeaseRoleAware, StandbyKeepsErrors {
     private final ProjectionName name;
 
     ScheduledSubscriptionView(ProjectionName name) {
@@ -228,11 +229,6 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     @Override
     public LeaseRole leaseRole() {
       return RunnerLeaseRole.of(leadership, name.value());
-    }
-
-    @Override
-    public boolean errorsEndWithTheLease() {
-      return false;
     }
 
     @Override
