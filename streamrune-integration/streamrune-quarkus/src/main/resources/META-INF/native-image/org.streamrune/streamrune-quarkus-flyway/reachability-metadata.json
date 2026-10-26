@@ -32,6 +32,7 @@
     { "type": "org.flywaydb.core.internal.proprietaryStubs.LicensingConfigurationExtensionStub", "methods": [{ "name": "<init>", "parameterTypes": [] }] },
     { "type": "org.flywaydb.core.internal.proprietaryStubs.AuthCommandExtensionStub", "methods": [{ "name": "<init>", "parameterTypes": [] }] },
     { "type": "org.flywaydb.core.internal.proprietaryStubs.DeployCommandExtensionStub", "methods": [{ "name": "<init>", "parameterTypes": [] }] },
+    { "type": "org.flywaydb.core.internal.proprietaryStubs.InitCommandExtensionStub", "methods": [{ "name": "<init>", "parameterTypes": [] }] },
     { "type": "org.flywaydb.core.internal.proprietaryStubs.DiffCommandExtensionStub", "methods": [{ "name": "<init>", "parameterTypes": [] }] },
     { "type": "org.flywaydb.core.internal.proprietaryStubs.ModelCommandExtensionStub", "methods": [{ "name": "<init>", "parameterTypes": [] }] },
     { "type": "org.flywaydb.core.internal.proprietaryStubs.DiffTextCommandExtensionStub", "methods": [{ "name": "<init>", "parameterTypes": [] }] },
