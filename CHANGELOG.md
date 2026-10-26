@@ -1257,7 +1257,7 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
 - **PostgreSQL 17 or newer** for `streamrune-postgres` and `streamrune-postgres-crypto` — tested on 17
   and 18, and enforced at startup. The in-memory stores of `streamrune-test` need no database.
 - **Jackson 2.19.2** (`jackson-databind` 2.19 or newer). `streamrune-core` depends on nothing else.
-- `streamrune-postgres` brings Flyway 13.9.0 (`flyway-core`, `flyway-database-postgresql`), HikariCP
+- `streamrune-postgres` brings Flyway 13.11.1 (`flyway-core`, `flyway-database-postgresql`), HikariCP
   6.2.1 (for its dedicated LISTEN and lock pools), the PostgreSQL JDBC driver 42.7.10 and SLF4J 2.0.
 - Frameworks: Spring Boot 4.1.x (built and tested against 4.1.1, Spring Security 7.1.x), Quarkus
   3.40.x, Micronaut 5.2.x (Micronaut Security 5.4, Validation 5.2, Serde 3.2). Micrometer 1.16 or
