@@ -882,7 +882,7 @@ replica still on the previous release is behind. What those replicas do in the w
 
 A dead-lettered command replays once its entry is retried on an upgraded replica. The retry runner
 is leased, so its automatic attempts run where the lease is, and the lease moves only when its
-holder stops: until then a replay may run on a replica still behind. Such a replay fails with the
+holder stops or fails to renew it: until then a replay may run on a replica still behind. Such a replay fails with the
 same refusal and counts no attempt (`RetryOutcome.READER_BEHIND`, an INFO line naming the event
 type and both versions): the entry is left unchanged and replayed again on the next poll. A long
 rollout therefore neither exhausts the entry (the default policy's five attempts span about 15
