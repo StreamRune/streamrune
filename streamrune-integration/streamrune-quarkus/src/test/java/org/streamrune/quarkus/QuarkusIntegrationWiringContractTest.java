@@ -21,6 +21,7 @@ import jakarta.ws.rs.ext.Provider;
 import java.io.PrintWriter;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -44,6 +45,8 @@ import org.eclipse.microprofile.health.HealthCheckResponse;
 import org.eclipse.microprofile.health.Readiness;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.UserRoleResolver;
@@ -71,14 +74,18 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * (with Quarkus' duration converter) and its two mappings, and the {@code DataSource}, which the
  * container disposes of when it shuts down, as quarkus-agroal closes its pool. An application
  * without a database declares the test kit's in-memory event store and offset store, and its {@code
- * DataSource} refuses every connection. A plain contract bean is a {@code Singleton} class bean, a
+ * DataSource} is {@link NoDatabase}. A plain contract bean is a {@code Singleton} class bean, a
  * supplied one a synthetic bean of the type it supplies.
  *
  * <p>The SSE endpoint is served by Quarkus REST over HTTP ({@link QuarkusRestTestServer}): the
  * {@link SseController} and the {@link StreamRuneRequestFilter} are built with the container's
  * beans, the request-context holder a plain instance, as {@code SseWireFormatTest} builds them. The
  * health check is the container's {@link StreamRuneHealthCheck} bean.
+ *
+ * <p>Arc is one container per JVM, and {@link ApplicationInfrastructure} hands it the current
+ * start's configuration through static fields: the tests run one start at a time, in one thread.
  */
+@Execution(ExecutionMode.SAME_THREAD)
 class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
 
   /**
@@ -122,7 +129,8 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
 
   /**
    * What a Quarkus application's extensions supply and raw Arc does not: the configuration, its
-   * mappings and the {@code DataSource}. The adapter sets the fields before each boot.
+   * mappings and the {@code DataSource}. The adapter sets the fields before each boot, which holds
+   * while one start runs at a time.
    */
   @ApplicationScoped
   public static class ApplicationInfrastructure {
@@ -457,16 +465,69 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     }
   }
 
-  /** The DataSource of an application without a database: it grants no connection. */
+  /**
+   * The DataSource of an application without a database. The Quarkus producers inject a {@code
+   * DataSource}, so such an application still has a bean of the type, and the integration builds
+   * its PostgreSQL stores on it and starts their retention sweepers. Its connections answer every
+   * statement with nothing, no row read and none written, so those sweepers poll quietly, as Spring
+   * and Micronaut, which build no store without a {@code DataSource}, start none.
+   */
   static final class NoDatabase implements DataSource {
     @Override
-    public Connection getConnection() throws SQLException {
-      throw new SQLException("this application has no database");
+    public Connection getConnection() {
+      return nothing(Connection.class);
     }
 
     @Override
-    public Connection getConnection(String username, String password) throws SQLException {
+    public Connection getConnection(String username, String password) {
       return getConnection();
+    }
+
+    /**
+     * A JDBC object that does nothing: a statement it creates updates no row, a query reads none, a
+     * number is zero, a flag false.
+     */
+    private static <T> T nothing(Class<T> type) {
+      return type.cast(
+          Proxy.newProxyInstance(
+              type.getClassLoader(),
+              new Class<?>[] {type},
+              (proxy, method, args) -> {
+                Class<?> returns = method.getReturnType();
+                return switch (method.getName()) {
+                  case "equals" -> proxy == args[0];
+                  case "hashCode" -> System.identityHashCode(proxy);
+                  case "toString" -> "no database: " + type.getSimpleName();
+                  default -> {
+                    if (returns.isInterface() && returns.getPackageName().equals("java.sql")) {
+                      yield nothing(returns);
+                    }
+                    yield zero(returns);
+                  }
+                };
+              }));
+    }
+
+    private static Object zero(Class<?> type) {
+      if (type == boolean.class) {
+        return false;
+      }
+      if (type == int.class || type == short.class || type == byte.class) {
+        return 0;
+      }
+      if (type == long.class) {
+        return 0L;
+      }
+      if (type == double.class) {
+        return 0.0d;
+      }
+      if (type == float.class) {
+        return 0.0f;
+      }
+      if (type == char.class) {
+        return (char) 0;
+      }
+      return null;
     }
 
     @Override

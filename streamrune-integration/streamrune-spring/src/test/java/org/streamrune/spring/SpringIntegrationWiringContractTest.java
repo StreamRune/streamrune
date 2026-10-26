@@ -70,6 +70,10 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * application declares a bean, under its bean type; without a database the application declares the
  * test kit's in-memory event store factory and offset store, with one the {@code DataSource}, which
  * the context closes as it closes a connection pool.
+ *
+ * <p>spring-security-core is on this module's test classpath and the application imports no
+ * security filter chain, so its request identity runs in the {@code AUTHENTICATED_PRINCIPAL} mode:
+ * a request without a principal is anonymous.
  */
 class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
 

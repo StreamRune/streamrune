@@ -193,6 +193,10 @@ public abstract class IntegrationWiringContract {
    * the SSE endpoint, whose authorizer admits identified callers only, answers {@code 403}. Behind
    * a trusted gateway the same request carries its identity and its stream opens, so the {@code
    * 403} is the missing identity's.
+   *
+   * <p>The Spring adapter runs it in the {@code AUTHENTICATED_PRINCIPAL} mode (spring-security-core
+   * is on that module's test classpath, and an unauthenticated request is anonymous), the Quarkus
+   * and Micronaut adapters in the {@code ANONYMOUS} mode; both fail closed.
    */
   @Test
   public void failClosedIdentityAnswers403WithoutAnIdentity() {
@@ -234,7 +238,9 @@ public abstract class IntegrationWiringContract {
   /**
    * The health endpoint reports the StreamRune check under the name the production guide states,
    * {@code UP}, with the head of the event store ({@code eventStore.lastGlobalOffset}) and one
-   * detail per subscription carrying its lease role ({@code subscription.<name>.role}).
+   * detail per subscription carrying its lease role ({@code subscription.<name>.role}): {@code
+   * UNGATED} for the contract's projection once its subscription runs (the runner reports {@code
+   * NOT_REPORTED} while it starts).
    */
   @Test
   public void healthCarriesTheDocumentedNameAndKeys() {
@@ -250,7 +256,8 @@ public abstract class IntegrationWiringContract {
     try (Application application =
         start(postgresql(), Map.of(), Set.of(ContractProjection.class))) {
       assertStarted(application);
-      Map<String, Object> health = awaitHealth(application, details -> details.containsKey(role));
+      Map<String, Object> health =
+          awaitHealth(application, details -> "UNGATED".equals(String.valueOf(details.get(role))));
       assertEquals(
           "UP", String.valueOf(health.get("status")), () -> "the check must be UP: " + health);
       Map<String, Object> details = details(health);
@@ -260,6 +267,10 @@ public abstract class IntegrationWiringContract {
       assertTrue(
           details.containsKey(role),
           () -> "the check must carry " + role + " for the running projection: " + health);
+      assertEquals(
+          "UNGATED",
+          String.valueOf(details.get(role)),
+          () -> "the running projection's subscription reports the role UNGATED: " + health);
     }
   }
 
@@ -290,7 +301,9 @@ public abstract class IntegrationWiringContract {
   /**
    * Closing the application stops the integration's runners before the container closes the
    * database the event store reads: the projection runner polls the database while the application
-   * runs, and once the {@code DataSource} is closed no thread asks it for a connection.
+   * runs; when the container closes the {@code DataSource}, every connection taken from it has been
+   * returned, so no runner is in the middle of a poll; and no thread asks it for a connection
+   * afterwards.
    */
   @Test
   public void shutdownStopsRunnersBeforeTheEventStoreCloses() throws InterruptedException {
@@ -311,6 +324,11 @@ public abstract class IntegrationWiringContract {
     }
     assertTrue(
         database.isClosed(), "the container must close the DataSource when the application closes");
+    assertEquals(
+        0,
+        database.connectionsInUseAtClose(),
+        "every connection must be returned before the container closes the DataSource: a runner"
+            + " still running a poll is not stopped");
     // A runner still alive asks for its next page within a few polling intervals.
     Thread.sleep(500);
     assertEquals(

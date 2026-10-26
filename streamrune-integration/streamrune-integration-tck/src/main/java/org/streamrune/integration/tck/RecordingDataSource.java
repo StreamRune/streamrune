@@ -1,21 +1,24 @@
 package org.streamrune.integration.tck;
 
 import java.io.PrintWriter;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 import javax.sql.DataSource;
 
 /**
  * A {@link DataSource} that hands out the connections of another one and records how it is used:
- * how many connections it granted, whether it is closed, and which threads asked it for a
- * connection after it closed. Once closed it grants none, the way a closed connection pool refuses
- * a borrow.
+ * how many connections it granted, how many of them were still in use when it closed, whether it is
+ * closed, and which threads asked it for a connection after it closed. Once closed it grants none,
+ * the way a closed connection pool refuses a borrow.
  *
  * <p>{@link IntegrationWiringContract} gives it to an application as the application's {@code
  * DataSource}, the one the integration builds its PostgreSQL event store and stores on, and reads
@@ -25,6 +28,8 @@ public final class RecordingDataSource implements DataSource, AutoCloseable {
 
   private final DataSource delegate;
   private final AtomicLong granted = new AtomicLong();
+  private final AtomicInteger inUse = new AtomicInteger();
+  private volatile int inUseAtClose = -1;
   private final AtomicBoolean closed = new AtomicBoolean();
   private final List<String> requestsAfterClose = new CopyOnWriteArrayList<>();
 
@@ -43,17 +48,48 @@ public final class RecordingDataSource implements DataSource, AutoCloseable {
   @Override
   public Connection getConnection() throws SQLException {
     refuseWhenClosed();
-    Connection connection = delegate.getConnection();
-    granted.incrementAndGet();
-    return connection;
+    return inUse(delegate.getConnection());
   }
 
   @Override
   public Connection getConnection(String username, String password) throws SQLException {
     refuseWhenClosed();
-    Connection connection = delegate.getConnection(username, password);
+    return inUse(delegate.getConnection(username, password));
+  }
+
+  /**
+   * Counts a granted connection as in use until its borrower closes it; every other call goes to
+   * the connection itself, unwrapping to the driver's types included.
+   */
+  private Connection inUse(Connection connection) {
     granted.incrementAndGet();
-    return connection;
+    inUse.incrementAndGet();
+    AtomicBoolean returned = new AtomicBoolean();
+    return (Connection)
+        Proxy.newProxyInstance(
+            Connection.class.getClassLoader(),
+            new Class<?>[] {Connection.class},
+            (proxy, method, args) -> {
+              switch (method.getName()) {
+                case "equals" -> {
+                  return proxy == args[0];
+                }
+                case "hashCode" -> {
+                  return System.identityHashCode(proxy);
+                }
+                case "close" -> {
+                  if (returned.compareAndSet(false, true)) {
+                    inUse.decrementAndGet();
+                  }
+                }
+                default -> {}
+              }
+              try {
+                return method.invoke(connection, args);
+              } catch (InvocationTargetException e) {
+                throw e.getCause();
+              }
+            });
   }
 
   private void refuseWhenClosed() throws SQLException {
@@ -69,8 +105,11 @@ public final class RecordingDataSource implements DataSource, AutoCloseable {
    */
   @Override
   public void close() throws Exception {
-    if (closed.compareAndSet(false, true) && delegate instanceof AutoCloseable closeable) {
-      closeable.close();
+    if (closed.compareAndSet(false, true)) {
+      inUseAtClose = inUse.get();
+      if (delegate instanceof AutoCloseable closeable) {
+        closeable.close();
+      }
     }
   }
 
@@ -86,6 +125,14 @@ public final class RecordingDataSource implements DataSource, AutoCloseable {
    */
   public long connectionsGranted() {
     return granted.get();
+  }
+
+  /**
+   * @return how many connections it handed out were not yet closed by their borrower when this data
+   *     source closed; {@code -1} while it is open
+   */
+  public int connectionsInUseAtClose() {
+    return inUseAtClose;
   }
 
   /**

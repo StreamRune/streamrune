@@ -27,6 +27,8 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.slf4j.LoggerFactory;
 import org.streamrune.integration.tck.Application;
@@ -50,8 +52,14 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * offset store, and the contract's beans. Two are declared at compile time in {@link
  * ApplicationBeans} instead, as an application declares them: a {@code SagaRunner}, because
  * Micronaut does not reliably collect a runtime singleton into an injected {@code List}, and the
- * {@code DataSource}, because the context closes a bean through its {@code preDestroy} method.
+ * {@code DataSource}, because the context closes a bean through its {@code preDestroy} method. A
+ * contract bean of another type that Micronaut collects into an injected {@code List} needs a
+ * method there too.
+ *
+ * <p>{@link ApplicationBeans} hands the context the current start's {@code DataSource} through a
+ * static field: the tests run one start at a time, in one thread.
  */
+@Execution(ExecutionMode.SAME_THREAD)
 class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
 
   /** The property that declares the {@link ApplicationBeans#dataSource()} of a start. */
@@ -67,7 +75,7 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   @Factory
   static class ApplicationBeans {
 
-    /** The DataSource of the current start. */
+    /** The DataSource of the current start; one start runs at a time. */
     static volatile DataSource current;
 
     @Singleton
