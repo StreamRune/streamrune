@@ -599,6 +599,22 @@ public final class StreamRune implements CommandBus, AutoCloseable {
       return this;
     }
 
+    /**
+     * The clock the command bus stamps each event's {@link
+     * org.streamrune.core.EventMetadata#timestamp()} with ({@link
+     * VirtualThreadCommandBus.Builder#clock}). Optional; defaults to {@link
+     * java.time.Clock#systemUTC()}. The projection runners are built by the {@link
+     * #projectionRunnerFactory} or given to {@link #projectionRunner}: pass the clock to their
+     * builders there.
+     *
+     * @param clock the clock; not {@code null}
+     * @return this builder
+     */
+    public Builder clock(java.time.Clock clock) {
+      busBuilder.clock(java.util.Objects.requireNonNull(clock, "clock is required"));
+      return this;
+    }
+
     /** Sets the lock timeout for aggregate locking. Defaults to 5 seconds. */
     public Builder lockTimeout(Duration lockTimeout) {
       busBuilder.lockTimeout(lockTimeout);

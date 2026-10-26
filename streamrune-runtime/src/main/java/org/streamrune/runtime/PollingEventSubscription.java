@@ -1,7 +1,9 @@
 package org.streamrune.runtime;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -94,6 +96,9 @@ public final class PollingEventSubscription
   // The contributor this subscription registers with on start() and leaves on close(); null
   // registers nothing.
   private final SubscriptionHealthContributor healthContributor;
+
+  // Times each delivery for the latency metric: the builder's clock, or System.nanoTime().
+  private final TimeSource time;
 
   /**
    * A started polling thread, the interrupt deferral pause() and close() stop it through, and the
@@ -195,8 +200,8 @@ public final class PollingEventSubscription
   }
 
   /**
-   * Full constructor with a lease and the contributor the subscription registers with ({@code null}
-   * = none). Package-private: the builder resolves both.
+   * Constructor with a lease and the contributor the subscription registers with ({@code null} =
+   * none). Package-private: the builder resolves both.
    */
   PollingEventSubscription(
       SubscriptionName subscriptionName,
@@ -209,6 +214,36 @@ public final class PollingEventSubscription
       int readPoisonBound,
       SubscriptionLease lease,
       SubscriptionHealthContributor healthContributor) {
+    this(
+        subscriptionName,
+        eventStore,
+        offsetStore,
+        listener,
+        config,
+        fetchSize,
+        metrics,
+        readPoisonBound,
+        lease,
+        healthContributor,
+        null);
+  }
+
+  /**
+   * Full constructor: as above, and the clock that times the deliveries ({@code null} = {@link
+   * System#nanoTime()}). Package-private: the builder resolves it.
+   */
+  PollingEventSubscription(
+      SubscriptionName subscriptionName,
+      EventStore eventStore,
+      OffsetStore offsetStore,
+      EventListener listener,
+      SubscriptionConfig config,
+      int fetchSize,
+      StreamRuneMetrics metrics,
+      int readPoisonBound,
+      SubscriptionLease lease,
+      SubscriptionHealthContributor healthContributor,
+      Clock clock) {
     if (subscriptionName == null) {
       throw new IllegalArgumentException("subscriptionName is required");
     }
@@ -232,6 +267,7 @@ public final class PollingEventSubscription
     }
     this.lease = lease;
     this.healthContributor = healthContributor;
+    this.time = TimeSource.of(clock);
     this.subscriptionName = subscriptionName;
     this.eventStore = eventStore;
     this.offsetStore = offsetStore;
@@ -605,12 +641,12 @@ public final class PollingEventSubscription
       interrupts.defer();
     }
     try {
-      long start = System.nanoTime();
+      long start = time.nanoTime();
       listener.onEvents(events);
       // Delivery succeeded: record received count and the latency of delivering this batch.
       // A listener failure above propagates (no metrics, checkpoint not advanced) so only
       // successfully delivered events are counted.
-      recordDelivery(events.size(), System.nanoTime() - start);
+      recordDelivery(events.size(), time.nanoTime() - start);
       offsetStore.saveOffset(name, events.getLast().globalOffset());
     } finally {
       if (interrupts != null) {
@@ -785,6 +821,7 @@ public final class PollingEventSubscription
     private SubscriptionLeadership leadership;
     private SagaRunner<?> sagaRunner;
     private SubscriptionHealthContributor healthContributor;
+    private Clock clock;
 
     /** Sets the unique subscription name (required). Accepts String for convenience. */
     public Builder subscriptionName(String name) {
@@ -902,6 +939,20 @@ public final class PollingEventSubscription
     }
 
     /**
+     * The clock that times each delivery for the latency metric ({@code
+     * streamrune.subscriptions.delivery_latency}). Optional; without one the subscription times its
+     * deliveries with {@link System#nanoTime()}, which no step of the wall clock disturbs. A test
+     * passes a {@code MutableClock} to decide the latency it records.
+     *
+     * @param clock the clock; not {@code null}
+     * @return this builder
+     */
+    public Builder clock(Clock clock) {
+      this.clock = Objects.requireNonNull(clock, "clock is required");
+      return this;
+    }
+
+    /**
      * Builds the {@link PollingEventSubscription}. Requires {@code subscriptionName}, {@code
      * eventStore}, {@code offsetStore}, and {@code listener} or {@code sagaRunner}.
      *
@@ -922,7 +973,8 @@ public final class PollingEventSubscription
           metrics,
           readPoisonBound,
           resolvedLease(),
-          healthContributor);
+          healthContributor,
+          clock);
     }
 
     /** Refuses one setting named twice: a saga runner sets the listener and the lease. */

@@ -1,5 +1,6 @@
 package org.streamrune.runtime;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -7,6 +8,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -293,6 +295,10 @@ public final class OutboxPoller implements AutoCloseable {
    */
   private volatile boolean zeroHorizonViolationLogged = false;
 
+  // Reads "now" for the age of the oldest FAILED entry (streamrune.outbox.blockage_age_seconds),
+  // compared with the instant the store stamped it with.
+  private final Clock clock;
+
   private OutboxPoller(Builder builder) {
     this.closeJoinTimeoutMs = builder.closeJoinTimeoutMs;
     this.store = builder.store;
@@ -304,6 +310,7 @@ public final class OutboxPoller implements AutoCloseable {
     this.metrics = builder.metrics;
     this.orderingMode = builder.orderingMode;
     this.claimLease = builder.claimLease;
+    this.clock = builder.clock;
     this.claimedBy = builder.store.claimedBy();
     Duration maxBackoff =
         pollInterval.compareTo(MAX_FAILURE_BACKOFF) > 0 ? pollInterval : MAX_FAILURE_BACKOFF;
@@ -375,7 +382,8 @@ public final class OutboxPoller implements AutoCloseable {
     // claimed_at (the DB clock) as it runs; capturing the base here — rather than after it returns
     // — charges the claim-query latency (RECLAIM_EXPIRED + claim CTE on a large backlog, or a GC
     // pause) AGAINST the publish budget instead of silently extending the window past claimed_at +
-    // fraction*lease and eroding the margin below the lease-reclaim horizon.
+    // fraction*lease and eroding the margin below the lease-reclaim horizon. Wall-clock time, not
+    // the poller's clock: the publisher compares the deadline with Instant.now().
     Instant claimBase = Instant.now();
     Duration lease = claimLease;
     List<OutboxEntry> pending = store.loadPending(batchSize);
@@ -778,7 +786,7 @@ public final class OutboxPoller implements AutoCloseable {
       long age =
           s.oldestFailedAt() == null
               ? 0
-              : Math.max(0, Duration.between(s.oldestFailedAt(), Instant.now()).toSeconds());
+              : Math.max(0, Duration.between(s.oldestFailedAt(), clock.instant()).toSeconds());
       metrics.recordOutboxBlockageAge(age);
     } catch (UnsupportedOperationException _) {
       blockageSamplingSupported = false;
@@ -1210,6 +1218,7 @@ public final class OutboxPoller implements AutoCloseable {
     private Duration pollInterval = Duration.ofSeconds(1);
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private long closeJoinTimeoutMs = CLOSE_JOIN_TIMEOUT_MS;
+    private Clock clock = Clock.systemUTC();
     // Read from the store in build(): the poller logs and reasons about the mode, so a store that
     // does not state one (the throwing default, or null) fails at wiring, like claimLease.
     private OutboxOrderingMode orderingMode;
@@ -1249,6 +1258,22 @@ public final class OutboxPoller implements AutoCloseable {
 
     public Builder pollInterval(Duration pollInterval) {
       this.pollInterval = pollInterval;
+      return this;
+    }
+
+    /**
+     * The clock the poller reads "now" from for the age of the oldest {@code FAILED} entry ({@code
+     * streamrune.outbox.blockage_age_seconds}), which it compares with the instant the store
+     * stamped on that entry. Optional; defaults to {@link Clock#systemUTC()}. A test passes the
+     * {@code MutableClock} of its {@code InMemoryOutboxStore}. The publish deadline the poller
+     * hands its publisher stays wall-clock time: the publishers compare it with {@link
+     * Instant#now()}.
+     *
+     * @param clock the clock; not {@code null}
+     * @return this builder
+     */
+    public Builder clock(Clock clock) {
+      this.clock = Objects.requireNonNull(clock, "clock is required");
       return this;
     }
 

@@ -1,5 +1,6 @@
 package org.streamrune.runtime;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -45,6 +46,8 @@ public final class MultiProjectionRunner implements AutoCloseable {
   private final SubscriptionLeadership leadership;
   private final org.streamrune.core.projection.ProjectionErrorClassifier classifier;
   private final SubscriptionHealthContributor healthContributor;
+  // The clock the builder was given, handed to every per-registration runner; null: none.
+  private final Clock clock;
 
   private final ConcurrentHashMap<ProjectionName, ContinuousProjectionRunner> runners =
       new ConcurrentHashMap<>();
@@ -64,7 +67,8 @@ public final class MultiProjectionRunner implements AutoCloseable {
       StreamRuneMetrics metrics,
       SubscriptionLeadership leadership,
       org.streamrune.core.projection.ProjectionErrorClassifier classifier,
-      SubscriptionHealthContributor healthContributor) {
+      SubscriptionHealthContributor healthContributor,
+      Clock clock) {
     this.registrations = List.copyOf(registrations);
     this.eventStore = eventStore;
     this.offsetStore = offsetStore;
@@ -81,6 +85,7 @@ public final class MultiProjectionRunner implements AutoCloseable {
             ? classifier
             : org.streamrune.core.projection.ProjectionErrorClassifier.DEFAULT;
     this.healthContributor = healthContributor;
+    this.clock = clock;
   }
 
   /**
@@ -96,7 +101,7 @@ public final class MultiProjectionRunner implements AutoCloseable {
     }
 
     for (var reg : registrations) {
-      var runner =
+      var builder =
           ContinuousProjectionRunner.builder()
               .eventStore(eventStore)
               .offsetStore(offsetStore)
@@ -118,8 +123,11 @@ public final class MultiProjectionRunner implements AutoCloseable {
               // Same health contributor threaded into every per-registration runner so each
               // projection's live subscription registers itself and reports delivery health; null
               // (no contributor) makes health tracking a no-op.
-              .healthContributor(healthContributor)
-              .build();
+              .healthContributor(healthContributor);
+      if (clock != null) {
+        builder.clock(clock);
+      }
+      var runner = builder.build();
 
       runners.put(reg.name(), runner);
 
@@ -237,6 +245,7 @@ public final class MultiProjectionRunner implements AutoCloseable {
     private org.streamrune.core.projection.ProjectionErrorClassifier classifier =
         org.streamrune.core.projection.ProjectionErrorClassifier.DEFAULT;
     private SubscriptionHealthContributor healthContributor;
+    private Clock clock;
     private final List<ProjectionRegistration> registrations = new ArrayList<>();
 
     public Builder eventStore(EventStore store) {
@@ -337,6 +346,19 @@ public final class MultiProjectionRunner implements AutoCloseable {
       return this;
     }
 
+    /**
+     * The clock handed to every per-projection {@link ContinuousProjectionRunner} ({@link
+     * ContinuousProjectionRunner.Builder#clock}): it stamps their dead-letter entries and times
+     * their batches and deliveries. Optional; without one they read the system's time.
+     *
+     * @param clock the clock; not {@code null}
+     * @return this builder
+     */
+    public Builder clock(Clock clock) {
+      this.clock = java.util.Objects.requireNonNull(clock, "clock is required");
+      return this;
+    }
+
     /** Registers a projection with the default HALT error strategy and its delivery mode. */
     public Builder register(String name, Projection projection, ProjectionDeliveryMode mode) {
       registrations.add(new ProjectionRegistration(name, projection, mode));
@@ -428,7 +450,8 @@ public final class MultiProjectionRunner implements AutoCloseable {
           metrics,
           leadership,
           classifier,
-          healthContributor);
+          healthContributor,
+          clock);
     }
   }
 }
