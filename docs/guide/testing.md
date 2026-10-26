@@ -684,6 +684,70 @@ envelope at a later offset around the metadata.
 
 ---
 
+## Testing a saga with SagaFixture
+
+`SagaFixture` runs a saga without a subscription, an event store or command handlers. `of(...)`
+hands your code the saga's own `SagaRunner.Builder`, already wired with an `InMemorySagaStore`, an
+`InMemorySagaDeadLetterStore`, a bus that records every command the saga dispatches and executes
+none, and a `MutableClock` at `SagaFixture.START`; you add the saga. Each step stores its events at
+the next global offset and delivers them as one page through `asEventListener()`, as a subscription
+does, and `expectCommands` reads the commands of the latest step:
+
+```java
+var decider = new OrderSagaDecider();   // a SagaDecider with timeout() of 30 minutes
+SagaFixture<OrderSaga.State> saga =
+    SagaFixture.of(
+            OrderSaga.State.class,
+            builder ->
+                builder
+                    .decider(decider)
+                    // OrderSaga.sagaOf answers "no saga" for an order id no saga id can hold
+                    .startWhen(event ->
+                        event.event() instanceof OrderPlaced e && OrderSaga.sagaOf(e.orderId()).isPresent())
+                    .extractSagaId(event ->
+                        OrderSaga.sagaOf(((OrderPlaced) event.event()).orderId()).orElseThrow()))
+        .withTimeouts(builder -> builder.decider(decider));
+StreamId order = StreamId.of(AggregateType.of("order"), AggregateId.of("1"));
+SagaId orderSaga = OrderSaga.sagaOf("1").orElseThrow();
+
+saga.when(order, new OrderPlaced("1"))                 // an event a request stored
+    .expectCommands(new ReserveStock("1"))
+    .expectState(orderSaga, state -> state.status() == SagaStatus.RUNNING)
+    .replyingTo(orderSaga, new StockReserved("1"))     // the reply to the saga's own command
+    .expectCommands(new ChargePayment("1"))
+    .advance(Duration.ofMinutes(31))
+    .runTimeouts()                                     // one poll of the SagaTimeoutRunner
+    .expectCommands(new ReleaseStock("1"))
+    .expectStatus(orderSaga, SagaStatus.COMPENSATED);
+```
+
+| Call | What it does |
+|---|---|
+| `given(events...)`, `when(event)`, `when(streamId, event)` | Steps: deliver stored events. `event(streamId, payload)` builds one as a request stores it (no saga origin, the fixture clock's instant) |
+| `replyingTo(sagaId, event)`, `replyingTo(sagaId, streamId, event)` | A step: delivers the reply to a command the saga dispatched (`reply(...)`, from `SagaEnvelopes`) |
+| `advance(duration)`, `runTimeouts()` | Moves the clock; one poll of the timeout runner `withTimeouts(...)` built over the same stores and clock |
+| `redeliver()` | A step: the events of the last delivery again, at the same offsets — what a subscription delivers after a crash before its checkpoint |
+| `failing(commandType, failure)` | Every later dispatch of that command type throws: a rejected command, or a compensation that cannot be dispatched |
+| `expectCommands(...)`, `expectNoCommands()` | The commands of the latest step, in order |
+| `expectState(id, predicate)`, `expectStatus(id, status)`, `expectCompensating(id)`, `expectCompleted(id)`, `expectDeadLettered(id)` | The saga's row and its dead-letter entries |
+| `saga(id)`, `dispatched()`, `delivered()`, `runner()`, `sagaStore()`, `deadLetterStore()`, `clock()`, `sagaStoreFaults()` | The parts, for an assertion of your own |
+
+The builder starts with `forwardFence(false)`: the recording bus stores nothing, so it fences
+nothing. A crash point of a step is a fault of the saga store the runner writes through:
+
+```java
+saga.sagaStoreFaults().crashAfter("createGenesisPending");   // stop after the first write
+assertThrows(InjectedFaultException.class, () -> saga.when(order, new OrderPlaced("1")));
+saga.redeliver()                                             // the subscription delivers it again
+    .expectCommands(new ReserveStock("1"))
+    .expectStatus(orderSaga, SagaStatus.RUNNING);
+```
+
+The saga guide's quick example is tested this way (`SagaGuideQuickExampleTest` in
+`streamrune-runtime`).
+
+---
+
 ## Testing Failure Modes
 
 ### DomainException via assertThrows
@@ -728,6 +792,79 @@ void concurrentAppend_throwsOptimisticLockException() {
 }
 ```
 
+### Store failures and crash points with FaultSchedule
+
+Every store port has a forwarding decorator in the kit — `ForwardingEventStore`,
+`ForwardingSagaStore`, `ForwardingSagaDeadLetterStore`, `ForwardingDeadLetterQueue`,
+`ForwardingOffsetStore`, `ForwardingProjectionDeadLetterStore`, `ForwardingOutboxStore` — that
+forwards every method of its interface, the default methods included, and consults a
+`FaultSchedule` on each call. A method is named by its Java name; the overloads of a name share it:
+
+```java
+var faults = FaultSchedule.none()
+    .failOnce("append")                 // the next append throws before anything is stored
+    .crashAfter("saveOffset");          // the next checkpoint is stored, then the call throws
+var events = new ForwardingEventStore(new InMemoryEventStore(), faults);
+var offsets = new ForwardingOffsetStore(new InMemoryOffsetStore(), faults);
+
+// ... run the code under test, catch InjectedFaultException where the "crash" stops it,
+// run it again over the same stores, assert that it converges ...
+assertEquals(2, faults.calls("append"));
+```
+
+`failAt(method, n)` fails the n-th call, `failAlways(method)` every later one, and
+`throwing(() -> new EventStoreException("down", new SQLException()))` replaces
+`InjectedFaultException`, to exercise how a transient failure is classified. A misspelled method
+name fails where it is written. A flow that writes in more than one step has a crash point after
+each write; `crashAfter` stops it there.
+
+---
+
+## Recording doubles
+
+`RecordingStreamRuneMetrics` records every call of the metrics port under its `MetricNames` meter,
+with the tags the call carries; its queries refuse a name outside `MetricNames`:
+
+```java
+var metrics = new RecordingStreamRuneMetrics();
+// ... build the runner with .metrics(metrics) and drive it ...
+metrics.assertIncremented(MetricNames.PROJECTIONS_DEAD_LETTERED,
+    MetricNames.TAG_PROJECTION_NAME, "orders");
+assertEquals(3, metrics.total(MetricNames.INBOX_SWEPT_ROWS));         // rows, summed
+assertEquals(OptionalLong.of(0), metrics.lastGauge(MetricNames.OUTBOX_PENDING));
+```
+
+`ScriptedSubscriptionLeadership` is a `SubscriptionLeadership` the test drives through a failover:
+
+```java
+var leadership = new ScriptedSubscriptionLeadership().grant();   // it denies until granted
+// ... a runner built with .leadership(leadership) leads ...
+leadership.revoke();     // the lease is gone: the runner stands by
+leadership.grant();      // free again: the runner takes it, with a greater epoch
+assertEquals(2, leadership.acquisitions());
+```
+
+---
+
+## Recorded event streams
+
+`EventStreamFixtures` keeps an event stream in a file: record it once from an `InMemoryEventStore`,
+check the file in, and replay it into a fresh store in a later test, so a projection runs over a
+history nobody rebuilds by hand:
+
+```java
+EventStreamFixtures.write(store, Path.of("src/test/resources/orders.json"));   // once
+
+var replayed = InMemoryEventStore.serializing(typeRegistry, null);
+EventStreamFixtures.appendTo(replayed, EventStreamFixtures.read(Path.of("src/test/resources/orders.json")));
+```
+
+The file is a JSON array of `{streamId, version, eventType, schemaVersion, payload, metadata}`,
+written with sorted keys, so the same stream is always the same file, and its ids and timestamps
+replay unchanged. `appendTo` binds each payload as the serializing store binds a stored one: the
+store's `EventTypeRegistry` resolves the type (an unregistered one fails with
+`UnknownEventTypeException`) and its upcasters upcast a payload written at an older schema version.
+
 ---
 
 ## The kit, type by type
@@ -747,7 +884,12 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `InMemoryCommandInbox` | A `CommandInbox`; the in-memory event store appends and claims under one lock. |
 | `InMemoryDeadLetterQueue` | A `DeadLetterQueue` that stamps `publishedAt` from the `Clock` it is given. |
 | `InMemoryOutboxStore` | An `OutboxStore` with the claim, lease and ordering rules of `PostgresOutboxStore`, its retry times taken from the `Clock` it is given. |
-| `ForwardingOutboxStore` | An `OutboxStore` that forwards every call to a delegate: override one method to make that call fail, block or record. |
+| `ForwardingOutboxStore` | An `OutboxStore` that forwards every call to a delegate and injects the faults of a `FaultSchedule`; or override one method to make that call fail, block or record. |
+| `ForwardingEventStore`, `ForwardingSagaStore`, `ForwardingSagaDeadLetterStore`, `ForwardingDeadLetterQueue`, `ForwardingOffsetStore`, `ForwardingProjectionDeadLetterStore` | The same for the other store ports: every method forwarded, the default methods included, each call consulting the `FaultSchedule`. |
+| `FaultSchedule` | The faults a forwarding store injects — `failOnce`, `failAt`, `failAlways`, `crashAfter`, `throwing` — and the count of every call. |
+| `InjectedFaultException` | What a `FaultSchedule` throws unless it names another failure. |
+| `RecordingStreamRuneMetrics` | A `StreamRuneMetrics` that records every call under its `MetricNames` meter and tags; `assertIncremented`, `count`, `total`, `lastGauge`. |
+| `ScriptedSubscriptionLeadership` | A `SubscriptionLeadership` the test grants, denies and revokes, counting attempts, acquisitions and resignations. |
 | `InMemorySagaStore` | A `SagaStore` that keeps the state objects themselves and stamps their times from the `Clock` it is given. |
 | `InMemorySagaDeadLetterStore` | A `SagaDeadLetterStore` whose `publish` is an upsert per saga and event offset, as in PostgreSQL. |
 | `InMemoryCryptoEngine` | An AES-256-GCM `CryptoEngine` with its keys in memory and the terminal erasure of the production engines. |
@@ -755,6 +897,8 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `DeciderFixture` | Given events, when a command, then events or a domain exception, for a decider. |
 | `EventStoreFixture` | Given/when/then over an event store's appends; `event(...)` builds a test envelope. |
 | `ProjectionFixture` | Feeds a projection events in sequence and asserts on its state. |
+| `SagaFixture` | Given events, when an event, then the commands a saga dispatched and its state, over in-memory stores, a recording bus and a `MutableClock`. |
+| `EventStreamFixtures` | Writes the events of an `InMemoryEventStore` to a JSON file, reads it back, and appends it to a fresh store. |
 | `SagaEnvelopes` | The metadata and envelopes of the events a saga's commands, and the commands of a continuation, produce. |
 | `EventPayloadAssertions` | `assertRoundTrips(event)` and `assertUpcastBinds(...)`: an event that writes what it cannot read, or an upcaster that writes a misspelled key, fails the test instead of a read in production. |
 | `AtomicBatchProcessorContract` | The contract suite of `AtomicBatchProcessor.supportsFencing()`; extend it to prove a custom processor. |
@@ -777,10 +921,26 @@ clock.advance(Duration.ofSeconds(5));
 // ... and is pending now
 ```
 
-A test of what happens when one store call fails overrides that call alone:
+The runners, the outbox poller, the subscriptions and `StreamRune` take a clock as well:
+`clock(Clock)` on their builders decides the timestamps they record and the durations they measure
+(without one they read the system clock and time with `System.nanoTime()`):
+
+```java
+var subscription = PollingEventSubscription.builder()
+    // ... the store, the offsets, a listener that advances the clock by 250 ms ...
+    .metrics(metrics)
+    .clock(clock)
+    .build();
+// streamrune.subscriptions.delivery.latency records 250 ms for that delivery
+```
+
+A test of what happens when one store call fails schedules the fault, or overrides that call alone:
 
 ```java
 var failingDelivery =
+    new ForwardingOutboxStore(new InMemoryOutboxStore(), FaultSchedule.none().failOnce("markDelivered"));
+
+var customised =
     new ForwardingOutboxStore(new InMemoryOutboxStore()) {
       @Override
       public boolean markDelivered(OutboxEntryId id, String claimedBy) {
@@ -809,6 +969,7 @@ EventPayloadAssertions.assertUpcastBinds(
 | Integration test (in-memory) | `streamrune-core`, `streamrune-runtime`, `streamrune-test` | No |
 | EventStoreFixture test | `streamrune-test` | No |
 | Projection unit test | `streamrune-core`, `streamrune-test` | No |
+| Saga test (`SagaFixture`) | `streamrune-test` (it brings `streamrune-runtime`) | No |
 | `TRANSACTIONAL_LOCAL` projection test (runner, rollback) | `streamrune-core`, `streamrune-runtime`, `streamrune-test`, AssertJ | No |
 | Postgres integration test | `streamrune-postgres`, TestContainers | Yes (container) |
 

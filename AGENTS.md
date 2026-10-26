@@ -138,11 +138,20 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
     `InMemoryOutboxStore`, `InMemoryDeadLetterQueue`, `InMemoryProjectionDeadLetterStore`,
     `InMemoryProjectionRepository`, `InMemorySagaStore`, `InMemorySagaDeadLetterStore`,
     `InMemoryCommandInbox`, `InMemoryCryptoEngine`;
-  - fixtures: `DeciderFixture`, `EventStoreFixture`, `ProjectionFixture`;
-  - `MutableClock`: tests advance time instead of sleeping;
+  - fixtures: `DeciderFixture`, `EventStoreFixture`, `ProjectionFixture`, `SagaFixture` (a saga
+    over in-memory stores, a bus that records its commands, a `MutableClock` and the timeout
+    runner), `EventStreamFixtures` (an event stream recorded to a JSON file and replayed);
+  - `MutableClock`: tests advance time instead of sleeping. The runners, the outbox poller, the
+    subscriptions and `StreamRune` take it through `clock(Clock)` on their builders;
+  - fault injection: `ForwardingEventStore`, `ForwardingSagaStore`,
+    `ForwardingSagaDeadLetterStore`, `ForwardingDeadLetterQueue`, `ForwardingOffsetStore`,
+    `ForwardingProjectionDeadLetterStore` and `ForwardingOutboxStore` forward every method of
+    their port to a delegate and consult a `FaultSchedule` (`failOnce`, `failAt`, `failAlways`,
+    `crashAfter`; `InjectedFaultException`);
+  - recording doubles: `RecordingStreamRuneMetrics` (every metrics call under its `MetricNames`
+    meter) and `ScriptedSubscriptionLeadership` (a lease the test grants, denies and revokes);
   - `EventPayloadAssertions` for payload round trips and `SagaEnvelopes` for the envelopes of a
-    saga's replies;
-  - `ForwardingOutboxStore`: override one method to make that outbox-store call fail.
+    saga's replies.
 - **Contract suites.** A new implementation of a store interface extends the matching abstract
   suite in its test sources (`OutboxStoreContract`, `SagaStoreContract`,
   `SagaDeadLetterStoreContract`, `SagaForwardFenceContract`, `AtomicBatchProcessorContract`,
@@ -157,7 +166,8 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 - **Durable multi-step flows.** A flow that writes in more than one step (an append and an offset, a
   claim and a publish, a saga step and its command) lists its crash points, one after each write,
   and has a test per crash point that stops the flow there, runs it again and asserts that it
-  converges.
+  converges. `FaultSchedule.crashAfter(method)` on the forwarding store of the write stops it
+  there; `SagaFixture.redeliver()` delivers a saga's events again at the same offsets.
 - **PostgreSQL containers** start as `new PostgreSQLContainer<>(PostgresTestImage.NAME)`, and a
   module whose tests start one is listed in `postgresBackedModules` in the root build script.
 

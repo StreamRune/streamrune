@@ -656,7 +656,7 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
 
     /**
      * The clock that times each delivery for the latency metric ({@code
-     * streamrune.subscriptions.delivery_latency}). Optional; without one the subscription times its
+     * streamrune.subscriptions.delivery.latency}). Optional; without one the subscription times its
      * deliveries with {@link System#nanoTime()}, which no step of the wall clock disturbs. A test
      * passes a {@code MutableClock} to decide the latency it records.
      *

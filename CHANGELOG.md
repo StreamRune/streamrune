@@ -60,7 +60,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 | `streamrune-postgres-crypto` | `:streamrune-crypto:streamrune-postgres-crypto` | `org.streamrune.crypto.postgres` | `PostgresCryptoEngine`, `JdbcForgottenSubjectStore`, `PostgresCryptoForgetSignal`, the crypto Flyway baseline. |
 | `streamrune-vault-crypto` | `:streamrune-crypto:streamrune-vault-crypto` | `org.streamrune.vault` | `VaultCryptoEngine` — HashiCorp Vault transit engine. |
 | `streamrune-aws-kms-crypto` | `:streamrune-crypto:streamrune-aws-kms-crypto` | `org.streamrune.aws.kms.crypto` | `AwsKmsCryptoEngine` — AWS KMS customer managed key with per-subject tombstones. |
-| `streamrune-test` | `:streamrune-test` | `org.streamrune.test` | `InMemoryEventStore`, fixtures, in-memory doubles of every store and bus, store contract suites. |
+| `streamrune-test` | `:streamrune-test` | `org.streamrune.test` | `InMemoryEventStore`, fixtures (decider, event store, projection, saga, recorded event streams), in-memory doubles of every store and bus, fault-injecting forwarding stores, recording doubles, store contract suites. |
 | `streamrune-integration-api` | `:streamrune-integration:streamrune-integration-api` | `org.streamrune.integration` | Shared integration pieces: `MicrometerStreamRuneMetrics`, `RequestIdentityPolicy`, `AuthenticatedUserResolver`, `SseAuthorizer`, `ProjectionProcessorResolution`, `CommandInboxWiringValidator`, `SagaRetentionValidator`. |
 | `streamrune-spring` | `:streamrune-integration:streamrune-spring` | `org.streamrune.spring` | Spring Boot 4 auto-configuration, health indicator, SSE controller, request filter, native-image hints. |
 | `streamrune-spring-boot-starter` | `:streamrune-integration:streamrune-spring-boot-starter` | `org.streamrune.spring.boot.starter` | Dependency aggregator: `streamrune-spring` + `streamrune-postgres` + `streamrune-runtime`. |
@@ -1249,6 +1249,26 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `InMemoryOffsetStore`, `InMemoryProjectionRepository` (a fencing-capable processor and its own offset
   store, for `TRANSACTIONAL_LOCAL` unit tests without Docker), `InMemoryProjectionDeadLetterStore`,
   `InMemorySagaStore`, `InMemorySagaDeadLetterStore`.
+- Fault injection: `ForwardingEventStore`, `ForwardingSagaStore`, `ForwardingSagaDeadLetterStore`,
+  `ForwardingDeadLetterQueue`, `ForwardingOffsetStore`, `ForwardingProjectionDeadLetterStore` and
+  `ForwardingOutboxStore` forward every method of their port to a delegate, the default methods
+  included, and consult a `FaultSchedule`: `failOnce`, `failAt` and `failAlways` throw before the
+  delegate runs, `crashAfter` lets it write and then throws, `throwing(...)` names the failure
+  (`InjectedFaultException` by default), and every call is counted.
+- Recording doubles: `RecordingStreamRuneMetrics` records every metrics call under its `MetricNames`
+  meter with its tags and amount (`count`, `total`, `lastGauge`, `assertIncremented`);
+  `ScriptedSubscriptionLeadership` is a lease the test grants, denies and revokes.
+- `SagaFixture`: a saga's runner over in-memory stores, a bus that records the commands it dispatches
+  and a `MutableClock`; steps (`given`, `when`, `replyingTo`, `redeliver`, `runTimeouts`) and
+  expectations (`expectCommands`, `expectState`, `expectStatus`, `expectCompensating`,
+  `expectCompleted`, `expectDeadLettered`). `streamrune-test` depends on `streamrune-runtime` for it,
+  and `SagaTimeoutRunner.pollOnce()` runs one poll on the caller's thread.
+- `EventStreamFixtures`: the events of an `InMemoryEventStore` written to a JSON file, read back and
+  appended to a fresh serializing store, which resolves and upcasts each payload as it reads its own.
+- Clock seams: `OutboxPoller`, `ContinuousProjectionRunner`, `ScheduledProjectionRunner`,
+  `MultiProjectionRunner`, `PollingEventSubscription`, `StreamEventSubscription` and `StreamRune`
+  take `clock(Clock)`; with one, the timestamps they record and the durations they measure come
+  from it (without one, the system clock and `System.nanoTime()`).
 - Contract suites a custom store can extend: `SagaStoreContract`, `SagaDeadLetterStoreContract`,
   `OutboxStoreContract`, `AtomicBatchProcessorContract`; and `CommandBusProvenanceContract` for a
   custom `CommandBus`: the saga origin and the causation id come from the bound dispatch cause and
