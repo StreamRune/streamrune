@@ -115,6 +115,15 @@ class ReservedCorrelationIdDeadLetterTest {
         .hasMessage("payment provider unreachable");
   }
 
+  /** The dispatch fails at the provider and is dead-lettered: its caller is told so. */
+  private void assertDeadLetteredAfterFailingAtTheProvider(Runnable dispatch) {
+    assertThatThrownBy(dispatch::run)
+        .isInstanceOf(CommandDeadLetteredException.class)
+        .cause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("payment provider unreachable");
+  }
+
   private static void assertNoEntryIsReserved(List<DeadLetterEntry> entries) {
     assertThat(entries)
         .allSatisfy(
@@ -201,7 +210,7 @@ class ReservedCorrelationIdDeadLetterTest {
     var request =
         StreamRuneContext.RequestContext.fromRequest(
             null, null, CorrelationId.of("c".repeat(255)), Instant.now(), Map.of());
-    assertFailsAtTheProvider(
+    assertDeadLetteredAfterFailingAtTheProvider(
         () ->
             ScopedValue.where(StreamRuneContext.CURRENT, request)
                 .run(() -> bus.execute(new Charge("pay-request"))));
@@ -228,7 +237,7 @@ class ReservedCorrelationIdDeadLetterTest {
             StreamRuneContext.continuing(requestCaused)
                 .run(() -> bus.execute(new Charge("pay-continued"))));
     // A background command: no context, no correlation id.
-    assertFailsAtTheProvider(() -> bus.execute(new Charge("pay-background")));
+    assertDeadLetteredAfterFailingAtTheProvider(() -> bus.execute(new Charge("pay-background")));
 
     assertThat(deadLetters.all())
         .extracting(entry -> entry.correlationId() == null ? null : entry.correlationId().value())

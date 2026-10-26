@@ -2305,9 +2305,12 @@ class VirtualThreadCommandBusTest {
 
     runWithContext(
         () ->
-            assertThrows(
+            assertInstanceOf(
                 LockAcquisitionException.class,
-                () -> bus.execute(new CounterCommand.Inc("counter-lock-2"))));
+                assertThrows(
+                        CommandDeadLetteredException.class,
+                        () -> bus.execute(new CounterCommand.Inc("counter-lock-2")))
+                    .getCause()));
 
     assertEquals(1, dlq.entries.size(), "exhausted lock retries publish a single DLQ entry");
     assertEquals(2, dlq.entries.getFirst().attempts(), "all retry attempts were used");
@@ -2363,9 +2366,12 @@ class VirtualThreadCommandBusTest {
 
     runWithContext(
         () ->
-            assertThrows(
+            assertInstanceOf(
                 LockException.class,
-                () -> bus.execute(new CounterCommand.Inc("counter-adv-lock-2"))));
+                assertThrows(
+                        CommandDeadLetteredException.class,
+                        () -> bus.execute(new CounterCommand.Inc("counter-adv-lock-2")))
+                    .getCause()));
 
     assertEquals(
         1, dlq.entries.size(), "advisory-lock retries were attempted, then a single DLQ entry");
@@ -2553,15 +2559,19 @@ class VirtualThreadCommandBusTest {
         () -> {
           Thread.currentThread().interrupt();
           try {
-            var ex =
+            var deadLettered =
                 assertThrows(
-                    CommandExecutionException.class,
+                    CommandDeadLetteredException.class,
                     () -> bus.execute(new CounterCommand.Inc("counter-int-1")),
-                    "an interrupt mid-backoff propagates a typed exception, not a bare"
-                        + " RuntimeException");
+                    "an interrupt mid-backoff dead-letters the command and says so");
+            var interrupted =
+                assertInstanceOf(
+                    CommandExecutionException.class,
+                    deadLettered.getCause(),
+                    "the failure is a typed exception, not a bare RuntimeException");
             assertInstanceOf(
                 LockAcquisitionException.class,
-                ex.getCause(),
+                interrupted.getCause(),
                 "the original transient failure is the cause");
           } finally {
             assertTrue(Thread.interrupted(), "the interrupt flag must be restored (cleared here)");

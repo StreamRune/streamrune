@@ -28,6 +28,7 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.runtime.CommandDeadLetteredException;
 import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.VirtualThreadCommandBus;
@@ -169,7 +170,10 @@ class DeadLetterWiringAutoConfigurationTest {
               var bus = ctx.getBean(VirtualThreadCommandBus.class);
               var command = new FailingCommand("agg-1", Instant.parse("2026-06-12T00:00:00Z"));
 
-              assertThatThrownBy(() -> bus.execute(command)).hasMessageContaining("boom");
+              assertThatThrownBy(() -> bus.execute(command))
+                  .isInstanceOf(CommandDeadLetteredException.class)
+                  .cause()
+                  .hasMessageContaining("boom");
 
               // The DLQ bean is wired into the auto-configured bus, and the fallback Jackson 2
               // mapper serialized the payload (including the java.time field) without a
@@ -210,7 +214,10 @@ class DeadLetterWiringAutoConfigurationTest {
               var bus = ctx.getBean(VirtualThreadCommandBus.class);
               var command = new PiiCommand("agg-1", "alice@example.com");
 
-              assertThatThrownBy(() -> bus.execute(command)).hasMessageContaining("boom");
+              assertThatThrownBy(() -> bus.execute(command))
+                  .isInstanceOf(CommandDeadLetteredException.class)
+                  .cause()
+                  .hasMessageContaining("boom");
 
               assertThat(realDlq.all()).hasSize(1);
               assertThat(realDlq.all().getFirst().commandPayload())
@@ -262,7 +269,10 @@ class DeadLetterWiringAutoConfigurationTest {
               var bus = ctx.getBean(VirtualThreadCommandBus.class);
               var command = new PiiCommand("agg-1", "carol@example.com");
 
-              assertThatThrownBy(() -> bus.execute(command)).hasMessageContaining("boom");
+              assertThatThrownBy(() -> bus.execute(command))
+                  .isInstanceOf(CommandDeadLetteredException.class)
+                  .cause()
+                  .hasMessageContaining("boom");
 
               assertThat(realDlq.all()).hasSize(1);
               assertThat(realDlq.all().getFirst().commandPayload())
@@ -370,7 +380,10 @@ class DeadLetterWiringAutoConfigurationTest {
               var bus = ctx.getBean(VirtualThreadCommandBus.class);
               var command = new PiiCommand("agg-1", "bob@example.com");
 
-              assertThatThrownBy(() -> bus.execute(command)).hasMessageContaining("boom");
+              assertThatThrownBy(() -> bus.execute(command))
+                  .isInstanceOf(CommandDeadLetteredException.class)
+                  .cause()
+                  .hasMessageContaining("boom");
 
               assertThat(realDlq.all()).hasSize(1);
               assertThat(realDlq.all().getFirst().commandPayload())

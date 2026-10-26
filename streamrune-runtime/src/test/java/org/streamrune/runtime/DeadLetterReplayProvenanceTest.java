@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -392,11 +393,13 @@ class DeadLetterReplayProvenanceTest {
               Map.of());
       harness.failing.set(true);
 
-      assertThrows(
-          IllegalStateException.class,
-          () ->
-              ScopedValue.where(StreamRuneContext.CURRENT, plain)
-                  .run(() -> harness.bus.execute(new Pay("pay-1"), key)));
+      var deadLettered =
+          assertThrows(
+              CommandDeadLetteredException.class,
+              () ->
+                  ScopedValue.where(StreamRuneContext.CURRENT, plain)
+                      .run(() -> harness.bus.execute(new Pay("pay-1"), key)));
+      assertInstanceOf(IllegalStateException.class, deadLettered.getCause());
       assertEquals(1, harness.dlq.all().size());
       assertEquals(key, harness.dlq.all().getFirst().idempotencyKey());
 

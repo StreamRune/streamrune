@@ -45,8 +45,9 @@ import org.streamrune.core.types.SagaType;
  *
  * <p><b>Forward-command failures are classified, not blindly compensated.</b> A failed forward
  * command is routed by {@link SagaCommandDispatch#isRetryLater}: PROVEN retry-later evidence (an
- * OPEN circuit breaker, an interceptor veto, a lock not acquired, a JDBC blip, a key-store outage)
- * leaves the saga untouched and propagates for redelivery ({@link #forwardRetryLater}); a business
+ * OPEN circuit breaker, an interceptor veto, a lock not acquired, a JDBC blip, a key-store outage,
+ * an aggregate holding an event stored at a schema version this replica does not read yet) leaves
+ * the saga untouched and propagates for redelivery ({@link #forwardRetryLater}); a business
  * rejection — and any failure that cannot be PROVEN retriable — takes the unchanged claim-first
  * compensation branch ({@link #claimFirstAndCompensate}). The asymmetric default is deliberate:
  * compensating is halted and bounded, whereas an unbounded batch retry of a deterministic failure
@@ -882,8 +883,9 @@ final class SagaStepExecutor<S extends SagaState> {
             + sagaCommand.command().getClass().getSimpleName()
             + " (index "
             + index
-            + ") failed transiently, or was refused admission by a circuit breaker or an"
-            + " interceptor veto; the saga is left untouched (RUNNING, same version, no"
+            + ") failed transiently, was refused admission by a circuit breaker or an"
+            + " interceptor veto, or loads an event stored at a schema version this replica does"
+            + " not read yet; the saga is left untouched (RUNNING, same version, no"
             + " compensation claimed) and the failure propagates so the subscription redelivers"
             + " the event. Already-dispatched forward commands dedup on their forward keys, so"
             + " only this index re-runs.",

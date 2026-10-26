@@ -875,13 +875,29 @@ replica still on the previous release is behind. What those replicas do in the w
 
 | What the old replica does | Schema-version bump (`EventSchemaAheadException`) | New event type (`UnknownEventTypeException`) | Shape change without a bump |
 |---|---|---|---|
-| A command that loads an aggregate carrying a newer event | fails, is dead-lettered, does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker | an added or renamed field fails with `EventDeserializationException`, is dead-lettered and does not count toward the breaker; a removed field binds as `null` and the command decides on it with no failure |
+| A command that loads an aggregate carrying a newer event, other than a saga's | fails, is dead-lettered (the caller gets `CommandDeadLetteredException`), does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker | an added or renamed field fails with `EventDeserializationException`, is dead-lettered and does not count toward the breaker; a removed field binds as `null` and the command decides on it with no failure |
+| A saga's forward command that loads such an aggregate (a saga's commands are never dead-lettered) | fails and compensates nothing: the saga is left as it is, the event is delivered again, and the step completes on an upgraded replica | fails, and the saga **compensates**: a type the reader does not register is not retry-later | an added or renamed field fails with `EventDeserializationException` and the saga **compensates**; a removed field binds as `null` and the command decides on it with no failure |
 | A projection or subscription it leads | stops at the first newer event and retries it (lag, no quarantine) until the replica is upgraded; its lease then passes to an upgraded replica | halts after the read-poison bound (5 consecutive failures by default) with health `DOWN`, until the replica is upgraded | halts after the read-poison bound with health `DOWN` (an added or renamed field, `EventDeserializationException`); a removed field reads as `null` with no failure at all |
 | Every other command | runs normally | runs normally | runs normally |
 
-Dead-lettered commands replay once their entry is retried on an upgraded replica: the retry runner
-is leased, so its automatic attempts run where the lease is, and an entry that exhausted its
-attempts during a long rollout is retried by the operator (`retry(commandId)`) afterwards.
+A dead-lettered command replays once its entry is retried on an upgraded replica. The retry runner
+is leased, so its automatic attempts run where the lease is, and the lease moves only when its
+holder stops: until then a replay may run on a replica still behind. Such a replay fails with the
+same refusal and counts no attempt (`RetryOutcome.READER_BEHIND`, an INFO line naming the event
+type and both versions): the entry is left unchanged and replayed again on the next poll. A long
+rollout therefore neither exhausts the entry (the default policy's five attempts span about 15
+minutes) nor, under `discardAfterMaxRetries`, discards the command. The runner replays a keyed
+entry automatically; an unkeyed one waits for an operator under the default policy, and an
+operator's `retry(commandId)` on a replica still behind answers `READER_BEHIND` and changes
+nothing.
+
+A command a saga dispatches is never dead-lettered: the saga subsystem owns its recovery. Its
+forward command that meets the refusal is retry-later, so the saga runner leaves the saga exactly
+as it was, claims no compensation and lets the failure propagate; the subscription delivers the
+event again, and the step completes once a replica that reads the newer event delivers it (the
+same replica after its upgrade, or the replica that takes over the saga's lease), with the commands
+that had already run answered from the command inbox. A saga whose `timeout()` elapses meanwhile is
+compensated by its `SagaTimeoutRunner`, on the deadline the saga sets.
 
 Choose the procedure by the kind of change:
 
@@ -928,7 +944,9 @@ Choose the procedure by the kind of change:
 2. **A new event type: readers first.** Release A registers the type (its class in the
    `EventTypeRegistry`, and whatever the projections and sagas do with it) and emits it nowhere;
    roll A out completely. Release B emits it. A replica that has not registered the type halts its
-   projections on the first such event, so no writer may emit it while such a replica runs.
+   projections on the first such event, so no writer may emit it while such a replica runs. The
+   same order protects sagas: on such a replica a saga's forward command that loads an aggregate
+   carrying the type fails with a failure that is not retry-later, and the saga compensates.
 3. **The aggregate's state class changes shape: bump `snapshotVersion`.** A snapshot is bound
    strictly too, but a field the state class gained binds as `null` from a snapshot the previous
    release wrote, and that snapshot then stands in for the events it covers. Raise the
@@ -936,11 +954,38 @@ Choose the procedure by the kind of change:
    2)`; the integrations' default policy is version 1, so declare a `SnapshotPolicy` bean): each
    release then discards the other's snapshots and replays the events, or migrates them through a
    `SnapshotMigration`. See [snapshot versioning](advanced/snapshot-versioning.md).
+
+   **3b. A saga's state class changes shape: stop and switch (procedure 5).** A `saga_state` row
+   carries no schema version, and the saga store binds it strictly to the state class of the
+   release that reads it. A row written with a field the reading class does not declare fails the
+   read with `SagaStateSerializationException`, which is deterministic, not retry-later: the saga
+   runner quarantines the event that met the row (a saga dead-letter entry, and the saga is
+   shielded) instead of pausing, and does so for every later event of that saga as well. So a
+   release that adds, removes or renames a field of an `S extends SagaState`:
+   - is deployed by stopping the previous release first (procedure 5), never replica by replica.
+     With a saga lease, a lease that passes to a replica of the previous release while the new
+     release runs — its holder stops, or its TTL runs out — quarantines every saga the new release
+     wrote; without one, every replica of the previous release delivers every event and quarantines
+     each such saga, and the shield it sets holds that saga's later events on the upgraded replicas
+     too;
+   - cannot be rolled back while rows of the new shape exist: a replica of the previous release
+     quarantines each saga it meets with such a row. After a rollback, or a window that took one
+     of the routes above, re-deploy the new release and drain each quarantined saga with
+     `replayAll(sagaId)` (see [Replaying quarantined events](advanced/saga.md#replaying-quarantined-events)).
+
+   The new release reads the rows the previous one wrote: an added field binds as `null` (or the
+   primitive default), so give it a default where `null` is not a valid value. A removed or renamed
+   field fails that read in the same way, so the new class keeps accepting the old property — a
+   class-level `@JsonIgnoreProperties({"oldName"})` for a removed field, `@JsonAlias("oldName")` on
+   a renamed one — for as long as rows of the old shape exist.
 4. **Roll out replica by replica.** For a schema-version bump nothing is quarantined: the old
    replicas fail the commands that load an aggregate with a newer event and lag on the projections
    they lead, the circuit breaker stays closed, and the dead-lettered commands replay on the
-   upgraded replicas. Keep the window short, and send traffic to the upgraded replicas first where
-   the load balancer allows it. A new event type is the exception: use procedure 2.
+   upgraded replicas, their replays on a replica still behind counting no attempt. A saga's
+   forward command is not dead-lettered: its saga is left as it is and its event delivered again
+   until an upgraded replica completes the step. Keep the window short, and send traffic to the
+   upgraded replicas first where the load balancer allows it. Two kinds of change are the
+   exception: a new event type (procedure 2) and a change to a saga's state class (procedure 3b).
 5. **Stop and switch.** Stop every replica of the previous release, then start the new release
    (a blue/green cutover that stops the old fleet before the new one serves writes, or a scale to
    zero). No replica is ever behind.

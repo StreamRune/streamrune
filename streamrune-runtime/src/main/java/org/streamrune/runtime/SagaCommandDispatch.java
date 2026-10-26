@@ -13,6 +13,7 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.CommandBusClosedException;
 import org.streamrune.core.CommandBusOverloadedException;
 import org.streamrune.core.DomainException;
+import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.LockException;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.StreamRuneContext;
@@ -350,6 +351,24 @@ final class SagaCommandDispatch {
    *         <li>{@link SQLException} — JDBC evidence: connection reset, pool exhaustion, statement
    *             timeout, failover. The same fail-safe marker {@link SagaStateConversion} and {@code
    *             ReadPoisonClassifier} key on.
+   *         <li>{@link EventSchemaAheadException} — this replica is behind the stored schema: the
+   *             command's aggregate holds an event a newer release stored at a {@code
+   *             schema_version} this replica's upcaster chain does not reach, which is what the
+   *             replicas still on the previous release meet during a rolling deployment of an
+   *             event-schema change. The store answered and refused the load before anything was
+   *             appended, so nothing was attempted against the command; the same command succeeds
+   *             on a replica that reads that version, so the redelivery after the upgrade completes
+   *             the step under the same forward keys. A command a saga dispatches is never
+   *             dead-lettered, so redelivery is its only way to an upgraded replica, and
+   *             compensating would undo a flow in which nothing failed. It is the framework's
+   *             retry-later verdict in {@code CommandFailureClassification}, {@code
+   *             ReadPoisonClassifier} and {@code ProjectionErrorClassifier} as well. An {@link
+   *             org.streamrune.core.UnknownEventTypeException} stays out of this set: a stored type
+   *             the reader does not register is deterministic read poison by design, because
+   *             nothing stored tells a newer release's type apart from a forgotten registration,
+   *             and propagating it would wedge the subscription for good. Deploying the readers of
+   *             a new event type before any writer emits it keeps a saga's forward commands from
+   *             meeting it.
    *         <li>A plain {@link CryptoOperationException} (i.e. NOT a {@link
    *             CryptoMappingException}) — an engine-raised backend or key-level failure: a
    *             key-store/Vault/KMS outage, or a key the engine cannot use until an operator acts
@@ -381,6 +400,7 @@ final class SagaCommandDispatch {
           || c instanceof LockException
           || c instanceof SagaStepLockException
           || c instanceof SQLException
+          || c instanceof EventSchemaAheadException
           || (c instanceof CryptoOperationException && !(c instanceof CryptoMappingException))) {
         sawRetryLater = true;
       }

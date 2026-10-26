@@ -82,8 +82,11 @@ the cause chain: this replica's upcaster chain does not reach the `schema_versio
 stored) is treated the same way, for a different reason: it is dead-lettered because a replay on an
 upgraded replica succeeds, and it does not count toward the breaker because the store answered —
 counting it would open the circuit of every replica still on the previous release for the whole
-rollout. Bumping an event's schema version for every change to its payload's shape is what makes
-a rolling deployment meet this retry-later case rather than read poison. See
+rollout. For the same reason a replay that fails with it counts no attempt (`READER_BEHIND`, below),
+and a saga's forward command that fails with it, which is never dead-lettered, leaves its saga as it
+is and is delivered again rather than compensated. Bumping an event's schema version for every
+change to its payload's shape is what makes a rolling deployment meet this retry-later case rather
+than read poison. See
 [rolling out an event-schema change](../production.md#rolling-out-an-event-schema-change).
 
 A configured `deadLetterQueue` requires an `objectMapper` on the builder — `build()` throws
@@ -110,12 +113,46 @@ nothing is executed, the runner records a failed attempt, and the entry spends i
 is exhausted. Give the runner a mapper configured like the bus's;
 `DeadLetterRetryRunner.createObjectMapper(cryptoEngine)` builds one that both sides can share.
 
+#### A dead-lettered command's caller is told so
+
+Once the entry is stored, `execute(command)` and `execute(command, key)` throw
+`CommandDeadLetteredException` instead of the failure, which is its cause. It names the entry —
+`commandId()` is the id `retry(commandId)` and `discard(commandId)` take — with `streamId()` and
+`idempotencyKey()` (`null` for an unkeyed command), and its message and `toString()` carry neither
+the command's payload nor the key. The outcome it reports is **pending**, not final: the command
+has not been applied, and a replay of the entry can still apply it. The failure itself propagates
+wherever no entry is stored — a failure `dlqEligible` refuses (a business rejection, by default), a
+bus without a queue, a failed publish (its exception attached as suppressed), the replay of an
+entry, a command a saga or a `continuing` listener dispatches — and it is what the interceptors'
+`onError` and an `executeAsync` future see, also when the entry is stored.
+
+What a caller does with it, and how an HTTP endpoint answers it:
+
+- **A keyed command is queued for replay under its key.** Send it again only under the same key,
+  or wait for the replay: the command inbox executes it once, whichever comes first, and answers the
+  other with the recorded outcome. A new key is a new operation and is applied beside the replay. An
+  endpoint answers `503 Service Unavailable` with `Retry-After` and a reason that says the change is
+  queued for replay (for example `{"reason": "QUEUED_FOR_REPLAY", "commandId": "…"}`), and a client
+  keeps the key it sent until it receives a `2xx` or a `4xx`.
+- **An unkeyed command waits for an operator** under the default policy (below): nothing pairs its
+  replay with a send of the caller's own, so a caller that sends it again has it applied twice if an
+  operator replays the entry as well. The endpoint answers `503` with a reason of its own (for
+  example `AWAITING_OPERATOR`).
+- **Not `202 Accepted`.** A client treats a `2xx` as done and never sends the request again, while
+  the replay can itself fail, exhaust its attempts and be kept for an operator.
+
+An exception mapper chosen by the thrown type — a JAX-RS `ExceptionMapper`, a Micronaut
+`ExceptionHandler` — receives `CommandDeadLetteredException`, not the `LockException` or
+`OptimisticLockException` an application maps to `503`: the bus dead-letters both once its retries
+are spent. Map `CommandDeadLetteredException` too, or map by its cause.
+
 #### Which entries are replayed automatically
 
 **An automatic replay of a command that ran without an idempotency key is a second execution.**
-When `execute(command)` fails on infrastructure, the bus dead-letters the command *and* throws the
-failure to the caller. The caller does not know the command was parked; a user re-sends the form, a
-client library retries, a load balancer retries the request. If that retry succeeds, the command's
+When `execute(command)` fails on infrastructure, the bus dead-letters the command *and* throws
+`CommandDeadLetteredException` to the caller. A caller that takes it for a final failure sends the
+command again: a user re-sends the form, a client library retries, a load balancer retries the
+request. If that retry succeeds, the command's
 effect is already there — and a later replay of the dead-letter entry executes it again. Nothing
 links the two: the replay runs under the synthetic key `dlq-replay:<commandId>`, which only
 collapses duplicate replays of the same entry and means nothing to the caller's retry. For a
@@ -143,7 +180,13 @@ unkeyed entries never starves the keyed ones behind it.
 may retry should be dispatched with `execute(command, key)`, the key derived from the caller's
 request (an `Idempotency-Key` header, a client-generated operation id) — see
 [Idempotency](idempotency.md). Then the caller's retry is deduplicated, a dead-letter entry is
-replayed automatically and safely, and nobody has to decide anything by hand.
+replayed automatically and safely, and nobody has to decide anything by hand — as long as the
+caller keeps the key. **A failure of a keyed command whose dead-letter entry exists is a pending
+outcome, not a final one** (`CommandDeadLetteredException`, see
+[A dead-lettered command's caller is told so](#a-dead-lettered-commands-caller-is-told-so)):
+the caller re-sends with the same key, which executes the command once whichever of the re-send
+and the replay comes first, or waits for the replay. A new key is a new operation, applied beside
+the replay — the same effect twice.
 
 **An entry waiting for an operator.** An unkeyed entry, and a keyed entry past the inbox window
 (below), is never replayed on the schedule and never counted as exhausted. The runner samples them
@@ -322,9 +365,14 @@ For an on-demand single retry (e.g. an operator clicking "Retry" in an admin UI)
 `retry(CommandId)` — it re-dispatches that one entry immediately, bypassing the per-entry backoff
 window, and returns a `RetryOutcome`: `REPLAYED` (the bus accepted the command and the entry was
 discarded), `FAILED` (it failed again or could not be replayed; the attempt is recorded),
-`ADMISSION_REFUSED` (the bus is closing or saturated; the entry is unchanged),
-`STALE_REPLAY_BLOCKED` (see [Stale keyed entries](#stale-keyed-entries)), `NOT_DEDUPLICATED` or
-`NOT_FOUND`. Without `force` it refuses exactly the entries the schedule leaves to an operator.
+`ADMISSION_REFUSED` (the bus is closing or saturated; the entry is unchanged), `READER_BEHIND`
+(this replica is behind the stored schema: the command's aggregate holds an event stored at a
+`schema_version` its upcaster chain does not reach, the `EventSchemaAheadException` of a rolling
+deployment; the entry is unchanged, no attempt is counted, and a replay on a replica that reads
+that version succeeds), `STALE_REPLAY_BLOCKED` (see [Stale keyed entries](#stale-keyed-entries)),
+`NOT_DEDUPLICATED` or `NOT_FOUND`. The schedule treats a replay that ends `ADMISSION_REFUSED` or
+`READER_BEHIND` the same way: nothing is counted, and the entry is replayed again on the next poll.
+Without `force` it refuses exactly the entries the schedule leaves to an operator.
 Under `unkeyedReplay = OPERATOR_ONLY`, `NOT_DEDUPLICATED` refuses an entry whose replay nothing can
 pair with a retry its caller may already have made — it ran without an idempotency key, or the bus
 has no command inbox: the operator cannot see from the entry whether that retry happened, so

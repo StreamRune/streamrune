@@ -6,7 +6,7 @@ Use command idempotency when a command may be delivered more than once and you n
 
 - **HTTP clients retry.** A browser, mobile app, or upstream service that times out on a slow `POST` will re-send the same request — often the same logical "place order" twice.
 - **Message-driven flows redeliver.** A command triggered off a broker or an event subscription (a saga dispatching commands, an integration consuming a queue) inherits the broker's at-least-once semantics.
-- **The dead-letter retry runner re-dispatches.** `DeadLetterRetryRunner` re-runs a failed command. With a key the replay and the caller's own retry meet at one inbox row, so the command applies once; without one nothing pairs them, and a replay after a successful retry by the caller applies the command a second time — which is why the runner replays unkeyed entries only when an operator asks, by default (see [Retry and resilience](retry-and-resilience.md#which-entries-are-replayed-automatically)).
+- **The dead-letter retry runner re-dispatches.** `DeadLetterRetryRunner` re-runs a failed command. With a key the replay and the caller's own retry under that key meet at one inbox row, so the command applies once (see [A dead-lettered keyed command is pending](#a-dead-lettered-keyed-command-is-pending)); without one nothing pairs them, and a replay after a successful retry by the caller applies the command a second time — which is why the runner replays unkeyed entries only when an operator asks, by default (see [Retry and resilience](retry-and-resilience.md#which-entries-are-replayed-automatically)).
 
 Idempotency makes those redeliveries safe: the first execution runs the decider and appends events; every later execution under the **same** `IdempotencyKey` returns the recorded result of the first, without re-running the handler or re-persisting events. This is *effectively-once* execution on top of at-least-once delivery.
 
@@ -119,7 +119,31 @@ class OrderController {
 
 The client sends the same `Idempotency-Key` on every retry of one logical action. The first request creates the order and appends its events; every retry returns the recorded result with `idempotentReplay() == true` and appends nothing. The controller maps that distinction onto `201 Created` vs `200 OK`, but the important guarantee is that no duplicate order is ever created.
 
-The same pattern applies on Quarkus and Micronaut — inject `org.streamrune.core.CommandBus` and read the client's request id from the framework's header abstraction.
+### A dead-lettered keyed command is pending
+
+A keyed command that fails on infrastructure is recorded in the dead letter queue with its key, and `VirtualThreadCommandBus` throws `CommandDeadLetteredException`: the failure is its cause, `commandId()` names the entry and `idempotencyKey()` is the key. That is not a negative answer. A replay of the entry — the retry runner's schedule, or an operator — runs under the same key, so the command may still be applied, and the guarantee above holds only while the client keeps that key:
+
+- **A failure on a keyed command whose dead-letter entry exists is pending.** Re-send with the same key — the inbox executes the command once, whichever of the re-send and the replay comes first, and answers the other with the recorded outcome — or wait for the replay.
+- **A new key is a new operation**, and it is applied beside the replay: the effect twice.
+- **Mint the key when the user intends the operation, and keep it until a `2xx` or a `4xx`.** A key minted per request, or per instance of a form that is closed and reopened, is a new key for the same intent.
+
+The endpoint tells the client which case it is in:
+
+```java
+    @ExceptionHandler(CommandDeadLetteredException.class)
+    ResponseEntity<Map<String, String>> deadLettered(CommandDeadLetteredException e) {
+        // 503, not 202: a 2xx tells the client the operation is done, while the replay can fail,
+        // exhaust its attempts and wait for an operator.
+        String reason = e.idempotencyKey() != null ? "QUEUED_FOR_REPLAY" : "AWAITING_OPERATOR";
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "30")
+                .body(Map.of("reason", reason, "commandId", e.commandId().value()));
+    }
+```
+
+`QUEUED_FOR_REPLAY` tells the client to re-send under the same key or wait; `AWAITING_OPERATOR` that the command ran without a key, so its entry waits for an operator and a re-send of the same operation may be applied as well. The client's own automatic retries of a `5xx` under the same key stay safe either way for a keyed request. [Retry and resilience](retry-and-resilience.md#a-dead-lettered-commands-caller-is-told-so) lists when the bus throws the failure itself instead.
+
+The same pattern applies on Quarkus and Micronaut — inject `org.streamrune.core.CommandBus` and read the client's request id from the framework's header abstraction. Their exception mappers are chosen by the thrown type, so map `CommandDeadLetteredException` with one of its own.
 
 ## Idempotency at the ingress: a recipe for public command endpoints
 

@@ -222,6 +222,8 @@ public record State(
 }
 ```
 
+The state is stored as JSON in `saga_state` with no schema version and bound strictly to the class of the release that reads it: a stored property the class does not declare fails the read, and the runner quarantines the saga's event. A release that adds, removes or renames a field of the state class therefore starts only once every replica of the previous release has stopped, and cannot be rolled back while rows of the new shape exist; the new class keeps accepting a removed or renamed property for as long as old rows exist. See procedure 3b of [rolling out an event-schema change](../production.md#rolling-out-an-event-schema-change).
+
 If your saga only needs the functional core (state evolution, command decisions, compensation) without owning routing, implement `SagaDecider<S>` instead of `SagaOrchestrator<S>` and configure routing on the builder:
 
 ```java
@@ -378,6 +380,7 @@ The failure is now split:
   | `OptimisticLockException`, `LockException` | the command bus's own retry ladder already calls both transient and retries them |
   | `SQLException` | JDBC: connection reset, pool exhaustion, statement timeout, failover — the same marker the state-conversion and projection-read classifiers key on |
   | `CryptoOperationException` (bare, i.e. not `CryptoMappingException`) | an engine-raised backend or key-level failure — a Vault/AWS KMS/key-store outage, a policy refusal an operator can reverse, a disabled or wrong key — not a verdict on the command |
+  | `EventSchemaAheadException` | this replica is behind the stored schema: the command's aggregate holds an event a newer release stored at a `schema_version` its upcaster chain does not reach — what the replicas still on the previous release meet during a rolling deployment of an event-schema change. The store refused the load before anything was appended, and the command succeeds on a replica that reads that version, so the redelivery after the upgrade completes the step; a saga's command is never dead-lettered, so redelivery is the only way it reaches that replica (see [rolling out an event-schema change](../production.md#rolling-out-an-event-schema-change)). `UnknownEventTypeException` is not in the set: a stored type the reader does not register is deterministic read poison by design, so the saga compensates on it — deploy the readers of a new event type before any writer emits it |
 
 - **Everything else** → the unchanged **claim-first compensation** branch: claim `COMPENSATING`, call `compensate()`, dispatch the undo, terminalize. This covers the intended case — a business rejection (`DomainException`/`IllegalArgumentException`) — *and* every failure the framework cannot **prove** retriable: a `SubjectForgottenException` (crypto-shredded subject, permanent), an `EventStoreException` wrapping a Jackson mapping defect, a plain `NullPointerException` out of a buggy command handler.
 

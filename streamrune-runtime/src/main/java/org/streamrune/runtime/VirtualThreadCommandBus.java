@@ -506,7 +506,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
                     notifyAfter(
                         withResult(beforeCtx, committedResult), completedBeforesAtDispatch));
       } catch (RuntimeException e) {
-        notifyOnError(beforeCtx, e, completedBefores);
+        notifyOnError(beforeCtx, failureItself(e, command), completedBefores);
         recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
         throw e;
       }
@@ -530,6 +530,21 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         LOG.error("Metrics recordCommandDuration failed", e);
       }
     }
+  }
+
+  /**
+   * The failure a dispatch of {@code command} ended in, as its interceptors' {@code onError} and an
+   * {@link #executeAsync} future see it: the cause of the {@link CommandDeadLetteredException} the
+   * bus throws in its place once the command's dead-letter entry is stored, otherwise {@code
+   * failure} itself. The signal is the synchronous caller's: an interceptor classifies the failure
+   * (the circuit breaker counts infrastructure failures by their type), and an asynchronous command
+   * runs without an idempotency key, so its entry waits for an operator whatever its future says.
+   */
+  private static Throwable failureItself(Throwable failure, Command command) {
+    return failure instanceof CommandDeadLetteredException deadLettered
+            && deadLettered.command() == command
+        ? deadLettered.getCause()
+        : failure;
   }
 
   /**
@@ -830,7 +845,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
             result = executeCounted(command, null);
           } catch (Throwable e) {
             slot.release();
-            future.completeExceptionally(e);
+            future.completeExceptionally(failureItself(e, command));
             return;
           }
           slot.release();
@@ -1141,19 +1156,31 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           }
           // Interrupted mid-backoff (typically shutdown): abandon the retries, but record the
           // command in the DLQ first — like any other abandoned failure it must not be lost.
-          maybePublishToDeadLetterQueue(
-              command, commandId, streamId, e, attempt, commandTimestamp, key);
-          throw new CommandExecutionException(
-              command, "Interrupted during retry backoff after attempt " + attempt, e);
+          RuntimeException interrupted =
+              new CommandExecutionException(
+                  command, "Interrupted during retry backoff after attempt " + attempt, e);
+          if (maybePublishToDeadLetterQueue(
+              command, commandId, streamId, e, attempt, commandTimestamp, key)) {
+            throw new CommandDeadLetteredException(command, commandId, streamId, key, interrupted);
+          }
+          throw interrupted;
         }
         // Permanent failure or retries exhausted — publish to DLQ before propagating, unless the
         // failure is a business rejection (see dlqEligible).
-        maybePublishToDeadLetterQueue(
-            command, commandId, streamId, e, attempt, commandTimestamp, key);
-        if (e instanceof RuntimeException re) {
-          throw re;
+        RuntimeException failure =
+            e instanceof RuntimeException re
+                ? re
+                : new CommandExecutionException(command, "Failed to execute command", e);
+        if (maybePublishToDeadLetterQueue(
+            command, commandId, streamId, e, attempt, commandTimestamp, key)) {
+          // The entry is stored, so the command's outcome is pending, not final: a replay of the
+          // entry, under the command's own key when it has one, can still apply it. The caller is
+          // told so, with the entry's id, instead of a failure it would take for the last word and
+          // answer by sending the operation again, under a new key that no inbox row pairs with the
+          // replay. The failure is the cause; interceptors and an executeAsync future see it alone.
+          throw new CommandDeadLetteredException(command, commandId, streamId, key, failure);
         }
-        throw new CommandExecutionException(command, "Failed to execute command", e);
+        throw failure;
       }
     }
     // This should never be reached but compiler needs it
@@ -1333,9 +1360,11 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * answer from the domain, not a transient or infrastructural fault — dead-lettering it would let
    * DLQ retry infrastructure blindly replay the command later and re-run a decision the domain
    * already, correctly rejected. Ineligible failures are neither published nor counted as
-   * dead-lettered; they are logged and still propagate exactly as eligible ones do.
+   * dead-lettered; they are logged and propagate unchanged.
+   *
+   * @return whether the dead-letter entry is stored ({@link #publishToDeadLetterQueue})
    */
-  private void maybePublishToDeadLetterQueue(
+  private boolean maybePublishToDeadLetterQueue(
       Command command,
       CommandId commandId,
       StreamId streamId,
@@ -1351,12 +1380,22 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName(),
           exception.getClass().getSimpleName());
-      return;
+      return false;
     }
-    publishToDeadLetterQueue(command, commandId, streamId, exception, attempts, timestamp, key);
+    return publishToDeadLetterQueue(
+        command, commandId, streamId, exception, attempts, timestamp, key);
   }
 
-  private void publishToDeadLetterQueue(
+  /**
+   * Records the failed command in the dead letter queue, unless another channel owns its recovery
+   * or there is no queue.
+   *
+   * @return {@code true} once the publish succeeded; {@code false} when no entry was stored: no
+   *     queue is configured, the execution replays an entry ({@link #DLQ_REPLAY}), a saga
+   *     dispatched the command, a dispatch cause is bound, or the publish failed (its exception is
+   *     attached to {@code exception} as suppressed)
+   */
+  private boolean publishToDeadLetterQueue(
       Command command,
       CommandId commandId,
       StreamId streamId,
@@ -1364,7 +1403,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       int attempts,
       Instant timestamp,
       IdempotencyKey key) {
-    if (deadLetterQueue == null) return;
+    if (deadLetterQueue == null) return false;
     if (DLQ_REPLAY.isBound() && Boolean.TRUE.equals(DLQ_REPLAY.get())) {
       // This execution replays an existing DLQ entry; the retry infrastructure tracks attempts
       // on the original entry. Publishing again would add a new entry on every retry cycle.
@@ -1372,7 +1411,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           "Skipping DLQ publish for command {} ({}) — execution replays an existing DLQ entry",
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName());
-      return;
+      return false;
     }
     if (StreamRuneContext.isSagaDispatch()) {
       // The saga subsystem, not this queue, owns the recovery of a command a saga issued. Every
@@ -1388,7 +1427,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
               + " recovery (compensation, redelivery, timeout, or the compensation resume paths)",
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName());
-      return;
+      return false;
     }
     if (StreamRuneContext.cause() != null) {
       // A dispatch cause is bound by saga dispatch (the block above) and by
@@ -1406,7 +1445,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
               + " retries it",
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName());
-      return;
+      return false;
     }
     String commandPayload;
     try {
@@ -1476,6 +1515,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       recordMetric(
           () -> metrics.recordDeadLetterPublished(command.getClass().getSimpleName()),
           "recordDeadLetterPublished");
+      return true;
     } catch (RuntimeException e) {
       // The original command failure still propagates to the caller; attach the DLQ failure as
       // suppressed so it is visible on the propagated exception, not only in this log line.
@@ -1488,6 +1528,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName(),
           e);
+      return false;
     }
   }
 
@@ -1875,6 +1916,14 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     /**
      * Sets the dead letter queue for failed commands. When a command exhausts all retry attempts,
      * it is published to the DLQ before the exception propagates.
+     *
+     * <p>Once the entry is stored, {@code execute} throws {@link CommandDeadLetteredException}
+     * instead of the failure, which becomes its cause: the command's outcome is pending, because a
+     * replay of the entry can still apply it, and the exception names the entry. A caller that sent
+     * the command under an idempotency key sends it again only under the same key, or waits. The
+     * failure itself propagates when no entry is stored (a failed publish, an ineligible failure,
+     * one of the commands below), and reaches the interceptors' {@code onError} and an {@code
+     * executeAsync} future in every case.
      *
      * <p>Three kinds of command are never published, because something else owns their retry and an
      * entry would add a second, uncoordinated one: a replay of an existing entry ({@link

@@ -27,10 +27,12 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.DomainException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.LockException;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.StreamRuneMetrics;
+import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.SubjectForgottenException;
@@ -215,6 +217,17 @@ class SagaForwardDispatchClassificationTest {
   }
 
   /**
+   * This replica is behind the stored schema: the command's aggregate holds an event a newer
+   * release stored at a schema version this replica's upcaster chain does not reach. The store
+   * refused the load before anything was appended, and the same command succeeds on a replica that
+   * reads that version, so the event is redelivered and the flow is not undone.
+   */
+  @Test
+  void readerBehindTheStoredSchema_propagates_leavingTheSagaRunningAtItsLoadedVersion() {
+    assertForwardFailurePropagates(SagaForwardDispatchClassificationTest::schemaAhead);
+  }
+
+  /**
    * A business rejection keeps the documented contract: claim COMPENSATING first, then compensate.
    * This is the ONE meaning of "a forward command failed" for which undoing the flow is correct.
    */
@@ -271,6 +284,14 @@ class SagaForwardDispatchClassificationTest {
                         "value too long for type character varying(255)", "22001"))))
         .as("the column overflow the ingress bound pre-empts was retry-later")
         .isTrue();
+  }
+
+  private static EventSchemaAheadException schemaAhead() {
+    return new EventSchemaAheadException(
+        "StockReserved is stored at schema_version 2; this reader's upcaster chain reaches 1",
+        new EventType("StockReserved"),
+        2,
+        1);
   }
 
   private static IllegalArgumentException ingressRefusal(String value) {
@@ -516,8 +537,21 @@ class SagaForwardDispatchClassificationTest {
         .isTrue();
     assertThat(SagaCommandDispatch.isRetryLater(new CryptoOperationException("vault down")))
         .isTrue();
+    assertThat(SagaCommandDispatch.isRetryLater(schemaAhead())).isTrue();
+    assertThat(
+            SagaCommandDispatch.isRetryLater(
+                new CommandExecutionException(new ReserveStock("x"), "wrapped", schemaAhead())))
+        .as("the reader-behind refusal is recognized anywhere in the chain")
+        .isTrue();
 
     // Permanent / unprovable ⇒ the documented compensate contract, unchanged.
+    assertThat(
+            SagaCommandDispatch.isRetryLater(
+                new UnknownEventTypeException("event", "StockReserved", List.of("OrderConfirmed"))))
+        .as(
+            "a stored type the reader does not register is deterministic read poison: nothing"
+                + " tells a newer release's type apart from a forgotten registration")
+        .isFalse();
     assertThat(SagaCommandDispatch.isRetryLater(new IllegalStateException("handler bug")))
         .isFalse();
     assertThat(SagaCommandDispatch.isRetryLater(new IllegalArgumentException("bad"))).isFalse();

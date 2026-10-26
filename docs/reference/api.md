@@ -551,7 +551,9 @@ fails closed rather than binding a newer-shaped payload to an older class. The e
 | Consumer | Verdict |
 |---|---|
 | Command bus dead letter queue | dead-lettered (a replay on an upgraded replica succeeds) |
+| `DeadLetterRetryRunner` | `RetryOutcome.READER_BEHIND`: a replay that fails with it counts no attempt, and the entry is unchanged |
 | Circuit breaker | **not** counted (the store answered; this replica's code is behind) |
+| A saga's forward command (never dead-lettered) | retry-later: the saga is left as it is and the event delivered again, never compensated |
 | `ReadPoisonClassifier`, `ProjectionErrorClassifier.DEFAULT` | transient: the projection or subscription stops at that event and retries it, never quarantines it |
 
 **Every shape change bumps the version.** Payloads bind strictly: a property the event class does
@@ -712,7 +714,7 @@ The `StreamRune.Builder` is the entry point for wiring the entire framework. Cal
 | `asyncTaskWrapper(UnaryOperator<Runnable>)` | Wraps each task `executeAsync` spawns. Runs on the submitting thread, so it can capture thread-bound caller context (such as the current OpenTelemetry context) that does not cross into the new virtual thread. | none |
 | `unboundRequestContext(Supplier<RequestContext>)` | Where a command dispatched on a thread with `StreamRuneContext.CURRENT` unbound takes its request context from. Asked once per dispatch on the dispatching thread (on entry to `execute`, at submission in `executeAsync`), never while `CURRENT` is bound; its answer is bound as `CURRENT` for the whole dispatch, so it is the identity the command is authorized and audited as. `null` answer: no context. The Micronaut integration sets it to the request's context (see its README). | none |
 | `objectMapper(ObjectMapper)` | The Jackson `ObjectMapper` that writes a command as JSON when the bus dead-letters it. Required when `deadLetterQueue` is set. The retry runner rebuilds the command from that JSON on replay, so a command type must round-trip through Jackson (records do by default; see [Dead-letter queue](../guide/advanced/retry-and-resilience.md#dead-letter-queue)). `DeadLetterRetryRunner.createObjectMapper(cryptoEngine)` builds a mapper for both sides. | none (the framework integrations supply one) |
-| `deadLetterQueue(DeadLetterQueue)` | Persists commands that fail after all retries. | none |
+| `deadLetterQueue(DeadLetterQueue)` | Persists commands that fail after all retries. Once a command's entry is stored, `execute` throws `CommandDeadLetteredException` (`commandId()`, `streamId()`, `idempotencyKey()`, the failure as its cause): the outcome is pending, not final (see [A dead-lettered command's caller is told so](../guide/advanced/retry-and-resilience.md#a-dead-lettered-commands-caller-is-told-so)). | none |
 | `metrics(StreamRuneMetrics)` | Metrics collector (e.g., `MicrometerStreamRuneMetrics`). | `StreamRuneMetrics.NOOP` |
 | `registerProjection(String name, Projection, ProjectionDeliveryMode)` | Registers a projection to run via `startProjections()` under its declared delivery mode — `TRANSACTIONAL_LOCAL`, `AT_LEAST_ONCE_IDEMPOTENT` or `EXTERNAL_EFFECT`; required, there is no default (see [Delivery modes](../guide/concepts.md#delivery-modes--what-a-projection-promises)). The runner checks the mode against its `AtomicBatchProcessor` before it reads an event. | none |
 | `projectionRunner(ProjectionRunner)` | Sets the projection runner implementation. | none |

@@ -200,8 +200,11 @@ class DlqReplayKeyedIdempotencyTest {
     var streamId = StreamId.of(TYPE, AggregateId.of("w-dlq-1"));
 
     // (1) The first keyed execute hits the seeded transient fault, rolls back uncommitted, and is
-    // dead-lettered. The failure propagates to the caller.
-    assertThrows(EventStoreException.class, () -> bus.execute(cmd, key));
+    // dead-lettered. The caller is told that the outcome is pending, replayed under its key.
+    var deadLettered =
+        assertThrows(CommandDeadLetteredException.class, () -> bus.execute(cmd, key));
+    assertInstanceOf(EventStoreException.class, deadLettered.getCause());
+    assertEquals(key, deadLettered.idempotencyKey());
 
     assertEquals(
         0, streamLength(backing, streamId), "the failed command must have committed nothing");
