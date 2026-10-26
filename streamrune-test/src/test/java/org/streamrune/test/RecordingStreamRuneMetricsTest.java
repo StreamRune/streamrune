@@ -132,6 +132,41 @@ class RecordingStreamRuneMetricsTest {
     return values;
   }
 
+  /**
+   * A meter is a constant named under {@code streamrune.}, a tag key one named {@code TAG_*} that
+   * is not: {@link MetricNames} holds no constant of another kind, which the recording double reads
+   * as neither.
+   */
+  @Test
+  void everyStringConstantOfMetricNames_isAMeterOrATagKey() throws Exception {
+    for (Field field : MetricNames.class.getFields()) {
+      if (Modifier.isStatic(field.getModifiers()) && field.getType() == String.class) {
+        String value = (String) field.get(null);
+        assertEquals(
+            !field.getName().startsWith("TAG_"),
+            value.startsWith("streamrune."),
+            () -> field.getName() + " = " + value + " is neither a meter nor a tag key");
+      }
+    }
+  }
+
+  /** Constants of every kind the double tells apart. */
+  static final class Names {
+    public static final String ORDERS_PLACED = "streamrune.orders.placed";
+    public static final String TAG_REGION = "region";
+    public static final String OUTCOME_SUCCESS = "success";
+    public static final String TAG_PREFIX = "streamrune.";
+    public static final int LIMIT = 3;
+  }
+
+  @Test
+  void aConstantOfAnotherKind_isNeitherAMeterNorATagKey() {
+    assertEquals(
+        Set.of("streamrune.orders.placed"),
+        RecordingStreamRuneMetrics.constants(Names.class, true));
+    assertEquals(Set.of("region"), RecordingStreamRuneMetrics.constants(Names.class, false));
+  }
+
   @Test
   void everyMethodOfTheInterfaceIsOverridden() {
     ForwardingDecoratorChecks.assertEveryMethodOverridden(

@@ -106,7 +106,7 @@ class ProjectionRunnerLeaseRoleTest {
 
   @Test
   void aRunnerThatHoldsItsLease_isLeading_whileLive() throws Exception {
-    var leadership = new ScriptedSubscriptionLeadership().grant();
+    var leadership = ScriptedSubscriptionLeadership.granting();
     var runner = runner(leadership).build();
     Thread thread = run(runner, batch -> {});
     try {
@@ -140,7 +140,7 @@ class ProjectionRunnerLeaseRoleTest {
   @Test
   void aRunnerThatLosesItsLease_turnsStandby_andKeepsTheHoleItDeadLettered() throws Exception {
     appendOne();
-    var leadership = new ScriptedSubscriptionLeadership().grant();
+    var leadership = ScriptedSubscriptionLeadership.granting();
     var deadLetters = new InMemoryProjectionDeadLetterStore();
     var runner =
         runner(leadership)

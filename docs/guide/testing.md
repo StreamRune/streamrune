@@ -837,7 +837,7 @@ assertEquals(OptionalLong.of(0), metrics.lastGauge(MetricNames.OUTBOX_PENDING));
 `ScriptedSubscriptionLeadership` is a `SubscriptionLeadership` the test drives through a failover:
 
 ```java
-var leadership = new ScriptedSubscriptionLeadership().grant();   // it denies until granted
+var leadership = ScriptedSubscriptionLeadership.granting();   // new ScriptedSubscriptionLeadership() denies until grant()
 // ... a runner built with .leadership(leadership) leads ...
 leadership.revoke();     // the lease is gone: the runner stands by
 leadership.grant();      // free again: the runner takes it, with a greater epoch
@@ -893,7 +893,7 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `FaultSchedule` | The faults a forwarding store injects — `failOnce`, `failAt`, `failAlways`, `crashAfter`, `throwing` — and the count of every call. |
 | `InjectedFaultException` | What a `FaultSchedule` throws unless it names another failure. |
 | `RecordingStreamRuneMetrics` | A `StreamRuneMetrics` that records every call under its `MetricNames` meter and tags; `assertIncremented`, `count`, `total`, `lastGauge`. |
-| `ScriptedSubscriptionLeadership` | A `SubscriptionLeadership` the test grants, denies and revokes, counting attempts, acquisitions and resignations. |
+| `ScriptedSubscriptionLeadership` | A `SubscriptionLeadership` the test grants, denies and revokes, counting attempts, acquisitions and resignations; `granting()` starts granting, the constructor denying. |
 | `InMemorySagaStore` | A `SagaStore` that keeps the state objects themselves and stamps their times from the `Clock` it is given. |
 | `InMemorySagaDeadLetterStore` | A `SagaDeadLetterStore` whose `publish` is an upsert per saga and event offset, as in PostgreSQL. |
 | `InMemoryCryptoEngine` | An AES-256-GCM `CryptoEngine` with its keys in memory and the terminal erasure of the production engines. |

@@ -27,6 +27,16 @@ class ScriptedSubscriptionLeadershipTest {
   }
 
   @Test
+  void granting_handsOutALeaseFromTheStart() {
+    var leadership = ScriptedSubscriptionLeadership.granting();
+
+    Lease lease = leadership.tryAcquire("orders").orElseThrow();
+
+    assertEquals(Optional.of(lease), leadership.current("orders"));
+    assertEquals(1, leadership.acquisitions());
+  }
+
+  @Test
   void grant_handsOutALease_andATryAcquireOfAHeldNameRenewsIt() {
     var leadership = new ScriptedSubscriptionLeadership().grant();
 

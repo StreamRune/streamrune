@@ -90,8 +90,8 @@ public class RecordingStreamRuneMetrics implements StreamRuneMetrics {
   /** A gauge registered with a supplier: its meter, its tags and the supplier a scrape reads. */
   private record SuppliedGauge(String meterName, Map<String, String> tags, LongSupplier supplier) {}
 
-  private static final Set<String> METERS = constants(true);
-  private static final Set<String> TAG_KEYS = constants(false);
+  private static final Set<String> METERS = constants(MetricNames.class, true);
+  private static final Set<String> TAG_KEYS = constants(MetricNames.class, false);
 
   private final List<Sample> samples = new CopyOnWriteArrayList<>();
   private final List<SuppliedGauge> suppliedGauges = new CopyOnWriteArrayList<>();
@@ -231,14 +231,22 @@ public class RecordingStreamRuneMetrics implements StreamRuneMetrics {
     }
   }
 
-  /** The values of the {@code String} constants of {@link MetricNames}: meters or tag keys. */
-  private static Set<String> constants(boolean meters) {
+  /**
+   * The values of the {@code String} constants of {@code names} that name its meters, or its tag
+   * keys. A meter is a constant whose value is under {@code streamrune.} and whose name does not
+   * start with {@code TAG_}; a tag key is a {@code TAG_*} constant whose value is not under {@code
+   * streamrune.}. A constant of another kind, a tag value or a prefix, is neither, so the queries
+   * refuse it.
+   */
+  static Set<String> constants(Class<?> names, boolean meters) {
     Set<String> values = new LinkedHashSet<>();
-    for (Field field : MetricNames.class.getFields()) {
+    for (Field field : names.getFields()) {
       if (Modifier.isStatic(field.getModifiers()) && field.getType() == String.class) {
         try {
           String value = (String) field.get(null);
-          if (value.startsWith("streamrune.") == meters) {
+          boolean namedTag = field.getName().startsWith("TAG_");
+          boolean underStreamrune = value.startsWith("streamrune.");
+          if (meters ? !namedTag && underStreamrune : namedTag && !underStreamrune) {
             values.add(value);
           }
         } catch (IllegalAccessException e) {

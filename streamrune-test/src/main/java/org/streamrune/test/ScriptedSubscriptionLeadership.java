@@ -14,21 +14,23 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
  * without a database:
  *
  * <pre>{@code
- * var leadership = new ScriptedSubscriptionLeadership().grant();
+ * var leadership = ScriptedSubscriptionLeadership.granting();
  * // ... build the runner with .leadership(leadership) and start it: it leads ...
  * leadership.revoke();   // another replica took the lease: the runner stands by
  * leadership.grant();    // the lease is free again: the runner takes it, with a higher epoch
  * assertEquals(2, leadership.acquisitions());
  * }</pre>
  *
- * <p>It starts denying: {@link #tryAcquire} answers empty for every name until {@link #grant()}.
- * Once granted, a name is acquired with a fresh {@link Lease#epoch() epoch}, strictly greater than
- * every epoch handed out before, and a {@code tryAcquire} of a name this process holds renews it
- * with the same lease. {@link #deny()} stops handing out leases and leaves the held ones held; a
- * held lease is renewed under it as well. {@link #revoke()} drops every held lease — the next
- * {@link #current} of each name reports none — and denies, as when another replica takes over.
- * {@link #resign} and {@link #close()} release what this process holds. The scripting calls apply
- * to every consumer name.
+ * <p>{@link #granting()} starts granting. The constructor starts denying: {@link #tryAcquire}
+ * answers empty for every name until {@link #grant()}, so a runner built over it stands by — what a
+ * test of a replica that waits for the lease wants, and what a test that forgets {@code grant()}
+ * sees as an {@code await} that times out. Once granted, a name is acquired with a fresh {@link
+ * Lease#epoch() epoch}, strictly greater than every epoch handed out before, and a {@code
+ * tryAcquire} of a name this process holds renews it with the same lease. {@link #deny()} stops
+ * handing out leases and leaves the held ones held; a held lease is renewed under it as well.
+ * {@link #revoke()} drops every held lease — the next {@link #current} of each name reports none —
+ * and denies, as when another replica takes over. {@link #resign} and {@link #close()} release what
+ * this process holds. The scripting calls apply to every consumer name.
  *
  * <p>Thread-safe: runners call it from their own threads.
  */
@@ -44,6 +46,16 @@ public class ScriptedSubscriptionLeadership implements SubscriptionLeadership {
 
   /** Creates a leadership that denies every lease until {@link #grant()}. */
   public ScriptedSubscriptionLeadership() {}
+
+  /**
+   * Creates a leadership that hands out a lease to every name from the start, as {@code new
+   * ScriptedSubscriptionLeadership().grant()} does: a runner built over it leads at once.
+   *
+   * @return a granting leadership
+   */
+  public static ScriptedSubscriptionLeadership granting() {
+    return new ScriptedSubscriptionLeadership().grant();
+  }
 
   /**
    * From now on {@link #tryAcquire} hands out a lease to every name it is asked for.

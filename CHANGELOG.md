@@ -1256,7 +1256,8 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   (`InjectedFaultException` by default), and every call is counted.
 - Recording doubles: `RecordingStreamRuneMetrics` records every metrics call under its `MetricNames`
   meter with its tags and amount (`count`, `total`, `lastGauge`, `assertIncremented`);
-  `ScriptedSubscriptionLeadership` is a lease the test grants, denies and revokes.
+  `ScriptedSubscriptionLeadership` is a lease the test grants, denies and revokes (`granting()`
+  starts granting, the constructor denying).
 - `SagaFixture`: a saga's runner over in-memory stores, a bus that records the commands it dispatches
   and a `MutableClock`; steps (`given`, `when`, `replyingTo`, `redeliver`, `runTimeouts`) and
   expectations (`expectCommands`, `expectState`, `expectStatus`, `expectCompensating`,
