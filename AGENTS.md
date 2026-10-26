@@ -220,8 +220,8 @@ run by `./gradlew docLintTest`, `check` and `quickCheck`) fail when it does not:
 - **Quarkus beans as the module's tests boot them.** The container tests run Arc without the
   bytecode transformation of a Quarkus build, and the classes Arc generates live in another
   classloader. A normal-scoped bean class therefore has a non-private no-argument constructor beside
-  the one marked `@Inject`, and its observer and disposer methods are public;
-  `QuarkusIntegrationWiringContractTest` checks every bean class of the module.
+  the one marked `@Inject` and no final method, and every observer and disposer method is public;
+  `QuarkusIntegrationWiringContractTest` checks every bean class of the module's main sources.
 - **Micronaut collection injection.** A singleton registered at runtime
   (`ApplicationContext.registerSingleton`) is not reliably collected into an injected `List`; a
   test that needs a bean in such a list declares it as a compile-time bean in a `@Factory`.

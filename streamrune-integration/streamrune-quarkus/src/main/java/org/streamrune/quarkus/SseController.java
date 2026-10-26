@@ -305,6 +305,21 @@ public class SseController {
   }
 
   /**
+   * Client-proxy constructor — see {@link StreamRuneConfigValidator#StreamRuneConfigValidator()}
+   * for the rationale. Never used for a real instance.
+   */
+  protected SseController() {
+    this.publisher = null;
+    this.authorizer = null;
+    this.identityPolicy = null;
+    this.requestContextHolder = null;
+    this.sseEnabled = null;
+    this.timeout = null;
+    this.keepAliveInterval = null;
+    this.keepAlive = null;
+  }
+
+  /**
    * Test convenience: SSE always enabled at runtime, production reaping defaults. Its holder is
    * never filled, as for the two constructors below: the HTTP endpoint refuses every request, and a
    * test opens a stream through {@link #stream(String, String, List,

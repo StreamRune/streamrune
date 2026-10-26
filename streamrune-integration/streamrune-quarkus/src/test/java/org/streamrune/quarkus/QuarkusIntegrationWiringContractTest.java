@@ -314,14 +314,26 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   @Test
   void theContainerHoldsEveryBeanClassOfTheModule() throws ClassNotFoundException {
     Set<String> beanClasses = new TreeSet<>();
-    for (String type : ConfigurationDocs.typesDeclaredIn(java.nio.file.Path.of("src/main/java"))) {
-      collectBeanClasses(Class.forName(type, false, getClass().getClassLoader()), beanClasses);
-    }
+    moduleBeanClasses().forEach(c -> beanClasses.add(c.getName()));
     Set<String> covered = new TreeSet<>();
     FRAMEWORK_BEANS.forEach(c -> covered.add(c.getName()));
     covered.add(SseController.class.getName());
     covered.add(StreamRuneRequestFilter.class.getName());
     assertEquals(beanClasses, covered);
+  }
+
+  /**
+   * Every class of the module's main sources, nested ones included, that Quarkus makes a bean: a
+   * scope annotation, a JAX-RS provider or a JAX-RS resource.
+   */
+  private static List<Class<?>> moduleBeanClasses() throws ClassNotFoundException {
+    List<Class<?>> beanClasses = new ArrayList<>();
+    for (String type : ConfigurationDocs.typesDeclaredIn(java.nio.file.Path.of("src/main/java"))) {
+      collectBeanClasses(
+          Class.forName(type, false, QuarkusIntegrationWiringContractTest.class.getClassLoader()),
+          beanClasses);
+    }
+    return beanClasses;
   }
 
   /**
@@ -333,9 +345,9 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
    * and disposer method is public.
    */
   @Test
-  void everyBeanClassIsProxyableAndObservableAsWritten() {
+  void everyBeanClassIsProxyableAndObservableAsWritten() throws ClassNotFoundException {
     List<String> problems = new ArrayList<>();
-    for (Class<?> bean : FRAMEWORK_BEANS) {
+    for (Class<?> bean : moduleBeanClasses()) {
       boolean normalScoped =
           bean.isAnnotationPresent(ApplicationScoped.class)
               || bean.isAnnotationPresent(RequestScoped.class);
@@ -377,7 +389,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     assertEquals(List.of(), problems);
   }
 
-  private static void collectBeanClasses(Class<?> type, Set<String> into) {
+  private static void collectBeanClasses(Class<?> type, List<Class<?>> into) {
     if (!type.isAnnotation()
         && (type.isAnnotationPresent(ApplicationScoped.class)
             || type.isAnnotationPresent(Singleton.class)
@@ -385,7 +397,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
             || type.isAnnotationPresent(RequestScoped.class)
             || type.isAnnotationPresent(Provider.class)
             || type.isAnnotationPresent(Path.class))) {
-      into.add(type.getName());
+      into.add(type);
     }
     for (Class<?> nested : type.getDeclaredClasses()) {
       collectBeanClasses(nested, into);
