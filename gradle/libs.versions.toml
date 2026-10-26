@@ -28,7 +28,7 @@ graalvm-sdk = "23.1.2"
 slf4j = "2.0.16"
 # Test-only slf4j binding for log-assertion tests (capturing operator-facing log lines with a
 # ListAppender); no main artifact depends on a logging backend.
-logback = "1.5.18"
+logback = "1.6.5"
 caffeine = "3.2.0"
 cron-utils = "9.2.1"
 
