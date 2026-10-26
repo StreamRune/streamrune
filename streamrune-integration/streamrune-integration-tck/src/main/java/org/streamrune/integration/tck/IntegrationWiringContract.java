@@ -304,38 +304,52 @@ public abstract class IntegrationWiringContract {
    * runs; when the container closes the {@code DataSource}, every connection taken from it has been
    * returned, so no runner is in the middle of a poll; and no thread asks it for a connection
    * afterwards.
+   *
+   * <p>It runs twice: with the single-active-consumer lease (the default), so the leadership the
+   * integration builds also releases its leases before the database closes; and without it, where a
+   * projection runner the integration does not stop keeps polling, because no closed leadership
+   * parks it in standby.
    */
   @Test
   public void shutdownStopsRunnersBeforeTheEventStoreCloses() throws InterruptedException {
+    Map<String, String> polling =
+        Map.of("streamrune.polling-interval-ms", "20", "streamrune.polling-jitter-ms", "0");
+    assertRunnersStopBeforeTheDatabaseCloses(polling);
+    Map<String, String> withoutLease = new LinkedHashMap<>(polling);
+    withoutLease.put("streamrune.subscription.single-active-consumer.enabled", "false");
+    assertRunnersStopBeforeTheDatabaseCloses(withoutLease);
+  }
+
+  private void assertRunnersStopBeforeTheDatabaseCloses(Map<String, String> properties)
+      throws InterruptedException {
     RecordingDataSource database = new RecordingDataSource(postgresql());
-    Application application =
-        start(
-            database,
-            Map.of("streamrune.polling-interval-ms", "20", "streamrune.polling-jitter-ms", "0"),
-            Set.of(ContractProjection.class));
+    Application application = start(database, properties, Set.of(ContractProjection.class));
     try {
       assertStarted(application);
       long afterStart = database.connectionsGranted();
       await(
           () -> database.connectionsGranted() > afterStart + 5,
-          "the projection runner must poll the database while the application runs");
+          "the projection runner must poll the database while the application runs " + properties);
     } finally {
       application.close();
     }
     assertTrue(
-        database.isClosed(), "the container must close the DataSource when the application closes");
+        database.isClosed(),
+        "the container must close the DataSource when the application closes " + properties);
     assertEquals(
         0,
         database.connectionsInUseAtClose(),
         "every connection must be returned before the container closes the DataSource: a runner"
-            + " still running a poll is not stopped");
+            + " still running a poll is not stopped "
+            + properties);
     // A runner still alive asks for its next page within a few polling intervals.
     Thread.sleep(500);
     assertEquals(
         List.of(),
         database.requestsAfterClose(),
         "no thread may ask the closed DataSource for a connection: every runner must be stopped"
-            + " before the container closes it");
+            + " before the container closes it "
+            + properties);
   }
 
   /**
