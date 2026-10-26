@@ -60,7 +60,8 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * in serializing mode ({@link InMemoryEventStore#serializing}), and a fresh one: an event whose
  * stream already holds that version fails with the store's {@code OptimisticLockException}. A file
  * holds payloads as the store reads them, so the fields of an {@code @Encrypted} event are in the
- * clear: append such a file to a store without a crypto engine.
+ * clear: append such a file to a store without a crypto engine. A fixture file therefore holds
+ * personal data as plain text — record it from synthetic data only, and keep it in test resources.
  */
 public final class EventStreamFixtures {
 

@@ -870,7 +870,8 @@ store's `EventTypeRegistry` resolves the type (an unregistered one fails with
 `write` serializes the payloads of a serializing store with a copy of the store's own
 `ObjectMapper`, so a type your application serializes its own way (a module, a custom serializer)
 reads back, and leaves the fields of an `@Encrypted` event in the clear: append such a file to a
-store without a crypto engine.
+store without a crypto engine. A fixture file therefore holds personal data as plain text — record
+it from synthetic data only, and keep it in test resources.
 
 ---
 
