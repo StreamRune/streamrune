@@ -1264,7 +1264,7 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   newer: the framework declares 1.16.3, the floor it is built against, and an application runs the
   version its framework manages (1.17 with Spring Boot 4.1 and Quarkus 3.40). OpenTelemetry API 1.47 (optional).
 - Outbox brokers: Kafka clients 3.9 (`streamrune-kafka-outbox`), RabbitMQ `amqp-client` 5.25
-  (`streamrune-rabbitmq-outbox`). Crypto backends: AWS SDK v2 KMS 2.30 (`streamrune-aws-kms-crypto`);
+  (`streamrune-rabbitmq-outbox`). Crypto backends: AWS SDK v2 KMS 2.57.3 (`streamrune-aws-kms-crypto`);
   HashiCorp Vault with the transit engine enabled, over its HTTP API (`streamrune-vault-crypto`).
   `streamrune-crypto-api` brings Caffeine 3.2.
 - GraalVM native image: GraalVM CE 25.0.1.
