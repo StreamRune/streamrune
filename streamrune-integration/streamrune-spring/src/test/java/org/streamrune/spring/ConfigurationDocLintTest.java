@@ -69,9 +69,8 @@ class ConfigurationDocLintTest {
     Map<String, String> bound =
         new TreeMap<>(ConfigurationOracle.ofRecord(properties, "streamrune"));
     bound.putAll(ConfigurationOracle.ofRecord(crypto, "streamrune.crypto"));
-    List<ReadElsewhere> reads = new ArrayList<>(conditions());
-    reads.addAll(LOOKUPS);
-    ConfigurationOracle.Merged merged = ConfigurationOracle.merge(bound, reads);
+    ConfigurationOracle.Merged merged =
+        ConfigurationOracle.merge(bound, readsOutsideTheProperties());
     oracle = merged.keys();
     conflicts = merged.conflicts();
 
@@ -142,6 +141,17 @@ class ConfigurationDocLintTest {
   void everyDefaultColumnStatesTheSpringDefault() {
     assertTrue(docs.defaultRowCount() > 30, "the Default tables of the guides must be found");
     assertNoProblems("default(s) stated differently from the code", docs.wrongDefaults(oracle));
+  }
+
+  /**
+   * The keys the module reads outside its properties types: the property of every bean condition
+   * and the keys {@code ProjectionAutoConfig} looks up. {@code SpringIntegrationWiringContractTest}
+   * merges them with the properties beans of a started application.
+   */
+  static List<ReadElsewhere> readsOutsideTheProperties() throws ClassNotFoundException {
+    List<ReadElsewhere> reads = new ArrayList<>(conditions());
+    reads.addAll(LOOKUPS);
+    return reads;
   }
 
   /**
