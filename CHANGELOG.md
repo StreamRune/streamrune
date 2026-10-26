@@ -1134,7 +1134,9 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   reachability metadata. Application `CommandInterceptor` beans join the framework's chain; an
   application bean of a framework interceptor's type replaces that interceptor in its slot (also when
   it is normal-scoped); every interceptor survives build-time removal of unused beans. Crypto backend
-  and SSE/query-cache selection are build-time properties (`@IfBuildProperty`).
+  and SSE/query-cache selection are build-time properties (`@IfBuildProperty`). Every bean class is
+  proxyable as written (a non-private no-argument constructor beside the `@Inject` one), so an
+  application built with `quarkus.arc.transform-unproxyable-classes=false` boots it too.
 - **Micronaut**: `StreamRuneMicronautModule`, `ProjectionFactory`, `StreamRuneLifecycle`,
   `StreamRuneContextFilter` with `StreamRuneContextHelper`, `BeanValidationInterceptor` with Micronaut's
   compile-time validator (`@Introspected` commands), `configuration-metadata.json`, `reflect-config.json`.

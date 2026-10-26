@@ -369,7 +369,7 @@ public class StreamRuneProducers {
    * EventEnvelope}s, survives every context teardown (dev-mode live reload, a {@code @QuarkusTest}
    * suite standing up several contexts) — accumulating one such fleet per cycle.
    */
-  void closeSsePublisher(@Disposes SseEventPublisher publisher) {
+  public void closeSsePublisher(@Disposes SseEventPublisher publisher) {
     publisher.close();
   }
 

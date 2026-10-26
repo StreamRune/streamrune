@@ -36,6 +36,7 @@ public class SagaTimeoutRunnerHealthRegistrar {
   private final List<SagaTimeoutRunner<?>> sagaTimeoutRunners;
   private final Instance<BackgroundRelayHealthContributor> relayHealthInstance;
 
+  @jakarta.inject.Inject
   public SagaTimeoutRunnerHealthRegistrar(
       @All List<SagaTimeoutRunner<?>> sagaTimeoutRunners,
       Instance<BackgroundRelayHealthContributor> relayHealthInstance) {
@@ -43,7 +44,18 @@ public class SagaTimeoutRunnerHealthRegistrar {
     this.relayHealthInstance = relayHealthInstance;
   }
 
-  void onStart(@Observes StartupEvent event) {
+  /**
+   * Client-proxy constructor — see {@link StreamRuneConfigValidator#StreamRuneConfigValidator()}
+   * for the rationale. Never used for a real instance.
+   */
+  protected SagaTimeoutRunnerHealthRegistrar() {
+    this.sagaTimeoutRunners = null;
+    this.relayHealthInstance = null;
+  }
+
+  // public: the observer invoker Arc generates may live in another classloader (see the
+  // client-proxy constructor's rationale).
+  public void onStart(@Observes StartupEvent event) {
     registerTimeoutRunnerHealth();
   }
 

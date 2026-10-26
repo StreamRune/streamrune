@@ -107,7 +107,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Disposer for {@link #fileSystemCryptoEngine}. */
-    void disposeCryptoEngine(@Disposes CryptoEngine engine) {
+    public void disposeCryptoEngine(@Disposes CryptoEngine engine) {
       closeEngine(engine);
     }
   }
@@ -134,7 +134,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Disposer for {@link #postgresCryptoEngine}. */
-    void disposeCryptoEngine(@Disposes CryptoEngine engine) {
+    public void disposeCryptoEngine(@Disposes CryptoEngine engine) {
       closeEngine(engine);
     }
   }
@@ -177,7 +177,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Closes the container-managed Vault {@link HttpClient} on shutdown. */
-    void closeVaultHttpClient(@Disposes StreamRuneVaultHttpClient httpClient) {
+    public void closeVaultHttpClient(@Disposes StreamRuneVaultHttpClient httpClient) {
       httpClient.close();
     }
 
@@ -196,7 +196,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Disposer for {@link #vaultCryptoEngine}. */
-    void disposeCryptoEngine(@Disposes CryptoEngine engine) {
+    public void disposeCryptoEngine(@Disposes CryptoEngine engine) {
       closeEngine(engine);
     }
   }
@@ -234,7 +234,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Closes the container-managed {@link KmsClient} on shutdown. */
-    void closeAwsKmsClient(@Disposes StreamRuneKmsClient kmsClient) {
+    public void closeAwsKmsClient(@Disposes StreamRuneKmsClient kmsClient) {
       kmsClient.close();
     }
 
@@ -258,7 +258,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Disposer for {@link #awsKmsCryptoEngine}. */
-    void disposeCryptoEngine(@Disposes CryptoEngine engine) {
+    public void disposeCryptoEngine(@Disposes CryptoEngine engine) {
       closeEngine(engine);
     }
   }

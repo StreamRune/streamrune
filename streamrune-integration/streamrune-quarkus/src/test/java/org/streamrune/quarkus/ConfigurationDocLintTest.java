@@ -67,14 +67,7 @@ class ConfigurationDocLintTest {
   static void readTheOracleAndCheckItOnKnownKeys() {
     StreamRuneQuarkusProperties properties = TestProperties.defaults();
     StreamRuneQuarkusCryptoProperties crypto = TestProperties.crypto(Map.of());
-    Map<String, String> bound =
-        new TreeMap<>(
-            ConfigurationOracle.ofConfigMapping(
-                properties, StreamRuneQuarkusProperties.class, "streamrune", SMALLRYE));
-    bound.putAll(
-        ConfigurationOracle.ofConfigMapping(
-            crypto, StreamRuneQuarkusCryptoProperties.class, "streamrune.crypto", SMALLRYE));
-    ConfigurationOracle.Merged merged = ConfigurationOracle.merge(bound, LOOKUPS);
+    ConfigurationOracle.Merged merged = oracleOf(properties, crypto);
     oracle = merged.keys();
     conflicts = merged.conflicts();
 
@@ -93,6 +86,23 @@ class ConfigurationDocLintTest {
     assertEquals("false", oracle.get("streamrune.crypto.vault.enabled"));
 
     docs = ConfigurationDocs.read(ConfigurationDocs.repositoryRoot(), README);
+  }
+
+  /**
+   * The oracle of two bound mappings: their keys, named as SmallRye names them, with the keys the
+   * projection discovery looks up. {@code QuarkusIntegrationWiringContractTest} reads the mappings
+   * of a started application with it.
+   */
+  static ConfigurationOracle.Merged oracleOf(
+      StreamRuneQuarkusProperties properties, StreamRuneQuarkusCryptoProperties crypto) {
+    Map<String, String> bound =
+        new TreeMap<>(
+            ConfigurationOracle.ofConfigMapping(
+                properties, StreamRuneQuarkusProperties.class, "streamrune", SMALLRYE));
+    bound.putAll(
+        ConfigurationOracle.ofConfigMapping(
+            crypto, StreamRuneQuarkusCryptoProperties.class, "streamrune.crypto", SMALLRYE));
+    return ConfigurationOracle.merge(bound, LOOKUPS);
   }
 
   @Test

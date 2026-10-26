@@ -27,6 +27,7 @@ public class StreamRuneStartupLogger {
   private final Instance<CryptoEngine> cryptoEngine;
   private final Instance<Projection> projections;
 
+  @jakarta.inject.Inject
   public StreamRuneStartupLogger(
       StreamRuneQuarkusProperties properties,
       Instance<EventStore> eventStore,
@@ -38,7 +39,20 @@ public class StreamRuneStartupLogger {
     this.projections = projections;
   }
 
-  void onStart(@Observes StartupEvent event) {
+  /**
+   * Client-proxy constructor — see {@link StreamRuneConfigValidator#StreamRuneConfigValidator()}
+   * for the rationale. Never used for a real instance.
+   */
+  protected StreamRuneStartupLogger() {
+    this.properties = null;
+    this.eventStore = null;
+    this.cryptoEngine = null;
+    this.projections = null;
+  }
+
+  // public: the observer invoker Arc generates may live in another classloader (see the
+  // client-proxy constructor's rationale).
+  public void onStart(@Observes StartupEvent event) {
     if (!properties.startupLog()) {
       return;
     }

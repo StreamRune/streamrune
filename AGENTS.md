@@ -25,7 +25,7 @@ plain constructors, and the integrations use the same builders. It is one Gradle
 | `streamrune-integration/streamrune-spring`, `streamrune-quarkus`, `streamrune-micronaut` | The three integrations | yes |
 | `streamrune-integration/streamrune-spring-boot-starter` | The Spring Boot starter: dependencies only, no sources | — |
 | `streamrune-integration/streamrune-e2e` | End-to-end crash-recovery and broker suites, not published | yes |
-| `streamrune-integration/streamrune-integration-tck` | What the three integrations' tests share: the configuration oracle and the doc reading of their doc-lint tests; not published | no |
+| `streamrune-integration/streamrune-integration-tck` | What the three integrations' tests share: the wiring contract each of them runs, the configuration oracle and the doc reading of their doc-lint tests; not published | no |
 | `streamrune-outbox/streamrune-kafka-outbox`, `streamrune-rabbitmq-outbox` | Transactional outbox publishers for Kafka and RabbitMQ | yes |
 
 Where each topic is written down:
@@ -147,6 +147,13 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   suite in its test sources (`OutboxStoreContract`, `SagaStoreContract`,
   `SagaDeadLetterStoreContract`, `SagaForwardFenceContract`, `AtomicBatchProcessorContract`,
   `CommandBusProvenanceContract`) and so passes the tests every implementation passes.
+- **The wiring contract.** `IntegrationWiringContract` (`streamrune-integration-tck`) holds the
+  rules the Spring, Quarkus and Micronaut integrations keep alike: the startup refusals, the
+  fail-closed request identity, the health check's name and details, the warning for a saga runner
+  without a lease, runners stopped before the database closes, the bound defaults. Each
+  integration's `*IntegrationWiringContractTest` starts its own container through the contract's
+  hooks, on the test kit's in-memory stores or on PostgreSQL. A behaviour that crosses the three
+  integrations gets a contract test first; the beans such a test adds are in `ContractBeans`.
 - **Durable multi-step flows.** A flow that writes in more than one step (an append and an offset, a
   claim and a publish, a saga step and its command) lists its crash points, one after each write,
   and has a test per crash point that stops the flow there, runs it again and asserts that it
@@ -210,6 +217,11 @@ run by `./gradlew docLintTest`, `check` and `quickCheck`) fail when it does not:
 - **Quarkus client proxies.** A normal-scoped or intercepted `BaseProjection` subclass needs
   `quarkus.arc.transform-unproxyable-classes=true`, the Quarkus default, because
   `BaseProjection.process(List, ProjectionRepository)` is final.
+- **Quarkus beans as the module's tests boot them.** The container tests run Arc without the
+  bytecode transformation of a Quarkus build, and the classes Arc generates live in another
+  classloader. A normal-scoped bean class therefore has a non-private no-argument constructor beside
+  the one marked `@Inject`, and its observer and disposer methods are public;
+  `QuarkusIntegrationWiringContractTest` checks every bean class of the module.
 - **Micronaut collection injection.** A singleton registered at runtime
   (`ApplicationContext.registerSingleton`) is not reliably collected into an injected `List`; a
   test that needs a bean in such a list declares it as a compile-time bean in a `@Factory`.

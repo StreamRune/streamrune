@@ -228,7 +228,8 @@ public class StreamRuneLifecycle {
     leadership = LeadershipInstances.resolve(leadershipInstance);
   }
 
-  void onStop(@Observes ShutdownEvent event) {
+  // public for the same cross-classloader reason as onStart.
+  public void onStop(@Observes ShutdownEvent event) {
     closeQuietly(deadLetterRetryRunner, "DeadLetterRetryRunner");
     deadLetterRetryRunner = null;
     closeQuietly(deadLetterRetentionSweeper, "DeadLetterRetentionSweeper");

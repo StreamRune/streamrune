@@ -211,7 +211,8 @@ public class SagaCompensationRetryLifecycle {
     return builder.build();
   }
 
-  void onStop(@Observes ShutdownEvent event) {
+  // public for the same cross-classloader reason as onStart.
+  public void onStop(@Observes ShutdownEvent event) {
     stopSweepers();
   }
 

@@ -18,7 +18,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
@@ -218,18 +217,13 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
 
   @Override
   protected Map<String, String> configurationDefaults(Application application) {
-    Map<String, String> bound =
-        new TreeMap<>(
-            ConfigurationOracle.ofRecord(
-                application.bean(StreamRuneProperties.class), "streamrune"));
-    bound.putAll(
-        ConfigurationOracle.ofRecord(
-            application.bean(StreamRuneCryptoProperties.class), "streamrune.crypto"));
     try {
-      ConfigurationOracle.Merged merged =
-          ConfigurationOracle.merge(bound, ConfigurationDocLintTest.readsOutsideTheProperties());
-      assertEquals(List.of(), merged.conflicts());
-      return merged.keys();
+      ConfigurationOracle.Merged oracle =
+          ConfigurationDocLintTest.oracleOf(
+              application.bean(StreamRuneProperties.class),
+              application.bean(StreamRuneCryptoProperties.class));
+      assertEquals(List.of(), oracle.conflicts());
+      return oracle.keys();
     } catch (ClassNotFoundException e) {
       throw new IllegalStateException(e);
     }
