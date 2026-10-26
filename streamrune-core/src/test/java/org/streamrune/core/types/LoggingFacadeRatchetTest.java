@@ -26,14 +26,19 @@ import org.junit.jupiter.api.Test;
  * literals are blanked first, so prose that merely mentions a forbidden name does not trip it.
  *
  * <p>{@link #ALLOWED} lists the only files permitted to name a forbidden facade, each with the
- * reason. It is empty: no production source needs one. An entry that no longer matches a violating
- * file fails {@link #theAllowListHoldsNoStaleEntries()}, so the list cannot rot into a blanket
- * exemption. Add an entry only where a platform genuinely requires {@code java.util.logging}.
+ * reason: a JDK interface that declares a {@code java.util.logging} type, which an implementation
+ * must name although it logs nothing. An entry that no longer matches a violating file fails {@link
+ * #theAllowListHoldsNoStaleEntries()}, so the list cannot rot into a blanket exemption. Add an
+ * entry only where a platform genuinely requires {@code java.util.logging}.
  */
 class LoggingFacadeRatchetTest {
 
   /** Repository-relative path suffix, mapped to the one-line reason it is allowed. */
-  private static final java.util.Map<String, String> ALLOWED = java.util.Map.of();
+  private static final java.util.Map<String, String> ALLOWED =
+      java.util.Map.of(
+          "streamrune-integration/streamrune-integration-tck/src/main/java/org/streamrune/integration/tck/RecordingDataSource.java",
+          "a javax.sql.DataSource declares getParentLogger(), whose type is"
+              + " java.util.logging.Logger; the test-support data source logs nothing");
 
   private static final List<Pattern> FORBIDDEN =
       List.of(

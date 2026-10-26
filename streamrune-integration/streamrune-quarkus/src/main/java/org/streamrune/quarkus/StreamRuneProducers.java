@@ -363,11 +363,12 @@ public class StreamRuneProducers {
 
   /**
    * Disposer for {@link #sseEventPublisher()}. CDI/Arc destroys a producer-method product only
-   * through a matching {@code @Disposes} method — mirroring {@link #closeVaultHttpClient} in {@code
-   * StreamRuneCryptoProducers}. Without this, every still-registered SSE subscription's dedicated
-   * virtual-thread delivery worker, and its bounded queue of up to 256 decrypted {@code
-   * EventEnvelope}s, survives every context teardown (dev-mode live reload, a {@code @QuarkusTest}
-   * suite standing up several contexts) — accumulating one such fleet per cycle.
+   * through a matching {@code @Disposes} method — mirroring {@link
+   * StreamRuneCryptoProducers.VaultCryptoProducer#closeVaultHttpClient}. Without this, every
+   * still-registered SSE subscription's dedicated virtual-thread delivery worker, and its bounded
+   * queue of up to 256 decrypted {@code EventEnvelope}s, survives every context teardown (dev-mode
+   * live reload, a {@code @QuarkusTest} suite standing up several contexts) — accumulating one such
+   * fleet per cycle.
    */
   public void closeSsePublisher(@Disposes SseEventPublisher publisher) {
     publisher.close();
