@@ -19,6 +19,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.BiFunction;
+import java.util.function.LongSupplier;
 import org.streamrune.core.AggregateHistory;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.outbox.OutboxEntryId;
@@ -35,6 +36,7 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 
 /**
@@ -262,6 +264,13 @@ final class ForwardingDecoratorChecks {
     }
     if (type == ProjectionName.class) {
       return ProjectionName.of("projection_" + n);
+    }
+    if (type == SubscriptionName.class) {
+      return SubscriptionName.of("subscription_" + n);
+    }
+    if (type == LongSupplier.class) {
+      long supplied = 1000L + n;
+      return (LongSupplier) () -> supplied;
     }
     if (type == OutboxEntryId.class) {
       return OutboxEntryId.of("outbox-" + n);
