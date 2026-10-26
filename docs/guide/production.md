@@ -882,12 +882,15 @@ replica still on the previous release is behind. What those replicas do in the w
 
 A dead-lettered command replays once its entry is retried on an upgraded replica. The retry runner
 is leased, so its automatic attempts run where the lease is, and the lease moves only when its
-holder stops or fails to renew it: until then a replay may run on a replica still behind. Such a replay fails with the
-same refusal and counts no attempt (`RetryOutcome.READER_BEHIND`, an INFO line naming the event
-type and both versions): the entry is left unchanged and replayed again on the next poll. A long
-rollout therefore neither exhausts the entry (the default policy's five attempts span about 15
-minutes) nor, under `discardAfterMaxRetries`, discards the command. The runner replays a keyed
-entry automatically; an unkeyed one waits for an operator under the default policy, and an
+holder stops or fails to renew it: until then a replay may run on a replica still behind. Such a
+replay fails with the same refusal and counts no attempt (`RetryOutcome.READER_BEHIND`, an INFO
+line naming the event type and both versions): the entry is left unchanged and replayed again on
+the next poll. A long rollout therefore neither exhausts the entry (five attempts span about 31
+minutes with the integrations' defaults, about 15 under `DeadLetterRetryPolicy.DEFAULT`) nor,
+under `discardAfterMaxRetries`, discards the command. An entry left unchanged stays due on every
+poll, so until the rollout ends such entries can take every slot of a poll's batch and hold back
+the entries queued behind them; nothing is lost, as with an admission refusal. The runner replays a
+keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
 operator's `retry(commandId)` on a replica still behind answers `READER_BEHIND` and changes
 nothing.
 
@@ -897,7 +900,11 @@ as it was, claims no compensation and lets the failure propagate; the subscripti
 event again, and the step completes once a replica that reads the newer event delivers it (the
 same replica after its upgrade, or the replica that takes over the saga's lease), with the commands
 that had already run answered from the command inbox. A saga whose `timeout()` elapses meanwhile is
-compensated by its `SagaTimeoutRunner`, on the deadline the saga sets.
+compensated by its `SagaTimeoutRunner`, on the deadline the saga sets. A compensation command an old
+replica refuses this way is a transient compensation failure: the episode stays `COMPENSATING`, and
+its re-drives count toward the compensation retry sweeper's give-up, so a rollout longer than
+`streamrune.saga.compensation-retry-give-up-after` (`1h` by default) can mark such a saga `FAULTED`;
+`resumeFaulted` resumes it once the replicas read the event.
 
 Choose the procedure by the kind of change:
 
