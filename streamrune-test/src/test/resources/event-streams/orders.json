@@ -1,0 +1,96 @@
+[
+  {
+    "streamId" : "order:1",
+    "version" : 1,
+    "eventType" : "OrderPlaced",
+    "schemaVersion" : 1,
+    "payload" : {
+      "orderId" : "1",
+      "quantity" : 2
+    },
+    "metadata" : {
+      "eventId" : "event-1",
+      "commandId" : "command-1",
+      "traceId" : null,
+      "spanId" : null,
+      "correlationId" : "correlation-1",
+      "causationId" : null,
+      "userId" : null,
+      "timestamp" : "2026-01-01T00:00:01Z",
+      "baggage" : {
+        "tenant" : "acme"
+      },
+      "sagaOrigin" : null
+    }
+  },
+  {
+    "streamId" : "order:2",
+    "version" : 1,
+    "eventType" : "OrderPlaced",
+    "schemaVersion" : 1,
+    "payload" : {
+      "orderId" : "2",
+      "quantity" : 5
+    },
+    "metadata" : {
+      "eventId" : "event-2",
+      "commandId" : "command-2",
+      "traceId" : null,
+      "spanId" : null,
+      "correlationId" : "correlation-2",
+      "causationId" : null,
+      "userId" : null,
+      "timestamp" : "2026-01-01T00:00:02Z",
+      "baggage" : {
+        "tenant" : "acme"
+      },
+      "sagaOrigin" : null
+    }
+  },
+  {
+    "streamId" : "order:1",
+    "version" : 2,
+    "eventType" : "OrderShipped",
+    "schemaVersion" : 1,
+    "payload" : {
+      "orderId" : "1"
+    },
+    "metadata" : {
+      "eventId" : "event-3",
+      "commandId" : "command-3",
+      "traceId" : null,
+      "spanId" : null,
+      "correlationId" : "correlation-3",
+      "causationId" : null,
+      "userId" : null,
+      "timestamp" : "2026-01-01T00:00:03Z",
+      "baggage" : {
+        "tenant" : "acme"
+      },
+      "sagaOrigin" : null
+    }
+  },
+  {
+    "streamId" : "order:2",
+    "version" : 2,
+    "eventType" : "OrderCancelled",
+    "schemaVersion" : 1,
+    "payload" : {
+      "orderId" : "2"
+    },
+    "metadata" : {
+      "eventId" : "event-4",
+      "commandId" : "command-4",
+      "traceId" : null,
+      "spanId" : null,
+      "correlationId" : "correlation-4",
+      "causationId" : null,
+      "userId" : null,
+      "timestamp" : "2026-01-01T00:00:04Z",
+      "baggage" : {
+        "tenant" : "acme"
+      },
+      "sagaOrigin" : null
+    }
+  }
+]

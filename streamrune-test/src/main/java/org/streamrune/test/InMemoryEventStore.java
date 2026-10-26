@@ -992,6 +992,52 @@ public final class InMemoryEventStore implements EventStore {
         .toList();
   }
 
+  /** Whether this store serializes its events: it has an {@link EventTypeRegistry} to read with. */
+  boolean serializes() {
+    return objectMapper != null;
+  }
+
+  /**
+   * The schema version this store reads an event of {@code eventType} at: the current version of
+   * its upcaster chain, or {@code 1} without one. For {@link EventStreamFixtures}.
+   */
+  int schemaVersionOf(EventType eventType) {
+    return upcasterChain != null ? upcasterChain.currentVersion(eventType) : 1;
+  }
+
+  /**
+   * Binds an event in the stored form of the serializing mode — its payload JSON, its metadata JSON
+   * and the schema version of the payload — the way a read binds a stored event: the registry
+   * resolves the type, the upcaster chain upcasts a payload below its current version, and a
+   * payload above it is refused. For {@link EventStreamFixtures}, whose files hold events in that
+   * form.
+   *
+   * @throws IllegalStateException if this store keeps its events by reference
+   */
+  EventEnvelope bindStoredForm(
+      StreamId streamId,
+      Version version,
+      EventType eventType,
+      int schemaVersion,
+      String payloadJson,
+      String metadataJson) {
+    if (!serializes()) {
+      throw new IllegalStateException(
+          "this InMemoryEventStore keeps its events by reference and has no EventTypeRegistry");
+    }
+    return toEnvelope(
+        new StoredEvent(
+            GlobalOffset.initial(),
+            streamId,
+            version,
+            eventType,
+            null,
+            null,
+            payloadJson,
+            metadataJson,
+            schemaVersion));
+  }
+
   /**
    * One stored event. In by-reference mode {@code event}/{@code metadata} hold the objects and the
    * JSON/schema fields are unused; in serializing mode {@code payloadJson}/{@code
