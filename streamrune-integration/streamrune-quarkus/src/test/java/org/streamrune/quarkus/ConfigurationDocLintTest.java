@@ -18,7 +18,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.integration.tck.ConfigurationDocs;
 import org.streamrune.integration.tck.ConfigurationOracle;
 import org.streamrune.integration.tck.ConfigurationOracle.KeyNaming;
@@ -75,19 +74,6 @@ class ConfigurationDocLintTest {
     bound.putAll(
         ConfigurationOracle.ofConfigMapping(
             crypto, StreamRuneQuarkusCryptoProperties.class, "streamrune.crypto", SMALLRYE));
-    // StreamRuneCryptoProducers binds the crypto cache expiries as ISO-8601 text and parses them
-    // itself; an unset cache expire-after-write leaves CachedCryptoEngine's mandatory ceiling.
-    bound.put(
-        "streamrune.crypto.aws.data-key-cache.expire-after-write",
-        DefaultRendering.render(Duration.parse(crypto.aws().dataKeyCache().expireAfterWriteRaw())));
-    bound.put(
-        "streamrune.crypto.cache.expire-after-write",
-        DefaultRendering.render(
-            crypto
-                .cache()
-                .expireAfterWriteRaw()
-                .map(Duration::parse)
-                .orElse(CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE)));
     ConfigurationOracle.Merged merged = ConfigurationOracle.merge(bound, LOOKUPS);
     oracle = merged.keys();
     conflicts = merged.conflicts();

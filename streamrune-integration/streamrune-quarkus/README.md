@@ -123,7 +123,7 @@ streamrune.startup-log=true
 streamrune.gdpr.snapshot-purge=required
 streamrune.crypto.cache.enabled=true
 streamrune.crypto.cache.maximum-size=10000
-# streamrune.crypto.cache.expire-after-write=  (unset: CachedCryptoEngine's ceiling of PT5M applies)
+streamrune.crypto.cache.expire-after-write=PT5M
 # streamrune.crypto.cache.expire-after-access=
 # crypto engine selection is fixed at build time (see below)
 streamrune.crypto.filesystem.enabled=false

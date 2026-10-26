@@ -142,17 +142,30 @@ class StreamRuneCryptoProducersTest {
     assertInstanceOf(CachedCryptoEngine.class, engine);
   }
 
+  /**
+   * In a Quarkus application an empty {@code expire-after-access} is no access expiry, as when the
+   * key is absent: the engine is built and its entries expire by write age only.
+   */
   @Test
-  void fileSystemCryptoEngineBuilt_blankExpiryDisablesExpiryInsteadOfFailing() {
-    var engine =
-        producers.buildFileSystemCryptoEngine(
-            mock(DataSource.class),
-            props(
-                Map.of(
-                    "streamrune.crypto.filesystem.enabled", "true",
-                    "streamrune.crypto.cache.expire-after-write", "  ",
-                    "streamrune.crypto.cache.expire-after-access", "  ")));
-    assertNotNull(engine);
+  void fileSystemCryptoEngineBuilt_anEmptyAccessExpiryInAQuarkusApplicationIsNone() {
+    var crypto =
+        new io.smallrye.config.SmallRyeConfigBuilder()
+            .withMapping(StreamRuneQuarkusCryptoProperties.class)
+            .withConverter(
+                java.time.Duration.class,
+                100,
+                new io.quarkus.runtime.configuration.DurationConverter())
+            .withSources(
+                new io.smallrye.config.PropertiesConfigSource(
+                    Map.of(
+                        "streamrune.crypto.filesystem.enabled", "true",
+                        "streamrune.crypto.cache.expire-after-access", "  "),
+                    "quarkus-application",
+                    1000))
+            .build()
+            .getConfigMapping(StreamRuneQuarkusCryptoProperties.class);
+    assertTrue(crypto.cache().expireAfterAccess().isEmpty());
+    var engine = producers.buildFileSystemCryptoEngine(mock(DataSource.class), crypto);
     assertInstanceOf(CachedCryptoEngine.class, engine);
   }
 
@@ -246,44 +259,6 @@ class StreamRuneCryptoProducersTest {
                     mock(DataSource.class),
                     props(Map.of("streamrune.crypto.vault.token", "s.test"))));
     assertTrue(ex.getMessage().contains("streamrune.crypto.vault.enabled"));
-  }
-
-  @Test
-  void vaultCryptoEngineRejectsInvalidExpireWrite_namingTheCacheKey() {
-    // "5m" is the Quarkus-idiomatic shorthand, but these properties are parsed with the strict
-    // ISO-8601 java.time.Duration format — the failure must point at the cache key and the
-    // expected format, not at the active engine's config.
-    var ex =
-        assertThrows(
-            IllegalStateException.class,
-            () ->
-                producers.buildVaultCryptoEngine(
-                    mock(DataSource.class),
-                    props(
-                        vaultEnabled(
-                            Map.of(
-                                "streamrune.crypto.vault.token", "s.test",
-                                "streamrune.crypto.cache.expire-after-write", "5m")))));
-    assertTrue(ex.getMessage().contains("streamrune.crypto.cache.expire-after-write"));
-    assertTrue(ex.getMessage().contains("ISO-8601"));
-    assertTrue(ex.getMessage().contains("'5m'"));
-  }
-
-  @Test
-  void vaultCryptoEngineRejectsInvalidExpireAccess_namingTheCacheKey() {
-    var ex =
-        assertThrows(
-            IllegalStateException.class,
-            () ->
-                producers.buildVaultCryptoEngine(
-                    mock(DataSource.class),
-                    props(
-                        vaultEnabled(
-                            Map.of(
-                                "streamrune.crypto.vault.token", "s.test",
-                                "streamrune.crypto.cache.expire-after-access", "xyz")))));
-    assertTrue(ex.getMessage().contains("streamrune.crypto.cache.expire-after-access"));
-    assertTrue(ex.getMessage().contains("ISO-8601"));
   }
 
   @Test
@@ -384,8 +359,8 @@ class StreamRuneCryptoProducersTest {
     assertTrue(
         size.getMessage().contains("streamrune.crypto.aws.data-key-cache.maximum-size"),
         size.getMessage());
-    // Strict ISO-8601, like the other crypto cache durations: Quarkus' 5m shorthand is refused.
-    for (String bad : new String[] {"PT0S", "PT-1S", "5m"}) {
+    // A data key cached for no time, or for a negative one, is a configuration error.
+    for (String bad : new String[] {"PT0S", "PT-1S"}) {
       var ttl =
           assertThrows(
               IllegalStateException.class,
@@ -577,7 +552,7 @@ class StreamRuneCryptoProducersTest {
   void resolveForgetSignal_wiresPostgresChannel_whenDataSourcePresent() {
     var signal =
         StreamRuneCryptoProducers.resolveForgetSignal(
-            mock(DataSource.class), java.util.Optional.of("PT5M"), "aws-kms");
+            mock(DataSource.class), java.time.Duration.ofMinutes(5), "aws-kms");
     assertInstanceOf(
         org.streamrune.crypto.postgres.PostgresCryptoForgetSignal.class,
         signal,
@@ -587,7 +562,8 @@ class StreamRuneCryptoProducersTest {
   @Test
   void resolveForgetSignal_fallsBackToNoop_whenNoDataSource() {
     var signal =
-        StreamRuneCryptoProducers.resolveForgetSignal(null, java.util.Optional.empty(), "vault");
+        StreamRuneCryptoProducers.resolveForgetSignal(
+            null, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "vault");
     assertSame(org.streamrune.crypto.CryptoForgetSignal.NOOP, signal);
   }
 }

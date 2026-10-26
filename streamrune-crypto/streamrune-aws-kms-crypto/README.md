@@ -64,7 +64,7 @@ the data-key cache from two keys, with the same names, defaults and validation i
 | Key | Default | Effect |
 |---|---|---|
 | `streamrune.crypto.aws.data-key-cache.maximum-size` | `1000` | entries per data-key map; `0` disables the data-key cache; a negative value fails startup |
-| `streamrune.crypto.aws.data-key-cache.expire-after-write` | 5 minutes (`5m` on Spring and Micronaut, `PT5M` on Quarkus, which takes strict ISO-8601 like its other crypto cache durations) | lifetime of a cached data key; zero or negative fails startup |
+| `streamrune.crypto.aws.data-key-cache.expire-after-write` | 5 minutes (`5m`; `PT5M` in the ISO-8601 form, which Quarkus reads like its other durations) | lifetime of a cached data key; zero or negative fails startup |
 
 `streamrune.crypto.cache.enabled=false` — the no-cache posture — also turns the data-key cache off
 (`maximum-size` is then ignored): neither decrypted plaintext nor a plaintext data key is kept in

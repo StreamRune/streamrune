@@ -24,7 +24,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -154,7 +153,8 @@ class QuarkusCryptoForgetListenTest {
     BlockingQueue<String> received = new LinkedBlockingQueue<>();
 
     CryptoForgetSignal signal =
-        StreamRuneCryptoProducers.resolveForgetSignal(pool, Optional.empty(), "vault");
+        StreamRuneCryptoProducers.resolveForgetSignal(
+            pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "vault");
     toClose.add(signal);
     signal.subscribe(received::add);
 
@@ -175,7 +175,8 @@ class QuarkusCryptoForgetListenTest {
     BlockingQueue<String> received = new LinkedBlockingQueue<>();
 
     CryptoForgetSignal signal =
-        StreamRuneCryptoProducers.resolveForgetSignal(pool, Optional.empty(), "aws-kms");
+        StreamRuneCryptoProducers.resolveForgetSignal(
+            pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "aws-kms");
     toClose.add(signal);
     signal.subscribe(received::add);
 
@@ -191,7 +192,8 @@ class QuarkusCryptoForgetListenTest {
     toClose.add(pool);
 
     CryptoForgetSignal signal =
-        StreamRuneCryptoProducers.resolveForgetSignal(pool, Optional.empty(), "filesystem");
+        StreamRuneCryptoProducers.resolveForgetSignal(
+            pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "filesystem");
     toClose.add(signal);
     signal.subscribe(token -> {});
     awaitListening(app);
@@ -213,7 +215,8 @@ class QuarkusCryptoForgetListenTest {
     BlockingQueue<String> received = new LinkedBlockingQueue<>();
 
     CryptoForgetSignal signal =
-        StreamRuneCryptoProducers.resolveForgetSignal(pool, Optional.empty(), "vault");
+        StreamRuneCryptoProducers.resolveForgetSignal(
+            pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "vault");
     toClose.add(signal);
     signal.subscribe(received::add);
     awaitListening(app);

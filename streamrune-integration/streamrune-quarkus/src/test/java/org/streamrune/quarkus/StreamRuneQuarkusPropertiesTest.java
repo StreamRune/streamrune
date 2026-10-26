@@ -2,6 +2,9 @@ package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import io.quarkus.runtime.configuration.DurationConverter;
+import io.smallrye.config.PropertiesConfigSource;
+import io.smallrye.config.SmallRyeConfigBuilder;
 import java.time.Duration;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -269,10 +272,10 @@ class StreamRuneQuarkusPropertiesTest {
     assertTrue(crypto.aws().kmsKeyId().isEmpty());
     assertTrue(crypto.cache().enabled());
     assertEquals(10000, crypto.cache().maximumSize());
-    assertTrue(crypto.cache().expireAfterWriteRaw().isEmpty());
-    assertTrue(crypto.cache().expireAfterAccessRaw().isEmpty());
+    assertEquals(Duration.ofMinutes(5), crypto.cache().expireAfterWrite());
+    assertTrue(crypto.cache().expireAfterAccess().isEmpty());
     assertEquals(1000, crypto.aws().dataKeyCache().maximumSize());
-    assertEquals("PT5M", crypto.aws().dataKeyCache().expireAfterWriteRaw());
+    assertEquals(Duration.ofMinutes(5), crypto.aws().dataKeyCache().expireAfterWrite());
   }
 
   @Test
@@ -287,14 +290,57 @@ class StreamRuneQuarkusPropertiesTest {
                 "streamrune.crypto.aws.kms-key-id", "key-1",
                 "streamrune.crypto.aws.data-key-cache.maximum-size", "50",
                 "streamrune.crypto.aws.data-key-cache.expire-after-write", "PT2M",
-                "streamrune.crypto.cache.expire-after-write", "PT5M"));
+                "streamrune.crypto.cache.expire-after-write", "PT30M",
+                "streamrune.crypto.cache.expire-after-access", "PT10M"));
     assertTrue(crypto.filesystem().enabled());
     assertEquals("/tmp/keys", crypto.filesystem().keyDirectory());
     assertEquals("s.token", crypto.vault().token().orElseThrow());
     assertEquals("eu-central-1", crypto.aws().region().orElseThrow());
     assertEquals("key-1", crypto.aws().kmsKeyId().orElseThrow());
-    assertEquals("PT5M", crypto.cache().expireAfterWriteRaw().orElseThrow());
+    assertEquals(Duration.ofMinutes(30), crypto.cache().expireAfterWrite());
+    assertEquals(Duration.ofMinutes(10), crypto.cache().expireAfterAccess().orElseThrow());
     assertEquals(50, crypto.aws().dataKeyCache().maximumSize());
-    assertEquals("PT2M", crypto.aws().dataKeyCache().expireAfterWriteRaw());
+    assertEquals(Duration.ofMinutes(2), crypto.aws().dataKeyCache().expireAfterWrite());
+  }
+
+  /**
+   * In a Quarkus application, which converts durations with Quarkus' converter, the crypto cache
+   * expiries take the {@code 5m} form as well as {@code PT5M}, like every other StreamRune
+   * duration.
+   */
+  @Test
+  void theCryptoExpiriesTakeTheDurationFormsOfAQuarkusApplication() {
+    var crypto =
+        new SmallRyeConfigBuilder()
+            .withMapping(StreamRuneQuarkusCryptoProperties.class)
+            .withConverter(Duration.class, 100, new DurationConverter())
+            .withSources(
+                new PropertiesConfigSource(
+                    Map.of(
+                        "streamrune.crypto.aws.data-key-cache.expire-after-write", "2m",
+                        "streamrune.crypto.cache.expire-after-write", "30m",
+                        "streamrune.crypto.cache.expire-after-access", "PT10M"),
+                    "quarkus-application",
+                    1000))
+            .build()
+            .getConfigMapping(StreamRuneQuarkusCryptoProperties.class);
+    assertEquals(Duration.ofMinutes(2), crypto.aws().dataKeyCache().expireAfterWrite());
+    assertEquals(Duration.ofMinutes(30), crypto.cache().expireAfterWrite());
+    assertEquals(Duration.ofMinutes(10), crypto.cache().expireAfterAccess().orElseThrow());
+  }
+
+  /** A crypto expiry that is not a duration fails the binding, and the failure names the key. */
+  @Test
+  void aCryptoExpiryThatIsNotADurationFailsTheBindingNamingTheKey() {
+    for (String key :
+        new String[] {
+          "streamrune.crypto.aws.data-key-cache.expire-after-write",
+          "streamrune.crypto.cache.expire-after-write",
+          "streamrune.crypto.cache.expire-after-access"
+        }) {
+      var failure =
+          assertThrows(RuntimeException.class, () -> TestProperties.crypto(Map.of(key, "xyz")));
+      assertTrue(failure.getMessage().contains(key), failure.getMessage());
+    }
   }
 }
