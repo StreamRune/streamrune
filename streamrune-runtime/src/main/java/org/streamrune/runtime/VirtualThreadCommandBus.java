@@ -1121,7 +1121,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           if (e instanceof RuntimeException re) {
             throw re;
           }
-          throw new CommandExecutionException(command, "Failed to execute command", e);
+          throw new CommandExecutionException(
+              command, commandId, streamId, "Failed to execute command", e);
         }
         if (outcomeUnknownFailure != null) {
           // The domain rejected the command and the inbox could not say whether the key was
@@ -1158,7 +1159,11 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           // command in the DLQ first — like any other abandoned failure it must not be lost.
           RuntimeException interrupted =
               new CommandExecutionException(
-                  command, "Interrupted during retry backoff after attempt " + attempt, e);
+                  command,
+                  commandId,
+                  streamId,
+                  "Interrupted during retry backoff after attempt " + attempt,
+                  e);
           if (maybePublishToDeadLetterQueue(
               command, commandId, streamId, e, attempt, commandTimestamp, key)) {
             throw new CommandDeadLetteredException(command, commandId, streamId, key, interrupted);
@@ -1170,7 +1175,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         RuntimeException failure =
             e instanceof RuntimeException re
                 ? re
-                : new CommandExecutionException(command, "Failed to execute command", e);
+                : new CommandExecutionException(
+                    command, commandId, streamId, "Failed to execute command", e);
         if (maybePublishToDeadLetterQueue(
             command, commandId, streamId, e, attempt, commandTimestamp, key)) {
           // The entry is stored, so the command's outcome is pending, not final: a replay of the

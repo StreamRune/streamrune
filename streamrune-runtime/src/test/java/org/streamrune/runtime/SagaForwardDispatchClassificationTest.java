@@ -540,7 +540,12 @@ class SagaForwardDispatchClassificationTest {
     assertThat(SagaCommandDispatch.isRetryLater(schemaAhead())).isTrue();
     assertThat(
             SagaCommandDispatch.isRetryLater(
-                new CommandExecutionException(new ReserveStock("x"), "wrapped", schemaAhead())))
+                new CommandExecutionException(
+                    new ReserveStock("x"),
+                    CommandId.of("cmd-x"),
+                    StreamId.of(TYPE, AggregateId.of("x")),
+                    "wrapped",
+                    schemaAhead())))
         .as("the reader-behind refusal is recognized anywhere in the chain")
         .isTrue();
 

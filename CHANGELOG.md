@@ -271,6 +271,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - `CommandResult` carries the events, `streamId`, `finalVersion`, `globalOffsets`, the envelopes and
   a never-null `ShortCircuitReason` (`NONE`, `VETOED`, `IDEMPOTENT_REPLAY`) with the predicates
   `shortCircuited()`, `vetoed()`, `idempotentReplay()`.
+- `CommandExecutionException` (the failure the bus throws for a non-runtime or interrupted
+  execution, and the supertype of `CommandDeadLetteredException`) carries `command()`,
+  `commandId()` and `streamId()`. Its `toString()`, the first line of a logged stack trace, names
+  the command's type, both ids (log-sanitized) and the cause's type, and never renders the command:
+  a command's own `toString` writes every component, `@Encrypted` ones included, in the clear.
 - `executeAsync` returns a `CompletableFuture<CommandResult>` on a fresh virtual thread and is bounded
   by an in-flight admission budget (`maxInFlightAsyncCommands`, default 10,000;
   `streamrune.max-in-flight-async-commands` on all three integrations): past it the call returns an

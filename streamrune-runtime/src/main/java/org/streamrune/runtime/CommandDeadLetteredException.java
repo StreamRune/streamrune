@@ -49,12 +49,11 @@ import org.streamrune.core.types.StreamId;
  *
  * <p>The message names the command type and the entry and is safe to log; it carries neither the
  * command's payload nor the key, which is a bearer token for the command's recorded result. {@link
- * #toString()} renders the message alone.
+ * #toString()} adds the command's type, its ids and the type of the cause, as {@link
+ * CommandExecutionException#toString()} renders every command failure.
  */
 public final class CommandDeadLetteredException extends CommandExecutionException {
 
-  private final transient CommandId commandId;
-  private final transient StreamId streamId;
   private final transient IdempotencyKey idempotencyKey;
 
   /**
@@ -76,11 +75,10 @@ public final class CommandDeadLetteredException extends CommandExecutionExceptio
       Throwable cause) {
     super(
         Objects.requireNonNull(command, "command is required"),
-        message(
-            command, Objects.requireNonNull(commandId, "commandId is required"), idempotencyKey),
+        Objects.requireNonNull(commandId, "commandId is required"),
+        streamId,
+        message(command, commandId, idempotencyKey),
         Objects.requireNonNull(cause, "cause is required"));
-    this.commandId = commandId;
-    this.streamId = Objects.requireNonNull(streamId, "streamId is required");
     this.idempotencyKey = idempotencyKey;
   }
 
@@ -105,17 +103,9 @@ public final class CommandDeadLetteredException extends CommandExecutionExceptio
    *
    * @return the command id
    */
+  @Override
   public CommandId commandId() {
-    return commandId;
-  }
-
-  /**
-   * The stream the command targets.
-   *
-   * @return the stream id
-   */
-  public StreamId streamId() {
-    return streamId;
+    return super.commandId();
   }
 
   /**
@@ -125,14 +115,5 @@ public final class CommandDeadLetteredException extends CommandExecutionExceptio
    */
   public IdempotencyKey idempotencyKey() {
     return idempotencyKey;
-  }
-
-  /**
-   * The class name and the message, without the command: a command's own {@code toString} renders
-   * its payload, {@code @Encrypted} fields included.
-   */
-  @Override
-  public String toString() {
-    return getClass().getName() + ": " + getMessage();
   }
 }

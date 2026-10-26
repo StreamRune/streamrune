@@ -129,7 +129,12 @@ class DeadLetterRetryReaderBehindTest {
         new BehindTheStoredSchemaBus(Integer.MAX_VALUE) {
           @Override
           RuntimeException refusal(Command command) {
-            return new CommandExecutionException(command, "wrapped", super.refusal(command));
+            return new CommandExecutionException(
+                command,
+                CommandId.of("cmd-wrapped"),
+                StreamId.of(STOCK, AggregateId.of("S")),
+                "wrapped",
+                super.refusal(command));
           }
         };
     CommandId id = publishKeyedEntry("cmd-behind-5");
