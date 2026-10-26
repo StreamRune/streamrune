@@ -380,4 +380,98 @@ class ResilientPollLoopTest {
       appender.stop();
     }
   }
+
+  // ==================== A call the stop's own interrupt cut short is no failure ============
+
+  /** Runs the loop on a thread whose task blocks until the owner's stop interrupts it. */
+  private static java.util.List<ch.qos.logback.classic.spi.ILoggingEvent> stopDuringABlockedCall(
+      java.util.function.Function<InterruptedException, RuntimeException> cutShort,
+      boolean flagStaysSet)
+      throws InterruptedException {
+    var running = new AtomicBoolean(true);
+    var loop =
+        new ResilientPollLoop("test-loop", running::get, () -> IDLE, INITIAL_BACKOFF, MAX_BACKOFF);
+    var logger =
+        (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ResilientPollLoop.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    // The test configuration passes WARN and above; the line under test is an INFO.
+    ch.qos.logback.classic.Level level = logger.getLevel();
+    logger.setLevel(ch.qos.logback.classic.Level.INFO);
+    var inTheCall = new java.util.concurrent.CountDownLatch(1);
+    try {
+      Thread thread =
+          Thread.ofVirtual()
+              .start(
+                  () ->
+                      loop.run(
+                          () -> {
+                            inTheCall.countDown();
+                            try {
+                              Thread.sleep(Duration.ofSeconds(30));
+                            } catch (InterruptedException interrupted) {
+                              if (flagStaysSet) {
+                                Thread.currentThread().interrupt();
+                              }
+                              throw cutShort.apply(interrupted);
+                            }
+                          }));
+      assertTrue(inTheCall.await(5, TimeUnit.SECONDS), "the call must start");
+      running.set(false);
+      thread.interrupt();
+      thread.join(TimeUnit.SECONDS.toMillis(5));
+      assertFalse(thread.isAlive(), "the loop must stop");
+      return java.util.List.copyOf(appender.list);
+    } finally {
+      logger.setLevel(level);
+      logger.detachAppender(appender);
+      appender.stop();
+    }
+  }
+
+  private static void assertOneInfoWithoutAStack(
+      java.util.List<ch.qos.logback.classic.spi.ILoggingEvent> events) {
+    assertTrue(
+        events.stream().noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR),
+        () -> "a call the stop cut short is no failure: " + events);
+    var stopped =
+        events.stream()
+            .filter(
+                e ->
+                    e.getLevel() == ch.qos.logback.classic.Level.INFO
+                        && e.getFormattedMessage().contains("test-loop"))
+            .toList();
+    assertEquals(1, stopped.size(), () -> "one INFO line names the loop: " + events);
+    assertNull(stopped.getFirst().getThrowableProxy(), "the INFO line carries no stack trace");
+    assertTrue(
+        stopped.getFirst().getFormattedMessage().contains("socket closed by the interrupt")
+            || stopped.getFirst().getFormattedMessage().contains("cut short"),
+        () -> "the INFO line says what the stop cut short: " + stopped);
+  }
+
+  @Test
+  void aCallTheStopsInterruptCutShort_isLoggedAtInfoWithoutAStack() throws Exception {
+    // A JDBC read on a virtual thread: the interrupt closes the socket, the driver throws, and the
+    // thread's interrupt status stays set.
+    var events =
+        stopDuringABlockedCall(
+            interrupted ->
+                new IllegalStateException(
+                    "I/O error", new java.net.SocketException("socket closed by the interrupt")),
+            true);
+
+    assertOneInfoWithoutAStack(events);
+  }
+
+  @Test
+  void aCallTheStopCutShort_whoseFlagWasConsumed_isKnownByItsCause() throws Exception {
+    // A driver that consumed the flag but kept the cause: an interruption in the cause chain.
+    var events =
+        stopDuringABlockedCall(
+            interrupted -> new IllegalStateException("read cut short", interrupted), false);
+
+    assertOneInfoWithoutAStack(events);
+  }
 }
