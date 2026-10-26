@@ -31,6 +31,7 @@ import org.streamrune.core.projection.ProjectionEpochRegressionException;
 import org.streamrune.core.projection.ProjectionErrorClass;
 import org.streamrune.core.projection.ProjectionErrorClassifier;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
@@ -213,13 +214,25 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    * Read-only {@link SubscriptionLifecycle} adapter exposing a scheduled projection's state to the
    * health contributor. Only {@link #state()}, {@link #isRunning()}, and {@link #close()} are
    * meaningful; {@link #start()}, {@link #pause()}, and {@link #resume()} throw since the runner —
-   * not the health contributor — owns the lifecycle.
+   * not the health contributor — owns the lifecycle. It reports the role the runner plays under its
+   * lease ({@link RunnerLeaseRole}), and its errors — ticks that dead-lettered or skipped a chunk —
+   * survive a standby ({@link LeaseRoleAware#errorsEndWithTheLease()} is {@code false}).
    */
-  private final class ScheduledSubscriptionView implements SubscriptionLifecycle {
+  private final class ScheduledSubscriptionView implements SubscriptionLifecycle, LeaseRoleAware {
     private final ProjectionName name;
 
     ScheduledSubscriptionView(ProjectionName name) {
       this.name = name;
+    }
+
+    @Override
+    public LeaseRole leaseRole() {
+      return RunnerLeaseRole.of(leadership, name.value());
+    }
+
+    @Override
+    public boolean errorsEndWithTheLease() {
+      return false;
     }
 
     @Override

@@ -372,8 +372,11 @@ public final class SubscriptionHealthContributor {
     LeaseRole role = roleOf(name, entry.subscription());
     // A standby delivers no page, so no delivered page can end the run of errors it had when it
     // lost its lease: the run ended with the lease. It reports none, and the count starts afresh
-    // when the subscription leads again.
-    if (role == LeaseRole.STANDBY) {
+    // when the subscription leads again. A projection runner's errors are holes in the shared read
+    // model instead, which standing by does not close: its view keeps them (errorsEndWithTheLease).
+    if (role == LeaseRole.STANDBY
+        && entry.subscription() instanceof LeaseRoleAware aware
+        && aware.errorsEndWithTheLease()) {
       entry.errorCount().set(0);
     }
     int errors = entry.errorCount().get();

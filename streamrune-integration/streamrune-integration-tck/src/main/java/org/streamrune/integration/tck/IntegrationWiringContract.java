@@ -238,9 +238,11 @@ public abstract class IntegrationWiringContract {
   /**
    * The health endpoint reports the StreamRune check under the name the production guide states,
    * {@code UP}, with the head of the event store ({@code eventStore.lastGlobalOffset}) and one
-   * detail per subscription carrying its lease role ({@code subscription.<name>.role}): {@code
-   * UNGATED} for the contract's projection once its subscription runs (the runner reports {@code
-   * NOT_REPORTED} while it starts).
+   * detail per subscription carrying its lease role ({@code subscription.<name>.role}): the role
+   * the contract's projection runner plays under its lease. With a {@code DataSource} the
+   * single-active-consumer lease is on by default and the only replica holds it: {@code LEADING}
+   * (the runner reports {@code STANDBY} until it takes the lease). With the lease switched off the
+   * runner takes none and delivers on every replica: {@code UNGATED}.
    */
   @Test
   public void healthCarriesTheDocumentedNameAndKeys() {
@@ -252,12 +254,19 @@ public abstract class IntegrationWiringContract {
                 + healthCheckName()
                 + ": it states "
                 + documented);
+    assertTheProjectionReports("LEADING", Map.of());
+    assertTheProjectionReports(
+        "UNGATED", Map.of("streamrune.subscription.single-active-consumer.enabled", "false"));
+  }
+
+  private void assertTheProjectionReports(String expectedRole, Map<String, String> properties) {
     String role = "subscription." + ContractProjection.NAME + ".role";
     try (Application application =
-        start(postgresql(), Map.of(), Set.of(ContractProjection.class))) {
+        start(postgresql(), properties, Set.of(ContractProjection.class))) {
       assertStarted(application);
       Map<String, Object> health =
-          awaitHealth(application, details -> "UNGATED".equals(String.valueOf(details.get(role))));
+          awaitHealth(
+              application, details -> expectedRole.equals(String.valueOf(details.get(role))));
       assertEquals(
           "UP", String.valueOf(health.get("status")), () -> "the check must be UP: " + health);
       Map<String, Object> details = details(health);
@@ -268,9 +277,15 @@ public abstract class IntegrationWiringContract {
           details.containsKey(role),
           () -> "the check must carry " + role + " for the running projection: " + health);
       assertEquals(
-          "UNGATED",
+          expectedRole,
           String.valueOf(details.get(role)),
-          () -> "the running projection's subscription reports the role UNGATED: " + health);
+          () ->
+              "with "
+                  + (properties.isEmpty() ? "the default properties" : properties)
+                  + " the running projection reports the role "
+                  + expectedRole
+                  + ": "
+                  + health);
     }
   }
 

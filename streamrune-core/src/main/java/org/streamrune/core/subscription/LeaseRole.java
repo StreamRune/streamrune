@@ -2,9 +2,7 @@ package org.streamrune.core.subscription;
 
 /** The role a subscription plays under its single-active-consumer lease, as health reports it. */
 public enum LeaseRole {
-  /**
-   * The subscription does not report a role (a projection runner's view, or a custom registration).
-   */
+  /** The registration does not report a role (a subscription that is not lease-role aware). */
   NOT_REPORTED,
   /** The subscription takes no lease: it delivers on every replica that runs it. */
   UNGATED,

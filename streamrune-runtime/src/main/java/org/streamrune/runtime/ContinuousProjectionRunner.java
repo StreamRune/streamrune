@@ -31,6 +31,7 @@ import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.projection.ProjectionRunner;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.EventSubscription;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
@@ -1516,10 +1517,11 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
   }
 
   /**
-   * Registers the live subscription with the health contributor when one is wired and the
-   * subscription exposes lifecycle state. Replaces the runner's standby view for the duration of
-   * LIVE mode; when the subscription is not a {@link SubscriptionLifecycle} (a custom factory
-   * subscription) the standby view stays registered, so the projection is never invisible.
+   * Registers a view of the live subscription ({@link LiveHealthView}: its state and push path,
+   * this runner's lease role) with the health contributor when one is wired and the subscription
+   * exposes lifecycle state. Replaces the runner's standby view for the duration of LIVE mode; when
+   * the subscription is not a {@link SubscriptionLifecycle} (a custom factory subscription) the
+   * standby view stays registered, so the projection is never invisible.
    *
    * <p>Uses {@link SubscriptionHealthContributor#replaceLifecycle} rather than {@code register} —
    * the standby view being replaced may have just accrued a catch-up error count (see {@link
@@ -1530,7 +1532,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     if (healthContributor == null || !(subscription instanceof SubscriptionLifecycle lifecycle)) {
       return;
     }
-    healthContributor.replaceLifecycle(projectionName.value(), lifecycle);
+    healthContributor.replaceLifecycle(
+        projectionName.value(), new LiveHealthView(projectionName, lifecycle));
   }
 
   /**
@@ -1585,7 +1588,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     if (healthContributor == null) {
       return;
     }
-    healthContributor.register(projectionName.value(), new RunnerHealthView());
+    healthContributor.register(projectionName.value(), new RunnerHealthView(projectionName));
   }
 
   /**
@@ -1605,7 +1608,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     if (healthContributor == null) {
       return;
     }
-    healthContributor.replaceLifecycle(projectionName.value(), new RunnerHealthView());
+    healthContributor.replaceLifecycle(
+        projectionName.value(), new RunnerHealthView(projectionName));
   }
 
   /**
@@ -1630,10 +1634,31 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * markTerminalError} independently forces DOWN on that path, so the mapping only keeps the
    * reported lifecycle state honest.
    *
+   * <p>The view reports the role this runner plays under its lease ({@link RunnerLeaseRole}):
+   * {@code STANDBY} while another replica leads, {@code LEADING} once this one holds the lease and
+   * catches up. Its errors are holes in the shared read model, so they survive a standby ({@link
+   * LeaseRoleAware#errorsEndWithTheLease()} is {@code false}).
+   *
    * <p>The runner — not the health contributor — owns the lifecycle, so the mutating operations
    * throw.
    */
-  private final class RunnerHealthView implements SubscriptionLifecycle {
+  private final class RunnerHealthView implements SubscriptionLifecycle, LeaseRoleAware {
+
+    private final ProjectionName projectionName;
+
+    RunnerHealthView(ProjectionName projectionName) {
+      this.projectionName = projectionName;
+    }
+
+    @Override
+    public LeaseRole leaseRole() {
+      return RunnerLeaseRole.of(leadership, projectionName.value());
+    }
+
+    @Override
+    public boolean errorsEndWithTheLease() {
+      return false;
+    }
 
     @Override
     public SubscriptionLifecycleState state() {
@@ -1666,6 +1691,77 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     @Override
     public void close() {
       // No-op: the runner owns the lifecycle; unregistration happens in run()'s finally.
+    }
+  }
+
+  /**
+   * The live subscription as the health contributor sees it: its lifecycle state and its push path
+   * (a hybrid subscription's), and the role of this runner under its lease. The subscription the
+   * runner builds takes no lease of its own — the runner holds it — so its own role would read
+   * {@code UNGATED} on a replica that leads under a lease. A runner without a lease reports the
+   * subscription's own role ({@code UNGATED} for the default polling one, a factory-built
+   * subscription's role when it delivers under a lease of its own). Its errors survive a standby,
+   * as the runner's own view's do.
+   */
+  private final class LiveHealthView
+      implements SubscriptionLifecycle, LeaseRoleAware, PushHealthAware {
+
+    private final ProjectionName projectionName;
+    private final SubscriptionLifecycle live;
+
+    LiveHealthView(ProjectionName projectionName, SubscriptionLifecycle live) {
+      this.projectionName = projectionName;
+      this.live = live;
+    }
+
+    @Override
+    public LeaseRole leaseRole() {
+      if (leadership == SubscriptionLeadership.NOOP && live instanceof LeaseRoleAware aware) {
+        return aware.leaseRole();
+      }
+      return RunnerLeaseRole.of(leadership, projectionName.value());
+    }
+
+    @Override
+    public boolean errorsEndWithTheLease() {
+      return false;
+    }
+
+    @Override
+    public PushPathStatus pushPathStatus() {
+      return live instanceof PushHealthAware push
+          ? push.pushPathStatus()
+          : PushPathStatus.NOT_CONFIGURED;
+    }
+
+    @Override
+    public SubscriptionLifecycleState state() {
+      return live.state();
+    }
+
+    @Override
+    public boolean isRunning() {
+      return live.isRunning();
+    }
+
+    @Override
+    public void start() {
+      throw new UnsupportedOperationException("lifecycle owned by ContinuousProjectionRunner");
+    }
+
+    @Override
+    public void pause() {
+      throw new UnsupportedOperationException("continuous projections cannot be paused here");
+    }
+
+    @Override
+    public void resume() {
+      throw new UnsupportedOperationException("continuous projections cannot be resumed here");
+    }
+
+    @Override
+    public void close() {
+      // No-op: the runner closes the live subscription itself.
     }
   }
 
