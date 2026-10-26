@@ -83,17 +83,11 @@ class ConfigurationDocLintTest {
   @BeforeAll
   static void readTheOracleAndCheckItOnKnownKeys() throws Exception {
     StreamRuneMicronautProperties properties;
-    Map<String, String> bound;
+    ConfigurationOracle.Merged merged;
     try (var context = ApplicationContext.run()) {
       properties = context.getBean(StreamRuneMicronautProperties.class);
-      StreamRuneMicronautCryptoProperties crypto =
-          context.getBean(StreamRuneMicronautCryptoProperties.class);
-      bound = new TreeMap<>(ConfigurationOracle.ofRecord(properties, "streamrune", MICRONAUT));
-      bound.putAll(ConfigurationOracle.ofRecord(crypto, "streamrune.crypto", MICRONAUT));
+      merged = oracleOf(properties, context.getBean(StreamRuneMicronautCryptoProperties.class));
     }
-    List<ReadElsewhere> reads = new ArrayList<>(injectionPointsAndConditions());
-    reads.addAll(LOOKUPS);
-    ConfigurationOracle.Merged merged = ConfigurationOracle.merge(bound, reads);
     oracle = merged.keys();
     conflicts = merged.conflicts();
 
@@ -112,6 +106,23 @@ class ConfigurationDocLintTest {
     assertEquals("true", oracle.get("streamrune.runner-lifecycle-enabled"));
 
     docs = ConfigurationDocs.read(ConfigurationDocs.repositoryRoot(), README);
+  }
+
+  /**
+   * The oracle of two bound properties records: their keys, named as Micronaut names them, with the
+   * property of every injection point and bean condition in the module and the keys the projection
+   * discovery looks up. {@code MicronautIntegrationWiringContractTest} reads the properties beans
+   * of a started application with it.
+   */
+  static ConfigurationOracle.Merged oracleOf(
+      StreamRuneMicronautProperties properties, StreamRuneMicronautCryptoProperties crypto)
+      throws ClassNotFoundException {
+    Map<String, String> bound =
+        new TreeMap<>(ConfigurationOracle.ofRecord(properties, "streamrune", MICRONAUT));
+    bound.putAll(ConfigurationOracle.ofRecord(crypto, "streamrune.crypto", MICRONAUT));
+    List<ReadElsewhere> reads = new ArrayList<>(injectionPointsAndConditions());
+    reads.addAll(LOOKUPS);
+    return ConfigurationOracle.merge(bound, reads);
   }
 
   @Test

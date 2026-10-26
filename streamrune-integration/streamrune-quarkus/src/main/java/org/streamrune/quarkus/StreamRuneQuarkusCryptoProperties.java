@@ -3,6 +3,7 @@ package org.streamrune.quarkus;
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
 import io.smallrye.config.WithName;
+import java.time.Duration;
 import java.util.Optional;
 
 /**
@@ -111,13 +112,12 @@ public interface StreamRuneQuarkusCryptoProperties {
       int maximumSize();
 
       /**
-       * How long a cached data key lives after it was stored; must be positive. Strict ISO-8601
-       * duration format (e.g. {@code PT5M}), like the other crypto cache durations — Quarkus'
-       * {@code 5m} shorthand is not supported.
+       * How long a cached data key lives after it was stored (default five minutes); must be
+       * positive. A duration like every other StreamRune duration: {@code PT5M}, or {@code 5m} in a
+       * Quarkus application.
        */
-      @WithName("expire-after-write")
       @WithDefault("PT5M")
-      String expireAfterWriteRaw();
+      Duration expireAfterWrite();
     }
   }
 
@@ -132,20 +132,18 @@ public interface StreamRuneQuarkusCryptoProperties {
     int maximumSize();
 
     /**
-     * Time after which an entry is expired, counted from when it was written. Strict ISO-8601
-     * duration format (e.g. {@code PT5M}, {@code PT1H}) — Quarkus' {@code 5m} shorthand is not
-     * supported. Unset, the engine's mandatory ceiling applies, {@link
-     * org.streamrune.crypto.CachedCryptoEngine#DEFAULT_EXPIRE_AFTER_WRITE} (five minutes).
+     * Time after which an entry is expired, counted from when it was written (default five minutes,
+     * the {@link org.streamrune.crypto.CachedCryptoEngine#DEFAULT_EXPIRE_AFTER_WRITE} ceiling the
+     * engine applies without one). A duration: {@code PT5M}, or {@code 5m} in a Quarkus
+     * application.
      */
-    @WithName("expire-after-write")
-    Optional<String> expireAfterWriteRaw();
+    @WithDefault("PT5M")
+    Duration expireAfterWrite();
 
     /**
-     * Time after which an entry is expired, counted from its last access. Strict ISO-8601 duration
-     * format (e.g. {@code PT10M}) — Quarkus' {@code 10m} shorthand is not supported. Leave unset to
-     * disable.
+     * Time after which an entry is expired, counted from its last access; unset, entries expire by
+     * write age only. A duration: {@code PT10M}, or {@code 10m} in a Quarkus application.
      */
-    @WithName("expire-after-access")
-    Optional<String> expireAfterAccessRaw();
+    Optional<Duration> expireAfterAccess();
   }
 }

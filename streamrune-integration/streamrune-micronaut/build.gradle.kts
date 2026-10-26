@@ -88,3 +88,16 @@ tasks.named<Test>("docLintTest") {
         .withPropertyName("configurationDocs")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
+
+// IntegrationWiringContract, which this module's test task runs, reads the production guide (the
+// health check names, the saga warning it quotes) and the configuration reference: declared, so an
+// edit to either re-runs the contract.
+tasks.named<Test>("test") {
+    inputs
+        .files(
+            rootDir.resolve("docs/guide/production.md"),
+            rootDir.resolve("docs/guide/configuration.md"),
+        )
+        .withPropertyName("wiringContractGuides")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}

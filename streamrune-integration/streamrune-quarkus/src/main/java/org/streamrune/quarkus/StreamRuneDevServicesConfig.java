@@ -22,7 +22,9 @@ public class StreamRuneDevServicesConfig {
 
   private static final Logger LOG = LoggerFactory.getLogger(StreamRuneDevServicesConfig.class);
 
-  void onStartup(@Observes StartupEvent event) {
+  // public: the observer invoker Arc generates may live in another classloader (see {@code
+  // StreamRuneConfigValidator}'s client-proxy constructor).
+  public void onStartup(@Observes StartupEvent event) {
     if (LaunchMode.current() == LaunchMode.DEVELOPMENT) {
       LOG.info(
           "StreamRune Dev Services: PostgreSQL dev service active. "

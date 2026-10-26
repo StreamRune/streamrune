@@ -16,3 +16,16 @@ dependencies {
     compileOnly(libs.opentelemetry.api)
     testImplementation(libs.opentelemetry.api)
 }
+
+// The contract's own tests read the production guide and the configuration reference, as the
+// integrations' test tasks do when they run the contract: declared, so an edit to either re-runs
+// them.
+tasks.named<Test>("test") {
+    inputs
+        .files(
+            rootDir.resolve("docs/guide/production.md"),
+            rootDir.resolve("docs/guide/configuration.md"),
+        )
+        .withPropertyName("wiringContractGuides")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}

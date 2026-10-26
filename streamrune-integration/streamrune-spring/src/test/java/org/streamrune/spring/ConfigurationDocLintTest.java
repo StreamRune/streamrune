@@ -66,12 +66,7 @@ class ConfigurationDocLintTest {
         binder.bindOrCreate("streamrune", Bindable.of(StreamRuneProperties.class));
     StreamRuneCryptoProperties crypto =
         binder.bindOrCreate("streamrune.crypto", Bindable.of(StreamRuneCryptoProperties.class));
-    Map<String, String> bound =
-        new TreeMap<>(ConfigurationOracle.ofRecord(properties, "streamrune"));
-    bound.putAll(ConfigurationOracle.ofRecord(crypto, "streamrune.crypto"));
-    List<ReadElsewhere> reads = new ArrayList<>(conditions());
-    reads.addAll(LOOKUPS);
-    ConfigurationOracle.Merged merged = ConfigurationOracle.merge(bound, reads);
+    ConfigurationOracle.Merged merged = oracleOf(properties, crypto);
     oracle = merged.keys();
     conflicts = merged.conflicts();
 
@@ -142,6 +137,23 @@ class ConfigurationDocLintTest {
   void everyDefaultColumnStatesTheSpringDefault() {
     assertTrue(docs.defaultRowCount() > 30, "the Default tables of the guides must be found");
     assertNoProblems("default(s) stated differently from the code", docs.wrongDefaults(oracle));
+  }
+
+  /**
+   * The oracle of two bound properties records: their keys, with the property of every bean
+   * condition in the module and the keys {@code ProjectionAutoConfig} looks up. {@code
+   * SpringIntegrationWiringContractTest} reads the properties beans of a started application with
+   * it.
+   */
+  static ConfigurationOracle.Merged oracleOf(
+      StreamRuneProperties properties, StreamRuneCryptoProperties crypto)
+      throws ClassNotFoundException {
+    Map<String, String> bound =
+        new TreeMap<>(ConfigurationOracle.ofRecord(properties, "streamrune"));
+    bound.putAll(ConfigurationOracle.ofRecord(crypto, "streamrune.crypto"));
+    List<ReadElsewhere> reads = new ArrayList<>(conditions());
+    reads.addAll(LOOKUPS);
+    return ConfigurationOracle.merge(bound, reads);
   }
 
   /**

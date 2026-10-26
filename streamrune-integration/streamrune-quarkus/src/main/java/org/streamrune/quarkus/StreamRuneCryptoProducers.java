@@ -107,7 +107,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Disposer for {@link #fileSystemCryptoEngine}. */
-    void disposeCryptoEngine(@Disposes CryptoEngine engine) {
+    public void disposeCryptoEngine(@Disposes CryptoEngine engine) {
       closeEngine(engine);
     }
   }
@@ -134,7 +134,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Disposer for {@link #postgresCryptoEngine}. */
-    void disposeCryptoEngine(@Disposes CryptoEngine engine) {
+    public void disposeCryptoEngine(@Disposes CryptoEngine engine) {
       closeEngine(engine);
     }
   }
@@ -177,7 +177,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Closes the container-managed Vault {@link HttpClient} on shutdown. */
-    void closeVaultHttpClient(@Disposes StreamRuneVaultHttpClient httpClient) {
+    public void closeVaultHttpClient(@Disposes StreamRuneVaultHttpClient httpClient) {
       httpClient.close();
     }
 
@@ -196,7 +196,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Disposer for {@link #vaultCryptoEngine}. */
-    void disposeCryptoEngine(@Disposes CryptoEngine engine) {
+    public void disposeCryptoEngine(@Disposes CryptoEngine engine) {
       closeEngine(engine);
     }
   }
@@ -234,7 +234,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Closes the container-managed {@link KmsClient} on shutdown. */
-    void closeAwsKmsClient(@Disposes StreamRuneKmsClient kmsClient) {
+    public void closeAwsKmsClient(@Disposes StreamRuneKmsClient kmsClient) {
       kmsClient.close();
     }
 
@@ -258,7 +258,7 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Disposer for {@link #awsKmsCryptoEngine}. */
-    void disposeCryptoEngine(@Disposes CryptoEngine engine) {
+    public void disposeCryptoEngine(@Disposes CryptoEngine engine) {
       closeEngine(engine);
     }
   }
@@ -285,7 +285,7 @@ public class StreamRuneCryptoProducers {
     return wrapWithCache(
         delegate,
         props.cache(),
-        resolveForgetSignal(dataSource, props.cache().expireAfterWriteRaw(), "filesystem"));
+        resolveForgetSignal(dataSource, props.cache().expireAfterWrite(), "filesystem"));
   }
 
   /**
@@ -391,7 +391,7 @@ public class StreamRuneCryptoProducers {
     return wrapWithCache(
         delegate,
         props.cache(),
-        resolveForgetSignal(dataSource, props.cache().expireAfterWriteRaw(), "vault"));
+        resolveForgetSignal(dataSource, props.cache().expireAfterWrite(), "vault"));
   }
 
   /**
@@ -440,18 +440,13 @@ public class StreamRuneCryptoProducers {
               + " data-key cache), got "
               + dataKeyCacheMaximumSize);
     }
-    Duration dataKeyCacheExpireAfterWrite =
-        expiry(
-                "streamrune.crypto.aws.data-key-cache.expire-after-write",
-                java.util.Optional.of(dataKeyCache.expireAfterWriteRaw()))
-            .filter(d -> !d.isZero() && !d.isNegative())
-            .orElseThrow(
-                () ->
-                    new IllegalStateException(
-                        "streamrune.crypto.aws.data-key-cache.expire-after-write must be a"
-                            + " positive ISO-8601 duration (e.g. PT5M), got '"
-                            + dataKeyCache.expireAfterWriteRaw()
-                            + "'"));
+    Duration dataKeyCacheExpireAfterWrite = dataKeyCache.expireAfterWrite();
+    if (dataKeyCacheExpireAfterWrite.isZero() || dataKeyCacheExpireAfterWrite.isNegative()) {
+      throw new IllegalStateException(
+          "streamrune.crypto.aws.data-key-cache.expire-after-write must be a positive duration"
+              + " (e.g. PT5M), got "
+              + dataKeyCacheExpireAfterWrite);
+    }
     CryptoEngine delegate;
     try {
       var builder =
@@ -479,7 +474,7 @@ public class StreamRuneCryptoProducers {
     return wrapWithCache(
         delegate,
         props.cache(),
-        resolveForgetSignal(dataSource, props.cache().expireAfterWriteRaw(), "aws-kms"));
+        resolveForgetSignal(dataSource, props.cache().expireAfterWrite(), "aws-kms"));
   }
 
   /**
@@ -514,21 +509,17 @@ public class StreamRuneCryptoProducers {
    * testing.
    */
   static CryptoForgetSignal resolveForgetSignal(
-      DataSource dataSource, java.util.Optional<String> configuredWriteTtlRaw, String backend) {
+      DataSource dataSource, Duration configuredWriteTtl, String backend) {
     if (dataSource != null) {
       return postgresForgetSignal(dataSource);
     }
-    String writeTtl =
-        configuredWriteTtlRaw
-            .filter(v -> !v.isBlank())
-            .orElse(CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE.toString());
     log.warn(
         "No DataSource available to wire the cross-replica crypto-forget channel for the {} crypto"
             + " backend; after a GDPR erasure, peer replicas will keep serving a forgotten subject's"
             + " cached plaintext for up to the cache write-TTL ceiling ({}) — the only cross-replica"
             + " erasure bound. Provide a Postgres DataSource for prompt (LISTEN/NOTIFY) eviction.",
         backend,
-        writeTtl);
+        configuredWriteTtl);
     return CryptoForgetSignal.NOOP;
   }
 
@@ -578,36 +569,9 @@ public class StreamRuneCryptoProducers {
         CachedCryptoEngine.builder()
             .delegate(delegate)
             .maximumSize(cache.maximumSize())
-            .forgetSignal(forgetSignal);
-    expiry("streamrune.crypto.cache.expire-after-write", cache.expireAfterWriteRaw())
-        .ifPresent(builder::expireAfterWrite);
-    expiry("streamrune.crypto.cache.expire-after-access", cache.expireAfterAccessRaw())
-        .ifPresent(builder::expireAfterAccess);
+            .forgetSignal(forgetSignal)
+            .expireAfterWrite(cache.expireAfterWrite());
+    cache.expireAfterAccess().ifPresent(builder::expireAfterAccess);
     return builder.build();
-  }
-
-  /**
-   * Parses a cache expiry value with the strict ISO-8601 {@link Duration} format. Quarkus' own
-   * duration shorthand ({@code 5m}, {@code 1h}) is deliberately not supported here: these values
-   * are mapped as raw strings so behavior is identical inside Quarkus and in plain SmallRye Config
-   * — fail fast naming the offending key instead of surfacing a bare {@link
-   * java.time.format.DateTimeParseException}.
-   */
-  private static java.util.Optional<Duration> expiry(String key, java.util.Optional<String> raw) {
-    return raw.filter(v -> !v.isBlank())
-        .map(
-            value -> {
-              try {
-                return Duration.parse(value);
-              } catch (java.time.format.DateTimeParseException e) {
-                throw new IllegalStateException(
-                    "Invalid value '"
-                        + value
-                        + "' for '"
-                        + key
-                        + "': expected an ISO-8601 duration (e.g. PT5M, PT1H).",
-                    e);
-              }
-            });
   }
 }

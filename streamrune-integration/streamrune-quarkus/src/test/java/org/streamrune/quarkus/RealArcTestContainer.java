@@ -106,7 +106,15 @@ final class RealArcTestContainer implements AutoCloseable {
    */
   static RealArcTestContainer boot(
       List<Class<?>> beanClasses, Map<String, String> buildTimeProperties) throws Exception {
-    return boot(beanClasses, buildTimeProperties, List.of(), Set.of(), false, Set.of());
+    return boot(
+        beanClasses,
+        buildTimeProperties,
+        List.of(),
+        Set.of(),
+        false,
+        Set.of(),
+        List.of(),
+        List.of());
   }
 
   /**
@@ -124,7 +132,7 @@ final class RealArcTestContainer implements AutoCloseable {
    */
   static RealArcTestContainer bootWithRestProviders(
       List<Class<?>> beanClasses, List<Class<?>> restProviders) throws Exception {
-    return boot(beanClasses, null, restProviders, Set.of(), false, Set.of());
+    return boot(beanClasses, null, restProviders, Set.of(), false, Set.of(), List.of(), List.of());
   }
 
   /**
@@ -147,7 +155,8 @@ final class RealArcTestContainer implements AutoCloseable {
    */
   static RealArcTestContainer bootIsolatingPackages(
       List<Class<?>> beanClasses, Set<String> isolatedPackages) throws Exception {
-    return boot(beanClasses, null, List.of(), isolatedPackages, false, Set.of());
+    return boot(
+        beanClasses, null, List.of(), isolatedPackages, false, Set.of(), List.of(), List.of());
   }
 
   /**
@@ -181,7 +190,52 @@ final class RealArcTestContainer implements AutoCloseable {
     }
     Set<Class<?>> unremovable = new HashSet<>(entryPoints);
     unremovable.addAll(restProviders);
-    return boot(allBeanClasses, null, restProviders, Set.of(), true, unremovable);
+    return boot(
+        allBeanClasses, null, restProviders, Set.of(), true, unremovable, List.of(), List.of());
+  }
+
+  /**
+   * A bean registered in code, the way a Quarkus extension registers a synthetic bean: a
+   * {@code @Singleton} of {@code type} that {@code creator} makes from {@code params}.
+   *
+   * @param type the bean type; a parameterized type keeps its type arguments
+   * @param implementation the class the container reports as the bean's class
+   * @param creator makes the instance, given {@code params}
+   * @param params the creator's parameters
+   */
+  record SyntheticBean(
+      java.lang.reflect.Type type,
+      Class<?> implementation,
+      Class<? extends io.quarkus.arc.BeanCreator<?>> creator,
+      Map<String, String> params) {}
+
+  /**
+   * As {@link #boot(List, Map)} — the build-time conditions evaluated against {@code
+   * buildTimeProperties} — plus the beans an application declares without a bean-defining
+   * annotation of their own: each class of {@code applicationClasses} is a {@code @Singleton} class
+   * bean, and each of {@code syntheticBeans} a synthetic {@code @Singleton}.
+   *
+   * @param beanClasses as {@link #boot(List)}
+   * @param buildTimeProperties as {@link #boot(List, Map)}
+   * @param applicationClasses classes with a public no-argument constructor, each a bean of its own
+   *     type closure
+   * @param syntheticBeans beans registered in code
+   */
+  static RealArcTestContainer bootApplication(
+      List<Class<?>> beanClasses,
+      Map<String, String> buildTimeProperties,
+      List<Class<?>> applicationClasses,
+      List<SyntheticBean> syntheticBeans)
+      throws Exception {
+    return boot(
+        beanClasses,
+        buildTimeProperties,
+        List.of(),
+        Set.of(),
+        false,
+        Set.of(),
+        applicationClasses,
+        syntheticBeans);
   }
 
   private static RealArcTestContainer boot(
@@ -190,15 +244,21 @@ final class RealArcTestContainer implements AutoCloseable {
       List<Class<?>> restProviders,
       Set<String> isolatedPackages,
       boolean removeUnusedBeans,
-      Set<Class<?>> unremovable)
+      Set<Class<?>> unremovable,
+      List<Class<?>> applicationClasses,
+      List<SyntheticBean> syntheticBeans)
       throws Exception {
     Path genDir = Files.createTempDirectory("arc-gen");
 
     List<Class<?>> allClasses = new ArrayList<>(beanClasses);
     allClasses.addAll(restProviders);
+    allClasses.addAll(applicationClasses);
     Set<DotName> singletonByDefault = new HashSet<>();
     for (Class<?> provider : restProviders) {
       singletonByDefault.add(DotName.createSimple(provider.getName()));
+    }
+    for (Class<?> application : applicationClasses) {
+      singletonByDefault.add(DotName.createSimple(application.getName()));
     }
 
     Indexer indexer = new Indexer();
@@ -213,6 +273,14 @@ final class RealArcTestContainer implements AutoCloseable {
           // exactly the ubiquitous kind an application also declares — impossible to exercise here.
           index(indexer, m.getReturnType(), alreadyIndexed, true);
         }
+      }
+    }
+    // A synthetic bean's class and types must be in the index: Arc reads the one and computes the
+    // closure of the others.
+    for (SyntheticBean bean : syntheticBeans) {
+      index(indexer, bean.implementation(), alreadyIndexed);
+      for (Class<?> referenced : classesOf(bean.type())) {
+        index(indexer, referenced, alreadyIndexed);
       }
     }
     Index appIndex = indexer.complete();
@@ -260,6 +328,23 @@ final class RealArcTestContainer implements AutoCloseable {
     }
     if (buildTimeProperties != null) {
       processorBuilder.addAnnotationTransformation(buildTimeConditions(buildTimeProperties));
+    }
+    if (!syntheticBeans.isEmpty()) {
+      processorBuilder.addBeanRegistrar(
+          context -> {
+            for (SyntheticBean bean : syntheticBeans) {
+              var configurator =
+                  context
+                      .configure(DotName.createSimple(bean.implementation().getName()))
+                      .addTypeClosure(jandexType(bean.type()))
+                      .scope(jakarta.inject.Singleton.class)
+                      .unremovable();
+              bean.params().forEach(configurator::param);
+              @SuppressWarnings({"unchecked", "rawtypes"})
+              Class<? extends io.quarkus.arc.BeanCreator<Object>> creator = (Class) bean.creator();
+              configurator.creator(creator).done();
+            }
+          });
     }
     if (!singletonByDefault.isEmpty()) {
       processorBuilder.addAnnotationTransformation(
@@ -339,6 +424,36 @@ final class RealArcTestContainer implements AutoCloseable {
     for (Class<?> i : c.getInterfaces()) {
       index(indexer, i, alreadyIndexed);
     }
+  }
+
+  /** The classes a reflected type names: its raw class and those of its type arguments. */
+  private static List<Class<?>> classesOf(java.lang.reflect.Type type) {
+    List<Class<?>> classes = new ArrayList<>();
+    if (type instanceof Class<?> c) {
+      classes.add(c);
+    } else if (type instanceof java.lang.reflect.ParameterizedType parameterized) {
+      classes.addAll(classesOf(parameterized.getRawType()));
+      for (java.lang.reflect.Type argument : parameterized.getActualTypeArguments()) {
+        classes.addAll(classesOf(argument));
+      }
+    }
+    return classes;
+  }
+
+  /** The Jandex form of a class or a parameterized type. */
+  private static org.jboss.jandex.Type jandexType(java.lang.reflect.Type type) {
+    if (type instanceof Class<?> c) {
+      return org.jboss.jandex.ClassType.create(DotName.createSimple(c.getName()));
+    }
+    if (type instanceof java.lang.reflect.ParameterizedType parameterized) {
+      org.jboss.jandex.Type[] arguments =
+          java.util.Arrays.stream(parameterized.getActualTypeArguments())
+              .map(RealArcTestContainer::jandexType)
+              .toArray(org.jboss.jandex.Type[]::new);
+      return org.jboss.jandex.ParameterizedType.create(
+          DotName.createSimple(((Class<?>) parameterized.getRawType()).getName()), arguments, null);
+    }
+    throw new IllegalArgumentException("not a class or a parameterized type: " + type);
   }
 
   @Override
