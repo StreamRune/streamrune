@@ -230,8 +230,14 @@ final class ReferenceApplication implements Application {
     Map<String, Object> details = new LinkedHashMap<>();
     details.put("eventStore.lastGlobalOffset", 0L);
     if (keeps(Rule.HEALTH_DETAILS) && !beansOf(ContractProjection.class).isEmpty()) {
+      // The runner's role under its lease: on by default with a database, the only replica leads.
+      boolean leased =
+          dataSource != null
+              && !"false"
+                  .equals(properties.get("streamrune.subscription.single-active-consumer.enabled"));
       details.put(
-          "subscription." + ContractProjection.NAME, Map.of("status", "UP", "role", "UNGATED"));
+          "subscription." + ContractProjection.NAME,
+          Map.of("status", "UP", "role", leased ? "LEADING" : "UNGATED"));
     }
     Map<String, Object> health = new LinkedHashMap<>();
     health.put("status", "UP");

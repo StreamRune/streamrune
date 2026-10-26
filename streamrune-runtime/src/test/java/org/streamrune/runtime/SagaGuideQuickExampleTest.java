@@ -7,10 +7,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.Command;
-import org.streamrune.core.CommandBus;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
@@ -27,13 +25,9 @@ import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
-import org.streamrune.core.types.IdempotencyKey;
-import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
-import org.streamrune.test.InMemorySagaDeadLetterStore;
-import org.streamrune.test.InMemorySagaStore;
-import org.streamrune.test.SagaEnvelopes;
+import org.streamrune.test.SagaFixture;
 
 /**
  * The saga of the saga guide's quick example, and its builder form, behave as the guide says — in
@@ -46,7 +40,8 @@ import org.streamrune.test.SagaEnvelopes;
  * example's {@code sagaOf} answers "no saga" instead: nothing is filed, loaded or written.
  *
  * <p>{@link OrderSaga} is the guide's class, statement for statement; the documentation ratchet in
- * {@code streamrune-core} keeps the guide's routing samples from building a saga id unchecked.
+ * {@code streamrune-core} keeps the guide's routing samples from building a saga id unchecked. The
+ * tests drive it through {@link SagaFixture}, as the guide's test of the example does.
  */
 class SagaGuideQuickExampleTest {
 
@@ -157,90 +152,51 @@ class SagaGuideQuickExampleTest {
     }
   }
 
-  static final class CapturingBus implements CommandBus {
-    final List<Command> dispatched = new ArrayList<>();
-
-    @Override
-    public boolean supportsIdempotentExecution() {
-      return true;
-    }
-
-    @Override
-    public <C extends Command> CommandResult execute(C command) {
-      throw new UnsupportedOperationException("a saga dispatches with a key");
-    }
-
-    @Override
-    public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
-      dispatched.add(command);
-      return new CommandResult(
-          List.of(), StreamId.of(ORDER, AggregateId.of("unused")), Version.initial(), List.of());
-    }
-  }
-
   private static final AggregateType ORDER = AggregateType.of("order");
-  private static final SagaType TYPE = SagaType.fromClass(OrderSaga.State.class);
+  private static final AggregateType STOCK = AggregateType.of("stock");
 
   /** 250 characters: an aggregate id holds it, {@code "order-saga-" + it} is 261 characters. */
   private static final String AN_ID_NO_SAGA_ID_CAN_HOLD = "x".repeat(250);
 
-  private ForwardingSagaStore sagaStore;
-  private InMemorySagaDeadLetterStore deadLetters;
-  private CapturingBus bus;
-  private long nextOffset = 1L;
-
-  @BeforeEach
-  void setUp() {
-    var rows = new InMemorySagaStore();
-    sagaStore = new ForwardingSagaStore(rows);
-    deadLetters = new InMemorySagaDeadLetterStore(rows);
-    bus = new CapturingBus();
-  }
-
   /** The guide's first wiring: the orchestrator. */
-  private SagaRunner<OrderSaga.State> orchestratorRunner() {
-    return SagaRunner.<OrderSaga.State>builder()
-        .orchestrator(new OrderSaga())
-        .sagaStore(sagaStore)
-        .commandBus(bus)
-        .sagaDeadLetterStore(deadLetters)
-        // The bus is a test double that stores nothing; the fence is tested in
-        // SagaForwardFence*Test.
-        .forwardFence(false)
-        .build();
+  private static SagaFixture<OrderSaga.State> orchestratorFixture() {
+    return SagaFixture.of(OrderSaga.State.class, builder -> builder.orchestrator(new OrderSaga()));
   }
 
   /** The guide's second wiring: the decider, with the routing on the builder. */
-  private SagaRunner<OrderSaga.State> deciderRunner() {
-    return SagaRunner.<OrderSaga.State>builder()
-        .decider(new OrderSagaDecider())
-        // OrderSaga.sagaOf is the quick example's helper: the saga id of an order, or nothing for
-        // an order id no saga id can hold. None of the three functions throws on the event's data.
-        .startWhen(
-            event ->
-                event.event() instanceof OrderPlaced e && OrderSaga.sagaOf(e.orderId()).isPresent())
-        .extractSagaId(
-            event -> OrderSaga.sagaOf(((OrderPlaced) event.event()).orderId()).orElseThrow())
-        // Optional. Events the saga caused are routed by their origin; this is only for the
-        // others.
-        .correlateByEventData(
-            (streamId, event) ->
-                event instanceof OrderCancelled e
-                    ? OrderSaga.sagaOf(e.orderId())
-                    : Optional.empty())
-        .sagaStore(sagaStore)
-        .commandBus(bus)
-        .sagaDeadLetterStore(deadLetters)
-        // The bus is a test double that stores nothing; the fence is tested in
-        // SagaForwardFence*Test.
-        .forwardFence(false)
-        .build();
+  private static SagaFixture<OrderSaga.State> deciderFixture() {
+    return SagaFixture.of(
+        OrderSaga.State.class,
+        builder ->
+            builder
+                .decider(new OrderSagaDecider())
+                // OrderSaga.sagaOf is the quick example's helper: the saga id of an order, or
+                // nothing for an order id no saga id can hold. None of the three functions throws
+                // on the event's data.
+                .startWhen(
+                    event ->
+                        event.event() instanceof OrderPlaced e
+                            && OrderSaga.sagaOf(e.orderId()).isPresent())
+                .extractSagaId(
+                    event ->
+                        OrderSaga.sagaOf(((OrderPlaced) event.event()).orderId()).orElseThrow())
+                // Optional. Events the saga caused are routed by their origin; this is only for
+                // the others.
+                .correlateByEventData(
+                    (streamId, event) ->
+                        event instanceof OrderCancelled e
+                            ? OrderSaga.sagaOf(e.orderId())
+                            : Optional.empty()));
   }
 
-  /** An event a request stored: no origin, and the given saga's id as its correlation id. */
-  private EventEnvelope storedByARequest(DomainEvent event, String streamOrderId, SagaId named) {
+  /**
+   * An event a request stored: no origin, and the given saga's id as its correlation id; the
+   * fixture gives it its offset.
+   */
+  private static EventEnvelope storedByARequest(
+      DomainEvent event, String streamOrderId, SagaId named) {
     return new EventEnvelope(
-        GlobalOffset.of(nextOffset++),
+        GlobalOffset.initial(),
         StreamId.of(ORDER, AggregateId.of(streamOrderId)),
         Version.initial(),
         EventType.fromClass(event.getClass()),
@@ -257,49 +213,41 @@ class SagaGuideQuickExampleTest {
             Map.of()));
   }
 
-  /** The reply to a command the saga of {@code orderId} dispatched. */
-  private EventEnvelope replyToTheSagaOf(String orderId, DomainEvent event) {
-    return new EventEnvelope(
-        GlobalOffset.of(nextOffset++),
-        StreamId.of(AggregateType.of("stock"), AggregateId.of(orderId)),
-        Version.initial(),
-        EventType.fromClass(event.getClass()),
-        event,
-        SagaEnvelopes.metadataCausedBy(OrderSaga.State.class, sagaOf(orderId)));
+  /** The stream the reply to the saga of {@code orderId}'s command is stored on. */
+  private static StreamId stockOf(String orderId) {
+    return StreamId.of(STOCK, AggregateId.of(orderId));
   }
 
   private static SagaId sagaOf(String orderId) {
     return OrderSaga.sagaOf(orderId).orElseThrow();
   }
 
-  private LoadedSaga<OrderSaga.State> row(String orderId) {
-    return sagaStore.load(sagaOf(orderId), TYPE, OrderSaga.State.class).orElseThrow();
+  private static LoadedSaga<OrderSaga.State> row(
+      SagaFixture<OrderSaga.State> saga, String orderId) {
+    return saga.saga(sagaOf(orderId)).orElseThrow();
   }
 
-  private void theExampleRunsAsTheGuideSays(SagaRunner<OrderSaga.State> runner) {
-    var listener = runner.asEventListener();
+  private void theExampleRunsAsTheGuideSays(SagaFixture<OrderSaga.State> saga) {
+    saga.when(storedByARequest(new OrderPlaced("1"), "1", sagaOf("9")))
+        .expectCommands(new ReserveStock("1"));
+    assertThat(row(saga, "1").state()).isEqualTo(new OrderSaga.State(SagaStatus.RUNNING, "1"));
 
-    listener.onEvents(List.of(storedByARequest(new OrderPlaced("1"), "1", sagaOf("9"))));
-    assertThat(row("1").state()).isEqualTo(new OrderSaga.State(SagaStatus.RUNNING, "1"));
-    assertThat(bus.dispatched).containsExactly(new ReserveStock("1"));
+    saga.replyingTo(sagaOf("1"), stockOf("1"), new StockReserved("1")).expectCompleted(sagaOf("1"));
 
-    listener.onEvents(List.of(replyToTheSagaOf("1", new StockReserved("1"))));
-    assertThat(row("1").status()).isEqualTo(SagaStatus.COMPLETED);
-
-    listener.onEvents(List.of(storedByARequest(new OrderPlaced("2"), "2", sagaOf("9"))));
-    listener.onEvents(List.of(storedByARequest(new OrderCancelled("2"), "2", sagaOf("9"))));
-    assertThat(row("2").status()).isEqualTo(SagaStatus.FAILED);
-    assertThat(deadLetters.all()).isEmpty();
+    saga.when(storedByARequest(new OrderPlaced("2"), "2", sagaOf("9")))
+        .when(storedByARequest(new OrderCancelled("2"), "2", sagaOf("9")))
+        .expectStatus(sagaOf("2"), SagaStatus.FAILED);
+    assertThat(saga.deadLetterStore().all()).isEmpty();
   }
 
   @Test
   void theOrchestrator_reservesOnOrderPlaced_completesOnItsReply_andEndsOnACancellation() {
-    theExampleRunsAsTheGuideSays(orchestratorRunner());
+    theExampleRunsAsTheGuideSays(orchestratorFixture());
   }
 
   @Test
   void theDeciderWithItsBuilderRouting_runsTheSameFlow() {
-    theExampleRunsAsTheGuideSays(deciderRunner());
+    theExampleRunsAsTheGuideSays(deciderFixture());
   }
 
   /**
@@ -308,11 +256,10 @@ class SagaGuideQuickExampleTest {
    * written, and the batch goes on.
    */
   private void aCancellationWithAnIdNoSagaIdCanHoldIsNoSagasEvent(
-      SagaRunner<OrderSaga.State> runner) {
-    var listener = runner.asEventListener();
-    listener.onEvents(List.of(storedByARequest(new OrderPlaced("1"), "1", sagaOf("1"))));
-    LoadedSaga<OrderSaga.State> running = row("1");
-    int storeCalls = sagaStore.calls().size();
+      SagaFixture<OrderSaga.State> saga) {
+    saga.when(storedByARequest(new OrderPlaced("1"), "1", sagaOf("1")));
+    LoadedSaga<OrderSaga.State> running = row(saga, "1");
+    int storeCalls = saga.sagaStoreFaults().calls();
     List<EventEnvelope> cancellations = new ArrayList<>();
     for (int i = 0; i < 3; i++) {
       cancellations.add(
@@ -321,59 +268,59 @@ class SagaGuideQuickExampleTest {
               AN_ID_NO_SAGA_ID_CAN_HOLD,
               sagaOf("1")));
     }
-    assertThat(runner.resolveTarget(cancellations.getFirst())).isEmpty();
+    assertThat(saga.runner().resolveTarget(cancellations.getFirst())).isEmpty();
 
-    listener.onEvents(cancellations);
+    saga.given(cancellations.toArray(EventEnvelope[]::new));
 
-    assertThat(deadLetters.all()).as("no null-saga entry for the caller's events").isEmpty();
-    assertThat(sagaStore.calls()).as("nothing loaded, nothing written").hasSize(storeCalls);
-    assertThat(row("1")).isEqualTo(running);
+    assertThat(saga.deadLetterStore().all())
+        .as("no null-saga entry for the caller's events")
+        .isEmpty();
+    assertThat(saga.sagaStoreFaults().calls())
+        .as("nothing loaded, nothing written")
+        .isEqualTo(storeCalls);
+    assertThat(row(saga, "1")).isEqualTo(running);
 
     // In one batch with the saga's own reply: the batch goes on past the caller's event.
-    listener.onEvents(
-        List.of(
-            storedByARequest(
-                new OrderCancelled(AN_ID_NO_SAGA_ID_CAN_HOLD),
-                AN_ID_NO_SAGA_ID_CAN_HOLD,
-                sagaOf("1")),
-            replyToTheSagaOf("1", new StockReserved("1"))));
+    saga.given(
+        storedByARequest(
+            new OrderCancelled(AN_ID_NO_SAGA_ID_CAN_HOLD), AN_ID_NO_SAGA_ID_CAN_HOLD, sagaOf("1")),
+        saga.reply(sagaOf("1"), stockOf("1"), new StockReserved("1")));
 
-    assertThat(deadLetters.all()).isEmpty();
-    assertThat(row("1").status()).isEqualTo(SagaStatus.COMPLETED);
-    assertThat(row("1").version()).isEqualTo(running.version() + 1);
+    assertThat(saga.deadLetterStore().all()).isEmpty();
+    saga.expectCompleted(sagaOf("1"));
+    assertThat(row(saga, "1").version()).isEqualTo(running.version() + 1);
   }
 
   @Test
   void theOrchestrator_answersNoSagaForACancellationWhoseIdNoSagaIdCanHold() {
-    aCancellationWithAnIdNoSagaIdCanHoldIsNoSagasEvent(orchestratorRunner());
+    aCancellationWithAnIdNoSagaIdCanHoldIsNoSagasEvent(orchestratorFixture());
   }
 
   @Test
   void theBuilderRouting_answersNoSagaForACancellationWhoseIdNoSagaIdCanHold() {
-    aCancellationWithAnIdNoSagaIdCanHoldIsNoSagasEvent(deciderRunner());
+    aCancellationWithAnIdNoSagaIdCanHoldIsNoSagasEvent(deciderFixture());
   }
 
-  private void anOrderWithAnIdNoSagaIdCanHoldStartsNoSaga(SagaRunner<OrderSaga.State> runner) {
+  private void anOrderWithAnIdNoSagaIdCanHoldStartsNoSaga(SagaFixture<OrderSaga.State> saga) {
     var placed =
         storedByARequest(
             new OrderPlaced(AN_ID_NO_SAGA_ID_CAN_HOLD), AN_ID_NO_SAGA_ID_CAN_HOLD, sagaOf("1"));
 
-    assertThat(runner.resolveTarget(placed)).isEmpty();
-    runner.asEventListener().onEvents(List.of(placed));
+    assertThat(saga.runner().resolveTarget(placed)).isEmpty();
+    saga.when(placed).expectNoCommands();
 
-    assertThat(deadLetters.all()).isEmpty();
-    assertThat(sagaStore.calls()).as("nothing loaded, nothing written").isEmpty();
-    assertThat(bus.dispatched).isEmpty();
+    assertThat(saga.deadLetterStore().all()).isEmpty();
+    assertThat(saga.sagaStoreFaults().calls()).as("nothing loaded, nothing written").isZero();
   }
 
   @Test
   void theOrchestrator_startsNoSagaForAnOrderWhoseIdNoSagaIdCanHold() {
-    anOrderWithAnIdNoSagaIdCanHoldStartsNoSaga(orchestratorRunner());
+    anOrderWithAnIdNoSagaIdCanHoldStartsNoSaga(orchestratorFixture());
   }
 
   @Test
   void theBuilderRouting_startsNoSagaForAnOrderWhoseIdNoSagaIdCanHold() {
-    anOrderWithAnIdNoSagaIdCanHoldStartsNoSaga(deciderRunner());
+    anOrderWithAnIdNoSagaIdCanHoldStartsNoSaga(deciderFixture());
   }
 
   @Test
@@ -394,24 +341,19 @@ class SagaGuideQuickExampleTest {
   @Test
   void theSameRoutingWithoutTheCheck_filesANullSagaEntryForEveryEventTheCallerWrites() {
     var unchecked =
-        SagaRunner.<OrderSaga.State>builder()
-            .orchestrator(
-                new OrderSaga() {
-                  @Override
-                  public Optional<SagaId> correlateByEventData(
-                      StreamId streamId, DomainEvent event) {
-                    return event instanceof OrderCancelled e
-                        ? Optional.of(SagaId.of("order-saga-" + e.orderId()))
-                        : Optional.empty();
-                  }
-                })
-            .sagaStore(sagaStore)
-            .commandBus(bus)
-            .sagaDeadLetterStore(deadLetters)
-            // The bus is a test double that stores nothing; the fence is tested in
-            // SagaForwardFence*Test.
-            .forwardFence(false)
-            .build();
+        SagaFixture.of(
+            OrderSaga.State.class,
+            builder ->
+                builder.orchestrator(
+                    new OrderSaga() {
+                      @Override
+                      public Optional<SagaId> correlateByEventData(
+                          StreamId streamId, DomainEvent event) {
+                        return event instanceof OrderCancelled e
+                            ? Optional.of(SagaId.of("order-saga-" + e.orderId()))
+                            : Optional.empty();
+                      }
+                    }));
     List<EventEnvelope> cancellations = new ArrayList<>();
     for (int i = 0; i < 3; i++) {
       cancellations.add(
@@ -421,9 +363,9 @@ class SagaGuideQuickExampleTest {
               sagaOf("1")));
     }
 
-    unchecked.asEventListener().onEvents(cancellations);
+    unchecked.given(cancellations.toArray(EventEnvelope[]::new));
 
-    assertThat(deadLetters.all())
+    assertThat(unchecked.deadLetterStore().all())
         .hasSize(3)
         .allSatisfy(entry -> assertThat(entry.sagaId()).isNull());
   }

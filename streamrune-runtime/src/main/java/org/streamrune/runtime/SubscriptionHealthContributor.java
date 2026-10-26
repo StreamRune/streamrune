@@ -39,9 +39,11 @@ import org.streamrune.core.types.SubscriptionName;
  * <p>Each entry also carries the subscription's role under its single-active-consumer lease ({@link
  * LeaseRole}), read from a registration that implements {@link LeaseRoleAware} and {@code
  * NOT_REPORTED} for any other. The role does not change the status rules: a standby is {@code
- * RUNNING}, has no delivery errors and shares the leader's lag. (A standby's run of delivery errors
- * ended with its lease: reading its health clears the count, and it starts afresh when the
- * subscription leads again.)
+ * RUNNING} and shares the leader's lag. A standby subscription has no delivery errors: its run of
+ * them ends with its lease, so reading its health clears the count, and it counts afresh when the
+ * subscription leads again. A projection runner's entry keeps its errors while it stands by: they
+ * are batches it dead-lettered or skipped, holes in the read model that standing by does not close,
+ * and they clear when it processes a clean batch.
  *
  * <p>Lag never makes a subscription {@code DOWN}. It is measured against the checkpoint all
  * replicas share, so every replica reports the same value: a new projection replaying the store, a
@@ -372,8 +374,9 @@ public final class SubscriptionHealthContributor {
     LeaseRole role = roleOf(name, entry.subscription());
     // A standby delivers no page, so no delivered page can end the run of errors it had when it
     // lost its lease: the run ended with the lease. It reports none, and the count starts afresh
-    // when the subscription leads again.
-    if (role == LeaseRole.STANDBY) {
+    // when the subscription leads again. A projection runner's errors are holes in the shared read
+    // model instead, which standing by does not close: its views keep them (StandbyKeepsErrors).
+    if (role == LeaseRole.STANDBY && !(entry.subscription() instanceof StandbyKeepsErrors)) {
       entry.errorCount().set(0);
     }
     int errors = entry.errorCount().get();

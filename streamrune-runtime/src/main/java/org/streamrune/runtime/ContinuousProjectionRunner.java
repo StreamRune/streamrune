@@ -1,8 +1,9 @@
 package org.streamrune.runtime;
 
+import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -31,6 +32,7 @@ import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.projection.ProjectionRunner;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.EventSubscription;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
@@ -75,6 +77,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
   private final Duration readRetryInitialBackoff;
   private final Duration readRetryMaxBackoff;
   private final int maxReadPoisonRetries;
+  // The clock the builder was given (null: none), handed on to the live subscription, and the time
+  // it gives: a dead-letter entry's timestamp, a batch's duration.
+  private final Clock clock;
+  private final TimeSource time;
   // The whole run()/stop lifecycle in ONE atomic slot — see RunSlot. This replaced a bare
   // `running` flag that a stop could only clear: a requestStop()/close() landing before run() won
   // its start CAS was overwritten by that CAS, so the owner's stop was lost and the projection ran
@@ -158,7 +164,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       SubscriptionHealthContributor healthContributor,
       Duration readRetryInitialBackoff,
       Duration readRetryMaxBackoff,
-      int maxReadPoisonRetries) {
+      int maxReadPoisonRetries,
+      Clock clock) {
     if (eventStore == null) {
       throw new IllegalArgumentException("eventStore is required");
     }
@@ -194,6 +201,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         readRetryMaxBackoff != null ? readRetryMaxBackoff : READ_RETRY_MAX_BACKOFF;
     this.maxReadPoisonRetries =
         maxReadPoisonRetries > 0 ? maxReadPoisonRetries : DEFAULT_MAX_READ_POISON_RETRIES;
+    this.clock = clock;
+    this.time = TimeSource.of(clock);
   }
 
   @Override
@@ -1121,7 +1130,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
             // Persisted free text, sanitized at the projection_dead_letters sink.
             LogSanitizer.sanitizeFreeText(error.getMessage()),
             attempts,
-            Instant.now());
+            time.instant());
     try {
       deadLetterStore.save(entry);
       recordDeadLettered(projectionName);
@@ -1201,7 +1210,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       throw new LeadershipLostException(projectionName.value());
     }
     GlobalOffset newOffset = batch.getLast().globalOffset();
-    long start = System.nanoTime();
+    long start = time.nanoTime();
     try {
       // Only a registration that writes through the handed repository has a read model in the
       // processor's store to prepare; an at-least-once one keeps its read models wherever it
@@ -1229,7 +1238,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       recordFailed(projectionName);
       throw e;
     } finally {
-      recordDuration(projectionName, System.nanoTime() - start);
+      recordDuration(projectionName, time.nanoTime() - start);
     }
   }
 
@@ -1339,7 +1348,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       warnIfFactorySubscriptionCannotSignalReadPoison(projectionName, subscription);
     } else {
       // Create default polling subscription with the same wrapped listener.
-      subscription =
+      PollingEventSubscription.Builder live =
           PollingEventSubscription.builder()
               .subscriptionName(projectionName.value())
               .eventStore(eventStore)
@@ -1351,8 +1360,11 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
               // the SAME bound catch-up uses. Without this a poison event appended AFTER the
               // projection goes LIVE (rolling deploy new type / corrupt payload) is retried forever
               // by the resilient poll loop — offset frozen, nothing dead-lettered, health stuck UP.
-              .readPoisonBound(maxReadPoisonRetries)
-              .build();
+              .readPoisonBound(maxReadPoisonRetries);
+      if (clock != null) {
+        live.clock(clock);
+      }
+      subscription = live.build();
     }
 
     // Register the live subscription with the health contributor so health() lists it and
@@ -1506,10 +1518,11 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
   }
 
   /**
-   * Registers the live subscription with the health contributor when one is wired and the
-   * subscription exposes lifecycle state. Replaces the runner's standby view for the duration of
-   * LIVE mode; when the subscription is not a {@link SubscriptionLifecycle} (a custom factory
-   * subscription) the standby view stays registered, so the projection is never invisible.
+   * Registers a view of the live subscription ({@link LiveHealthView}: its state and push path,
+   * this runner's lease role) with the health contributor when one is wired and the subscription
+   * exposes lifecycle state. Replaces the runner's standby view for the duration of LIVE mode; when
+   * the subscription is not a {@link SubscriptionLifecycle} (a custom factory subscription) the
+   * standby view stays registered, so the projection is never invisible.
    *
    * <p>Uses {@link SubscriptionHealthContributor#replaceLifecycle} rather than {@code register} —
    * the standby view being replaced may have just accrued a catch-up error count (see {@link
@@ -1520,7 +1533,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     if (healthContributor == null || !(subscription instanceof SubscriptionLifecycle lifecycle)) {
       return;
     }
-    healthContributor.replaceLifecycle(projectionName.value(), lifecycle);
+    healthContributor.replaceLifecycle(
+        projectionName.value(), new LiveHealthView(projectionName, lifecycle));
   }
 
   /**
@@ -1575,7 +1589,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     if (healthContributor == null) {
       return;
     }
-    healthContributor.register(projectionName.value(), new RunnerHealthView());
+    healthContributor.register(projectionName.value(), new RunnerHealthView(projectionName));
   }
 
   /**
@@ -1595,7 +1609,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     if (healthContributor == null) {
       return;
     }
-    healthContributor.replaceLifecycle(projectionName.value(), new RunnerHealthView());
+    healthContributor.replaceLifecycle(
+        projectionName.value(), new RunnerHealthView(projectionName));
   }
 
   /**
@@ -1620,10 +1635,27 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * markTerminalError} independently forces DOWN on that path, so the mapping only keeps the
    * reported lifecycle state honest.
    *
+   * <p>The view reports the role this runner plays under its lease ({@link RunnerLeaseRole}):
+   * {@code STANDBY} while another replica leads, {@code LEADING} once this one holds the lease and
+   * catches up. Its errors are holes in the shared read model, so they survive a standby ({@link
+   * StandbyKeepsErrors}).
+   *
    * <p>The runner — not the health contributor — owns the lifecycle, so the mutating operations
    * throw.
    */
-  private final class RunnerHealthView implements SubscriptionLifecycle {
+  private final class RunnerHealthView
+      implements SubscriptionLifecycle, LeaseRoleAware, StandbyKeepsErrors {
+
+    private final ProjectionName projectionName;
+
+    RunnerHealthView(ProjectionName projectionName) {
+      this.projectionName = projectionName;
+    }
+
+    @Override
+    public LeaseRole leaseRole() {
+      return RunnerLeaseRole.of(leadership, projectionName.value());
+    }
 
     @Override
     public SubscriptionLifecycleState state() {
@@ -1656,6 +1688,72 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     @Override
     public void close() {
       // No-op: the runner owns the lifecycle; unregistration happens in run()'s finally.
+    }
+  }
+
+  /**
+   * The live subscription as the health contributor sees it: its lifecycle state and its push path
+   * (a hybrid subscription's), and the role of this runner under its lease. The subscription the
+   * runner builds takes no lease of its own — the runner holds it — so its own role would read
+   * {@code UNGATED} on a replica that leads under a lease. A runner without a lease reports the
+   * subscription's own role ({@code UNGATED} for the default polling one, a factory-built
+   * subscription's role when it delivers under a lease of its own). Its errors survive a standby,
+   * as the runner's own view's do ({@link StandbyKeepsErrors}).
+   */
+  private final class LiveHealthView
+      implements SubscriptionLifecycle, LeaseRoleAware, PushHealthAware, StandbyKeepsErrors {
+
+    private final ProjectionName projectionName;
+    private final SubscriptionLifecycle live;
+
+    LiveHealthView(ProjectionName projectionName, SubscriptionLifecycle live) {
+      this.projectionName = projectionName;
+      this.live = live;
+    }
+
+    @Override
+    public LeaseRole leaseRole() {
+      if (leadership == SubscriptionLeadership.NOOP && live instanceof LeaseRoleAware aware) {
+        return aware.leaseRole();
+      }
+      return RunnerLeaseRole.of(leadership, projectionName.value());
+    }
+
+    @Override
+    public PushPathStatus pushPathStatus() {
+      return live instanceof PushHealthAware push
+          ? push.pushPathStatus()
+          : PushPathStatus.NOT_CONFIGURED;
+    }
+
+    @Override
+    public SubscriptionLifecycleState state() {
+      return live.state();
+    }
+
+    @Override
+    public boolean isRunning() {
+      return live.isRunning();
+    }
+
+    @Override
+    public void start() {
+      throw new UnsupportedOperationException("lifecycle owned by ContinuousProjectionRunner");
+    }
+
+    @Override
+    public void pause() {
+      throw new UnsupportedOperationException("continuous projections cannot be paused here");
+    }
+
+    @Override
+    public void resume() {
+      throw new UnsupportedOperationException("continuous projections cannot be resumed here");
+    }
+
+    @Override
+    public void close() {
+      // No-op: the runner closes the live subscription itself.
     }
   }
 
@@ -2130,6 +2228,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     private Duration readRetryInitialBackoff = READ_RETRY_INITIAL_BACKOFF;
     private Duration readRetryMaxBackoff = READ_RETRY_MAX_BACKOFF;
     private int maxReadPoisonRetries = DEFAULT_MAX_READ_POISON_RETRIES;
+    private Clock clock;
 
     /**
      * Test-only: overrides the catch-up read-retry backoff bounds. Production uses {@link
@@ -2257,6 +2356,23 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       return this;
     }
 
+    /**
+     * The clock the runner reads time from: it stamps a dead-letter entry's {@code failedAt} and
+     * times each batch for {@code streamrune.projections.duration}, and the runner hands it to the
+     * live subscription it builds, which times its deliveries on it. Optional; without one the
+     * runner stamps with {@link Clock#systemUTC()} and times with {@link System#nanoTime()}; a
+     * system clock ({@link Clock#systemUTC()}, or another {@link Clock#system} clock) stamps and
+     * leaves the timing on {@code System.nanoTime()}. A test passes a {@code MutableClock} to
+     * decide the timestamps and the durations the runner records.
+     *
+     * @param clock the clock; not {@code null}
+     * @return this builder
+     */
+    public Builder clock(Clock clock) {
+      this.clock = Objects.requireNonNull(clock, "clock is required");
+      return this;
+    }
+
     public ContinuousProjectionRunner build() {
       if (errorStrategy == ProjectionErrorStrategy.DLQ && deadLetterStore == null) {
         throw new IllegalArgumentException("deadLetterStore is required when errorStrategy is DLQ");
@@ -2290,7 +2406,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           healthContributor,
           readRetryInitialBackoff,
           readRetryMaxBackoff,
-          maxReadPoisonRetries);
+          maxReadPoisonRetries,
+          clock);
     }
   }
 }

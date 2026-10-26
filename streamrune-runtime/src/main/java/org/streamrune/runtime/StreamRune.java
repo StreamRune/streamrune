@@ -1,9 +1,11 @@
 package org.streamrune.runtime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 import java.util.function.UnaryOperator;
@@ -596,6 +598,21 @@ public final class StreamRune implements CommandBus, AutoCloseable {
     /** Sets the snapshot policy. */
     public Builder snapshotPolicy(SnapshotPolicy snapshotPolicy) {
       busBuilder.snapshotPolicy(snapshotPolicy);
+      return this;
+    }
+
+    /**
+     * The clock the command bus stamps each event's {@link
+     * org.streamrune.core.EventMetadata#timestamp()} with ({@link
+     * VirtualThreadCommandBus.Builder#clock}). Optional; defaults to {@link Clock#systemUTC()}. The
+     * projection runners are built by the {@link #projectionRunnerFactory} or given to {@link
+     * #projectionRunner}: pass the clock to their builders there.
+     *
+     * @param clock the clock; not {@code null}
+     * @return this builder
+     */
+    public Builder clock(Clock clock) {
+      busBuilder.clock(Objects.requireNonNull(clock, "clock is required"));
       return this;
     }
 

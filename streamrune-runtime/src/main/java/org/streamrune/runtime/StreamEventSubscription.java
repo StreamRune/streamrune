@@ -1,7 +1,9 @@
 package org.streamrune.runtime;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -109,6 +111,9 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
   /** How long {@link #close()} waits for the polling thread; package-private knob for tests. */
   private final long closeJoinTimeoutMs;
 
+  /** Times each delivery for the latency metric: the builder's clock, or System.nanoTime(). */
+  private final TimeSource time;
+
   private final ResilientPollLoop pollLoop;
   private volatile PollThread pollThread;
 
@@ -172,6 +177,36 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
       StreamRuneMetrics metrics,
       long closeJoinTimeoutMs,
       int readPoisonBound) {
+    this(
+        subscriptionName,
+        streamId,
+        eventStore,
+        offsetStore,
+        listener,
+        config,
+        fetchSize,
+        metrics,
+        closeJoinTimeoutMs,
+        readPoisonBound,
+        null);
+  }
+
+  /**
+   * As above, with the clock that times the deliveries ({@code null} = {@link System#nanoTime()}).
+   * Package-private: {@link Builder#clock} sets it.
+   */
+  StreamEventSubscription(
+      SubscriptionName subscriptionName,
+      StreamId streamId,
+      EventStore eventStore,
+      OffsetStore offsetStore,
+      EventListener listener,
+      SubscriptionConfig config,
+      int fetchSize,
+      StreamRuneMetrics metrics,
+      long closeJoinTimeoutMs,
+      int readPoisonBound,
+      Clock clock) {
     if (subscriptionName == null) {
       throw new IllegalArgumentException("subscriptionName is required");
     }
@@ -197,6 +232,7 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
       throw new IllegalArgumentException("closeJoinTimeoutMs must not be negative");
     }
     this.closeJoinTimeoutMs = closeJoinTimeoutMs;
+    this.time = TimeSource.of(clock);
     this.subscriptionName = subscriptionName;
     this.streamId = streamId;
     this.eventStore = eventStore;
@@ -405,11 +441,11 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
     }
     try {
       if (!streamEvents.isEmpty()) {
-        long start = System.nanoTime();
+        long start = time.nanoTime();
         listener.onEvents(streamEvents);
         // Record only events actually delivered to the listener (this stream's events). A listener
         // failure above propagates before recording and leaves the checkpoint untouched.
-        recordDelivery(streamEvents.size(), System.nanoTime() - start);
+        recordDelivery(streamEvents.size(), time.nanoTime() - start);
       }
       // Advance the checkpoint past the entire fetched page, including foreign-stream events.
       // Saving only the last delivered event's offset would stall the subscription forever once a
@@ -545,6 +581,7 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
     private StreamRuneMetrics metrics;
     private long closeJoinTimeoutMs = DEFAULT_CLOSE_JOIN_TIMEOUT_MS;
     private int readPoisonBound = DEFAULT_READ_POISON_BOUND;
+    private Clock clock;
 
     /**
      * Unique checkpoint name for this subscription. Shares the {@link OffsetStore} namespace with
@@ -618,6 +655,21 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
       return this;
     }
 
+    /**
+     * The clock that times each delivery for the latency metric ({@code
+     * streamrune.subscriptions.delivery.latency}). Optional; without one, or with a system clock
+     * such as {@link Clock#systemUTC()}, the subscription times its deliveries with {@link
+     * System#nanoTime()}, which no step of the wall clock disturbs. A test passes a {@code
+     * MutableClock} to decide the latency it records.
+     *
+     * @param clock the clock; not {@code null}
+     * @return this builder
+     */
+    public Builder clock(Clock clock) {
+      this.clock = Objects.requireNonNull(clock, "clock is required");
+      return this;
+    }
+
     /** Builds the subscription. Requires {@code subscriptionName}. */
     public StreamEventSubscription build() {
       return new StreamEventSubscription(
@@ -630,7 +682,8 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
           fetchSize,
           metrics,
           closeJoinTimeoutMs,
-          readPoisonBound);
+          readPoisonBound,
+          clock);
     }
   }
 }

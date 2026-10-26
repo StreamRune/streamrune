@@ -1,5 +1,7 @@
 package org.streamrune.runtime;
 
+import java.io.InterruptedIOException;
+import java.nio.channels.ClosedByInterruptException;
 import java.time.Duration;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -24,6 +26,12 @@ import org.slf4j.LoggerFactory;
  * <p>An {@link Error} is different: it is not retryable, so the loop logs it by name at ERROR and
  * rethrows — the loop stops, and the owner decides what a dead thread means.
  *
+ * <p>A failure that ends the loop because its owner stopped it is no failure when the stop's own
+ * interrupt caused it — the thread is interrupted, or the failure's cause chain holds an
+ * interruption: a read in flight that the stop cut short. The loop logs it at INFO, on one line
+ * without a stack trace. A failure after which the loop stops by itself (a task that cleared the
+ * loop's condition before it threw, such as a terminal read poison) stays an ERROR.
+ *
  * <p>Instances are reusable across {@link #run(PollTask)} invocations (e.g. pause/resume cycles
  * that spawn a fresh thread); the failure counter resets at the start of each run.
  */
@@ -33,6 +41,9 @@ final class ResilientPollLoop {
 
   /** Backoff never sleeps less than this, even if the configured initial backoff is tiny. */
   private static final Duration MIN_INITIAL_BACKOFF = Duration.ofMillis(10);
+
+  /** How many links of a cause chain the stop check and the log summary follow. */
+  private static final int MAX_CAUSE_DEPTH = 8;
 
   /** One poll cycle. Implementations may throw {@link RuntimeException} on transient failures. */
   @FunctionalInterface
@@ -137,6 +148,15 @@ final class ResilientPollLoop {
               failures,
               backoff.toMillis(),
               e);
+        } else if (cutShortByTheStop(e)) {
+          // The owner ended the loop — a stop or a pause — and interrupted its thread, and the
+          // interrupt cut the call in flight short: on a virtual thread it closes the socket of a
+          // JDBC read, the driver throws, and the thread's interrupt status stays set. That is the
+          // owner's doing, not a failure.
+          logger.info(
+              "Poll loop '{}' ended: the owner's interrupt cut a call in flight short ({})",
+              name,
+              summary(e));
         } else {
           logger.error(
               "Poll loop '{}' failed ({} consecutive failure(s)); stopping, not retrying",
@@ -183,6 +203,38 @@ final class ResilientPollLoop {
         throw t;
       }
     }
+  }
+
+  /**
+   * Whether {@code failure} is a call the owner's stop or pause cut short: the thread is
+   * interrupted (the owner's interrupt, which a socket read on a virtual thread leaves set), or the
+   * failure's cause chain holds an interruption (a driver that consumed the flag kept its cause).
+   */
+  private static boolean cutShortByTheStop(RuntimeException failure) {
+    if (Thread.currentThread().isInterrupted()) {
+      return true;
+    }
+    Throwable cause = failure;
+    for (int depth = 0; cause != null && depth < MAX_CAUSE_DEPTH; depth++) {
+      if (cause instanceof InterruptedException
+          || cause instanceof InterruptedIOException
+          || cause instanceof ClosedByInterruptException) {
+        return true;
+      }
+      cause = cause.getCause() == cause ? null : cause.getCause();
+    }
+    return false;
+  }
+
+  /** The failure and its causes on one line, for a log line without a stack trace. */
+  private static String summary(Throwable failure) {
+    StringBuilder text = new StringBuilder(failure.toString());
+    Throwable cause = failure.getCause();
+    for (int depth = 1; cause != null && cause != failure && depth < MAX_CAUSE_DEPTH; depth++) {
+      text.append("; caused by ").append(cause);
+      cause = cause.getCause() == cause ? null : cause.getCause();
+    }
+    return text.toString();
   }
 
   /** Number of consecutive poll failures; {@code 0} when the last poll succeeded. */

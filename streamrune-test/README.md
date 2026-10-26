@@ -4,7 +4,7 @@ In-memory event store and test fixtures for StreamRune.
 
 ## Overview
 
-Provides `InMemoryEventStore` for unit tests, fixtures that simplify testing deciders and projections, and in-memory doubles of the other framework stores and buses (`InMemoryCommandBus`, `InMemoryQueryBus`, `InMemorySagaStore`, `InMemoryDeadLetterQueue`, `InMemoryCryptoEngine`, …).
+Provides `InMemoryEventStore` for unit tests, fixtures that simplify testing deciders, projections and sagas, in-memory doubles of the other framework stores and buses (`InMemoryCommandBus`, `InMemoryQueryBus`, `InMemorySagaStore`, `InMemoryDeadLetterQueue`, `InMemoryCryptoEngine`, …), forwarding stores that inject faults, and recording doubles of the metrics port and the leadership.
 
 ## Installation
 
@@ -60,7 +60,14 @@ assertEquals(1, history.events().size());
 | `SagaForwardFenceContract` | Abstract JUnit contract suite of an `EventStore` that fences a saga's forward command against the rows of a `SagaStore`; extend it to prove a custom event store |
 | `OutboxStoreContract` | Abstract JUnit contract suite every `OutboxStore` honours (status transitions, both ordering modes, retention, replay); `InMemoryOutboxStore` and `PostgresOutboxStore` pass it |
 | `InMemoryOutboxStore` | `OutboxStore` with the claim, lease and ordering rules of `PostgresOutboxStore`; retry times come from the `Clock` it is given |
-| `ForwardingOutboxStore` | `OutboxStore` that forwards every call to a delegate: subclass it and override the one call a test makes fail, block or record |
+| `FaultSchedule` | The faults a forwarding store injects, by the Java name of the method: `failOnce`, `failAt(method, n)` and `failAlways` throw before the delegate runs, `crashAfter` lets the delegate write and then throws (a crash between two steps); `throwing(supplier)` names the failure, `calls(method)` and `calls()` count every call, failed ones included. A name the decorated interface does not have is refused when the decorator is built |
+| `InjectedFaultException` | What a `FaultSchedule` throws unless `throwing(...)` names another failure; its message names the method, the call and whether the delegate ran |
+| `ForwardingEventStore`, `ForwardingSagaStore`, `ForwardingSagaDeadLetterStore`, `ForwardingDeadLetterQueue`, `ForwardingOffsetStore`, `ForwardingProjectionDeadLetterStore` | A store that forwards every method of its interface — the default methods included, so `appendWithKey`, `load(id, int)`, `lastGlobalOffset()` and the counts reach the delegate, never a throwing default — and consults its `FaultSchedule` on each call: `new ForwardingEventStore(store, FaultSchedule.none().crashAfter("append"))`. Subclass one to override a single call |
+| `ForwardingOutboxStore` | `OutboxStore` that forwards every call to a delegate, with a `FaultSchedule` like the other forwarding stores (`new ForwardingOutboxStore(store, schedule)`); or subclass it and override the one call a test makes fail, block or record |
+| `RecordingStreamRuneMetrics` | `StreamRuneMetrics` that records every call under its `MetricNames` meter, with the tags it carries and its amount: `count`, `total`, `lastGauge` (a supplied gauge is read when asked), `samples` and `assertIncremented(meter, tagKey, tagValue, …)`, which fails listing what was recorded. A meter name or tag key outside `MetricNames` is refused |
+| `ScriptedSubscriptionLeadership` | `SubscriptionLeadership` the test scripts: built with `new` it denies until `grant()`, `ScriptedSubscriptionLeadership.granting()` grants from the start; it keeps the held leases under `deny()`, drops them on `revoke()` (the next `current()` reports the loss), hands out a greater epoch for every acquisition, and counts `attempts()`, `acquisitions()` and `resignations()` |
+| `SagaFixture` | Given events, when an event, then the commands a saga dispatched and the state it keeps: `SagaFixture.of(State.class, builder -> builder.orchestrator(saga))` builds the `SagaRunner` over in-memory stores, a bus that records the commands and executes none, and a `MutableClock`; `given`, `when`, `replyingTo`, `redeliver`, `advance(...).runTimeouts()`, `expectCommands`, `expectState`, `expectStatus`, `expectCompensating`, `expectCompleted`, `expectDeadLettered`; `failing(commandType, failure)` rejects a command, `sagaStoreFaults()` scripts the saga store |
+| `EventStreamFixtures` | Event streams in files: `write(store, file)` records every event of an `InMemoryEventStore` as JSON (stream, version, type, schema version, payload as the store's own mapper writes it with `@Encrypted` fields in the clear, metadata), `read(file)` parses it, `appendTo(store, events)` replays it into a fresh serializing store — the store's registry resolves each type, its upcasters upcast an older payload — and a stream written again is the same file |
 | `InMemoryCommandInbox` | `CommandInbox`; `InMemoryEventStore.withCommandInbox(inbox)` claims a key and appends under one lock |
 | `InMemorySagaDeadLetterStore` | `SagaDeadLetterStore` whose `publish` is an upsert per saga and event offset, as in PostgreSQL |
 | `InMemoryProjectionDeadLetterStore` | `ProjectionDeadLetterStore`; `all()` returns every stored entry |
@@ -91,11 +98,40 @@ DeciderFixture.of(new OrderDecider())
 `expectProduced`) assert with JUnit and chain. `DeciderFixture` calls `decide` only, not `guard` —
 test authorization through `InMemoryCommandBus`.
 
+## SagaFixture example
+
+```java
+SagaFixture<OrderSaga.State> saga =
+    SagaFixture.of(OrderSaga.State.class, builder -> builder.orchestrator(new OrderSaga()));
+SagaId orderSaga = SagaId.of("order-saga-1");
+
+saga.when(StreamId.of(AggregateType.of("order"), AggregateId.of("1")), new OrderPlaced("1"))
+    .expectCommands(new ReserveStock("1"))
+    .replyingTo(orderSaga, new StockReserved("1"))
+    .expectCompleted(orderSaga);
+```
+
+Each step stores its events at the next global offset and delivers them through the runner's
+`asEventListener()`; `expectCommands` reads the commands of the latest step. The saga guide and the
+testing guide show the timeout runner (`withTimeouts`, `advance`, `runTimeouts`) and a crash point
+(`sagaStoreFaults().crashAfter(...)`, `redeliver()`).
+
+## A crash point with FaultSchedule
+
+```java
+var faults = FaultSchedule.none().crashAfter("saveOffset");
+var offsets = new ForwardingOffsetStore(new InMemoryOffsetStore(), faults);
+// ... the subscription delivers a page and saves its checkpoint; the save is stored and then
+// InjectedFaultException stops the flow, as a crash after the write would ...
+// restart the subscription over the same stores and assert that the projection converges
+assertEquals(1, faults.calls("saveOffset"));
+```
+
 ## Requirements
 
 - Java 25
 - JUnit 5 (`junit-jupiter-api`, exposed as an `api` dependency)
-- Depends on `streamrune-core` and `streamrune-crypto-api`, plus Jackson
+- Depends on `streamrune-core`, `streamrune-runtime` (for `SagaFixture`) and `streamrune-crypto-api`, plus Jackson
 
 ## Known Limitations
 

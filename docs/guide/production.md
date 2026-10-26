@@ -238,14 +238,18 @@ The details are:
   subscription. `role` is the subscription's role under its single-active-consumer lease:
   `UNGATED` (it takes no lease and delivers on every replica), `LEADING` (this replica holds the
   lease and delivers), `STANDBY` (another replica holds it, or none does; this one waits to take
-  over) or `NOT_REPORTED` (a projection runner's view, or a registration that reports no role). A
-  standby is `RUNNING`, has no delivery errors and shares the leader's lag, so it reads `UP` while a
-  replica leads and `DEGRADED` on every replica once the shared lag crosses the threshold. A
-  subscription you build yourself reaches this list through `.healthContributor(contributor)` on
+  over) or `NOT_REPORTED` (a registration that reports no role). A projection runner reports the
+  role it plays under its own lease for its whole run: `STANDBY` until it takes the lease, then
+  `LEADING` while it catches up and runs live — with a `DataSource` and the default
+  `streamrune.subscription.single-active-consumer.enabled=true`, the only replica of an application
+  reads `LEADING`, and with the lease switched off `UNGATED`. A scheduled projection takes its
+  lease at its first fire and reads `STANDBY` until then, on the only replica too. A standby is `RUNNING` and shares the
+  leader's lag: with no errors of its own it reads `UP` while a replica leads, and every replica
+  reads `DEGRADED` once the shared lag crosses the threshold. A subscription you build yourself reaches this list through `.healthContributor(contributor)` on
   `PollingEventSubscription.builder()` or `HybridEventSubscription.builder()`: it registers on
   `start()` and unregisters on `close()`, and it records each page its listener throws on as a
   delivery error (`errorCount`, `DEGRADED`) and clears the errors when a page is delivered, so do
-  not wrap the listener in `HealthTrackingEventListener` as well. A standby's run of errors ends with its lease: it reads `errorCount` 0 and counts afresh when it leads again. The integrations cannot find it
+  not wrap the listener in `HealthTrackingEventListener` as well. A standby subscription's run of errors ends with its lease: it reads `errorCount` 0 and counts afresh when it leads again. A projection runner's errors are the batches it dead-lettered or skipped, holes in the read model that standing by does not close: its entry keeps them, and stays `DEGRADED`, until it processes a clean batch. The integrations cannot find a subscription you build yourself
   otherwise.
 - `relay.<component>` — `status` (`UP` / `DEGRADED` / `DOWN`), `started`, `alive`,
   `consecutiveFailures`, one per background relay. A relay is `DOWN` when it was started but its

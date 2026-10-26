@@ -60,7 +60,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 | `streamrune-postgres-crypto` | `:streamrune-crypto:streamrune-postgres-crypto` | `org.streamrune.crypto.postgres` | `PostgresCryptoEngine`, `JdbcForgottenSubjectStore`, `PostgresCryptoForgetSignal`, the crypto Flyway baseline. |
 | `streamrune-vault-crypto` | `:streamrune-crypto:streamrune-vault-crypto` | `org.streamrune.vault` | `VaultCryptoEngine` — HashiCorp Vault transit engine. |
 | `streamrune-aws-kms-crypto` | `:streamrune-crypto:streamrune-aws-kms-crypto` | `org.streamrune.aws.kms.crypto` | `AwsKmsCryptoEngine` — AWS KMS customer managed key with per-subject tombstones. |
-| `streamrune-test` | `:streamrune-test` | `org.streamrune.test` | `InMemoryEventStore`, fixtures, in-memory doubles of every store and bus, store contract suites. |
+| `streamrune-test` | `:streamrune-test` | `org.streamrune.test` | `InMemoryEventStore`, fixtures (decider, event store, projection, saga, recorded event streams), in-memory doubles of every store and bus, fault-injecting forwarding stores, recording doubles, store contract suites. |
 | `streamrune-integration-api` | `:streamrune-integration:streamrune-integration-api` | `org.streamrune.integration` | Shared integration pieces: `MicrometerStreamRuneMetrics`, `RequestIdentityPolicy`, `AuthenticatedUserResolver`, `SseAuthorizer`, `ProjectionProcessorResolution`, `CommandInboxWiringValidator`, `SagaRetentionValidator`. |
 | `streamrune-spring` | `:streamrune-integration:streamrune-spring` | `org.streamrune.spring` | Spring Boot 4 auto-configuration, health indicator, SSE controller, request filter, native-image hints. |
 | `streamrune-spring-boot-starter` | `:streamrune-integration:streamrune-spring-boot-starter` | `org.streamrune.spring.boot.starter` | Dependency aggregator: `streamrune-spring` + `streamrune-postgres` + `streamrune-runtime`. |
@@ -492,7 +492,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - `SubscriptionConfig.DEFAULT` = LISTEN/NOTIFY on, 5 s polling interval, 1 s jitter;
   `SubscriptionConfig.pollingOnly(interval)` for transaction-pooling proxies.
 - `ResilientPollLoop`: a transient `RuntimeException` in the poll loop is logged and retried with
-  capped exponential backoff plus jitter. `PgNotificationListener` reconnects with capped backoff and
+  capped exponential backoff plus jitter. A read that the owner's own interrupt cut short on a stop
+  or a pause — the thread is interrupted, or the failure's cause chain holds an interruption — ends
+  the loop with one INFO line and no stack trace, not an ERROR. `PgNotificationListener` reconnects with capped backoff and
   detects a connection whose server vanished without closing it: after 10 s without a notification it
   runs `SELECT 1` with a 5 s timeout and reconnects on failure. `HybridEventSubscription.pushHealthy()`
   and `pushPathStatus()` report the push path, which reads dead after 30 s without a LISTEN
@@ -528,10 +530,13 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `UNGATED`, `LEADING`, `STANDBY`) names the role a subscription plays under its lease.
 - Subscription health reports the lease role: `SubscriptionHealth.role` is a `LeaseRole`, read from a
   registration that implements `LeaseRoleAware` (`PollingEventSubscription` and
-  `HybridEventSubscription` do) and `NOT_REPORTED` for any other, a projection runner's view
-  included. A standby is `RUNNING` with no delivery errors and shares the leader's lag: `UP` while a
-  replica leads, `DEGRADED` on every replica once the shared lag crosses the threshold, never
-  `DOWN`. `PollingEventSubscription.Builder.healthContributor(...)` and
+  `HybridEventSubscription` do) and `NOT_REPORTED` for any other. The projection runners report the
+  role they play under their own lease for their whole run (`STANDBY` until they take it, which a
+  scheduled projection does at its first fire, then `LEADING`; `UNGATED` without one), the live
+  subscription of a `ContinuousProjectionRunner` included, which holds no lease of its own; a
+  runner's dead-lettered or skipped batches keep its entry `DEGRADED` while it stands by. A standby subscription is `RUNNING` with no delivery errors
+  and shares the leader's lag: `UP` while a replica leads, `DEGRADED` on every replica once the
+  shared lag crosses the threshold, never `DOWN`. `PollingEventSubscription.Builder.healthContributor(...)` and
   `HybridEventSubscription.Builder.healthContributor(...)` register an application-built
   subscription with the `SubscriptionHealthContributor` on `start()` and unregister it on `close()`;
   a hybrid subscription registers itself, so a dead LISTEN/NOTIFY push path still reads `DEGRADED`.
@@ -1243,6 +1248,29 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   `InMemoryOffsetStore`, `InMemoryProjectionRepository` (a fencing-capable processor and its own offset
   store, for `TRANSACTIONAL_LOCAL` unit tests without Docker), `InMemoryProjectionDeadLetterStore`,
   `InMemorySagaStore`, `InMemorySagaDeadLetterStore`.
+- Fault injection: `ForwardingEventStore`, `ForwardingSagaStore`, `ForwardingSagaDeadLetterStore`,
+  `ForwardingDeadLetterQueue`, `ForwardingOffsetStore`, `ForwardingProjectionDeadLetterStore` and
+  `ForwardingOutboxStore` forward every method of their port to a delegate, the default methods
+  included, and consult a `FaultSchedule`: `failOnce`, `failAt` and `failAlways` throw before the
+  delegate runs, `crashAfter` lets it write and then throws, `throwing(...)` names the failure
+  (`InjectedFaultException` by default), and every call is counted.
+- Recording doubles: `RecordingStreamRuneMetrics` records every metrics call under its `MetricNames`
+  meter with its tags and amount (`count`, `total`, `lastGauge`, `assertIncremented`);
+  `ScriptedSubscriptionLeadership` is a lease the test grants, denies and revokes (`granting()`
+  starts granting, the constructor denying).
+- `SagaFixture`: a saga's runner over in-memory stores, a bus that records the commands it dispatches
+  and a `MutableClock`; steps (`given`, `when`, `replyingTo`, `redeliver`, `runTimeouts`) and
+  expectations (`expectCommands`, `expectState`, `expectStatus`, `expectCompensating`,
+  `expectCompleted`, `expectDeadLettered`). `streamrune-test` depends on `streamrune-runtime` for it,
+  and `SagaTimeoutRunner.pollOnce()` runs one poll on the caller's thread.
+- `EventStreamFixtures`: the events of an `InMemoryEventStore` written to a JSON file (each payload
+  as the store's own mapper writes it, `@Encrypted` fields in the clear), read back and appended to
+  a fresh serializing store, which resolves and upcasts each payload as it reads its own.
+- Clock seams: `OutboxPoller`, `ContinuousProjectionRunner`, `ScheduledProjectionRunner`,
+  `MultiProjectionRunner`, `PollingEventSubscription`, `StreamEventSubscription` and `StreamRune`
+  take `clock(Clock)`; with one, the timestamps they record and the durations they measure come
+  from it (without one, the system clock and `System.nanoTime()`; a system clock such as
+  `Clock.systemUTC()` stamps and leaves the durations on `System.nanoTime()`).
 - Contract suites a custom store can extend: `SagaStoreContract`, `SagaDeadLetterStoreContract`,
   `OutboxStoreContract`, `AtomicBatchProcessorContract`; and `CommandBusProvenanceContract` for a
   custom `CommandBus`: the saga origin and the causation id come from the bound dispatch cause and

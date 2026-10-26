@@ -1,5 +1,6 @@
 package org.streamrune.runtime;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -8,6 +9,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -30,6 +32,7 @@ import org.streamrune.core.projection.ProjectionEpochRegressionException;
 import org.streamrune.core.projection.ProjectionErrorClass;
 import org.streamrune.core.projection.ProjectionErrorClassifier;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
+import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
@@ -81,6 +84,9 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
   private final int maxTransientRetries;
   private final int maxReadPoisonRetries;
   private final long stopTimeoutMs;
+  // The time the runner reads: the next fire it computes and sleeps until, the fire it records, a
+  // dead-letter entry's timestamp, a drain's duration. The builder's clock, or the system's.
+  private final TimeSource time;
 
   private final ConcurrentHashMap<ProjectionName, RuntimeStatus> statuses =
       new ConcurrentHashMap<>();
@@ -133,6 +139,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     this.maxTransientRetries = b.maxTransientRetries;
     this.maxReadPoisonRetries = b.maxReadPoisonRetries;
     this.stopTimeoutMs = b.stopTimeoutMs;
+    this.time = TimeSource.of(b.clock);
 
     for (var reg : registrations) {
       statuses.put(
@@ -140,7 +147,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
           new RuntimeStatus(
               ScheduledProjectionState.PENDING,
               null,
-              reg.cron().nextFire(Instant.now()),
+              reg.cron().nextFire(time.instant()),
               0L,
               null));
     }
@@ -208,13 +215,23 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    * Read-only {@link SubscriptionLifecycle} adapter exposing a scheduled projection's state to the
    * health contributor. Only {@link #state()}, {@link #isRunning()}, and {@link #close()} are
    * meaningful; {@link #start()}, {@link #pause()}, and {@link #resume()} throw since the runner —
-   * not the health contributor — owns the lifecycle.
+   * not the health contributor — owns the lifecycle. It reports the role the runner plays under its
+   * lease ({@link RunnerLeaseRole}): the runner takes the lease at a projection's first fire, so
+   * the view reads {@code STANDBY} until then, on the only replica too, and {@code LEADING} from
+   * then on. Its errors — ticks that dead-lettered or skipped a chunk — survive a standby ({@link
+   * StandbyKeepsErrors}).
    */
-  private final class ScheduledSubscriptionView implements SubscriptionLifecycle {
+  private final class ScheduledSubscriptionView
+      implements SubscriptionLifecycle, LeaseRoleAware, StandbyKeepsErrors {
     private final ProjectionName name;
 
     ScheduledSubscriptionView(ProjectionName name) {
       this.name = name;
+    }
+
+    @Override
+    public LeaseRole leaseRole() {
+      return RunnerLeaseRole.of(leadership, name.value());
     }
 
     @Override
@@ -258,7 +275,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     setState(reg.name(), ScheduledProjectionState.SLEEPING);
     try {
       while (!stopping.get()) {
-        Instant nextFire = reg.cron().nextFire(Instant.now());
+        Instant nextFire = reg.cron().nextFire(time.instant());
 
         // Guard: Instant.MAX means the cron will never fire again.
         if (nextFire.equals(Instant.MAX)) {
@@ -271,7 +288,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
 
         updateNextFire(reg.name(), nextFire);
 
-        long sleepMs = Duration.between(Instant.now(), nextFire).toMillis();
+        long sleepMs = Duration.between(time.instant(), nextFire).toMillis();
         if (sleepMs > 0) {
           try {
             Thread.sleep(sleepMs);
@@ -345,7 +362,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
               "Projection '{}' terminated on an unrecoverable error", reg.name().value(), t);
           break;
         }
-        recordFire(reg.name(), Instant.now(), batchesProcessed);
+        recordFire(reg.name(), time.instant(), batchesProcessed);
 
         if (statuses.get(reg.name()).state == ScheduledProjectionState.ERROR) {
           break;
@@ -623,7 +640,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
       // Chunk by batchSize
       for (int i = 0; i < events.size(); i += batchSize) {
         var chunk = events.subList(i, Math.min(i + batchSize, events.size()));
-        long start = System.nanoTime();
+        long start = time.nanoTime();
         try {
           // Re-check leadership BEFORE the offset-advancing commit: the
           // atomic commit below advances the offset in the SAME transaction as the read-model
@@ -750,7 +767,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
           // chunk gets its OWN full budget instead of inheriting this chunk's.
           chunkTransientStates.remove(reg.name());
         } finally {
-          recordDuration(reg.name(), System.nanoTime() - start);
+          recordDuration(reg.name(), time.nanoTime() - start);
         }
       }
 
@@ -927,7 +944,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
                 // Persisted free text, sanitized at the projection_dead_letters sink.
                 LogSanitizer.sanitizeFreeText(error.getMessage()),
                 consecutiveTransientFailures > 0 ? consecutiveTransientFailures : 1,
-                Instant.now());
+                time.instant());
         try {
           runHeldFromStop(
               reg.name(),
@@ -1375,6 +1392,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     private int maxTransientRetries = DEFAULT_MAX_TRANSIENT_RETRIES;
     private int maxReadPoisonRetries = DEFAULT_MAX_READ_POISON_RETRIES;
     private long stopTimeoutMs = STOP_TIMEOUT_MS;
+    private Clock clock;
     private final List<ScheduledProjectionRegistration> registrations = new ArrayList<>();
 
     /**
@@ -1516,6 +1534,27 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
      */
     public Builder healthContributor(SubscriptionHealthContributor healthContributor) {
       this.healthContributor = healthContributor;
+      return this;
+    }
+
+    /**
+     * The clock the runner reads time from: it computes each projection's next fire from it,
+     * records the fire ({@link ScheduledProjectionStatus#lastFireAt()}), stamps a dead-letter
+     * entry's {@code failedAt} and times each drain for {@code streamrune.projections.duration}.
+     * Optional; without one the runner reads {@link Clock#systemUTC()} and times with {@link
+     * System#nanoTime()}, and a system clock leaves the timing on {@code System.nanoTime()} too.
+     *
+     * <p>The runner sleeps in real time for the distance its clock computes to the next fire, and
+     * fires when it wakes: advancing the clock neither shortens the sleep of a started runner nor
+     * fires a projection, and on a clock that does not move, a started runner fires each time that
+     * distance passes in real time. A test reads {@link ScheduledProjectionRunner#status()} without
+     * starting the runner, or waits real time.
+     *
+     * @param clock the clock; not {@code null}
+     * @return this builder
+     */
+    public Builder clock(Clock clock) {
+      this.clock = Objects.requireNonNull(clock, "clock is required");
       return this;
     }
 
