@@ -7,6 +7,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -349,13 +350,14 @@ public final class MultiProjectionRunner implements AutoCloseable {
     /**
      * The clock handed to every per-projection {@link ContinuousProjectionRunner} ({@link
      * ContinuousProjectionRunner.Builder#clock}): it stamps their dead-letter entries and times
-     * their batches and deliveries. Optional; without one they read the system's time.
+     * their batches and deliveries. Optional; without one they read the system's time, and a system
+     * clock leaves their timing on {@link System#nanoTime()}.
      *
      * @param clock the clock; not {@code null}
      * @return this builder
      */
     public Builder clock(Clock clock) {
-      this.clock = java.util.Objects.requireNonNull(clock, "clock is required");
+      this.clock = Objects.requireNonNull(clock, "clock is required");
       return this;
     }
 

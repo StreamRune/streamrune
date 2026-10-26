@@ -1268,7 +1268,8 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
 - Clock seams: `OutboxPoller`, `ContinuousProjectionRunner`, `ScheduledProjectionRunner`,
   `MultiProjectionRunner`, `PollingEventSubscription`, `StreamEventSubscription` and `StreamRune`
   take `clock(Clock)`; with one, the timestamps they record and the durations they measure come
-  from it (without one, the system clock and `System.nanoTime()`).
+  from it (without one, the system clock and `System.nanoTime()`; a system clock such as
+  `Clock.systemUTC()` stamps and leaves the durations on `System.nanoTime()`).
 - Contract suites a custom store can extend: `SagaStoreContract`, `SagaDeadLetterStoreContract`,
   `OutboxStoreContract`, `AtomicBatchProcessorContract`; and `CommandBusProvenanceContract` for a
   custom `CommandBus`: the saga origin and the causation id come from the bound dispatch cause and

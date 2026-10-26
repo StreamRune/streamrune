@@ -3,6 +3,7 @@ package org.streamrune.runtime;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -2359,14 +2360,16 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
      * The clock the runner reads time from: it stamps a dead-letter entry's {@code failedAt} and
      * times each batch for {@code streamrune.projections.duration}, and the runner hands it to the
      * live subscription it builds, which times its deliveries on it. Optional; without one the
-     * runner stamps with {@link Clock#systemUTC()} and times with {@link System#nanoTime()}. A test
-     * passes a {@code MutableClock} to decide the timestamps and the durations the runner records.
+     * runner stamps with {@link Clock#systemUTC()} and times with {@link System#nanoTime()}; a
+     * system clock ({@link Clock#systemUTC()}, or another {@link Clock#system} clock) stamps and
+     * leaves the timing on {@code System.nanoTime()}. A test passes a {@code MutableClock} to
+     * decide the timestamps and the durations the runner records.
      *
      * @param clock the clock; not {@code null}
      * @return this builder
      */
     public Builder clock(Clock clock) {
-      this.clock = java.util.Objects.requireNonNull(clock, "clock is required");
+      this.clock = Objects.requireNonNull(clock, "clock is required");
       return this;
     }
 

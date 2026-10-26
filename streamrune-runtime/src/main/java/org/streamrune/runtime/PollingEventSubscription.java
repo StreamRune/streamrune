@@ -940,9 +940,10 @@ public final class PollingEventSubscription
 
     /**
      * The clock that times each delivery for the latency metric ({@code
-     * streamrune.subscriptions.delivery.latency}). Optional; without one the subscription times its
-     * deliveries with {@link System#nanoTime()}, which no step of the wall clock disturbs. A test
-     * passes a {@code MutableClock} to decide the latency it records.
+     * streamrune.subscriptions.delivery.latency}). Optional; without one, or with a system clock
+     * such as {@link Clock#systemUTC()}, the subscription times its deliveries with {@link
+     * System#nanoTime()}, which no step of the wall clock disturbs. A test passes a {@code
+     * MutableClock} to decide the latency it records.
      *
      * @param clock the clock; not {@code null}
      * @return this builder

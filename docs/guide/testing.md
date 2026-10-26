@@ -927,7 +927,8 @@ clock.advance(Duration.ofSeconds(5));
 
 The runners, the outbox poller, the subscriptions and `StreamRune` take a clock as well:
 `clock(Clock)` on their builders decides the timestamps they record and the durations they measure
-(without one they read the system clock and time with `System.nanoTime()`):
+(without one they read the system clock and time with `System.nanoTime()`, and a system clock such
+as `Clock.systemUTC()` leaves the timing on `System.nanoTime()` too):
 
 ```java
 var subscription = PollingEventSubscription.builder()
@@ -937,6 +938,10 @@ var subscription = PollingEventSubscription.builder()
     .build();
 // streamrune.subscriptions.delivery.latency records 250 ms for that delivery
 ```
+
+A started `ScheduledProjectionRunner` sleeps in real time for the distance its clock computes to the
+next fire: advancing the clock does not make it fire, so a test reads the next fire from `status()`
+without starting the runner.
 
 A test of what happens when one store call fails schedules the fault, or overrides that call alone:
 

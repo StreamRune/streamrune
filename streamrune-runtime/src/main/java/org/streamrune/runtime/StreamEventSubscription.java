@@ -3,6 +3,7 @@ package org.streamrune.runtime;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -656,15 +657,16 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
 
     /**
      * The clock that times each delivery for the latency metric ({@code
-     * streamrune.subscriptions.delivery.latency}). Optional; without one the subscription times its
-     * deliveries with {@link System#nanoTime()}, which no step of the wall clock disturbs. A test
-     * passes a {@code MutableClock} to decide the latency it records.
+     * streamrune.subscriptions.delivery.latency}). Optional; without one, or with a system clock
+     * such as {@link Clock#systemUTC()}, the subscription times its deliveries with {@link
+     * System#nanoTime()}, which no step of the wall clock disturbs. A test passes a {@code
+     * MutableClock} to decide the latency it records.
      *
      * @param clock the clock; not {@code null}
      * @return this builder
      */
     public Builder clock(Clock clock) {
-      this.clock = java.util.Objects.requireNonNull(clock, "clock is required");
+      this.clock = Objects.requireNonNull(clock, "clock is required");
       return this;
     }
 

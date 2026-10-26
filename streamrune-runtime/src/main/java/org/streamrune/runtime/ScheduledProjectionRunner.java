@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -1535,20 +1536,23 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     }
 
     /**
-     * The clock the runner reads time from: it computes each projection's next fire from it and
-     * sleeps until that instant, records the fire ({@link ScheduledProjectionStatus#lastFireAt()}),
-     * stamps a dead-letter entry's {@code failedAt} and times each drain for {@code
-     * streamrune.projections.duration}. Optional; without one the runner reads {@link
-     * Clock#systemUTC()} and times with {@link System#nanoTime()}. The sleep itself runs on the
-     * system's time: a clock that does not move keeps the distance to the next fire it computes, so
-     * a test that starts the runner on a {@code MutableClock} advances it, or reads {@link
-     * ScheduledProjectionRunner#status()} without starting it.
+     * The clock the runner reads time from: it computes each projection's next fire from it,
+     * records the fire ({@link ScheduledProjectionStatus#lastFireAt()}), stamps a dead-letter
+     * entry's {@code failedAt} and times each drain for {@code streamrune.projections.duration}.
+     * Optional; without one the runner reads {@link Clock#systemUTC()} and times with {@link
+     * System#nanoTime()}, and a system clock leaves the timing on {@code System.nanoTime()} too.
+     *
+     * <p>The runner sleeps in real time for the distance its clock computes to the next fire, and
+     * fires when it wakes: advancing the clock neither shortens the sleep of a started runner nor
+     * fires a projection, and on a clock that does not move, a started runner fires each time that
+     * distance passes in real time. A test reads {@link ScheduledProjectionRunner#status()} without
+     * starting the runner, or waits real time.
      *
      * @param clock the clock; not {@code null}
      * @return this builder
      */
     public Builder clock(Clock clock) {
-      this.clock = java.util.Objects.requireNonNull(clock, "clock is required");
+      this.clock = Objects.requireNonNull(clock, "clock is required");
       return this;
     }
 

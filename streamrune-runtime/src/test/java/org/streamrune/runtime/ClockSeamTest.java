@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
@@ -254,5 +256,26 @@ class ClockSeamTest {
 
     EventEnvelope placed = store.load(ORDER_1).events().getFirst();
     assertThat(placed.metadata().timestamp()).isEqualTo(START);
+  }
+
+  /**
+   * A system clock reads the wall clock, which an NTP step moves: with one, in any zone, a duration
+   * is measured on {@code System.nanoTime()}, as without a clock.
+   */
+  @Test
+  void aSystemClock_timesDurationsOnSystemNanoTime() {
+    for (Clock system :
+        List.of(
+            Clock.systemUTC(),
+            Clock.systemDefaultZone(),
+            Clock.system(ZoneId.of("Europe/Prague")))) {
+      TimeSource time = TimeSource.of(system);
+
+      long before = System.nanoTime();
+      long reading = time.nanoTime();
+      long after = System.nanoTime();
+
+      assertThat(reading).as("%s times on System.nanoTime()", system).isBetween(before, after);
+    }
   }
 }
