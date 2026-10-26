@@ -143,6 +143,29 @@ public class OrderSaga implements SagaOrchestrator<OrderSaga.State> {
 }
 ```
 
+Test it with `SagaFixture` from `streamrune-test`. The fixture builds the runner from the saga's
+own builder over in-memory stores, records each command the saga dispatches instead of executing
+it, and delivers events and replies the way a subscription delivers them:
+
+```java
+SagaFixture<OrderSaga.State> saga =
+    SagaFixture.of(OrderSaga.State.class, builder -> builder.orchestrator(new OrderSaga()));
+StreamId order = StreamId.of(AggregateType.of("order"), AggregateId.of("1"));
+SagaId orderSaga = OrderSaga.sagaOf("1").orElseThrow();
+
+saga.when(order, new OrderPlaced("1"))
+    .expectCommands(new ReserveStock("1"))
+    .expectStatus(orderSaga, SagaStatus.RUNNING);
+
+saga.replyingTo(orderSaga, new StockReserved("1"))   // the reply to the saga's ReserveStock
+    .expectNoCommands()
+    .expectCompleted(orderSaga);
+```
+
+`SagaGuideQuickExampleTest` in `streamrune-runtime` runs this example and the decider wiring below
+on the fixture. The testing guide describes the fixture's steps, its timeout runner and its fault
+schedule ([Testing a saga](../testing.md#testing-a-saga-with-sagafixture)).
+
 ## Full example
 
 Wiring the saga to a subscription:

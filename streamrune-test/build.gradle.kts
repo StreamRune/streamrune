@@ -2,6 +2,8 @@ description = "StreamRune test support: in-memory event store, decider fixture, 
 
 dependencies {
     api(project(":streamrune-core"))
+    // SagaFixture builds a SagaRunner and a SagaTimeoutRunner, whose builders its API exposes.
+    api(project(":streamrune-runtime"))
     // All `api`, because module-info.java requires each of them by name.
     //
     // The previous reasoning here — "InMemoryEventStore.serializing() registers

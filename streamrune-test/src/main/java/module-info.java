@@ -1,5 +1,6 @@
 open module org.streamrune.test {
   requires org.streamrune.core;
+  requires org.streamrune.runtime;
   requires org.streamrune.crypto;
   requires org.junit.jupiter.api;
   requires com.fasterxml.jackson.core;

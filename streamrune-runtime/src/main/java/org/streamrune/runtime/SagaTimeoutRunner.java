@@ -422,14 +422,18 @@ public final class SagaTimeoutRunner<S extends SagaState> {
   }
 
   /**
-   * Computes the timeout cutoff from the injected {@link Clock} and processes one batch of
-   * timed-out sagas. The cutoff is {@code now - timeout}; a {@code STARTED}/{@code RUNNING} saga
+   * Runs one poll on the calling thread — what the poll thread of a started runner runs every poll
+   * interval: computes the timeout cutoff from the injected {@link Clock} and processes one batch
+   * of timed-out sagas. The cutoff is {@code now - timeout}; a {@code STARTED}/{@code RUNNING} saga
    * whose <em>start instant</em> is before the cutoff has exceeded its (absolute) timeout, while a
    * {@code COMPENSATING} crash-resume episode is re-picked on last-write inactivity — see {@link
-   * org.streamrune.core.saga.SagaStore#findTimedOut}. Package-private so tests can drive a single
-   * poll with a fixed clock and assert the cutoff deterministically.
+   * org.streamrune.core.saga.SagaStore#findTimedOut}. A failure propagates to the caller.
+   *
+   * <p>For a test that drives the runner on a clock of its own and asserts what one poll claims
+   * ({@code SagaFixture.runTimeouts()} in {@code streamrune-test} calls it). A started runner polls
+   * on its own thread; a call made beside it is one more poll.
    */
-  void pollOnce() {
+  public void pollOnce() {
     if (!follower.mayAct()) {
       // Not leading here: read nothing, write nothing. A new leadership period counts deferrals
       // from zero.
