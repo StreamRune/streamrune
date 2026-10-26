@@ -42,7 +42,7 @@ kafka = "3.9.0"
 rabbitmq = "5.25.0"
 
 # Cloud
-aws-sdk = "2.30.0"
+aws-sdk = "2.57.3"
 
 # Observability
 opentelemetry = "1.47.0"
