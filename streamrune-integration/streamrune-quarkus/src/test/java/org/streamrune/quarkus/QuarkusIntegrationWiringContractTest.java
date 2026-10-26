@@ -246,7 +246,6 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
       }
       return new QuarkusApplication(arc, server, controller, null, log.close());
     } catch (Throwable failure) {
-      failure.printStackTrace(); // DEBUG-PROBE
       List<String> lines = log.close();
       if (arc != null) {
         arc.close();
