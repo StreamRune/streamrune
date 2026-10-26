@@ -216,8 +216,10 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    * health contributor. Only {@link #state()}, {@link #isRunning()}, and {@link #close()} are
    * meaningful; {@link #start()}, {@link #pause()}, and {@link #resume()} throw since the runner —
    * not the health contributor — owns the lifecycle. It reports the role the runner plays under its
-   * lease ({@link RunnerLeaseRole}), and its errors — ticks that dead-lettered or skipped a chunk —
-   * survive a standby ({@link StandbyKeepsErrors}).
+   * lease ({@link RunnerLeaseRole}): the runner takes the lease at a projection's first fire, so
+   * the view reads {@code STANDBY} until then, on the only replica too, and {@code LEADING} from
+   * then on. Its errors — ticks that dead-lettered or skipped a chunk — survive a standby ({@link
+   * StandbyKeepsErrors}).
    */
   private final class ScheduledSubscriptionView
       implements SubscriptionLifecycle, LeaseRoleAware, StandbyKeepsErrors {

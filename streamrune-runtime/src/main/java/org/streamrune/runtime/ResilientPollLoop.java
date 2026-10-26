@@ -149,11 +149,12 @@ final class ResilientPollLoop {
               backoff.toMillis(),
               e);
         } else if (cutShortByTheStop(e)) {
-          // The owner stopped the loop and interrupted its thread, and the interrupt cut the call
-          // in flight short: on a virtual thread it closes the socket of a JDBC read, the driver
-          // throws, and the thread's interrupt status stays set. That is the stop, not a failure.
+          // The owner ended the loop — a stop or a pause — and interrupted its thread, and the
+          // interrupt cut the call in flight short: on a virtual thread it closes the socket of a
+          // JDBC read, the driver throws, and the thread's interrupt status stays set. That is the
+          // owner's doing, not a failure.
           logger.info(
-              "Poll loop '{}' stopped: the stop interrupted a call in flight ({})",
+              "Poll loop '{}' ended: the owner's interrupt cut a call in flight short ({})",
               name,
               summary(e));
         } else {
@@ -205,9 +206,9 @@ final class ResilientPollLoop {
   }
 
   /**
-   * Whether {@code failure} is a call the owner's stop cut short: the thread is interrupted (the
-   * stop's interrupt, which a socket read on a virtual thread leaves set), or the failure's cause
-   * chain holds an interruption (a driver that consumed the flag kept its cause).
+   * Whether {@code failure} is a call the owner's stop or pause cut short: the thread is
+   * interrupted (the owner's interrupt, which a socket read on a virtual thread leaves set), or the
+   * failure's cause chain holds an interruption (a driver that consumed the flag kept its cause).
    */
   private static boolean cutShortByTheStop(RuntimeException failure) {
     if (Thread.currentThread().isInterrupted()) {

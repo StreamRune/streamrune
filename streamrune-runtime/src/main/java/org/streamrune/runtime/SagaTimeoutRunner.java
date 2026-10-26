@@ -429,6 +429,10 @@ public final class SagaTimeoutRunner<S extends SagaState> {
    * {@code COMPENSATING} crash-resume episode is re-picked on last-write inactivity — see {@link
    * org.streamrune.core.saga.SagaStore#findTimedOut}. A failure propagates to the caller.
    *
+   * <p>A runner built with {@link Builder#sagaRunner} follows that runner's lease: while this
+   * process does not lead it — a standby, or a saga subscription that has not taken the lease yet —
+   * the call reads nothing and writes nothing, as the poll thread's poll does.
+   *
    * <p>For a test that drives the runner on a clock of its own and asserts what one poll claims
    * ({@code SagaFixture.runTimeouts()} in {@code streamrune-test} calls it). A started runner polls
    * on its own thread; a call made beside it is one more poll.

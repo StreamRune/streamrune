@@ -449,6 +449,12 @@ class ResilientPollLoopTest {
         stopped.getFirst().getFormattedMessage().contains("socket closed by the interrupt")
             || stopped.getFirst().getFormattedMessage().contains("cut short"),
         () -> "the INFO line says what the stop cut short: " + stopped);
+    assertTrue(
+        stopped
+            .getFirst()
+            .getFormattedMessage()
+            .contains("ended: the owner's interrupt cut a call in flight short"),
+        () -> "the INFO line fits a stop and a pause alike: " + stopped);
   }
 
   @Test

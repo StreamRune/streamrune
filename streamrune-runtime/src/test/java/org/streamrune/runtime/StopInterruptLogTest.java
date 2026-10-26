@@ -32,9 +32,12 @@ import org.streamrune.test.InMemoryOffsetStore;
  * A read in flight when the subscription, or the projection runner it serves, is closed is cut
  * short by the close's own interrupt: on a virtual thread the interrupt closes the socket of a JDBC
  * read, the driver throws, and the thread's interrupt status stays set. That is the stop, not a
- * failure: no ERROR line, and no stack trace.
+ * failure: no ERROR line, and no stack trace. A pause interrupts the read the same way.
  */
 class StopInterruptLogTest {
+
+  /** What the INFO line says, for a stop and a pause alike. */
+  private static final String CUT_SHORT = "ended: the owner's interrupt cut a call in flight short";
 
   private final Logger runtime = (Logger) LoggerFactory.getLogger("org.streamrune.runtime");
   private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -111,9 +114,46 @@ class StopInterruptLogTest {
         .anySatisfy(
             event -> {
               assertThat(event.getLevel()).isEqualTo(Level.INFO);
-              assertThat(event.getFormattedMessage()).contains("orders").contains("stopped");
+              assertThat(event.getFormattedMessage()).contains("orders").contains(CUT_SHORT);
               assertThat(event.getThrowableProxy()).isNull();
             });
+  }
+
+  @Test
+  void aSubscriptionPausedDuringARead_logsNoError() throws Exception {
+    var store = new InterruptibleReads();
+    store.armed.set(true);
+    var subscription =
+        PollingEventSubscription.builder()
+            .subscriptionName("orders")
+            .eventStore(store)
+            .offsetStore(new InMemoryOffsetStore())
+            .listener(events -> {})
+            .config(SubscriptionConfig.pollingOnly(Duration.ofMillis(20)))
+            .build();
+    subscription.start();
+    assertThat(store.inTheRead.await(5, TimeUnit.SECONDS)).isTrue();
+
+    subscription.pause();
+
+    try {
+      await()
+          .atMost(Duration.ofSeconds(5))
+          .untilAsserted(
+              () ->
+                  assertThat(List.copyOf(appender.list))
+                      .anySatisfy(
+                          event -> {
+                            assertThat(event.getLevel()).isEqualTo(Level.INFO);
+                            assertThat(event.getFormattedMessage())
+                                .contains("orders")
+                                .contains(CUT_SHORT);
+                            assertThat(event.getThrowableProxy()).isNull();
+                          }));
+      assertThat(errors()).as("the pause cut the read short").isEmpty();
+    } finally {
+      subscription.close();
+    }
   }
 
   @Test

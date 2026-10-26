@@ -242,7 +242,8 @@ The details are:
   role it plays under its own lease for its whole run: `STANDBY` until it takes the lease, then
   `LEADING` while it catches up and runs live — with a `DataSource` and the default
   `streamrune.subscription.single-active-consumer.enabled=true`, the only replica of an application
-  reads `LEADING`, and with the lease switched off `UNGATED`. A standby is `RUNNING` and shares the
+  reads `LEADING`, and with the lease switched off `UNGATED`. A scheduled projection takes its
+  lease at its first fire and reads `STANDBY` until then, on the only replica too. A standby is `RUNNING` and shares the
   leader's lag: with no errors of its own it reads `UP` while a replica leads, and every replica
   reads `DEGRADED` once the shared lag crosses the threshold. A subscription you build yourself reaches this list through `.healthContributor(contributor)` on
   `PollingEventSubscription.builder()` or `HybridEventSubscription.builder()`: it registers on

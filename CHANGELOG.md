@@ -492,9 +492,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - `SubscriptionConfig.DEFAULT` = LISTEN/NOTIFY on, 5 s polling interval, 1 s jitter;
   `SubscriptionConfig.pollingOnly(interval)` for transaction-pooling proxies.
 - `ResilientPollLoop`: a transient `RuntimeException` in the poll loop is logged and retried with
-  capped exponential backoff plus jitter. A read that a stop's own interrupt cut short — the
-  thread is interrupted, or the failure's cause chain holds an interruption — ends the loop with one
-  INFO line and no stack trace, not an ERROR. `PgNotificationListener` reconnects with capped backoff and
+  capped exponential backoff plus jitter. A read that the owner's own interrupt cut short on a stop
+  or a pause — the thread is interrupted, or the failure's cause chain holds an interruption — ends
+  the loop with one INFO line and no stack trace, not an ERROR. `PgNotificationListener` reconnects with capped backoff and
   detects a connection whose server vanished without closing it: after 10 s without a notification it
   runs `SELECT 1` with a 5 s timeout and reconnects on failure. `HybridEventSubscription.pushHealthy()`
   and `pushPathStatus()` report the push path, which reads dead after 30 s without a LISTEN
@@ -531,10 +531,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - Subscription health reports the lease role: `SubscriptionHealth.role` is a `LeaseRole`, read from a
   registration that implements `LeaseRoleAware` (`PollingEventSubscription` and
   `HybridEventSubscription` do) and `NOT_REPORTED` for any other. The projection runners report the
-  role they play under their own lease for their whole run (`STANDBY` until they take it, then
-  `LEADING`; `UNGATED` without one), the live subscription of a `ContinuousProjectionRunner`
-  included, which holds no lease of its own; a runner's dead-lettered or skipped batches keep its
-  entry `DEGRADED` while it stands by. A standby subscription is `RUNNING` with no delivery errors
+  role they play under their own lease for their whole run (`STANDBY` until they take it, which a
+  scheduled projection does at its first fire, then `LEADING`; `UNGATED` without one), the live
+  subscription of a `ContinuousProjectionRunner` included, which holds no lease of its own; a
+  runner's dead-lettered or skipped batches keep its entry `DEGRADED` while it stands by. A standby subscription is `RUNNING` with no delivery errors
   and shares the leader's lag: `UP` while a replica leads, `DEGRADED` on every replica once the
   shared lag crosses the threshold, never `DOWN`. `PollingEventSubscription.Builder.healthContributor(...)` and
   `HybridEventSubscription.Builder.healthContributor(...)` register an application-built
