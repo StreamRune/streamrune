@@ -847,6 +847,74 @@ Running more than one instance of the same application is fully supported, and t
 > reads, projections, and *per-aggregate* command concurrency — but **not** the global append rate.
 > Plan write capacity against the single write lane below before sizing a write-heavy cluster.
 
+### The aggregate lock across replicas
+
+The three integrations wire `LocalStripedLocker` as the `AggregateLocker`: a lock in the memory of
+one process, which serializes the commands of one aggregate on one replica and nothing across
+replicas. Two replicas that run a command on the same aggregate at once both load it, and the second
+append fails its version check (`OptimisticLockException`): the bus reloads and decides again, up to
+its retry policy, and then fails and dead-letters the command; and the after-phase of the two
+commands (an `INLINE` projection) is not held in commit order. On more than one replica, declare
+`PgAdvisoryLocker.withDedicatedPool(jdbcUrl, username, password, maxPoolSize)` as the
+`AggregateLocker` bean: a PostgreSQL transaction-scoped advisory lock per stream, held on a
+connection of the locker's own pool for the whole command. The integration's default steps aside for
+an application's bean:
+
+```java
+// Spring: the auto-configured locker is @ConditionalOnMissingBean(AggregateLocker.class).
+@Bean(destroyMethod = "close") // the locker owns its pool
+AggregateLocker aggregateLocker(
+        @Value("${spring.datasource.url}") String url,
+        @Value("${spring.datasource.username}") String username,
+        @Value("${spring.datasource.password}") String password) {
+    return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+}
+```
+
+```java
+// Quarkus: the produced locker is a @DefaultBean.
+@ApplicationScoped
+public class AggregateLockerProducer {
+
+    @Produces
+    @Singleton
+    AggregateLocker aggregateLocker(
+            @ConfigProperty(name = "quarkus.datasource.jdbc.url") String url,
+            @ConfigProperty(name = "quarkus.datasource.username") String username,
+            @ConfigProperty(name = "quarkus.datasource.password") String password) {
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+    }
+
+    void close(@Disposes AggregateLocker locker) throws Exception {
+        ((AutoCloseable) locker).close(); // the locker owns its pool
+    }
+}
+```
+
+```java
+// Micronaut: the module's locker is @Requires(missingBeans = AggregateLocker.class).
+@Factory
+class AggregateLockerFactory {
+
+    @Singleton
+    @Bean(preDestroy = "close") // the locker owns its pool
+    PgAdvisoryLocker aggregateLocker(
+            @Value("${datasources.default.url}") String url,
+            @Value("${datasources.default.username}") String username,
+            @Value("${datasources.default.password}") String password) {
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+    }
+}
+```
+
+**The connection budget.** A command holds its lock connection for its whole run and borrows a
+second connection from the application's pool for its load and its append, so size the lock pool for
+the commands one replica runs at once, and the application's pool for the load and the append alone;
+the two pools of every replica together stay below PostgreSQL's `max_connections`. A command whose
+`INLINE` projection dispatches a command on another aggregate holds a second lock connection (see
+[the dedicated lock pool](#postgresql-setup) above). `streamrune.lock-timeout` bounds the wait for a
+lock with either locker.
+
 ### Rolling out an event-schema change
 
 A replica reads only what its own code understands, and three rules decide what that is:

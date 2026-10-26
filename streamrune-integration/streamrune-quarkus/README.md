@@ -141,6 +141,36 @@ streamrune.crypto.aws.data-key-cache.maximum-size=1000
 streamrune.crypto.aws.data-key-cache.expire-after-write=PT5M
 ```
 
+**More than one replica: a database-wide aggregate lock.** The produced `AggregateLocker` is the
+in-process `LocalStripedLocker`, which serializes one aggregate's commands within one replica only.
+On more than one replica produce `PgAdvisoryLocker.withDedicatedPool(...)` as the `AggregateLocker`
+bean; the integration's producer is a `@DefaultBean` and steps aside:
+
+```java
+@ApplicationScoped
+public class AggregateLockerProducer {
+
+    @Produces
+    @Singleton
+    AggregateLocker aggregateLocker(
+            @ConfigProperty(name = "quarkus.datasource.jdbc.url") String url,
+            @ConfigProperty(name = "quarkus.datasource.username") String username,
+            @ConfigProperty(name = "quarkus.datasource.password") String password) {
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+    }
+
+    void close(@Disposes AggregateLocker locker) throws Exception {
+        ((AutoCloseable) locker).close(); // the locker owns its pool
+    }
+}
+```
+
+A command holds its lock connection for its whole run and borrows a second one from the Agroal pool
+for its load and its append, so size the lock pool for the commands one replica runs at once and the
+Agroal pool for the load and the append alone; the two pools of every replica together stay below
+PostgreSQL's `max_connections` (see
+[the aggregate lock across replicas](../../docs/guide/production.md#the-aggregate-lock-across-replicas)).
+
 ### Server-Sent Events
 
 With `streamrune.sse.enabled=true` the integration serves
