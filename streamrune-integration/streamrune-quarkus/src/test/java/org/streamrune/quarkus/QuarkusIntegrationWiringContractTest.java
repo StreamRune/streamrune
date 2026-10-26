@@ -403,6 +403,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
             || type.isAnnotationPresent(Singleton.class)
             || type.isAnnotationPresent(Dependent.class)
             || type.isAnnotationPresent(RequestScoped.class)
+            || type.isAnnotationPresent(StreamRuneComponent.class)
             || type.isAnnotationPresent(Provider.class)
             || type.isAnnotationPresent(Path.class))) {
       into.add(type);

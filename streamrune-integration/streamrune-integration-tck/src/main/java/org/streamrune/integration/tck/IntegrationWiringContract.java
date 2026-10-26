@@ -305,6 +305,10 @@ public abstract class IntegrationWiringContract {
    * returned, so no runner is in the middle of a poll; and no thread asks it for a connection
    * afterwards.
    *
+   * <p>The assertion is a necessary condition of the order, not the order itself: a runner stopped
+   * within one idle interval after the close, with its poll thread asleep, passes unobserved; the
+   * 20 ms interval keeps that window small.
+   *
    * <p>It runs twice: with the single-active-consumer lease (the default), so the leadership the
    * integration builds also releases its leases before the database closes; and without it, where a
    * projection runner the integration does not stop keeps polling, because no closed leadership

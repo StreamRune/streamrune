@@ -1134,9 +1134,10 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   reachability metadata. Application `CommandInterceptor` beans join the framework's chain; an
   application bean of a framework interceptor's type replaces that interceptor in its slot (also when
   it is normal-scoped); every interceptor survives build-time removal of unused beans. Crypto backend
-  and SSE/query-cache selection are build-time properties (`@IfBuildProperty`). Every bean class of
-  the module has a constructor Arc can proxy (a non-private no-argument one beside the `@Inject`
-  one, and no final method) and public observer and disposer methods. The crypto cache expiries
+  and SSE/query-cache selection are build-time properties (`@IfBuildProperty`). Every normal-scoped
+  bean class of the module has a constructor Arc can proxy (a non-private no-argument one beside
+  the `@Inject` one, and no final method), and every bean class has public observer and disposer
+  methods. The crypto cache expiries
   `streamrune.crypto.cache.expire-after-write` and
   `streamrune.crypto.aws.data-key-cache.expire-after-write` bind as `Duration`s with a default of
   `PT5M`, and `streamrune.crypto.cache.expire-after-access` as an optional one; an empty
