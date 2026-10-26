@@ -864,6 +864,10 @@ written with sorted keys, so the same stream is always the same file, and its id
 replay unchanged. `appendTo` binds each payload as the serializing store binds a stored one: the
 store's `EventTypeRegistry` resolves the type (an unregistered one fails with
 `UnknownEventTypeException`) and its upcasters upcast a payload written at an older schema version.
+`write` serializes the payloads of a serializing store with a copy of the store's own
+`ObjectMapper`, so a type your application serializes its own way (a module, a custom serializer)
+reads back, and leaves the fields of an `@Encrypted` event in the clear: append such a file to a
+store without a crypto engine.
 
 ---
 

@@ -998,6 +998,14 @@ public final class InMemoryEventStore implements EventStore {
   }
 
   /**
+   * The mapper this store serializes with, {@code null} when it keeps its events by reference. For
+   * {@link EventStreamFixtures}, which writes the payloads of a serializing store with a copy.
+   */
+  ObjectMapper objectMapper() {
+    return objectMapper;
+  }
+
+  /**
    * The schema version this store reads an event of {@code eventType} at: the current version of
    * its upcaster chain, or {@code 1} without one. For {@link EventStreamFixtures}.
    */

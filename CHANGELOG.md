@@ -1262,8 +1262,9 @@ Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
   expectations (`expectCommands`, `expectState`, `expectStatus`, `expectCompensating`,
   `expectCompleted`, `expectDeadLettered`). `streamrune-test` depends on `streamrune-runtime` for it,
   and `SagaTimeoutRunner.pollOnce()` runs one poll on the caller's thread.
-- `EventStreamFixtures`: the events of an `InMemoryEventStore` written to a JSON file, read back and
-  appended to a fresh serializing store, which resolves and upcasts each payload as it reads its own.
+- `EventStreamFixtures`: the events of an `InMemoryEventStore` written to a JSON file (each payload
+  as the store's own mapper writes it, `@Encrypted` fields in the clear), read back and appended to
+  a fresh serializing store, which resolves and upcasts each payload as it reads its own.
 - Clock seams: `OutboxPoller`, `ContinuousProjectionRunner`, `ScheduledProjectionRunner`,
   `MultiProjectionRunner`, `PollingEventSubscription`, `StreamEventSubscription` and `StreamRune`
   take `clock(Clock)`; with one, the timestamps they record and the durations they measure come

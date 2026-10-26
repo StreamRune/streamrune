@@ -8,6 +8,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.cfg.SerializerFactoryConfig;
+import com.fasterxml.jackson.databind.ser.BasicSerializerFactory;
+import com.fasterxml.jackson.databind.ser.BeanSerializerModifier;
+import com.fasterxml.jackson.databind.ser.Serializers;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -24,6 +28,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
+import org.streamrune.crypto.CryptoShreddingModule;
 
 /**
  * Event streams kept in files: record the events of an {@link InMemoryEventStore} once, check the
@@ -40,11 +45,11 @@ import org.streamrune.core.types.Version;
  *
  * <p><b>The file.</b> A JSON array, one object per event in global order: {@code streamId} ({@code
  * type:id}), {@code version}, {@code eventType}, {@code schemaVersion}, {@code payload} (the event
- * as a JSON object) and {@code metadata} (the components of {@link EventMetadata}: the event,
- * command and correlation ids, the timestamp in ISO-8601, the baggage, the saga origin). It is
- * written with sorted map keys, two-space indentation and {@code \n} line ends, so a stream written
- * twice is byte for byte the same file. The ids and timestamps are the file's: a stream appended
- * from it and written again reproduces it exactly.
+ * as a JSON object, as the store's own mapper writes it) and {@code metadata} (the components of
+ * {@link EventMetadata}: the event, command and correlation ids, the timestamp in ISO-8601, the
+ * baggage, the saga origin). It is written with sorted map keys, two-space indentation and {@code
+ * \n} line ends, so a stream written twice is byte for byte the same file. The ids and timestamps
+ * are the file's: a stream appended from it and written again reproduces it exactly.
  *
  * <p><b>Reading it back.</b> {@link #read} parses the file and keeps each payload as JSON; {@link
  * #appendTo} binds it the way the store binds a stored event — the store's {@link
@@ -106,7 +111,12 @@ public final class EventStreamFixtures {
   private EventStreamFixtures() {}
 
   /**
-   * Writes every event of {@code store}, in global order, to {@code file}, replacing it.
+   * Writes every event of {@code store}, in global order, to {@code file}, replacing it. The
+   * payloads of a serializing store are written with a copy of its own {@code ObjectMapper}, so a
+   * payload type the application serializes its own way reads back: the copy sorts map keys, writes
+   * dates in ISO-8601 and leaves out the encrypting writers of a {@link CryptoShreddingModule}. A
+   * store that keeps its events by reference has no mapper: its payloads are written with the
+   * file's own, {@code JavaTimeModule} and the same two formats.
    *
    * @param store the store whose events to record
    * @param file the file to write; its parent directories are created
@@ -115,6 +125,7 @@ public final class EventStreamFixtures {
   public static void write(InMemoryEventStore store, Path file) throws IOException {
     Objects.requireNonNull(store, "store is required");
     Objects.requireNonNull(file, "file is required");
+    ObjectMapper payloads = payloadMapper(store);
     List<StoredEvent> events = new ArrayList<>();
     for (EventEnvelope event : store.readGlobalStream(GlobalOffset.initial(), Integer.MAX_VALUE)) {
       events.add(
@@ -123,7 +134,7 @@ public final class EventStreamFixtures {
               event.version(),
               event.eventType(),
               store.schemaVersionOf(event.eventType()),
-              MAPPER.valueToTree(event.event()),
+              payloads.valueToTree(event.event()),
               event.metadata()));
     }
     Path parent = file.toAbsolutePath().getParent();
@@ -179,6 +190,64 @@ public final class EventStreamFixtures {
               json(event.metadata()));
       store.append(event.streamId(), List.of(envelope), new Version(event.version().value() - 1));
     }
+  }
+
+  /**
+   * The mapper the payloads of {@code store} are written with (see {@link #write}): the file's own
+   * for a store without a mapper, else a copy of the store's that writes {@code @Encrypted} fields
+   * in the clear.
+   */
+  private static ObjectMapper payloadMapper(InMemoryEventStore store) {
+    if (!store.serializes()) {
+      return MAPPER;
+    }
+    ObjectMapper copy = store.objectMapper().copy();
+    if (copy.getSerializerFactory() instanceof BasicSerializerFactory factory
+        && encrypts(factory.getFactoryConfig())) {
+      copy.setSerializerFactory(factory.withConfig(withoutEncryption(factory.getFactoryConfig())));
+    }
+    return copy.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+        .enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+  }
+
+  private static boolean encrypts(SerializerFactoryConfig config) {
+    for (BeanSerializerModifier modifier : config.serializerModifiers()) {
+      if (encrypting(modifier)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** A serializer modifier a {@link CryptoShreddingModule} registered: it encrypts. */
+  private static boolean encrypting(BeanSerializerModifier modifier) {
+    return modifier.getClass().getEnclosingClass() == CryptoShreddingModule.class;
+  }
+
+  /**
+   * {@code config} without the modifiers that encrypt. Each {@code with...} call puts its argument
+   * first, so adding the parts in reverse keeps their order.
+   */
+  private static SerializerFactoryConfig withoutEncryption(SerializerFactoryConfig config) {
+    SerializerFactoryConfig clear = new SerializerFactoryConfig();
+    for (Serializers serializers : reversed(config.serializers())) {
+      clear = clear.withAdditionalSerializers(serializers);
+    }
+    for (Serializers serializers : reversed(config.keySerializers())) {
+      clear = clear.withAdditionalKeySerializers(serializers);
+    }
+    for (BeanSerializerModifier modifier : reversed(config.serializerModifiers())) {
+      if (!encrypting(modifier)) {
+        clear = clear.withSerializerModifier(modifier);
+      }
+    }
+    return clear;
+  }
+
+  private static <T> List<T> reversed(Iterable<T> items) {
+    List<T> list = new ArrayList<>();
+    items.forEach(list::add);
+    return list.reversed();
   }
 
   private static String json(Object value) {

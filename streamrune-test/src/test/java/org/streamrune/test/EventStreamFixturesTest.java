@@ -5,12 +5,24 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializerProvider;
+import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
+import com.fasterxml.jackson.databind.module.SimpleModule;
+import com.fasterxml.jackson.databind.ser.std.StdSerializer;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -23,6 +35,7 @@ import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.UnknownEventTypeException;
+import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -33,6 +46,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.EventUpcaster;
+import org.streamrune.crypto.CryptoShreddingModule;
 
 class EventStreamFixturesTest {
 
@@ -300,6 +314,104 @@ class EventStreamFixturesTest {
     EventStreamFixtures.StoredEvent event = EventStreamFixtures.read(file).getFirst();
     assertEquals(3, event.payload().get("quantity").asInt());
     assertEquals(1, event.schemaVersion());
+  }
+
+  /** An amount the application's mapper writes as one string, {@code "12.34 EUR"}. */
+  record Money(long cents, String currency) {}
+
+  record OrderPriced(String orderId, Money price, Instant pricedAt, Map<String, String> notes)
+      implements DomainEvent {}
+
+  static final class MoneySerializer extends StdSerializer<Money> {
+    MoneySerializer() {
+      super(Money.class);
+    }
+
+    @Override
+    public void serialize(Money money, JsonGenerator generator, SerializerProvider provider)
+        throws IOException {
+      generator.writeString(
+          BigDecimal.valueOf(money.cents(), 2).toPlainString() + " " + money.currency());
+    }
+  }
+
+  static final class MoneyDeserializer extends StdDeserializer<Money> {
+    MoneyDeserializer() {
+      super(Money.class);
+    }
+
+    @Override
+    public Money deserialize(JsonParser parser, DeserializationContext context) throws IOException {
+      if (!parser.hasToken(JsonToken.VALUE_STRING)) {
+        return (Money) context.handleUnexpectedToken(Money.class, parser);
+      }
+      String[] amount = parser.getText().split(" ");
+      return new Money(new BigDecimal(amount[0]).movePointRight(2).longValueExact(), amount[1]);
+    }
+  }
+
+  /** The mapper of an application with a serializer of its own, built afresh for each store. */
+  private static ObjectMapper applicationMapper() {
+    return new ObjectMapper()
+        .registerModule(new JavaTimeModule())
+        .registerModule(
+            new SimpleModule()
+                .addSerializer(Money.class, new MoneySerializer())
+                .addDeserializer(Money.class, new MoneyDeserializer()));
+  }
+
+  @Test
+  void aStoreWithTheApplicationsMapper_recordsPayloadsItReadsBack() throws IOException {
+    var registry = registry(OrderPriced.class);
+    var store = new InMemoryEventStore(applicationMapper(), registry);
+    Map<String, String> notes = new LinkedHashMap<>();
+    notes.put("wrapping", "gift");
+    notes.put("delivery", "express");
+    var priced =
+        new OrderPriced("1", new Money(1234, "EUR"), Instant.parse("2026-01-01T12:00:00Z"), notes);
+    store.append(ORDER_1, List.of(envelope(ORDER_1, 1, priced, 1)), Version.initial());
+    Path file = dir.resolve("priced.json");
+
+    EventStreamFixtures.write(store, file);
+    var replayed = new InMemoryEventStore(applicationMapper(), registry);
+    EventStreamFixtures.appendTo(replayed, EventStreamFixtures.read(file));
+
+    assertEquals(all(store), all(replayed));
+    String text = Files.readString(file);
+    assertTrue(text.contains("\"price\" : \"12.34 EUR\""), () -> "the store's mapper: " + text);
+    assertTrue(text.contains("\"pricedAt\" : \"2026-01-01T12:00:00Z\""), () -> "ISO-8601: " + text);
+    assertTrue(
+        text.indexOf("\"delivery\"") < text.indexOf("\"wrapping\""),
+        () -> "map keys sorted: " + text);
+  }
+
+  record CustomerRegistered(
+      String customerId, @Encrypted(subjectId = "customerId") String email, Money credit)
+      implements DomainEvent {}
+
+  /**
+   * The application's mapper with the crypto module, as production configures it: the file holds
+   * the email in the clear, and the credit as the application's serializer writes it.
+   */
+  @Test
+  void aStoreThatEncrypts_writesItsEncryptedFieldsInTheClear() throws IOException {
+    var registry = registry(CustomerRegistered.class);
+    var encrypting =
+        applicationMapper().registerModule(new CryptoShreddingModule(new InMemoryCryptoEngine()));
+    var store = new InMemoryEventStore(encrypting, registry);
+    StreamId customer = StreamId.of(AggregateType.of("customer"), AggregateId.of("7"));
+    var registered = new CustomerRegistered("7", "jane@example.com", new Money(500, "EUR"));
+    store.append(customer, List.of(envelope(customer, 1, registered, 1)), Version.initial());
+    Path file = dir.resolve("customers.json");
+
+    EventStreamFixtures.write(store, file);
+    var replayed = new InMemoryEventStore(applicationMapper(), registry);
+    EventStreamFixtures.appendTo(replayed, EventStreamFixtures.read(file));
+
+    String text = Files.readString(file);
+    assertTrue(text.contains("\"email\" : \"jane@example.com\""), () -> "in the clear: " + text);
+    assertTrue(text.contains("\"credit\" : \"5.00 EUR\""), () -> "the store's mapper: " + text);
+    assertEquals(all(store), all(replayed));
   }
 
   @Test
