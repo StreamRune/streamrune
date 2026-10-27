@@ -650,9 +650,8 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     // head of the least-recently-active order and, a page's worth of them, hide every fresh keyed
     // entry behind them. The in-loop check below still skips any a store returns anyway.
     Instant keyedCutoff = staleKeyedCutoff(now);
-    // One row beyond the page, read only to know whether an entry is queued after it: the poll
-    // never
-    // replays that row (the next poll reads it in its own page). Saturating, like the page.
+    // One row beyond the page, read only to learn whether an entry is queued after it; the poll
+    // never replays that row (the next poll reads it in its own page). Saturating, like the page.
     int readLimit = fetchLimit == Integer.MAX_VALUE ? fetchLimit : fetchLimit + 1;
     var read =
         deadLetterQueue.readRetryable(policy.maxRetries(), readLimit, includeUnkeyed, keyedCutoff);
