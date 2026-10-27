@@ -33,7 +33,7 @@ class ForwardingDeadLetterQueueTest {
   @Test
   void everyMethodOfTheInterfaceIsOverridden_theThrowingDefaultsIncluded() {
     ForwardingDecoratorChecks.assertEveryMethodOverridden(
-        DeadLetterQueue.class, ForwardingDeadLetterQueue.class, 9);
+        DeadLetterQueue.class, ForwardingDeadLetterQueue.class, 10);
   }
 
   @Test

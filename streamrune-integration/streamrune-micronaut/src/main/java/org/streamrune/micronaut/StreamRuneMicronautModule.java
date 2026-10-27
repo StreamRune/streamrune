@@ -708,11 +708,15 @@ public class StreamRuneMicronautModule {
     // mirroring Spring. The DLQ publish mapper is ALWAYS the crypto-aware default — never an
     // application ObjectMapper bean — so @Encrypted command fields are persisted as ciphertext.
     if (deadLetterQueue != null) {
+      // The retry runner's policy and inbox window tell a keyed command that fails again under its
+      // key whether the entry stored for it is still replayed on the schedule.
       builder
           .deadLetterQueue(deadLetterQueue)
           .objectMapper(
               org.streamrune.runtime.DeadLetterRetryRunner.createObjectMapper(
-                  cryptoEngine, metrics));
+                  cryptoEngine, metrics))
+          .deadLetterRetryPolicy(deadLetterRetryPolicy(properties))
+          .inboxRetentionMaxAge(properties.inboxRetentionMaxAge());
     }
 
     if (commandInbox != null) {
@@ -724,6 +728,22 @@ public class StreamRuneMicronautModule {
     }
 
     return builder.build();
+  }
+
+  /**
+   * The policy the dead-letter retry runner replays under, built from {@code
+   * streamrune.dead-letter.*}: the runner and the command bus take the same one, so the bus answers
+   * a keyed command that fails again under its key by the rules the runner replays by.
+   */
+  static org.streamrune.core.DeadLetterRetryPolicy deadLetterRetryPolicy(
+      StreamRuneMicronautProperties properties) {
+    return new org.streamrune.core.DeadLetterRetryPolicy(
+        properties.deadLetterMaxRetries(),
+        java.time.Duration.ofMillis(properties.deadLetterRetryIntervalMs()),
+        2.0,
+        false,
+        org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(
+            properties.deadLetterUnkeyedReplay()));
   }
 
   /** Captures the registration's type parameters once so the builder call type-checks. */
@@ -1342,14 +1362,7 @@ public class StreamRuneMicronautModule {
             .objectMapper(
                 org.streamrune.runtime.DeadLetterRetryRunner.createObjectMapper(
                     cryptoEngine, metrics))
-            .policy(
-                new org.streamrune.core.DeadLetterRetryPolicy(
-                    properties.deadLetterMaxRetries(),
-                    java.time.Duration.ofMillis(properties.deadLetterRetryIntervalMs()),
-                    2.0,
-                    false,
-                    org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(
-                        properties.deadLetterUnkeyedReplay())))
+            .policy(deadLetterRetryPolicy(properties))
             // The window the inbox retention sweeper prunes with: a keyed entry older than it is
             // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
             .inboxRetentionMaxAge(properties.inboxRetentionMaxAge())

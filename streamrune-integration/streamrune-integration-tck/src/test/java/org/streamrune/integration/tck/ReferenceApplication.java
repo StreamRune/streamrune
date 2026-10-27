@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
 import javax.sql.DataSource;
 import org.streamrune.core.CommandInbox;
 import org.streamrune.core.DeadLetterQueue;
+import org.streamrune.core.DeadLetterRetryPolicy;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditOutcome;
@@ -41,8 +42,11 @@ import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
 import org.streamrune.integration.tck.ContractBeans.ContractProjection;
 import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
 import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
+import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.VirtualThreadCommandBus;
+import org.streamrune.test.InMemoryEventStore;
 
 /**
  * An application that keeps every rule of {@link IntegrationWiringContract} with a few lines each,
@@ -64,7 +68,8 @@ final class ReferenceApplication implements Application {
     UNGATED_SAGA_WARNING,
     RUNNERS_STOP_FIRST,
     DOCUMENTED_DEFAULTS,
-    ROUTE_CALLER_AUDITED
+    ROUTE_CALLER_AUDITED,
+    BUS_ANSWERS_BY_RUNNER_RULES
   }
 
   private final List<Object> beans;
@@ -75,6 +80,7 @@ final class ReferenceApplication implements Application {
   private final DataSource dataSource;
   private HttpServer server;
   private Thread runner;
+  private VirtualThreadCommandBus commandBus;
 
   private ReferenceApplication(
       DataSource dataSource,
@@ -84,10 +90,14 @@ final class ReferenceApplication implements Application {
     this.dataSource = dataSource;
     this.properties = properties;
     this.broken = broken.isEmpty() ? EnumSet.noneOf(Rule.class) : EnumSet.copyOf(broken);
-    this.beans = extraBeans.stream().map(ContractBeans::create).collect(Collectors.toList());
+    this.beans =
+        extraBeans.stream()
+            .map(ContractBeans::create)
+            .collect(Collectors.toCollection(ArrayList::new));
     String refusal = null;
     try {
       validate();
+      buildDeadLetterRetry();
       startRunner();
       startServer();
     } catch (RuntimeException e) {
@@ -145,6 +155,67 @@ final class ReferenceApplication implements Application {
           "WARN org.streamrune.runtime.SagaLeaseWiring: Saga type "
               + ContractBeans.ContractSagaState.class.getName()
               + " is delivered on every replica: its SagaRunner carries no lease.");
+    }
+  }
+
+  /**
+   * With a command inbox and a dead-letter queue, builds the command bus and the retry runner from
+   * the same keys, as an integration does, and keeps what the runner logs when it is built: the bus
+   * answers a keyed re-send by the runner's {@code maxRetries} and inbox window, unless the rule is
+   * broken.
+   */
+  private void buildDeadLetterRetry() {
+    List<CommandInbox> inboxes = beansOf(CommandInbox.class);
+    List<DeadLetterQueue> queues = beansOf(DeadLetterQueue.class);
+    if (inboxes.isEmpty() || queues.isEmpty()) {
+      return;
+    }
+    var policy =
+        new DeadLetterRetryPolicy(
+            Integer.parseInt(properties.getOrDefault("streamrune.dead-letter.max-retries", "5")),
+            Duration.ofMillis(
+                Long.parseLong(
+                    properties.getOrDefault("streamrune.dead-letter.retry-interval-ms", "60000"))),
+            2.0,
+            false,
+            DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY);
+    Duration window =
+        Duration.parse(properties.getOrDefault("streamrune.inbox.retention-max-age", "PT168H"));
+    var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(new InMemoryEventStore())
+            .commandInbox(inboxes.getFirst())
+            .deadLetterQueue(queues.getFirst())
+            .objectMapper(DeadLetterRetryRunner.createObjectMapper(null));
+    if (keeps(Rule.BUS_ANSWERS_BY_RUNNER_RULES)) {
+      bus.deadLetterRetryPolicy(policy).inboxRetentionMaxAge(window);
+    }
+    commandBus = bus.build();
+    var logger =
+        (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(DeadLetterRetryRunner.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    try {
+      beans.add(
+          DeadLetterRetryRunner.builder()
+              .deadLetterQueue(queues.getFirst())
+              .commandBus(commandBus)
+              .objectMapper(DeadLetterRetryRunner.createObjectMapper(null))
+              .policy(policy)
+              .inboxRetentionMaxAge(window)
+              .build());
+    } finally {
+      logger.detachAppender(appender);
+      appender.stop();
+    }
+    for (var event : appender.list) {
+      if (event.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.WARN)) {
+        logLines.add(
+            event.getLevel() + " " + event.getLoggerName() + ": " + event.getFormattedMessage());
+      }
     }
   }
 
@@ -310,6 +381,9 @@ final class ReferenceApplication implements Application {
   public void close() {
     if (server != null) {
       server.stop(0);
+    }
+    if (commandBus != null) {
+      commandBus.close();
     }
     if (keeps(Rule.RUNNERS_STOP_FIRST)) {
       stopRunner();

@@ -112,6 +112,15 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * does not bind {@link StreamRuneContext#CAUSE}, so no header and no baggage entry, allowlisted or
  * not, reaches the saga origin or the causation id of an event: the command bus takes both from
  * that binding alone.
+ *
+ * <p><b>Work off the servlet thread.</b> The binding holds on the thread the filter runs on. The
+ * filter also stores the context it binds on the request, as the attribute {@link
+ * RequestAttributeContextSource#ATTRIBUTE}, and the command bus and the query bus the integration
+ * builds read it back through {@link RequestAttributeContextSource} for a dispatch that starts with
+ * {@code CURRENT} unbound: a {@code Callable} or a {@code WebAsyncTask} a controller returns runs
+ * on the MVC task executor, where Spring MVC makes the request's attributes current, and dispatches
+ * as the request's caller. A thread that serves no request dispatches anonymously. A refused
+ * request stores nothing.
  */
 public class ScopedValueFilter implements Filter {
 
@@ -241,6 +250,11 @@ public class ScopedValueFilter implements Filter {
                         + " request thread will be denied",
                     userRoleResolver.getClass().getName(),
                     e));
+    // The same context, for the work Spring MVC runs for this request on another thread (a
+    // Callable a controller returns), which this binding does not reach. Left on the request after
+    // the chain returns: an asynchronous request is still being served then, and the container
+    // drops the request's attributes when it recycles the request.
+    httpReq.setAttribute(RequestAttributeContextSource.ATTRIBUTE, ctx);
     // call() (not run()) so checked exceptions from the chain propagate unchanged — the servlet
     // container and Spring's error handling special-case ServletException/IOException, so wrapping
     // them in RuntimeException would corrupt error-page resolution and stack traces.

@@ -101,6 +101,8 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case RUNNERS_STOP_FIRST -> this::shutdownStopsRunnersBeforeTheEventStoreCloses;
       case DOCUMENTED_DEFAULTS -> this::configurationDefaultsEqualTheOracle;
       case ROUTE_CALLER_AUDITED -> this::aCommandDispatchedFromARouteIsAuditedAsTheCaller;
+      case BUS_ANSWERS_BY_RUNNER_RULES ->
+          this::theCommandBusAnswersAKeyedReSendByTheRetryRunnersRules;
     };
   }
 

@@ -372,6 +372,34 @@ class ScopedValueFilterTest {
     assertEquals("corr-1", captured.get().correlationId().value());
   }
 
+  /**
+   * The filter stores the context it binds on the request too, as {@link
+   * RequestAttributeContextSource#ATTRIBUTE}: a task Spring MVC runs for the request on another
+   * thread, outside the binding, reads it there.
+   */
+  @Test
+  void storesTheContextItBindsAsARequestAttribute() throws Exception {
+    var filter = new ScopedValueFilter(Set.of(), RequestIdentityPolicy.of(null, true), null);
+    var request = requestWith("X-User-Id", "alice");
+    var captured = new AtomicReference<StreamRuneContext.RequestContext>();
+    FilterChain chain = (req, res) -> captured.set(StreamRuneContext.CURRENT.get());
+
+    filter.doFilter(request, new MockHttpServletResponse(), chain);
+
+    assertNotNull(captured.get());
+    assertSame(captured.get(), request.getAttribute(RequestAttributeContextSource.ATTRIBUTE));
+    assertEquals("alice", captured.get().userId().value());
+  }
+
+  @Test
+  void aRefusedRequestStoresNoContext() throws Exception {
+    var request = requestWith("X-Correlation-Id", "streamrune:saga:forged");
+
+    anonymousFilter().doFilter(request, new MockHttpServletResponse(), (req, res) -> {});
+
+    assertNull(request.getAttribute(RequestAttributeContextSource.ATTRIBUTE));
+  }
+
   @Test
   void anAnonymousFilterIgnoresEvenAnOversizedOrForgedUserIdHeader() throws Exception {
     // In the ANONYMOUS mode the header is not read for identity at all, so a value the

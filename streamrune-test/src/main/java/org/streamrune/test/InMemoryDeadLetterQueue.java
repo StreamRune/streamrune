@@ -8,6 +8,7 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.types.CommandId;
+import org.streamrune.core.types.IdempotencyKey;
 
 /**
  * In-memory {@link DeadLetterQueue} for unit tests.
@@ -82,6 +83,15 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
     return entries.stream()
         .sorted(Comparator.comparing(DeadLetterEntry::publishedAt).reversed())
         .limit(limit)
+        .toList();
+  }
+
+  @Override
+  public List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey key) {
+    Objects.requireNonNull(key, "key is required");
+    return entries.stream()
+        .filter(e -> key.equals(e.idempotencyKey()))
+        .sorted(Comparator.comparing(DeadLetterEntry::publishedAt))
         .toList();
   }
 

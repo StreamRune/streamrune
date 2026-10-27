@@ -15,6 +15,9 @@ dependencies {
     api("org.junit.jupiter:junit-jupiter-api")
     compileOnly(libs.opentelemetry.api)
     testImplementation(libs.opentelemetry.api)
+    // The reference application keeps the warning the dead-letter retry runner logs when it is
+    // built, as an integration's start logs it: a binding whose events it can capture.
+    testImplementation(libs.logback.classic)
 }
 
 // The contract's own tests read the production guide and the configuration reference, as the

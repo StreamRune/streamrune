@@ -46,6 +46,8 @@ import org.streamrune.core.types.UserId;
  *         CHECK (aggregate_type ~ '^[a-z][a-z0-9_]{0,31}$')
  * );
  * CREATE INDEX idx_dlq_published_at ON dead_letter_queue (published_at DESC);
+ * CREATE INDEX idx_dlq_idempotency_key ON dead_letter_queue (idempotency_key)
+ *     WHERE idempotency_key IS NOT NULL;
  * </pre>
  *
  * <p>The {@code correlation_id}/{@code user_id}/{@code trace_id} columns persist the originating
@@ -58,7 +60,8 @@ import org.streamrune.core.types.UserId;
  * key rather than a synthetic {@code dlq-replay:<commandId>} key — reconciling a cross-instance
  * duplicate replay AND the client's at-least-once redelivery against the same command inbox row
  * (events produced exactly once). Commands that ran unkeyed store null and are replayed under the
- * synthetic key.
+ * synthetic key. {@link #findByIdempotencyKey(IdempotencyKey)} reads the entries stored under a key
+ * through the partial index on the column.
  */
 public final class PostgresDeadLetterQueue implements DeadLetterQueue {
 
@@ -83,6 +86,14 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
           + "error_type, error_message, attempts, first_attempt_at, published_at, "
           + "dlq_attempts, last_attempt_at, correlation_id, user_id, trace_id, idempotency_key "
           + "FROM dead_letter_queue WHERE command_id = ?";
+
+  // Served by the partial index idx_dlq_idempotency_key: a point lookup on the failure path of
+  // every keyed command the bus dead-letters.
+  private static final String SELECT_BY_IDEMPOTENCY_KEY =
+      "SELECT command_id, command_type, payload, aggregate_type, aggregate_id, "
+          + "error_type, error_message, attempts, first_attempt_at, published_at, "
+          + "dlq_attempts, last_attempt_at, correlation_id, user_id, trace_id, idempotency_key "
+          + "FROM dead_letter_queue WHERE idempotency_key = ? ORDER BY published_at ASC";
 
   private static final String DELETE = "DELETE FROM dead_letter_queue WHERE command_id = ?";
 
@@ -203,6 +214,27 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
               + LogSanitizer.sanitizeForLog(commandId.value()),
           e);
     }
+  }
+
+  /**
+   * The entries stored under {@code key}, oldest first, read through the partial index on {@code
+   * idempotency_key}.
+   */
+  @Override
+  public List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey key) {
+    List<DeadLetterEntry> results = new ArrayList<>();
+    try (var conn = dataSource.getConnection();
+        var ps = conn.prepareStatement(SELECT_BY_IDEMPOTENCY_KEY)) {
+      ps.setString(1, key.value());
+      try (var rs = ps.executeQuery()) {
+        while (rs.next()) {
+          results.add(readEntry(rs));
+        }
+      }
+    } catch (SQLException e) {
+      throw new EventStoreException("Failed to find dead letter queue entries by key", e);
+    }
+    return results;
   }
 
   @Override

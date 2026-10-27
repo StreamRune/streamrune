@@ -82,6 +82,17 @@ class DeadLetterQueueDefaultMethodsTest {
     assertTrue(ex.getMessage().contains(MinimalDeadLetterQueue.class.getName()), ex.getMessage());
   }
 
+  @Test
+  void findByIdempotencyKeyDefault_throwsUnsupportedOperation() {
+    var dlq = new MinimalDeadLetterQueue();
+    var ex =
+        assertThrows(
+            UnsupportedOperationException.class,
+            () -> dlq.findByIdempotencyKey(org.streamrune.core.types.IdempotencyKey.of("op-1")));
+    assertTrue(ex.getMessage().contains("findByIdempotencyKey"), ex.getMessage());
+    assertTrue(ex.getMessage().contains(MinimalDeadLetterQueue.class.getName()), ex.getMessage());
+  }
+
   // ========== find(CommandId) default method ==========
 
   private static DeadLetterQueue.DeadLetterEntry entry(String id) {

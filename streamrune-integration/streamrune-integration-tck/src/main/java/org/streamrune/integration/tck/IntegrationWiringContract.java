@@ -41,6 +41,7 @@ import org.streamrune.integration.tck.ContractBeans.OutboxStoreBean;
 import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
 import org.streamrune.integration.tck.ContractBeans.SecondLeadership;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
+import org.streamrune.runtime.DeadLetterRetryRunner;
 
 /**
  * The wiring rules the Spring, Quarkus and Micronaut integrations keep alike, as tests that run in
@@ -191,6 +192,46 @@ public abstract class IntegrationWiringContract {
           "must not exceed streamrune.inbox.retention-max-age (PT168H)");
     }
   }
+
+  /**
+   * The command bus answers a keyed command that fails again under its key by the dead-letter retry
+   * runner's rules — whether the entry stored for the key is still replayed on the schedule — and
+   * the integration builds the bus and the runner from the same keys: the runner, which compares
+   * its {@code maxRetries} and inbox window with its bus's when it is built, logs no warning about
+   * them, with the defaults and with values of the application's own.
+   */
+  @Test
+  public void theCommandBusAnswersAKeyedReSendByTheRetryRunnersRules() {
+    List<Map<String, String>> configurations =
+        List.of(
+            Map.of(),
+            Map.of(
+                "streamrune.dead-letter.max-retries",
+                "3",
+                "streamrune.inbox.retention-max-age",
+                "PT240H"));
+    for (Map<String, String> properties : configurations) {
+      try (Application application =
+          start(null, properties, Set.of(CommandInboxBean.class, DeadLetterQueueBean.class))) {
+        assertStarted(application);
+        DeadLetterRetryRunner runner = application.bean(DeadLetterRetryRunner.class);
+        assertEquals(
+            Integer.parseInt(properties.getOrDefault("streamrune.dead-letter.max-retries", "5")),
+            runner.policy().maxRetries(),
+            "the runner replays by the configured maxRetries");
+        List<String> lines = application.startupLogLines();
+        assertTrue(
+            lines.stream().noneMatch(line -> line.contains(BUS_RULES_DIFFER)),
+            () ->
+                "the bus and the runner must answer by the same rules; the start logged:\n  "
+                    + String.join("\n  ", lines));
+      }
+    }
+  }
+
+  /** What the retry runner's warning names when its bus answers a keyed re-send by other rules. */
+  private static final String BUS_RULES_DIFFER =
+      "VirtualThreadCommandBus.Builder.deadLetterRetryPolicy";
 
   /**
    * The request identity fails closed: without an authenticated principal and without {@code

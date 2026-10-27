@@ -17,8 +17,11 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
 /**
  * Boots the auto-configuration on a classpath that <strong>genuinely lacks</strong> the optional
  * dependencies {@code streamrune-spring} declares {@code compileOnly} — the servlet API, Spring
- * Boot's health (actuator) module, Bean Validation, and Spring MVC. This is the WebFlux app, the
- * {@code spring-boot-starter-jersey} app, and a headless HA worker.
+ * Boot's health (actuator) module, Bean Validation, Spring MVC and Spring Web. This is the WebFlux
+ * app, the {@code spring-boot-starter-jersey} app, and a headless HA worker with no web dependency
+ * at all: the command bus and query bus beans name {@link RequestAttributeContextSource}, which
+ * reads Spring Web's {@code RequestContextHolder}, in their injection points, and must still be
+ * created.
  *
  * <p><strong>Why a separate test JVM.</strong> {@code FilteredClassLoader} cannot express genuine
  * absence: it carries no URLs of its own and delegates every non-filtered name to the parent
@@ -45,6 +48,7 @@ class OptionalDependencyAbsentTest {
     "org.springframework.boot.health.contributor.HealthIndicator",
     "jakarta.validation.Validator",
     "org.springframework.web.servlet.mvc.method.annotation.SseEmitter",
+    "org.springframework.web.context.request.RequestContextHolder",
   };
 
   private final ApplicationContextRunner runner =

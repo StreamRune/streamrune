@@ -80,8 +80,8 @@ val noValidationProviderTest =
 
 // A test JVM whose classpath GENUINELY lacks the optional dependencies this
 // module declares compileOnly — the servlet API, Spring Boot's health (actuator) module, Bean
-// Validation, and Spring MVC. That is a WebFlux app, a Jersey app, and a headless HA
-// worker. FilteredClassLoader cannot express it: it owns no URLs and delegates every non-filtered
+// Validation, Spring MVC and Spring Web. That is a WebFlux app, a Jersey app, and a headless HA
+// worker with no web dependency at all. FilteredClassLoader cannot express it: it owns no URLs and delegates every non-filtered
 // name to the parent, so a framework class such as ScopedValueFilter is still DEFINED by the
 // parent — whose classpath still has servlet-api — and its jakarta.servlet.Filter superinterface
 // links fine. Only a real classpath makes Class#getDeclaredMethods fail on an optional-typed @Bean
@@ -93,7 +93,7 @@ val optionalDependencyAbsentTest =
         group = "verification"
         description =
             "Boots the auto-configuration on a classpath with the servlet API, Spring Boot " +
-                "health, Bean Validation and Spring MVC removed."
+                "health, Bean Validation, Spring MVC and Spring Web removed."
         testClassesDirs = testSourceSet.output.classesDirs
         // Jar name prefixes to strip. Declared as a local (not a script property) so the filter
         // lambda captures only a plain list and stays configuration-cache serializable.
@@ -105,6 +105,7 @@ val optionalDependencyAbsentTest =
                 "jakarta.servlet-api",
                 "tomcat-embed-core",
                 "spring-webmvc",
+                "spring-web-",
                 "spring-boot-health",
                 "jakarta.validation-api",
                 "hibernate-validator",

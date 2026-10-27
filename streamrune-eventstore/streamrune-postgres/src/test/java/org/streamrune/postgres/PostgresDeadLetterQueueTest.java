@@ -529,6 +529,78 @@ class PostgresDeadLetterQueueTest {
   }
 
   @Test
+  void findByIdempotencyKeyReturnsTheEntriesStoredUnderTheKey_oldestFirst() throws Exception {
+    dlq.publish(keyedRequest("e3000000-0000-0000-0000-000000000001", "client-op-1"));
+    dlq.publish(keyedRequest("e3000000-0000-0000-0000-000000000002", "client-op-2"));
+    dlq.publish(keyedRequest("e3000000-0000-0000-0000-000000000003", "client-op-1"));
+    dlq.publish(
+        new DeadLetterQueue.DeadLetterPublishRequest(
+            "{}",
+            "Unkeyed",
+            CommandId.of("e3000000-0000-0000-0000-000000000004"),
+            TestStreams.stream("s"),
+            "Err",
+            "msg",
+            1,
+            Instant.now(),
+            null,
+            null,
+            null,
+            null));
+    // published_at is NOW() at the insert, so set the order the lookup returns explicitly.
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute(
+          "UPDATE dead_letter_queue SET published_at = TIMESTAMPTZ '2026-01-02T00:00:00Z'"
+              + " WHERE command_id = 'e3000000-0000-0000-0000-000000000001'");
+      stmt.execute(
+          "UPDATE dead_letter_queue SET published_at = TIMESTAMPTZ '2026-01-01T00:00:00Z'"
+              + " WHERE command_id = 'e3000000-0000-0000-0000-000000000003'");
+    }
+
+    var found = dlq.findByIdempotencyKey(IdempotencyKey.of("client-op-1"));
+
+    assertEquals(
+        List.of(
+            CommandId.of("e3000000-0000-0000-0000-000000000003"),
+            CommandId.of("e3000000-0000-0000-0000-000000000001")),
+        found.stream().map(DeadLetterQueue.DeadLetterEntry::commandId).toList());
+    assertEquals(IdempotencyKey.of("client-op-1"), found.getFirst().idempotencyKey());
+    assertEquals("KeyedCmd", found.getFirst().commandType());
+    assertEquals(TestStreams.stream("order-keyed"), found.getFirst().streamId());
+    assertTrue(dlq.findByIdempotencyKey(IdempotencyKey.of("client-op-none")).isEmpty());
+  }
+
+  @Test
+  void findByIdempotencyKey_wrapsAStoreFailureWithoutTheKey() {
+    var broken = new PGSimpleDataSource();
+    broken.setUrl("jdbc:postgresql://127.0.0.1:1/none");
+    var unreachable = new PostgresDeadLetterQueue(broken);
+
+    var failure =
+        assertThrows(
+            org.streamrune.core.EventStoreException.class,
+            () -> unreachable.findByIdempotencyKey(IdempotencyKey.of("secret-client-key")));
+    assertFalse(failure.getMessage().contains("secret-client-key"), failure.getMessage());
+  }
+
+  private static DeadLetterQueue.DeadLetterPublishRequest keyedRequest(String id, String key) {
+    return new DeadLetterQueue.DeadLetterPublishRequest(
+        "{\"amount\":1}",
+        "KeyedCmd",
+        CommandId.of(id),
+        TestStreams.stream("order-keyed"),
+        "EventStoreException",
+        "connection reset",
+        1,
+        Instant.now(),
+        null,
+        null,
+        null,
+        IdempotencyKey.of(key));
+  }
+
+  @Test
   void findReturnsEmptyOptionalForUnknownCommandId() {
     dlq.publish(
         new DeadLetterQueue.DeadLetterPublishRequest(
