@@ -227,9 +227,11 @@ class DeadLetterRetryReaderBehindTest {
   }
 
   /**
-   * A poll that reads a full page, replays entries behind the stored schema and reaches the end of
-   * the page with its batch not full has not reached the entries queued after the page: its summary
-   * line says so at WARN. A poll whose page is not full states the same replays at INFO.
+   * A poll that replays entries behind the stored schema and reaches the end of a full page with
+   * its batch not full, while an entry is queued after the page, has not reached that entry: its
+   * summary line says so at WARN. The poll reads one row beyond the page to know, and never replays
+   * that row: the next poll reads it in its own page. A poll whose page is not full states the same
+   * replays at INFO.
    */
   @Test
   void aPollThatReachesTheEndOfAFullPageOfEntriesBehindStatesItAtWarn() {
@@ -244,12 +246,13 @@ class DeadLetterRetryReaderBehindTest {
 
     var poll = logDuring(runner::processBatch);
 
+    assertThat(bus.refused()).as("the row read beyond the page is not replayed").isEqualTo(20);
     assertThat(messagesAt(poll, Level.WARN)).as("one WARN line for the poll").hasSize(1);
     assertThat(messagesAt(poll, Level.WARN).getFirst())
         .contains("20 DLQ entries")
         .contains("behind the stored schema")
         .contains("full page of 20")
-        .contains("not reached");
+        .contains("at least one entry queued after the page was not reached");
     assertThat(messagesAt(poll, Level.INFO)).isEmpty();
 
     var notFull = new InMemoryDeadLetterQueue(clock);
@@ -260,6 +263,29 @@ class DeadLetterRetryReaderBehindTest {
     assertThat(messagesAt(small, Level.INFO))
         .singleElement()
         .satisfies(line -> assertThat(line).contains("1 DLQ entry").doesNotContain("full page"));
+  }
+
+  /**
+   * A full page of entries behind the stored schema with nothing queued after it holds nothing
+   * back: the poll reached every entry there is, and its line stays at INFO.
+   */
+  @Test
+  void aFullPageWithNothingQueuedAfterItStatesItsReplaysBehindAtInfo() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
+    for (int i = 0; i < 20; i++) {
+      publishKeyedEntry(queue, "cmd-exact-" + i, new ReserveStock("S", "o-" + i));
+      clock.advance(Duration.ofSeconds(1));
+    }
+    var bus = new BehindForOneAggregateBus("S");
+
+    var poll = logDuring(runner(bus, policy(5, false), queue, clock, 2)::processBatch);
+
+    assertThat(bus.refused()).isEqualTo(20);
+    assertThat(messagesAt(poll, Level.WARN)).isEmpty();
+    assertThat(messagesAt(poll, Level.INFO))
+        .singleElement()
+        .satisfies(line -> assertThat(line).contains("20 DLQ entries").doesNotContain("full page"));
   }
 
   /**

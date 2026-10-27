@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -223,8 +224,8 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      * batch, so the entries behind it in the page the poll read are replayed in the same poll, and
      * a run of such entries longer than a page delays the entries after it by one poll per page.
      * Every such replay is counted in {@code streamrune.dlq.reader_behind}, and a poll states its
-     * own in one line: at WARN when the poll read a full page and reached its end with its batch
-     * not full, because the entries queued after that page were not reached; at INFO otherwise.
+     * own in one line: at WARN when the poll reached the end of a full page with its batch not full
+     * while an entry is queued after that page, which the poll did not reach; at INFO otherwise.
      */
     READER_BEHIND,
     /**
@@ -312,6 +313,45 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     this.pollLoop =
         new ResilientPollLoop(
             "dead-letter-retry", () -> running, () -> pollInterval, pollInterval, maxBackoff);
+    warnWhenTheBusAnswersByOtherRules();
+  }
+
+  /**
+   * Logs one WARN when the command bus is a {@link VirtualThreadCommandBus} that answers a keyed
+   * command failing again under its key by another {@code maxRetries} or another inbox window than
+   * this runner replays by. The bus tells such a re-send whether the entry stored for the key is
+   * still replayed on the schedule, by its own copy of the two rules ({@code
+   * VirtualThreadCommandBus.Builder.deadLetterRetryPolicy}, {@code inboxRetentionMaxAge}): when
+   * they differ, a caller can be told to wait for a replay this runner does not make, or to stop
+   * for an entry it still replays — the answer's shape, never the command's outcome. A bus without
+   * a command inbox runs no keyed command and is not compared. Both windows are compared as
+   * normalized, zero or negative being none.
+   */
+  private void warnWhenTheBusAnswersByOtherRules() {
+    if (!(commandBus instanceof VirtualThreadCommandBus bus)
+        || !bus.supportsIdempotentExecution()) {
+      return;
+    }
+    int busRetries = bus.deadLetterRetryPolicy().maxRetries();
+    Duration busWindow = bus.inboxRetentionMaxAge();
+    if (busRetries == policy.maxRetries() && Objects.equals(busWindow, inboxRetentionMaxAge)) {
+      return;
+    }
+    LOG.warn(
+        "DeadLetterRetryRunner replays by maxRetries={} and {}, while its command bus answers a"
+            + " keyed command that fails again under its key by maxRetries={} and {}: such a"
+            + " re-send can be told that its entry is queued for replay while this runner keeps it"
+            + " for an operator, or the reverse. Build the bus with"
+            + " VirtualThreadCommandBus.Builder.deadLetterRetryPolicy(...) and"
+            + " inboxRetentionMaxAge(...) set to this runner's policy and inbox window.",
+        policy.maxRetries(),
+        describeWindow(inboxRetentionMaxAge),
+        busRetries,
+        describeWindow(busWindow));
+  }
+
+  private static String describeWindow(Duration window) {
+    return window == null ? "no inbox window" : "an inbox window of " + window;
   }
 
   /**
@@ -610,8 +650,14 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     // head of the least-recently-active order and, a page's worth of them, hide every fresh keyed
     // entry behind them. The in-loop check below still skips any a store returns anyway.
     Instant keyedCutoff = staleKeyedCutoff(now);
-    var entries =
-        deadLetterQueue.readRetryable(policy.maxRetries(), fetchLimit, includeUnkeyed, keyedCutoff);
+    // One row beyond the page, read only to know whether an entry is queued after it: the poll
+    // never
+    // replays that row (the next poll reads it in its own page). Saturating, like the page.
+    int readLimit = fetchLimit == Integer.MAX_VALUE ? fetchLimit : fetchLimit + 1;
+    var read =
+        deadLetterQueue.readRetryable(policy.maxRetries(), readLimit, includeUnkeyed, keyedCutoff);
+    boolean queuedAfterThePage = read.size() > fetchLimit;
+    var entries = queuedAfterThePage ? read.subList(0, fetchLimit) : read;
     int processed = 0;
     int staleSkipped = 0;
     var readerBehind = new ReaderBehindTally();
@@ -665,11 +711,11 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     }
     int behind = readerBehind.replays();
     if (behind > 0) {
-      // The poll read a full page and reached its end with its batch not full: rows queued after
-      // the page may be due and were not read. The entries behind the stored schema have moved
-      // behind them, so a later poll reaches them; until then they wait, which an operator sees.
-      boolean pageExhausted =
-          !stoppedEarly && entries.size() >= fetchLimit && processed < batchSize;
+      // The poll reached the end of a full page with its batch not full while an entry is queued
+      // after the page: that entry may be due and was not reached. The entries behind the stored
+      // schema have moved behind it, so a later poll reaches it; until then it waits, which an
+      // operator sees. A full page with nothing after it held nothing back.
+      boolean pageExhausted = !stoppedEarly && queuedAfterThePage && processed < batchSize;
       LOG.atLevel(pageExhausted ? Level.WARN : Level.INFO)
           .log(
               "{} DLQ entr{} of this cycle's page {} not replayed: this replica is behind the"
@@ -687,15 +733,15 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
               readerBehind.commandTypeCount() == 1 ? "" : "s",
               readerBehind.commandTypes(),
               pageExhausted
-                  ? " The poll read a full page of "
+                  ? " The poll reached the end of its full page of "
                       + fetchLimit
-                      + " entries and reached its end with "
+                      + " entries with "
                       + processed
                       + " of its batch of "
                       + batchSize
-                      + " replayed, so the entries queued after the page were not reached this"
-                      + " poll; the entries behind the stored schema move behind them, and a"
-                      + " later poll reaches them."
+                      + " replayed, and at least one entry queued after the page was not reached"
+                      + " this poll; the entries behind the stored schema move behind the entries"
+                      + " queued after them, so a later poll reaches those."
                   : "");
     }
     if (staleSkipped > 0) {

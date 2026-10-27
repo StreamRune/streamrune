@@ -300,7 +300,128 @@ class DeadLetterOneEntryPerKeyTest {
         .singleElement();
   }
 
+  /**
+   * A retry runner over a bus that answers a keyed re-send by another {@code maxRetries} or another
+   * inbox window than the runner replays by logs one WARN when it is built, naming both values and
+   * the bus builder's two settings: such a re-send could be told to wait for a replay the runner
+   * does not make, or to stop for an entry it still replays.
+   */
+  @Test
+  void aRunnerOverABusThatAnswersByOtherRules_logsOneWarnNamingBoth() {
+    List<String> otherRetries = warningsBuilding(bus(deadLetters).build(), retryPolicy(3), null);
+
+    assertThat(otherRetries)
+        .singleElement()
+        .satisfies(
+            line ->
+                assertThat(line)
+                    .contains("maxRetries=3", "maxRetries=5")
+                    .contains(
+                        "VirtualThreadCommandBus.Builder.deadLetterRetryPolicy",
+                        "inboxRetentionMaxAge"));
+
+    List<String> otherWindow =
+        warningsBuilding(
+            bus(deadLetters).inboxRetentionMaxAge(Duration.ofDays(7)).build(),
+            DeadLetterRetryPolicy.DEFAULT,
+            null);
+
+    assertThat(otherWindow)
+        .singleElement()
+        .satisfies(line -> assertThat(line).contains("PT168H", "no inbox window"));
+  }
+
+  /** The bus the integrations build answers by the runner's own values: nothing is logged. */
+  @Test
+  void aRunnerOverABusThatAnswersByItsRules_logsNothing() {
+    assertThat(
+            warningsBuilding(
+                bus(deadLetters)
+                    .deadLetterRetryPolicy(retryPolicy(3))
+                    .inboxRetentionMaxAge(Duration.ofDays(7))
+                    .build(),
+                retryPolicy(3),
+                Duration.ofDays(7)))
+        .isEmpty();
+    assertThat(
+            warningsBuilding(
+                bus(deadLetters).inboxRetentionMaxAge(Duration.ZERO).build(),
+                DeadLetterRetryPolicy.DEFAULT,
+                null))
+        .as("a zero window and none are both an inbox that is never pruned")
+        .isEmpty();
+  }
+
+  /**
+   * A bus without a command inbox runs no keyed command, so it never answers a keyed re-send and
+   * its values are never read; another command bus has none to compare.
+   */
+  @Test
+  void aRunnerOverABusThatAnswersNoKeyedReSend_logsNothing() {
+    var noInbox =
+        VirtualThreadCommandBus.builder()
+            .eventStore(store)
+            .deadLetterQueue(deadLetters)
+            .objectMapper(new ObjectMapper())
+            .register(
+                COUNTER, CounterCommand.class, c -> AggregateId.of(c.id()), new CounterDecider())
+            .build();
+    org.streamrune.core.CommandBus another =
+        new org.streamrune.core.CommandBus() {
+          @Override
+          public <C extends Command> CommandResult execute(C command) {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+            throw new UnsupportedOperationException();
+          }
+        };
+
+    assertThat(warningsBuilding(noInbox, retryPolicy(3), Duration.ofDays(7))).isEmpty();
+    assertThat(warningsBuilding(another, retryPolicy(3), Duration.ofDays(7))).isEmpty();
+  }
+
   // ---- fixtures ----------------------------------------------------------------------------
+
+  private static DeadLetterRetryPolicy retryPolicy(int maxRetries) {
+    return new DeadLetterRetryPolicy(
+        maxRetries,
+        Duration.ofSeconds(30),
+        2.0,
+        false,
+        DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY);
+  }
+
+  /** The WARN lines {@link DeadLetterRetryRunner} logs while one is built over {@code bus}. */
+  private List<String> warningsBuilding(
+      org.streamrune.core.CommandBus bus, DeadLetterRetryPolicy policy, Duration window) {
+    var logger =
+        (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(DeadLetterRetryRunner.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    try {
+      DeadLetterRetryRunner.builder()
+          .deadLetterQueue(deadLetters)
+          .commandBus(bus)
+          .objectMapper(new ObjectMapper())
+          .policy(policy)
+          .inboxRetentionMaxAge(window)
+          .registerCommand(CounterCommand.class)
+          .build();
+    } finally {
+      logger.detachAppender(appender);
+      appender.stop();
+    }
+    return appender.list.stream()
+        .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+        .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+        .toList();
+  }
 
   private VirtualThreadCommandBus.Builder bus(DeadLetterQueue deadLetterQueue) {
     return VirtualThreadCommandBus.builder()

@@ -147,7 +147,8 @@ What a caller does with it, and how an HTTP endpoint answers it:
   endpoint answers it as below. The bus reads both rules from the retry runner's policy and inbox
   window, which the integrations hand to it from the same keys; a bus you build yourself takes them
   through `VirtualThreadCommandBus.Builder.deadLetterRetryPolicy(…)` and `inboxRetentionMaxAge(…)`,
-  set to what its runner takes.
+  set to what its runner takes. A `DeadLetterRetryRunner` built over a bus with a command inbox
+  whose `maxRetries` or inbox window differs from its own logs one WARN naming both.
 - **An unkeyed command waits for an operator** under the default policy (below), and is always
   answered `AWAITING_OPERATOR`: nothing pairs its replay with a send of the caller's own, so a
   caller that sends it again has it applied twice if an operator replays the entry as well. Each

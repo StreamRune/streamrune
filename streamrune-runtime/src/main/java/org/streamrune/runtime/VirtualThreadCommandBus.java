@@ -257,6 +257,23 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
+   * The dead-letter retry policy this bus answers a keyed re-send by ({@link
+   * Builder#deadLetterRetryPolicy}), for {@link DeadLetterRetryRunner} to compare with its own.
+   */
+  DeadLetterRetryPolicy deadLetterRetryPolicy() {
+    return deadLetterRetryPolicy;
+  }
+
+  /**
+   * The command-inbox retention window this bus answers a keyed re-send by ({@link
+   * Builder#inboxRetentionMaxAge}), or {@code null} when it has none, for {@link
+   * DeadLetterRetryRunner} to compare with its own.
+   */
+  Duration inboxRetentionMaxAge() {
+    return inboxRetentionMaxAge;
+  }
+
+  /**
    * Reports whether a {@link CommandInbox} was configured on this bus. When {@code false}, {@link
    * #execute(Command, IdempotencyKey)} throws {@link IllegalStateException} rather than executing —
    * callers that need to choose between keyed and unkeyed execution (e.g. {@link
@@ -2120,7 +2137,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * replays have made fewer than {@code maxRetries} attempts, {@link
      * CommandDeadLetteredException.PendingOutcome#AWAITING_OPERATOR} once they have exhausted them.
      * A policy that differs from the runner's tells a caller to wait for a replay the runner does
-     * not make, or to stop for an entry it still replays.
+     * not make, or to stop for an entry it still replays; a runner built over a bus with a command
+     * inbox logs one WARN when its {@code maxRetries} differs from this one's.
      *
      * @param deadLetterRetryPolicy the runner's policy; {@code null} restores the default
      * @return this builder
@@ -2139,7 +2157,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * command was first received longer ago than the window is one the runner refuses to replay on
      * its schedule, so a keyed command that fails again under its key is answered {@link
      * CommandDeadLetteredException.PendingOutcome#AWAITING_OPERATOR}. The age is measured on {@link
-     * #clock}.
+     * #clock}. A runner built over a bus with a command inbox logs one WARN when its window differs
+     * from this one.
      *
      * @param inboxRetentionMaxAge the window; {@code null} removes it
      * @return this builder

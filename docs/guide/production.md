@@ -965,9 +965,10 @@ under `discardAfterMaxRetries`, discards the command. Such a replay takes no slo
 batch either: the poll goes on to the entries behind it in the page it read (ten batches), which are
 replayed in the same poll. The recorded time moves the entry behind the entries queued after it in
 the queue's least-recently-active order, so a run of entries behind the stored schema longer than a
-page delays the entries after it by one poll per page it fills, and a poll that reads a full page
-and reaches its end with its batch not full states its line at WARN instead, because the entries
-queued after that page were not reached; nothing is lost. The runner replays a keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
+page delays the entries after it by one poll per page it fills, and a poll that reaches the end of
+a full page with its batch not full while an entry is queued after the page states its line at WARN
+instead, because it did not reach that entry (the poll reads one row beyond the page to know, and
+replays it in a later poll); nothing is lost. The runner replays a keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
 operator's `retry(commandId)` on a replica still behind answers `READER_BEHIND`, counts no attempt
 and records the replay's time.
 
