@@ -2,6 +2,7 @@ package org.streamrune.postgres;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.metrics.MetricsTrackerFactory;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -93,7 +94,8 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    * rather than 2× the concurrent command count.
    *
    * <p>The returned locker <em>owns</em> the pool and must be {@link #close() closed} to release
-   * it.
+   * it. The pool reports to no metrics tracker; {@link #withDedicatedPool(String, String, String,
+   * int, MetricsTrackerFactory)} takes one.
    *
    * @param jdbcUrl the JDBC URL of the same database the event store uses (required)
    * @param username the database username (may be null if encoded in the URL)
@@ -104,6 +106,31 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    */
   public static PgAdvisoryLocker withDedicatedPool(
       String jdbcUrl, String username, String password, int maxPoolSize) {
+    return withDedicatedPool(jdbcUrl, username, password, maxPoolSize, null);
+  }
+
+  /**
+   * {@link #withDedicatedPool(String, String, String, int)}, with the dedicated pool, named {@code
+   * streamrune-advisory-lock}, reporting to {@code metricsTrackerFactory}, HikariCP's metrics SPI.
+   * An application passes {@code new MicrometerMetricsTrackerFactory(registry)} to get {@code
+   * hikaricp.connections.*} tagged with the pool name; without a tracker the lock pool's saturation
+   * shows only as lock timeouts.
+   *
+   * @param jdbcUrl the JDBC URL of the same database the event store uses (required)
+   * @param username the database username (may be null if encoded in the URL)
+   * @param password the database password (may be null if encoded in the URL)
+   * @param maxPoolSize the maximum size of the dedicated lock pool; size it for the expected
+   *     maximum number of concurrent in-flight commands (must be >= 1)
+   * @param metricsTrackerFactory the factory the pool creates its metrics tracker with, or {@code
+   *     null} for none
+   * @return a locker backed by a dedicated pool
+   */
+  public static PgAdvisoryLocker withDedicatedPool(
+      String jdbcUrl,
+      String username,
+      String password,
+      int maxPoolSize,
+      MetricsTrackerFactory metricsTrackerFactory) {
     if (jdbcUrl == null || jdbcUrl.isBlank()) {
       throw new IllegalArgumentException("jdbcUrl is required");
     }
@@ -124,6 +151,9 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
     config.setConnectionTimeout(10_000);
     config.setKeepaliveTime(300_000);
     config.setMaxLifetime(1_800_000);
+    if (metricsTrackerFactory != null) {
+      config.setMetricsTrackerFactory(metricsTrackerFactory);
+    }
     var pool = new HikariDataSource(config);
     return new PgAdvisoryLocker(pool, pool);
   }

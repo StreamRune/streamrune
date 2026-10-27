@@ -23,11 +23,16 @@ dependencies {
     implementation(libs.jackson.databind)
     implementation(libs.jackson.datatype.jsr310)
     implementation(libs.postgresql)
-    implementation(libs.hikaricp)
+    // api, not implementation: a PUBLIC method takes a HikariCP type —
+    // PgAdvisoryLocker.withDedicatedPool(..., MetricsTrackerFactory) — so a consumer calling it
+    // needs HikariCP resolvable on ITS OWN compile classpath, which an `implementation` dependency
+    // (Maven `runtime` scope) does not give it.
+    api(libs.hikaricp)
     // GraalVM native-image compatibility: HikariConfig.setMetricRegistry / setHealthCheckRegistry
     // do `instanceof` checks against optional Dropwizard-metrics (codahale) and Micrometer types.
     // GraalVM's build-time analysis requires those classes to be resolvable even though HikariCP
-    // never instantiates them here (no MetricsTrackerFactory is set), so they are dead-code-
+    // never instantiates them here (the framework sets no metric registry; a MetricsTrackerFactory
+    // is only the one an application hands to withDedicatedPool), so they are dead-code-
     // eliminated from the native binary. Without them on the classpath, Quarkus/Micronaut native
     // builds fail with ClassNotFound (Spring native works only because Spring Boot ships its own
     // HikariCP native hints). runtimeOnly keeps them off consumers' compile classpath + inert on JVM.

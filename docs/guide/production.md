@@ -858,8 +858,12 @@ its retry policy, and then fails and dead-letters the command; and the after-pha
 commands (an `INLINE` projection) is not held in commit order. On more than one replica, declare
 `PgAdvisoryLocker.withDedicatedPool(jdbcUrl, username, password, maxPoolSize)` as the
 `AggregateLocker` bean: a PostgreSQL transaction-scoped advisory lock per stream, held on a
-connection of the locker's own pool for the whole command. The integration's default steps aside for
-an application's bean:
+connection of the locker's own pool for the whole command. To observe that pool, pass a HikariCP
+`MetricsTrackerFactory` as a fifth argument,
+`withDedicatedPool(jdbcUrl, username, password, maxPoolSize, metricsTrackerFactory)`:
+`new MicrometerMetricsTrackerFactory(registry)` gives `hikaricp.connections.*` tagged with the pool's
+name, `streamrune-advisory-lock`; without one, the lock pool's saturation shows only as lock
+timeouts. The integration's default steps aside for an application's bean:
 
 ```java
 // Spring: the auto-configured locker is @ConditionalOnMissingBean(AggregateLocker.class).
