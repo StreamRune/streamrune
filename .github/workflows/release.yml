@@ -1,0 +1,315 @@
+name: Release
+
+# Cuts a signed release of every published module to Maven Central through the Sonatype Central
+# Portal. Started by hand only: Actions → Release → Run workflow, on main, with the version to
+# release (for example 1.0.0). Four jobs run one after another, each with the permissions it needs:
+#
+#   verify   Refuses the run unless it was started on main, the version is a release version, the
+#            tag v<version> does not exist, Maven Central does not have the version, CHANGELOG.md has
+#            a dated `## [<version>]` section and the four secrets below are set. It then confirms
+#            that the CI checks the upload requires succeeded on this commit, runs the full build at
+#            the release version and keeps the release notes as the `release-notes` artifact.
+#   tag      Pushes the annotated tag v<version> on this commit.
+#   publish  Signs the artifacts, uploads them to the Central Portal with `publishToMavenCentral` (the
+#            task Publish Snapshot runs) and waits until the Portal has validated the deployment.
+#   release  Creates the GitHub release v<version> as a draft, with the release notes.
+#
+# The tag comes before the upload because the build demands it. Every POM's licence URL points at
+# v<version>, and two tasks the Central upload task depends on (root build.gradle.kts) refuse a
+# release upload: verifyReleaseTag unless the tag is on origin, on the commit being published, with
+# a clean working tree; verifyReleaseChecks unless the checks `build`, `postgres-17` and `broker-e2e`
+# concluded success on that commit. A push made with the workflow's own token starts no other
+# workflow, so this tag starts neither Build nor Broker E2E Tests: the checks are the ones the
+# commit already has, `build` and `postgres-17` from its push to main, `broker-e2e` from the nightly
+# run or a run of Broker E2E Tests started on main. The verify job checks them first, so a commit
+# without them is refused before it is tagged.
+#
+# Two steps stay manual, on purpose:
+#   - The upload is a user-managed deployment: Maven Central serves nothing until Publish is pressed
+#     on the validated deployment at https://central.sonatype.com/publishing/deployments. That makes
+#     the version public, and it cannot be undone: Maven Central never replaces or deletes a version.
+#   - The GitHub release is a draft. Publish it once Maven Central serves the version.
+#
+# Secrets (repository secrets; this file names them and holds no value):
+#   MAVEN_CENTRAL_USERNAME  the username of the Central Portal user token (Publish Snapshot reads it)
+#   MAVEN_CENTRAL_PASSWORD  the password of that user token (Publish Snapshot reads it)
+#   SIGNING_KEY             the ASCII-armored PGP secret key that signs the artifacts, as
+#                           `gpg --armor --export-secret-keys <key id>` prints it; its public key
+#                           must be on a key server the Portal reads, such as keys.openpgp.org
+#   SIGNING_PASSWORD        the passphrase of that key
+# The build reads the first two as the Gradle properties mavenCentralUsername and
+# mavenCentralPassword, and the last two as the environment variables SIGNING_KEY and
+# SIGNING_PASSWORD (root build.gradle.kts).
+#
+# When a job fails, "Re-run failed jobs" runs it and the jobs after it again and repeats none that
+# succeeded, so a publish run again uploads on the tag the first attempt pushed. Before that, open
+# the Portal's Deployments page: drop a deployment of the version that failed validation, and if one
+# was validated after the job stopped waiting, publish that one instead and create the draft release
+# by hand from the `release-notes` artifact. A fix that needs a new commit needs the tag deleted
+# first (git push origin :refs/tags/v<version>) and a new run. "Re-run all jobs" starts with
+# verify, which refuses a version whose tag exists.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, MAJOR.MINOR.PATCH (for example 1.0.0); never a -SNAPSHOT'
+        required: true
+        type: string
+
+run-name: Release ${{ inputs.version }}
+
+permissions:
+  contents: read
+
+concurrency:
+  # One release at a time, whatever its version; a release in progress is never cancelled.
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      checks: read # verifyReleaseChecks reads the check-runs of this commit
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Check the branch, the version, the tag and the CHANGELOG entry
+        env:
+          VERSION: ${{ inputs.version }}
+          LC_ALL: C.UTF-8
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+
+          [ "$GITHUB_REF" = refs/heads/main ] \
+            || fail "Start the release on main; this run was started on $GITHUB_REF."
+
+          # A release version is MAJOR.MINOR.PATCH, optionally with a pre-release part (1.0.0-rc.1),
+          # and never a snapshot. Build metadata (+...) is refused: the version is also the tag and
+          # a path segment of every artifact URL.
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          [[ "$VERSION" =~ $semver ]] \
+            || fail "'$VERSION' is not a release version: write MAJOR.MINOR.PATCH, for example 1.0.0."
+          [[ "${VERSION^^}" != *SNAPSHOT* ]] \
+            || fail "'$VERSION' is a snapshot; the Publish Snapshot workflow publishes snapshots."
+
+          tag="v$VERSION"
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null || status=$?
+          case "$status" in
+            0) fail "The tag $tag exists. A version is released once; to finish a release run that stopped after tagging, use Re-run failed jobs on that run (see the top of release.yml)." ;;
+            2) ;;
+            *) fail "Could not read the tags of origin (git ls-remote exited $status)." ;;
+          esac
+
+          pom="https://repo1.maven.org/maven2/org/streamrune/streamrune-core/$VERSION/streamrune-core-$VERSION.pom"
+          code=$(curl -sS --max-time 30 --retry 3 -o /dev/null -w '%{http_code}' "$pom") \
+            || fail "Could not reach Maven Central to check that it does not have $VERSION."
+          case "$code" in
+            404) ;;
+            200) fail "Maven Central has org.streamrune:streamrune-core:$VERSION already, and a version is published once." ;;
+            *) fail "Maven Central answered HTTP $code for $pom." ;;
+          esac
+
+          # The CHANGELOG section of the version, dated at release time: ## [<version>] — YYYY-MM-DD
+          header=$(awk -v h="## [$VERSION]" 'index($0, h) == 1 { print; exit }' CHANGELOG.md)
+          [ -n "$header" ] || fail "CHANGELOG.md has no '## [$VERSION]' section."
+          [[ "$header" =~ ^"## [$VERSION] "(—|-)" "[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+            || fail "Date the CHANGELOG section first: '$header' must read '## [$VERSION] — YYYY-MM-DD'."
+
+          # The section's text without its heading, up to the next version's heading.
+          awk -v h="## [$VERSION]" '
+            index($0, h) == 1 { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { lines[++n] = $0 }
+            END {
+              first = 1; while (first <= n && lines[first] ~ /^[ \t]*$/) first++
+              last = n; while (last >= first && lines[last] ~ /^[ \t]*$/) last--
+              for (i = first; i <= last; i++) print lines[i]
+            }' CHANGELOG.md > "$RUNNER_TEMP/section.md"
+          [ -s "$RUNNER_TEMP/section.md" ] || fail "The CHANGELOG section of $VERSION is empty."
+
+          # The release notes are that section. A GitHub release holds at most 125,000 characters, so
+          # a longer section is given as its lead (the text before its first ### heading) followed by
+          # a link to the whole section in CHANGELOG.md at the tag.
+          limit=125000
+          notes="$RUNNER_TEMP/release-notes/release-notes.md"
+          mkdir -p "$RUNNER_TEMP/release-notes"
+          if [ "$(wc -m < "$RUNNER_TEMP/section.md")" -le "$limit" ]; then
+            cp "$RUNNER_TEMP/section.md" "$notes"
+            echo "Release notes: the CHANGELOG section of $VERSION."
+          else
+            awk '/^### / { exit } { print }' "$RUNNER_TEMP/section.md" > "$notes"
+            printf '\nThe complete entry is the `## [%s]` section of [CHANGELOG.md](%s/%s/blob/%s/CHANGELOG.md).\n' \
+              "$VERSION" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$tag" >> "$notes"
+            echo "Release notes: the lead of the CHANGELOG section of $VERSION and a link to the whole section, which exceeds $limit characters."
+          fi
+          [ "$(wc -m < "$notes")" -le "$limit" ] || fail "The release notes exceed $limit characters."
+          echo "Releasing $VERSION from $GITHUB_SHA as $tag."
+
+      - name: Check that the release secrets are set
+        env:
+          # Only whether each secret is set reaches this step, never its value.
+          HAS_MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME != '' }}
+          HAS_MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD != '' }}
+          HAS_SIGNING_KEY: ${{ secrets.SIGNING_KEY != '' }}
+          HAS_SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD != '' }}
+        run: |
+          missing=""
+          [ "$HAS_MAVEN_CENTRAL_USERNAME" = true ] || missing="$missing MAVEN_CENTRAL_USERNAME"
+          [ "$HAS_MAVEN_CENTRAL_PASSWORD" = true ] || missing="$missing MAVEN_CENTRAL_PASSWORD"
+          [ "$HAS_SIGNING_KEY" = true ] || missing="$missing SIGNING_KEY"
+          [ "$HAS_SIGNING_PASSWORD" = true ] || missing="$missing SIGNING_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Add the repository secrets$missing before releasing."
+            exit 1
+          fi
+
+      - name: Keep the release notes for the release job
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes/release-notes.md
+          if-no-files-found: error
+          overwrite: true # a run of this job again replaces the notes of the run before
+
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # The gate the upload passes in the publish job, run here as well so that a commit whose
+      # checks have not concluded success is refused before anything is tagged.
+      - name: Check that build, postgres-17 and broker-e2e succeeded on this commit
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: ./gradlew :streamrune-core:verifyReleaseChecks -PreleaseVersion="$VERSION" --no-daemon --console=plain
+
+      # ubuntu-latest ships a Docker daemon; the integration tests need it for Testcontainers.
+      - name: Verify Docker available
+        run: docker info
+
+      # --no-build-cache: every task of the release build runs in this job, none is taken from a
+      # cache another run wrote.
+      - name: Build at the release version (compile + test + JaCoCo 0.80 gates)
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ./gradlew build -PreleaseVersion="$VERSION" --no-build-cache --no-daemon --console=plain
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: '**/build/reports/tests/'
+          if-no-files-found: ignore
+          overwrite: true
+
+  tag:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # push the tag
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      # An annotated tag by github-actions[bot] on the commit verify built. A push never moves a tag
+      # that origin has, so a tag created since verify ran fails this step instead of being replaced.
+      - name: Tag this commit and push the tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              tag -a "v$VERSION" -m "StreamRune $VERSION" "$GITHUB_SHA"
+          git push origin "refs/tags/v$VERSION"
+
+  publish:
+    needs: tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      checks: read # verifyReleaseChecks reads the check-runs of this commit
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      # verifyReleaseTag compares the tag here, the tag on origin and HEAD.
+      - name: Fetch the release tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: git fetch --no-tags origin "refs/tags/v$VERSION:refs/tags/v$VERSION"
+
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      # The job that holds the signing key reads the Gradle caches and writes none.
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
+
+      # verifyReleaseTag and verifyReleaseChecks run first, as dependencies of the upload. The
+      # Portal then validates the bundle (signatures, POMs, sources and Javadoc jars); the task waits
+      # for its verdict, up to 15 minutes, and fails on a failed validation.
+      - name: Sign and upload the release to the Central Portal
+        env:
+          VERSION: ${{ inputs.version }}
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: ./gradlew publishToMavenCentral -PreleaseVersion="$VERSION" --no-build-cache --no-daemon --console=plain
+
+      - name: Name the manual step that releases the deployment
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          {
+            echo "### StreamRune $VERSION is validated in the Central Portal"
+            echo
+            echo "Maven Central serves nothing yet. Press **Publish** on the deployment at"
+            echo "https://central.sonatype.com/publishing/deployments to release it; that cannot be undone."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release
+    steps:
+      - name: Fetch the release notes
+        uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes
+
+      - name: Create the draft GitHub release
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          options=(--draft --verify-tag --title "StreamRune $VERSION")
+          case "$VERSION" in *-*) options+=(--prerelease) ;; esac
+          url=$(gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" "${options[@]}" \
+            --notes-file "$RUNNER_TEMP/release-notes/release-notes.md")
+          {
+            echo "### Draft release v$VERSION"
+            echo
+            echo "$url — publish it once Maven Central serves $VERSION."
+          } >> "$GITHUB_STEP_SUMMARY"
