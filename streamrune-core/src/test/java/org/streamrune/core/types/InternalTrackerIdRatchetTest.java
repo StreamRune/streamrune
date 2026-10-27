@@ -213,24 +213,23 @@ class InternalTrackerIdRatchetTest {
   /**
    * Narration of an earlier behaviour of the code, in any letter case: the words that describe a
    * change instead of the current state ({@code previously}, {@code used to}, {@code no longer},
-   * {@code now also}, {@code until now}, {@code historically}, "this wave" after since, before or
-   * after, "before this" followed by fix, change or release, and "before this" or "exactly as
-   * before" closing a clause). Rejected outside test sources ({@link #isTestSource}) and outside
-   * code samples (a fenced block of a guide, a {@code <pre>} block of a javadoc), which quote code
-   * as it is written; read on into the next line ({@link #ruleBrokenBy}). Write the state as it is:
-   * "cannot" or "is not" for a state that ends at run time, "the recorded result" for a result
-   * recorded earlier, "the clock that computes" for a purpose. Left alone: {@code used to} after a
-   * form of "be", directly or with one word between ("is used to look up", "is not used to gate",
-   * "is also used to compute", "was successfully used to rehydrate"), the passive of "use"; "this
-   * wave" anywhere else and "this wave of" ("replicas that join this wave of appends"), a state at
-   * run time; "before this" without the comma ("before this call returns"); and "exactly as before"
-   * followed by an article or a determiner ("exactly as before the reinstate"), a state at run
-   * time.
+   * {@code now also}, {@code until now}, {@code historically}, "this wave" (the unit of the work
+   * that changed the code), "before this" followed by fix, change or release, and "before this" or
+   * "exactly as before" closing a clause). Rejected outside test sources ({@link #isTestSource})
+   * and outside code samples (a fenced block of a guide, a {@code <pre>} block of a javadoc), which
+   * quote code as it is written; read on into the next line ({@link #ruleBrokenBy}). Write the
+   * state as it is: "cannot" or "is not" for a state that ends at run time, "the recorded result"
+   * for a result recorded earlier, "the clock that computes" for a purpose. Left alone: {@code used
+   * to} after a form of "be", directly or with one word between ("is used to look up", "is not used
+   * to gate", "is also used to compute", "was successfully used to rehydrate"), the passive of
+   * "use"; "this wave of" ("replicas that join this wave of appends"), a state at run time; "before
+   * this" without the comma ("before this call returns"); and "exactly as before" followed by an
+   * article or a determiner ("exactly as before the reinstate"), a state at run time.
    */
   private static final Pattern HISTORY_NARRATION =
       Pattern.compile(
           "(?i)\\b(?:previously|historically|until now|now also|no longer"
-              + "|(?:since|before|after) this wave(?! of\\b)"
+              + "|this wave(?! of\\b)"
               + "|before this (?:fix|change|release)"
               + "|(?<!\\b(?:is|are|was|were|be|been|being)(?: [a-z]{1,20})? )used to)\\b"
               + "|\\bbefore this,"
@@ -607,6 +606,10 @@ class InternalTrackerIdRatchetTest {
         List.of(
             "Since this wa" + "ve, both runners continue",
             "after this wa" + "ve the guard is on",
+            "This wa" + "ve adds a role to the view",
+            "In this wa" + "ve, the lease is epoch-fenced",
+            "With this wa" + "ve the runner reports a role",
+            "this wa" + "ve fixes the guard",
             "Befo" + "re this, the guard was a flag",
             "tolerated exactly as befo" + "re.",
             "threads it in exactly as befo" + "re even with zero registrations",
