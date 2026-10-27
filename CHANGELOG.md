@@ -4,34 +4,69 @@ All notable changes to StreamRune are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0-alpha-SNAPSHOT] — unreleased preview
+`1.0.0-alpha-SNAPSHOT` is the unsigned preview of the next release, published from `main`: it is
+rebuilt each time the Build workflow passes there and goes only to the Maven Central snapshot
+repository (`https://central.sonatype.com/repository/maven-snapshots/`, see
+[Preview builds](README.md#preview-builds)), never to Maven Central itself. Its API, database schema
+and configuration keys can change in any later snapshot without a migration path. A schema change
+edits the baseline migrations in place, so a database created by an earlier snapshot fails Flyway's
+checksum validation: recreate it (with Docker Compose, `docker compose down -v`) when you move to a
+newer snapshot.
 
-The first published build of StreamRune, a CQRS / Event Sourcing framework for Java 25:
-PostgreSQL-native, multi-framework (Spring Boot, Quarkus, Micronaut), GDPR-ready. Explicit, readable
-code — no annotation magic, no hidden behavior. This entry describes what the preview contains.
+## [1.0.0] — unreleased
 
-`1.0.0-alpha-SNAPSHOT` is an unreleased preview of `1.0.0`. It is rebuilt from `main` each time the
-Build workflow passes on it and published only to the Maven Central snapshot repository
-(`https://central.sonatype.com/repository/maven-snapshots/`), not to Maven Central itself. Snapshot
-artifacts are not signed, and the API, the database schema and the configuration keys can change in
-any later snapshot without a migration path. A schema change edits the baseline migrations in
-place, so a database created by an earlier snapshot fails Flyway's checksum validation: recreate it
-(with Docker Compose, `docker compose down -v`) when you move to a newer snapshot. Every module shares the `org.streamrune` group and the
-`1.0.0-alpha-SNAPSHOT` version and ships with sources and Javadoc jars.
+The first release of StreamRune, a CQRS / Event Sourcing framework for Java 25: PostgreSQL-native,
+multi-framework (Spring Boot, Quarkus, Micronaut), GDPR-ready. Explicit, readable code — no
+annotation magic, no hidden behavior. Every module shares the `org.streamrune` group and the `1.0.0`
+version, is published to Maven Central with signed artifacts and ships with sources and Javadoc
+jars. In brief:
+
+- **Explicit wiring.** Every component exists because a builder or a constructor created it, and the
+  Spring Boot, Quarkus and Micronaut integrations create theirs with the same builders. An
+  annotation is configuration that a named component reads (`@Encrypted`, `@RequireRole`,
+  `@ProjectionConfig`, …), and the integrations refuse to start on the misconfigurations their
+  startup validators check.
+- **GDPR crypto-shredding.** A `String` record component marked `@Encrypted(subjectId = "…")` is
+  encrypted under its subject's key, held in PostgreSQL, in a key directory, in HashiCorp Vault's
+  transit engine or under an AWS KMS key. `ForgetSubjectService.forget` deletes the key and then
+  runs the registered purgers — the aggregate snapshots among them, unless the application declares
+  that it keeps none. A field whose key is gone reads `[REDACTED]`, so replays and rebuilds keep
+  working. `ExportSubjectDataService` collects a subject's data for an access request.
+- **Sagas with subscription leadership.** `SagaRunner` drives a saga from any subscription: every
+  command it dispatches is keyed for the command inbox, a failed step opens a compensation episode,
+  and the event store's forward fence (on by default) refuses a forward command once that episode
+  has opened. A runner built with a `SubscriptionLeadership` (`SagaRunner.Builder.leadership`) has
+  one replica per saga type deliver its events, claim its deadlines and retry its compensations, and
+  another replica takes over within the lease TTL of a crash.
+- **Command dead-letter queue with operator-confirmed replay.** A command that keeps failing on
+  infrastructure, never one the domain rejected, is parked in the dead-letter queue, and its caller
+  receives `CommandDeadLetteredException`: the outcome is pending. The retry runner replays on its
+  own only the entries the command inbox can deduplicate; an unkeyed entry, or a keyed one older than
+  the inbox retention window, waits for an operator, who replays it with
+  `DeadLetterRetryRunner.retry(commandId, true)` or discards it.
+- **Outbox ordered per aggregate by default.** Outbox entries commit or roll back with the events
+  that produced them. Under `STRICT_PER_AGGREGATE`, the default ordering mode, the entries of a stream
+  are delivered in commit order with at most one in flight, and a terminally failed entry holds its
+  stream until an operator replays or skips it; `AVAILABILITY_FIRST` is the explicit choice for
+  consumers that tolerate reordering. Publishers for Kafka, RabbitMQ and HTTP.
+- **Explicit projection delivery modes.** Every projection registration declares
+  `TRANSACTIONAL_LOCAL`, `AT_LEAST_ONCE_IDEMPOTENT` or `EXTERNAL_EFFECT` — there is no default — and
+  the runner checks the declaration against its processor before it reads an event, so at-least-once
+  delivery is always a declared choice.
+- **Fail-closed identity.** One rule, `RequestIdentityPolicy`, derives the caller on all three
+  integrations: a trusted gateway's `X-User-Id` header when
+  `streamrune.security.trust-user-id-header=true`, otherwise the authenticated principal, otherwise
+  anonymous. Startup is refused when command authorization is configured and the mode is anonymous.
 
 ```kotlin
 repositories {
     mavenCentral()
-    maven("https://central.sonatype.com/repository/maven-snapshots/") {
-        mavenContent { snapshotsOnly() }
-        content { includeGroup("org.streamrune") }
-    }
 }
 
 dependencies {
-    implementation("org.streamrune:streamrune-spring-boot-starter:1.0.0-alpha-SNAPSHOT") // Spring Boot
+    implementation("org.streamrune:streamrune-spring-boot-starter:1.0.0") // Spring Boot
     // or pick modules: streamrune-core, streamrune-runtime, streamrune-postgres, streamrune-quarkus, …
-    testImplementation("org.streamrune:streamrune-test:1.0.0-alpha-SNAPSHOT")
+    testImplementation("org.streamrune:streamrune-test:1.0.0")
 }
 ```
 
@@ -45,8 +80,11 @@ License 2.0.
 
 Sixteen published artifacts, one per Gradle project in `settings.gradle.kts` except the four
 aggregator projects (`streamrune-eventstore`, `streamrune-crypto`, `streamrune-integration`,
-`streamrune-outbox`) and the unpublished end-to-end test project `streamrune-e2e`. The artifact id is
-the project name. Each jar declares a stable JPMS module name (four ship a `module-info.java`, the
+`streamrune-outbox`) and the two test projects, which are not published:
+`streamrune-integration:streamrune-e2e` (the end-to-end crash-recovery and broker suites) and
+`streamrune-integration:streamrune-integration-tck` (the wiring contract, the configuration oracle
+and the doc reading that the tests of the three integrations share). The artifact id is the project
+name. Each jar declares a stable JPMS module name (four ship a `module-info.java`, the
 other twelve carry `Automatic-Module-Name`), bundles `LICENSE`, `NOTICE` and `LICENSE-COMMERCIAL.md`
 under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 
@@ -935,8 +973,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
     with `streamrune.crypto.cache.enabled=false`. The IAM
     permissions are `kms:GenerateDataKey`, `kms:Decrypt` and `kms:DescribeKey`. Erasure is a durable
     per-subject tombstone, read before every cache lookup and KMS call; `deleteKey` also drops the
-    subject's cached data keys. Ciphertext written by an earlier snapshot (envelope version 1, each
-    value sent to KMS `Encrypt`) is refused with `CryptoMappingException`; re-create that data.
+    subject's cached data keys. Ciphertext written by an earlier preview snapshot (envelope version
+    1, each value sent to KMS `Encrypt`) is refused with `CryptoMappingException`; re-create that
+    data.
 - Vault and AWS KMS `build()` fail closed without a `ForgottenSubjectStore`; `JdbcForgottenSubjectStore`
   is the durable one, auto-wired by the integrations whenever a `DataSource` is present.
 - postgres and filesystem keep a key-generation byte in every ciphertext header, so a subject that is
@@ -1428,8 +1467,6 @@ Each statement below is a property of the shipped code and holds under the state
 
 ### Known limitations
 
-- **Preview status.** `1.0.0-alpha-SNAPSHOT` is unsigned, published only to the snapshot repository,
-  and may change API, schema and configuration in any later snapshot with no upgrade path.
 - **One global write lane per event store.** Every append reserves its offsets from a single counter
   row and holds that lock until commit, so appends to unrelated streams serialize and the global
   append rate does not grow with application instances. No measured capacity envelope is published.
