@@ -516,18 +516,17 @@ final class SagaCommandDispatch {
         // failure, any other infra RuntimeException) is transient and must be RETRIED so the undo
         // is never dropped on a momentary blip.
         //
-        // An interceptor VETO surfaces here as SagaCommandVetoedException. It is
-        // deliberately NOT a DomainException, so it lands in this RETRY branch: the
-        // episode stays COMPENSATING and the resume paths re-drive it. A re-drive whose every
-        // failure is such a refusal attempts nothing (attemptedNothing below), so
-        // SagaCompensationRetrySweeper does not count it toward its give-up: the episode waits for
-        // an admitted re-drive or for the key-age guard to fault it. Terminalizing FAILED on the
-        // argument that "a veto is
-        // deterministic, re-driving would spin forever" would be wrong: a veto is a load-shedding
-        // GATE, and the two ways it can be wrong are not symmetric: staying COMPENSATING through a
-        // maintenance window costs a bounded dwell and then actually issues the refund, whereas
-        // terminalizing abandoned the undo permanently for a gate that lifts in minutes. What is
-        // unchanged is the guarantee that a veto is never COMPENSATED.
+        // An interceptor VETO surfaces here as SagaCommandVetoedException. It is deliberately NOT a
+        // DomainException, so it lands in this RETRY branch: the episode stays COMPENSATING and the
+        // resume paths re-drive it. A re-drive whose every failure is such a refusal attempts
+        // nothing (attemptedNothing below), so SagaCompensationRetrySweeper does not count it
+        // toward its give-up: the episode waits for an admitted re-drive or for the key-age guard
+        // to fault it. Terminalizing FAILED on the argument that "a veto is deterministic, re-
+        // driving would spin forever" would be wrong: a veto is a load-shedding GATE, and the two
+        // ways it can be wrong are not symmetric: staying COMPENSATING through a maintenance window
+        // costs a bounded dwell and then actually issues the refund, whereas terminalizing
+        // abandoned the undo permanently for a gate that lifts in minutes. What is unchanged is the
+        // guarantee that a veto is never COMPENSATED.
         if (VirtualThreadCommandBus.DEFAULT_DLQ_ELIGIBLE.test(e)) {
           hadTransientFailure = true;
           // A refused admission attempted nothing, and neither did a load the store refused on a
