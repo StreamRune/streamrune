@@ -274,6 +274,97 @@ class StreamRuneMicronautModuleTest {
     bus.close();
   }
 
+  /**
+   * The module's command bus answers a keyed command that fails again under its key by the retry
+   * runner's rules, read from the same {@code streamrune.dead-letter.max-retries} and {@code
+   * streamrune.inbox.retention-max-age}: an entry whose replays exhausted their attempts, and one
+   * first received longer ago than the inbox window, are answered as awaiting an operator, and no
+   * second entry is stored.
+   */
+  @Test
+  void commandBusAnswersAReSendByTheRetryRunnersPolicyAndInboxWindow() {
+    StreamRuneMicronautProperties properties;
+    try (var ctx =
+        io.micronaut.context.ApplicationContext.run(
+            java.util.Map.of("streamrune.dead-letter.max-retries", "1"))) {
+      properties = ctx.getBean(StreamRuneMicronautProperties.class);
+    }
+    var module = new StreamRuneMicronautModule();
+    var dlq = new org.streamrune.test.InMemoryDeadLetterQueue();
+    var key = org.streamrune.core.types.IdempotencyKey.of("op-wired");
+    dlq.publish(failedEntry("cmd-exhausted", "agg-exhausted", key, java.time.Instant.now()));
+    dlq.updateAttempts(
+        org.streamrune.core.types.CommandId.of("cmd-exhausted"), 1, java.time.Instant.now());
+    dlq.publish(
+        failedEntry(
+            "cmd-stale",
+            "agg-stale",
+            key,
+            java.time.Instant.now().minus(java.time.Duration.ofDays(8))));
+    dlq.publish(failedEntry("cmd-fresh", "agg-fresh", key, java.time.Instant.now()));
+    var inbox = new org.streamrune.test.InMemoryCommandInbox();
+    var bus =
+        module.virtualThreadCommandBus(
+            new org.streamrune.test.InMemoryEventStore().withCommandInbox(inbox),
+            module.aggregateLocker(properties),
+            properties,
+            null,
+            List.of(),
+            List.of(
+                new org.streamrune.runtime.DeciderRegistration<>(
+                    org.streamrune.core.types.AggregateType.of("failing"),
+                    FailingCommand.class,
+                    cmd -> org.streamrune.core.types.AggregateId.of(cmd.id()),
+                    new FailingDecider())),
+            List.of(),
+            inbox,
+            dlq,
+            null);
+
+    assertEquals(
+        org.streamrune.runtime.CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR,
+        reSent(bus, "agg-exhausted", key).pendingOutcome());
+    assertEquals(
+        org.streamrune.runtime.CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR,
+        reSent(bus, "agg-stale", key).pendingOutcome());
+    assertEquals(
+        org.streamrune.runtime.CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY,
+        reSent(bus, "agg-fresh", key).pendingOutcome());
+    assertEquals(3, dlq.all().size(), "a re-send stores no second entry");
+    bus.close();
+  }
+
+  private static org.streamrune.runtime.CommandDeadLetteredException reSent(
+      org.streamrune.runtime.VirtualThreadCommandBus bus,
+      String id,
+      org.streamrune.core.types.IdempotencyKey key) {
+    return assertThrows(
+        org.streamrune.runtime.CommandDeadLetteredException.class,
+        () -> bus.execute(new FailingCommand(id), key));
+  }
+
+  private static org.streamrune.core.DeadLetterQueue.DeadLetterPublishRequest failedEntry(
+      String commandId,
+      String aggregateId,
+      org.streamrune.core.types.IdempotencyKey key,
+      java.time.Instant at) {
+    return new org.streamrune.core.DeadLetterQueue.DeadLetterPublishRequest(
+        "{}",
+        FailingCommand.class.getName(),
+        org.streamrune.core.types.CommandId.of(commandId),
+        org.streamrune.core.types.StreamId.of(
+            org.streamrune.core.types.AggregateType.of("failing"),
+            org.streamrune.core.types.AggregateId.of(aggregateId)),
+        IllegalStateException.class.getName(),
+        "boom",
+        1,
+        at,
+        null,
+        null,
+        null,
+        key);
+  }
+
   record FailingCommand(String id) implements org.streamrune.core.Command {}
 
   record FailingState() implements org.streamrune.core.AggregateState {}

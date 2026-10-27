@@ -82,6 +82,8 @@ class CommandDeadLetteredExceptionTest {
         .isEqualTo(entry.streamId())
         .isEqualTo(StreamId.of(COUNTER, AggregateId.of("c-1")));
     assertThat(deadLettered.idempotencyKey()).isEqualTo(key).isEqualTo(entry.idempotencyKey());
+    assertThat(deadLettered.pendingOutcome())
+        .isEqualTo(CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY);
     assertThat(deadLettered.command()).isEqualTo(command);
     assertThat(deadLettered.getCause()).isSameAs(storeFailure.get());
     assertThat(deadLettered.getMessage())
@@ -105,6 +107,8 @@ class CommandDeadLetteredExceptionTest {
     assertThat(deadLettered.commandId()).isEqualTo(entry.commandId());
     assertThat(deadLettered.streamId()).isEqualTo(entry.streamId());
     assertThat(deadLettered.idempotencyKey()).isNull();
+    assertThat(deadLettered.pendingOutcome())
+        .isEqualTo(CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR);
     assertThat(entry.idempotencyKey()).isNull();
     assertThat(deadLettered.getCause()).isSameAs(storeFailure.get());
     assertThat(deadLettered.getMessage()).contains("without an idempotency key", "operator");
@@ -222,6 +226,66 @@ class CommandDeadLetteredExceptionTest {
     assertThat(new CommandDeadLetteredException(command, commandId, streamId, null, cause))
         .isInstanceOf(CommandExecutionException.class)
         .hasCause(cause);
+    assertThatThrownBy(
+            () ->
+                new CommandDeadLetteredException(
+                    command, commandId, streamId, IdempotencyKey.of("op-10"), null, cause))
+        .isInstanceOf(NullPointerException.class);
+  }
+
+  /**
+   * The outcome a caller is answered with: a keyed command is queued for replay under its key, an
+   * unkeyed one awaits an operator, and a keyed one whose entry the retry schedule does not replay
+   * awaits an operator too, with a message that says so and invites no re-send.
+   */
+  @Test
+  void thePendingOutcomeFollowsTheKeyUnlessTheBusNamesIt() {
+    var command = new Adjust("c-11", 1);
+    var commandId = CommandId.of("cmd-11");
+    var streamId = StreamId.of(COUNTER, AggregateId.of("c-11"));
+    var cause = new EventStoreException("down");
+    var key = IdempotencyKey.of("op-11");
+
+    var queued = new CommandDeadLetteredException(command, commandId, streamId, key, cause);
+    var unkeyed = new CommandDeadLetteredException(command, commandId, streamId, null, cause);
+    var awaiting =
+        new CommandDeadLetteredException(
+            command,
+            commandId,
+            streamId,
+            key,
+            CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR,
+            cause);
+
+    assertThat(queued.pendingOutcome())
+        .isEqualTo(CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY);
+    assertThat(unkeyed.pendingOutcome())
+        .isEqualTo(CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR);
+    assertThat(awaiting.pendingOutcome())
+        .isEqualTo(CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR);
+    assertThat(awaiting.idempotencyKey()).isEqualTo(key);
+    assertThat(awaiting.getMessage())
+        .contains("cmd-11", "not replayed on the retry schedule", "operator")
+        .doesNotContain("same key")
+        .doesNotContain(key.value());
+  }
+
+  /** An unkeyed command has no key to be replayed under, so it is never queued for replay. */
+  @Test
+  void anUnkeyedCommandIsNeverQueuedForReplay() {
+    var command = new Adjust("c-12", 1);
+
+    assertThatThrownBy(
+            () ->
+                new CommandDeadLetteredException(
+                    command,
+                    CommandId.of("cmd-12"),
+                    StreamId.of(COUNTER, AggregateId.of("c-12")),
+                    null,
+                    CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY,
+                    new EventStoreException("down")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("idempotency key");
   }
 
   // ---- fixtures ----------------------------------------------------------------------------

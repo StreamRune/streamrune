@@ -183,6 +183,84 @@ class DeadLetterWiringAutoConfigurationTest {
   }
 
   /**
+   * The command bus answers a keyed command that fails again under its key by the retry runner's
+   * rules, read from the same {@code streamrune.dead-letter.max-retries} and {@code
+   * streamrune.inbox.retention-max-age}: an entry whose replays exhausted their attempts, and one
+   * first received longer ago than the inbox window, are answered as awaiting an operator, and no
+   * second entry is stored.
+   */
+  @Test
+  void theCommandBusAnswersAReSendByTheRetryRunnersPolicyAndInboxWindow() {
+    var queue = new InMemoryDeadLetterQueue();
+    var key = org.streamrune.core.types.IdempotencyKey.of("op-wired");
+    queue.publish(keyedEntry("cmd-exhausted", "agg-exhausted", key, Instant.now()));
+    queue.updateAttempts(CommandId.of("cmd-exhausted"), 1, Instant.now());
+    queue.publish(
+        keyedEntry(
+            "cmd-stale", "agg-stale", key, Instant.now().minus(java.time.Duration.ofDays(8))));
+    queue.publish(keyedEntry("cmd-fresh", "agg-fresh", key, Instant.now()));
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS, "streamrune.dead-letter.max-retries=1")
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
+        .withBean(DeadLetterQueue.class, () -> queue)
+        .withBean(
+            org.streamrune.core.CommandInbox.class, org.streamrune.test.InMemoryCommandInbox::new)
+        .withBean(
+            "failingDeciderRegistration",
+            DeciderRegistration.class,
+            () ->
+                new DeciderRegistration<>(
+                    TYPE,
+                    FailingCommand.class,
+                    cmd -> AggregateId.of(cmd.id()),
+                    new FailingDecider()))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              var bus = ctx.getBean(VirtualThreadCommandBus.class);
+
+              assertThat(reSent(bus, "agg-exhausted", key).pendingOutcome())
+                  .isEqualTo(CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR);
+              assertThat(reSent(bus, "agg-stale", key).pendingOutcome())
+                  .isEqualTo(CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR);
+              assertThat(reSent(bus, "agg-fresh", key).pendingOutcome())
+                  .isEqualTo(CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY);
+              assertThat(queue.all()).hasSize(3);
+            });
+  }
+
+  private static CommandDeadLetteredException reSent(
+      VirtualThreadCommandBus bus, String id, org.streamrune.core.types.IdempotencyKey key) {
+    Throwable thrown =
+        org.assertj.core.api.Assertions.catchThrowable(
+            () -> bus.execute(new FailingCommand(id, Instant.parse("2026-06-12T00:00:00Z")), key));
+    assertThat(thrown).isInstanceOf(CommandDeadLetteredException.class);
+    return (CommandDeadLetteredException) thrown;
+  }
+
+  private static DeadLetterQueue.DeadLetterPublishRequest keyedEntry(
+      String commandId,
+      String aggregateId,
+      org.streamrune.core.types.IdempotencyKey key,
+      Instant at) {
+    return new DeadLetterQueue.DeadLetterPublishRequest(
+        "{}",
+        FailingCommand.class.getName(),
+        CommandId.of(commandId),
+        StreamId.of(TYPE, AggregateId.of(aggregateId)),
+        IllegalStateException.class.getName(),
+        "boom",
+        1,
+        at,
+        null,
+        null,
+        null,
+        key);
+  }
+
+  /**
    * Regression coverage for the defect this task fixes: the auto-configured command bus built its
    * DLQ publish mapper via {@code defaultDeadLetterObjectMapper()} with NO {@link CryptoEngine}
    * wiring, so an {@code @Encrypted} command field was persisted to the DLQ as plaintext PII. With

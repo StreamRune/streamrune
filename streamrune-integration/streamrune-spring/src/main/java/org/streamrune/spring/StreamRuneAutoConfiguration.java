@@ -601,10 +601,14 @@ public class StreamRuneAutoConfiguration {
       // The DLQ publish mapper is ALWAYS the crypto-aware default — never the application's
       // own ObjectMapper bean — so @Encrypted command fields are persisted as ciphertext, mirroring
       // the event store, saga store, and Micronaut. The metrics bean is threaded in so the shared
-      // DLQ decrypt mapper's CryptoShreddingModule reports subject_redacted.
+      // DLQ decrypt mapper's CryptoShreddingModule reports subject_redacted. The retry runner's
+      // policy and inbox window tell a keyed command that fails again under its key whether the
+      // entry stored for it is still replayed on the schedule.
       builder
           .deadLetterQueue(deadLetterQueue)
-          .objectMapper(defaultDeadLetterObjectMapper(cryptoEngine, metrics));
+          .objectMapper(defaultDeadLetterObjectMapper(cryptoEngine, metrics))
+          .deadLetterRetryPolicy(deadLetterRetryPolicy(properties))
+          .inboxRetentionMaxAge(properties.inbox().retentionMaxAge());
     }
 
     commandInboxProvider.ifAvailable(builder::commandInbox);
@@ -639,6 +643,21 @@ public class StreamRuneAutoConfiguration {
               + "exactly one CryptoEngine bean as @Primary.",
           e);
     }
+  }
+
+  /**
+   * The policy the dead-letter retry runner replays under, built from {@code
+   * streamrune.dead-letter.*}: the runner and the command bus take the same one, so the bus answers
+   * a keyed command that fails again under its key by the rules the runner replays by.
+   */
+  static org.streamrune.core.DeadLetterRetryPolicy deadLetterRetryPolicy(
+      StreamRuneProperties properties) {
+    return new org.streamrune.core.DeadLetterRetryPolicy(
+        properties.deadLetter().maxRetries(),
+        java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()),
+        2.0,
+        false,
+        properties.deadLetter().unkeyedReplayPolicy());
   }
 
   /** Captures the registration's type parameters once so the builder call type-checks. */
@@ -1324,13 +1343,7 @@ public class StreamRuneAutoConfiguration {
             // streamrune.dlq.exhausted counter + terminal ERROR log under the default policy;
             // defaults to NOOP when no metrics bean exists (behavior unchanged).
             .metrics(metrics)
-            .policy(
-                new org.streamrune.core.DeadLetterRetryPolicy(
-                    properties.deadLetter().maxRetries(),
-                    java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()),
-                    2.0,
-                    false,
-                    properties.deadLetter().unkeyedReplayPolicy()))
+            .policy(deadLetterRetryPolicy(properties))
             // The window the inbox retention sweeper prunes with: a keyed entry older than it is
             // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
             .inboxRetentionMaxAge(properties.inbox().retentionMaxAge())

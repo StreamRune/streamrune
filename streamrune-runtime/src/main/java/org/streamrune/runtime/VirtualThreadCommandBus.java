@@ -38,6 +38,7 @@ import org.streamrune.core.CommandInbox;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.CommandInterceptor.CommandContext;
 import org.streamrune.core.DeadLetterQueue;
+import org.streamrune.core.DeadLetterRetryPolicy;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DeciderRegistrations;
 import org.streamrune.core.DomainEvent;
@@ -161,6 +162,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   private final Clock clock;
   private final CommandInbox commandInbox;
   private final Predicate<Throwable> dlqEligible;
+  private final DeadLetterRetryPolicy deadLetterRetryPolicy;
+  private final Duration inboxRetentionMaxAge;
+  // Cleared the first time the queue answers findByIdempotencyKey with
+  // UnsupportedOperationException: such a queue stores an entry for every failed send, and the bus
+  // does not ask again.
+  private volatile boolean deadLetterLookupSupported = true;
 
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private final AtomicInteger inFlightCommands = new AtomicInteger(0);
@@ -188,7 +195,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       Clock clock,
       CommandInbox commandInbox,
       Predicate<Throwable> dlqEligible,
-      int maxInFlightAsyncCommands) {
+      int maxInFlightAsyncCommands,
+      DeadLetterRetryPolicy deadLetterRetryPolicy,
+      Duration inboxRetentionMaxAge) {
     this.eventStore = eventStore;
     this.locker = locker;
     this.retryPolicy = retryPolicy;
@@ -206,6 +215,16 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     this.clock = clock != null ? clock : Clock.systemUTC();
     this.commandInbox = commandInbox;
     this.dlqEligible = dlqEligible != null ? dlqEligible : DEFAULT_DLQ_ELIGIBLE;
+    this.deadLetterRetryPolicy =
+        deadLetterRetryPolicy != null ? deadLetterRetryPolicy : DeadLetterRetryPolicy.DEFAULT;
+    // Zero or negative is the inbox sweeper's "pruning disabled", which DeadLetterRetryRunner
+    // normalizes the same way: no entry is ever too old.
+    this.inboxRetentionMaxAge =
+        inboxRetentionMaxAge == null
+                || inboxRetentionMaxAge.isZero()
+                || inboxRetentionMaxAge.isNegative()
+            ? null
+            : inboxRetentionMaxAge;
     this.asyncAdmission = new Semaphore(maxInFlightAsyncCommands, true);
     this.maxInFlightAsyncCommands = maxInFlightAsyncCommands;
     // A live gauge so the metrics endpoint always reads the CURRENT in-flight count on every
@@ -1164,9 +1183,17 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
                   streamId,
                   "Interrupted during retry backoff after attempt " + attempt,
                   e);
-          if (maybePublishToDeadLetterQueue(
-              command, commandId, streamId, e, attempt, commandTimestamp, key)) {
-            throw new CommandDeadLetteredException(command, commandId, streamId, key, interrupted);
+          DeadLetterRecord interruptedEntry =
+              maybePublishToDeadLetterQueue(
+                  command, commandId, streamId, e, attempt, commandTimestamp, key);
+          if (interruptedEntry != null) {
+            throw new CommandDeadLetteredException(
+                command,
+                interruptedEntry.entryId(),
+                streamId,
+                key,
+                interruptedEntry.outcome(),
+                interrupted);
           }
           throw interrupted;
         }
@@ -1177,14 +1204,18 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
                 ? re
                 : new CommandExecutionException(
                     command, commandId, streamId, "Failed to execute command", e);
-        if (maybePublishToDeadLetterQueue(
-            command, commandId, streamId, e, attempt, commandTimestamp, key)) {
+        DeadLetterRecord entry =
+            maybePublishToDeadLetterQueue(
+                command, commandId, streamId, e, attempt, commandTimestamp, key);
+        if (entry != null) {
           // The entry is stored, so the command's outcome is pending, not final: a replay of the
           // entry, under the command's own key when it has one, can still apply it. The caller is
-          // told so, with the entry's id, instead of a failure it would take for the last word and
-          // answer by sending the operation again, under a new key that no inbox row pairs with the
-          // replay. The failure is the cause; interceptors and an executeAsync future see it alone.
-          throw new CommandDeadLetteredException(command, commandId, streamId, key, failure);
+          // told so, with the entry's id and its outcome, instead of a failure it would take for
+          // the last word and answer by sending the operation again, under a new key that no inbox
+          // row pairs with the replay. The failure is the cause; interceptors and an executeAsync
+          // future see it alone.
+          throw new CommandDeadLetteredException(
+              command, entry.entryId(), streamId, key, entry.outcome(), failure);
         }
         throw failure;
       }
@@ -1368,9 +1399,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * already, correctly rejected. Ineligible failures are neither published nor counted as
    * dead-lettered; they are logged and propagate unchanged.
    *
-   * @return whether the dead-letter entry is stored ({@link #publishToDeadLetterQueue})
+   * @return the dead-letter entry that holds the command ({@link #publishToDeadLetterQueue}), or
+   *     {@code null} when none does
    */
-  private boolean maybePublishToDeadLetterQueue(
+  private DeadLetterRecord maybePublishToDeadLetterQueue(
       Command command,
       CommandId commandId,
       StreamId streamId,
@@ -1386,22 +1418,34 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName(),
           exception.getClass().getSimpleName());
-      return false;
+      return null;
     }
     return publishToDeadLetterQueue(
         command, commandId, streamId, exception, attempts, timestamp, key);
   }
 
   /**
-   * Records the failed command in the dead letter queue, unless another channel owns its recovery
-   * or there is no queue.
+   * Records the failed command in the dead letter queue, unless another channel owns its recovery,
+   * there is no queue, or the queue holds an entry of the command under its key already.
    *
-   * @return {@code true} once the publish succeeded; {@code false} when no entry was stored: no
-   *     queue is configured, the execution replays an entry ({@link #DLQ_REPLAY}), a saga
-   *     dispatched the command, a dispatch cause is bound, or the publish failed (its exception is
-   *     attached to {@code exception} as suppressed)
+   * <p><b>One entry per keyed command.</b> Before it stores an entry for a keyed command, the bus
+   * asks the queue for the entries under the key ({@link DeadLetterQueue#findByIdempotencyKey}).
+   * One of the same command — its type and its stream, the two things the command inbox matches a
+   * key's row against — means a send under the key was dead-lettered already and this one failed
+   * again: nothing is stored, and the caller is answered with that entry and its outcome ({@link
+   * #outcomeOf}). A client that re-sends under its key during an outage therefore leaves one entry,
+   * not one per re-send. The lookup is a read before the insert and adds no crash point: a crash
+   * before the insert leaves what a failed send leaves without it. Two sends that fail at the same
+   * instant can each store an entry; the inbox deduplicates their replays. A lookup that fails
+   * costs the command nothing: the bus stores the entry as without it.
+   *
+   * @return the entry that holds the command — the one this call stored, or the one the queue held
+   *     under the key already — or {@code null} when none does: no queue is configured, the
+   *     execution replays an entry ({@link #DLQ_REPLAY}), a saga dispatched the command, a dispatch
+   *     cause is bound, or the publish failed (its exception is attached to {@code exception} as
+   *     suppressed)
    */
-  private boolean publishToDeadLetterQueue(
+  private DeadLetterRecord publishToDeadLetterQueue(
       Command command,
       CommandId commandId,
       StreamId streamId,
@@ -1409,7 +1453,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       int attempts,
       Instant timestamp,
       IdempotencyKey key) {
-    if (deadLetterQueue == null) return false;
+    if (deadLetterQueue == null) return null;
     if (DLQ_REPLAY.isBound() && Boolean.TRUE.equals(DLQ_REPLAY.get())) {
       // This execution replays an existing DLQ entry; the retry infrastructure tracks attempts
       // on the original entry. Publishing again would add a new entry on every retry cycle.
@@ -1417,7 +1461,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           "Skipping DLQ publish for command {} ({}) — execution replays an existing DLQ entry",
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName());
-      return false;
+      return null;
     }
     if (StreamRuneContext.isSagaDispatch()) {
       // The saga subsystem, not this queue, owns the recovery of a command a saga issued. Every
@@ -1433,7 +1477,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
               + " recovery (compensation, redelivery, timeout, or the compensation resume paths)",
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName());
-      return false;
+      return null;
     }
     if (StreamRuneContext.cause() != null) {
       // A dispatch cause is bound by saga dispatch (the block above) and by
@@ -1451,7 +1495,13 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
               + " retries it",
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName());
-      return false;
+      return null;
+    }
+    if (key != null) {
+      DeadLetterRecord stored = entryStoredUnder(key, command, commandId, streamId);
+      if (stored != null) {
+        return stored;
+      }
     }
     String commandPayload;
     try {
@@ -1521,7 +1571,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       recordMetric(
           () -> metrics.recordDeadLetterPublished(command.getClass().getSimpleName()),
           "recordDeadLetterPublished");
-      return true;
+      // A fresh entry: no replay has been attempted, and its command was first received now.
+      return new DeadLetterRecord(
+          commandId,
+          key != null
+              ? CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY
+              : CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR);
     } catch (RuntimeException e) {
       // The original command failure still propagates to the caller; attach the DLQ failure as
       // suppressed so it is visible on the propagated exception, not only in this log line.
@@ -1534,8 +1589,90 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           LogSanitizer.sanitizeForLog(commandId.value()),
           command.getClass().getSimpleName(),
           e);
-      return false;
+      return null;
     }
+  }
+
+  /** The dead-letter entry that holds a failed command, and what happens to it. */
+  private record DeadLetterRecord(
+      CommandId entryId, CommandDeadLetteredException.PendingOutcome outcome) {}
+
+  /**
+   * The entry the queue holds of {@code command} under {@code key} — same command type, same stream
+   * — or {@code null} when it holds none, the queue does not look entries up by key, or the lookup
+   * failed. Of several such entries (sends that failed at the same instant) one the retry schedule
+   * still replays answers, since the command is then queued for replay.
+   */
+  private DeadLetterRecord entryStoredUnder(
+      IdempotencyKey key, Command command, CommandId commandId, StreamId streamId) {
+    if (!deadLetterLookupSupported) {
+      return null;
+    }
+    List<DeadLetterQueue.DeadLetterEntry> underKey;
+    try {
+      underKey = deadLetterQueue.findByIdempotencyKey(key);
+    } catch (UnsupportedOperationException _) {
+      deadLetterLookupSupported = false;
+      LOG.debug(
+          "DeadLetterQueue {} does not support findByIdempotencyKey(); a keyed command that fails"
+              + " again under the same key stores another entry",
+          deadLetterQueue.getClass().getSimpleName());
+      return null;
+    } catch (RuntimeException lookupFailure) {
+      LOG.warn(
+          "Could not look up the dead-letter entries under the key of command {} ({}): {}. Storing"
+              + " an entry for this failure",
+          LogSanitizer.sanitizeForLog(commandId.value()),
+          command.getClass().getSimpleName(),
+          LogSanitizer.sanitizeFreeText(lookupFailure.getMessage()));
+      return null;
+    }
+    String commandType = command.getClass().getName();
+    DeadLetterQueue.DeadLetterEntry match = null;
+    for (DeadLetterQueue.DeadLetterEntry entry : underKey) {
+      if (!commandType.equals(entry.commandType()) || !streamId.equals(entry.streamId())) {
+        continue;
+      }
+      if (outcomeOf(entry) == CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY) {
+        match = entry;
+        break;
+      }
+      if (match == null) {
+        match = entry;
+      }
+    }
+    if (match == null) {
+      return null;
+    }
+    CommandDeadLetteredException.PendingOutcome outcome = outcomeOf(match);
+    LOG.info(
+        "Not storing a second dead-letter entry for command {} ({}): entry {} holds it under its"
+            + " idempotency key and is {}",
+        LogSanitizer.sanitizeForLog(commandId.value()),
+        command.getClass().getSimpleName(),
+        LogSanitizer.sanitizeForLog(match.commandId().value()),
+        outcome == CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY
+            ? "queued for replay"
+            : "awaiting an operator");
+    return new DeadLetterRecord(match.commandId(), outcome);
+  }
+
+  /**
+   * What happens to a keyed entry under the retry runner's rules, as far as this bus knows them
+   * ({@link Builder#deadLetterRetryPolicy}, {@link Builder#inboxRetentionMaxAge}): the schedule
+   * replays it until its replays have exhausted the policy's {@code maxRetries} attempts, and
+   * refuses it once its command was first received longer ago than the inbox window. Either way an
+   * operator decides about it.
+   */
+  private CommandDeadLetteredException.PendingOutcome outcomeOf(
+      DeadLetterQueue.DeadLetterEntry entry) {
+    boolean exhausted = entry.dlqAttempts() >= deadLetterRetryPolicy.maxRetries();
+    boolean stale =
+        inboxRetentionMaxAge != null
+            && entry.firstAttemptAt().plus(inboxRetentionMaxAge).isBefore(clock.instant());
+    return exhausted || stale
+        ? CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR
+        : CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY;
   }
 
   @SuppressWarnings("unchecked")
@@ -1819,6 +1956,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     private Clock clock;
     private CommandInbox commandInbox;
     private Predicate<Throwable> dlqEligible;
+    private DeadLetterRetryPolicy deadLetterRetryPolicy;
+    private Duration inboxRetentionMaxAge;
     private final Map<
             Class<?>, DeciderRegistration<?, ? extends AggregateState, ? extends DomainEvent>>
         registry = new LinkedHashMap<>();
@@ -1931,6 +2070,13 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * one of the commands below), and reaches the interceptors' {@code onError} and an {@code
      * executeAsync} future in every case.
      *
+     * <p>A keyed command that fails while the queue holds an entry of it under its key — same
+     * command type, same stream ({@link DeadLetterQueue#findByIdempotencyKey}) — stores no second
+     * entry: {@code execute} throws the exception for the entry that is stored, with that entry's
+     * outcome ({@link CommandDeadLetteredException#pendingOutcome()}), which the bus reads from
+     * {@link #deadLetterRetryPolicy} and {@link #inboxRetentionMaxAge}. A queue without the lookup
+     * stores an entry for every failed send.
+     *
      * <p>Three kinds of command are never published, because something else owns their retry and an
      * entry would add a second, uncoordinated one: a replay of an existing entry ({@link
      * #DLQ_REPLAY}), a command a saga dispatched ({@link StreamRuneContext#SAGA_OWNED}), and a
@@ -1960,6 +2106,46 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      */
     public Builder dlqEligible(Predicate<Throwable> dlqEligible) {
       this.dlqEligible = dlqEligible;
+      return this;
+    }
+
+    /**
+     * Sets the policy of the {@link DeadLetterRetryRunner} that replays this bus's dead-letter
+     * entries — the one its builder's {@code policy} takes. Defaults to {@link
+     * DeadLetterRetryPolicy#DEFAULT}, the runner's default.
+     *
+     * <p>The bus reads it for one answer. A keyed command that fails while the queue holds an entry
+     * of it under its key stores no second entry, and its caller is told that entry's outcome:
+     * {@link CommandDeadLetteredException.PendingOutcome#QUEUED_FOR_REPLAY} while the entry's
+     * replays have made fewer than {@code maxRetries} attempts, {@link
+     * CommandDeadLetteredException.PendingOutcome#AWAITING_OPERATOR} once they have exhausted them.
+     * A policy that differs from the runner's tells a caller to wait for a replay the runner does
+     * not make, or to stop for an entry it still replays.
+     *
+     * @param deadLetterRetryPolicy the runner's policy; {@code null} restores the default
+     * @return this builder
+     */
+    public Builder deadLetterRetryPolicy(DeadLetterRetryPolicy deadLetterRetryPolicy) {
+      this.deadLetterRetryPolicy = deadLetterRetryPolicy;
+      return this;
+    }
+
+    /**
+     * Sets the command-inbox retention window of the {@link DeadLetterRetryRunner} that replays
+     * this bus's dead-letter entries — the one its builder's {@code inboxRetentionMaxAge} takes.
+     * Not set, or zero or negative (an inbox that is never pruned), no entry is too old.
+     *
+     * <p>The bus reads it for the same answer as {@link #deadLetterRetryPolicy}: an entry whose
+     * command was first received longer ago than the window is one the runner refuses to replay on
+     * its schedule, so a keyed command that fails again under its key is answered {@link
+     * CommandDeadLetteredException.PendingOutcome#AWAITING_OPERATOR}. The age is measured on {@link
+     * #clock}.
+     *
+     * @param inboxRetentionMaxAge the window; {@code null} removes it
+     * @return this builder
+     */
+    public Builder inboxRetentionMaxAge(Duration inboxRetentionMaxAge) {
+      this.inboxRetentionMaxAge = inboxRetentionMaxAge;
       return this;
     }
 
@@ -2180,7 +2366,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           clock,
           commandInbox,
           dlqEligible,
-          maxInFlightAsyncCommands);
+          maxInFlightAsyncCommands,
+          deadLetterRetryPolicy,
+          inboxRetentionMaxAge);
     }
   }
 }

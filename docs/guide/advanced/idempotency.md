@@ -121,9 +121,9 @@ The client sends the same `Idempotency-Key` on every retry of one logical action
 
 ### A dead-lettered keyed command is pending
 
-A keyed command that fails on infrastructure is recorded in the dead letter queue with its key, and `VirtualThreadCommandBus` throws `CommandDeadLetteredException`: the failure is its cause, `commandId()` names the entry and `idempotencyKey()` is the key. That is not a negative answer. A replay of the entry — the retry runner's schedule, or an operator — runs under the same key, so the command may still be applied, and the guarantee above holds only while the client keeps that key:
+A keyed command that fails on infrastructure is recorded in the dead letter queue with its key, and `VirtualThreadCommandBus` throws `CommandDeadLetteredException`: the failure is its cause, `commandId()` names the entry, `idempotencyKey()` is the key and `pendingOutcome()` says what happens to the entry. That is not a negative answer. A replay of the entry — the retry runner's schedule, or an operator — runs under the same key, so the command may still be applied, and the guarantee above holds only while the client keeps that key:
 
-- **A failure on a keyed command whose dead-letter entry exists is pending.** Re-send with the same key — the inbox executes the command once, whichever of the re-send and the replay comes first, and answers the other with the recorded outcome — or wait for the replay.
+- **A failure on a keyed command whose dead-letter entry exists is pending.** Re-send with the same key — the inbox executes the command once, whichever of the re-send and the replay comes first, and answers the other with the recorded outcome — or, better, wait for the replay. A re-send that fails again stores no second entry: the bus answers it with the entry already stored for the key and that entry's outcome.
 - **A new key is a new operation**, and it is applied beside the replay: the effect twice.
 - **Mint the key when the user intends the operation, and keep it until a `2xx` or a `4xx`.** A key minted per request, or per instance of a form that is closed and reopened, is a new key for the same intent.
 - **Under `discardAfterMaxRetries` a wait can end in nothing.** A retry runner built with `DeadLetterRetryPolicy.discardAfterMaxRetries` discards an entry whose replays exhaust their attempts, and a client that waits for the replay is not told that its command was dropped. Where clients are answered `QUEUED_FOR_REPLAY`, keep the default — the integrations' policy — under which an exhausted entry is kept for an operator, or tell the client through a channel of your own.
@@ -135,20 +135,22 @@ The endpoint tells the client which case it is in:
     ResponseEntity<Map<String, String>> deadLettered(CommandDeadLetteredException e) {
         // Never 202: a 2xx tells the client the operation is done, while the replay can fail,
         // exhaust its attempts and wait for an operator.
-        if (e.idempotencyKey() != null) {
+        if (e.pendingOutcome() == CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY) {
             // Queued for replay under the client's key: a re-send under the same key is safe.
+            // Retry-After is at least the retry runner's interval (retry-interval-ms, 60 s): a
+            // sooner re-send meets the same outage.
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .header(HttpHeaders.RETRY_AFTER, "30")
+                    .header(HttpHeaders.RETRY_AFTER, "60")
                     .body(Map.of("reason", "QUEUED_FOR_REPLAY", "commandId", e.commandId().value()));
         }
-        // Awaiting an operator: a re-send is a second operation, applied beside the operator's
-        // replay, so the answer invites none — no Retry-After.
+        // Awaiting an operator: the retry schedule does not replay the entry, and for an unkeyed
+        // command a re-send is a second operation, so the answer invites none — no Retry-After.
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("reason", "AWAITING_OPERATOR", "commandId", e.commandId().value()));
     }
 ```
 
-`QUEUED_FOR_REPLAY` (`503` with `Retry-After`) tells the client to re-send under the same key or wait. `AWAITING_OPERATOR` (`500`, no `Retry-After`) tells it that the command ran without a key, so its entry waits for an operator: do not re-send until the operator has decided, because a re-send is a second operation, applied beside an operator's replay. A client that retries `5xx` answers on its own may retry a keyed request under its key, and must not retry an `AWAITING_OPERATOR` answer. [Retry and resilience](retry-and-resilience.md#a-dead-lettered-commands-caller-is-told-so) lists when the bus throws the failure itself instead.
+`QUEUED_FOR_REPLAY` (`503` with `Retry-After`) tells the client to re-send under the same key or wait. `AWAITING_OPERATOR` (`500`, no `Retry-After`) tells it that the retry schedule will not replay its entry — the command ran without a key, or its entry's replays exhausted their attempts or its command was first received longer ago than the inbox window — so an operator decides: do not re-send until then; for an unkeyed command a re-send is a second operation, applied beside an operator's replay. A client that retries `5xx` answers on its own may retry a keyed request under its key, and must not retry an `AWAITING_OPERATOR` answer. [Retry and resilience](retry-and-resilience.md#a-dead-lettered-commands-caller-is-told-so) lists when the bus throws the failure itself instead.
 
 The same pattern applies on Quarkus and Micronaut — inject `org.streamrune.core.CommandBus` and read the client's request id from the framework's header abstraction. Their exception mappers are chosen by the thrown type, so map `CommandDeadLetteredException` with one of its own.
 

@@ -117,9 +117,10 @@ is exhausted. Give the runner a mapper configured like the bus's;
 
 Once the entry is stored, `execute(command)` and `execute(command, key)` throw
 `CommandDeadLetteredException` instead of the failure, which is its cause. It names the entry —
-`commandId()` is the id `retry(commandId)` and `discard(commandId)` take — with `streamId()` and
-`idempotencyKey()` (`null` for an unkeyed command), and its message and `toString()` carry neither
-the command's payload nor the key. The outcome it reports is **pending**, not final: the command
+`commandId()` is the id `retry(commandId)` and `discard(commandId)` take — with `streamId()`,
+`idempotencyKey()` (`null` for an unkeyed command) and `pendingOutcome()`, which says what happens
+to the entry (`QUEUED_FOR_REPLAY` or `AWAITING_OPERATOR`), and its message and `toString()` carry
+neither the command's payload nor the key. The outcome it reports is **pending**, not final: the command
 has not been applied, and a replay of the entry can still apply it. The failure itself propagates
 wherever no entry is stored — a failure `dlqEligible` refuses (a business rejection, by default), a
 bus without a queue, a failed publish (its exception attached as suppressed), the replay of an
@@ -128,15 +129,29 @@ entry, a command a saga or a `continuing` listener dispatches — and it is what
 
 What a caller does with it, and how an HTTP endpoint answers it:
 
-- **A keyed command is queued for replay under its key.** Send it again only under the same key,
-  or wait for the replay: the command inbox executes it once, whichever comes first, and answers the
-  other with the recorded outcome. A new key is a new operation and is applied beside the replay. An
-  endpoint answers `503 Service Unavailable` with `Retry-After` and a reason that says the change is
-  queued for replay (for example `{"reason": "QUEUED_FOR_REPLAY", "commandId": "…"}`), and a client
-  keeps the key it sent until it receives a `2xx` or a `4xx`.
-- **An unkeyed command waits for an operator** under the default policy (below): nothing pairs its
-  replay with a send of the caller's own, so a caller that sends it again has it applied twice if an
-  operator replays the entry as well. The endpoint answers `500 Internal Server Error` with no
+- **A keyed command is queued for replay under its key** (`QUEUED_FOR_REPLAY`). Send it again only
+  under the same key, or wait for the replay: the command inbox executes it once, whichever comes
+  first, and answers the other with the recorded outcome. A new key is a new operation and is
+  applied beside the replay. An endpoint answers `503 Service Unavailable` with `Retry-After` and a
+  reason that says the change is queued for replay (for example
+  `{"reason": "QUEUED_FOR_REPLAY", "commandId": "…"}`), and a client keeps the key it sent until it
+  receives a `2xx` or a `4xx`. Prefer waiting: a `Retry-After` of at least the retry runner's
+  interval (`streamrune.dead-letter.retry-interval-ms`, 60 s, on the integrations) keeps a client
+  from re-sending into the same outage. A re-send under the same key that fails again stores no
+  second entry: the queue holds one of the command — its type and its stream — under the key
+  (`DeadLetterQueue.findByIdempotencyKey`), and the bus answers with that entry and its outcome.
+- **A keyed command whose entry the schedule does not replay awaits an operator**
+  (`AWAITING_OPERATOR`). When the entry's replays have exhausted their attempts, or its command was
+  first received longer ago than the command-inbox window ([Stale keyed entries](#stale-keyed-entries)),
+  a re-send that fails again is answered with that entry's id and `AWAITING_OPERATOR`, and the
+  endpoint answers it as below. The bus reads both rules from the retry runner's policy and inbox
+  window, which the integrations hand to it from the same keys; a bus you build yourself takes them
+  through `VirtualThreadCommandBus.Builder.deadLetterRetryPolicy(…)` and `inboxRetentionMaxAge(…)`,
+  set to what its runner takes.
+- **An unkeyed command waits for an operator** under the default policy (below), and is always
+  answered `AWAITING_OPERATOR`: nothing pairs its replay with a send of the caller's own, so a
+  caller that sends it again has it applied twice if an operator replays the entry as well. Each
+  failed send of an unkeyed command stores an entry of its own. The endpoint answers `500 Internal Server Error` with no
   `Retry-After` and a reason of its own (for example
   `{"reason": "AWAITING_OPERATOR", "commandId": "…"}`): do not re-send until the operator has
   decided, because a re-send is a second operation, applied beside an operator's replay. A client

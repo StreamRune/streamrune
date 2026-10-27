@@ -119,6 +119,42 @@ class InMemoryDeadLetterQueueTest {
   }
 
   @Test
+  void findByIdempotencyKeyReturnsTheEntriesStoredUnderTheKey_oldestFirst() {
+    MutableClock clock = MutableClock.startingAt(Instant.parse("2026-01-01T00:00:00Z"));
+    var queue = new InMemoryDeadLetterQueue(clock);
+    queue.publish(keyedRequest("cmd-a", "k-1"));
+    clock.advance(Duration.ofSeconds(1));
+    queue.publish(keyedRequest("cmd-other", "k-2"));
+    queue.publish(request("cmd-unkeyed", "Cmd"));
+    clock.advance(Duration.ofSeconds(1));
+    queue.publish(keyedRequest("cmd-b", "k-1"));
+
+    assertEquals(
+        java.util.List.of(CommandId.of("cmd-a"), CommandId.of("cmd-b")),
+        queue.findByIdempotencyKey(IdempotencyKey.of("k-1")).stream()
+            .map(DeadLetterQueue.DeadLetterEntry::commandId)
+            .toList());
+    assertTrue(queue.findByIdempotencyKey(IdempotencyKey.of("k-none")).isEmpty());
+    assertThrows(NullPointerException.class, () -> queue.findByIdempotencyKey(null));
+  }
+
+  private DeadLetterQueue.DeadLetterPublishRequest keyedRequest(String id, String key) {
+    return new DeadLetterQueue.DeadLetterPublishRequest(
+        "{}",
+        "Keyed",
+        CommandId.of(id),
+        StreamId.of(TYPE, AggregateId.of("s1")),
+        "Err",
+        "msg",
+        1,
+        Instant.now(),
+        null,
+        null,
+        null,
+        IdempotencyKey.of(key));
+  }
+
+  @Test
   void readRetryableExcludesExhaustedEntries() {
     dlq.publish(request("cmd-1", "Eligible"));
     dlq.publish(request("cmd-2", "Exhausted"));
