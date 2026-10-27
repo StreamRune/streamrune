@@ -739,7 +739,7 @@ class StreamRuneBuilderTest {
     try {
       streamRune.startProjections();
 
-      var streamId = org.streamrune.core.types.StreamId.of(TYPE, AggregateId.of("w52-stream"));
+      var streamId = org.streamrune.core.types.StreamId.of(TYPE, AggregateId.of("factory-stream"));
       eventStore.append(
           streamId,
           List.of(registrationEnvelope(streamId, 1)),

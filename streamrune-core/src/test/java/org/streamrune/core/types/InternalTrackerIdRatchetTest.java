@@ -29,9 +29,10 @@ import org.junit.jupiter.api.Test;
  * that only exists in somebody's private notes.
  *
  * <p><b>What is rejected.</b> Work-item labels (a capital {@code W} or {@code FU} followed by
- * digits, optionally with a numeric suffix), review-finding identifiers (a letter-and-digits prefix
- * such as {@code A17-...}, or {@code SAGA-}, {@code CONC17-}, {@code PROJ17-}, {@code SEC-}, {@code
- * ERR17-}, {@code INTG10-} followed by a finding code), a numbered audit round, and review
+ * digits, optionally with a numeric suffix, and in either letter case such a label at the front of
+ * an identifier, a test name or a string id), review-finding identifiers (a letter-and-digits
+ * prefix such as {@code A17-...}, or {@code SAGA-}, {@code CONC17-}, {@code PROJ17-}, {@code SEC-},
+ * {@code ERR17-}, {@code INTG10-} followed by a finding code), a numbered audit round, and review
  * nicknames. The exact expressions are {@link #FORBIDDEN}. Short review labels (a capital letter,
  * one or two digits and an optional lower-case letter) are rejected where they are used as a label:
  * alone in parentheses, or leading a comment line before a colon ({@link #SHORT_LABEL}). Time
@@ -53,16 +54,20 @@ import org.junit.jupiter.api.Test;
  * reported on the line it starts on ({@link #ruleBrokenBy}).
  *
  * <p><b>No space before a period.</b> In prose, a period follows its word directly ({@link
- * #STRAY_SPACE_BEFORE_PERIOD}). Prose means javadoc and comment lines of a {@code .java} file
- * outside {@code <pre>} blocks, and lines of a {@code .md} file outside fenced code blocks; inline
- * code (a backtick span, an inline javadoc tag) counts as one word, so a code sample is never
- * flagged.
+ * #STRAY_SPACE_BEFORE_PERIOD}). Prose means the comments of a {@code .java} file — javadoc and
+ * block-comment lines outside {@code <pre>} blocks, a one-line javadoc or block comment, a line
+ * comment that is a line of its own — and lines of a {@code .md} file outside fenced code blocks;
+ * inline code (a backtick span, an inline javadoc tag) counts as one word, so a code sample is
+ * never flagged. The other files, the build files among them, are not checked for it.
  *
  * <p><b>What is scanned.</b> Every {@code .java} (main and test), {@code .md} and build file
- * (Gradle scripts, version catalog, properties, workflows, SQL, shell, XML, JSON) under the
- * repository root, except build output, VCS and tool directories, and the internal working material
- * that is never published ({@link #PRUNED_DIRECTORY_NAMES}, {@link #PRUNED_RELATIVE_PATHS}). {@code
- * CHANGELOG.md} is scanned like everything else.
+ * (Gradle scripts, version catalog, properties, workflows, SQL, shell and batch scripts, XML, JSON,
+ * text) under the repository root, and the files without an extension the repository publishes, by
+ * name ({@link #SCANNED_NAMES}: the commit template {@code .gitmessage}, {@code LICENSE}, {@code
+ * NOTICE}, {@code CODEOWNERS}, the git hook, {@code gradlew}), except build output, VCS and tool
+ * directories, and the internal working material that is never published ({@link
+ * #PRUNED_DIRECTORY_NAMES}, {@link #PRUNED_RELATIVE_PATHS}). {@code CHANGELOG.md} is scanned like
+ * everything else.
  *
  * <p><b>The one allow-list.</b> A crash-point table in the javadoc of a test legitimately labels
  * its rows ({@code INV-n} for the invariant a row protects, {@code CP-n} for the crash point it
@@ -122,21 +127,42 @@ class InternalTrackerIdRatchetTest {
           "yaml",
           "sql",
           "sh",
+          "bat",
           "xml",
           "json",
           "txt");
 
   /**
+   * The files without an extension that the repository publishes, scanned by name: the commit
+   * template, the ignore list, the license and notice, the code owners, the git hook and the Gradle
+   * wrapper script. {@code streamrune-core/build.gradle.kts} declares the same names.
+   */
+  private static final Set<String> SCANNED_NAMES =
+      Set.of(
+          ".gitmessage", ".gitignore", "LICENSE", "NOTICE", "CODEOWNERS", "pre-commit", "gradlew");
+
+  /** Whether a file of this name is scanned: one of {@link #SCANNED_EXTENSIONS} or names. */
+  static boolean isScannedName(String name) {
+    int dot = name.lastIndexOf('.');
+    return SCANNED_NAMES.contains(name)
+        || (dot >= 0 && SCANNED_EXTENSIONS.contains(name.substring(dot + 1)));
+  }
+
+  /**
    * The forbidden shapes. Each alternative is anchored on word boundaries so a longer ordinary word
    * never matches: {@code W3C} and {@code WARN} are fine, a label like the examples in {@link
-   * #SAMPLES} is not.
+   * #SAMPLES} is not. A work-item label written in lower case as the prefix of an identifier, a
+   * test method name or a string id is rejected too, in either letter case: the letter, one or two
+   * digits and a review code before an underscore or a dash ({@code w} then {@code 3fd4_} in the
+   * samples), or the letter and digits before a dash and a word ({@code w} then {@code 52-stream}).
    */
   private static final Pattern FORBIDDEN =
       Pattern.compile(
           "\\b(?:W[0-9]{1,2}(?:-[0-9]+)?|FU[0-9]-[0-9]+|F2-[0-9]|PRE[1]"
               + "|A1[0-9]-[A-Z0-9-]+|SAGA-[A-Z0-9-]+|CONC1[0-9]-[0-9]+|PROJ1[0-9]-[0-9]+"
               + "|SEC-[A-Z-]+[0-9]*|ERR1[0-9]-[0-9]+|INTG1[0-9]-[0-9]+|audit[- ]?1[0-9]"
-              + "|GPT-[A]stra|P[0-9] fix)\\b");
+              + "|GPT-[A]stra|P[0-9] fix)\\b"
+              + "|(?i:\\bw[0-9]{1,2}[a-z]{1,2}[0-9]{1,2}(?=[_-])|\\bw[0-9]{1,2}-(?=[a-z]))");
 
   /**
    * A short review label used as a label: alone in parentheses, or leading a comment line (after
@@ -187,23 +213,26 @@ class InternalTrackerIdRatchetTest {
   /**
    * Narration of an earlier behaviour of the code, in any letter case: the words that describe a
    * change instead of the current state ({@code previously}, {@code used to}, {@code no longer},
-   * {@code now also}, {@code until now}, {@code historically}, "this wave", "before this" followed
-   * by fix, change or release, and "before this" or "exactly as before" closing a clause). Rejected
-   * outside test sources ({@link #isTestSource}) and outside code samples (a fenced block of a
-   * guide, a {@code <pre>} block of a javadoc), which quote code as it is written; read on into the
-   * next line ({@link #ruleBrokenBy}). Write the state as it is: "cannot" or "is not" for a state
-   * that ends at run time, "the recorded result" for a result recorded earlier, "the clock that
-   * computes" for a purpose. Left alone: {@code used to} after a form of "be", with or without an
-   * adverb ("is used to look up", "was successfully used to rehydrate"), the passive of "use";
-   * "before this" without the comma ("before this call returns"); and "exactly as before" followed
-   * by an article or a determiner ("exactly as before the reinstate"), a state at run time.
+   * {@code now also}, {@code until now}, {@code historically}, "this wave" after since, before or
+   * after, "before this" followed by fix, change or release, and "before this" or "exactly as
+   * before" closing a clause). Rejected outside test sources ({@link #isTestSource}) and outside
+   * code samples (a fenced block of a guide, a {@code <pre>} block of a javadoc), which quote code
+   * as it is written; read on into the next line ({@link #ruleBrokenBy}). Write the state as it is:
+   * "cannot" or "is not" for a state that ends at run time, "the recorded result" for a result
+   * recorded earlier, "the clock that computes" for a purpose. Left alone: {@code used to} after a
+   * form of "be", directly or with one word between ("is used to look up", "is not used to gate",
+   * "is also used to compute", "was successfully used to rehydrate"), the passive of "use"; "this
+   * wave" anywhere else and "this wave of" ("replicas that join this wave of appends"), a state at
+   * run time; "before this" without the comma ("before this call returns"); and "exactly as before"
+   * followed by an article or a determiner ("exactly as before the reinstate"), a state at run
+   * time.
    */
   private static final Pattern HISTORY_NARRATION =
       Pattern.compile(
-          "(?i)\\b(?:previously|historically|until now|now also|no longer|this wave"
+          "(?i)\\b(?:previously|historically|until now|now also|no longer"
+              + "|(?:since|before|after) this wave(?! of\\b)"
               + "|before this (?:fix|change|release)"
-              + "|(?<!\\b(?:is|are|was|were|be|been|being) )"
-              + "(?<!\\b(?:is|are|was|were|be|been|being) [a-z]{1,20}ly )used to)\\b"
+              + "|(?<!\\b(?:is|are|was|were|be|been|being)(?: [a-z]{1,20})? )used to)\\b"
               + "|\\bbefore this,"
               + "|\\bexactly as before\\b"
               + "(?!\\s+(?:the|a|an|its|this|that|their|any|each|every)\\b)");
@@ -231,6 +260,15 @@ class InternalTrackerIdRatchetTest {
 
   /** A javadoc or block-comment line: its first character after the indentation is a star. */
   private static final Pattern COMMENT_LINE = Pattern.compile("^\\s*\\*");
+
+  /**
+   * A comment that is a whole line of its own: a line comment, or a javadoc or block comment that
+   * opens and closes on the line.
+   */
+  private static final Pattern ONE_LINE_COMMENT = Pattern.compile("^\\s*(?://|/\\*.*\\*/\\s*$)");
+
+  /** The closing marker of a one-line javadoc or block comment, left out of its prose view. */
+  private static final Pattern CLOSING_MARKER = Pattern.compile("\\s*\\*/\\s*$");
 
   /** Crash-point table labels: tolerated only in {@link #CRASH_POINT_TABLE_TESTS}. */
   private static final Pattern CRASH_POINT_LABEL =
@@ -267,7 +305,10 @@ class InternalTrackerIdRatchetTest {
           "audit" + "-17",
           "audit " + "16",
           "GPT" + "-Astra",
-          "P" + "7 fix");
+          "P" + "7 fix",
+          "w" + "3fd4_eventNotFoundStop",
+          "W" + "3FR1_healthyRow",
+          "w" + "52-stream");
 
   @Test
   void noInternalTrackerIdAppearsInPublicText() {
@@ -397,8 +438,9 @@ class InternalTrackerIdRatchetTest {
    * Classifies each line of a file, index for index. In a {@code .md} file a fenced code block (a
    * line that starts with three backticks or three tildes opens and closes one) is a code sample
    * and every other line is prose; in a {@code .java} file a javadoc or block-comment line is
-   * prose, or a code sample inside a {@code <pre>} block. Code lines and every line of the other
-   * file types are neither: they are scanned whole, string literals and comments alike.
+   * prose, or a code sample inside a {@code <pre>} block, and so is a comment that is a whole line
+   * of its own ({@link #ONE_LINE_COMMENT}). Code lines and every line of the other file types are
+   * neither: they are scanned whole, string literals and comments alike.
    */
   static List<Line> classify(String relative, List<String> lines) {
     List<Line> classified = new ArrayList<>(lines.size());
@@ -429,6 +471,12 @@ class InternalTrackerIdRatchetTest {
         if (opens != closes) {
           inSample = opens;
         }
+      } else if (java && ONE_LINE_COMMENT.matcher(line).find()) {
+        // Inline code is one word here too: a javadoc tag, or a backtick span (a Markdown
+        // documentation comment, or a line comment that quotes code that way).
+        String text = CLOSING_MARKER.matcher(line).replaceFirst("");
+        text = JAVADOC_INLINE_TAG.matcher(text).replaceAll("code");
+        classified.add(new Line(line, MARKDOWN_CODE_SPAN.matcher(text).replaceAll("code"), false));
       } else {
         classified.add(new Line(line, null, false));
       }
@@ -535,6 +583,19 @@ class InternalTrackerIdRatchetTest {
         "STRAY_SPACE_BEFORE_PERIOD",
         ruleBrokenBy(
             "a/src/main/java/A.java", classify("A.java", List.of(strayJavadoc)).get(0), null));
+    // A one-line javadoc and a line comment are prose too.
+    for (String strayComment :
+        List.of(
+            "  /** The sweep is done " + ". */",
+            "  /* The sweep is done " + ". */",
+            "    // the sweep is done " + ".",
+            "    // the sweep is done " + ". Then the purge runs.")) {
+      assertEquals(
+          "STRAY_SPACE_BEFORE_PERIOD",
+          ruleBrokenBy(
+              "a/src/main/java/A.java", classify("A.java", List.of(strayComment)).get(0), null),
+          strayComment);
+    }
     String narrationInGuide = "The rule now al" + "so covers the band.";
     assertEquals(
         "HISTORY_NARRATION",
@@ -545,6 +606,7 @@ class InternalTrackerIdRatchetTest {
     for (String narration :
         List.of(
             "Since this wa" + "ve, both runners continue",
+            "after this wa" + "ve the guard is on",
             "Befo" + "re this, the guard was a flag",
             "tolerated exactly as befo" + "re.",
             "threads it in exactly as befo" + "re even with zero registrations",
@@ -623,6 +685,14 @@ class InternalTrackerIdRatchetTest {
             "the key is used to look up the subject",
             "it cannot be used to gate a decision",
             "a snapshot that was successfully used to rehydrate the aggregate",
+            "the fence is not used to gate reads",
+            "the table is also used to compute lag",
+            "replicas that join this wave of appends wait",
+            "after this wave of appends the lease renews",
+            "a W3C-compliant header",
+            "the w3c-baggage header",
+            "a w-9 form",
+            "the rows aw3fd4_x and xw52-y",
             "the previous offset",
             "the road map of a city",
             "version 1.0.1",
@@ -663,6 +733,14 @@ class InternalTrackerIdRatchetTest {
             "   * Returns {@code done " + ".} and {@link Foo#bar() bar " + ".} as written.",
             "   */");
     assertNoneFlagged("a/src/main/java/A.java", javadoc);
+    // A one-line javadoc and a line comment read inline code as one word, as a javadoc does.
+    assertNoneFlagged(
+        "a/src/main/java/A.java",
+        List.of(
+            "  /** Returns {@code done " + ".} as written. */",
+            "  /** The lease. */",
+            "    // wait ... and retry, then ./gradlew build",
+            "    // the cutoff (e.g. a lease) holds"));
     // Reading on into the next line keeps its punctuation, and stops at a code sample.
     assertNoneFlagged(
         "a/src/main/java/A.java",
@@ -707,6 +785,11 @@ class InternalTrackerIdRatchetTest {
     assertTrue(
         files.stream().anyMatch(p -> relative(p).contains("/src/test/java/")),
         "test sources must be scanned");
+    for (String withoutExtension : List.of(".gitmessage", "NOTICE", "gradle/hooks/pre-commit")) {
+      assertTrue(
+          files.stream().anyMatch(p -> relative(p).equals(withoutExtension)),
+          "a text file without an extension must be scanned: " + withoutExtension);
+    }
     assertTrue(
         files.stream().noneMatch(p -> relative(p).startsWith("." + PLANNING + "/")),
         "internal working material is never scanned");
@@ -773,12 +856,9 @@ class InternalTrackerIdRatchetTest {
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-              String name = file.getFileName().toString();
-              int dot = name.lastIndexOf('.');
-              String extension = dot < 0 ? "" : name.substring(dot + 1);
               String rel = root.relativize(file).toString().replace('\\', '/');
               if (attrs.isRegularFile()
-                  && SCANNED_EXTENSIONS.contains(extension)
+                  && isScannedName(file.getFileName().toString())
                   && !EXCLUDED_FILES.contains(rel)) {
                 files.add(file);
               }
