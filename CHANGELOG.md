@@ -319,8 +319,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   payload nor the key. The failure itself propagates when no entry is stored (a failed publish, an
   ineligible failure, a replay, a command a saga or a `continuing` listener dispatches), and it is
   what the interceptors' `onError` and an `executeAsync` future receive. The retry guide and the
-  idempotency guide state the client rule and the HTTP answer: `503` with `Retry-After` and a
-  reason that tells "queued for replay" (keyed) from "awaiting an operator" (unkeyed), never `202`.
+  idempotency guide state the client rule and the HTTP answer: `503` with `Retry-After` and the
+  reason "queued for replay" for a keyed command, `500` with no `Retry-After` and the reason
+  "awaiting an operator" for an unkeyed one, whose re-send would be a second operation beside an
+  operator's replay, and never `202`.
   `DeadLetterRetryRunner` re-dispatches entries under the command's original idempotency key (or a
   deterministic `dlq-replay:<commandId>` key), learns command types from the registered deciders
   (sealed roots expand to every permitted class), refuses to replay an entry whose `@Encrypted`

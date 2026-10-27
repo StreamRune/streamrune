@@ -132,16 +132,22 @@ The endpoint tells the client which case it is in:
 ```java
     @ExceptionHandler(CommandDeadLetteredException.class)
     ResponseEntity<Map<String, String>> deadLettered(CommandDeadLetteredException e) {
-        // 503, not 202: a 2xx tells the client the operation is done, while the replay can fail,
+        // Never 202: a 2xx tells the client the operation is done, while the replay can fail,
         // exhaust its attempts and wait for an operator.
-        String reason = e.idempotencyKey() != null ? "QUEUED_FOR_REPLAY" : "AWAITING_OPERATOR";
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .header(HttpHeaders.RETRY_AFTER, "30")
-                .body(Map.of("reason", reason, "commandId", e.commandId().value()));
+        if (e.idempotencyKey() != null) {
+            // Queued for replay under the client's key: a re-send under the same key is safe.
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .header(HttpHeaders.RETRY_AFTER, "30")
+                    .body(Map.of("reason", "QUEUED_FOR_REPLAY", "commandId", e.commandId().value()));
+        }
+        // Awaiting an operator: a re-send is a second operation, applied beside the operator's
+        // replay, so the answer invites none — no Retry-After.
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("reason", "AWAITING_OPERATOR", "commandId", e.commandId().value()));
     }
 ```
 
-`QUEUED_FOR_REPLAY` tells the client to re-send under the same key or wait; `AWAITING_OPERATOR` that the command ran without a key, so its entry waits for an operator and a re-send of the same operation may be applied as well. The client's own automatic retries of a `5xx` under the same key stay safe either way for a keyed request. [Retry and resilience](retry-and-resilience.md#a-dead-lettered-commands-caller-is-told-so) lists when the bus throws the failure itself instead.
+`QUEUED_FOR_REPLAY` (`503` with `Retry-After`) tells the client to re-send under the same key or wait. `AWAITING_OPERATOR` (`500`, no `Retry-After`) tells it that the command ran without a key, so its entry waits for an operator: do not re-send until the operator has decided, because a re-send is a second operation, applied beside an operator's replay. A client that retries `5xx` answers on its own may retry a keyed request under its key, and must not retry an `AWAITING_OPERATOR` answer. [Retry and resilience](retry-and-resilience.md#a-dead-lettered-commands-caller-is-told-so) lists when the bus throws the failure itself instead.
 
 The same pattern applies on Quarkus and Micronaut — inject `org.streamrune.core.CommandBus` and read the client's request id from the framework's header abstraction. Their exception mappers are chosen by the thrown type, so map `CommandDeadLetteredException` with one of its own.
 

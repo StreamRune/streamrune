@@ -136,8 +136,11 @@ What a caller does with it, and how an HTTP endpoint answers it:
   keeps the key it sent until it receives a `2xx` or a `4xx`.
 - **An unkeyed command waits for an operator** under the default policy (below): nothing pairs its
   replay with a send of the caller's own, so a caller that sends it again has it applied twice if an
-  operator replays the entry as well. The endpoint answers `503` with a reason of its own (for
-  example `AWAITING_OPERATOR`).
+  operator replays the entry as well. The endpoint answers `500 Internal Server Error` with no
+  `Retry-After` and a reason of its own (for example
+  `{"reason": "AWAITING_OPERATOR", "commandId": "…"}`): do not re-send until the operator has
+  decided, because a re-send is a second operation, applied beside an operator's replay. A client
+  that retries `5xx` answers on its own must not retry this one.
 - **Not `202 Accepted`.** A client treats a `2xx` as done and never sends the request again, while
   the replay can itself fail, exhaust its attempts and be kept for an operator.
 

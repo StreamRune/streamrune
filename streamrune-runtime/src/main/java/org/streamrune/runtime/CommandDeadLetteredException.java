@@ -31,11 +31,14 @@ import org.streamrune.core.types.StreamId;
  *       it applied again if the operator replays the entry as well.
  * </ul>
  *
- * <p>An HTTP endpoint answers it with {@code 503 Service Unavailable} and {@code Retry-After}, and
- * a body whose reason tells the two cases apart: queued for replay under the client's key, or
- * awaiting an operator. Not {@code 202 Accepted}: a client treats a 2xx as done and never sends the
- * request again, while the replay can itself fail, exhaust its attempts and be kept for an
- * operator.
+ * <p>An HTTP endpoint answers the two cases differently, each with a body whose reason names it. A
+ * keyed command is queued for replay under the client's key: {@code 503 Service Unavailable} with
+ * {@code Retry-After}, since a re-send under the same key is safe. An unkeyed command awaits an
+ * operator: {@code 500 Internal Server Error} with no {@code Retry-After}, since a re-send is a
+ * second operation, applied beside an operator's replay of the entry — the client does not re-send
+ * it until the operator has decided. Never {@code 202 Accepted}: a client treats a 2xx as done and
+ * never sends the request again, while the replay can itself fail, exhaust its attempts and be kept
+ * for an operator.
  *
  * <p><b>When the failure itself propagates.</b> Only a stored entry makes the outcome pending, so
  * the bus throws the failure unchanged when there is none: a failure its {@code dlqEligible}
