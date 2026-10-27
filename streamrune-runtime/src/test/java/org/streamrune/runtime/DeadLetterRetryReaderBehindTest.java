@@ -428,7 +428,10 @@ class DeadLetterRetryReaderBehindTest {
   /**
    * A poll states its replays behind the stored schema in one INFO line, however many there are:
    * during a rollout every poll meets them again, and a line per entry per poll would bury the log.
-   * Each entry's own line, with the event type and both versions, is at DEBUG.
+   * The line names what the replica lacks — each distinct event type with the version it is stored
+   * at and the version this replica reads up to, once however many entries share it — and the
+   * command types refused, so an operator at INFO sees whether the rollout is still in progress.
+   * Each entry's own line is at DEBUG.
    */
   @Test
   void aPollStatesItsReplaysBehindTheStoredSchemaInOneInfoLine() {
@@ -444,7 +447,84 @@ class DeadLetterRetryReaderBehindTest {
     assertThat(info.getFirst())
         .contains("3 DLQ entries")
         .contains("behind the stored schema")
-        .contains(MetricNames.DLQ_READER_BEHIND);
+        .contains(MetricNames.DLQ_READER_BEHIND)
+        .containsOnlyOnce("StockReserved stored at schema version 2, read up to 1")
+        .containsOnlyOnce("StockReserved")
+        .containsOnlyOnce("ReserveStock");
+  }
+
+  /**
+   * The line names five schemas and five command types at most, in the order the poll met them, and
+   * counts the rest: a rollout that bumps many event types does not make one poll's line grow with
+   * the page.
+   */
+  @Test
+  void aPollNamesFiveSchemasAtMost_andCountsTheRest() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
+    for (int i = 0; i < 7; i++) {
+      publishKeyedEntry(queue, "cmd-schema-" + i, new ReserveStock("S", "o-" + i));
+      clock.advance(Duration.ofSeconds(1));
+    }
+    var bus =
+        new BehindTheStoredSchemaBus(Integer.MAX_VALUE) {
+          @Override
+          RuntimeException refusal(Command command) {
+            String n = ((ReserveStock) command).orderId().substring(2);
+            return new EventSchemaAheadException(
+                "stored at schema_version 3, reader reaches 2", new EventType("Event" + n), 3, 2);
+          }
+        };
+
+    List<String> info =
+        infoLinesDuring(runner(bus, policy(5, false), queue, clock, 10)::processBatch);
+
+    assertThat(info)
+        .singleElement()
+        .satisfies(
+            line ->
+                assertThat(line)
+                    .contains("7 DLQ entries")
+                    .contains(
+                        "Event0 stored at schema version 3, read up to 2; Event1 stored at schema"
+                            + " version 3, read up to 2; Event2")
+                    .contains("Event4 stored at schema version 3, read up to 2; and 2 more")
+                    .doesNotContain("Event5")
+                    .doesNotContain("Event6")
+                    .containsOnlyOnce("ReserveStock"));
+  }
+
+  /** Each command type refused in the poll is named once. */
+  @Test
+  void aPollNamesEachCommandTypeItsReplaysBehindRefused() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
+    publishKeyedEntry(queue, "cmd-reserve-1", new ReserveStock("S", "o-1"));
+    publishKeyedEntry(queue, "cmd-release-1", ReleaseStock.class, new ReleaseStock("S", "o-1"));
+    publishKeyedEntry(queue, "cmd-reserve-2", new ReserveStock("S", "o-2"));
+    var bus = new BehindTheStoredSchemaBus(Integer.MAX_VALUE);
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(queue)
+            .commandBus(bus)
+            .objectMapper(objectMapper)
+            .policy(policy(5, false))
+            .clock(clock)
+            .registerCommand(ReserveStock.class)
+            .registerCommand(ReleaseStock.class)
+            .build();
+
+    List<String> info = infoLinesDuring(runner::processBatch);
+
+    assertThat(info)
+        .singleElement()
+        .satisfies(
+            line ->
+                assertThat(line)
+                    .contains("3 DLQ entries")
+                    .contains("command types ReserveStock, ReleaseStock")
+                    .containsOnlyOnce("ReserveStock")
+                    .containsOnlyOnce("ReleaseStock"));
   }
 
   @Test
@@ -528,6 +608,8 @@ class DeadLetterRetryReaderBehindTest {
   // ---- fixtures ----------------------------------------------------------------------------
 
   record ReserveStock(String itemId, String orderId) implements Command {}
+
+  record ReleaseStock(String itemId, String orderId) implements Command {}
 
   record StockReserved(String itemId, String orderId) implements DomainEvent {}
 
@@ -653,14 +735,23 @@ class DeadLetterRetryReaderBehindTest {
   }
 
   private CommandId publishKeyedEntry(DeadLetterQueue queue, String id, ReserveStock command) {
+    return publishKeyedEntry(queue, id, ReserveStock.class, command);
+  }
+
+  private CommandId publishKeyedEntry(
+      DeadLetterQueue queue, String id, Class<? extends Command> type, Command command) {
     CommandId commandId = CommandId.of(id);
+    String itemId =
+        command instanceof ReserveStock reserve
+            ? reserve.itemId()
+            : ((ReleaseStock) command).itemId();
     try {
       queue.publish(
           new DeadLetterQueue.DeadLetterPublishRequest(
               objectMapper.writeValueAsString(command),
-              ReserveStock.class.getName(),
+              type.getName(),
               commandId,
-              StreamId.of(STOCK, AggregateId.of(command.itemId())),
+              StreamId.of(STOCK, AggregateId.of(itemId)),
               EventSchemaAheadException.class.getName(),
               "stored at schema_version 2, reader reaches 1",
               1,

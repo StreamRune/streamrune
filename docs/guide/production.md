@@ -955,9 +955,11 @@ holder stops or fails to renew it: until then a replay may run on a replica stil
 replay fails with the same refusal and counts no attempt (`RetryOutcome.READER_BEHIND`): the entry
 keeps its attempt count, and only its last attempt time becomes the replay's, so it is replayed
 again once the backoff of its next attempt has passed. A poll states its replays that answered so
-in one INFO line (DEBUG names each entry with the event type and both versions), and
-`streamrune.dlq.reader_behind` counts them by command type: a rate that stays above zero after the
-rollout ended means the replica that holds the runner's lease is still behind. A long rollout therefore neither exhausts the entry (five attempts span about 31
+in one INFO line, which names what the replica lacks — each event type with the schema version it
+is stored at and the version the replica reads up to — and the command types refused, five of each
+at most with a count of the rest (DEBUG names each entry), and `streamrune.dlq.reader_behind`
+counts them by command type: a rate that stays above zero after the rollout ended means the
+replica that holds the runner's lease is still behind, and the line says which version it reads. A long rollout therefore neither exhausts the entry (five attempts span about 31
 minutes with the integrations' defaults, about 15 under `DeadLetterRetryPolicy.DEFAULT`) nor,
 under `discardAfterMaxRetries`, discards the command. Such a replay takes no slot of the poll's
 batch either: the poll goes on to the entries behind it in the page it read (ten batches), which are

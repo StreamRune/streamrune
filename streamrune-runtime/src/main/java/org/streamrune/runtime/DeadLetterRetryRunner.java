@@ -12,9 +12,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -530,7 +532,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
             .unstarted(
                 () -> {
                   try {
-                    outcome[0] = processEntry(entry, force, true, forcedBy);
+                    outcome[0] = processEntry(entry, force, true, forcedBy, null);
                   } catch (RuntimeException | Error e) {
                     failure[0] = e;
                   }
@@ -612,7 +614,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         deadLetterQueue.readRetryable(policy.maxRetries(), fetchLimit, includeUnkeyed, keyedCutoff);
     int processed = 0;
     int staleSkipped = 0;
-    int readerBehind = 0;
+    var readerBehind = new ReaderBehindTally();
     // Whether the loop stopped before the end of the page: the batch is full, or leadership moved.
     boolean stoppedEarly = false;
     for (var entry : entries) {
@@ -649,20 +651,20 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       if (!isDue(entry, now)) {
         continue;
       }
-      if (processEntry(entry, false, false, null) == RetryOutcome.READER_BEHIND) {
+      if (processEntry(entry, false, false, null, readerBehind) == RetryOutcome.READER_BEHIND) {
         // A replay that answers READER_BEHIND takes no slot of the batch: nothing was attempted
         // against the command, and counted, a batch's worth of such entries at the head of the
         // page would hold back the entries behind them in it. The page is over-fetched, so the
         // poll reaches those entries in the same cycle; the entry itself moves behind the entries
         // queued after the page (processEntry records the replay's time). An admission refusal
         // keeps its slot: the bus is closing or saturated, and the next entry would meet the same
-        // refusal. Summarized once below.
-        readerBehind++;
-      } else {
-        processed++;
+        // refusal. Summarized once below, with what the replica lacks.
+        continue;
       }
+      processed++;
     }
-    if (readerBehind > 0) {
+    int behind = readerBehind.replays();
+    if (behind > 0) {
       // The poll read a full page and reached its end with its batch not full: rows queued after
       // the page may be due and were not read. The entries behind the stored schema have moved
       // behind them, so a later poll reaches them; until then they wait, which an operator sees.
@@ -672,15 +674,18 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
           .log(
               "{} DLQ entr{} of this cycle's page {} not replayed: this replica is behind the"
                   + " stored schema of {} aggregate{} (a newer release stored an event at a schema"
-                  + " version this replica's upcaster chain does not reach). No attempt is"
-                  + " counted; each is replayed again after its backoff, and the replay succeeds"
-                  + " on a replica that reads the stored version (streamrune.dlq.reader_behind"
-                  + " counts them; DEBUG names each).{}",
-              readerBehind,
-              readerBehind == 1 ? "y" : "ies",
-              readerBehind == 1 ? "was" : "were",
-              readerBehind == 1 ? "its" : "their",
-              readerBehind == 1 ? "" : "s",
+                  + " version this replica's upcaster chain does not reach: {}), command type{} {}."
+                  + " No attempt is counted; each is replayed again after its backoff, and the"
+                  + " replay succeeds on a replica that reads the stored version"
+                  + " (streamrune.dlq.reader_behind counts them; DEBUG names each).{}",
+              behind,
+              behind == 1 ? "y" : "ies",
+              behind == 1 ? "was" : "were",
+              behind == 1 ? "its" : "their",
+              behind == 1 ? "" : "s",
+              readerBehind.schemas(),
+              readerBehind.commandTypeCount() == 1 ? "" : "s",
+              readerBehind.commandTypes(),
               pageExhausted
                   ? " The poll read a full page of "
                       + fetchLimit
@@ -835,9 +840,15 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
    * @param force whether to lift the two on-demand refusals (operator path only; the schedule never
    *     forces)
    * @param onDemand whether an operator's {@link #retry} triggered the replay, for the log lines
+   * @param readerBehind where a scheduled replay that answers {@link RetryOutcome#READER_BEHIND}
+   *     records what the replica lacks, for the poll's summary line; {@code null} on demand
    */
   private RetryOutcome processEntry(
-      DeadLetterQueue.DeadLetterEntry entry, boolean force, boolean onDemand, String forcedBy) {
+      DeadLetterQueue.DeadLetterEntry entry,
+      boolean force,
+      boolean onDemand,
+      String forcedBy,
+      ReaderBehindTally readerBehind) {
     // Before anything else: a stale keyed entry must not reach the bus, and the refusal leaves the
     // entry exactly as it was (no attempt bump — the entry has not failed, it cannot be replayed
     // safely), so a crash at any point here converges trivially: the rerun refuses again.
@@ -1052,6 +1063,9 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         recordMetric(
             "recordDeadLetterReaderBehind",
             () -> metrics.recordDeadLetterReaderBehind(simpleTypeName(entry.commandType())));
+        if (readerBehind != null) {
+          readerBehind.add(simpleTypeName(entry.commandType()), behind);
+        }
         LOG.atLevel(onDemand ? Level.INFO : Level.DEBUG)
             .log(
                 "Not counting the DLQ replay of {} ({}) as a failed attempt: this replica reads {}"
@@ -1677,6 +1691,60 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
             LogSanitizer.sanitizeForLog(entry.commandId().value()),
             updateFailure);
       }
+    }
+  }
+
+  /**
+   * The replays of one poll that answered {@link RetryOutcome#READER_BEHIND}, for the poll's
+   * summary line: how many, the distinct schemas the replica lacks — an event type, the version it
+   * is stored at and the version this replica reads up to — and the distinct command types refused,
+   * in the order the poll met them. The line names {@value #NAMED} of each at most and counts the
+   * rest, so it does not grow with the page.
+   */
+  private static final class ReaderBehindTally {
+
+    /** How many schemas, and how many command types, the line names. */
+    static final int NAMED = 5;
+
+    private int replays;
+    private final Set<String> schemas = new LinkedHashSet<>();
+    private final Set<String> commandTypes = new LinkedHashSet<>();
+
+    void add(String commandType, EventSchemaAheadException behind) {
+      replays++;
+      schemas.add(
+          LogSanitizer.sanitizeForLog(behind.eventType().name())
+              + " stored at schema version "
+              + behind.storedVersion()
+              + ", read up to "
+              + behind.readerVersion());
+      commandTypes.add(LogSanitizer.sanitizeForLog(commandType));
+    }
+
+    int replays() {
+      return replays;
+    }
+
+    String schemas() {
+      return named(schemas, "; ");
+    }
+
+    String commandTypes() {
+      return named(commandTypes, ", ");
+    }
+
+    int commandTypeCount() {
+      return commandTypes.size();
+    }
+
+    /**
+     * The first {@value #NAMED} values joined by {@code separator}, then how many more there are.
+     */
+    private static String named(Set<String> values, String separator) {
+      List<String> shown = values.stream().limit(NAMED).toList();
+      String joined = String.join(separator, shown);
+      int more = values.size() - shown.size();
+      return more > 0 ? joined + separator + "and " + more + " more" : joined;
     }
   }
 
