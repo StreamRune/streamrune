@@ -40,8 +40,9 @@ import org.streamrune.integration.tck.DefaultRendering;
  * <ol>
  *   <li>{@code configuration-metadata.json} declares every key, and no other, with the default this
  *       integration has;
- *   <li>the guides or this module's README name every key, and every {@code streamrune.} name they
- *       use is a key, a meter or a span attribute;
+ *   <li>the guides or this module's README name every key, and every {@code streamrune.} name they,
+ *       the repository's README, the quickstart and the API reference use is a key, a meter or a
+ *       span attribute;
  *   <li>every table with a {@code Default} column states the default this integration has.
  * </ol>
  */
@@ -161,17 +162,30 @@ class ConfigurationDocLintTest {
   @Test
   void everyNameTheGuidesUseIsAKeyAMeterOrASpanAttribute() {
     assertNoProblems(
-        "streamrune.* name(s) in the guides or "
+        "streamrune.* name(s) in the guides, "
             + README
+            + " or "
+            + ConfigurationDocs.OTHER_PAGES
             + " that Micronaut neither binds nor reads",
         docs.unknown(oracle));
   }
 
+  /**
+   * The keys this module reads in code, and those it reads through a constant of {@code
+   * streamrune-integration-api}, are keys the oracle knows.
+   */
   @Test
   void everyKeyTheModuleReadsInCodeIsInTheOracle() {
+    List<String> unknown =
+        new ArrayList<>(ConfigurationDocs.unknownInJavaSources(Path.of("src/main/java"), oracle));
+    unknown.addAll(
+        ConfigurationDocs.unknownInJavaSources(
+            ConfigurationDocs.repositoryRoot().resolve(ConfigurationDocs.INTEGRATION_API_SOURCES),
+            oracle));
     assertNoProblems(
-        "streamrune.* name(s) in this module's string literals that the oracle does not know",
-        ConfigurationDocs.unknownInJavaSources(Path.of("src/main/java"), oracle));
+        "streamrune.* name(s) in the string literals of this module or of"
+            + " streamrune-integration-api that the oracle does not know",
+        unknown);
   }
 
   @Test

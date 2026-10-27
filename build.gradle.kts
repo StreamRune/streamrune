@@ -363,8 +363,8 @@ val dockerFreeModules =
 // ── Doc-lint tests ───────────────────────────────────────────────────────────────────────────
 //
 // A doc-lint test (a test class named `*DocLintTest`) holds a guide, a README or a metadata file
-// against the code that is its oracle: the metrics table against MetricNames, the configuration
-// docs against the properties types. It runs in its module's `docLintTest` task instead of `test`,
+// against the code that is its oracle: the metrics table against MetricNames and the meters the
+// Micrometer metrics register, the configuration docs against the properties types. It runs in its module's `docLintTest` task instead of `test`,
 // and each module declares the documents it reads as that task's inputs, so an edit to a guide
 // re-runs these few tests and not the module's whole suite. None needs Docker: `check` runs them
 // and so does quickCheck.
@@ -373,6 +373,7 @@ val docLintModules =
         ":streamrune-core",
         ":streamrune-runtime",
         ":streamrune-test",
+        ":streamrune-integration:streamrune-integration-api",
         ":streamrune-integration:streamrune-spring",
         ":streamrune-integration:streamrune-quarkus",
         ":streamrune-integration:streamrune-micronaut")

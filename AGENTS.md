@@ -35,7 +35,9 @@ Where each topic is written down:
   (PostgreSQL setup, health checks, the metrics table, duration properties, operations runbooks),
   `configuration.md` (every configuration property and its default) and `advanced/`, one guide per
   feature (outbox, sagas, GDPR erasure, idempotency and more).
-- Each module's `README.md`: its API and, for an integration, its configuration properties.
+- Each module's `README.md`: its API and, for an integration, the configuration keys most
+  applications set. Every key and its default are in `docs/guide/configuration.md`; the Quarkus
+  README also lists every key, in an `application.properties` listing.
 - `docs/adr/`: architecture decisions. `docs/reference/api.md`: the API reference.
   `CHANGELOG.md`: what each version changes.
 
@@ -185,12 +187,15 @@ build files, guides, commit messages and pull request descriptions. All of it fo
 - No space before a period.
 
 `InternalTrackerIdRatchetTest` in `streamrune-core` reads every `.java`, `.md` and build file in the
-repository and fails on tracker and review labels (review-finding labels included, in test sources
-too), on references to private review material and on history wording: a reviewer named by role, a
-numbered roadmap stage, work deferred to the roadmap, and outside test sources and code samples the
-state before or after a fix and the words that narrate an earlier behaviour (the test's javadoc
-lists them). It also fails on a space before a period in prose (javadoc, and markdown outside fenced
-blocks), and it reads a phrase across a line break, so a reflowed comment does not hide one.
+repository, and the files without an extension it publishes (`.gitmessage`, `.gitignore`,
+`LICENSE`, `NOTICE`, `CODEOWNERS`, the git hook, `gradlew`), and fails on tracker and review labels
+(review-finding labels included, and a work-item label at the front of a test name or a string id,
+in test sources too), on references to private review material and on history wording: a reviewer
+named by role, a numbered roadmap stage, work deferred to the roadmap, and outside test sources and
+code samples the state before or after a fix and the words that narrate an earlier behaviour (the
+test's javadoc lists them). It also fails on a space before a period in prose — the comments of a
+`.java` file (javadoc, a one-line comment, a line comment on a line of its own) and markdown outside
+fenced blocks — and it reads a phrase across a line break, so a reflowed comment does not hide one.
 Write a state as it is: "cannot", "is not", "has lost it", and "the clock that computes" for a
 purpose. Its failure message lists every offending `file:line` with the rule it breaks. The other
 repository-wide ratchets:
@@ -209,18 +214,23 @@ run by `./gradlew docLintTest`, `check` and `quickCheck`) fail when it does not:
 
 - a meter constant in `MetricNames` and the `### Metrics` table of `docs/guide/production.md`
   (`MetricNamesDocLintTest`, which also checks the integration-api README's meter table and every
-  meter name in the guides);
+  meter name in the guides, the README, `docs/QUICKSTART.md` and `docs/reference/api.md`);
+- the kind of meter `MicrometerStreamRuneMetrics` registers and the `Type` column of both meter
+  tables (`MeterTypeDocLintTest` in `streamrune-integration-api`);
 - a relay component name in `RelayComponentNames`, or an integration's health check name, and the
   two health tables of `docs/guide/production.md` (`RelayComponentNamesDocLintTest`);
 - a public type of the test kit and `docs/guide/testing.md` and `streamrune-test/README.md`
-  (`TestKitDocLintTest`);
+  (`TestKitDocLintTest`): a heading or a code span of the type's name alone in the guide, a heading
+  or the first cell of a row of the type table in the README;
 - a configuration property or its default and `docs/guide/configuration.md`, the configuration
   metadata of Spring and Micronaut (`additional-spring-configuration-metadata.json`,
   `configuration-metadata.json`) and the Quarkus README's listing, and every guide table with a
   `Default` column (`ConfigurationDocLintTest` in each integration). Its oracle is what the
   integration binds and reads: the properties types as the framework binds them, every bean
-  condition and injected property, the keys looked up in code. A default is written the way the
-  configuration reference describes (`7d`, `1m`, `—` for none);
+  condition and injected property, the keys looked up in code, its own and those it reads through
+  the constants of `streamrune-integration-api`. Every `streamrune.` name of the guides, the README,
+  the quickstart and the API reference is a key, a meter or a span attribute. A default is written
+  the way the configuration reference describes (`7d`, `1m`, `—` for none);
 - a change a user notices and `CHANGELOG.md`.
 
 ## 6. Pitfalls

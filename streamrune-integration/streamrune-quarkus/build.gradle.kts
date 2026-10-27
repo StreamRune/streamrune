@@ -169,14 +169,22 @@ tasks.named("check") {
     dependsOn(verifyMicrometerVersion)
 }
 
-// ConfigurationDocLintTest reads the guides, this module's README and its main sources (the keys it
-// reads in code) (docLintTest, see the root build): declared, so an edit to any of them re-runs it.
+// ConfigurationDocLintTest reads the guides, this module's README, the repository's README, the
+// quickstart and the API reference, and the main sources of this module and of
+// streamrune-integration-api (the keys read in code) (docLintTest, see the root build): declared, so
+// an edit to any of them re-runs it.
 tasks.named<Test>("docLintTest") {
     inputs
         .files(
             fileTree(rootDir.resolve("docs/guide")) { include("**/*.md") },
             file("README.md"),
+            rootDir.resolve("README.md"),
+            rootDir.resolve("docs/QUICKSTART.md"),
+            rootDir.resolve("docs/reference/api.md"),
             fileTree("src/main/java") { include("**/*.java") },
+            fileTree(rootDir.resolve("streamrune-integration/streamrune-integration-api/src/main/java")) {
+                include("**/*.java")
+            },
         )
         .withPropertyName("configurationDocs")
         .withPathSensitivity(PathSensitivity.RELATIVE)

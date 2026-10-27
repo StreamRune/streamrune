@@ -90,6 +90,30 @@ class ConfigurationDocsTest {
   }
 
   @Test
+  void aNameOnAnotherPageIsHeldToTheCodeAndDocumentsNoKey() {
+    var docs =
+        ConfigurationDocs.of(
+            Map.of(
+                "guide.md",
+                "`streamrune.outbox.enabled`, `streamrune.outbox.retention-max-age`,"
+                    + " `streamrune.retry-max-attempts`, `streamrune.projections.<name>.enabled`.",
+                "docs/QUICKSTART.md",
+                "Set `streamrune.inbox.retention-max-age`; `streamrune.outbox.time-out` is no key."),
+            Set.of("guide.md"));
+
+    assertEquals(
+        List.of("streamrune.inbox.retention-max-age (default 7d)"), docs.undocumented(ORACLE));
+    assertEquals(List.of("docs/QUICKSTART.md:1: streamrune.outbox.time-out"), docs.unknown(ORACLE));
+  }
+
+  @Test
+  void theDomainOfAnEmailAddressIsNoName() {
+    var docs = ConfigurationDocs.of(Map.of("README.md", "Write to security@streamrune.com."));
+
+    assertEquals(List.of(), docs.unknown(ORACLE));
+  }
+
+  @Test
   void aDefaultColumnMustStateTheCanonicalDefault() {
     var docs =
         ConfigurationDocs.of(
@@ -255,6 +279,8 @@ class ConfigurationDocsTest {
     assertEquals(root, docs.root());
     assertTrue(docs.fileNames().contains("docs/guide/production.md"), docs.fileNames().toString());
     assertTrue(docs.fileNames().contains("streamrune-integration/streamrune-spring/README.md"));
+    assertTrue(
+        docs.fileNames().containsAll(ConfigurationDocs.OTHER_PAGES), docs.fileNames().toString());
     assertTrue(docs.fileNames().size() > 10, docs.fileNames().toString());
   }
 
