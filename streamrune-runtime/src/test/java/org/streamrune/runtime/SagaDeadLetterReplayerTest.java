@@ -417,7 +417,7 @@ class SagaDeadLetterReplayerTest {
   }
 
   @Test
-  void w3fd4_eventNotFoundStop_leavesTheLiveRowLive_shieldOn_discardIsTheRemedy() {
+  void eventNotFoundStop_leavesTheLiveRowLive_shieldOn_discardIsTheRemedy() {
     var h = new Harness();
     var start = h.start();
     h.orchestrator.evolvePoison.add(h.offset(start));
@@ -449,7 +449,7 @@ class SagaDeadLetterReplayerTest {
   }
 
   @Test
-  void w3fr1_healthyRowWithAResolvedNullEntry_isNeverFaultedByAStop() {
+  void healthyRowWithAResolvedNullEntry_isNeverFaultedByAStop() {
     var h = new Harness();
     var start = h.start();
     h.deliver(start);
@@ -466,7 +466,7 @@ class SagaDeadLetterReplayerTest {
   }
 
   @Test
-  void w3fr4_sameOffsetTwin_theNullTwinIsDiscardedBeforeTheNamedEntryIsFed() {
+  void sameOffsetTwin_theNullTwinIsDiscardedBeforeTheNamedEntryIsFed() {
     var h = new Harness();
     var start = h.start();
     var corr = h.advance();

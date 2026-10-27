@@ -41,18 +41,41 @@ import org.streamrune.core.metrics.MetricNames;
  * the ones in its {@code Property}, {@code Setting}, {@code Spring}, {@code Quarkus} and {@code
  * Micronaut} cells. The cell is compared after its backticks and bold markers are removed, so it
  * must be written as {@link DefaultRendering} writes the default.
+ *
+ * <p>The files read are the guides under {@code docs/guide}, the integration's README, and the
+ * pages {@link #OTHER_PAGES_LIST} lists, which name keys too. Every name of every file is held to
+ * the code ({@link #unknown}, {@link #wrongDefaults}); a key is documented ({@link #undocumented})
+ * when a guide or the README names it, where a reader looks a key up.
  */
 public final class ConfigurationDocs {
 
   /**
+   * The repository-relative file that lists the pages outside {@code docs/guide} that name
+   * configuration keys (the repository's README, the quickstart and the API reference), one
+   * repository-relative path per line; a line that starts with {@code #} is a comment. {@code
+   * MetricNamesDocLintTest} reads the same list for the meter names, and the root build declares
+   * the list and its pages as inputs of every {@code docLintTest} task.
+   */
+  public static final String OTHER_PAGES_LIST = "gradle/doc-lint-pages.txt";
+
+  /**
+   * The main sources of {@code streamrune-integration-api}, repository-relative: the keys the three
+   * integrations read through its constants ({@code RequestIdentityPolicy}, {@code
+   * SnapshotPurgeSetting} and the other settings) are declared there.
+   */
+  public static final String INTEGRATION_API_SOURCES =
+      "streamrune-integration/streamrune-integration-api/src/main/java";
+
+  /**
    * A {@code streamrune.} name: dot-separated segments of lower-case letters, digits, {@code -} and
    * {@code _}, or a {@code <placeholder>}, optionally ending in {@code .*}. Not preceded by a word
-   * character, a dot, a slash or a dash, so a package name ({@code org.streamrune.core}) or a
-   * system property flag ({@code -Dstreamrune.x}) is not a name.
+   * character, a dot, a slash, a dash or an at sign, so a package name ({@code
+   * org.streamrune.core}), a system property flag ({@code -Dstreamrune.x}) or the domain of an
+   * e-mail address is not a name.
    */
   private static final Pattern NAME =
       Pattern.compile(
-          "(?<![\\w.$/-])streamrune(?:\\.(?:[a-z0-9]+(?:[-_][a-z0-9]+)*|<[a-z-]+>))+(?:\\.\\*)?");
+          "(?<![\\w.$/@-])streamrune(?:\\.(?:[a-z0-9]+(?:[-_][a-z0-9]+)*|<[a-z-]+>))+(?:\\.\\*)?");
 
   /** A Java string literal on one line; group 1 is its content. */
   private static final Pattern STRING_LITERAL = Pattern.compile("\"((?:[^\"\\\\]|\\\\.)*)\"");
@@ -67,35 +90,72 @@ public final class ConfigurationDocs {
   private final Path root;
   private final Map<String, List<String>> files;
 
-  private ConfigurationDocs(Path root, Map<String, List<String>> files) {
+  /** The files whose names document a key: the guides and the given README. */
+  private final Set<String> referenceFiles;
+
+  private ConfigurationDocs(
+      Path root, Map<String, List<String>> files, Set<String> referenceFiles) {
     this.root = root;
     this.files = files;
+    this.referenceFiles = referenceFiles;
   }
 
   /**
-   * The markdown files under {@code docs/guide} of the repository and the given repository-relative
-   * files (an integration's README), read once.
+   * The pages {@link #OTHER_PAGES_LIST} lists in the repository at {@code root},
+   * repository-relative, in the order it lists them.
+   */
+  public static List<String> otherPages(Path root) {
+    try {
+      return Files.readAllLines(root.resolve(OTHER_PAGES_LIST), StandardCharsets.UTF_8).stream()
+          .map(String::strip)
+          .filter(line -> !line.isEmpty() && !line.startsWith("#"))
+          .toList();
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  /**
+   * The markdown files under {@code docs/guide} of the repository, the given repository-relative
+   * files (an integration's README) and the {@link #otherPages}, read once.
    */
   public static ConfigurationDocs read(Path root, String... moreFiles) {
     Map<String, List<String>> files = new LinkedHashMap<>();
+    Set<String> referenceFiles = new TreeSet<>();
     try (Stream<Path> guides = Files.walk(root.resolve("docs/guide"))) {
       for (Path guide : guides.filter(p -> p.toString().endsWith(".md")).sorted().toList()) {
         files.put(relative(root, guide), Files.readAllLines(guide, StandardCharsets.UTF_8));
+        referenceFiles.add(relative(root, guide));
       }
       for (String file : moreFiles) {
         files.put(file, Files.readAllLines(root.resolve(file), StandardCharsets.UTF_8));
+        referenceFiles.add(file);
+      }
+      for (String page : otherPages(root)) {
+        files.put(page, Files.readAllLines(root.resolve(page), StandardCharsets.UTF_8));
       }
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
-    return new ConfigurationDocs(root, files);
+    return new ConfigurationDocs(root, files, referenceFiles);
   }
 
-  /** Markdown text given directly, by file name; for testing this class. */
+  /**
+   * Markdown text given directly, by file name; for testing this class. Every file documents the
+   * keys it names.
+   */
   static ConfigurationDocs of(Map<String, String> markdownByFile) {
+    return of(markdownByFile, markdownByFile.keySet());
+  }
+
+  /**
+   * Markdown text given directly, by file name, of which {@code referenceFiles} document the keys
+   * they name; for testing this class.
+   */
+  static ConfigurationDocs of(Map<String, String> markdownByFile, Set<String> referenceFiles) {
     Map<String, List<String>> files = new LinkedHashMap<>();
     markdownByFile.forEach((name, text) -> files.put(name, List.of(text.split("\n", -1))));
-    return new ConfigurationDocs(Path.of("."), files);
+    return new ConfigurationDocs(Path.of("."), files, Set.copyOf(referenceFiles));
   }
 
   /**
@@ -119,10 +179,15 @@ public final class ConfigurationDocs {
     return new TreeSet<>(files.keySet());
   }
 
-  /** The keys of {@code oracle} that no file names, with no placeholder exempt. */
+  /**
+   * The keys of {@code oracle} that no guide and no given README names, with no placeholder exempt;
+   * a key named only on one of the {@link #otherPages} is not documented.
+   */
   public List<String> undocumented(Map<String, String> oracle) {
     Set<String> named = new TreeSet<>();
-    occurrences().forEach(o -> named.add(o.name()));
+    occurrences().stream()
+        .filter(o -> referenceFiles.contains(o.file()))
+        .forEach(o -> named.add(o.name()));
     List<String> missing = new ArrayList<>();
     for (String key : oracle.keySet()) {
       if (!named.contains(key)) {
@@ -380,8 +445,8 @@ public final class ConfigurationDocs {
     }
   }
 
-  /** A name at a place: {@code file:line}. */
-  record Occurrence(String name, String where) {}
+  /** A name at a place: {@code where} is {@code file:line}. */
+  record Occurrence(String name, String file, String where) {}
 
   /** A table row that states a default for {@code keys}. */
   record DefaultRow(List<String> keys, String stated, String where) {}
@@ -404,10 +469,11 @@ public final class ConfigurationDocs {
             }
             Matcher name = NAME.matcher(line);
             while (name.find()) {
-              occurrences.add(new Occurrence(name.group(), where));
+              occurrences.add(new Occurrence(name.group(), file, where));
             }
             if (inYaml) {
-              yamlKey(line, path).ifPresent(key -> occurrences.add(new Occurrence(key, where)));
+              yamlKey(line, path)
+                  .ifPresent(key -> occurrences.add(new Occurrence(key, file, where)));
             }
           }
         });

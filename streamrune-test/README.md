@@ -70,6 +70,9 @@ assertEquals(1, history.events().size());
 | `EventStreamFixtures` | Event streams in files: `write(store, file)` records every event of an `InMemoryEventStore` as JSON (stream, version, type, schema version, payload as the store's own mapper writes it with `@Encrypted` fields in the clear, metadata), `read(file)` parses it, `appendTo(store, events)` replays it into a fresh serializing store — the store's registry resolves each type, its upcasters upcast an older payload — and a stream written again is the same file |
 | `InMemoryCommandInbox` | `CommandInbox`; `InMemoryEventStore.withCommandInbox(inbox)` claims a key and appends under one lock |
 | `InMemorySagaDeadLetterStore` | `SagaDeadLetterStore` whose `publish` is an upsert per saga and event offset, as in PostgreSQL |
+| `InMemorySagaStore` | `SagaStore` that keeps the state objects themselves and stamps their times from the `Clock` it is given; `InMemoryEventStore.withSagaStore(store)` fences a saga's forward command against it, as `PostgresEventStore` fences it against `saga_state` |
+| `InMemoryDeadLetterQueue` | `DeadLetterQueue` that stamps `publishedAt` from the `Clock` it is given; `all()` returns every stored entry |
+| `InMemoryCryptoEngine` | AES-256-GCM `CryptoEngine` with its keys in memory and the terminal erasure of the production engines: a forgotten subject's key is gone, and only `reinstate` registers the subject again |
 | `InMemoryProjectionDeadLetterStore` | `ProjectionDeadLetterStore`; `all()` returns every stored entry |
 | `InMemoryEventSubscription` | `EventSubscription` with the at-most-once notification semantics of PostgreSQL `LISTEN`/`NOTIFY`, for push-driven wiring without Docker |
 | `MutableClock` | `Clock` the test sets and advances (`startingAt(instant)`, `advance(duration)`): backoff, timeouts and timestamps without sleeping |

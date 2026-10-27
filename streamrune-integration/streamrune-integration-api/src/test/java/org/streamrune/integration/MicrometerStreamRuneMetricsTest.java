@@ -447,8 +447,11 @@ class MicrometerStreamRuneMetricsTest {
     return names;
   }
 
-  /** Calls every recording entry point once so lazily-registered tagged meters exist too. */
-  private static void driveEveryRecordingEntryPoint(MicrometerStreamRuneMetrics metrics) {
+  /**
+   * Calls every recording entry point once so lazily-registered tagged meters exist too; {@code
+   * MeterTypeDocLintTest} reads the kind of every meter after it.
+   */
+  static void driveEveryRecordingEntryPoint(MicrometerStreamRuneMetrics metrics) {
     metrics.recordCommandDispatched("PlaceOrder");
     metrics.recordCommandSucceeded();
     metrics.recordCommandFailed();

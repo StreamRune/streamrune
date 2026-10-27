@@ -27,18 +27,27 @@ import org.junit.jupiter.api.Test;
  *       {@code MetricNames} exactly once, and nothing else;
  *   <li>the meter table of {@code streamrune-integration/streamrune-integration-api/README.md}
  *       names meters only;
- *   <li>every meter-shaped name in the guides is a meter: a backticked {@code streamrune.} name
- *       whose last segment has an underscore, a shape no configuration key has (keys are kebab
- *       case). A meter name without an underscore is held to the code by the integrations'
- *       configuration doc-lint, which knows the keys as well as the meters.
+ *   <li>every meter-shaped name in the guides and the pages {@code gradle/doc-lint-pages.txt} lists
+ *       (the repository's README, the quickstart and the API reference) is a meter: a backticked
+ *       {@code streamrune.} name whose last segment has an underscore, a shape no configuration key
+ *       has (keys are kebab case). A meter name without an underscore is held to the code by the
+ *       integrations' configuration doc-lint, which knows the keys as well as the meters.
  * </ul>
  *
- * <p>The documents are declared as inputs of this module's {@code docLintTest} task.
+ * <p>The documents are declared as inputs of this module's {@code docLintTest} task; the root build
+ * declares the list of pages and the pages it lists.
  */
 class MetricNamesDocLintTest {
 
   private static final Pattern BACKTICKED_NAME =
       Pattern.compile("`(streamrune(?:\\.[a-z0-9_]+)+)[^`]*`");
+
+  /**
+   * The file that lists the pages outside {@code docs/guide} that name meters too, one
+   * repository-relative path per line, {@code #} starting a comment line; the integrations'
+   * configuration doc-lint reads the same list.
+   */
+  private static final String OTHER_PAGES_LIST = "gradle/doc-lint-pages.txt";
 
   @Test
   void theProductionGuideMetricsTableNamesEveryMeterOnce() {
@@ -85,18 +94,27 @@ class MetricNamesDocLintTest {
     Set<String> meters = meters();
     List<String> problems = new ArrayList<>();
     int checked = 0;
+    List<Path> documents = new ArrayList<>();
     try (Stream<Path> guides = Files.walk(root().resolve("docs/guide"))) {
-      for (Path guide : guides.filter(p -> p.toString().endsWith(".md")).sorted().toList()) {
-        List<String> lines = Files.readAllLines(guide, StandardCharsets.UTF_8);
-        for (int i = 0; i < lines.size(); i++) {
-          Matcher name = BACKTICKED_NAME.matcher(lines.get(i));
-          while (name.find()) {
-            String found = name.group(1);
-            if (found.substring(found.lastIndexOf('.') + 1).contains("_")) {
-              checked++;
-              if (!meters.contains(found)) {
-                problems.add(root().relativize(guide) + ":" + (i + 1) + ": " + found);
-              }
+      guides.filter(p -> p.toString().endsWith(".md")).sorted().forEach(documents::add);
+    }
+    List<String> otherPages =
+        Files.readAllLines(root().resolve(OTHER_PAGES_LIST), StandardCharsets.UTF_8).stream()
+            .map(String::strip)
+            .filter(line -> !line.isEmpty() && !line.startsWith("#"))
+            .toList();
+    assertTrue(!otherPages.isEmpty(), OTHER_PAGES_LIST + " must list the pages besides the guides");
+    otherPages.forEach(page -> documents.add(root().resolve(page)));
+    for (Path document : documents) {
+      List<String> lines = Files.readAllLines(document, StandardCharsets.UTF_8);
+      for (int i = 0; i < lines.size(); i++) {
+        Matcher name = BACKTICKED_NAME.matcher(lines.get(i));
+        while (name.find()) {
+          String found = name.group(1);
+          if (found.substring(found.lastIndexOf('.') + 1).contains("_")) {
+            checked++;
+            if (!meters.contains(found)) {
+              problems.add(root().relativize(document) + ":" + (i + 1) + ": " + found);
             }
           }
         }
@@ -104,7 +122,10 @@ class MetricNamesDocLintTest {
     }
     assertTrue(checked > 50, "the meter names of the guides must be found: " + checked);
     assertNoProblems(
-        "meter-shaped name(s) in the guides that MetricNames does not define", problems);
+        "meter-shaped name(s) in the guides or the pages of "
+            + OTHER_PAGES_LIST
+            + " that MetricNames does not define",
+        problems);
   }
 
   /** The {@code streamrune.} values of the public string constants of {@link MetricNames}. */

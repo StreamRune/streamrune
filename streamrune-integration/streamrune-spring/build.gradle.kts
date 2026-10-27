@@ -142,14 +142,19 @@ tasks.named<Test>("test") {
 
 tasks.named("check") { dependsOn(noValidationProviderTest, optionalDependencyAbsentTest) }
 
-// ConfigurationDocLintTest reads the guides, this module's README and its main sources (the keys it
-// reads in code) (docLintTest, see the root build): declared, so an edit to any of them re-runs it.
+// ConfigurationDocLintTest reads the guides, this module's README, the pages listed in
+// gradle/doc-lint-pages.txt (declared by the root build) and the main sources of this module and of
+// streamrune-integration-api (the keys read in code) (docLintTest, see the root build): declared, so
+// an edit to any of them re-runs it.
 tasks.named<Test>("docLintTest") {
     inputs
         .files(
             fileTree(rootDir.resolve("docs/guide")) { include("**/*.md") },
             file("README.md"),
             fileTree("src/main/java") { include("**/*.java") },
+            fileTree(rootDir.resolve("streamrune-integration/streamrune-integration-api/src/main/java")) {
+                include("**/*.java")
+            },
         )
         .withPropertyName("configurationDocs")
         .withPathSensitivity(PathSensitivity.RELATIVE)

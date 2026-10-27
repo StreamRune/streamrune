@@ -482,8 +482,8 @@ Use `SubscriptionConfig.DEFAULT` for production (LISTEN/NOTIFY enabled). Use `po
 
 ## Duration properties: what `0` and a negative value mean
 
-Every `Duration` knob accepts ISO-8601 (`PT30S`, `PT720H` — the Quarkus form) or the compact form
-(`30s`, `30d` — the Spring/Micronaut form). What a **zero** or a **negative** value does is *not*
+Every `Duration` knob accepts the compact form (`30s`, `30d`) or ISO-8601 (`PT30S`, `PT720H`), on
+each of the three integrations. What a **zero** or a **negative** value does is *not*
 uniform across the knobs, because the knobs do not all measure the same kind of thing. The rule
 StreamRune froze for 1.0.0 is:
 
@@ -698,7 +698,7 @@ Quarantine metadata, command-inbox rows, and command dead-letter queue entries a
 | `streamrune.inbox.retention-max-age` | `7d` | `InboxRetentionSweeper` — deletes processed command-inbox rows older than the window; **must** exceed your actual broker redelivery/subscription-replay horizon, or a pruned key cannot prevent a genuine duplicate dispatch |
 | `streamrune.dead-letter.retention-max-age` | `7d` | `DeadLetterRetentionSweeper` — deletes `dead_letter_queue` rows older than the window. A command DLQ entry stores the full command payload (`@Encrypted` fields encrypted, per the crypto-shredding mapper); this bounds how long it sits queryable. **Must not exceed** `streamrune.inbox.retention-max-age`: a keyed entry is replayed under its caller's key, and that replay is a no-op only while the inbox still holds the key's row — retried after the inbox sweeper pruned the row, it executes the command a second time although the caller's own retry already completed it. So the boot-time `CommandDeadLetterRetentionValidator` fails fast on a violating config whenever a `CommandInbox` and a `DeadLetterQueue` are configured, and the retry runner skips a keyed entry first received longer ago than the inbox window on its schedule (the store leaves it out of the read; `streamrune.dlq.awaiting_operator` counts it) and refuses it (`STALE_REPLAY_BLOCKED`) on an operator's `retry(commandId)`, unless the operator forces it after checking that the command's effect is absent. Decide on an entry within the window: discard it if its effect is present, retry it if not. **Independent of `streamrune.dead-letter.enabled`** — that switch turns off only the automatic retry runner; the bus keeps dead-lettering and this sweeper keeps pruning. Zero or negative is what turns pruning off |
 
-All three accept ISO-8601 (Quarkus, e.g. `PT168H`) or the framework's compact duration form (Spring/Micronaut, e.g. `7d`); zero or negative disables pruning for that sweeper — **except** the two dead-letter windows, `streamrune.saga.dead-letter-retention-max-age` and `streamrune.dead-letter.retention-max-age`, where "disabled" means unbounded retention, which violates the "must not exceed inbox retention" invariant in the rows above and makes `SagaRetentionValidator.validateDeadLetterRetention` (sagas enabled and a `SagaDeadLetterStore` bean present, the default) or `CommandDeadLetterRetentionValidator` (a `CommandInbox` and a `DeadLetterQueue` configured) throw `IllegalStateException` at startup — every replica fails to boot rather than merely skipping pruning. To retain dead-letter entries longer, raise the dead-letter window **and** `streamrune.inbox.retention-max-age` together (or set the inbox property itself to zero/negative first, which the validators treat as "never prunes, so nothing can outlive it").
+All three accept the compact duration form (e.g. `7d`) or ISO-8601 (e.g. `PT168H`) on every integration; zero or negative disables pruning for that sweeper — **except** the two dead-letter windows, `streamrune.saga.dead-letter-retention-max-age` and `streamrune.dead-letter.retention-max-age`, where "disabled" means unbounded retention, which violates the "must not exceed inbox retention" invariant in the rows above and makes `SagaRetentionValidator.validateDeadLetterRetention` (sagas enabled and a `SagaDeadLetterStore` bean present, the default) or `CommandDeadLetterRetentionValidator` (a `CommandInbox` and a `DeadLetterQueue` configured) throw `IllegalStateException` at startup — every replica fails to boot rather than merely skipping pruning. To retain dead-letter entries longer, raise the dead-letter window **and** `streamrune.inbox.retention-max-age` together (or set the inbox property itself to zero/negative first, which the validators treat as "never prunes, so nothing can outlive it").
 
 **With a `CommandInbox` of your own, set `streamrune.inbox.retention-max-age` to its actual pruning window** (zero or negative if it never prunes). The command dead-letter boot check and the retry runner's stale-key refusal read that property whatever inbox is wired; a value that disagrees with your pruning either refuses a valid configuration or replays entries whose rows are gone.
 
@@ -1222,7 +1222,7 @@ streamrune.subscription.single-active-consumer.lease-ttl=15s
 ```
 
 ```properties
-# Quarkus (same property names; Duration parses the ISO-8601 literal)
+# Quarkus (same property names; 15s and the ISO-8601 PT15S below bind on all three)
 streamrune.subscription.single-active-consumer.enabled=true
 streamrune.subscription.single-active-consumer.lease-ttl=PT15S
 ```

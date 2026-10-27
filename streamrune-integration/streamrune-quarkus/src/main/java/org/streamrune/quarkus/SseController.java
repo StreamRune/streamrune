@@ -519,10 +519,11 @@ public class SseController {
   /**
    * Stops the keepalive scheduler when the bean is destroyed. A stream opened afterwards is
    * answered already complete, like one opened after the shutdown event: a stopped scheduler
-   * accepts neither its keepalive nor its deadline.
+   * accepts neither its keepalive nor its deadline. Public, as the module's observers are: the
+   * container calls it from the bean class it generates.
    */
   @PreDestroy
-  void shutdown() {
+  public void shutdown() {
     shuttingDown = true;
     if (keepAlive != null) {
       keepAlive.shutdownNow();

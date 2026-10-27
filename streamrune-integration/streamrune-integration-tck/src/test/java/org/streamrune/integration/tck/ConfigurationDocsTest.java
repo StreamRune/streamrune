@@ -90,6 +90,30 @@ class ConfigurationDocsTest {
   }
 
   @Test
+  void aNameOnAnotherPageIsHeldToTheCodeAndDocumentsNoKey() {
+    var docs =
+        ConfigurationDocs.of(
+            Map.of(
+                "guide.md",
+                "`streamrune.outbox.enabled`, `streamrune.outbox.retention-max-age`,"
+                    + " `streamrune.retry-max-attempts`, `streamrune.projections.<name>.enabled`.",
+                "docs/QUICKSTART.md",
+                "Set `streamrune.inbox.retention-max-age`; `streamrune.outbox.time-out` is no key."),
+            Set.of("guide.md"));
+
+    assertEquals(
+        List.of("streamrune.inbox.retention-max-age (default 7d)"), docs.undocumented(ORACLE));
+    assertEquals(List.of("docs/QUICKSTART.md:1: streamrune.outbox.time-out"), docs.unknown(ORACLE));
+  }
+
+  @Test
+  void theDomainOfAnEmailAddressIsNoName() {
+    var docs = ConfigurationDocs.of(Map.of("README.md", "Write to security@streamrune.com."));
+
+    assertEquals(List.of(), docs.unknown(ORACLE));
+  }
+
+  @Test
   void aDefaultColumnMustStateTheCanonicalDefault() {
     var docs =
         ConfigurationDocs.of(
@@ -255,7 +279,22 @@ class ConfigurationDocsTest {
     assertEquals(root, docs.root());
     assertTrue(docs.fileNames().contains("docs/guide/production.md"), docs.fileNames().toString());
     assertTrue(docs.fileNames().contains("streamrune-integration/streamrune-spring/README.md"));
+    List<String> otherPages = ConfigurationDocs.otherPages(root);
+    assertTrue(!otherPages.isEmpty(), ConfigurationDocs.OTHER_PAGES_LIST + " lists no page");
+    assertTrue(docs.fileNames().containsAll(otherPages), docs.fileNames().toString());
     assertTrue(docs.fileNames().size() > 10, docs.fileNames().toString());
+  }
+
+  @Test
+  void theOtherPagesAreTheLinesOfTheirListThatAreNeitherBlankNorAComment(@TempDir Path root)
+      throws Exception {
+    Files.createDirectories(root.resolve(ConfigurationDocs.OTHER_PAGES_LIST).getParent());
+    Files.writeString(
+        root.resolve(ConfigurationDocs.OTHER_PAGES_LIST),
+        String.join("\n", "# the pages", "README.md", "", "  docs/QUICKSTART.md  ", "#", ""));
+
+    assertEquals(List.of("README.md", "docs/QUICKSTART.md"), ConfigurationDocs.otherPages(root));
+    assertThrowsUnchecked(() -> ConfigurationDocs.otherPages(root.resolve("no-such-root")));
   }
 
   @Test

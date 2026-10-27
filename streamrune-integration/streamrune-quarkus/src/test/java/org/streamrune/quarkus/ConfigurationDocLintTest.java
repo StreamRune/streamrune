@@ -9,6 +9,7 @@ import io.smallrye.config.WithName;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -34,8 +35,9 @@ import org.streamrune.integration.tck.DefaultRendering;
  * <ol>
  *   <li>this module's README names every key (Quarkus has no configuration metadata file of its
  *       own);
- *   <li>the guides or the README name every key, and every {@code streamrune.} name they use is a
- *       key, a meter or a span attribute;
+ *   <li>the guides or this module's README name every key, and every {@code streamrune.} name they,
+ *       the repository's README, the quickstart and the API reference use is a key, a meter or a
+ *       span attribute;
  *   <li>every table with a {@code Default} column states the default this integration has.
  * </ol>
  */
@@ -182,15 +184,30 @@ class ConfigurationDocLintTest {
   @Test
   void everyNameTheGuidesUseIsAKeyAMeterOrASpanAttribute() {
     assertNoProblems(
-        "streamrune.* name(s) in the guides or " + README + " that Quarkus neither binds nor reads",
+        "streamrune.* name(s) in the guides, "
+            + README
+            + " or "
+            + ConfigurationDocs.otherPages(ConfigurationDocs.repositoryRoot())
+            + " that Quarkus neither binds nor reads",
         docs.unknown(oracle));
   }
 
+  /**
+   * The keys this module reads in code, and those it reads through a constant of {@code
+   * streamrune-integration-api}, are keys the oracle knows.
+   */
   @Test
   void everyKeyTheModuleReadsInCodeIsInTheOracle() {
+    List<String> unknown =
+        new ArrayList<>(ConfigurationDocs.unknownInJavaSources(Path.of("src/main/java"), oracle));
+    unknown.addAll(
+        ConfigurationDocs.unknownInJavaSources(
+            ConfigurationDocs.repositoryRoot().resolve(ConfigurationDocs.INTEGRATION_API_SOURCES),
+            oracle));
     assertNoProblems(
-        "streamrune.* name(s) in this module's string literals that the oracle does not know",
-        ConfigurationDocs.unknownInJavaSources(Path.of("src/main/java"), oracle));
+        "streamrune.* name(s) in the string literals of this module or of"
+            + " streamrune-integration-api that the oracle does not know",
+        unknown);
   }
 
   @Test

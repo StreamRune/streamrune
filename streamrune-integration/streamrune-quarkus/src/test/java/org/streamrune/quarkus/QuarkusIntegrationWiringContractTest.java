@@ -1,6 +1,7 @@
 package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.quarkus.arc.BeanCreator;
 import io.quarkus.arc.SyntheticCreationalContext;
@@ -16,6 +17,7 @@ import jakarta.enterprise.context.Dependent;
 import jakarta.enterprise.context.RequestScoped;
 import jakarta.enterprise.inject.Disposes;
 import jakarta.enterprise.inject.Produces;
+import jakarta.enterprise.inject.spi.InjectionPoint;
 import jakarta.inject.Singleton;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -34,6 +36,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -44,6 +47,7 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import javax.sql.DataSource;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.health.HealthCheckResponse;
 import org.eclipse.microprofile.health.Readiness;
 import org.junit.jupiter.api.AfterAll;
@@ -53,17 +57,13 @@ import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStore;
-import org.streamrune.core.UserRoleResolver;
 import org.streamrune.core.projection.OffsetStore;
-import org.streamrune.integration.RequestIdentityPolicy;
-import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.integration.tck.Application;
 import org.streamrune.integration.tck.ConfigurationDocs;
 import org.streamrune.integration.tck.ContractBeans;
 import org.streamrune.integration.tck.ContractHttp;
 import org.streamrune.integration.tck.HttpResponse;
 import org.streamrune.integration.tck.IntegrationWiringContract;
-import org.streamrune.runtime.SseEventPublisher;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
 import org.streamrune.testsupport.PostgresTestImage;
@@ -81,13 +81,16 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * DataSource} is {@link NoDatabase}. A plain contract bean is a {@code Singleton} class bean, a
  * supplied one a synthetic bean of the type it supplies.
  *
- * <p>The SSE endpoint is served by Quarkus REST over HTTP ({@link QuarkusRestTestServer}): the
- * {@link SseController} and the {@link StreamRuneRequestFilter} are built with the container's
- * beans, the request-context holder a plain instance, as {@code SseWireFormatTest} builds them. The
+ * <p>The HTTP endpoints are served by Quarkus REST over HTTP ({@link QuarkusRestTestServer}) as a
+ * Quarkus application serves them: the resource and the request filter are the container's beans —
+ * the {@link SseController} bean, which exists when the build-time condition {@code
+ * streamrune.sse.enabled=true} holds, and the {@link StreamRuneRequestFilter} provider, which
+ * Quarkus REST registers as a bean ({@link #REST_PROVIDERS}) — and each request runs inside a CDI
+ * request context of its own, active on every thread the request runs on, so the filter writes the
+ * request-scoped holder the resource reads. The runtime value of {@code streamrune.sse.enabled},
+ * which the controller injects, comes from the configuration ({@link ConfigPropertyValues}). The
  * contract's {@link ContractBeans.DispatchingRoute} is {@link DispatchingResource}, served the same
- * way but as a Quarkus application serves it: each request runs inside a CDI request context of its
- * own, and the filter writes the container's request-scoped holder. The health check is the
- * container's {@link StreamRuneHealthCheck} bean.
+ * way. The health check is the container's {@link StreamRuneHealthCheck} bean.
  *
  * <p>Arc is one container per JVM, and {@link ApplicationInfrastructure} hands it the current
  * start's configuration through static fields: the tests run one start at a time, in one thread.
@@ -96,11 +99,13 @@ import org.testcontainers.containers.PostgreSQLContainer;
 class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
 
   /**
-   * Every class of the module's main sources that Quarkus makes a bean, other than the two JAX-RS
-   * classes the adapter builds itself ({@link SseController}, {@link StreamRuneRequestFilter}).
+   * Every class of the module's main sources that Quarkus makes a bean, other than the JAX-RS
+   * provider Quarkus REST registers ({@link #REST_PROVIDERS}). The {@link SseController} resource
+   * is a bean of an application whose build-time configuration enables SSE.
    */
   static final List<Class<?>> FRAMEWORK_BEANS =
       List.of(
+          SseController.class,
           StreamRuneProducers.class,
           ProjectionProducer.class,
           StreamRuneCryptoProducers.FileSystemCryptoProducer.class,
@@ -121,6 +126,9 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
           StreamRuneStartupLogger.class,
           StreamRuneDevServicesConfig.class,
           StreamRuneRequestContextHolder.class);
+
+  /** The module's JAX-RS providers, which Quarkus REST registers as {@code Singleton} beans. */
+  static final List<Class<?>> REST_PROVIDERS = List.of(StreamRuneRequestFilter.class);
 
   /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
   private static PostgreSQLContainer<?> postgres;
@@ -177,6 +185,84 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     }
   }
 
+  /**
+   * A configuration property injected by name, {@code @ConfigProperty}, as Quarkus' configuration
+   * supplies one ({@link #valueOf}). A {@code Provider} of it reads the configuration again on each
+   * {@code get()}.
+   */
+  @ApplicationScoped
+  public static class ConfigPropertyValues {
+
+    @Produces
+    @Dependent
+    @ConfigProperty
+    public Boolean booleanValue(InjectionPoint injectionPoint) {
+      ConfigProperty property =
+          injectionPoint.getQualifiers().stream()
+              .filter(ConfigProperty.class::isInstance)
+              .map(ConfigProperty.class::cast)
+              .findFirst()
+              .orElseThrow();
+      return valueOf(ApplicationInfrastructure.config, property);
+    }
+
+    /**
+     * The value of {@code property} as Quarkus' configuration supplies it: the one {@code config}
+     * holds, else the default the injection point names, converted as a configured value is. A
+     * property with neither fails with the configuration's {@code NoSuchElementException}, as it
+     * fails a Quarkus application.
+     */
+    static Boolean valueOf(SmallRyeConfig config, ConfigProperty property) {
+      if (ConfigProperty.UNCONFIGURED_VALUE.equals(property.defaultValue())) {
+        return config.getValue(property.name(), Boolean.class);
+      }
+      return config
+          .getOptionalValue(property.name(), Boolean.class)
+          .orElseGet(
+              () ->
+                  config
+                      .getConverter(Boolean.class)
+                      .orElseThrow()
+                      .convert(property.defaultValue()));
+    }
+  }
+
+  /**
+   * A property injected by name that the configuration does not hold and that names no default
+   * fails, as it fails a Quarkus application, instead of reading as {@code false}; a default is
+   * converted as a configured value is.
+   */
+  @Test
+  void aPropertyInjectedByNameWithNeitherAValueNorADefaultFails() throws NoSuchFieldException {
+    SmallRyeConfig empty = configuration(Map.of());
+    ConfigProperty withoutDefault = injectedAs("withoutDefault");
+    ConfigProperty defaultYes = injectedAs("defaultYes");
+
+    assertThrows(
+        NoSuchElementException.class,
+        () -> ConfigPropertyValues.valueOf(empty, withoutDefault),
+        "a property with neither a value nor a default");
+    assertEquals(true, ConfigPropertyValues.valueOf(empty, defaultYes));
+    assertEquals(
+        false,
+        ConfigPropertyValues.valueOf(
+            configuration(Map.of("example.default-yes", "false")), defaultYes));
+  }
+
+  private static ConfigProperty injectedAs(String field) throws NoSuchFieldException {
+    return InjectionPoints.class.getDeclaredField(field).getAnnotation(ConfigProperty.class);
+  }
+
+  /** The injection points of {@link #aPropertyInjectedByNameWithNeitherAValueNorADefaultFails}. */
+  @SuppressWarnings("unused")
+  private static final class InjectionPoints {
+    @ConfigProperty(name = "example.without-default")
+    Boolean withoutDefault;
+
+    @ConfigProperty(name = "example.default-yes", defaultValue = "yes")
+    Boolean defaultYes;
+  }
+
   /** The stores of an application without a database: the test kit's in-memory ones. */
   @ApplicationScoped
   public static class InMemoryStores {
@@ -212,9 +298,12 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     ApplicationInfrastructure.config = configuration(properties);
     ApplicationInfrastructure.dataSource = dataSource != null ? dataSource : new NoDatabase();
     List<Class<?>> beans = new ArrayList<>(FRAMEWORK_BEANS);
-    // The qualifier SmallRye Health registers: indexed, Arc reads it as one.
+    // The qualifiers SmallRye Health and the configuration register: indexed, Arc reads them as
+    // qualifiers.
     beans.add(Readiness.class);
+    beans.add(ConfigProperty.class);
     beans.add(ApplicationInfrastructure.class);
+    beans.add(ConfigPropertyValues.class);
     if (dataSource == null) {
       beans.add(InMemoryStores.class);
     }
@@ -238,52 +327,34 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     CapturedLog log = new CapturedLog();
     RealArcTestContainer arc = null;
     try {
-      arc = RealArcTestContainer.bootApplication(beans, properties, classes, supplied);
+      arc =
+          RealArcTestContainer.bootApplication(
+              beans, properties, REST_PROVIDERS, classes, supplied);
       arc.container().beanManager().getEvent().select(StartupEvent.class).fire(new StartupEvent());
       QuarkusRestTestServer server = null;
-      SseController controller = null;
-      if (Boolean.parseBoolean(properties.get("streamrune.sse.enabled"))) {
-        var holder = new StreamRuneRequestContextHolder();
-        RequestIdentityPolicy policy = arc.container().instance(RequestIdentityPolicy.class).get();
-        StreamRuneQuarkusProperties mapping =
-            arc.container().instance(StreamRuneQuarkusProperties.class).get();
-        controller =
-            new SseController(
-                arc.container().instance(SseEventPublisher.class).get(),
-                arc.container().instance(SseAuthorizer.class).get(),
-                policy,
-                holder,
-                () -> Boolean.TRUE,
-                mapping);
+      // As a Quarkus application serves a resource: the resource and the request filter are the
+      // container's beans, and the filter writes the request-scoped holder of the request's own
+      // CDI request context, active on every thread the request runs on. Without a resource bean
+      // (its build-time condition does not hold) nothing is served, and every request is a 404.
+      var sse = arc.container().instance(SseController.class);
+      Object resource =
+          dispatchingRoute
+              ? new DispatchingResource(arc.container().instance(CommandBus.class).get())
+              : sse.isAvailable() ? sse.get() : null;
+      if (resource != null) {
         server =
             QuarkusRestTestServer.start(
-                controller,
-                List.of(
-                    new StreamRuneRequestFilter(
-                        holder, mapping, policy, arc.container().select(UserRoleResolver.class))));
-      }
-      if (dispatchingRoute) {
-        // As a Quarkus application serves a resource: the request filter writes the request-scoped
-        // holder of the request's own CDI request context, active on every thread the request
-        // runs on.
-        server =
-            QuarkusRestTestServer.start(
-                new DispatchingResource(arc.container().instance(CommandBus.class).get()),
-                List.of(
-                    new StreamRuneRequestFilter(
-                        arc.container().instance(StreamRuneRequestContextHolder.class).get(),
-                        arc.container().instance(StreamRuneQuarkusProperties.class).get(),
-                        arc.container().instance(RequestIdentityPolicy.class).get(),
-                        arc.container().select(UserRoleResolver.class))),
+                resource,
+                List.of(arc.container().instance(StreamRuneRequestFilter.class).get()),
                 new ArcThreadSetupAction(arc.container().requestContext()));
       }
-      return new QuarkusApplication(arc, server, controller, null, log.close());
+      return new QuarkusApplication(arc, server, null, log.close());
     } catch (Throwable failure) {
       List<String> lines = log.close();
       if (arc != null) {
         arc.close();
       }
-      return new QuarkusApplication(null, null, null, messages(failure), lines);
+      return new QuarkusApplication(null, null, messages(failure), lines);
     }
   }
 
@@ -362,8 +433,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
 
   /**
    * Every class of the module's main sources that Quarkus makes a bean is in {@link
-   * #FRAMEWORK_BEANS}, or is one of the two JAX-RS classes the adapter builds: a new bean does not
-   * stay out of the contract.
+   * #FRAMEWORK_BEANS} or {@link #REST_PROVIDERS}: a new bean does not stay out of the contract.
    */
   @Test
   void theContainerHoldsEveryBeanClassOfTheModule() throws ClassNotFoundException {
@@ -371,8 +441,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     moduleBeanClasses().forEach(c -> beanClasses.add(c.getName()));
     Set<String> covered = new TreeSet<>();
     FRAMEWORK_BEANS.forEach(c -> covered.add(c.getName()));
-    covered.add(SseController.class.getName());
-    covered.add(StreamRuneRequestFilter.class.getName());
+    REST_PROVIDERS.forEach(c -> covered.add(c.getName()));
     assertEquals(beanClasses, covered);
   }
 
@@ -395,8 +464,9 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
    * classes Arc generates live in another classloader and no bytecode transformation makes a class
    * proxyable (a Quarkus application can switch that transformation off too): a normal-scoped one
    * is not final, has no final method a client proxy would have to override, has a non-private
-   * no-argument constructor and marks its injecting constructor {@code Inject}, and every observer
-   * and disposer method is public.
+   * no-argument constructor and marks its injecting constructor {@code Inject}, and every observer,
+   * disposer and lifecycle callback ({@code PostConstruct}, {@code PreDestroy}) method is public:
+   * the bean class Arc generates calls it from another classloader.
    */
   @Test
   void everyBeanClassIsProxyableAndObservableAsWritten() throws ClassNotFoundException {
@@ -428,7 +498,11 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
                     p ->
                         p.isAnnotationPresent(jakarta.enterprise.event.Observes.class)
                             || p.isAnnotationPresent(Disposes.class));
-        if (observesOrDisposes && !Modifier.isPublic(method.getModifiers())) {
+        boolean lifecycleCallback =
+            method.isAnnotationPresent(jakarta.annotation.PostConstruct.class)
+                || method.isAnnotationPresent(jakarta.annotation.PreDestroy.class);
+        if ((observesOrDisposes || lifecycleCallback)
+            && !Modifier.isPublic(method.getModifiers())) {
           problems.add(bean.getName() + "#" + method.getName() + " is not public");
         }
         int modifiers = method.getModifiers();
@@ -614,19 +688,16 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
 
     private final RealArcTestContainer arc;
     private final QuarkusRestTestServer server;
-    private final SseController controller;
     private final String failure;
     private final List<String> logLines;
 
     QuarkusApplication(
         RealArcTestContainer arc,
         QuarkusRestTestServer server,
-        SseController controller,
         String failure,
         List<String> logLines) {
       this.arc = arc;
       this.server = server;
-      this.controller = controller;
       this.failure = failure;
       this.logLines = logLines;
     }
@@ -648,6 +719,9 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
 
     @Override
     public HttpResponse http(String method, String path, Map<String, String> headers, String body) {
+      if (server == null) {
+        return new HttpResponse(404, Map.of(), "no resource of the application serves " + path);
+      }
       return ContractHttp.send(server.port(), method, path, headers, body);
     }
 
@@ -678,11 +752,10 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
         return;
       }
       try {
+        // As a Quarkus application stops: the HTTP server first, then the shutdown event, then
+        // the container, which destroys the beans (the SSE resource stops its scheduler then).
         if (server != null) {
           server.close();
-        }
-        if (controller != null) {
-          controller.shutdown();
         }
         arc.container()
             .beanManager()

@@ -35,7 +35,9 @@ Where each topic is written down:
   (PostgreSQL setup, health checks, the metrics table, duration properties, operations runbooks),
   `configuration.md` (every configuration property and its default) and `advanced/`, one guide per
   feature (outbox, sagas, GDPR erasure, idempotency and more).
-- Each module's `README.md`: its API and, for an integration, its configuration properties.
+- Each module's `README.md`: its API and, for an integration, the configuration keys most
+  applications set. Every key and its default are in `docs/guide/configuration.md`; the Quarkus
+  README also lists every key, in an `application.properties` listing.
 - `docs/adr/`: architecture decisions. `docs/reference/api.md`: the API reference.
   `CHANGELOG.md`: what each version changes.
 
@@ -77,12 +79,19 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   outside any test, such as a test JVM that stops, is listed under the run's name and counted on its
   own. Every test task, `check`, `build` and `quickCheck` ends with the line
   `N tests, F failed — see build/reports/test-summary.txt`, where F counts both kinds of failure;
-  that file collects the summaries of the run's test tasks. A test task that fails for a reason of
-  its own prints the line too: with no test matching `--tests` it reads `0 tests, 0 failed`, and
-  Gradle's failure block below it says "No tests found for given includes". Each entry carries the
-  time it was written: a build that stops before a test task runs (a compile error, or an earlier failure
-  without `--continue`) leaves that task's entry from an earlier run. Read the summary before the
-  HTML reports under `build/reports/tests/`.
+  that file collects the summaries of the build's test tasks, each with the time and the build that
+  wrote it. The counts are those of the test tasks that ran in this build: their tests ran, or their
+  result was up to date or came from the build cache. A test task that fails after it starts and
+  before its tests do, when Gradle cannot provision its toolchain or resolve its test classpath,
+  counts with the summary an earlier build left; Gradle's failure block below the line names the
+  cause. A test task of the build that did not run — its test sources do not compile, or the build
+  stopped before it without `--continue` — is named in the file with its last summary, which is not
+  counted, and the line says how many: `N tests, F failed, K test tasks did not run — see …`. A
+  test task skips on a condition of its own through `enabled`, which the summary lists as not run,
+  never through an `onlyIf` of its own (the root build script says why). A test task that fails for
+  a reason of its own prints the line too: with no test matching `--tests` it reads
+  `0 tests, 0 failed`, and Gradle's failure block below it says "No tests found for given
+  includes". Read the summary before the HTML reports under `build/reports/tests/`.
 - **Mutation testing.** `./gradlew :streamrune-core:pitest` and `./gradlew :streamrune-runtime:pitest`
   run PIT, which changes the compiled code one small mutation at a time and lists every mutant no
   test detects; the task prints the path of its report (`build/reports/pitest/index.html`). It is
@@ -182,12 +191,17 @@ build files, guides, commit messages and pull request descriptions. All of it fo
 - No space before a period.
 
 `InternalTrackerIdRatchetTest` in `streamrune-core` reads every `.java`, `.md` and build file in the
-repository and fails on tracker and review labels (review-finding labels included, in test sources
-too), on references to private review material and on history wording: a reviewer named by role, a
-numbered roadmap stage, work deferred to the roadmap, and outside test sources and code samples the
-state before or after a fix and the words that narrate an earlier behaviour (the test's javadoc
-lists them). It also fails on a space before a period in prose (javadoc, and markdown outside fenced
-blocks), and it reads a phrase across a line break, so a reflowed comment does not hide one.
+repository, and the files without an extension it publishes (`.gitmessage`, `.gitignore`,
+`LICENSE`, `NOTICE`, `CODEOWNERS`, the git hook, `gradlew`), and fails on tracker and review labels
+(review-finding labels included, and a work-item, audit-round or review-area label at the front of
+an identifier, a test name or a string id, in either letter case and in test sources too, or glued
+inside a camel-case name), on
+references to private review material and on history wording: a reviewer named by role, a
+numbered roadmap stage, work deferred to the roadmap, and outside test sources and code samples
+the state before or after a fix and the words that narrate an earlier behaviour (the test's
+javadoc lists them). It also fails on a space before a period in prose — the comments of a
+`.java` file (javadoc, a one-line comment, a line comment on a line of its own) and markdown outside
+fenced blocks — and it reads a phrase across a line break, so a reflowed comment does not hide one.
 Write a state as it is: "cannot", "is not", "has lost it", and "the clock that computes" for a
 purpose. Its failure message lists every offending `file:line` with the rule it breaks. The other
 repository-wide ratchets:
@@ -206,18 +220,24 @@ run by `./gradlew docLintTest`, `check` and `quickCheck`) fail when it does not:
 
 - a meter constant in `MetricNames` and the `### Metrics` table of `docs/guide/production.md`
   (`MetricNamesDocLintTest`, which also checks the integration-api README's meter table and every
-  meter name in the guides);
+  meter name in the guides and on the pages `gradle/doc-lint-pages.txt` lists: the README,
+  `docs/QUICKSTART.md` and `docs/reference/api.md`);
+- the kind of meter `MicrometerStreamRuneMetrics` registers and the `Type` column of both meter
+  tables (`MeterTypeDocLintTest` in `streamrune-integration-api`);
 - a relay component name in `RelayComponentNames`, or an integration's health check name, and the
   two health tables of `docs/guide/production.md` (`RelayComponentNamesDocLintTest`);
 - a public type of the test kit and `docs/guide/testing.md` and `streamrune-test/README.md`
-  (`TestKitDocLintTest`);
+  (`TestKitDocLintTest`): a heading or a code span of the type's name alone in the guide, a heading
+  or the first cell of a row of the type table in the README;
 - a configuration property or its default and `docs/guide/configuration.md`, the configuration
   metadata of Spring and Micronaut (`additional-spring-configuration-metadata.json`,
   `configuration-metadata.json`) and the Quarkus README's listing, and every guide table with a
   `Default` column (`ConfigurationDocLintTest` in each integration). Its oracle is what the
   integration binds and reads: the properties types as the framework binds them, every bean
-  condition and injected property, the keys looked up in code. A default is written the way the
-  configuration reference describes (`7d`, `1m`, `—` for none);
+  condition and injected property, the keys looked up in code, its own and those it reads through
+  the constants of `streamrune-integration-api`. Every `streamrune.` name of the guides, the README,
+  the quickstart and the API reference is a key, a meter or a span attribute. A default is written
+  the way the configuration reference describes (`7d`, `1m`, `—` for none);
 - a change a user notices and `CHANGELOG.md`.
 
 ## 6. Pitfalls
@@ -230,13 +250,17 @@ run by `./gradlew docLintTest`, `check` and `quickCheck`) fail when it does not:
 - **Quarkus beans as the module's tests boot them.** The container tests run Arc without the
   bytecode transformation of a Quarkus build, and the classes Arc generates live in another
   classloader. A normal-scoped bean class therefore has a non-private no-argument constructor beside
-  the one marked `@Inject` and no final method, and every observer and disposer method is public;
-  `QuarkusIntegrationWiringContractTest` checks every bean class of the module's main sources.
+  the one marked `@Inject` and no final method, and every observer, disposer and lifecycle callback
+  (`@PostConstruct`, `@PreDestroy`) method is public; `QuarkusIntegrationWiringContractTest` checks
+  every bean class of the module's main sources.
 - **Micronaut collection injection.** A singleton registered at runtime
   (`ApplicationContext.registerSingleton`) is not reliably collected into an injected `List`; a
   test that needs a bean in such a list declares it as a compile-time bean in a `@Factory`.
-- **`LogSinkPolicyRatchetTest` fails outside Gradle by design.** One of its tests reads the
-  `-Dstreamrune.logsink.declared-sources` property that the `test` task supplies. Run it with
+- **`LogSinkPolicyRatchetTest` and `InternalTrackerIdRatchetTest` fail outside Gradle by design.**
+  One test of each compares the files it reads with the files Gradle declares as the inputs of the
+  `test` task, a list the task hands over (`-Dstreamrune.logsink.declared-sources`,
+  `-Dstreamrune.publictext.declared-sources`): Gradle's default excludes leave a `.gitignore` out of
+  every file tree, so the build declares the repository's one on its own. Run them with
   `./gradlew :streamrune-core:test`, not from an IDE.
 - **Broker suites.** Kafka and RabbitMQ containers boot slowly under parallel container start, so the
   `@Tag("broker")` tests run in `brokerTest` (nightly and on release tags), not in `check`.

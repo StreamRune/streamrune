@@ -17,3 +17,12 @@ dependencies {
     // Fluent exception-message assertions (ProjectionProcessorResolutionTest). Test-only.
     testImplementation(libs.assertj.core)
 }
+
+// MeterTypeDocLintTest reads the production guide and this module's README (docLintTest, see the
+// root build): declared, so an edit to either re-runs it.
+tasks.named<Test>("docLintTest") {
+    inputs
+        .files(rootDir.resolve("docs/guide/production.md"), file("README.md"))
+        .withPropertyName("meterDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}

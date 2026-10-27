@@ -227,10 +227,31 @@ final class RealArcTestContainer implements AutoCloseable {
       List<Class<?>> applicationClasses,
       List<SyntheticBean> syntheticBeans)
       throws Exception {
+    return bootApplication(
+        beanClasses, buildTimeProperties, List.of(), applicationClasses, syntheticBeans);
+  }
+
+  /**
+   * As {@link #bootApplication(List, Map, List, List)}, plus the JAX-RS {@code @Provider} classes
+   * Quarkus REST registers as beans ({@link #bootWithRestProviders}).
+   *
+   * @param beanClasses as {@link #boot(List)}
+   * @param buildTimeProperties as {@link #boot(List, Map)}
+   * @param restProviders as {@link #bootWithRestProviders}
+   * @param applicationClasses as {@link #bootApplication(List, Map, List, List)}
+   * @param syntheticBeans as {@link #bootApplication(List, Map, List, List)}
+   */
+  static RealArcTestContainer bootApplication(
+      List<Class<?>> beanClasses,
+      Map<String, String> buildTimeProperties,
+      List<Class<?>> restProviders,
+      List<Class<?>> applicationClasses,
+      List<SyntheticBean> syntheticBeans)
+      throws Exception {
     return boot(
         beanClasses,
         buildTimeProperties,
-        List.of(),
+        restProviders,
         Set.of(),
         false,
         Set.of(),
