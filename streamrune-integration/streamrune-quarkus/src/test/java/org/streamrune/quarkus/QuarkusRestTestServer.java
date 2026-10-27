@@ -39,10 +39,12 @@ import org.jboss.resteasy.reactive.spi.ThreadSetupAction;
  * REST serialization, including the Server-Sent Events writer and the lookup of a {@link
  * jakarta.ws.rs.ext.MessageBodyWriter} for each frame.
  *
- * <p>The resource is the instance handed in, so a test builds it with its own collaborators. The
- * message body readers and writers are the Quarkus REST built-ins plus the {@code @Provider}
- * classes named by the test — the stand-in for the JSON extension an application chooses. A
- * provider that needs collaborators (a request filter) is handed in as an instance.
+ * <p>The resource is the instance handed in, so a test builds it with its own collaborators, or
+ * takes the bean from an Arc container: a client proxy of a normal-scoped resource is scanned as
+ * its bean class and serves every request through the bean's contextual instance. The message body
+ * readers and writers are the Quarkus REST built-ins plus the {@code @Provider} classes named by
+ * the test — the stand-in for the JSON extension an application chooses. A provider that needs
+ * collaborators (a request filter) is handed in as an instance.
  *
  * <p><b>The CDI request context.</b> Started with a {@link ThreadSetupAction} — Quarkus REST's own
  * {@code ArcThreadSetupAction} over the Arc container's request context — each request runs inside
@@ -128,10 +130,10 @@ final class QuarkusRestTestServer implements AutoCloseable {
       Class<?>... providers)
       throws Exception {
     Map<String, Object> instances = new HashMap<>();
-    instances.put(resource.getClass().getName(), resource);
-    providerInstances.forEach(provider -> instances.put(provider.getClass().getName(), provider));
+    instances.put(classOf(resource).getName(), resource);
+    providerInstances.forEach(provider -> instances.put(classOf(provider).getName(), provider));
     List<Class<?>> indexed = new ArrayList<>(List.of(providers));
-    instances.values().forEach(instance -> indexed.add(instance.getClass()));
+    instances.values().forEach(instance -> indexed.add(classOf(instance)));
     ResteasyReactiveDeploymentManager.ScanStep scan =
         ResteasyReactiveDeploymentManager.start(Index.of(indexed.toArray(Class<?>[]::new)));
     // The scanner Quarkus registers for reactive return types; it is what serves a Multi.
@@ -205,6 +207,17 @@ final class QuarkusRestTestServer implements AutoCloseable {
             handlerChain,
             abortHandlerChain,
             null);
+  }
+
+  /**
+   * The class Quarkus REST scans for an instance: its own, or the bean class of an Arc client proxy
+   * (a subclass that carries none of the JAX-RS annotations), which then serves the requests the
+   * way a Quarkus application's normal-scoped resource does.
+   */
+  private static Class<?> classOf(Object instance) {
+    return instance instanceof io.quarkus.arc.ClientProxy
+        ? instance.getClass().getSuperclass()
+        : instance.getClass();
   }
 
   /** The port the server listens on. */
