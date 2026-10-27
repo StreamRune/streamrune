@@ -2207,8 +2207,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      *
      * <p>For a web framework that can run a request handler on a thread outside the binding its
      * request filter made, such as a Micronaut route that resumes on a Netty event loop once its
-     * body has arrived. The Micronaut integration sets it to the context its request filter stored
-     * on the request the calling thread serves.
+     * body has arrived, or a {@code Callable} a Spring MVC controller returns. The three
+     * integrations set it to the context their request filter stored for the request the calling
+     * thread serves.
      *
      * <p>The bus asks the source once per dispatch, on the dispatching thread, before anything in
      * the dispatch reads the context: on entry to {@link VirtualThreadCommandBus#execute(Command)}
