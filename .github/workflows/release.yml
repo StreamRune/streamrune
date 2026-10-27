@@ -11,7 +11,7 @@ name: Release
 #                     requires succeeded on this commit, runs the full build at the release version
 #                     and keeps the release notes as the `release-notes` artifact.
 #   rehearse-signing  A dry run only: signs every module at the release version into a scratch
-#                     repository on the runner.
+#                     repository on the runner and checks that every published file is signed.
 #   tag               Pushes the annotated tag v<version> on this commit, unless it is there.
 #   publish           Signs the artifacts, uploads them to the Central Portal with
 #                     `publishToMavenCentral` (the task Publish Snapshot runs) and waits until the
@@ -200,6 +200,12 @@ jobs:
               "$VERSION" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$tag" >> "$notes"
             echo "Release notes: the lead of the CHANGELOG section of $VERSION and a link to the whole section, which exceeds $limit characters."
           fi
+          # A link relative to the repository, a path with no scheme as CHANGELOG.md writes its links
+          # to the repository's pages, resolves in GitHub's file view but not on a release page: it
+          # is pointed at that file at the tag.
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$tag"
+          sed -E "s#\]\(([A-Za-z0-9_.-][^ ():]*)\)#](${base}/\1)#g" "$notes" > "$notes.tmp"
+          mv "$notes.tmp" "$notes"
           [ "$(wc -m < "$notes")" -le "$limit" ] || fail "The release notes exceed $limit characters."
           echo "Releasing $VERSION from $GITHUB_SHA as $tag."
 
@@ -278,11 +284,26 @@ jobs:
           SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: ./gradlew publishToMavenLocal -PreleaseVersion="$VERSION" -Dmaven.repo.local="$RUNNER_TEMP/m2" --no-build-cache --no-daemon --console=plain
 
-      - name: Count the signatures (16 modules × jar, sources, javadoc, POM, module file = 80)
+      # Every file the publication wrote, checksums, signatures and repository metadata aside, has
+      # its signature beside it; no count of modules or files is assumed.
+      - name: Check that every published file is signed
         run: |
-          n=$(find "$RUNNER_TEMP/m2/org/streamrune" -name '*.asc' | wc -l)
-          [ "$n" -eq 80 ] || { echo "::error::Expected 80 signatures, found $n."; exit 1; }
-          echo "Every published file of the 16 modules is signed."
+          repo="$RUNNER_TEMP/m2/org/streamrune"
+          modules=$(find "$repo" -mindepth 1 -maxdepth 1 -type d | wc -l)
+          files=0
+          unsigned=0
+          while IFS= read -r file; do
+            files=$((files + 1))
+            if [ ! -f "$file.asc" ]; then
+              unsigned=$((unsigned + 1))
+              echo "::error::${file#"$repo"/} has no signature."
+            fi
+          done < <(find "$repo" -type f ! -name '*.asc' ! -name '*.md5' ! -name '*.sha1' \
+                     ! -name '*.sha256' ! -name '*.sha512' ! -name 'maven-metadata*' | sort)
+          signatures=$(find "$repo" -type f -name '*.asc' | wc -l)
+          echo "$modules modules published, $files files, $signatures signatures, $unsigned unsigned."
+          [ "$modules" -ge 1 ] && [ "$files" -ge 1 ] || { echo "::error::No module was published."; exit 1; }
+          [ "$unsigned" -eq 0 ] || exit 1
 
   tag:
     needs: verify
