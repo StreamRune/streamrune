@@ -261,7 +261,11 @@ handler dispatch anonymously unless the application binds the context
 (`ScopedValue.where(StreamRuneContext.CURRENT, ctx)`, or `StreamRuneContext.wrap(task)` on the
 request thread). A command bus or query bus you define yourself takes the
 `RequestAttributeContextSource` bean: `.unboundRequestContext(source)`, and
-`new UnboundRequestContextQueryBus(bus, source)`.
+`new UnboundRequestContextQueryBus(bus, source)`. Keep `threadContextInheritable` at its default
+(`false`) on the `DispatcherServlet` and on any `RequestContextFilter`: with it, a pooled thread
+created while one request is handled inherits that request's attributes, and a dispatch from another
+request on that thread, while the first is still in its handler, is attributed to the first
+request's caller; the source cannot tell the two apart.
 
 The mode is logged once at startup. In a servlet application, startup **fails** when a command bus
 runs an identity-consuming authorization interceptor — `AuthorizationCommandInterceptor` (registered

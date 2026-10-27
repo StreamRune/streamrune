@@ -23,6 +23,12 @@ import org.streamrune.core.StreamRuneContext;
  * (WebFlux has no servlet request). It answers {@code null} too once the request has completed, and
  * for a request the filter did not run for.
  *
+ * <p>Keep {@code threadContextInheritable} at its default ({@code false}) on the {@code
+ * DispatcherServlet} and on any {@code RequestContextFilter}: with it, a pooled thread created
+ * while one request is handled inherits that request's attributes, and a dispatch from another
+ * request on that thread, while the first is still in its handler, is attributed to the first
+ * request's caller; the source cannot tell the two apart.
+ *
  * <p>The auto-configuration registers one in a servlet web application and hands it to the command
  * bus and the query bus it builds. A {@code VirtualThreadCommandBus} or a {@code QueryBus} the
  * application defines itself takes the bean the same way: {@code .unboundRequestContext(source)},
