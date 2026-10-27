@@ -83,9 +83,12 @@ import org.streamrune.integration.RequestIdentityPolicy;
  *
  * <p>The parsed context is stored in the request-scoped {@link StreamRuneRequestContextHolder} and
  * as the request property {@link #CONTEXT_PROPERTY}. JAX-RS filters cannot wrap the resource-method
- * invocation, so binding the {@link ScopedValue} is explicit: wrap StreamRune calls with {@link
- * #withContext(StreamRuneContext.RequestContext, Runnable)} or {@link
- * #callWithContext(StreamRuneContext.RequestContext, Supplier)}.
+ * invocation, so the filter binds no {@link ScopedValue}: the command bus and the query bus the
+ * integration produces read the holder ({@link StreamRuneRequestContextHolder#ofCurrentRequest()})
+ * for a dispatch that starts with {@link StreamRuneContext#CURRENT} unbound, so a resource method
+ * dispatches as the request's caller with nothing bound. Code that reads the caller itself, outside
+ * a bus dispatch, binds it with {@link #withContext(StreamRuneContext.RequestContext, Runnable)} or
+ * {@link #callWithContext(StreamRuneContext.RequestContext, Supplier)}.
  *
  * <p><b>Baggage allowlisting:</b> OpenTelemetry baggage is populated from the client-supplied,
  * unauthenticated W3C {@code baggage:} HTTP header, and every baggage entry ends up in every

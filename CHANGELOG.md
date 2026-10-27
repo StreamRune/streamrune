@@ -1022,11 +1022,27 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   context the filter stored on the request for a dispatch that starts with
   `StreamRuneContext.CURRENT` unbound (`VirtualThreadCommandBus.Builder#unboundRequestContext`,
   asked on entry to `execute` and at submission in `executeAsync`), its `QueryBus` bean does the
-  same (`UnboundRequestContextQueryBus`), a saga replay (`SagaDeadLetterReplayer`) run from such a
-  route records the operator, and `StreamRuneContextHelper.get()` answers the request's context
-  first. A bound context is never replaced, and a dispatch with no request current runs without
-  one. A task Micronaut propagates the request to (`@ExecuteOn`, `@Async`, a Micronaut executor)
-  dispatches as the caller of that request, also after the response was sent.
+  same (`UnboundRequestContextQueryBus`, in `streamrune-runtime`), a saga replay
+  (`SagaDeadLetterReplayer`) run from such a route records the operator, and
+  `StreamRuneContextHelper.get()` answers the request's context first. A bound context is never
+  replaced, and a dispatch with no request current runs without one. A task Micronaut propagates
+  the request to (`@ExecuteOn`, `@Async`, a Micronaut executor) dispatches as the caller of that
+  request, also after the response was sent.
+- Quarkus: the request's caller reaches every command and query a resource method dispatches, with
+  nothing bound in the method. A JAX-RS filter cannot wrap the resource method, so
+  `StreamRuneRequestFilter` stores the request's context in the request-scoped
+  `StreamRuneRequestContextHolder` and `StreamRuneContext.CURRENT` is unbound while the method runs.
+  The produced command bus is built with `StreamRuneRequestContextHolder::ofCurrentRequest` as its
+  unbound-request-context source — the holder's context while a CDI request context is active on
+  the calling thread, which Quarkus REST keeps on every thread it runs a request on — and the
+  `QueryBus` bean is an `UnboundRequestContextQueryBus` over the same source, so authorization, the
+  command and query audit, the events' metadata, a command sent through `executeAsync` and a saga
+  replay (`SagaDeadLetterReplayer`) run from the method name the request's caller.
+  `StreamRuneRequestFilter.withContext(...)` / `callWithContext(...)` bind the context for code that
+  reads the caller outside a bus dispatch; a bound context is never replaced, and a dispatch with no
+  request context active runs without one. The integration wiring contract checks on Spring, Quarkus and
+  Micronaut that a command a route dispatches with nothing bound is audited as the request's
+  caller.
 - Off-thread authorization: request-scoped resolvers are evaluated once at the request edge and the
   result travels in `RequestContext.authority()`, so `executeAsync` authorizes like synchronous
   execution; a dead-letter replay runs under a recorded system principal. The captured authority is

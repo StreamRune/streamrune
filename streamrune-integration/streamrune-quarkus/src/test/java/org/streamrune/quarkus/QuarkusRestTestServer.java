@@ -4,6 +4,7 @@ import io.vertx.core.Context;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpServer;
 import io.vertx.ext.web.Router;
+import io.vertx.ext.web.RoutingContext;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -16,13 +17,16 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.jboss.jandex.Index;
 import org.jboss.resteasy.reactive.common.core.BlockingOperationSupport;
+import org.jboss.resteasy.reactive.server.core.RequestContextFactory;
 import org.jboss.resteasy.reactive.server.core.reflection.ReflectiveContextInjectedBeanFactory;
 import org.jboss.resteasy.reactive.server.processor.ResteasyReactiveDeploymentManager;
 import org.jboss.resteasy.reactive.server.processor.scanning.AsyncReturnTypeScanner;
 import org.jboss.resteasy.reactive.server.spi.DefaultRuntimeConfiguration;
 import org.jboss.resteasy.reactive.server.vertx.ResteasyReactiveVertxHandler;
 import org.jboss.resteasy.reactive.server.vertx.VertxRequestContextFactory;
+import org.jboss.resteasy.reactive.server.vertx.VertxResteasyReactiveRequestContext;
 import org.jboss.resteasy.reactive.spi.BeanFactory;
+import org.jboss.resteasy.reactive.spi.ThreadSetupAction;
 
 /**
  * Serves one JAX-RS resource through Quarkus REST over HTTP, without a Quarkus application.
@@ -39,6 +43,12 @@ import org.jboss.resteasy.reactive.spi.BeanFactory;
  * message body readers and writers are the Quarkus REST built-ins plus the {@code @Provider}
  * classes named by the test — the stand-in for the JSON extension an application chooses. A
  * provider that needs collaborators (a request filter) is handed in as an instance.
+ *
+ * <p><b>The CDI request context.</b> Started with a {@link ThreadSetupAction} — Quarkus REST's own
+ * {@code ArcThreadSetupAction} over the Arc container's request context — each request runs inside
+ * a CDI request context of its own, activated on every thread the request moves to, the way a
+ * Quarkus application runs it: a request-scoped bean a filter writes is the one the resource method
+ * reads. Started without one, no request context is active.
  *
  * <p><b>Threads.</b> The HTTP server runs on Vert.x event-loop threads. A blocking resource method
  * is dispatched to the worker executor, whose threads are named {@value #WORKER_THREAD_PREFIX}…,
@@ -94,6 +104,29 @@ final class QuarkusRestTestServer implements AutoCloseable {
    */
   static QuarkusRestTestServer start(
       Object resource, List<Object> providerInstances, Class<?>... providers) throws Exception {
+    return start(resource, providerInstances, null, providers);
+  }
+
+  /**
+   * Deploys {@code resource} with providers that are already built, runs every request inside the
+   * request context {@code requestScope} activates, and starts the HTTP server on a free port.
+   *
+   * @param resource the resource instance that serves the requests
+   * @param providerInstances the {@code @Provider} instances of the application, each serving every
+   *     request (a request filter built with its collaborators)
+   * @param requestScope activates a request's CDI request context on each thread the request runs
+   *     on; {@code null} for none
+   * @param providers the {@code @Provider} classes of the application (each with a no-argument
+   *     constructor)
+   * @return the running server
+   * @throws Exception if the resource cannot be scanned or the server cannot start
+   */
+  static QuarkusRestTestServer start(
+      Object resource,
+      List<Object> providerInstances,
+      ThreadSetupAction requestScope,
+      Class<?>... providers)
+      throws Exception {
     Map<String, Object> instances = new HashMap<>();
     instances.put(resource.getClass().getName(), resource);
     providerInstances.forEach(provider -> instances.put(provider.getClass().getName(), provider));
@@ -135,7 +168,9 @@ final class QuarkusRestTestServer implements AutoCloseable {
                   1000,
                   8192,
                   128),
-              new VertxRequestContextFactory(),
+              requestScope == null
+                  ? new VertxRequestContextFactory()
+                  : requestContexts(requestScope),
               workers);
       Router router = Router.router(vertx);
       router
@@ -155,6 +190,21 @@ final class QuarkusRestTestServer implements AutoCloseable {
       workers.shutdownNow();
       throw e;
     }
+  }
+
+  /**
+   * The request contexts of Quarkus REST on Vert.x, each running its request inside the CDI request
+   * context {@code requestScope} activates instead of the deployment's, which activates none.
+   */
+  private static RequestContextFactory requestContexts(ThreadSetupAction requestScope) {
+    return (deployment, context, ignored, handlerChain, abortHandlerChain) ->
+        new VertxResteasyReactiveRequestContext(
+            deployment,
+            (RoutingContext) context,
+            requestScope,
+            handlerChain,
+            abortHandlerChain,
+            null);
   }
 
   /** The port the server listens on. */

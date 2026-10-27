@@ -19,20 +19,28 @@ import javax.sql.DataSource;
 import org.streamrune.core.CommandInbox;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.StreamRuneContext;
+import org.streamrune.core.audit.AuditEntry;
+import org.streamrune.core.audit.AuditOutcome;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.UserId;
 import org.streamrune.integration.CommandDeadLetterRetentionValidator;
 import org.streamrune.integration.OutboxWiringMessages;
 import org.streamrune.integration.RequestIdentityPolicy;
 import org.streamrune.integration.SnapshotPurgeSetting;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.integration.SubscriptionLeadershipResolution;
+import org.streamrune.integration.tck.ContractBeans.ContractCommand;
+import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
 import org.streamrune.integration.tck.ContractBeans.ContractProjection;
+import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
+import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
 import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
 
@@ -55,7 +63,8 @@ final class ReferenceApplication implements Application {
     HEALTH_DETAILS,
     UNGATED_SAGA_WARNING,
     RUNNERS_STOP_FIRST,
-    DOCUMENTED_DEFAULTS
+    DOCUMENTED_DEFAULTS,
+    ROUTE_CALLER_AUDITED
   }
 
   private final List<Object> beans;
@@ -162,7 +171,9 @@ final class ReferenceApplication implements Application {
   }
 
   private void startServer() {
-    if (!Boolean.parseBoolean(properties.get("streamrune.sse.enabled"))) {
+    boolean sse = Boolean.parseBoolean(properties.get("streamrune.sse.enabled"));
+    boolean route = !beansOf(DispatchingRoute.class).isEmpty();
+    if (!sse && !route) {
       return;
     }
     boolean trusted =
@@ -200,6 +211,34 @@ final class ReferenceApplication implements Application {
           } else {
             exchange.sendResponseHeaders(403, -1);
           }
+          exchange.close();
+        });
+    server.createContext(
+        DispatchingRoute.PATH + "/",
+        exchange -> {
+          String id =
+              exchange.getRequestURI().getPath().substring(DispatchingRoute.PATH.length() + 1);
+          UserId caller =
+              policy.resolve(
+                  exchange.getRequestHeaders().get(RequestIdentityPolicy.USER_ID_HEADER),
+                  (header, principal) -> {});
+          // The command's audit row, as the integration's audit interceptor writes it: it names
+          // the caller the request edge identified, unless the rule is broken.
+          beansOf(RecordingAuditStore.class)
+              .getFirst()
+              .save(
+                  new AuditEntry(
+                      CommandId.of("reference-" + id),
+                      ContractCommand.class.getSimpleName(),
+                      AggregateType.of(ContractCommandRegistration.TYPE),
+                      AggregateId.of(id),
+                      keeps(Rule.ROUTE_CALLER_AUDITED) ? caller : null,
+                      Instant.now(),
+                      AuditOutcome.SUCCESS,
+                      null,
+                      1,
+                      CorrelationId.of("reference-request")));
+          exchange.sendResponseHeaders(200, -1);
           exchange.close();
         });
     server.start();

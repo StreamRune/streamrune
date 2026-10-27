@@ -1,4 +1,4 @@
-package org.streamrune.micronaut;
+package org.streamrune.runtime;
 
 import java.util.Objects;
 import java.util.function.Supplier;
@@ -9,15 +9,17 @@ import org.streamrune.core.StreamRuneContext;
 
 /**
  * A {@link QueryBus} that dispatches a query started where {@link StreamRuneContext#CURRENT} is not
- * bound under the request context a source answers — the query-side counterpart of {@code
+ * bound under the request context a source answers — the query-side counterpart of {@link
  * VirtualThreadCommandBus.Builder#unboundRequestContext}.
  *
- * <p>The module's {@code QueryBus} bean is this bus over the composed chain, with {@link
- * StreamRuneContextHelper#get()} as the source: a query dispatched from a route Micronaut runs
- * outside the request filter's binding (a Netty event loop, an {@code @ExecuteOn} executor) is
- * audited as the request's caller, and its handler sees that caller in {@code CURRENT} ({@code
- * Authorization.currentUserId()}, {@code requireOwner}). An application that defines its own {@code
- * QueryBus} bean replaces the module's, and wraps its bus in this one to keep that.
+ * <p>The Micronaut and Quarkus integrations make their {@code QueryBus} bean this bus over the
+ * composed chain, with the request context of the request the calling thread serves as the source:
+ * a query dispatched from a route or a resource method that runs outside the request filter's
+ * binding (a Micronaut route on a Netty event loop or an {@code @ExecuteOn} executor, any Quarkus
+ * resource method, which a JAX-RS filter cannot wrap) is audited as the request's caller, and its
+ * handler sees that caller in {@code CURRENT} ({@code Authorization.currentUserId()}, {@code
+ * requireOwner}). An application that defines its own {@code QueryBus} bean replaces the
+ * integration's, and wraps its bus in this one to keep that.
  *
  * <p>The source is asked once per dispatch, on the dispatching thread, and never while {@code
  * CURRENT} is bound, whatever it is bound to: a binding the caller made is never replaced. A {@code

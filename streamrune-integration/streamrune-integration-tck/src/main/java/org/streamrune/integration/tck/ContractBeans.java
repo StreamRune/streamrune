@@ -5,14 +5,20 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
+import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.CommandInbox;
 import org.streamrune.core.DeadLetterQueue;
+import org.streamrune.core.Decider;
+import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.ProjectionConfig;
 import org.streamrune.core.StreamRuneContext;
+import org.streamrune.core.audit.AuditEntry;
+import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.projection.Projection;
@@ -23,8 +29,11 @@ import org.streamrune.core.saga.SagaOrchestrator;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.AggregateId;
+import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.integration.SseAuthorizer;
+import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryCryptoEngine;
@@ -150,6 +159,92 @@ public final class ContractBeans {
     @Override
     public boolean isAuthorized(StreamRuneContext.RequestContext caller, StreamId streamId) {
       return caller.userId() != null;
+    }
+  }
+
+  /**
+   * A route of the application: a {@code POST} to {@value #PATH}{@code /<id>} executes {@link
+   * ContractCommand} with that id through the integration's command bus and answers {@code 200},
+   * binding no request context itself. The class marks the route in a start's beans: an adapter
+   * declares in its place the route its framework serves — a Spring controller, a Quarkus resource,
+   * a Micronaut controller — the way an application declares one.
+   */
+  public static final class DispatchingRoute {
+
+    /** The path of the route; the id of the command follows it. */
+    public static final String PATH = "/contract/commands";
+  }
+
+  /** The command {@link DispatchingRoute} executes, on the aggregate its id names. */
+  public record ContractCommand(String id) implements Command {}
+
+  /** The event {@link ContractCommand} stores. */
+  public record ContractCommandExecuted(String id) implements DomainEvent {}
+
+  /** The state of a contract command's aggregate, which keeps nothing. */
+  public record ContractCommandState() implements AggregateState {}
+
+  /**
+   * The application's registration of {@link ContractCommand}, under the aggregate type {@value
+   * #TYPE}: each command stores one {@link ContractCommandExecuted}.
+   */
+  public static final class ContractCommandRegistration
+      implements Supplier<
+          DeciderRegistration<ContractCommand, ContractCommandState, ContractCommandExecuted>> {
+
+    /** The aggregate type of the contract command. */
+    public static final String TYPE = "contract_command";
+
+    @Override
+    public DeciderRegistration<ContractCommand, ContractCommandState, ContractCommandExecuted>
+        get() {
+      return new DeciderRegistration<>(
+          AggregateType.of(TYPE),
+          ContractCommand.class,
+          command -> AggregateId.of(command.id()),
+          new ContractCommandDecider());
+    }
+  }
+
+  /** Stores one event per command and keeps no state. */
+  static final class ContractCommandDecider
+      implements Decider<ContractCommand, ContractCommandState, ContractCommandExecuted> {
+    @Override
+    public ContractCommandState initialState() {
+      return new ContractCommandState();
+    }
+
+    @Override
+    public List<ContractCommandExecuted> decide(
+        ContractCommand command, ContractCommandState state) {
+      return List.of(new ContractCommandExecuted(command.id()));
+    }
+
+    @Override
+    public ContractCommandState evolve(ContractCommandState state, ContractCommandExecuted event) {
+      return state;
+    }
+  }
+
+  /**
+   * The application's audit store: the integration audits its commands into it, and it keeps them.
+   */
+  public static final class RecordingAuditStore implements AuditStore {
+
+    private final List<AuditEntry> entries = new CopyOnWriteArrayList<>();
+
+    @Override
+    public void save(AuditEntry entry) {
+      entries.add(entry);
+    }
+
+    /**
+     * The entries saved so far, in the order they were saved.
+     *
+     * @return a copy of the entries
+     */
+    public List<AuditEntry> entries() {
+      return List.copyOf(entries);
     }
   }
 

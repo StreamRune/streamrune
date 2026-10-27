@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.quarkus.arc.BeanCreator;
 import io.quarkus.arc.SyntheticCreationalContext;
+import io.quarkus.resteasy.reactive.common.runtime.ArcThreadSetupAction;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import io.quarkus.runtime.configuration.DurationConverter;
@@ -16,7 +17,9 @@ import jakarta.enterprise.context.RequestScoped;
 import jakarta.enterprise.inject.Disposes;
 import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Singleton;
+import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.ext.Provider;
 import java.io.PrintWriter;
 import java.lang.reflect.Method;
@@ -48,6 +51,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.postgresql.ds.PGSimpleDataSource;
+import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.UserRoleResolver;
 import org.streamrune.core.projection.OffsetStore;
@@ -80,7 +84,10 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * <p>The SSE endpoint is served by Quarkus REST over HTTP ({@link QuarkusRestTestServer}): the
  * {@link SseController} and the {@link StreamRuneRequestFilter} are built with the container's
  * beans, the request-context holder a plain instance, as {@code SseWireFormatTest} builds them. The
- * health check is the container's {@link StreamRuneHealthCheck} bean.
+ * contract's {@link ContractBeans.DispatchingRoute} is {@link DispatchingResource}, served the same
+ * way but as a Quarkus application serves it: each request runs inside a CDI request context of its
+ * own, and the filter writes the container's request-scoped holder. The health check is the
+ * container's {@link StreamRuneHealthCheck} bean.
  *
  * <p>Arc is one container per JVM, and {@link ApplicationInfrastructure} hands it the current
  * start's configuration through static fields: the tests run one start at a time, in one thread.
@@ -213,8 +220,11 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     }
     List<Class<?>> classes = new ArrayList<>();
     List<RealArcTestContainer.SyntheticBean> supplied = new ArrayList<>();
+    boolean dispatchingRoute = false;
     for (Class<?> beanClass : extraBeans) {
-      if (Supplier.class.isAssignableFrom(beanClass)) {
+      if (beanClass == ContractBeans.DispatchingRoute.class) {
+        dispatchingRoute = true;
+      } else if (Supplier.class.isAssignableFrom(beanClass)) {
         supplied.add(
             new RealArcTestContainer.SyntheticBean(
                 ContractBeans.beanType(beanClass),
@@ -252,6 +262,21 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
                     new StreamRuneRequestFilter(
                         holder, mapping, policy, arc.container().select(UserRoleResolver.class))));
       }
+      if (dispatchingRoute) {
+        // As a Quarkus application serves a resource: the request filter writes the request-scoped
+        // holder of the request's own CDI request context, active on every thread the request
+        // runs on.
+        server =
+            QuarkusRestTestServer.start(
+                new DispatchingResource(arc.container().instance(CommandBus.class).get()),
+                List.of(
+                    new StreamRuneRequestFilter(
+                        arc.container().instance(StreamRuneRequestContextHolder.class).get(),
+                        arc.container().instance(StreamRuneQuarkusProperties.class).get(),
+                        arc.container().instance(RequestIdentityPolicy.class).get(),
+                        arc.container().select(UserRoleResolver.class))),
+                new ArcThreadSetupAction(arc.container().requestContext()));
+      }
       return new QuarkusApplication(arc, server, controller, null, log.close());
     } catch (Throwable failure) {
       List<String> lines = log.close();
@@ -259,6 +284,27 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
         arc.close();
       }
       return new QuarkusApplication(null, null, null, messages(failure), lines);
+    }
+  }
+
+  /**
+   * The contract's {@link ContractBeans.DispatchingRoute} as a Quarkus application writes it: a
+   * resource that executes the command through the command bus bean and binds nothing itself.
+   */
+  @Path(ContractBeans.DispatchingRoute.PATH)
+  public static final class DispatchingResource {
+
+    private final CommandBus commandBus;
+
+    DispatchingResource(CommandBus commandBus) {
+      this.commandBus = commandBus;
+    }
+
+    @POST
+    @Path("/{id}")
+    public String dispatch(@PathParam("id") String id) {
+      commandBus.execute(new ContractBeans.ContractCommand(id));
+      return "executed";
     }
   }
 

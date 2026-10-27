@@ -1,4 +1,4 @@
-package org.streamrune.micronaut;
+package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -12,7 +12,6 @@ import org.streamrune.core.Query;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.UserId;
-import org.streamrune.runtime.SimpleQueryBus;
 
 /** Tests for {@link UnboundRequestContextQueryBus}. */
 class UnboundRequestContextQueryBusTest {
