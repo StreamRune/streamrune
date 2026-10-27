@@ -143,6 +143,12 @@ What a caller does with it, and how an HTTP endpoint answers it:
   that retries `5xx` answers on its own must not retry this one.
 - **Not `202 Accepted`.** A client treats a `2xx` as done and never sends the request again, while
   the replay can itself fail, exhaust its attempts and be kept for an operator.
+- **Under `discardAfterMaxRetries` a wait can end in nothing.** A runner built with
+  `DeadLetterRetryPolicy.discardAfterMaxRetries` discards an entry whose replays exhaust their
+  attempts, and a client that waits for the replay is not told that its command was dropped. Where
+  callers are answered `QUEUED_FOR_REPLAY`, keep the default — the integrations' policy — under
+  which an exhausted entry is kept for an operator, or tell the caller through a channel of your
+  own.
 
 An exception mapper chosen by the thrown type — a JAX-RS `ExceptionMapper`, a Micronaut
 `ExceptionHandler` — receives `CommandDeadLetteredException`, not the `LockException` or

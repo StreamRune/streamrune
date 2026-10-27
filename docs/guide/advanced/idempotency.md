@@ -126,6 +126,7 @@ A keyed command that fails on infrastructure is recorded in the dead letter queu
 - **A failure on a keyed command whose dead-letter entry exists is pending.** Re-send with the same key — the inbox executes the command once, whichever of the re-send and the replay comes first, and answers the other with the recorded outcome — or wait for the replay.
 - **A new key is a new operation**, and it is applied beside the replay: the effect twice.
 - **Mint the key when the user intends the operation, and keep it until a `2xx` or a `4xx`.** A key minted per request, or per instance of a form that is closed and reopened, is a new key for the same intent.
+- **Under `discardAfterMaxRetries` a wait can end in nothing.** A retry runner built with `DeadLetterRetryPolicy.discardAfterMaxRetries` discards an entry whose replays exhaust their attempts, and a client that waits for the replay is not told that its command was dropped. Where clients are answered `QUEUED_FOR_REPLAY`, keep the default — the integrations' policy — under which an exhausted entry is kept for an operator, or tell the client through a channel of your own.
 
 The endpoint tells the client which case it is in:
 

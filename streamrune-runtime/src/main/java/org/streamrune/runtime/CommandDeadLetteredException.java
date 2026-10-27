@@ -38,7 +38,10 @@ import org.streamrune.core.types.StreamId;
  * second operation, applied beside an operator's replay of the entry — the client does not re-send
  * it until the operator has decided. Never {@code 202 Accepted}: a client treats a 2xx as done and
  * never sends the request again, while the replay can itself fail, exhaust its attempts and be kept
- * for an operator.
+ * for an operator. Under the retry policy's {@code discardAfterMaxRetries} the replay can also
+ * exhaust its attempts and discard the command, and a client that waits for it is not told: where
+ * callers are answered that their command is queued for replay, keep the default, under which an
+ * exhausted entry is kept for an operator, or tell them through a channel of your own.
  *
  * <p><b>When the failure itself propagates.</b> Only a stored entry makes the outcome pending, so
  * the bus throws the failure unchanged when there is none: a failure its {@code dlqEligible}
