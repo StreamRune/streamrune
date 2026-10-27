@@ -7,6 +7,7 @@ import io.smallrye.config.PropertiesConfigSource;
 import io.smallrye.config.SmallRyeConfigBuilder;
 import java.time.Duration;
 import java.util.Map;
+import java.util.TreeMap;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -327,6 +328,58 @@ class StreamRuneQuarkusPropertiesTest {
     assertEquals(Duration.ofMinutes(2), crypto.aws().dataKeyCache().expireAfterWrite());
     assertEquals(Duration.ofMinutes(30), crypto.cache().expireAfterWrite());
     assertEquals(Duration.ofMinutes(10), crypto.cache().expireAfterAccess().orElseThrow());
+  }
+
+  /**
+   * In a Quarkus application every duration key takes the short form the configuration reference
+   * writes its default in ({@code 7d}, {@code 1m}, {@code 30s}, {@code 500ms}) as well as ISO-8601:
+   * bound with each default written that way, the mappings read as they read with no source at all.
+   * SmallRye Config without Quarkus' converter reads ISO-8601 only, which is why the README's
+   * listing writes ISO-8601.
+   */
+  @Test
+  void everyDurationTakesTheShortFormOfTheConfigurationReferenceInAQuarkusApplication() {
+    var crypto = TestProperties.crypto(Map.of());
+    Map<String, String> defaults =
+        ConfigurationDocLintTest.oracleOf(TestProperties.defaults(), crypto).keys();
+    Map<String, String> shortForms = new TreeMap<>();
+    Map<String, String> cryptoShortForms = new TreeMap<>();
+    defaults.forEach(
+        (key, value) -> {
+          if (value.matches("[0-9]+(?:ms|d|h|m|s)")) {
+            (key.startsWith("streamrune.crypto.") ? cryptoShortForms : shortForms).put(key, value);
+          }
+        });
+    assertTrue(shortForms.size() >= 10, "the duration keys must be found: " + shortForms);
+    assertTrue(cryptoShortForms.size() >= 2, "the crypto duration keys: " + cryptoShortForms);
+
+    var application =
+        new SmallRyeConfigBuilder()
+            .withMapping(StreamRuneQuarkusProperties.class)
+            .withMapping(StreamRuneQuarkusCryptoProperties.class)
+            .withConverter(Duration.class, 100, new DurationConverter())
+            .withSources(
+                new PropertiesConfigSource(
+                    merged(shortForms, cryptoShortForms), "quarkus-application", 1000))
+            .build();
+
+    assertEquals(
+        defaults,
+        ConfigurationDocLintTest.oracleOf(
+                application.getConfigMapping(StreamRuneQuarkusProperties.class),
+                application.getConfigMapping(StreamRuneQuarkusCryptoProperties.class))
+            .keys());
+    String sample = shortForms.keySet().iterator().next();
+    assertThrows(
+        RuntimeException.class,
+        () -> TestProperties.of(Map.of(sample, shortForms.get(sample))),
+        "SmallRye Config alone reads ISO-8601 only");
+  }
+
+  private static Map<String, String> merged(Map<String, String> a, Map<String, String> b) {
+    Map<String, String> merged = new TreeMap<>(a);
+    merged.putAll(b);
+    return merged;
   }
 
   /** A crypto expiry that is not a duration fails the binding, and the failure names the key. */
