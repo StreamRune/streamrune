@@ -1,6 +1,7 @@
 package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.quarkus.arc.BeanCreator;
 import io.quarkus.arc.SyntheticCreationalContext;
@@ -35,6 +36,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -185,8 +187,8 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
 
   /**
    * A configuration property injected by name, {@code @ConfigProperty}, as Quarkus' configuration
-   * supplies one: the value the configuration holds, else the default the injection point names. A
-   * {@code Provider} of it reads the configuration again on each {@code get()}.
+   * supplies one ({@link #valueOf}). A {@code Provider} of it reads the configuration again on each
+   * {@code get()}.
    */
   @ApplicationScoped
   public static class ConfigPropertyValues {
@@ -201,10 +203,64 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
               .map(ConfigProperty.class::cast)
               .findFirst()
               .orElseThrow();
-      return ApplicationInfrastructure.config
-          .getOptionalValue(property.name(), Boolean.class)
-          .orElseGet(() -> Boolean.valueOf(property.defaultValue()));
+      return valueOf(ApplicationInfrastructure.config, property);
     }
+
+    /**
+     * The value of {@code property} as Quarkus' configuration supplies it: the one {@code config}
+     * holds, else the default the injection point names, converted as a configured value is. A
+     * property with neither fails with the configuration's {@code NoSuchElementException}, as it
+     * fails a Quarkus application.
+     */
+    static Boolean valueOf(SmallRyeConfig config, ConfigProperty property) {
+      if (ConfigProperty.UNCONFIGURED_VALUE.equals(property.defaultValue())) {
+        return config.getValue(property.name(), Boolean.class);
+      }
+      return config
+          .getOptionalValue(property.name(), Boolean.class)
+          .orElseGet(
+              () ->
+                  config
+                      .getConverter(Boolean.class)
+                      .orElseThrow()
+                      .convert(property.defaultValue()));
+    }
+  }
+
+  /**
+   * A property injected by name that the configuration does not hold and that names no default
+   * fails, as it fails a Quarkus application, instead of reading as {@code false}; a default is
+   * converted as a configured value is.
+   */
+  @Test
+  void aPropertyInjectedByNameWithNeitherAValueNorADefaultFails() throws NoSuchFieldException {
+    SmallRyeConfig empty = configuration(Map.of());
+    ConfigProperty withoutDefault = injectedAs("withoutDefault");
+    ConfigProperty defaultYes = injectedAs("defaultYes");
+
+    assertThrows(
+        NoSuchElementException.class,
+        () -> ConfigPropertyValues.valueOf(empty, withoutDefault),
+        "a property with neither a value nor a default");
+    assertEquals(true, ConfigPropertyValues.valueOf(empty, defaultYes));
+    assertEquals(
+        false,
+        ConfigPropertyValues.valueOf(
+            configuration(Map.of("example.default-yes", "false")), defaultYes));
+  }
+
+  private static ConfigProperty injectedAs(String field) throws NoSuchFieldException {
+    return InjectionPoints.class.getDeclaredField(field).getAnnotation(ConfigProperty.class);
+  }
+
+  /** The injection points of {@link #aPropertyInjectedByNameWithNeitherAValueNorADefaultFails}. */
+  @SuppressWarnings("unused")
+  private static final class InjectionPoints {
+    @ConfigProperty(name = "example.without-default")
+    Boolean withoutDefault;
+
+    @ConfigProperty(name = "example.default-yes", defaultValue = "yes")
+    Boolean defaultYes;
   }
 
   /** The stores of an application without a database: the test kit's in-memory ones. */
