@@ -1222,7 +1222,7 @@ streamrune.subscription.single-active-consumer.lease-ttl=15s
 ```
 
 ```properties
-# Quarkus (same property names; Duration parses the ISO-8601 literal)
+# Quarkus (same property names; 15s and the ISO-8601 PT15S below bind on all three)
 streamrune.subscription.single-active-consumer.enabled=true
 streamrune.subscription.single-active-consumer.lease-ttl=PT15S
 ```

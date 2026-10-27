@@ -12,8 +12,8 @@ lists them all.
 A default is written in one form in this guide and in every other table with a `Default` column:
 
 - a duration as the shortest exact one of `Nd`, `Nh`, `Nm`, `Ns` and `Nms`: `7d`, `1m`, `30s`,
-  `500ms`. All three integrations accept that form as it is; Quarkus also reads ISO-8601, so `7d`
-  or `PT168H`, and `1m` or `PT60S`, there;
+  `500ms`. All three integrations accept that form as it is, and ISO-8601 (`PT168H` for `7d`,
+  `PT60S` for `1m`) as well;
 - a boolean or a number as its value: `true`, `100`, `2.0`; a text as it is: `operator-only`;
 - `—` where the property has no default.
 

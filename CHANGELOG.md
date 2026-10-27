@@ -1115,8 +1115,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 ### Framework integrations
 
 Spring Boot 4, Quarkus and Micronaut each auto-configure the same picture from a `DataSource` and a
-set of `streamrune.*` properties with the same names on all three (`Duration`s accept `30s`/`7d` on
-Spring and Micronaut and ISO-8601 `PT30S`/`PT168H` on Quarkus):
+set of `streamrune.*` properties with the same names on all three (a `Duration` takes the short form
+`30s`/`7d` or ISO-8601 `PT30S`/`PT168H` on each):
 
 - The event store through `PostgresEventStoreFactory`, a `VirtualThreadCommandBus` with
   `PostgresCommandInbox`, `PostgresAuditStore`, `PostgresDeadLetterQueue` + `DeadLetterRetryRunner`,
