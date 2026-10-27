@@ -47,7 +47,7 @@ plugins {
 // so calling them from a `doLast { }` lambda captures a reference to the script instance itself —
 // which the configuration cache refuses to serialize ("cannot serialize Gradle script object
 // references"). A nested `object` is an ordinary standalone class with no such reference.
-private object BrA17SupertypeCheck {
+private object PublicSupertypeScopeCheck {
     private val TOP_LEVEL_PUBLIC_TYPE =
         Regex(
             """(?m)^public(?:\s+(?:final|abstract|sealed|non-sealed|strictfp))*\s+""" +
@@ -118,7 +118,7 @@ private object BrA17SupertypeCheck {
 // did not run. Which tasks run is recorded by an onlyIf predicate of every test task into the
 // TestSummary.Runs build service, of which each build has its own instance.
 //
-// A nested object for the reason BrA17SupertypeCheck gives: the listener is stored in the
+// A nested object for the reason PublicSupertypeScopeCheck gives: the listener is stored in the
 // configuration cache, so it must not reference the script instance.
 private object TestSummary {
     const val AGGREGATE = "reports/test-summary.txt"
@@ -758,10 +758,10 @@ subprojects {
                 if (nonApiProjectDepPaths.isNotEmpty() && ownMainJavaDir.exists()) {
                     val exportedNamesByDep: Map<String, Set<String>> =
                         depMainJavaDirsByPath.mapValues { (_, dir) ->
-                            if (dir.exists()) BrA17SupertypeCheck.publicTopLevelTypeNames(dir) else emptySet()
+                            if (dir.exists()) PublicSupertypeScopeCheck.publicTopLevelTypeNames(dir) else emptySet()
                         }
                     val offenders = mutableListOf<String>()
-                    BrA17SupertypeCheck.publicSupertypeReferences(ownMainJavaDir).forEach { ref ->
+                    PublicSupertypeScopeCheck.publicSupertypeReferences(ownMainJavaDir).forEach { ref ->
                         exportedNamesByDep.forEach { (depPath, exportedNames) ->
                             val leaked = ref.supertypes.intersect(exportedNames)
                             if (leaked.isNotEmpty()) {
