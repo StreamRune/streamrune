@@ -341,6 +341,22 @@ public class StreamRuneProducers {
    * isResolvable()} alone, because a dependent-scoped producer in this class may hand back a null
    * product.
    */
+  /**
+   * The policy the dead-letter retry runner replays under, built from {@code
+   * streamrune.dead-letter.*}: the runner and the command bus take the same one, so the bus answers
+   * a keyed command that fails again under its key by the rules the runner replays by.
+   */
+  static org.streamrune.core.DeadLetterRetryPolicy deadLetterRetryPolicy(
+      StreamRuneQuarkusProperties properties) {
+    return new org.streamrune.core.DeadLetterRetryPolicy(
+        properties.deadLetter().maxRetries(),
+        java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()),
+        2.0,
+        false,
+        org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(
+            properties.deadLetter().unkeyedReplay()));
+  }
+
   private static SnapshotPolicy resolveSnapshotPolicy(
       Instance<SnapshotPolicy> snapshotPolicyInstance, StreamRuneQuarkusProperties properties) {
     SnapshotPolicy supplied =
@@ -1199,11 +1215,15 @@ public class StreamRuneProducers {
     if (deadLetterQueueInstance.isResolvable()) {
       org.streamrune.core.DeadLetterQueue deadLetterQueue = deadLetterQueueInstance.get();
       if (deadLetterQueue != null) {
+        // The retry runner's policy and inbox window tell a keyed command that fails again under
+        // its key whether the entry stored for it is still replayed on the schedule.
         builder
             .deadLetterQueue(deadLetterQueue)
             .objectMapper(
                 org.streamrune.runtime.DeadLetterRetryRunner.createObjectMapper(
-                    cryptoEngine, metrics));
+                    cryptoEngine, metrics))
+            .deadLetterRetryPolicy(deadLetterRetryPolicy(properties))
+            .inboxRetentionMaxAge(properties.inbox().retentionMaxAge());
       }
     }
 
@@ -1298,14 +1318,7 @@ public class StreamRuneProducers {
             .deadLetterQueue(dlq.get())
             .commandBus(commandBus.get())
             .objectMapper(resolvedMapper)
-            .policy(
-                new org.streamrune.core.DeadLetterRetryPolicy(
-                    properties.deadLetter().maxRetries(),
-                    java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()),
-                    2.0,
-                    false,
-                    org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(
-                        properties.deadLetter().unkeyedReplay())))
+            .policy(deadLetterRetryPolicy(properties))
             // The window the inbox retention sweeper prunes with: a keyed entry older than it is
             // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
             .inboxRetentionMaxAge(properties.inbox().retentionMaxAge())

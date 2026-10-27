@@ -53,7 +53,9 @@ public class CommandExecutionException extends RuntimeException {
   }
 
   /**
-   * The id the command ran under.
+   * The id the command ran under. For a {@link CommandDeadLetteredException} it is the id of the
+   * dead-letter entry that holds the command, which for a re-send the queue already held an entry
+   * for is the id of that earlier send (see {@link CommandDeadLetteredException#commandId()}).
    *
    * @return the command id
    */

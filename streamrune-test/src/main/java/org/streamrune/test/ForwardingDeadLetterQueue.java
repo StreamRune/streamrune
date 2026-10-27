@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.Set;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.types.CommandId;
+import org.streamrune.core.types.IdempotencyKey;
 
 /**
  * A {@link DeadLetterQueue} that forwards every call to a delegate and injects the faults of a
@@ -15,10 +16,11 @@ import org.streamrune.core.types.CommandId;
  * its bookkeeping ({@code crashAfter("updateAttempts")}).
  *
  * <p>Every method of the interface is overridden and forwarded to the same method of the delegate,
- * the default methods included, so {@code find}, {@code updateAttempts}, {@code readRetryable},
- * {@code countPending}, {@code countAwaitingOperator} and {@code deleteOlderThan} reach the
- * delegate's implementation, never the throwing defaults. A subclass may override a method to
- * observe, block or fail it; {@code super} applies the schedule, {@link #delegate} does not.
+ * the default methods included, so {@code find}, {@code findByIdempotencyKey}, {@code
+ * updateAttempts}, {@code readRetryable}, {@code countPending}, {@code countAwaitingOperator} and
+ * {@code deleteOlderThan} reach the delegate's implementation, never the throwing defaults. A
+ * subclass may override a method to observe, block or fail it; {@code super} applies the schedule,
+ * {@link #delegate} does not.
  */
 public class ForwardingDeadLetterQueue implements DeadLetterQueue {
 
@@ -65,6 +67,11 @@ public class ForwardingDeadLetterQueue implements DeadLetterQueue {
   @Override
   public Optional<DeadLetterEntry> find(CommandId commandId) {
     return schedule.call("find", () -> delegate.find(commandId));
+  }
+
+  @Override
+  public List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey key) {
+    return schedule.call("findByIdempotencyKey", () -> delegate.findByIdempotencyKey(key));
   }
 
   @Override

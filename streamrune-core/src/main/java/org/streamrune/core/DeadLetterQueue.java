@@ -21,11 +21,15 @@ import org.streamrune.core.types.UserId;
  *
  * <p><b>Keying.</b> {@code commandId} uniquely identifies an entry: the queue holds at most one
  * entry per command, and {@link #discard(CommandId)} and {@link #updateAttempts(CommandId, int,
- * Instant)} address entries by it.
+ * Instant)} address entries by it. An entry also records the idempotency key its command ran under,
+ * and {@link #findByIdempotencyKey(IdempotencyKey)} finds the entries stored under a key: a command
+ * bus that meets an entry for a keyed command's key stores no second one when the command fails
+ * again under that key.
  *
  * <p><b>Optional capabilities.</b> The methods that back an optional feature — scheduled DLQ retry
- * ({@link #updateAttempts}, {@link #readRetryable}), the depth gauge ({@link #countPending}) and
- * retention pruning ({@link #deleteOlderThan}) — are {@code default} methods that throw {@link
+ * ({@link #updateAttempts}, {@link #readRetryable}), the depth gauge ({@link #countPending}),
+ * retention pruning ({@link #deleteOlderThan}) and the lookup by key ({@link
+ * #findByIdempotencyKey}) — are {@code default} methods that throw {@link
  * UnsupportedOperationException}, so an implementation that does not support a feature fails loudly
  * — never silently — when that feature is enabled. Override them to opt in.
  */
@@ -110,7 +114,9 @@ public interface DeadLetterQueue {
    * <p>Callers must publish a given {@code commandId} at most once — the queue keeps one entry per
    * command, and implementations may reject a duplicate (the PostgreSQL implementation has a
    * primary key on the command ID). When a replayed entry fails again, update it via {@link
-   * #updateAttempts(CommandId, int, Instant)} instead of publishing it a second time.
+   * #updateAttempts(CommandId, int, Instant)} instead of publishing it a second time; when a keyed
+   * command fails again under a key the queue holds an entry of the same command for ({@link
+   * #findByIdempotencyKey}), the command bus publishes nothing.
    *
    * @param request the dead letter publish request containing all failure details
    */
@@ -220,6 +226,32 @@ public interface DeadLetterQueue {
     return read(Integer.MAX_VALUE).stream()
         .filter(entry -> entry.commandId().equals(commandId))
         .findFirst();
+  }
+
+  /**
+   * Finds every entry stored under {@code key} — the entries of the commands that ran under it —
+   * oldest first (ascending {@code publishedAt}); empty when none is.
+   *
+   * <p>The command bus asks before it stores an entry for a keyed command: when the queue already
+   * holds an entry of the same command (its type and its stream) under the key, the command failed
+   * again after a send under that key was dead-lettered, so the bus stores nothing and answers the
+   * caller with that entry. The client that re-sends under its key during an outage therefore adds
+   * no entry per re-send. Two sends that fail at the same instant can still store one entry each;
+   * the command inbox deduplicates their replays.
+   *
+   * <p>The default implementation throws {@link UnsupportedOperationException}: the lookup is an
+   * optional capability. Without it the bus stores an entry for every failed send, as it does for
+   * an unkeyed command. Implementations backed by a database override it with an indexed lookup.
+   *
+   * @param key the idempotency key the commands ran under
+   * @return the entries stored under the key, oldest first; may be empty
+   * @throws UnsupportedOperationException if the implementation does not look entries up by key
+   */
+  default List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey key) {
+    throw new UnsupportedOperationException(
+        getClass().getName()
+            + " does not support findByIdempotencyKey(IdempotencyKey) — override it so a keyed"
+            + " command that fails again under the same key stores no second entry");
   }
 
   /**

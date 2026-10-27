@@ -188,6 +188,23 @@ class DeadLetterQueueMigrationTest {
   }
 
   @Test
+  void migrationCreatesThePartialIdempotencyKeyIndex() throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement();
+        var rs =
+            stmt.executeQuery(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND"
+                    + " tablename = 'dead_letter_queue' AND indexname = 'idx_dlq_idempotency_key'")) {
+      assertTrue(rs.next(), "idx_dlq_idempotency_key must exist after migration");
+      String definition = rs.getString("indexdef");
+      assertTrue(
+          definition.contains("(idempotency_key)")
+              && definition.contains("WHERE (idempotency_key IS NOT NULL)"),
+          definition);
+    }
+  }
+
+  @Test
   void dlqIsFunctionalAgainstTheMigratedSchema() {
     // End-to-end proof: publish() succeeds against the Flyway-provisioned table.
     var dlq = new PostgresDeadLetterQueue(dataSource);

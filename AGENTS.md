@@ -169,7 +169,8 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 - **The wiring contract.** `IntegrationWiringContract` (`streamrune-integration-tck`) holds the
   rules the Spring, Quarkus and Micronaut integrations keep alike: the startup refusals, the
   fail-closed request identity, the health check's name and details, the warning for a saga runner
-  without a lease, runners stopped before the database closes, the bound defaults. Each
+  without a lease, runners stopped before the database closes, the bound defaults, the dead-letter
+  rules the command bus and its retry runner answer a keyed re-send by. Each
   integration's `*IntegrationWiringContractTest` starts its own container through the contract's
   hooks, on the test kit's in-memory stores or on PostgreSQL. A behaviour that crosses the three
   integrations gets a contract test first; the beans such a test adds are in `ContractBeans`.

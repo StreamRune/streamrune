@@ -69,6 +69,7 @@ import org.streamrune.runtime.OutboxRetentionSweeper;
 import org.streamrune.runtime.SimpleQueryBus;
 import org.streamrune.runtime.SseEventFeed;
 import org.streamrune.runtime.SseEventPublisher;
+import org.streamrune.runtime.UnboundRequestContextQueryBus;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.runtime.gdpr.ExportSubjectDataService;
 import org.streamrune.runtime.gdpr.ForgetSubjectService;
@@ -202,6 +203,19 @@ public class StreamRuneAutoConfiguration {
           // AnnotationAuthorizationInterceptor bean gets, so the authority captured at the request
           // edge is byte-identical to the one a synchronous execute would have computed.
           userRoleResolver.getIfAvailable());
+    }
+
+    /**
+     * The source the command bus and the query bus take the caller's request context from for a
+     * dispatch that starts with {@code StreamRuneContext.CURRENT} unbound: the context {@link
+     * ScopedValueFilter} stored on the request the calling thread serves, which Spring MVC makes
+     * current on the thread that runs a {@code Callable} a controller returns. Servlet web
+     * applications only, beside the filter.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public RequestAttributeContextSource requestAttributeContextSource() {
+      return new RequestAttributeContextSource();
     }
 
     /**
@@ -469,7 +483,9 @@ public class StreamRuneAutoConfiguration {
 
   /**
    * Creates the primary {@link QueryBus} bean composing the full chain: SimpleQueryBus →
-   * CachingQueryBus (if enabled) → AuditingQueryBus (if AuditStore available).
+   * CachingQueryBus (if enabled) → AuditingQueryBus (if AuditStore available), inside an {@link
+   * UnboundRequestContextQueryBus} over the {@link RequestAttributeContextSource} bean in a servlet
+   * web application.
    */
   // Back off on any application-defined QueryBus by TYPE, not just a bean literally named
   // "queryBus". A user QueryBus under any other name (e.g. a tenant/authorization-filtering
@@ -485,11 +501,16 @@ public class StreamRuneAutoConfiguration {
   public QueryBus queryBus(
       SimpleQueryBus simpleBus,
       ObjectProvider<CachingQueryBus> cachingBusProvider,
-      ObjectProvider<AuditStore> auditStoreProvider) {
+      ObjectProvider<AuditStore> auditStoreProvider,
+      ObjectProvider<RequestAttributeContextSource> requestContextSourceProvider) {
     CachingQueryBus caching = cachingBusProvider.getIfAvailable();
     QueryBus bus = caching != null ? caching : simpleBus;
     AuditStore store = auditStoreProvider.getIfAvailable();
-    return store != null ? new AuditingQueryBus(bus, store) : bus;
+    QueryBus composed = store != null ? new AuditingQueryBus(bus, store) : bus;
+    // In a servlet web application a query dispatched off the servlet thread (a Callable a
+    // controller returns) is audited, cached and handled as the request's caller.
+    RequestAttributeContextSource source = requestContextSourceProvider.getIfAvailable();
+    return source != null ? new UnboundRequestContextQueryBus(composed, source) : composed;
   }
 
   /**
@@ -547,7 +568,8 @@ public class StreamRuneAutoConfiguration {
       ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider,
       ObjectProvider<org.streamrune.core.DeadLetterQueue> deadLetterQueueProvider,
       ObjectProvider<CryptoEngine> cryptoEngineProvider,
-      ObjectProvider<CommandInbox> commandInboxProvider) {
+      ObjectProvider<CommandInbox> commandInboxProvider,
+      ObjectProvider<RequestAttributeContextSource> requestContextSourceProvider) {
 
     // Resolve the CryptoEngine once, up front: it both fails fast on @Encrypted command fields
     // (below) and makes the DLQ publish mapper crypto-aware (below).
@@ -591,6 +613,9 @@ public class StreamRuneAutoConfiguration {
             .stripeCount(properties.stripeCount())
             .maxInFlightAsyncCommands(properties.maxInFlightAsyncCommands())
             .interceptors(interceptors);
+    // In a servlet web application a command dispatched off the servlet thread (a Callable a
+    // controller returns) is authorized, audited and recorded as the request's caller.
+    requestContextSourceProvider.ifAvailable(builder::unboundRequestContext);
 
     org.streamrune.core.StreamRuneMetrics metrics =
         metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP);
@@ -601,10 +626,14 @@ public class StreamRuneAutoConfiguration {
       // The DLQ publish mapper is ALWAYS the crypto-aware default — never the application's
       // own ObjectMapper bean — so @Encrypted command fields are persisted as ciphertext, mirroring
       // the event store, saga store, and Micronaut. The metrics bean is threaded in so the shared
-      // DLQ decrypt mapper's CryptoShreddingModule reports subject_redacted.
+      // DLQ decrypt mapper's CryptoShreddingModule reports subject_redacted. The retry runner's
+      // policy and inbox window tell a keyed command that fails again under its key whether the
+      // entry stored for it is still replayed on the schedule.
       builder
           .deadLetterQueue(deadLetterQueue)
-          .objectMapper(defaultDeadLetterObjectMapper(cryptoEngine, metrics));
+          .objectMapper(defaultDeadLetterObjectMapper(cryptoEngine, metrics))
+          .deadLetterRetryPolicy(deadLetterRetryPolicy(properties))
+          .inboxRetentionMaxAge(properties.inbox().retentionMaxAge());
     }
 
     commandInboxProvider.ifAvailable(builder::commandInbox);
@@ -639,6 +668,21 @@ public class StreamRuneAutoConfiguration {
               + "exactly one CryptoEngine bean as @Primary.",
           e);
     }
+  }
+
+  /**
+   * The policy the dead-letter retry runner replays under, built from {@code
+   * streamrune.dead-letter.*}: the runner and the command bus take the same one, so the bus answers
+   * a keyed command that fails again under its key by the rules the runner replays by.
+   */
+  static org.streamrune.core.DeadLetterRetryPolicy deadLetterRetryPolicy(
+      StreamRuneProperties properties) {
+    return new org.streamrune.core.DeadLetterRetryPolicy(
+        properties.deadLetter().maxRetries(),
+        java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()),
+        2.0,
+        false,
+        properties.deadLetter().unkeyedReplayPolicy());
   }
 
   /** Captures the registration's type parameters once so the builder call type-checks. */
@@ -1324,13 +1368,7 @@ public class StreamRuneAutoConfiguration {
             // streamrune.dlq.exhausted counter + terminal ERROR log under the default policy;
             // defaults to NOOP when no metrics bean exists (behavior unchanged).
             .metrics(metrics)
-            .policy(
-                new org.streamrune.core.DeadLetterRetryPolicy(
-                    properties.deadLetter().maxRetries(),
-                    java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()),
-                    2.0,
-                    false,
-                    properties.deadLetter().unkeyedReplayPolicy()))
+            .policy(deadLetterRetryPolicy(properties))
             // The window the inbox retention sweeper prunes with: a keyed entry older than it is
             // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
             .inboxRetentionMaxAge(properties.inbox().retentionMaxAge())

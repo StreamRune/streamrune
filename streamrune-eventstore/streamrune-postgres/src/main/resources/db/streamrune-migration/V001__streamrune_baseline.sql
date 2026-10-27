@@ -165,6 +165,9 @@ CREATE TABLE dead_letter_queue (
 );
 
 CREATE INDEX idx_dlq_published_at ON dead_letter_queue (published_at DESC);
+-- Serves the command bus's lookup of the entries stored under a key before it stores another.
+CREATE INDEX idx_dlq_idempotency_key ON dead_letter_queue (idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 
 -- ===========================================================================================

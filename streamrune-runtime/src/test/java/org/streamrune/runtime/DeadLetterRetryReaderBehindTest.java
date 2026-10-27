@@ -1,8 +1,11 @@
 package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
@@ -30,11 +33,15 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.runtime.DeadLetterRetryRunner.RetryOutcome;
+import org.streamrune.test.FaultSchedule;
+import org.streamrune.test.ForwardingDeadLetterQueue;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryDeadLetterQueue;
 import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.InjectedFaultException;
 import org.streamrune.test.MutableClock;
 import org.streamrune.test.RecordingStreamRuneMetrics;
+import org.streamrune.test.ScriptedSubscriptionLeadership;
 
 /**
  * A dead-letter replay on a replica that is behind the stored schema: the replayed command's
@@ -44,14 +51,27 @@ import org.streamrune.test.RecordingStreamRuneMetrics;
  * <p>During a rolling deployment of an event-schema change the retry runner's lease can sit on a
  * replica of the previous release for the whole window, and every replay it makes fails that way.
  * The failure says nothing about the command, which succeeds on an upgraded replica, so it counts
- * no attempt: the entry is left exactly as it was ({@link RetryOutcome#READER_BEHIND}). The default
- * policy's five attempts would otherwise turn an entry dead-lettered during a rollout into one only
- * an operator replays after about fifteen minutes, and {@code discardAfterMaxRetries} would drop
- * the command.
+ * no attempt ({@link RetryOutcome#READER_BEHIND}): the entry's attempt count stays, and only its
+ * last attempt time becomes the replay's. The default policy's five attempts would otherwise turn
+ * an entry dead-lettered during a rollout into one only an operator replays after about fifteen
+ * minutes, and {@code discardAfterMaxRetries} would drop the command. The new attempt time moves
+ * the entry behind the entries queued after it, so a run of such entries at the head of the
+ * least-recently-active order delays those entries by one poll per page it fills, not until the
+ * rollout ends.
+ *
+ * <p><b>Crash points.</b> The time is recorded by one single-row write ({@code updateAttempts} with
+ * the entry's own attempt count), the last step of such a replay. A crash before it leaves the
+ * entry as it was, at the head of the order, and the next poll replays it again; a crash after it
+ * leaves the entry behind the others, replayed once its backoff has passed. Both converge: the
+ * entry stays until a replica that reads the stored version replays it, with no attempt counted
+ * ({@link #aFailedAttemptTimeWriteLeavesTheEntryAsItWas_andTheNextPollReplaysItAgain}, {@link
+ * #aCrashAfterTheAttemptTimeWriteLeavesTheEntryBehind_andItIsReplayedAfterItsBackoff}).
  */
 class DeadLetterRetryReaderBehindTest {
 
   private static final AggregateType STOCK = AggregateType.of("stock");
+
+  private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
 
   private final InMemoryDeadLetterQueue deadLetterQueue = new InMemoryDeadLetterQueue();
   private final ObjectMapper objectMapper = new ObjectMapper();
@@ -59,15 +79,20 @@ class DeadLetterRetryReaderBehindTest {
 
   @Test
   void aReplayBehindTheStoredSchemaCountsNoAttempt_acrossEveryPollOfTheWindow() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
     var bus = new BehindTheStoredSchemaBus(Integer.MAX_VALUE);
-    CommandId id = publishKeyedEntry("cmd-behind-1");
-    var runner = runner(bus, policy(5, false));
+    CommandId id = publishKeyedEntry(queue, "cmd-behind-1", new ReserveStock("S", "order-1"));
+    var runner = runner(bus, policy(5, false), queue, clock, 10);
 
     for (int poll = 1; poll <= 6; poll++) {
+      clock.advance(Duration.ofMinutes(1));
       runner.processBatch();
-      DeadLetterQueue.DeadLetterEntry entry = deadLetterQueue.find(id).orElseThrow();
+      DeadLetterQueue.DeadLetterEntry entry = queue.find(id).orElseThrow();
       assertThat(entry.dlqAttempts()).as("attempts after poll %d", poll).isZero();
-      assertThat(entry.lastAttemptAt()).as("the entry is left as it was").isNull();
+      assertThat(entry.lastAttemptAt())
+          .as("the replay's time is recorded, not an attempt")
+          .isEqualTo(clock.instant());
     }
 
     assertThat(bus.replays()).as("the schedule replays the entry on every poll").isEqualTo(6);
@@ -110,28 +135,31 @@ class DeadLetterRetryReaderBehindTest {
   }
 
   @Test
-  void anOperatorRetryBehindTheStoredSchema_isReaderBehind_andLeavesTheEntryAsItWas() {
+  void anOperatorRetryBehindTheStoredSchema_isReaderBehind_andCountsNoAttempt() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
     var bus = new BehindTheStoredSchemaBus(1);
-    CommandId id = publishKeyedEntry("cmd-behind-4");
-    var runner = runner(bus, policy(5, false));
+    CommandId id = publishKeyedEntry(queue, "cmd-behind-4", new ReserveStock("S", "order-1"));
+    var runner = runner(bus, policy(5, false), queue, clock, 10);
+    clock.advance(Duration.ofSeconds(5));
 
     assertThat(runner.retry(id)).isEqualTo(RetryOutcome.READER_BEHIND);
-    DeadLetterQueue.DeadLetterEntry untouched = deadLetterQueue.find(id).orElseThrow();
-    assertThat(untouched.dlqAttempts()).isZero();
-    assertThat(untouched.lastAttemptAt()).isNull();
+    DeadLetterQueue.DeadLetterEntry entry = queue.find(id).orElseThrow();
+    assertThat(entry.dlqAttempts()).isZero();
+    assertThat(entry.lastAttemptAt()).isEqualTo(clock.instant());
 
     assertThat(runner.retry(id)).isEqualTo(RetryOutcome.REPLAYED);
-    assertThat(deadLetterQueue.find(id)).isEmpty();
+    assertThat(queue.find(id)).isEmpty();
   }
 
   /**
-   * A replay that answers {@code READER_BEHIND} takes no slot of the poll's batch. The entries left
-   * unchanged keep the head of the least-recently-active order on every poll; counted against the
-   * batch, a batch's worth of them would hold back every entry behind them until the rollout ends.
+   * A replay that answers {@code READER_BEHIND} takes no slot of the poll's batch: counted against
+   * the batch, a batch's worth of such entries at the head of the page would hold back every entry
+   * behind them in the same page.
    */
   @Test
   void entriesBehindTheStoredSchemaTakeNoSlotOfThePollsBatch() {
-    MutableClock clock = MutableClock.startingAt(Instant.parse("2026-01-01T00:00:00Z"));
+    MutableClock clock = MutableClock.startingAt(START);
     var queue = new InMemoryDeadLetterQueue(clock);
     List<CommandId> behind = new java.util.ArrayList<>();
     for (int i = 0; i < 10; i++) {
@@ -154,8 +182,249 @@ class DeadLetterRetryReaderBehindTest {
             id -> {
               DeadLetterQueue.DeadLetterEntry entry = queue.find(id).orElseThrow();
               assertThat(entry.dlqAttempts()).isZero();
-              assertThat(entry.lastAttemptAt()).isNull();
+              assertThat(entry.lastAttemptAt()).isEqualTo(clock.instant());
             });
+  }
+
+  /**
+   * More entries behind the stored schema than a page holds: the first poll's page is all of them,
+   * so it reaches no entry queued after them. Each one's replay records its time, which moves it
+   * behind those entries and makes it due again only after its backoff, so the next poll reaches
+   * the healthy entry and replays it — while none of the entries behind the stored schema has an
+   * attempt counted.
+   */
+  @Test
+  void aRunOfEntriesBehindTheStoredSchemaYieldsTheHead_soTheEntryBehindAFullPageIsReplayedNext() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
+    List<CommandId> behind = new java.util.ArrayList<>();
+    for (int i = 0; i < 21; i++) {
+      behind.add(publishKeyedEntry(queue, "cmd-run-" + i, new ReserveStock("S", "o-" + i)));
+      clock.advance(Duration.ofSeconds(1));
+    }
+    CommandId healthy = publishKeyedEntry(queue, "cmd-healthy", new ReserveStock("T", "order-2"));
+    var bus = new BehindForOneAggregateBus("S");
+    // batchSize 2: the poll reads a page of twenty. The first replay of an entry is due 15 to 45 s
+    // (30 s, with jitter) after its publish or its last replay.
+    var runner = runner(bus, backoffPolicy(), queue, clock, 2);
+
+    clock.advance(Duration.ofMinutes(1));
+    runner.processBatch();
+
+    assertThat(queue.find(healthy)).as("the first page is full of entries behind").isPresent();
+    assertThat(bus.refused()).isEqualTo(20);
+
+    clock.advance(Duration.ofSeconds(1));
+    runner.processBatch();
+
+    assertThat(queue.find(healthy)).as("replayed on the next poll").isEmpty();
+    assertThat(bus.executed()).isEqualTo(1);
+    assertThat(bus.refused())
+        .as("the next poll replays only the entry the first page did not hold")
+        .isEqualTo(21);
+    assertThat(behind)
+        .allSatisfy(id -> assertThat(queue.find(id).orElseThrow().dlqAttempts()).isZero());
+  }
+
+  /**
+   * A poll that replays entries behind the stored schema and reaches the end of a full page with
+   * its batch not full, while an entry is queued after the page, has not reached that entry: its
+   * summary line says so at WARN. The poll reads one row beyond the page to know, and never replays
+   * that row: the next poll reads it in its own page. A poll whose page is not full states the same
+   * replays at INFO.
+   */
+  @Test
+  void aPollThatReachesTheEndOfAFullPageOfEntriesBehindStatesItAtWarn() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
+    for (int i = 0; i < 21; i++) {
+      publishKeyedEntry(queue, "cmd-full-" + i, new ReserveStock("S", "o-" + i));
+      clock.advance(Duration.ofSeconds(1));
+    }
+    var bus = new BehindForOneAggregateBus("S");
+    var runner = runner(bus, policy(5, false), queue, clock, 2);
+
+    var poll = logDuring(runner::processBatch);
+
+    assertThat(bus.refused()).as("the row read beyond the page is not replayed").isEqualTo(20);
+    assertThat(messagesAt(poll, Level.WARN)).as("one WARN line for the poll").hasSize(1);
+    assertThat(messagesAt(poll, Level.WARN).getFirst())
+        .contains("20 DLQ entries")
+        .contains("behind the stored schema")
+        .contains("full page of 20")
+        .contains("at least one entry queued after the page was not reached");
+    assertThat(messagesAt(poll, Level.INFO)).isEmpty();
+
+    var notFull = new InMemoryDeadLetterQueue(clock);
+    publishKeyedEntry(notFull, "cmd-not-full", new ReserveStock("S", "o-x"));
+    var small = logDuring(runner(bus, policy(5, false), notFull, clock, 2)::processBatch);
+
+    assertThat(messagesAt(small, Level.WARN)).isEmpty();
+    assertThat(messagesAt(small, Level.INFO))
+        .singleElement()
+        .satisfies(line -> assertThat(line).contains("1 DLQ entry").doesNotContain("full page"));
+  }
+
+  /**
+   * A full page of entries behind the stored schema with nothing queued after it holds nothing
+   * back: the poll reached every entry there is, and its line stays at INFO.
+   */
+  @Test
+  void aFullPageWithNothingQueuedAfterItStatesItsReplaysBehindAtInfo() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
+    for (int i = 0; i < 20; i++) {
+      publishKeyedEntry(queue, "cmd-exact-" + i, new ReserveStock("S", "o-" + i));
+      clock.advance(Duration.ofSeconds(1));
+    }
+    var bus = new BehindForOneAggregateBus("S");
+
+    var poll = logDuring(runner(bus, policy(5, false), queue, clock, 2)::processBatch);
+
+    assertThat(bus.refused()).isEqualTo(20);
+    assertThat(messagesAt(poll, Level.WARN)).isEmpty();
+    assertThat(messagesAt(poll, Level.INFO))
+        .singleElement()
+        .satisfies(line -> assertThat(line).contains("20 DLQ entries").doesNotContain("full page"));
+  }
+
+  /**
+   * The poll that fills its batch before it reaches the end of a full page has not been held back
+   * by the entries behind the stored schema: its line stays at INFO.
+   */
+  @Test
+  void aPollThatFillsItsBatchStatesItsReplaysBehindAtInfo() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
+    publishKeyedEntry(queue, "cmd-head-behind", new ReserveStock("S", "o-0"));
+    clock.advance(Duration.ofSeconds(1));
+    for (int i = 0; i < 25; i++) {
+      publishKeyedEntry(queue, "cmd-healthy-" + i, new ReserveStock("T", "o-" + i));
+      clock.advance(Duration.ofSeconds(1));
+    }
+    var bus = new BehindForOneAggregateBus("S");
+
+    var poll = logDuring(runner(bus, policy(5, false), queue, clock, 2)::processBatch);
+
+    assertThat(bus.executed()).as("the batch is full").isEqualTo(2);
+    assertThat(bus.refused()).isEqualTo(1);
+    assertThat(messagesAt(poll, Level.WARN)).isEmpty();
+    assertThat(messagesAt(poll, Level.INFO).stream().filter(l -> l.contains("stored schema")))
+        .singleElement()
+        .satisfies(line -> assertThat(line).doesNotContain("full page"));
+  }
+
+  /**
+   * A poll that stops in a full page because another replica took the runner's lease has not
+   * reached the end of the page: the entries after the point where it stopped are the new lease
+   * holder's, and its line stays at INFO.
+   */
+  @Test
+  void aPollThatLosesTheLeaseInAFullPageStatesItsReplaysBehindAtInfo() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
+    for (int i = 0; i < 21; i++) {
+      publishKeyedEntry(queue, "cmd-lease-" + i, new ReserveStock("S", "o-" + i));
+      clock.advance(Duration.ofSeconds(1));
+    }
+    var leadership = ScriptedSubscriptionLeadership.granting();
+    var bus =
+        new BehindForOneAggregateBus("S") {
+          @Override
+          public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+            if (refused() == 4) {
+              leadership.revoke();
+            }
+            return super.execute(command, key);
+          }
+        };
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(queue)
+            .commandBus(bus)
+            .objectMapper(objectMapper)
+            .policy(policy(5, false))
+            .batchSize(2)
+            .clock(clock)
+            .leadership(leadership)
+            .registerCommand(ReserveStock.class)
+            .build();
+
+    var poll = logDuring(runner::processBatch);
+
+    assertThat(bus.refused()).as("the poll stops at the next entry").isEqualTo(5);
+    assertThat(messagesAt(poll, Level.INFO))
+        .singleElement()
+        .satisfies(line -> assertThat(line).contains("5 DLQ entries").doesNotContain("full page"));
+  }
+
+  /**
+   * Crash point: the write of the replay's time fails before it reaches the store. The entry is
+   * left as it was, at the head of the order, and the next poll replays it again and records the
+   * time.
+   */
+  @Test
+  void aFailedAttemptTimeWriteLeavesTheEntryAsItWas_andTheNextPollReplaysItAgain() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var store = new InMemoryDeadLetterQueue(clock);
+    var faults = FaultSchedule.none();
+    var queue = new ForwardingDeadLetterQueue(store, faults);
+    CommandId id = publishKeyedEntry(store, "cmd-crash-before", new ReserveStock("S", "o-1"));
+    var bus = new BehindTheStoredSchemaBus(Integer.MAX_VALUE);
+    var runner = runner(bus, policy(5, false), queue, clock, 10);
+    faults.failOnce("updateAttempts");
+    clock.advance(Duration.ofSeconds(5));
+
+    assertThatThrownBy(runner::processBatch).isInstanceOf(InjectedFaultException.class);
+
+    DeadLetterQueue.DeadLetterEntry untouched = store.find(id).orElseThrow();
+    assertThat(untouched.dlqAttempts()).isZero();
+    assertThat(untouched.lastAttemptAt()).as("the store was not reached").isNull();
+
+    clock.advance(Duration.ofSeconds(5));
+    runner.processBatch();
+
+    DeadLetterQueue.DeadLetterEntry replayed = store.find(id).orElseThrow();
+    assertThat(bus.replays()).isEqualTo(2);
+    assertThat(replayed.dlqAttempts()).isZero();
+    assertThat(replayed.lastAttemptAt()).isEqualTo(clock.instant());
+  }
+
+  /**
+   * Crash point: the replay's time is written and the runner fails before it goes on. The entry is
+   * behind the others and not due; once its backoff has passed it is replayed again, still with no
+   * attempt counted, and the first poll on a replica that reads the stored version replays it.
+   */
+  @Test
+  void aCrashAfterTheAttemptTimeWriteLeavesTheEntryBehind_andItIsReplayedAfterItsBackoff() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var store = new InMemoryDeadLetterQueue(clock);
+    var faults = FaultSchedule.none();
+    var queue = new ForwardingDeadLetterQueue(store, faults);
+    CommandId id = publishKeyedEntry(store, "cmd-crash-after", new ReserveStock("S", "o-1"));
+    var bus = new BehindTheStoredSchemaBus(2);
+    var runner = runner(bus, backoffPolicy(), queue, clock, 10);
+    faults.crashAfter("updateAttempts");
+    clock.advance(Duration.ofMinutes(1));
+
+    assertThatThrownBy(runner::processBatch).isInstanceOf(InjectedFaultException.class);
+
+    Instant crashedAt = clock.instant();
+    assertThat(store.find(id).orElseThrow().lastAttemptAt()).isEqualTo(crashedAt);
+
+    clock.advance(Duration.ofSeconds(1));
+    runner.processBatch();
+    assertThat(bus.replays()).as("not due within its backoff").isEqualTo(1);
+
+    clock.advance(Duration.ofMinutes(1));
+    runner.processBatch();
+    assertThat(bus.replays()).isEqualTo(2);
+    assertThat(store.find(id).orElseThrow().dlqAttempts()).isZero();
+
+    clock.advance(Duration.ofMinutes(1));
+    runner.processBatch();
+    assertThat(store.find(id)).as("replayed on a replica that reads the version").isEmpty();
+    assertThat(bus.executed()).isEqualTo(1);
   }
 
   @Test
@@ -185,7 +454,10 @@ class DeadLetterRetryReaderBehindTest {
   /**
    * A poll states its replays behind the stored schema in one INFO line, however many there are:
    * during a rollout every poll meets them again, and a line per entry per poll would bury the log.
-   * Each entry's own line, with the event type and both versions, is at DEBUG.
+   * The line names what the replica lacks — each distinct event type with the version it is stored
+   * at and the version this replica reads up to, once however many entries share it — and the
+   * command types refused, so an operator at INFO sees whether the rollout is still in progress.
+   * Each entry's own line is at DEBUG.
    */
   @Test
   void aPollStatesItsReplaysBehindTheStoredSchemaInOneInfoLine() {
@@ -201,7 +473,84 @@ class DeadLetterRetryReaderBehindTest {
     assertThat(info.getFirst())
         .contains("3 DLQ entries")
         .contains("behind the stored schema")
-        .contains(MetricNames.DLQ_READER_BEHIND);
+        .contains(MetricNames.DLQ_READER_BEHIND)
+        .containsOnlyOnce("StockReserved stored at schema version 2, read up to 1")
+        .containsOnlyOnce("StockReserved")
+        .containsOnlyOnce("ReserveStock");
+  }
+
+  /**
+   * The line names five schemas and five command types at most, in the order the poll met them, and
+   * counts the rest: a rollout that bumps many event types does not make one poll's line grow with
+   * the page.
+   */
+  @Test
+  void aPollNamesFiveSchemasAtMost_andCountsTheRest() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
+    for (int i = 0; i < 7; i++) {
+      publishKeyedEntry(queue, "cmd-schema-" + i, new ReserveStock("S", "o-" + i));
+      clock.advance(Duration.ofSeconds(1));
+    }
+    var bus =
+        new BehindTheStoredSchemaBus(Integer.MAX_VALUE) {
+          @Override
+          RuntimeException refusal(Command command) {
+            String n = ((ReserveStock) command).orderId().substring(2);
+            return new EventSchemaAheadException(
+                "stored at schema_version 3, reader reaches 2", new EventType("Event" + n), 3, 2);
+          }
+        };
+
+    List<String> info =
+        infoLinesDuring(runner(bus, policy(5, false), queue, clock, 10)::processBatch);
+
+    assertThat(info)
+        .singleElement()
+        .satisfies(
+            line ->
+                assertThat(line)
+                    .contains("7 DLQ entries")
+                    .contains(
+                        "Event0 stored at schema version 3, read up to 2; Event1 stored at schema"
+                            + " version 3, read up to 2; Event2")
+                    .contains("Event4 stored at schema version 3, read up to 2; and 2 more")
+                    .doesNotContain("Event5")
+                    .doesNotContain("Event6")
+                    .containsOnlyOnce("ReserveStock"));
+  }
+
+  /** Each command type refused in the poll is named once. */
+  @Test
+  void aPollNamesEachCommandTypeItsReplaysBehindRefused() {
+    MutableClock clock = MutableClock.startingAt(START);
+    var queue = new InMemoryDeadLetterQueue(clock);
+    publishKeyedEntry(queue, "cmd-reserve-1", new ReserveStock("S", "o-1"));
+    publishKeyedEntry(queue, "cmd-release-1", ReleaseStock.class, new ReleaseStock("S", "o-1"));
+    publishKeyedEntry(queue, "cmd-reserve-2", new ReserveStock("S", "o-2"));
+    var bus = new BehindTheStoredSchemaBus(Integer.MAX_VALUE);
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(queue)
+            .commandBus(bus)
+            .objectMapper(objectMapper)
+            .policy(policy(5, false))
+            .clock(clock)
+            .registerCommand(ReserveStock.class)
+            .registerCommand(ReleaseStock.class)
+            .build();
+
+    List<String> info = infoLinesDuring(runner::processBatch);
+
+    assertThat(info)
+        .singleElement()
+        .satisfies(
+            line ->
+                assertThat(line)
+                    .contains("3 DLQ entries")
+                    .contains("command types ReserveStock, ReleaseStock")
+                    .containsOnlyOnce("ReserveStock")
+                    .containsOnlyOnce("ReleaseStock"));
   }
 
   @Test
@@ -285,6 +634,8 @@ class DeadLetterRetryReaderBehindTest {
   // ---- fixtures ----------------------------------------------------------------------------
 
   record ReserveStock(String itemId, String orderId) implements Command {}
+
+  record ReleaseStock(String itemId, String orderId) implements Command {}
 
   record StockReserved(String itemId, String orderId) implements DomainEvent {}
 
@@ -382,7 +733,7 @@ class DeadLetterRetryReaderBehindTest {
    * A bus with a command inbox that refuses every command on one aggregate as the store refuses a
    * load on a replica behind the stored schema, and executes the commands on every other aggregate.
    */
-  static final class BehindForOneAggregateBus extends BehindTheStoredSchemaBus {
+  static class BehindForOneAggregateBus extends BehindTheStoredSchemaBus {
     private final String behindItem;
     private final AtomicInteger refused = new AtomicInteger();
 
@@ -410,14 +761,23 @@ class DeadLetterRetryReaderBehindTest {
   }
 
   private CommandId publishKeyedEntry(DeadLetterQueue queue, String id, ReserveStock command) {
+    return publishKeyedEntry(queue, id, ReserveStock.class, command);
+  }
+
+  private CommandId publishKeyedEntry(
+      DeadLetterQueue queue, String id, Class<? extends Command> type, Command command) {
     CommandId commandId = CommandId.of(id);
+    String itemId =
+        command instanceof ReserveStock reserve
+            ? reserve.itemId()
+            : ((ReleaseStock) command).itemId();
     try {
       queue.publish(
           new DeadLetterQueue.DeadLetterPublishRequest(
               objectMapper.writeValueAsString(command),
-              ReserveStock.class.getName(),
+              type.getName(),
               commandId,
-              StreamId.of(STOCK, AggregateId.of(command.itemId())),
+              StreamId.of(STOCK, AggregateId.of(itemId)),
               EventSchemaAheadException.class.getName(),
               "stored at schema_version 2, reader reaches 1",
               1,
@@ -434,15 +794,22 @@ class DeadLetterRetryReaderBehindTest {
 
   /** The INFO-and-above lines {@link DeadLetterRetryRunner} logs while {@code body} runs. */
   private static List<String> infoLinesDuring(Runnable body) {
+    return logDuring(body).stream()
+        .filter(e -> e.getLevel().isGreaterOrEqual(Level.INFO))
+        .map(ILoggingEvent::getFormattedMessage)
+        .toList();
+  }
+
+  /** The events {@link DeadLetterRetryRunner} logs at INFO and above while {@code body} runs. */
+  private static List<ILoggingEvent> logDuring(Runnable body) {
     var logger =
         (ch.qos.logback.classic.Logger)
             org.slf4j.LoggerFactory.getLogger(DeadLetterRetryRunner.class);
     var previous = logger.getLevel();
-    var appender =
-        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    var appender = new ch.qos.logback.core.read.ListAppender<ILoggingEvent>();
     appender.start();
     logger.addAppender(appender);
-    logger.setLevel(ch.qos.logback.classic.Level.INFO);
+    logger.setLevel(Level.INFO);
     try {
       body.run();
     } finally {
@@ -450,9 +817,14 @@ class DeadLetterRetryReaderBehindTest {
       logger.setLevel(previous);
       appender.stop();
     }
-    return appender.list.stream()
-        .filter(e -> e.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.INFO))
-        .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+    return List.copyOf(appender.list);
+  }
+
+  /** The messages of {@code events} logged at exactly {@code level}. */
+  private static List<String> messagesAt(List<ILoggingEvent> events, Level level) {
+    return events.stream()
+        .filter(e -> e.getLevel().equals(level))
+        .map(ILoggingEvent::getFormattedMessage)
         .toList();
   }
 
@@ -465,6 +837,15 @@ class DeadLetterRetryReaderBehindTest {
         2.0,
         discardAfterMaxRetries,
         DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY);
+  }
+
+  /**
+   * The default policy's backoff: the first replay of an entry is due 15 to 45 s (30 s with jitter)
+   * after its publish or its last replay.
+   */
+  private static DeadLetterRetryPolicy backoffPolicy() {
+    return new DeadLetterRetryPolicy(
+        5, Duration.ofSeconds(30), 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY);
   }
 
   private DeadLetterRetryRunner runner(CommandBus bus, DeadLetterRetryPolicy policy) {

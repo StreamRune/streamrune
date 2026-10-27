@@ -253,6 +253,21 @@ streamrune:
     trust-user-id-header: true
 ```
 
+**Off the servlet thread.** `ScopedValueFilter` binds the request context on the servlet thread
+and stores it on the request as well: a `Callable` or `WebAsyncTask` a controller returns runs on
+the MVC task executor, where the auto-configured command bus and query bus take it from the request
+(`RequestAttributeContextSource`), so it dispatches as the request's caller. An `@Async` method, a
+`DeferredResult` completed from another thread, a thread the application starts and a WebFlux
+handler dispatch anonymously unless the application binds the context
+(`ScopedValue.where(StreamRuneContext.CURRENT, ctx)`, or `StreamRuneContext.wrap(task)` on the
+request thread). A command bus or query bus you define yourself takes the
+`RequestAttributeContextSource` bean: `.unboundRequestContext(source)`, and
+`new UnboundRequestContextQueryBus(bus, source)`. Keep `threadContextInheritable` at its default
+(`false`) on the `DispatcherServlet` and on any `RequestContextFilter`: with it, a pooled thread
+created while one request is handled inherits that request's attributes, and a dispatch from another
+request on that thread, while the first is still in its handler, is attributed to the first
+request's caller; the source cannot tell the two apart.
+
 The mode is logged once at startup. In a servlet application, startup **fails** when a command bus
 runs an identity-consuming authorization interceptor — `AuthorizationCommandInterceptor` (registered
 for a `CommandAuthorizationPolicy` bean) or `AnnotationAuthorizationInterceptor` (registered for a
@@ -268,6 +283,7 @@ or set the trusted-gateway flag. See
 | `StreamRuneAutoConfiguration` | Auto-configuration class |
 | `StreamRuneProperties` | `@ConfigurationProperties` binding |
 | `ScopedValueFilter` | Propagates HTTP request metadata into `StreamRuneContext`; the user comes from `RequestIdentityPolicy` (see [Request identity](#request-identity)); answers `400` to an id the request edge refuses |
+| `RequestAttributeContextSource` | The request context `ScopedValueFilter` stored on the request the calling thread serves; the command bus and the query bus take the caller from it for a dispatch off the servlet thread, such as a `Callable` a controller returns (servlet web applications only) |
 | `SseController` | `GET /api/sse/{aggregateType}/{aggregateId}` — live event stream of one aggregate; only with `streamrune.sse.enabled=true`, and every stream is denied until you provide an `SseAuthorizer` bean |
 | `SseEventFeed` | Publishes every event stored after the application started to the SSE endpoint's clients; registered with `SseController`, started and stopped with the application context |
 

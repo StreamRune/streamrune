@@ -163,28 +163,29 @@ public final class CachingQueryBus implements QueryBus {
    * Whether this dispatch is a {@link Cacheable.Scope#USER}-scoped query that the framework cannot
    * attribute to a caller, and must therefore bypass the cache entirely.
    *
-   * <p><b>Why bypassing, not a shared "anonymous" partition.</b> The old key was {@code
-   * UserScopedKey(Authorization.currentUserId(), query)}, and {@code currentUserId()} returns
-   * {@code null} whenever {@code StreamRuneContext.CURRENT} is unbound. Every unbound caller then
-   * produced the byte-identical key and shared ONE partition — so the first caller's rows were
-   * served to the next. That is not confined to genuinely anonymous traffic: Spring is the only
-   * integration whose filter wraps the handler in a {@code ScopedValue.where(CURRENT, ctx)}. On
-   * Quarkus the sole binding is the STATIC {@code StreamRuneRequestFilter.callWithContext} helper
-   * the application must call by hand (nothing in the framework calls it for the query path), and
-   * on Micronaut a route that runs off the filter thread is unbound unless the query goes through
-   * the module's {@code QueryBus} bean, which binds the request's context for it. And every entry
-   * point outside a request (a scheduled job, a subscription thread) is unbound on every runtime.
-   * There a {@code @Cacheable} USER-scoped query silently cross-served authenticated users' data.
+   * <p><b>Why bypassing, not a shared "anonymous" partition.</b> {@code
+   * Authorization.currentUserId()} returns {@code null} whenever {@code StreamRuneContext.CURRENT}
+   * is unbound, so a key built from it, {@code UserScopedKey(null, query)}, is byte-identical for
+   * every unbound caller: they would share ONE partition, and the first caller's rows would be
+   * served to the next. Where a request is served, the integrations bind the caller for the query
+   * paths they own: Spring's filter binds {@code CURRENT} around the handler on the servlet thread,
+   * and the Spring, Micronaut and Quarkus {@code QueryBus} beans bind it for a dispatch that starts
+   * unbound, from their unbound-request-context source ({@code RequestAttributeContextSource},
+   * {@code StreamRuneContextHelper}, {@code StreamRuneRequestContextHolder}). Every entry point
+   * outside a request — a scheduled job, a subscription thread, a DLQ replay, a thread of the
+   * application's own — is unbound on every runtime, and so is a query sent through a {@code
+   * QueryBus} the application builds without that source. There a {@code @Cacheable} USER-scoped
+   * key would cross-serve authenticated users' data.
    *
    * <p>The two ways to be wrong are not symmetric: bypassing costs a delegate dispatch that could
    * have been a hit, while sharing discloses one user's rows to another. If the answer genuinely
    * does not depend on the caller, the query should declare {@link Cacheable.Scope#GLOBAL} — which
    * stays fully cached for unbound callers, precisely because it asserts caller-independence.
    *
-   * <p>This closes the guarantee at the one place that can enforce it for every entry point,
-   * including the off-request ones (async dispatch, DLQ replay, schedulers) that no HTTP filter can
-   * reach. Binding {@code CURRENT} on Quarkus/Micronaut remains worth doing on its own merits — it
-   * would turn these bypasses back into hits — but it is not what makes the guarantee hold.
+   * <p>The bypass holds the guarantee at the one place every entry point passes, the off-request
+   * ones (a thread of the application's own, DLQ replay, schedulers) that no HTTP filter reaches
+   * included. Binding {@code CURRENT} where a request is served turns the bypass into a hit, but
+   * the guarantee does not rest on it.
    */
   private static boolean isUnidentifiedUserScope(Cacheable ann) {
     return ann.scope() != Cacheable.Scope.GLOBAL && Authorization.currentUserId() == null;
