@@ -39,7 +39,8 @@ Where each topic is written down:
   applications set. Every key and its default are in `docs/guide/configuration.md`; the Quarkus
   README also lists every key, in an `application.properties` listing.
 - `docs/adr/`: architecture decisions. `docs/reference/api.md`: the API reference.
-  `CHANGELOG.md`: what each version changes.
+  `CHANGELOG.md`: what each version changes. `docs/reference/release-1.0.0.md`: what `1.0.0`, the
+  first release, ships, area by area; its `CHANGELOG.md` entry links to it.
 
 A change to behaviour updates the guide and the README that describe it in the same pull request.
 

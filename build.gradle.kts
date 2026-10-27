@@ -1410,11 +1410,14 @@ subprojects {
 
         // ── A release cannot ship without CI having actually passed ───────────
         //
-        // A `v*` tag push starts build.yml and broker-e2e-test.yml, but starting is not the same
-        // as enforcing: on its own, nothing makes a publish wait for or check either workflow's
-        // result, so a release could be tagged and uploaded to the immutable Central Portal from a
-        // commit whose test suite had never run at all, or had failed. verifyReleaseTag (above)
-        // only proves git facts (the tag exists, on HEAD, on origin) — it has no notion of CI.
+        // A release commit is checked by build.yml (its `build` and `postgres-17` jobs, from the
+        // commit's push to main) and by broker-e2e-test.yml (its nightly run on main, or one started
+        // by hand); the tag release.yml pushes starts neither, and a tag pushed by hand starts both.
+        // A run is not the same as enforcing: on its own, nothing makes a publish wait for or check
+        // either workflow's result, so a release could be tagged and uploaded to the immutable
+        // Central Portal from a commit whose test suite had never run at all, or had failed.
+        // verifyReleaseTag (above) only proves git facts (the tag exists, on HEAD, on origin) — it
+        // has no notion of CI.
         //
         // This task queries the GitHub Checks API for the exact tagged commit and refuses to
         // proceed unless every name in REQUIRED_CHECK_NAMES concluded `success` there. Check-run
@@ -1423,12 +1426,11 @@ subprojects {
         // repos/StreamRune/streamrune/commits/main/check-runs`): build.yml's `build:` job produces a
         // check-run literally named "build". By the same rule broker-e2e-test.yml's `broker-e2e:`
         // job produces "broker-e2e" — NOT "broker-e2e-test" (that is only the workflow's
-        // filename/title; that workflow had not yet run on GitHub when this was written, so this
-        // could not be verified the same way — read
-        // the job key in .github/workflows/broker-e2e-test.yml if it is ever renamed). build.yml's
-        // second job, `postgres-17:` (the PostgreSQL-backed suites on the oldest supported server),
-        // produces "postgres-17" by the same rule and is required too — the release declares
-        // PostgreSQL 17 or newer, so it must not ship from a commit whose 17 leg is red or missing.
+        // filename/title; read the job key in .github/workflows/broker-e2e-test.yml if it is ever
+        // renamed). build.yml's second job, `postgres-17:` (the PostgreSQL-backed suites on the
+        // oldest supported server), produces "postgres-17" by the same rule and is required too — the
+        // release declares PostgreSQL 17 or newer, so it must not ship from a commit whose 17 leg is
+        // red or missing.
         // Uses the "any check-run with this name concluded success" rule, so a check that failed
         // once and was re-run green still satisfies the gate.
         //
@@ -1573,11 +1575,11 @@ subprojects {
                             "$label: required CI check(s) $missing did not conclude `success` on " +
                                 "commit $headCommit (release tag $tag) per the GitHub Checks API " +
                                 "(repos/$repoSlug/commits/$headCommit/check-runs). Required: " +
-                                "$requiredNames; confirmed success: $successfulNames. Push the tag " +
-                                "and wait for build.yml (its `build` and `postgres-17` jobs) + " +
-                                "broker-e2e-test.yml to go green on that exact commit (both " +
-                                "workflows trigger on a `v*` tag push) before publishing, " +
-                                "or pass -PskipCiVerification=true to deliberately bypass this gate.")
+                                "$requiredNames; confirmed success: $successfulNames. `build` and " +
+                                "`postgres-17` come from the Build run of the commit's push to main, " +
+                                "`broker-e2e` from a Broker E2E Tests run on main (nightly, or started by " +
+                                "hand); a tag pushed by the Release workflow starts neither. Wait for " +
+                                "them, or pass -PskipCiVerification=true to deliberately bypass this gate.")
                     }
                     logger.lifecycle(
                         "$label: required CI checks $requiredNames all concluded success on " +
