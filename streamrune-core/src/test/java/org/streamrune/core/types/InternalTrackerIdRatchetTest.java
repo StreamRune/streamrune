@@ -29,16 +29,16 @@ import org.junit.jupiter.api.Test;
  * that only exists in somebody's private notes.
  *
  * <p><b>What is rejected.</b> Work-item labels (a capital {@code W} or {@code FU} followed by
- * digits, optionally with a numeric suffix, and in either letter case such a label at the front of
- * an identifier, a test name or a string id), review-finding identifiers (a letter-and-digits
- * prefix such as {@code A17-...}, or {@code SAGA-}, {@code CONC17-}, {@code PROJ17-}, {@code SEC-},
- * {@code ERR17-}, {@code INTG10-} followed by a finding code), a numbered audit round, and review
- * nicknames. The exact expressions are {@link #FORBIDDEN}. Short review labels (a capital letter,
- * one or two digits and an optional lower-case letter) are rejected where they are used as a label:
- * alone in parentheses, or leading a comment line before a colon ({@link #SHORT_LABEL}). Time
- * constants ({@code T0}, {@code T1}), schema versions ({@code V1}, {@code V2}) and the C0/C1
- * control-character sets keep both forms. So are references to the private review material: the
- * expressions in {@link #PRIVATE_MATERIAL}.
+ * digits, optionally with a numeric suffix, and in either letter case such a label, or an audit
+ * round's or a review area's, at the front of an identifier, a test name or a string id),
+ * review-finding identifiers (a letter-and-digits prefix such as {@code A17-...}, or {@code SAGA-},
+ * {@code CONC17-}, {@code PROJ17-}, {@code SEC-}, {@code ERR17-}, {@code INTG10-} followed by a
+ * finding code), a numbered audit round, and review nicknames. The exact expressions are {@link
+ * #FORBIDDEN}. Short review labels (a capital letter, one or two digits and an optional lower-case
+ * letter) are rejected where they are used as a label: alone in parentheses, or leading a comment
+ * line before a colon ({@link #SHORT_LABEL}). Time constants ({@code T0}, {@code T1}), schema
+ * versions ({@code V1}, {@code V2}) and the C0/C1 control-character sets keep both forms. So are
+ * references to the private review material: the expressions in {@link #PRIVATE_MATERIAL}.
  *
  * <p><b>History wording is rejected too.</b> Public text says what the code does and why, not how
  * it got there: a reviewer named by role and a numbered roadmap stage are rejected everywhere
@@ -151,10 +151,15 @@ class InternalTrackerIdRatchetTest {
   /**
    * The forbidden shapes. Each alternative is anchored on word boundaries so a longer ordinary word
    * never matches: {@code W3C} and {@code WARN} are fine, a label like the examples in {@link
-   * #SAMPLES} is not. A work-item label written in lower case as the prefix of an identifier, a
-   * test method name or a string id is rejected too, in either letter case: the letter, one or two
-   * digits and a review code before an underscore or a dash ({@code w} then {@code 3fd4_} in the
-   * samples), or the letter and digits before a dash and a word ({@code w} then {@code 52-stream}).
+   * #SAMPLES} is not. A label written in lower case as the prefix of an identifier, a test method
+   * name or a string id is rejected too, in either letter case: a work item ({@code w} and one or
+   * two digits), a follow-up ({@code fu} and a digit), an audit round ({@code a1} and a digit) or a
+   * review area ({@code conc}, {@code proj}, {@code err} or {@code intg}, then {@code 1} and a
+   * digit), followed by a review code and an underscore, a dash or the capital letter of a
+   * camel-case word ({@code w} then {@code 3fd4_} or {@code 3fd4Event} in the samples), or by an
+   * underscore or a dash and a word or a number ({@code w} then {@code 52_stream}, {@code a} then
+   * {@code 11-residue}). A capital letter directly after the digits is left alone, so {@code W3C}
+   * stays fine in every spelling.
    */
   private static final Pattern FORBIDDEN =
       Pattern.compile(
@@ -162,7 +167,8 @@ class InternalTrackerIdRatchetTest {
               + "|A1[0-9]-[A-Z0-9-]+|SAGA-[A-Z0-9-]+|CONC1[0-9]-[0-9]+|PROJ1[0-9]-[0-9]+"
               + "|SEC-[A-Z-]+[0-9]*|ERR1[0-9]-[0-9]+|INTG1[0-9]-[0-9]+|audit[- ]?1[0-9]"
               + "|GPT-[A]stra|P[0-9] fix)\\b"
-              + "|(?i:\\bw[0-9]{1,2}[a-z]{1,2}[0-9]{1,2}(?=[_-])|\\bw[0-9]{1,2}-(?=[a-z]))");
+              + "|(?i:\\b(?:w[0-9]{1,2}|fu[0-9]|a1[0-9]|(?:conc|proj|err|intg)1[0-9])"
+              + "(?:[a-z]{1,2}[0-9]{1,2}(?=[_-]|(?-i:[A-Z][a-z]))|[_-](?=[a-z0-9])))");
 
   /**
    * A short review label used as a label: alone in parentheses, or leading a comment line (after
@@ -307,7 +313,16 @@ class InternalTrackerIdRatchetTest {
           "P" + "7 fix",
           "w" + "3fd4_eventNotFoundStop",
           "W" + "3FR1_healthyRow",
-          "w" + "52-stream");
+          "w" + "52-stream",
+          "w" + "52_stream",
+          "w" + "3fd4EventNotFound",
+          "a" + "11-residue",
+          "a" + "11r3_rotatedKey",
+          "fu" + "3-2_retry",
+          "conc" + "17-3_lostUpdate",
+          "err" + "17_5",
+          "proj" + "17-rebuild",
+          "intg" + "10_routeBinds");
 
   @Test
   void noInternalTrackerIdAppearsInPublicText() {
@@ -694,8 +709,16 @@ class InternalTrackerIdRatchetTest {
             "after this wave of appends the lease renews",
             "a W3C-compliant header",
             "the w3c-baggage header",
+            "the W3C_TRACE_CONTEXT constant",
             "a w-9 form",
             "the rows aw3fd4_x and xw52-y",
+            "a 12-hour window",
+            "the a11y audit",
+            "an a1-sized page",
+            "the hex digest a12b3c4d",
+            "the key A10F2E9C",
+            "sha1_digest and utf8_bytes",
+            "the err_code field",
             "the previous offset",
             "the road map of a city",
             "version 1.0.1",

@@ -119,7 +119,7 @@ class VaultCryptoEngineTest {
     // The plain case, no clock skew anywhere: the erasure destroys the ORIGINAL key and records
     // its creation time; an encrypt racing the erasure upserts a FRESH key whose best-effort sweep
     // failed. The live key exists but is a DIFFERENT key, so the revival must be refused.
-    var subject = SubjectId.of("vault-a11-residue");
+    var subject = SubjectId.of("vault-residue-key");
     java.time.Instant vaultNow = java.time.Instant.now();
     var liveKeyCreatedAt =
         new java.util.concurrent.atomic.AtomicReference<>(

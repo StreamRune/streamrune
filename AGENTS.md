@@ -189,11 +189,12 @@ build files, guides, commit messages and pull request descriptions. All of it fo
 `InternalTrackerIdRatchetTest` in `streamrune-core` reads every `.java`, `.md` and build file in the
 repository, and the files without an extension it publishes (`.gitmessage`, `.gitignore`,
 `LICENSE`, `NOTICE`, `CODEOWNERS`, the git hook, `gradlew`), and fails on tracker and review labels
-(review-finding labels included, and a work-item label at the front of a test name or a string id,
-in test sources too), on references to private review material and on history wording: a reviewer
-named by role, a numbered roadmap stage, work deferred to the roadmap, and outside test sources and
-code samples the state before or after a fix and the words that narrate an earlier behaviour (the
-test's javadoc lists them). It also fails on a space before a period in prose — the comments of a
+(review-finding labels included, and a work-item, audit-round or review-area label at the front of
+an identifier, a test name or a string id, in either letter case and in test sources too), on
+references to private review material and on history wording: a reviewer named by role, a
+numbered roadmap stage, work deferred to the roadmap, and outside test sources and code samples
+the state before or after a fix and the words that narrate an earlier behaviour (the test's
+javadoc lists them). It also fails on a space before a period in prose — the comments of a
 `.java` file (javadoc, a one-line comment, a line comment on a line of its own) and markdown outside
 fenced blocks — and it reads a phrase across a line break, so a reflowed comment does not hide one.
 Write a state as it is: "cannot", "is not", "has lost it", and "the clock that computes" for a
