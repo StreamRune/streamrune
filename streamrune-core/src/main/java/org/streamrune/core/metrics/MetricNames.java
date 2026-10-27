@@ -67,6 +67,16 @@ public final class MetricNames {
    */
   public static final String DLQ_STALE_REPLAY_BLOCKED = "streamrune.dlq.stale_replay_blocked";
 
+  /**
+   * Dead-letter replays that failed because the replica is behind the stored schema: the command's
+   * aggregate holds an event a newer release stored at a {@code schema_version} the replica's
+   * upcaster chain does not reach. No attempt was counted and the entry is unchanged. Expected
+   * during a rolling deployment of an event-schema change while the retry runner's lease sits on a
+   * replica of the previous release; a count that keeps rising after the rollout ended means the
+   * replica holding the lease is still behind. Tagged by {@link #TAG_COMMAND_TYPE}. Counter.
+   */
+  public static final String DLQ_READER_BEHIND = "streamrune.dlq.reader_behind";
+
   /** Command dead-letter-queue rows swept by the housekeeping job */
   public static final String DLQ_SWEPT_ROWS = "streamrune.dlq.swept_rows";
 

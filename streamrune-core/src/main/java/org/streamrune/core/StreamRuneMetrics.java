@@ -143,6 +143,18 @@ public interface StreamRuneMetrics {
   default void recordDeadLetterStaleReplayBlocked(String commandType) {}
 
   /**
+   * Records a dead-letter replay that failed because this replica is behind the stored schema (an
+   * {@link EventSchemaAheadException} in the cause chain): the command's aggregate holds an event a
+   * newer release stored at a {@code schema_version} this replica's upcaster chain does not reach.
+   * The retry runner counted no attempt and left the entry unchanged. Emitted for every such
+   * replay, on the schedule and on an operator's retry. See {@link
+   * org.streamrune.core.metrics.MetricNames#DLQ_READER_BEHIND}.
+   *
+   * @param commandType simple class name of the command
+   */
+  default void recordDeadLetterReaderBehind(String commandType) {}
+
+  /**
    * Records time spent waiting to acquire an aggregate lock.
    *
    * @param durationNanos wait duration in nanoseconds

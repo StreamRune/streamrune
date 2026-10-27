@@ -220,8 +220,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   (`CommandFailureClassification.isReaderBehindStoredSchema`), and `ReadPoisonClassifier` and
   `ProjectionErrorClassifier.DEFAULT` treat it as transient whatever frame wraps it, so a replica on
   the previous release stops at a newer event and retries it instead of quarantining it. A
-  dead-letter replay that fails with it counts no attempt (`RetryOutcome.READER_BEHIND`, an INFO
-  line, the entry unchanged), so a rollout that keeps the retry runner's lease on a replica of the
+  dead-letter replay that fails with it counts no attempt (`RetryOutcome.READER_BEHIND`, the entry
+  unchanged; one INFO line per poll, and the `streamrune.dlq.reader_behind` counter tagged by
+  command type), so a rollout that keeps the retry runner's lease on a replica of the
   previous release neither exhausts the entry nor, under `discardAfterMaxRetries`, discards the
   command; on the schedule it takes no slot of the poll's batch, so the entries behind it in the
   page the poll read are replayed in the same poll. A saga's forward command that fails with it is retry-later: the saga is left as it is

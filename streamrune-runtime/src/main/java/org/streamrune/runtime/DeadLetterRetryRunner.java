@@ -18,6 +18,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.CommandBusClosedException;
@@ -216,7 +217,8 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      * discardAfterMaxRetries}, discard it — and it is replayed again on the next poll, until a
      * replica that reads the event holds the runner's lease. On the schedule such a replay takes no
      * slot of the poll's batch, so the entries behind it in the page the poll read are replayed in
-     * the same poll.
+     * the same poll. Every such replay is counted in {@code streamrune.dlq.reader_behind}, and a
+     * poll states its own in one INFO line.
      */
     READER_BEHIND,
     /**
@@ -606,6 +608,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         deadLetterQueue.readRetryable(policy.maxRetries(), fetchLimit, includeUnkeyed, keyedCutoff);
     int processed = 0;
     int staleSkipped = 0;
+    int readerBehind = 0;
     for (var entry : entries) {
       if (processed >= batchSize) {
         break;
@@ -635,16 +638,34 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         staleSkipped++;
         continue;
       }
-      if (isDue(entry, now)
-          && processEntry(entry, false, false, null) != RetryOutcome.READER_BEHIND) {
+      if (!isDue(entry, now)) {
+        continue;
+      }
+      if (processEntry(entry, false, false, null) == RetryOutcome.READER_BEHIND) {
         // A replay that answers READER_BEHIND takes no slot of the batch: nothing was attempted,
         // the entry is left unchanged and keeps the head of the least-recently-active order on
         // every poll, so counted, a batch's worth of such entries would hold back every entry
         // behind them for the whole rollout. The page is over-fetched, so the poll reaches those
         // entries in the same cycle. An admission refusal keeps its slot: the bus is closing or
-        // saturated, and the next entry would meet the same refusal.
+        // saturated, and the next entry would meet the same refusal. Summarized once below.
+        readerBehind++;
+      } else {
         processed++;
       }
+    }
+    if (readerBehind > 0) {
+      LOG.info(
+          "{} DLQ entr{} of this cycle's page {} not replayed: this replica is behind the stored"
+              + " schema of {} aggregate{} (a newer release stored an event at a schema version"
+              + " this replica's upcaster chain does not reach). Each is left unchanged, with no"
+              + " attempt counted, and replayed again on the next poll; the replay succeeds on a"
+              + " replica that reads the stored version (streamrune.dlq.reader_behind counts"
+              + " them; DEBUG names each).",
+          readerBehind,
+          readerBehind == 1 ? "y" : "ies",
+          readerBehind == 1 ? "was" : "were",
+          readerBehind == 1 ? "its" : "their",
+          readerBehind == 1 ? "" : "s");
     }
     if (staleSkipped > 0) {
       LOG.warn(
@@ -1000,17 +1021,24 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         // the command — for a failure that is not the command's. The entry stays untouched (no
         // attempt, no lastAttemptAt), exactly like an admission refusal: a crash anywhere here
         // converges trivially, and the next run replays it again.
+        // Counted for every such replay; logged per entry at INFO for an operator's retry, and at
+        // DEBUG on the schedule, which meets the same entries on every poll of the rollout and
+        // states them in one INFO line per poll (processBatch).
         EventSchemaAheadException behind = schemaAheadCause(e);
-        LOG.info(
-            "Not counting the DLQ replay of {} ({}) as a failed attempt: this replica reads {} only"
-                + " up to schema version {}, and the command's aggregate holds an event stored at"
-                + " version {} by a newer release. The entry is left unchanged; a replay on a"
-                + " replica that reads that version succeeds.",
-            LogSanitizer.sanitizeForLog(entry.commandId().value()),
-            entry.commandType(),
-            LogSanitizer.sanitizeForLog(behind.eventType().name()),
-            behind.readerVersion(),
-            behind.storedVersion());
+        recordMetric(
+            "recordDeadLetterReaderBehind",
+            () -> metrics.recordDeadLetterReaderBehind(simpleTypeName(entry.commandType())));
+        LOG.atLevel(onDemand ? Level.INFO : Level.DEBUG)
+            .log(
+                "Not counting the DLQ replay of {} ({}) as a failed attempt: this replica reads {}"
+                    + " only up to schema version {}, and the command's aggregate holds an event"
+                    + " stored at version {} by a newer release. The entry is left unchanged; a"
+                    + " replay on a replica that reads that version succeeds.",
+                LogSanitizer.sanitizeForLog(entry.commandId().value()),
+                entry.commandType(),
+                LogSanitizer.sanitizeForLog(behind.eventType().name()),
+                behind.readerVersion(),
+                behind.storedVersion());
         return RetryOutcome.READER_BEHIND;
       }
       recordFailedAttempt(entry, e);

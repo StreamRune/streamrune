@@ -159,6 +159,52 @@ class DeadLetterRetryReaderBehindTest {
   }
 
   @Test
+  void everyReplayBehindTheStoredSchemaIsCountedByCommandType() {
+    var bus = new BehindTheStoredSchemaBus(Integer.MAX_VALUE);
+    CommandId first = publishKeyedEntry("cmd-counted-1");
+    publishKeyedEntry("cmd-counted-2");
+    var runner = runner(bus, policy(5, false));
+
+    runner.processBatch();
+
+    assertThat(
+            metrics.count(
+                MetricNames.DLQ_READER_BEHIND, MetricNames.TAG_COMMAND_TYPE, "ReserveStock"))
+        .as("one sample per replay of the poll")
+        .isEqualTo(2);
+
+    assertThat(runner.retry(first)).isEqualTo(RetryOutcome.READER_BEHIND);
+
+    assertThat(
+            metrics.count(
+                MetricNames.DLQ_READER_BEHIND, MetricNames.TAG_COMMAND_TYPE, "ReserveStock"))
+        .as("an operator's retry is counted too")
+        .isEqualTo(3);
+  }
+
+  /**
+   * A poll states its replays behind the stored schema in one INFO line, however many there are:
+   * during a rollout every poll meets them again, and a line per entry per poll would bury the log.
+   * Each entry's own line, with the event type and both versions, is at DEBUG.
+   */
+  @Test
+  void aPollStatesItsReplaysBehindTheStoredSchemaInOneInfoLine() {
+    var bus = new BehindTheStoredSchemaBus(Integer.MAX_VALUE);
+    publishKeyedEntry("cmd-logged-1");
+    publishKeyedEntry("cmd-logged-2");
+    publishKeyedEntry("cmd-logged-3");
+    var runner = runner(bus, policy(5, false));
+
+    List<String> info = infoLinesDuring(runner::processBatch);
+
+    assertThat(info).as("one line for the poll").hasSize(1);
+    assertThat(info.getFirst())
+        .contains("3 DLQ entries")
+        .contains("behind the stored schema")
+        .contains(MetricNames.DLQ_READER_BEHIND);
+  }
+
+  @Test
   void theRefusalIsRecognisedWhereverItSitsInTheCauseChain() {
     var bus =
         new BehindTheStoredSchemaBus(Integer.MAX_VALUE) {
@@ -384,6 +430,30 @@ class DeadLetterRetryReaderBehindTest {
       throw new IllegalStateException(e);
     }
     return commandId;
+  }
+
+  /** The INFO-and-above lines {@link DeadLetterRetryRunner} logs while {@code body} runs. */
+  private static List<String> infoLinesDuring(Runnable body) {
+    var logger =
+        (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(DeadLetterRetryRunner.class);
+    var previous = logger.getLevel();
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    logger.setLevel(ch.qos.logback.classic.Level.INFO);
+    try {
+      body.run();
+    } finally {
+      logger.detachAppender(appender);
+      logger.setLevel(previous);
+      appender.stop();
+    }
+    return appender.list.stream()
+        .filter(e -> e.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.INFO))
+        .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+        .toList();
   }
 
   private static DeadLetterRetryPolicy policy(int maxRetries, boolean discardAfterMaxRetries) {

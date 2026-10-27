@@ -365,6 +365,11 @@ public class RecordingStreamRuneMetrics implements StreamRuneMetrics {
   }
 
   @Override
+  public void recordDeadLetterReaderBehind(String commandType) {
+    record(MetricNames.DLQ_READER_BEHIND, 1, MetricNames.TAG_COMMAND_TYPE, commandType);
+  }
+
+  @Override
   public void recordLockWait(long durationNanos) {
     record(MetricNames.LOCKS_WAIT, durationNanos);
   }
