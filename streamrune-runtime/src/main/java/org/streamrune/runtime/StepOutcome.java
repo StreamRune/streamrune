@@ -6,10 +6,11 @@ enum StepOutcome {
   COMPLETED,
   COMPENSATING_LEFT,
   /**
-   * The episode was left {@code COMPENSATING} because every failed compensation command was REFUSED
-   * ADMISSION (open breaker, closing bus, interceptor veto) — nothing was attempted. Identical to
-   * {@link #COMPENSATING_LEFT} for every consumer except the compensation-retry sweeper's give-up
-   * bookkeeping, which must not count it as a re-drive attempt.
+   * The episode was left {@code COMPENSATING} because every failed compensation command attempted
+   * nothing: it was REFUSED ADMISSION (open breaker, closing bus, interceptor veto), or the event
+   * store refused to load its aggregate because this replica is behind the stored schema. Identical
+   * to {@link #COMPENSATING_LEFT} for every consumer except the compensation-retry sweeper's
+   * give-up bookkeeping, which must not count it as a re-drive attempt.
    */
   COMPENSATING_REFUSED,
   COMPENSATED,

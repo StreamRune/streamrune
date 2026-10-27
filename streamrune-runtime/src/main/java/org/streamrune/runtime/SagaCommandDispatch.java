@@ -12,6 +12,7 @@ import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.CommandBusClosedException;
 import org.streamrune.core.CommandBusOverloadedException;
+import org.streamrune.core.CommandFailureClassification;
 import org.streamrune.core.DomainException;
 import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.LockException;
@@ -433,15 +434,16 @@ final class SagaCommandDispatch {
      */
     RETRY(null),
     /**
-     * Every failed compensation command was REFUSED ADMISSION — an open circuit breaker, a closing
-     * bus, or an interceptor veto — so nothing was attempted and nothing can be learned about the
-     * compensation itself. Semantically {@link #RETRY} (the episode stays {@code COMPENSATING} for
-     * the resume paths), but callers that COUNT attempts toward a give-up bound ({@code
-     * SagaCompensationRetrySweeper}) must not count this one: a sweeper that recorded a refused
-     * re-drive as a real attempt would, one cycle past {@code giveUpAfter}, FAULT the saga with
-     * ZERO actual dispatches — the same class the dead-letter retry runner guards against in {@code
-     * DeadLetterRetryRunner}. A mix of refusals and genuine transient failures stays {@link
-     * #RETRY}: a real attempt happened.
+     * Every failed compensation command attempted nothing ({@link #attemptedNothing}): it was
+     * REFUSED ADMISSION — an open circuit breaker, a closing bus, or an interceptor veto — or the
+     * event store refused to load its aggregate because this replica is behind the stored schema,
+     * so nothing can be learned about the compensation itself. Semantically {@link #RETRY} (the
+     * episode stays {@code COMPENSATING} for the resume paths), but callers that COUNT attempts
+     * toward a give-up bound ({@code SagaCompensationRetrySweeper}) must not count this one: a
+     * sweeper that recorded a refused re-drive as a real attempt would, one cycle past {@code
+     * giveUpAfter}, FAULT the saga with ZERO actual dispatches — the same class the dead-letter
+     * retry runner guards against in {@code DeadLetterRetryRunner}. A mix of refusals and genuine
+     * transient failures stays {@link #RETRY}: a real attempt happened.
      */
     RETRY_REFUSED(null);
 
@@ -474,8 +476,9 @@ final class SagaCommandDispatch {
    * COMPENSATED if there was at least one command and all dispatched successfully; FAILED if a
    * command failed <em>deterministically</em> (a business rejection) or the list was empty; RETRY
    * if the only failures were transient/infra (so the undo must not be abandoned — the saga stays
-   * {@code COMPENSATING} for the resume path). A permanent failure dominates a transient one:
-   * retrying a deterministic failure forever is worse than terminalizing.
+   * {@code COMPENSATING} for the resume path), RETRY_REFUSED when every one of them attempted
+   * nothing ({@link #attemptedNothing}). A permanent failure dominates a transient one: retrying a
+   * deterministic failure forever is worse than terminalizing.
    *
    * <p>Caller-supplied key scheme: the one caller, {@code SagaStepExecutor}, supplies the shared,
    * episode-scoped {@link #episodeCompensationKey}-derived keys on every path, scoped by the
@@ -525,9 +528,10 @@ final class SagaCommandDispatch {
         // unchanged is the guarantee that a veto is never COMPENSATED.
         if (VirtualThreadCommandBus.DEFAULT_DLQ_ELIGIBLE.test(e)) {
           hadTransientFailure = true;
-          // A refused admission attempted nothing; only a failure that actually reached
-          // the command counts as an attempt for the sweeper's give-up bookkeeping.
-          if (!isRefusedAdmission(e)) {
+          // A refused admission attempted nothing, and neither did a load the store refused on a
+          // replica behind the stored schema; only a failure that actually reached the command
+          // counts as an attempt for the sweeper's give-up bookkeeping.
+          if (!attemptedNothing(e)) {
             hadAttemptedTransientFailure = true;
           }
           log.warn(
@@ -553,6 +557,21 @@ final class SagaCommandDispatch {
     return hadAttemptedTransientFailure
         ? CompensationOutcome.RETRY
         : CompensationOutcome.RETRY_REFUSED;
+  }
+
+  /**
+   * Whether {@code failure} proves that a compensation command attempted nothing: it was refused
+   * admission ({@link #isRefusedAdmission}), or the event store refused to load its aggregate
+   * because this replica is behind the stored schema ({@link
+   * CommandFailureClassification#isReaderBehindStoredSchema}) — the refusal the forward path reads
+   * as retry-later ({@link #isRetryLater}), met by a replica still on the previous release during a
+   * rolling deployment of an event-schema change. Nothing was appended either way, and the same
+   * command succeeds once the gate lifts or a replica that reads the stored version runs it, so the
+   * compensation retry sweeper does not count such a re-drive toward its give-up horizon.
+   */
+  static boolean attemptedNothing(Throwable failure) {
+    return isRefusedAdmission(failure)
+        || CommandFailureClassification.isReaderBehindStoredSchema(failure);
   }
 
   /**

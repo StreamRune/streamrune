@@ -168,8 +168,9 @@ public final class CommandFailureClassification {
    * that wrote the event (a rolling deployment of a schema bump), or is missing an upcaster. The
    * command succeeds on a reader that is not behind, so it is dead-lettered for replay; it carries
    * no infrastructure-health evidence, so it does not count toward the circuit breaker. For the
-   * same reason the dead-letter retry runner counts no attempt for a replay that fails with it, and
-   * the saga runner treats a forward command that fails with it as retry-later.
+   * same reason the dead-letter retry runner counts no attempt for a replay that fails with it, the
+   * saga runner treats a forward command that fails with it as retry-later, and the compensation
+   * retry sweeper does not count a compensation re-drive that fails with it toward its give-up.
    */
   public static boolean isReaderBehindStoredSchema(Throwable error) {
     Throwable c = error;

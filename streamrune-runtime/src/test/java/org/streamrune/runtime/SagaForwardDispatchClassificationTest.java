@@ -525,6 +525,56 @@ class SagaForwardDispatchClassificationTest {
         .isFalse();
   }
 
+  /**
+   * A compensation command refused by a replica behind the stored schema attempted nothing, as the
+   * forward path reads the same refusal: the store refused the load before anything was appended.
+   * The compensation path keeps the episode {@code COMPENSATING} and surfaces the re-drive as
+   * refused, so the compensation retry sweeper does not count it toward its give-up horizon. A
+   * genuine transient failure of another compensation command beside it is an attempt.
+   */
+  @Test
+  void compensationPath_aReaderBehindTheStoredSchemaAttemptedNothing() {
+    var bare = new ScriptedBus();
+    bare.failAlways("undo-1", SagaForwardDispatchClassificationTest::schemaAhead);
+    assertThat(compensate(bare, "undo-1"))
+        .isEqualTo(SagaCommandDispatch.CompensationOutcome.RETRY_REFUSED);
+
+    var wrapped = new ScriptedBus();
+    wrapped.failAlways(
+        "undo-1",
+        () ->
+            new CommandExecutionException(
+                new ReleaseStock("undo-1"),
+                org.streamrune.core.types.CommandId.of("cmd-undo-1"),
+                org.streamrune.core.types.StreamId.of(
+                    org.streamrune.core.types.AggregateType.of("stock"), AggregateId.of("a")),
+                "wrapped",
+                schemaAhead()));
+    assertThat(compensate(wrapped, "undo-1"))
+        .as("recognised anywhere in the cause chain")
+        .isEqualTo(SagaCommandDispatch.CompensationOutcome.RETRY_REFUSED);
+
+    var mixed = new ScriptedBus();
+    mixed.failAlways("undo-1", SagaForwardDispatchClassificationTest::schemaAhead);
+    mixed.failAlways("undo-2", () -> new EventStoreException("connection reset"));
+    assertThat(compensate(mixed, "undo-1", "undo-2"))
+        .as("a real attempt happened beside the refusal")
+        .isEqualTo(SagaCommandDispatch.CompensationOutcome.RETRY);
+  }
+
+  private static SagaCommandDispatch.CompensationOutcome compensate(
+      CommandBus bus, String... orderIds) {
+    return SagaCommandDispatch.compensateAndClassify(
+        java.util.Arrays.stream(orderIds)
+            .map(id -> SagaCommand.of(new ReleaseStock(id), AggregateId.of("a")))
+            .toList(),
+        bus,
+        SagaOrigins.of("saga-1"),
+        null,
+        i -> IdempotencyKey.of("k:" + i),
+        org.slf4j.LoggerFactory.getLogger("test"));
+  }
+
   /** Every marker the forward classifier keys on, and the unprovable default. */
   @Test
   void isRetryLater_provesOnlyTheDirectionThatChangesBehaviour() {

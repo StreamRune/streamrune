@@ -228,7 +228,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   page the poll read are replayed in the same poll. A saga's forward command that fails with it is retry-later: the saga is left as it is
   and the event delivered again until a replica that reads it completes the step, instead of
   compensating a flow in which nothing failed; `UnknownEventTypeException` stays deterministic
-  there.
+  there. A compensation command that fails with it attempted nothing either: the episode stays
+  `COMPENSATING`, the outcome is `RETRY_REFUSED` (as for a refused admission), and
+  `SagaCompensationRetrySweeper` does not count the re-drive toward its give-up horizon, so a
+  rollout longer than `compensation-retry-give-up-after` faults no saga; the key-age bound still
+  applies.
 - Event payloads bind strictly: a stored property the event class does not declare fails the read
   with `EventDeserializationException`. Every change to an event payload's shape, an added field
   included, therefore bumps the type's schema version through its upcaster (a step that returns the
