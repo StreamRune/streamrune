@@ -69,8 +69,9 @@ import org.streamrune.runtime.SagaTimeoutRunner;
  * clock. The events of a step are delivered through {@link SagaRunner#asEventListener()} as one
  * page, as a subscription delivers them, after the fixture stored them: an envelope at the initial
  * offset — as {@link #event}, {@link #reply} and {@link SagaEnvelopes} build them — gets the next
- * global offset and the next version of its stream; an envelope with an offset of its own keeps it,
- * so a test can deliver one again. A failure of the step — a saga that throws, a fault of {@link
+ * global offset and the next version of its stream; an envelope with an offset of its own keeps it
+ * and its version, and the offsets and versions of its stream go on after them, so a test can
+ * deliver one again. A failure of the step — a saga that throws, a fault of {@link
  * #sagaStoreFaults()} — propagates to the test, and {@link #redeliver()} then delivers the same
  * events at the same offsets, as a subscription does after a crash before its checkpoint.
  *
@@ -291,12 +292,17 @@ public final class SagaFixture<S extends SagaState> {
     stepStart = bus.dispatched.size();
   }
 
-  /** The envelope as stored: the next offset and stream version, unless it carries an offset. */
+  /**
+   * The envelope as stored: the next offset and stream version, unless it carries an offset. An
+   * envelope with an offset of its own keeps its offset and its version, and the offsets and the
+   * versions of its stream go on after them.
+   */
   private EventEnvelope stored(EventEnvelope event) {
     Objects.requireNonNull(event, "event is required");
     long offset = event.globalOffset().value();
     if (offset > 0) {
       nextOffset = Math.max(nextOffset, offset + 1);
+      streamVersions.merge(event.streamId(), event.version().value(), Math::max);
       return event;
     }
     long version = streamVersions.merge(event.streamId(), 1L, Long::sum);

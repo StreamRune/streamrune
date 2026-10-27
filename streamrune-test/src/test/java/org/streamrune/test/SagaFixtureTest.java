@@ -23,6 +23,7 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.Version;
 
 class SagaFixtureTest {
 
@@ -288,6 +289,27 @@ class SagaFixtureTest {
     List<EventEnvelope> delivered = fixture.delivered();
     assertEquals(GlobalOffset.of(40), delivered.get(0).globalOffset());
     assertEquals(GlobalOffset.of(41), delivered.get(1).globalOffset());
+  }
+
+  @Test
+  void anEnvelopeAtAnOffsetOfItsOwnKeepsItsVersion_andTheStreamGoesOnFromIt() {
+    var fixture = fixture();
+    EventEnvelope placed = fixture.event(ORDER_1, new OrderPlaced("1"));
+    EventEnvelope own =
+        new EventEnvelope(
+            GlobalOffset.of(7),
+            ORDER_1,
+            new Version(3),
+            placed.eventType(),
+            placed.event(),
+            placed.metadata());
+
+    fixture.given(own).when(ORDER_1, new OrderCancelled("1"));
+
+    List<EventEnvelope> delivered = fixture.delivered();
+    assertEquals(new Version(3), delivered.get(0).version());
+    assertEquals(GlobalOffset.of(8), delivered.get(1).globalOffset());
+    assertEquals(new Version(4), delivered.get(1).version());
   }
 
   @Test
