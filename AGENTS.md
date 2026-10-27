@@ -77,12 +77,15 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   outside any test, such as a test JVM that stops, is listed under the run's name and counted on its
   own. Every test task, `check`, `build` and `quickCheck` ends with the line
   `N tests, F failed — see build/reports/test-summary.txt`, where F counts both kinds of failure;
-  that file collects the summaries of the run's test tasks. A test task that fails for a reason of
+  that file collects the summaries of the build's test tasks, each with the time and the build that
+  wrote it. The counts are those of the test tasks that ran in this build: their tests ran, or their
+  result was up to date or came from the build cache. A test task of the build that did not run —
+  its test sources do not compile, or the build stopped before it without `--continue` — is named in
+  the file with its last summary, which is not counted, and the line says how many:
+  `N tests, F failed, K test tasks did not run — see …`. A test task that fails for a reason of
   its own prints the line too: with no test matching `--tests` it reads `0 tests, 0 failed`, and
-  Gradle's failure block below it says "No tests found for given includes". Each entry carries the
-  time it was written: a build that stops before a test task runs (a compile error, or an earlier failure
-  without `--continue`) leaves that task's entry from an earlier run. Read the summary before the
-  HTML reports under `build/reports/tests/`.
+  Gradle's failure block below it says "No tests found for given includes". Read the summary before
+  the HTML reports under `build/reports/tests/`.
 - **Mutation testing.** `./gradlew :streamrune-core:pitest` and `./gradlew :streamrune-runtime:pitest`
   run PIT, which changes the compiled code one small mutation at a time and lists every mutant no
   test detects; the task prints the path of its report (`build/reports/pitest/index.html`). It is

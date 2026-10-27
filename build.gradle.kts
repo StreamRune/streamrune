@@ -5,6 +5,8 @@ import java.lang.module.ModuleFinder
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.jar.Manifest
 import java.util.zip.ZipFile
@@ -104,10 +106,17 @@ private object BrA17SupertypeCheck {
 // build/test-summary.txt for the `test` task, build/test-summary-<task>.txt for any other test task.
 // It holds the totals, one line per failure (`Class#method — the first line of the exception, joined
 // with the lines after it when it ends in a colon — the first stack frame in org.streamrune`) and the
-// ten slowest tests. The root task `testSummary` collects the summaries of the test tasks in the
-// current task graph into build/reports/test-summary.txt and prints one line. Every test task,
-// `check`, `build` and `quickCheck` are finalized by it, so that line closes every test run, a
-// failing one included.
+// ten slowest tests, and its header names the build that wrote it. The root task `testSummary`
+// collects the summaries of the test tasks in the current task graph into
+// build/reports/test-summary.txt and prints one line. Every test task, `check`, `build` and
+// `quickCheck` are finalized by it, so that line closes every test run, a failing one included.
+//
+// The line counts the test tasks that run in this build only: run, or up to date, or taken from
+// the build cache, whose summary is the one that run wrote. A test task of the graph that does not
+// run — its test sources do not compile, or the build stopped before it — still has the summary of
+// an earlier build on disk; it is named in the file and not counted, and the line says how many
+// did not run. Which tasks run is recorded by an onlyIf predicate of every test task into the
+// TestSummary.Runs build service, of which each build has its own instance.
 //
 // A nested object for the reason BrA17SupertypeCheck gives: the listener is stored in the
 // configuration cache, so it must not reference the script instance.
@@ -129,8 +138,30 @@ private object TestSummary {
     fun fileName(testTaskName: String): String =
         if (testTaskName == "test") "test-summary.txt" else "test-summary-$testTaskName.txt"
 
+    /**
+     * The test tasks that run in the current build. Gradle creates one instance per build, so its
+     * [id] names the build and its [ran] set holds this build's tasks only.
+     */
+    abstract class Runs : BuildService<BuildServiceParameters.None> {
+        /** The build's id, written into the header of every summary the build writes. */
+        val id: String = UUID.randomUUID().toString().substring(0, 8)
+        private val ran: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+        /** Records that the test task [taskPath] runs in this build. */
+        fun ran(taskPath: String) {
+            ran.add(taskPath)
+        }
+
+        /** The test tasks that ran in this build. */
+        fun ran(): Set<String> = ran.toSet()
+    }
+
     /** Collects one test task's results and writes its summary when the run ends. */
-    class Listener(private val taskPath: String, private val output: File) : TestListener {
+    class Listener(
+        private val taskPath: String,
+        private val output: File,
+        private val runs: Provider<Runs>,
+    ) : TestListener {
         private var durations = ArrayList<Pair<String, Long>>()
         private var failures = ArrayList<String>()
         private var outsideFailures = 0
@@ -195,7 +226,8 @@ private object TestSummary {
                         "$taskPath — ${result.testCount} tests, ${result.successfulTestCount} " +
                             "passed, ${result.failedTestCount} failed, ${result.skippedTestCount} " +
                             "skipped$outsideCount " +
-                            "(${duration(result.endTime - result.startTime)}, ${now()})")
+                            "(${duration(result.endTime - result.startTime)}, ${now()}, " +
+                            "build ${runs.get().id})")
                     failed.forEach { appendLine("  FAILED $it") }
                     if (slowest.isNotEmpty()) {
                         appendLine("  slowest:")
@@ -241,34 +273,78 @@ private object TestSummary {
     private fun duration(millis: Long): String =
         if (millis < 1000) "${millis}ms" else String.format(Locale.ROOT, "%.1fs", millis / 1000.0)
 
-    // The local time a summary is written: a build that stops before a test task runs leaves that
-    // task's summary, and the aggregate, from an earlier run, and the time says so.
+    // The local time a summary is written; an entry of a test task that is up to date shows the
+    // time of the run that wrote it.
     private fun now(): String =
         LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
 
+    /** The counts of a build's summary: tests, failures, and the test tasks that did not run. */
+    data class Totals(val tests: Int, val failed: Int, val notRun: Int)
+
     /**
-     * Writes the collected summaries to [output] and returns the total test count and the failure
-     * count: failed tests plus failures outside a test.
+     * Writes the summaries of the test tasks of [summaries] (task path to summary file) that ran in
+     * the build [buildId] ([ran]: run, up to date or from the cache) to [output], followed by the
+     * test tasks that did not run, and returns the counts: the tests of the tasks that ran, their
+     * failed tests plus failures outside a test, and the number of tasks that did not run, whose
+     * summaries, written by an earlier build, are not counted.
      */
-    fun aggregate(summaries: List<File>, output: File): Pair<Int, Int> {
-        val texts = summaries.filter { it.isFile }.map { it.readText().trimEnd() }
+    fun aggregate(summaries: Map<String, File>, ran: Set<String>, buildId: String, output: File): Totals {
         var tests = 0
         var failed = 0
-        texts.forEach { text ->
-            TOTALS.find(text.lineSequence().first())?.let {
-                tests += it.groupValues[1].toInt()
-                failed += it.groupValues[2].toInt() + (it.groupValues[3].toIntOrNull() ?: 0)
+        var reused = 0
+        val entries = ArrayList<String>()
+        val notRun = ArrayList<String>()
+        summaries.toSortedMap().forEach { (task, file) ->
+            val text = if (file.isFile) file.readText().trimEnd() else null
+            val header = text?.lineSequence()?.first()
+            if (task !in ran) {
+                notRun.add(if (header == null) task else "$header — not counted")
+            } else if (text == null) {
+                entries.add("$task — ran and wrote no summary")
+            } else {
+                TOTALS.find(header!!)?.let {
+                    tests += it.groupValues[1].toInt()
+                    failed += it.groupValues[2].toInt() + (it.groupValues[3].toIntOrNull() ?: 0)
+                }
+                if (!header.endsWith("build $buildId)")) {
+                    reused++
+                }
+                entries.add(text)
             }
         }
         output.parentFile.mkdirs()
         output.writeText(
             buildString {
-                appendLine("$tests tests, $failed failed — ${texts.size} test task(s), ${now()}")
-                texts.forEach { appendLine().appendLine(it) }
+                appendLine(
+                    "$tests tests, $failed failed — ${entries.size} test task(s) ran in this " +
+                        "build ($reused of them up to date or from the cache), ${notRun.size} did " +
+                        "not run; build $buildId, ${now()}")
+                if (notRun.isNotEmpty()) {
+                    appendLine()
+                    appendLine(
+                        "Did not run in this build (a dependency failed or the build stopped " +
+                            "before them); their last summaries are from an earlier build:")
+                    notRun.forEach { appendLine("  $it") }
+                }
+                entries.forEach { appendLine().appendLine(it) }
             })
-        return tests to failed
+        return Totals(tests, failed, notRun.size)
+    }
+
+    /** The line `testSummary` prints. */
+    fun line(totals: Totals): String {
+        val notRun =
+            when (totals.notRun) {
+                0 -> ""
+                1 -> ", 1 test task did not run"
+                else -> ", ${totals.notRun} test tasks did not run"
+            }
+        return "${totals.tests} tests, ${totals.failed} failed$notRun — see build/$AGGREGATE"
     }
 }
+
+// The build's TestSummary.Runs: every test task records itself in it, testSummary reads it.
+private val testRuns = gradle.sharedServices.registerIfAbsent("testRuns", TestSummary.Runs::class.java) {}
 
 // ── quickCheck — the fast lane ───────────────────────────────────────────────────────────────
 //
@@ -379,7 +455,19 @@ subprojects {
         // summary of the run that produced it.
         val summary = layout.buildDirectory.file(TestSummary.fileName(name))
         outputs.file(summary).withPropertyName("testSummary")
-        addTestListener(TestSummary.Listener(path, summary.get().asFile))
+        // Local vals: the listener and the onlyIf spec are stored in the configuration cache and
+        // capture plain values and the service provider, never the script or the project.
+        val runs = testRuns
+        val taskPath = path
+        addTestListener(TestSummary.Listener(taskPath, summary.get().asFile, runs))
+        usesService(runs)
+        // Gradle evaluates the spec once the task's dependencies have succeeded, before it decides
+        // whether to run the tests or reuse their result: the task runs in this build. A test task
+        // whose test sources do not compile, or that the build stopped before, never gets here.
+        onlyIf("it records that it runs in this build") {
+            runs.get().ran(taskPath)
+            true
+        }
         // Every test run ends with the one-line summary of the root project's `testSummary`.
         finalizedBy(":testSummary")
     }
@@ -1717,10 +1805,10 @@ configure<com.diffplug.gradle.spotless.SpotlessExtension> {
 
 // ── testSummary and quickCheck ──────────────────────────────────────────────────────────────
 //
-// The summary files of the test tasks in this build's task graph. The list is set once the graph
-// is ready (whenReady below); the configuration cache stores it with the graph, so a build that
-// reuses the cache entry collects the same files.
-val testSummaryFiles = objects.listProperty<String>()
+// The summary files of the test tasks in this build's task graph, by task path. The map is set once
+// the graph is ready (whenReady below); the configuration cache stores it with the graph, so a
+// build that reuses the cache entry collects the same files.
+val testSummaryFiles = objects.mapProperty<String, String>()
 
 // testSummary declares no inputs or outputs on purpose: it is the printer, so it runs in every build
 // that has it in its graph. An up-to-date check would let it skip and print nothing.
@@ -1731,19 +1819,26 @@ val testSummary =
             "Collects the summaries of this build's test tasks into " +
                 "build/${TestSummary.AGGREGATE} and prints one line."
         val summaries = testSummaryFiles
+        val runs = testRuns
         val aggregate = layout.buildDirectory.file(TestSummary.AGGREGATE)
+        usesService(runs)
         mustRunAfter(subprojects.map { it.tasks.withType<Test>() })
         doLast {
-            val (tests, failed) =
-                TestSummary.aggregate(summaries.get().map(::File), aggregate.get().asFile)
-            logger.lifecycle("$tests tests, $failed failed — see build/${TestSummary.AGGREGATE}")
+            val totals =
+                TestSummary.aggregate(
+                    summaries.get().mapValues { File(it.value) },
+                    runs.get().ran(),
+                    runs.get().id,
+                    aggregate.get().asFile)
+            logger.lifecycle(TestSummary.line(totals))
         }
     }
 
 gradle.taskGraph.whenReady {
     testSummaryFiles.set(
-        allTasks.filterIsInstance<Test>().sortedBy { it.path }.map {
-            it.project.layout.buildDirectory.file(TestSummary.fileName(it.name)).get().asFile.path
+        allTasks.filterIsInstance<Test>().associate {
+            it.path to
+                it.project.layout.buildDirectory.file(TestSummary.fileName(it.name)).get().asFile.path
         })
 }
 
