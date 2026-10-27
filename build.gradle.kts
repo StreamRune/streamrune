@@ -477,6 +477,11 @@ subprojects {
         // Gradle evaluates the spec once the task's dependencies have succeeded, before it decides
         // whether to run the tests or reuse their result: the task runs in this build. A test task
         // whose test sources do not compile, or that the build stopped before, never gets here.
+        // This spec stays the task's last: Gradle checks a task's specs in the order they were
+        // added, whether the task is enabled first, and stops at the first that is false, so a spec
+        // a module's build file added after this one could skip a task already recorded as run, and
+        // the summary would count the task's last result. A test task that a condition skips sets
+        // `enabled` instead; replacing the specs (`setOnlyIf`) would drop this one.
         onlyIf("it records that it runs in this build") {
             runs.get().ran(taskPath)
             true

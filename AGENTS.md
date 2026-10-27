@@ -81,13 +81,17 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   `N tests, F failed — see build/reports/test-summary.txt`, where F counts both kinds of failure;
   that file collects the summaries of the build's test tasks, each with the time and the build that
   wrote it. The counts are those of the test tasks that ran in this build: their tests ran, or their
-  result was up to date or came from the build cache. A test task of the build that did not run —
-  its test sources do not compile, or the build stopped before it without `--continue` — is named in
-  the file with its last summary, which is not counted, and the line says how many:
-  `N tests, F failed, K test tasks did not run — see …`. A test task that fails for a reason of
-  its own prints the line too: with no test matching `--tests` it reads `0 tests, 0 failed`, and
-  Gradle's failure block below it says "No tests found for given includes". Read the summary before
-  the HTML reports under `build/reports/tests/`.
+  result was up to date or came from the build cache. A test task that fails after it starts and
+  before its tests do, when Gradle cannot provision its toolchain or resolve its test classpath,
+  counts with the summary an earlier build left; Gradle's failure block below the line names the
+  cause. A test task of the build that did not run — its test sources do not compile, or the build
+  stopped before it without `--continue` — is named in the file with its last summary, which is not
+  counted, and the line says how many: `N tests, F failed, K test tasks did not run — see …`. A
+  test task skips on a condition of its own through `enabled`, which the summary lists as not run,
+  never through an `onlyIf` of its own (the root build script says why). A test task that fails for
+  a reason of its own prints the line too: with no test matching `--tests` it reads
+  `0 tests, 0 failed`, and Gradle's failure block below it says "No tests found for given
+  includes". Read the summary before the HTML reports under `build/reports/tests/`.
 - **Mutation testing.** `./gradlew :streamrune-core:pitest` and `./gradlew :streamrune-runtime:pitest`
   run PIT, which changes the compiled code one small mutation at a time and lists every mutant no
   test detects; the task prints the path of its report (`build/reports/pitest/index.html`). It is
