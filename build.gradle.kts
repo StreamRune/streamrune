@@ -283,10 +283,11 @@ private object TestSummary {
 
     /**
      * Writes the summaries of the test tasks of [summaries] (task path to summary file) that ran in
-     * the build [buildId] ([ran]: run, up to date or from the cache) to [output], followed by the
-     * test tasks that did not run, and returns the counts: the tests of the tasks that ran, their
-     * failed tests plus failures outside a test, and the number of tasks that did not run, whose
-     * summaries, written by an earlier build, are not counted.
+     * the build [buildId] ([ran]: run, up to date or from the cache) to [output], after the test
+     * tasks that did not run, and returns the counts: the tests of the tasks that ran, their failed
+     * tests plus failures outside a test, and the number of tasks that did not run, whose summaries,
+     * written by an earlier build, are not counted. A test task that ran and has no summary has no
+     * tests (Gradle skipped it as NO-SOURCE) and is left out.
      */
     fun aggregate(summaries: Map<String, File>, ran: Set<String>, buildId: String, output: File): Totals {
         var tests = 0
@@ -299,9 +300,7 @@ private object TestSummary {
             val header = text?.lineSequence()?.first()
             if (task !in ran) {
                 notRun.add(if (header == null) task else "$header — not counted")
-            } else if (text == null) {
-                entries.add("$task — ran and wrote no summary")
-            } else {
+            } else if (text != null) {
                 TOTALS.find(header!!)?.let {
                     tests += it.groupValues[1].toInt()
                     failed += it.groupValues[2].toInt() + (it.groupValues[3].toIntOrNull() ?: 0)
@@ -316,9 +315,9 @@ private object TestSummary {
         output.writeText(
             buildString {
                 appendLine(
-                    "$tests tests, $failed failed — ${entries.size} test task(s) ran in this " +
-                        "build ($reused of them up to date or from the cache), ${notRun.size} did " +
-                        "not run; build $buildId, ${now()}")
+                    "$tests tests, $failed failed — the summaries of ${entries.size} test " +
+                        "task(s) of this build ($reused of them up to date or from the cache), " +
+                        "${notRun.size} did not run; build $buildId, ${now()}")
                 if (notRun.isNotEmpty()) {
                     appendLine()
                     appendLine(
@@ -1835,9 +1834,11 @@ val testSummary =
         }
     }
 
+// The modules' test tasks only: they write the summaries and record that they run (subprojects
+// above). The root project's own test task has no sources and neither.
 gradle.taskGraph.whenReady {
     testSummaryFiles.set(
-        allTasks.filterIsInstance<Test>().associate {
+        allTasks.filterIsInstance<Test>().filter { it.project.parent != null }.associate {
             it.path to
                 it.project.layout.buildDirectory.file(TestSummary.fileName(it.name)).get().asFile.path
         })
