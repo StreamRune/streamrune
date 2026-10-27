@@ -19,16 +19,16 @@ import org.streamrune.core.types.UserId;
  * A {@link Cacheable.Scope#USER} query must never be served across callers when the framework
  * cannot see who the caller is.
  *
- * <p>{@code cacheKey} keyed USER-scoped entries on {@code Authorization.currentUserId()}, which
- * reads {@code StreamRuneContext.CURRENT} and returns {@code null} whenever that ScopedValue is
- * unbound. Every unbound caller therefore produced the byte-identical key {@code
- * UserScopedKey(null, query)} and shared ONE partition. That is not a rare edge case: Spring is the
- * only integration whose filter wraps the handler in a {@code ScopedValue.where(CURRENT, ctx)}. On
- * Quarkus the only binding is the STATIC {@code StreamRuneRequestFilter.callWithContext} helper the
- * application must call by hand (no framework caller exists), and on Micronaut any
- * {@code @ExecuteOn} / reactive route whose body runs off the filter thread leaves it unbound too.
- * So on those runtimes EVERY authenticated user collapses into the shared "anonymous" partition and
- * the first caller's rows are served to the next one.
+ * <p>{@code Authorization.currentUserId()} reads {@code StreamRuneContext.CURRENT} and returns
+ * {@code null} whenever that ScopedValue is unbound, so a USER-scoped key built from it, {@code
+ * UserScopedKey(null, query)}, is byte-identical for every unbound caller: they would share ONE
+ * partition and the first caller's rows would be served to the next. Unbound callers are ordinary.
+ * The integrations bind the caller for the query paths they own — Spring's filter on the servlet
+ * thread, and the Spring, Micronaut and Quarkus {@code QueryBus} beans for a dispatch that starts
+ * unbound, through their unbound-request-context source — but every query dispatched outside a
+ * request (a scheduled job, a subscription thread, a DLQ replay, a thread of the application's own)
+ * is unbound on every runtime, and so is a query a handler sends through a {@code QueryBus} built
+ * without that source. Those callers bypass the cache.
  */
 class CachingQueryBusUnboundUserScopeTest {
 
@@ -42,9 +42,9 @@ class CachingQueryBusUnboundUserScopeTest {
   record AllProductsQuery() implements Query<String> {}
 
   /**
-   * Stands in for the application's own resolution of the caller: on Quarkus/Micronaut the identity
-   * reaches the handler through the container (a request-scoped bean, a SecurityContext), NOT
-   * through {@code StreamRuneContext.CURRENT}, which is exactly why the cache key sees null.
+   * Stands in for the application's own resolution of the caller — a request-scoped bean, a
+   * SecurityContext — which a handler can read where {@code StreamRuneContext.CURRENT} is unbound,
+   * and where the cache key therefore sees null.
    */
   private final AtomicReference<String> ambientUser = new AtomicReference<>();
 
@@ -80,7 +80,8 @@ class CachingQueryBusUnboundUserScopeTest {
 
   @Test
   void unboundCallers_areNeverServedAnotherCallersUserScopedResult() {
-    // Alice's request on Quarkus: the resource method runs with CURRENT unbound.
+    // Alice's query from a thread where nothing is bound, such as a QueryBus built without the
+    // integration's unbound-request-context source.
     ambientUser.set("alice");
     assertEquals("alice-orders", bus.dispatch(new MyOrdersQuery()));
 
