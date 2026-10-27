@@ -37,6 +37,10 @@ import org.streamrune.core.saga.SagaForwardFencedException;
  *   <tr><td>infrastructure (everything else)</td><td>yes</td><td>yes</td><td>the failure</td></tr>
  * </table>
  *
+ * <p>Where a failure is dead-lettered, the caller of {@code VirtualThreadCommandBus.execute} gets
+ * it as the cause of a {@code CommandDeadLetteredException} once the entry is stored: the command's
+ * outcome is then pending, not final.
+ *
  * <p>Why the reader-behind row splits the same way, for a different reason: a replica on the
  * previous release reads an event the next release wrote at a higher {@code schema_version} and
  * refuses it. The store answered, so the refusal carries no infrastructure-health evidence, and
@@ -163,7 +167,10 @@ public final class CommandFailureClassification {
    * the one this reader's upcaster chain reaches — the replica runs an older release than the one
    * that wrote the event (a rolling deployment of a schema bump), or is missing an upcaster. The
    * command succeeds on a reader that is not behind, so it is dead-lettered for replay; it carries
-   * no infrastructure-health evidence, so it does not count toward the circuit breaker.
+   * no infrastructure-health evidence, so it does not count toward the circuit breaker. For the
+   * same reason the dead-letter retry runner counts no attempt for a replay that fails with it, the
+   * saga runner treats a forward command that fails with it as retry-later, and the compensation
+   * retry sweeper does not count a compensation re-drive that fails with it toward its give-up.
    */
   public static boolean isReaderBehindStoredSchema(Throwable error) {
     Throwable c = error;

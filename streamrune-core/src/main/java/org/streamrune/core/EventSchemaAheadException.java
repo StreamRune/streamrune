@@ -20,7 +20,13 @@ import org.streamrune.core.types.EventType;
  *       but does <b>not</b> count toward the command bus's circuit breaker — it says nothing about
  *       the health of the store, the pool or the network, and opening the bus-global circuit would
  *       reject every command of the replica, for every aggregate, for the whole rollout (see {@link
- *       CommandFailureClassification});
+ *       CommandFailureClassification}). The dead-letter retry runner's replay that fails with it
+ *       counts no attempt: the entry is left as it is until a replica that reads the event replays
+ *       it;
+ *   <li>a command a saga dispatches is never dead-lettered: the saga runner leaves the saga as it
+ *       is and lets the failure propagate, so the event is redelivered and the step completes on a
+ *       replica that reads the stored version, instead of compensating a flow in which nothing
+ *       failed;
  *   <li>a projection or subscription that reads it retries the read and stops at that event instead
  *       of quarantining it, so a replica on the previous release never dead-letters an event that
  *       the next release reads fine ({@code ReadPoisonClassifier} and {@link

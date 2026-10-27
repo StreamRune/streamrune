@@ -100,6 +100,7 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case UNGATED_SAGA_WARNING -> this::sagaRunnerWithoutLeadershipLogsTheDocumentedWarn;
       case RUNNERS_STOP_FIRST -> this::shutdownStopsRunnersBeforeTheEventStoreCloses;
       case DOCUMENTED_DEFAULTS -> this::configurationDefaultsEqualTheOracle;
+      case ROUTE_CALLER_AUDITED -> this::aCommandDispatchedFromARouteIsAuditedAsTheCaller;
     };
   }
 

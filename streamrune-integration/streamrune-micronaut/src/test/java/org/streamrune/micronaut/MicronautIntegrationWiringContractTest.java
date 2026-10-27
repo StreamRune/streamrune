@@ -12,6 +12,8 @@ import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Bean;
 import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Requires;
+import io.micronaut.http.annotation.Controller;
+import io.micronaut.http.annotation.Post;
 import io.micronaut.runtime.server.EmbeddedServer;
 import jakarta.inject.Singleton;
 import java.io.IOException;
@@ -31,13 +33,20 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.CommandBus;
 import org.streamrune.integration.tck.Application;
 import org.streamrune.integration.tck.ContractBeans;
+import org.streamrune.integration.tck.ContractBeans.ContractCommand;
+import org.streamrune.integration.tck.ContractBeans.ContractCommandExecuted;
+import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
+import org.streamrune.integration.tck.ContractBeans.ContractCommandState;
 import org.streamrune.integration.tck.ContractBeans.ContractSagaState;
+import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 import org.streamrune.integration.tck.ContractHttp;
 import org.streamrune.integration.tck.HttpResponse;
 import org.streamrune.integration.tck.IntegrationWiringContract;
+import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
@@ -69,6 +78,15 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   static final String UNGATED_SAGA_RUNNER = "contract.ungated-saga-runner";
 
   /**
+   * The property that declares the {@link ApplicationBeans#contractCommandRegistration()} of a
+   * start: a {@code DeciderRegistration}, which Micronaut collects into an injected {@code List}.
+   */
+  static final String COMMAND_REGISTRATION = "contract.command-registration";
+
+  /** The property that declares the {@link DispatchingController} of a start. */
+  static final String DISPATCHING_ROUTE = "contract.dispatching-route";
+
+  /**
    * The application's beans that Micronaut must know at compile time, each declared only for a
    * start that sets its property.
    */
@@ -89,6 +107,34 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     @Requires(property = UNGATED_SAGA_RUNNER, value = "true")
     SagaRunner<ContractSagaState> ungatedSagaRunner() {
       return new UngatedSagaRunner().get();
+    }
+
+    @Singleton
+    @Requires(property = COMMAND_REGISTRATION, value = "true")
+    DeciderRegistration<ContractCommand, ContractCommandState, ContractCommandExecuted>
+        contractCommandRegistration() {
+      return new ContractCommandRegistration().get();
+    }
+  }
+
+  /**
+   * The contract's {@link DispatchingRoute} as a Micronaut application writes it: a controller that
+   * executes the command through the command bus bean and binds nothing itself.
+   */
+  @Controller(DispatchingRoute.PATH)
+  @Requires(property = DISPATCHING_ROUTE, value = "true")
+  static class DispatchingController {
+
+    private final CommandBus commandBus;
+
+    DispatchingController(CommandBus commandBus) {
+      this.commandBus = commandBus;
+    }
+
+    @Post("/{id}")
+    io.micronaut.http.HttpResponse<String> dispatch(String id) {
+      commandBus.execute(new ContractCommand(id));
+      return io.micronaut.http.HttpResponse.ok("executed");
     }
   }
 
@@ -190,6 +236,10 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     for (Class<?> beanClass : extraBeans) {
       if (beanClass == UngatedSagaRunner.class) {
         configuration.put(UNGATED_SAGA_RUNNER, "true");
+      } else if (beanClass == ContractCommandRegistration.class) {
+        configuration.put(COMMAND_REGISTRATION, "true");
+      } else if (beanClass == DispatchingRoute.class) {
+        configuration.put(DISPATCHING_ROUTE, "true");
       } else {
         singletons.add(ContractBeans.create(beanClass));
       }

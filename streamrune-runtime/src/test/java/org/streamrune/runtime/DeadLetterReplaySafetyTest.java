@@ -273,7 +273,7 @@ class DeadLetterReplaySafetyTest {
     var restock = new AdjustStock("p-1", 50);
 
     // The first attempt hits a transient store fault: dead-lettered, and the caller sees it fail.
-    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+    assertDeadLettered(() -> h.bus.execute(restock));
     assertEquals(100, h.units("p-1"));
     assertNull(h.onlyEntry().idempotencyKey(), "the command ran unkeyed");
 
@@ -295,7 +295,7 @@ class DeadLetterReplaySafetyTest {
   void unkeyedRelativeCommand_underAutomaticUnkeyedReplay_isAppliedTwice_theDocumentedHazard() {
     var h = new Harness(true, 1, immediate(UnkeyedReplay.AUTOMATIC));
     var restock = new AdjustStock("p-1", 50);
-    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+    assertDeadLettered(() -> h.bus.execute(restock));
     h.bus.execute(restock);
 
     h.runner.processBatch();
@@ -312,7 +312,7 @@ class DeadLetterReplaySafetyTest {
   void unkeyedEntry_operatorRetryWithoutForce_isRefused_withForce_replaysIt() {
     var h = new Harness(true, 1, immediate(UnkeyedReplay.OPERATOR_ONLY));
     var restock = new AdjustStock("p-1", 50);
-    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+    assertDeadLettered(() -> h.bus.execute(restock));
     var commandId = h.onlyEntry().commandId();
 
     assertEquals(RetryOutcome.NOT_DEDUPLICATED, h.runner.retry(commandId));
@@ -332,7 +332,7 @@ class DeadLetterReplaySafetyTest {
     // restock, and nothing on the entry shows it.
     var h = new Harness(true, 1, null);
     var restock = new AdjustStock("p-1", 50);
-    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+    assertDeadLettered(() -> h.bus.execute(restock));
     h.bus.execute(restock);
     assertEquals(150, h.units("p-1"));
     var commandId = h.onlyEntry().commandId();
@@ -359,7 +359,7 @@ class DeadLetterReplaySafetyTest {
     var h = new Harness(true, 1, null);
     var restock = new AdjustStock("p-1", 50);
     var key = key("restock-p-1-1");
-    assertThrows(EventStoreException.class, () -> h.bus.execute(restock, key));
+    assertDeadLettered(() -> h.bus.execute(restock, key));
 
     h.runnerClock.advance(Duration.ofHours(2));
     h.runner.processBatch();
@@ -499,7 +499,7 @@ class DeadLetterReplaySafetyTest {
 
     // Day 0: the keyed command is dead-lettered, then the caller's retry under the same key
     // succeeds and writes the inbox row.
-    assertThrows(EventStoreException.class, () -> h.bus.execute(reserve, key));
+    assertDeadLettered(() -> h.bus.execute(reserve, key));
     assertFalse(h.bus.execute(reserve, key).idempotentReplay());
     assertEquals(97, h.units("p-1"));
     var commandId = h.onlyEntry().commandId();
@@ -522,7 +522,7 @@ class DeadLetterReplaySafetyTest {
   void staleKeyedEntry_forcedOperatorRetry_runsTheCommandAgain_atLeastOnceAcknowledged() {
     var h = new Harness(true, 1, null);
     var restock = new AdjustStock("p-1", 50);
-    assertThrows(EventStoreException.class, () -> h.bus.execute(restock, key("restock-p-1-1")));
+    assertDeadLettered(() -> h.bus.execute(restock, key("restock-p-1-1")));
     var commandId = h.onlyEntry().commandId();
     h.runnerClock.advance(Duration.ofDays(8));
 
@@ -674,7 +674,7 @@ class DeadLetterReplaySafetyTest {
   void underAutomatic_anOperatorRetryOfAnUnkeyedEntryIsNotRefused_likeTheSchedule() {
     var h = new Harness(true, 1, immediate(UnkeyedReplay.AUTOMATIC));
     var restock = new AdjustStock("p-1", 50);
-    assertThrows(EventStoreException.class, () -> h.bus.execute(restock));
+    assertDeadLettered(() -> h.bus.execute(restock));
 
     assertEquals(RetryOutcome.REPLAYED, h.runner.retry(h.onlyEntry().commandId()));
     assertEquals(150, h.units("p-1"));
@@ -913,7 +913,7 @@ class DeadLetterReplaySafetyTest {
     assertEquals(RetryOutcome.NOT_FOUND, h.runner.retry(CommandId.of("absent")));
 
     var restock = new AdjustStock("p-1", 50);
-    assertThrows(EventStoreException.class, () -> h.bus.execute(restock, key("k-1")));
+    assertDeadLettered(() -> h.bus.execute(restock, key("k-1")));
     var commandId = h.onlyEntry().commandId();
     // The second seeded failure hits the replay.
     assertEquals(RetryOutcome.FAILED, h.runner.retry(commandId));
@@ -922,6 +922,15 @@ class DeadLetterReplaySafetyTest {
     h.bus.close();
     assertEquals(RetryOutcome.ADMISSION_REFUSED, h.runner.retry(commandId));
     assertEquals(1, h.onlyEntry().dlqAttempts(), "a refused admission is not an attempt");
+  }
+
+  /**
+   * The caller's {@code execute} fails on the store and the bus stores the dead-letter entry: the
+   * caller is told that the command's outcome is pending, with the store's failure as the cause.
+   */
+  private static void assertDeadLettered(org.junit.jupiter.api.function.Executable dispatch) {
+    var deadLettered = assertThrows(CommandDeadLetteredException.class, dispatch);
+    assertInstanceOf(EventStoreException.class, deadLettered.getCause());
   }
 
   @Test

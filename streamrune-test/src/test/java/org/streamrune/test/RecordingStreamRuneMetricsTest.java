@@ -46,6 +46,7 @@ class RecordingStreamRuneMetricsTest {
           entry("recordDeadLetterPublished", MetricNames.DLQ_PUBLISHED),
           entry("recordDeadLetterExhausted", MetricNames.DLQ_EXHAUSTED),
           entry("recordDeadLetterStaleReplayBlocked", MetricNames.DLQ_STALE_REPLAY_BLOCKED),
+          entry("recordDeadLetterReaderBehind", MetricNames.DLQ_READER_BEHIND),
           entry("recordLockWait", MetricNames.LOCKS_WAIT),
           entry("recordEventAppended", MetricNames.EVENTS_APPENDED),
           entry("recordEventReplayed", MetricNames.EVENTS_REPLAYED),
@@ -170,7 +171,7 @@ class RecordingStreamRuneMetricsTest {
   @Test
   void everyMethodOfTheInterfaceIsOverridden() {
     ForwardingDecoratorChecks.assertEveryMethodOverridden(
-        StreamRuneMetrics.class, RecordingStreamRuneMetrics.class, 86);
+        StreamRuneMetrics.class, RecordingStreamRuneMetrics.class, 87);
   }
 
   @Test

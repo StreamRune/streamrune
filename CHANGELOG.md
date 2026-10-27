@@ -219,15 +219,31 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   that fails with it is dead-lettered and does not count toward the circuit breaker
   (`CommandFailureClassification.isReaderBehindStoredSchema`), and `ReadPoisonClassifier` and
   `ProjectionErrorClassifier.DEFAULT` treat it as transient whatever frame wraps it, so a replica on
-  the previous release stops at a newer event and retries it instead of quarantining it.
+  the previous release stops at a newer event and retries it instead of quarantining it. A
+  dead-letter replay that fails with it counts no attempt (`RetryOutcome.READER_BEHIND`, the entry
+  unchanged; one INFO line per poll, and the `streamrune.dlq.reader_behind` counter tagged by
+  command type), so a rollout that keeps the retry runner's lease on a replica of the
+  previous release neither exhausts the entry nor, under `discardAfterMaxRetries`, discards the
+  command; on the schedule it takes no slot of the poll's batch, so the entries behind it in the
+  page the poll read are replayed in the same poll. A saga's forward command that fails with it is retry-later: the saga is left as it is
+  and the event delivered again until a replica that reads it completes the step, instead of
+  compensating a flow in which nothing failed; `UnknownEventTypeException` stays deterministic
+  there. A compensation command that fails with it attempted nothing either: the episode stays
+  `COMPENSATING`, the outcome is `RETRY_REFUSED` (as for a refused admission), and
+  `SagaCompensationRetrySweeper` does not count the re-drive toward its give-up horizon, so a
+  rollout longer than `compensation-retry-give-up-after` faults no saga; the key-age bound still
+  applies.
 - Event payloads bind strictly: a stored property the event class does not declare fails the read
   with `EventDeserializationException`. Every change to an event payload's shape, an added field
   included, therefore bumps the type's schema version through its upcaster (a step that returns the
   payload unchanged suffices for an added, nullable field), so a replica on the previous release
   pauses with `EventSchemaAheadException` instead of misreading. The production guide describes the
   rollout of each kind of change — a payload change, a new event type (readers first, since
-  `UnknownEventTypeException` stays read poison), a state-class change (bump `snapshotVersion`) —
-  and what the replicas still on the previous release do meanwhile. `EventPayloadAssertions` in
+  `UnknownEventTypeException` stays read poison), a state-class change (bump `snapshotVersion`), a
+  saga state class change (stop and switch: a `saga_state` row carries no schema version, binds
+  strictly, and a replica that cannot bind it quarantines the saga, so such a release is not rolled
+  back while rows of the new shape exist) — and what the replicas still on the previous release do
+  meanwhile, a saga's forward command included. `EventPayloadAssertions` in
   `streamrune-test` (`assertRoundTrips`, `assertUpcastBinds`) catches, at test time, an event class
   that does not read what it writes and an upcaster step that writes a key the event class does not
   declare.
@@ -261,6 +277,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - `CommandResult` carries the events, `streamId`, `finalVersion`, `globalOffsets`, the envelopes and
   a never-null `ShortCircuitReason` (`NONE`, `VETOED`, `IDEMPOTENT_REPLAY`) with the predicates
   `shortCircuited()`, `vetoed()`, `idempotentReplay()`.
+- `CommandExecutionException` (the failure the bus throws for a non-runtime or interrupted
+  execution, and the supertype of `CommandDeadLetteredException`) carries `command()`,
+  `commandId()` and `streamId()`. Its `toString()`, the first line of a logged stack trace, names
+  the command's type, both ids (log-sanitized) and the cause's type, and never renders the command:
+  a command's own `toString` writes every component, `@Encrypted` ones included, in the clear.
 - `executeAsync` returns a `CompletableFuture<CommandResult>` on a fresh virtual thread and is bounded
   by an in-flight admission budget (`maxInFlightAsyncCommands`, default 10,000;
   `streamrune.max-in-flight-async-commands` on all three integrations): past it the call returns an
@@ -295,14 +316,27 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   stored as JSON through `DeadLetterRetryRunner.createObjectMapper(cryptoEngine)`, so its own
   `@Encrypted` components are ciphertext; a payload that cannot be serialized is stored as a
   metadata-only entry, which is never dispatched). A command that can be dead-lettered must
-  round-trip through Jackson, because the retry runner rebuilds it from the stored JSON.
+  round-trip through Jackson, because the retry runner rebuilds it from the stored JSON. Once the
+  entry is stored, `execute` throws `CommandDeadLetteredException` (a `CommandExecutionException`
+  carrying `commandId()`, the entry's id, `streamId()` and the nullable `idempotencyKey()`, with the
+  failure as its cause) instead of the failure: the command's outcome is pending, because a replay
+  of the entry can still apply it, so a caller of a keyed command re-sends only under the same key
+  or waits, and a new key is a second operation. Its message and `toString()` carry neither the
+  payload nor the key. The failure itself propagates when no entry is stored (a failed publish, an
+  ineligible failure, a replay, a command a saga or a `continuing` listener dispatches), and it is
+  what the interceptors' `onError` and an `executeAsync` future receive. The retry guide and the
+  idempotency guide state the client rule and the HTTP answer: `503` with `Retry-After` and the
+  reason "queued for replay" for a keyed command, `500` with no `Retry-After` and the reason
+  "awaiting an operator" for an unkeyed one, whose re-send would be a second operation beside an
+  operator's replay, and never `202`.
   `DeadLetterRetryRunner` re-dispatches entries under the command's original idempotency key (or a
   deterministic `dlq-replay:<commandId>` key), learns command types from the registered deciders
   (sealed roots expand to every permitted class), refuses to replay an entry whose `@Encrypted`
   fields read `[REDACTED]`, is leadership-gated, and offers an on-demand `retry(CommandId)` that runs
   on its own virtual thread with the context recorded on the entry, never the operator's identity,
   correlation, baggage, saga marker or dispatch cause, and returns a `RetryOutcome` (`REPLAYED`,
-  `FAILED`, `ADMISSION_REFUSED`, `STALE_REPLAY_BLOCKED`, `NOT_DEDUPLICATED`, `NOT_FOUND`). A replay restores user,
+  `FAILED`, `ADMISSION_REFUSED`, `READER_BEHIND`, `STALE_REPLAY_BLOCKED`, `NOT_DEDUPLICATED`,
+  `NOT_FOUND`). A replay restores user,
   correlation id and trace id and never a saga origin or a causation id; a command dispatched with a
   dispatch cause bound (a saga's own dispatch, or a `StreamRuneContext.continuing` reaction to a
   stored event) is not dead-lettered, its caller retries it. `DeadLetterRetentionSweeper` prunes
@@ -712,7 +746,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   or a concurrent re-driver dedups in the command inbox instead of re-executing a refund.
 - Forward-command failure classification: a proven retry-later failure (`CircuitBreakerOpenException`,
   an interceptor veto, `CommandBusClosedException`, `CommandBusOverloadedException`,
-  `OptimisticLockException`, `LockException`, `SQLException`, a bare `CryptoOperationException`)
+  `OptimisticLockException`, `LockException`, `SQLException`, a bare `CryptoOperationException`,
+  `EventSchemaAheadException` — a replica behind the stored schema during a rolling deployment)
   leaves the saga untouched and propagates so the event is redelivered; everything else claims
   `COMPENSATING` first, then calls `compensate(state, failure, failedCommand)` and dispatches the undo.
 - Compensation outcomes: all undo commands succeed → `COMPENSATED`; a deterministic rejection or an
@@ -995,11 +1030,27 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   context the filter stored on the request for a dispatch that starts with
   `StreamRuneContext.CURRENT` unbound (`VirtualThreadCommandBus.Builder#unboundRequestContext`,
   asked on entry to `execute` and at submission in `executeAsync`), its `QueryBus` bean does the
-  same (`UnboundRequestContextQueryBus`), a saga replay (`SagaDeadLetterReplayer`) run from such a
-  route records the operator, and `StreamRuneContextHelper.get()` answers the request's context
-  first. A bound context is never replaced, and a dispatch with no request current runs without
-  one. A task Micronaut propagates the request to (`@ExecuteOn`, `@Async`, a Micronaut executor)
-  dispatches as the caller of that request, also after the response was sent.
+  same (`UnboundRequestContextQueryBus`, in `streamrune-runtime`), a saga replay
+  (`SagaDeadLetterReplayer`) run from such a route records the operator, and
+  `StreamRuneContextHelper.get()` answers the request's context first. A bound context is never
+  replaced, and a dispatch with no request current runs without one. A task Micronaut propagates
+  the request to (`@ExecuteOn`, `@Async`, a Micronaut executor) dispatches as the caller of that
+  request, also after the response was sent.
+- Quarkus: the request's caller reaches every command and query a resource method dispatches, with
+  nothing bound in the method. A JAX-RS filter cannot wrap the resource method, so
+  `StreamRuneRequestFilter` stores the request's context in the request-scoped
+  `StreamRuneRequestContextHolder` and `StreamRuneContext.CURRENT` is unbound while the method runs.
+  The produced command bus is built with `StreamRuneRequestContextHolder::ofCurrentRequest` as its
+  unbound-request-context source — the holder's context while a CDI request context is active on
+  the calling thread, which Quarkus REST keeps on every thread it runs a request on — and the
+  `QueryBus` bean is an `UnboundRequestContextQueryBus` over the same source, so authorization, the
+  command and query audit, the events' metadata, a command sent through `executeAsync` and a saga
+  replay (`SagaDeadLetterReplayer`) run from the method name the request's caller.
+  `StreamRuneRequestFilter.withContext(...)` / `callWithContext(...)` bind the context for code that
+  reads the caller outside a bus dispatch; a bound context is never replaced, and a dispatch with no
+  request context active runs without one. The integration wiring contract checks on Spring, Quarkus and
+  Micronaut that a command a route dispatches with nothing bound is audited as the request's
+  caller.
 - Off-thread authorization: request-scoped resolvers are evaluated once at the request edge and the
   result travels in `RequestContext.authority()`, so `executeAsync` authorizes like synchronous
   execution; a dead-letter replay runs under a recorded system principal. The captured authority is

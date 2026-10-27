@@ -31,6 +31,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.postgres.PostgresDeadLetterQueue;
 import org.streamrune.runtime.AnnotationAuthorizationInterceptor;
+import org.streamrune.runtime.CommandDeadLetteredException;
 import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 
@@ -234,7 +235,9 @@ class DlqReplayAuthzE2EIT extends E2ETestBase {
             () ->
                 ScopedValue.where(StreamRuneContext.CURRENT, adminContext())
                     .run(() -> bus.execute(new ProtectedCommand(aggregateId))))
-        .as("the first execution fails inside the decider and propagates")
+        .as("the first execution fails inside the decider and is dead-lettered, which it reports")
+        .isInstanceOf(CommandDeadLetteredException.class)
+        .cause()
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("transient handler failure");
 
@@ -311,6 +314,8 @@ class DlqReplayAuthzE2EIT extends E2ETestBase {
               () ->
                   ScopedValue.where(StreamRuneContext.CURRENT, adminContext())
                       .run(() -> bus.execute(new ProtectedCommand(aggregateId))))
+          .isInstanceOf(CommandDeadLetteredException.class)
+          .cause()
           .isInstanceOf(IllegalStateException.class)
           .hasMessageContaining("transient handler failure");
     } finally {

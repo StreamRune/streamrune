@@ -619,6 +619,17 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
         .increment();
   }
 
+  @Override
+  public void recordDeadLetterReaderBehind(String commandType) {
+    Counter.builder(meter(MetricNames.DLQ_READER_BEHIND))
+        .tag(MetricNames.TAG_COMMAND_TYPE, commandTypeTag(commandType))
+        .description(
+            "Dead-letter replays that failed because this replica is behind the stored schema (no"
+                + " attempt counted; the entry is unchanged)")
+        .register(registry)
+        .increment();
+  }
+
   /**
    * The {@code command.type} tag value for the command-type family: the simple class name the bus
    * passes, or {@link #UNKNOWN_TAG_VALUE} when the caller supplied none.

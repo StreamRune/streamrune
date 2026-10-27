@@ -18,12 +18,15 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.CommandBusClosedException;
 import org.streamrune.core.CommandBusOverloadedException;
+import org.streamrune.core.CommandFailureClassification;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.DeadLetterRetryPolicy;
+import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.SealedHierarchy;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.StreamRuneContext.RequestContext;
@@ -203,6 +206,21 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      * Nothing was attempted and the entry is unchanged.
      */
     ADMISSION_REFUSED,
+    /**
+     * The replay failed because this replica is behind the stored schema: the command's aggregate
+     * holds an event stored at a {@code schema_version} its upcaster chain does not reach ({@link
+     * org.streamrune.core.EventSchemaAheadException} in the cause chain), which is what a replica
+     * still on the previous release meets during a rolling deployment of an event-schema change.
+     * The store refused the load before anything was appended, and the command succeeds on a
+     * replica that reads that version, so the failure is not counted: the entry is unchanged — its
+     * attempt count is not bumped, so the rollout window can neither exhaust it nor, under {@code
+     * discardAfterMaxRetries}, discard it — and it is replayed again on the next poll, until a
+     * replica that reads the event holds the runner's lease. On the schedule such a replay takes no
+     * slot of the poll's batch, so the entries behind it in the page the poll read are replayed in
+     * the same poll. Every such replay is counted in {@code streamrune.dlq.reader_behind}, and a
+     * poll states its own in one INFO line.
+     */
+    READER_BEHIND,
     /**
      * The entry's command ran under an idempotency key and was first received longer ago than the
      * command-inbox retention window, so the inbox might not hold the row that deduplicates the
@@ -590,6 +608,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         deadLetterQueue.readRetryable(policy.maxRetries(), fetchLimit, includeUnkeyed, keyedCutoff);
     int processed = 0;
     int staleSkipped = 0;
+    int readerBehind = 0;
     for (var entry : entries) {
       if (processed >= batchSize) {
         break;
@@ -619,10 +638,34 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         staleSkipped++;
         continue;
       }
-      if (isDue(entry, now)) {
-        processEntry(entry, false, false, null);
+      if (!isDue(entry, now)) {
+        continue;
+      }
+      if (processEntry(entry, false, false, null) == RetryOutcome.READER_BEHIND) {
+        // A replay that answers READER_BEHIND takes no slot of the batch: nothing was attempted,
+        // the entry is left unchanged and keeps the head of the least-recently-active order on
+        // every poll, so counted, a batch's worth of such entries would hold back every entry
+        // behind them for the whole rollout. The page is over-fetched, so the poll reaches those
+        // entries in the same cycle. An admission refusal keeps its slot: the bus is closing or
+        // saturated, and the next entry would meet the same refusal. Summarized once below.
+        readerBehind++;
+      } else {
         processed++;
       }
+    }
+    if (readerBehind > 0) {
+      LOG.info(
+          "{} DLQ entr{} of this cycle's page {} not replayed: this replica is behind the stored"
+              + " schema of {} aggregate{} (a newer release stored an event at a schema version"
+              + " this replica's upcaster chain does not reach). Each is left unchanged, with no"
+              + " attempt counted, and replayed again on the next poll; the replay succeeds on a"
+              + " replica that reads the stored version (streamrune.dlq.reader_behind counts"
+              + " them; DEBUG names each).",
+          readerBehind,
+          readerBehind == 1 ? "y" : "ies",
+          readerBehind == 1 ? "was" : "were",
+          readerBehind == 1 ? "its" : "their",
+          readerBehind == 1 ? "" : "s");
     }
     if (staleSkipped > 0) {
       LOG.warn(
@@ -967,6 +1010,36 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
             LogSanitizer.sanitizeForLog(entry.commandId().value()),
             entry.commandType());
         return RetryOutcome.ADMISSION_REFUSED;
+      }
+      if (CommandFailureClassification.isReaderBehindStoredSchema(e)) {
+        // This replica is behind the stored schema: the command's aggregate holds an event a newer
+        // release stored at a schema_version this replica's upcaster chain does not reach. The
+        // store refused the load before anything was appended, so nothing was attempted against
+        // the command, and the same replay succeeds on a replica that reads that version. During a
+        // rolling deployment the lease can stay on a replica of the previous release for the whole
+        // window, so counting it would exhaust the entry — and, under discardAfterMaxRetries, drop
+        // the command — for a failure that is not the command's. The entry stays untouched (no
+        // attempt, no lastAttemptAt), exactly like an admission refusal: a crash anywhere here
+        // converges trivially, and the next run replays it again.
+        // Counted for every such replay; logged per entry at INFO for an operator's retry, and at
+        // DEBUG on the schedule, which meets the same entries on every poll of the rollout and
+        // states them in one INFO line per poll (processBatch).
+        EventSchemaAheadException behind = schemaAheadCause(e);
+        recordMetric(
+            "recordDeadLetterReaderBehind",
+            () -> metrics.recordDeadLetterReaderBehind(simpleTypeName(entry.commandType())));
+        LOG.atLevel(onDemand ? Level.INFO : Level.DEBUG)
+            .log(
+                "Not counting the DLQ replay of {} ({}) as a failed attempt: this replica reads {}"
+                    + " only up to schema version {}, and the command's aggregate holds an event"
+                    + " stored at version {} by a newer release. The entry is left unchanged; a"
+                    + " replay on a replica that reads that version succeeds.",
+                LogSanitizer.sanitizeForLog(entry.commandId().value()),
+                entry.commandType(),
+                LogSanitizer.sanitizeForLog(behind.eventType().name()),
+                behind.readerVersion(),
+                behind.storedVersion());
+        return RetryOutcome.READER_BEHIND;
       }
       recordFailedAttempt(entry, e);
       return RetryOutcome.FAILED;
@@ -1451,6 +1524,21 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       }
     }
     return false;
+  }
+
+  /**
+   * The {@link EventSchemaAheadException} in {@code t}'s (bounded) cause chain. Called only once
+   * {@link CommandFailureClassification#isReaderBehindStoredSchema} has found one, for the event
+   * type and the two versions the log line names.
+   */
+  private static EventSchemaAheadException schemaAheadCause(Throwable t) {
+    Throwable c = t;
+    for (int depth = 0; c != null && depth < 50; depth++, c = c.getCause()) {
+      if (c instanceof EventSchemaAheadException behind) {
+        return behind;
+      }
+    }
+    throw new IllegalStateException("no EventSchemaAheadException in the cause chain", t);
   }
 
   private void recordFailedAttempt(DeadLetterQueue.DeadLetterEntry entry, Exception e) {

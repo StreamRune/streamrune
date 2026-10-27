@@ -14,13 +14,10 @@ Configure StreamRune via `application.properties`, inject the buses anywhere, an
 @Inject
 CommandBus commandBus;
 
-@Inject
-StreamRuneRequestContextHolder requestContext;
-
 @POST
 public Response placeOrder(PlaceOrderCommand cmd) {
-    var result = StreamRuneRequestFilter.callWithContext(
-        requestContext.context(), () -> commandBus.execute(cmd));
+    // Audited, authorized and recorded as the request's caller: see "Request context propagation".
+    var result = commandBus.execute(cmd);
     ...
 }
 ```
@@ -140,6 +137,36 @@ streamrune.crypto.aws.enabled=false
 streamrune.crypto.aws.data-key-cache.maximum-size=1000
 streamrune.crypto.aws.data-key-cache.expire-after-write=PT5M
 ```
+
+**More than one replica: a database-wide aggregate lock.** The produced `AggregateLocker` is the
+in-process `LocalStripedLocker`, which serializes one aggregate's commands within one replica only.
+On more than one replica produce `PgAdvisoryLocker.withDedicatedPool(...)` as the `AggregateLocker`
+bean; the integration's producer is a `@DefaultBean` and steps aside:
+
+```java
+@ApplicationScoped
+public class AggregateLockerProducer {
+
+    @Produces
+    @Singleton
+    AggregateLocker aggregateLocker(
+            @ConfigProperty(name = "quarkus.datasource.jdbc.url") String url,
+            @ConfigProperty(name = "quarkus.datasource.username") String username,
+            @ConfigProperty(name = "quarkus.datasource.password") String password) {
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+    }
+
+    void close(@Disposes AggregateLocker locker) throws Exception {
+        ((AutoCloseable) locker).close(); // the locker owns its pool
+    }
+}
+```
+
+A command holds its lock connection for its whole run and borrows a second one from the Agroal pool
+for its load and its append, so size the lock pool for the commands one replica runs at once and the
+Agroal pool for the load and the append alone; the two pools of every replica together stay below
+PostgreSQL's `max_connections` (see
+[the aggregate lock across replicas](../../docs/guide/production.md#the-aggregate-lock-across-replicas)).
 
 ### Server-Sent Events
 
@@ -376,7 +403,7 @@ which keeps the bus producer itself even in an application that injects no `Comm
 | `StreamRuneRequestFilter` | JAX-RS `@Provider` that builds the `RequestContext`: `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)); aborts with `400` for an id the request edge refuses |
 | `StreamRuneRequestIdentityValidator` | Startup observer: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |
 | `StreamRuneAuthorizationValidator` | Startup observer: refuses startup when a command bus registers `@RequireRole`/`@RequirePermission` commands without an `AnnotationAuthorizationInterceptor` in its chain |
-| `StreamRuneRequestContextHolder` | Request-scoped holder carrying the parsed `RequestContext` |
+| `StreamRuneRequestContextHolder` | Request-scoped holder carrying the parsed `RequestContext`; `ofCurrentRequest()` answers it for the request the calling thread serves, the source the command and query buses dispatch as (see [Request context propagation](#request-context-propagation)) |
 
 ## Request context propagation
 
@@ -392,9 +419,27 @@ it is never taken from the client unless you say so: it comes from the authentic
 `streamrune.security.trust-user-id-header=true`, and is otherwise absent (see
 [Request identity](#request-identity)). Only
 allowlisted OpenTelemetry baggage keys (`streamrune.metadata.baggage-allowlist`; none by
-default) reach the context, because baggage is written into every event's metadata. Bind the context explicitly around
-StreamRune calls with `StreamRuneRequestFilter.withContext(...)` / `callWithContext(...)` as shown
-above.
+default) reach the context, because baggage is written into every event's metadata.
+
+**The command bus and the query bus bind it themselves.** The produced `VirtualThreadCommandBus` is
+built with `StreamRuneRequestContextHolder::ofCurrentRequest` as its unbound-request-context source
+(`VirtualThreadCommandBus.Builder#unboundRequestContext`): it answers the holder's context while a
+CDI request context is active on the calling thread. The `QueryBus` bean is an
+`UnboundRequestContextQueryBus` (`streamrune-runtime`) over the same source. Quarkus REST
+activates a request's CDI request context on every thread it runs the request on — the event loop,
+a worker thread, a virtual thread — so a command or a query a resource method dispatches, with
+nothing bound around it, is authorized, audited and recorded as the request's caller. So are a command sent through `executeAsync` from the method and the commands of a saga
+replay it runs (`SagaDeadLetterReplayer`). A dispatch with `StreamRuneContext.CURRENT` already bound
+keeps its binding, and a dispatch with no request context active (a runner, a scheduled job, a
+thread the application starts) runs without a context.
+
+Two things stay yours. Code that reads the caller itself, outside a bus dispatch —
+`Authorization.currentUserId()` or `StreamRuneContext.capture()` in a resource method before it
+dispatches — binds the context with `StreamRuneRequestFilter.withContext(...)` /
+`callWithContext(...)`, or reads `StreamRuneRequestContextHolder.context()`. And a bus you produce
+yourself takes the same source: a `VirtualThreadCommandBus` is built with
+`.unboundRequestContext(StreamRuneRequestContextHolder::ofCurrentRequest)`, and a `QueryBus` is
+wrapped in `new UnboundRequestContextQueryBus(bus, StreamRuneRequestContextHolder::ofCurrentRequest)`.
 
 ## Lifecycle
 

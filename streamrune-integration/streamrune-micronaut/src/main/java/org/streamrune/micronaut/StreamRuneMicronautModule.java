@@ -54,6 +54,7 @@ import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.SimpleQueryBus;
 import org.streamrune.runtime.SseEventFeed;
 import org.streamrune.runtime.SseEventPublisher;
+import org.streamrune.runtime.UnboundRequestContextQueryBus;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.runtime.gdpr.ExportSubjectDataService;
 import org.streamrune.runtime.gdpr.ForgetSubjectService;

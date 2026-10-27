@@ -18,6 +18,8 @@ import org.streamrune.core.CommandInbox;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.ProjectionConfig;
 import org.streamrune.core.StreamRuneContext;
+import org.streamrune.core.audit.AuditEntry;
+import org.streamrune.core.audit.AuditOutcome;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
@@ -25,10 +27,15 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.integration.tck.ContractBeans.CommandInboxBean;
+import org.streamrune.integration.tck.ContractBeans.ContractCommand;
+import org.streamrune.integration.tck.ContractBeans.ContractCommandExecuted;
+import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
+import org.streamrune.integration.tck.ContractBeans.ContractCommandState;
 import org.streamrune.integration.tck.ContractBeans.ContractProjection;
 import org.streamrune.integration.tck.ContractBeans.ContractSagaState;
 import org.streamrune.integration.tck.ContractBeans.CryptoEngineBean;
@@ -36,6 +43,7 @@ import org.streamrune.integration.tck.ContractBeans.DeadLetterQueueBean;
 import org.streamrune.integration.tck.ContractBeans.FirstLeadership;
 import org.streamrune.integration.tck.ContractBeans.IdentifiedCallers;
 import org.streamrune.integration.tck.ContractBeans.OutboxStoreBean;
+import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
 import org.streamrune.integration.tck.ContractBeans.SecondLeadership;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 import org.streamrune.runtime.SagaRunner;
@@ -150,5 +158,42 @@ class ContractBeansTest {
     var bus = new ContractBeans.NoCommandBus();
     assertTrue(bus.supportsIdempotentExecution());
     assertThrows(UnsupportedOperationException.class, () -> bus.execute(null));
+  }
+
+  @Test
+  void theContractCommandStoresOneEventOnTheAggregateItsIdNames() {
+    var registration = new ContractCommandRegistration().get();
+    var command = new ContractCommand("order-1");
+    assertEquals(AggregateType.of(ContractCommandRegistration.TYPE), registration.aggregateType());
+    assertEquals(ContractCommand.class, registration.commandType());
+    assertEquals(AggregateId.of("order-1"), registration.idExtractor().apply(command));
+    var decider = registration.decider();
+    ContractCommandState state = decider.initialState();
+    assertEquals(List.of(new ContractCommandExecuted("order-1")), decider.decide(command, state));
+    assertEquals(state, decider.evolve(state, new ContractCommandExecuted("order-1")));
+  }
+
+  @Test
+  void theAuditStoreKeepsWhatItSavesInOrder() {
+    var store = new RecordingAuditStore();
+    var first = entry("cmd-1");
+    var second = entry("cmd-2");
+    store.save(first);
+    store.save(second);
+    assertEquals(List.of(first, second), store.entries());
+  }
+
+  private static AuditEntry entry(String commandId) {
+    return new AuditEntry(
+        CommandId.of(commandId),
+        ContractCommand.class.getSimpleName(),
+        AggregateType.of(ContractCommandRegistration.TYPE),
+        AggregateId.of("order-1"),
+        UserId.of("alice"),
+        Instant.now(),
+        AuditOutcome.SUCCESS,
+        null,
+        1,
+        CorrelationId.of("corr-1"));
   }
 }

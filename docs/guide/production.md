@@ -288,6 +288,7 @@ single source of truth — the table below tracks it):
 | `streamrune.dlq.pending` | Gauge | Current command dead-letter-queue depth (entries queued for retry/inspection), sampled by `DeadLetterRetryRunner` each poll cycle — a sustained rise means commands are failing faster than they are retried/resolved; alert alongside `dlq.exhausted`. It counts every queued entry — exhausted entries kept for inspection and entries awaiting an operator included — so alert on `dlq.awaiting_operator` for the latter |
 | `streamrune.dlq.awaiting_operator` | Gauge | Command dead-letter entries the `DeadLetterRetryRunner` will never replay on its schedule and that are not exhausted: unkeyed entries under the default `streamrune.dead-letter.unkeyed-replay=operator-only` (on a bus without a command inbox, keyed ones too), and keyed entries first received longer ago than `streamrune.inbox.retention-max-age`. Each waits for an operator to discard it or retry it with `force`, and none ever reaches `dlq.exhausted`. **Alert on it above zero.** Sampled each poll cycle; untagged; stays at zero for a `DeadLetterQueue` without `countAwaitingOperator` |
 | `streamrune.dlq.stale_replay_blocked` | Counter | Operator retries (`retry(commandId)` without `force`) the `DeadLetterRetryRunner` refused because the entry's command ran under an idempotency key and was first received longer ago than `streamrune.inbox.retention-max-age`, so the inbox might not deduplicate it. Nothing was executed. The schedule skips such entries without counting them here — they are in `dlq.awaiting_operator`. Tagged by `command.type` |
+| `streamrune.dlq.reader_behind` | Counter | Dead-letter replays that failed because the replica running them is behind the stored schema (`RetryOutcome.READER_BEHIND`: the command's aggregate holds an event a newer release stored at a `schema_version` the replica's upcaster chain does not reach), on the schedule and on an operator's `retry(commandId)`. No attempt was counted and the entry is unchanged. Expected while a rolling deployment of an event-schema change keeps the retry runner's lease on a replica of the previous release (see [Rolling out an event-schema change](#rolling-out-an-event-schema-change)); a rate that stays above zero after the rollout ended means the replica holding the lease is still behind. Tagged by `command.type` |
 | `streamrune.dlq.swept_rows` | Counter | Command dead-letter-queue rows swept by the housekeeping job |
 | `streamrune.dlq.retry.consecutive_failures` | Gauge | Consecutive poll-cycle failures of the `DeadLetterRetryRunner` — `0` when healthy, rising while the runner is in backoff (DLQ store unreachable); a nonzero value means the runner is DEGRADED but still running |
 | `streamrune.outbox.relay.consecutive_failures` | Gauge | Consecutive poll-cycle failures of the outbox relay (`OutboxPoller`) — `0` when the last cycle succeeded, rising while the relay is in backoff (store/broker unreachable); combine with the relay-liveness health check to catch a wholly dead relay thread |
@@ -321,7 +322,7 @@ single source of truth — the table below tracks it):
 | `streamrune.saga.skipped_while_faulted` | Counter | Correlated events delivered to an already-`FAULTED` saga and therefore **recorded instead of processed**. A strict subset of `saga.quarantined`, as is `saga.event_held`, so `quarantined − skipped_while_faulted − event_held` is the genuine-poison count (a NEW defect — except the event path's refusals to resume a compensation episode older than the command-inbox retention window, which go through the same poison handler and are recognizable by the entry's error type `org.streamrune.runtime.SagaStaleCompensationEpisodeException`) while this series is the **blast radius** of a fault you already know about — a rising rate means business events are piling up behind a halted saga, i.e. how urgent the pending `SagaDeadLetterReplayer.replayAll(sagaId)` is. Replayed events are not counted. Tagged by `saga.type` |
 | `streamrune.saga.event_held` | Counter | Correlated events **held** — recorded in the saga dead-letter store instead of processed — because their known saga cannot consume them yet. Tagged by `saga.type` and `hold.reason`: `GENESIS_PENDING` (the saga's start step has not committed), `BACKLOG_PENDING` (the saga already owns dead-letter entries, and later events wait behind them), `BEFORE_START` (the saga has no row but already owns a dead-letter entry). A strict subset of `saga.quarantined`; the `FAULTED` hold keeps its own series, `saga.skipped_while_faulted`. Every held event waits for a `SagaDeadLetterReplayer.replayAll(sagaId)` |
 | `streamrune.saga.replay_deferred` | Counter | Dead-letter entries a `replayAll` drain deferred behind a saga genesis that is not applied yet, without feeding them (outcome `SAGA_ROW_PENDING`). Never a `saga.replayed` sample. Tagged by `saga.type` |
-| `streamrune.saga.compensation` | Counter | Saga compensation attempts, tagged by `saga.type` and `outcome`: `COMPENSATED` and `FAILED` (terminal), `RETRY` (a transient failure — the saga stays `COMPENSATING` for a resume) and `RETRY_REFUSED` (every failed compensation command was refused admission — open circuit breaker, closing bus, interceptor veto — so nothing was attempted; the saga also stays `COMPENSATING`). A dashboard that counts only `outcome="RETRY"` misses the refused attempts |
+| `streamrune.saga.compensation` | Counter | Saga compensation attempts, tagged by `saga.type` and `outcome`: `COMPENSATED` and `FAILED` (terminal), `RETRY` (a transient failure — the saga stays `COMPENSATING` for a resume) and `RETRY_REFUSED` (every failed compensation command attempted nothing — refused admission by an open circuit breaker, a closing bus or an interceptor veto, or refused by a replica behind the stored schema of its aggregate; the saga also stays `COMPENSATING`). A dashboard that counts only `outcome="RETRY"` misses the refused attempts |
 | `streamrune.saga.compensation_retries` | Counter | Compensation episodes re-driven out of band by `SagaCompensationRetrySweeper` — a no-timeout saga whose compensation failed transiently. A sustained nonzero rate means compensations are not completing on the first attempt; alert alongside `saga.faulted`. Counts only re-drives that actually dispatched: one refused admission wholesale (open circuit breaker, closing bus, interceptor veto) is not counted — it shows as `saga.compensation{outcome="RETRY_REFUSED"}` and an INFO log line. Tagged by `saga.type` |
 | `streamrune.saga.cas_conflicts` | Counter | Optimistic-concurrency (CAS) conflicts while persisting saga state, tagged by `saga.type` |
 | `streamrune.saga.compensation_under_forward_step` | Counter | Compensation episodes opened underneath a forward saga step that executed a command — by a timeout claim the step lock does not hold back (a timeout runner on another node, or one given a lock of its own), by a delivery on another node whose own command was rejected, or by a step nested on the thread of that step. The compensation is computed from a state that does not include the step. The sample says that this happened, not in which order the step's command and the compensation were stored: a command stored before the compensation ran is what a cancel/void compensation covers, one stored after it is undone by nothing. With the forward fence on (the default), a command the step dispatched after the claim was refused, so the sample means commands stored before the episode opened — what a cancel/void compensation covers — and the line beside it is an `INFO`; `saga.forward_commands_fenced` is the signal of the race. One sample per step, beside a line that names the saga type, the saga id, the event's offset and the number of forward commands the step executed: `INFO` with the fence on, `WARNING` with it off. **Alert on any increase only for runners built with `forwardFence(false)`**, and inspect the target aggregates of that saga for an effect its compensation did not undo — see the [runbook](#operations-runbook-a-compensation-episode-opened-under-a-forward-step). Tagged by `saga.type` |
@@ -371,7 +372,7 @@ unaffected, and if a future release starts reporting the real type, traffic simp
 The command-type family follows the same rule the other way round: `commands.retried`,
 `commands.short.circuited` and `dlq.published` are registered at startup as a
 `command_type="unknown"` zero series and then carry the real `command.type` on every sample, and
-`dlq.exhausted` and `dlq.stale_replay_blocked` register each type on first use. Write queries over them as
+`dlq.exhausted`, `dlq.stale_replay_blocked` and `dlq.reader_behind` register each type on first use. Write queries over them as
 `sum(rate(streamrune_commands_retried_total[5m]))` for the total or
 `sum by (command_type) (rate(streamrune_commands_retried_total[5m]))` per type — a bare `rate(...)`
 returns one series per command type.
@@ -705,7 +706,7 @@ The saga dead-letter and inbox sweepers are auto-configured only for the framewo
 
 The command dead-letter sweeper follows the `DeadLetterQueue` bean instead. No integration creates a `DeadLetterQueue` for you — you declare the bean (typically `new PostgresDeadLetterQueue(dataSource)`) — and the framework registers a `DeadLetterRetentionSweeper` for whichever queue bean exists, so retention applies to a queue you supplied too. It does **not** depend on `streamrune.dead-letter.enabled`: that switch controls only the automatic `DeadLetterRetryRunner` (no `dead-letter-retry` relay component while it is `false`), whereas the bus dead-letters into the queue bean regardless. A deployment that turns automatic replays off and retries from an admin screen therefore still has its entries pruned after `streamrune.dead-letter.retention-max-age`; to keep them for ever, set that property to zero or negative (the sweeper logs at startup that retention is disabled), or declare your own `DeadLetterRetentionSweeper` bean, which replaces the framework's.
 
-> **Saga compensation dwell invariant:** keep `streamrune.saga.compensation-retry-give-up-after` (default 1h) strictly **below** `streamrune.inbox.retention-max-age` (default 7d). A `COMPENSATING` episode that dwells past the inbox window loses its succeeded-compensation dedup keys to the sweeper, so a later resume re-executes an already-succeeded compensation (double refund / double stock release). With `streamrune.saga.compensation-retry-enabled=true` (the default — the setting this bound belongs to) the auto-configs validate this at startup and log a loud `WARNING` (with the exact values) if it is violated. Both dwell bounds (the sweeper's give-up horizon and `SagaTimeoutRunner.maxCompensatingDwell`) are measured from the episode's durable claim instant (`episode_claimed_at`, fault-cycle-immutable), never the refreshable `updated_at`, so a fault→replay cycle cannot reset the clock and re-open the dwell window. If you disable the compensation-retry sweeper but keep a `SagaTimeoutRunner`, set that runner's `maxCompensatingDwell` below the inbox window so the timeout path still caps dwell. A re-drive refused admission wholesale (open circuit breaker, closing bus, interceptor veto) is not counted as an attempt, so the give-up horizon never fires on it: a saga whose re-drives keep being refused stays `COMPENSATING` until one is admitted or the key-age guard below faults it.
+> **Saga compensation dwell invariant:** keep `streamrune.saga.compensation-retry-give-up-after` (default 1h) strictly **below** `streamrune.inbox.retention-max-age` (default 7d). A `COMPENSATING` episode that dwells past the inbox window loses its succeeded-compensation dedup keys to the sweeper, so a later resume re-executes an already-succeeded compensation (double refund / double stock release). With `streamrune.saga.compensation-retry-enabled=true` (the default — the setting this bound belongs to) the auto-configs validate this at startup and log a loud `WARNING` (with the exact values) if it is violated. Both dwell bounds (the sweeper's give-up horizon and `SagaTimeoutRunner.maxCompensatingDwell`) are measured from the episode's durable claim instant (`episode_claimed_at`, fault-cycle-immutable), never the refreshable `updated_at`, so a fault→replay cycle cannot reset the clock and re-open the dwell window. If you disable the compensation-retry sweeper but keep a `SagaTimeoutRunner`, set that runner's `maxCompensatingDwell` below the inbox window so the timeout path still caps dwell. A re-drive whose every failed command attempted nothing — refused admission (open circuit breaker, closing bus, interceptor veto), or refused by a replica behind the stored schema of the command's aggregate — is not counted as an attempt, so the give-up horizon never fires on it: a saga whose re-drives keep being refused stays `COMPENSATING` until one is admitted or the key-age guard below faults it; a deployment that wants a shorter bound caps the dwell with `SagaTimeoutRunner.maxCompensatingDwell`.
 >
 > **Runtime key-age guard:** the boot-time validation above only `WARN`s, and no in-process bound helps across a *deployment-wide outage* longer than the inbox window. The automatic re-drive paths therefore carry the same key-age guard as `SagaDeadLetterReplayer`'s `STALE_COMPENSATION_BLOCKED`, on the same `episode_claimed_at` anchor: the auto-wired sweeper FAULTs (without dispatching) any `COMPENSATING` episode older than `streamrune.inbox.retention-max-age` instead of re-driving it — even on its guaranteed first post-restart attempt — and a `SagaTimeoutRunner` does the same *before* its resume dispatch when its `Builder.inboxRetentionMaxAge` is set (application-declared runners: wire your deployment's inbox window there yourself, alongside `maxCompensatingDwell`). Such a FAULT means "this episode's dedup keys are unprovably fresh": reconcile which compensations actually executed before any forced resume. The event-path resume (a correlated or start event redelivered to a `COMPENSATING` saga) carries the same guard, armed on every `SagaRunner` bean by the integrations from the same property: it quarantines the event and FAULTs the saga instead of dispatching. A forced dead-letter replay is the one path that passes it — see `STALE_COMPENSATION_BLOCKED` under [Replay](#replay). A **zero/negative** `streamrune.inbox.retention-max-age` (inbox pruning disabled — keys never swept, never stale) normalizes to guard-inert in *every* consumer of the knob — sweeper, timeout runner, `SagaDeadLetterReplayer`, and the boot validator alike — so wire the raw deployment value everywhere without special-casing the disabled-pruning configuration.
 
@@ -847,6 +848,74 @@ Running more than one instance of the same application is fully supported, and t
 > reads, projections, and *per-aggregate* command concurrency — but **not** the global append rate.
 > Plan write capacity against the single write lane below before sizing a write-heavy cluster.
 
+### The aggregate lock across replicas
+
+The three integrations wire `LocalStripedLocker` as the `AggregateLocker`: a lock in the memory of
+one process, which serializes the commands of one aggregate on one replica and nothing across
+replicas. Two replicas that run a command on the same aggregate at once both load it, and the second
+append fails its version check (`OptimisticLockException`): the bus reloads and decides again, up to
+its retry policy, and then fails and dead-letters the command; and the after-phase of the two
+commands (an `INLINE` projection) is not held in commit order. On more than one replica, declare
+`PgAdvisoryLocker.withDedicatedPool(jdbcUrl, username, password, maxPoolSize)` as the
+`AggregateLocker` bean: a PostgreSQL transaction-scoped advisory lock per stream, held on a
+connection of the locker's own pool for the whole command. The integration's default steps aside for
+an application's bean:
+
+```java
+// Spring: the auto-configured locker is @ConditionalOnMissingBean(AggregateLocker.class).
+@Bean(destroyMethod = "close") // the locker owns its pool
+AggregateLocker aggregateLocker(
+        @Value("${spring.datasource.url}") String url,
+        @Value("${spring.datasource.username}") String username,
+        @Value("${spring.datasource.password}") String password) {
+    return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+}
+```
+
+```java
+// Quarkus: the produced locker is a @DefaultBean.
+@ApplicationScoped
+public class AggregateLockerProducer {
+
+    @Produces
+    @Singleton
+    AggregateLocker aggregateLocker(
+            @ConfigProperty(name = "quarkus.datasource.jdbc.url") String url,
+            @ConfigProperty(name = "quarkus.datasource.username") String username,
+            @ConfigProperty(name = "quarkus.datasource.password") String password) {
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+    }
+
+    void close(@Disposes AggregateLocker locker) throws Exception {
+        ((AutoCloseable) locker).close(); // the locker owns its pool
+    }
+}
+```
+
+```java
+// Micronaut: the module's locker is @Requires(missingBeans = AggregateLocker.class).
+@Factory
+class AggregateLockerFactory {
+
+    @Singleton
+    @Bean(preDestroy = "close") // the locker owns its pool
+    PgAdvisoryLocker aggregateLocker(
+            @Value("${datasources.default.url}") String url,
+            @Value("${datasources.default.username}") String username,
+            @Value("${datasources.default.password}") String password) {
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+    }
+}
+```
+
+**The connection budget.** A command holds its lock connection for its whole run and borrows a
+second connection from the application's pool for its load and its append, so size the lock pool for
+the commands one replica runs at once, and the application's pool for the load and the append alone;
+the two pools of every replica together stay below PostgreSQL's `max_connections`. A command whose
+`INLINE` projection dispatches a command on another aggregate holds a second lock connection (see
+[the dedicated lock pool](#postgresql-setup) above). `streamrune.lock-timeout` bounds the wait for a
+lock with either locker.
+
 ### Rolling out an event-schema change
 
 A replica reads only what its own code understands, and three rules decide what that is:
@@ -875,13 +944,44 @@ replica still on the previous release is behind. What those replicas do in the w
 
 | What the old replica does | Schema-version bump (`EventSchemaAheadException`) | New event type (`UnknownEventTypeException`) | Shape change without a bump |
 |---|---|---|---|
-| A command that loads an aggregate carrying a newer event | fails, is dead-lettered, does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker | an added or renamed field fails with `EventDeserializationException`, is dead-lettered and does not count toward the breaker; a removed field binds as `null` and the command decides on it with no failure |
+| A command that loads an aggregate carrying a newer event, other than a saga's | fails, is dead-lettered (the caller gets `CommandDeadLetteredException`), does **not** count toward the circuit breaker | fails, is dead-lettered, does not count toward the breaker | an added or renamed field fails with `EventDeserializationException`, is dead-lettered and does not count toward the breaker; a removed field binds as `null` and the command decides on it with no failure |
+| A saga's forward command that loads such an aggregate (a saga's commands are never dead-lettered) | fails and compensates nothing: the saga is left as it is, the event is delivered again, and the step completes on an upgraded replica | fails, and the saga **compensates**: a type the reader does not register is not retry-later | an added or renamed field fails with `EventDeserializationException` and the saga **compensates**; a removed field binds as `null` and the command decides on it with no failure |
 | A projection or subscription it leads | stops at the first newer event and retries it (lag, no quarantine) until the replica is upgraded; its lease then passes to an upgraded replica | halts after the read-poison bound (5 consecutive failures by default) with health `DOWN`, until the replica is upgraded | halts after the read-poison bound with health `DOWN` (an added or renamed field, `EventDeserializationException`); a removed field reads as `null` with no failure at all |
 | Every other command | runs normally | runs normally | runs normally |
 
-Dead-lettered commands replay once their entry is retried on an upgraded replica: the retry runner
-is leased, so its automatic attempts run where the lease is, and an entry that exhausted its
-attempts during a long rollout is retried by the operator (`retry(commandId)`) afterwards.
+A dead-lettered command replays once its entry is retried on an upgraded replica. The retry runner
+is leased, so its automatic attempts run where the lease is, and the lease moves only when its
+holder stops or fails to renew it: until then a replay may run on a replica still behind. Such a
+replay fails with the same refusal and counts no attempt (`RetryOutcome.READER_BEHIND`): the entry
+is left unchanged and replayed again on the next poll. A poll states its replays that answered so
+in one INFO line (DEBUG names each entry with the event type and both versions), and
+`streamrune.dlq.reader_behind` counts them by command type: a rate that stays above zero after the
+rollout ended means the replica that holds the runner's lease is still behind. A long rollout therefore neither exhausts the entry (five attempts span about 31
+minutes with the integrations' defaults, about 15 under `DeadLetterRetryPolicy.DEFAULT`) nor,
+under `discardAfterMaxRetries`, discards the command. Such a replay takes no slot of the poll's
+batch either: an entry left unchanged stays due and keeps the head of the queue's
+least-recently-active order on every poll, and the poll goes on to the entries behind it in the page
+it read (ten batches), which are replayed in the same poll. Only more entries behind the stored
+schema than a page holds keep the entries queued after them waiting until the rollout ends; nothing
+is lost. The runner replays a keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
+operator's `retry(commandId)` on a replica still behind answers `READER_BEHIND` and changes
+nothing.
+
+A command a saga dispatches is never dead-lettered: the saga subsystem owns its recovery. Its
+forward command that meets the refusal is retry-later, so the saga runner leaves the saga exactly
+as it was, claims no compensation and lets the failure propagate; the subscription delivers the
+event again, and the step completes once a replica that reads the newer event delivers it (the
+same replica after its upgrade, or the replica that takes over the saga's lease), with the commands
+that had already run answered from the command inbox. A saga whose `timeout()` elapses meanwhile is
+compensated by its `SagaTimeoutRunner`, on the deadline the saga sets. A compensation command an old
+replica refuses this way attempted nothing either: the episode stays `COMPENSATING`, and the
+compensation retry sweeper does not count the re-drive. Its give-up horizon
+(`streamrune.saga.compensation-retry-give-up-after`, `1h` by default) is the episode's age since
+its claim (`episode_claimed_at`), applied only to a saga the sweeper re-drove in the cycle before,
+so it does not fault the saga during the rollout, and the first re-drive on a replica that reads
+the event completes the compensation. The key-age bound (`streamrune.inbox.retention-max-age`, `7d`
+by default, from the same claim) still faults an episode that outlasts it; `resumeFaulted` resumes
+it once the replicas read the event.
 
 Choose the procedure by the kind of change:
 
@@ -928,7 +1028,9 @@ Choose the procedure by the kind of change:
 2. **A new event type: readers first.** Release A registers the type (its class in the
    `EventTypeRegistry`, and whatever the projections and sagas do with it) and emits it nowhere;
    roll A out completely. Release B emits it. A replica that has not registered the type halts its
-   projections on the first such event, so no writer may emit it while such a replica runs.
+   projections on the first such event, so no writer may emit it while such a replica runs. The
+   same order protects sagas: on such a replica a saga's forward command that loads an aggregate
+   carrying the type fails with a failure that is not retry-later, and the saga compensates.
 3. **The aggregate's state class changes shape: bump `snapshotVersion`.** A snapshot is bound
    strictly too, but a field the state class gained binds as `null` from a snapshot the previous
    release wrote, and that snapshot then stands in for the events it covers. Raise the
@@ -936,11 +1038,38 @@ Choose the procedure by the kind of change:
    2)`; the integrations' default policy is version 1, so declare a `SnapshotPolicy` bean): each
    release then discards the other's snapshots and replays the events, or migrates them through a
    `SnapshotMigration`. See [snapshot versioning](advanced/snapshot-versioning.md).
+
+   **3b. A saga's state class changes shape: stop and switch (procedure 5).** A `saga_state` row
+   carries no schema version, and the saga store binds it strictly to the state class of the
+   release that reads it. A row written with a field the reading class does not declare fails the
+   read with `SagaStateSerializationException`, which is deterministic, not retry-later: the saga
+   runner quarantines the event that met the row (a saga dead-letter entry, and the saga is
+   shielded) instead of pausing, and does so for every later event of that saga as well. So a
+   release that adds, removes or renames a field of an `S extends SagaState`:
+   - is deployed by stopping the previous release first (procedure 5), never replica by replica.
+     With a saga lease, a lease that passes to a replica of the previous release while the new
+     release runs — its holder stops, or its TTL runs out — quarantines every saga the new release
+     wrote; without one, every replica of the previous release delivers every event and quarantines
+     each such saga, and the shield it sets holds that saga's later events on the upgraded replicas
+     too;
+   - cannot be rolled back while rows of the new shape exist: a replica of the previous release
+     quarantines each saga it meets with such a row. After a rollback, or a window that took one
+     of the routes above, re-deploy the new release and drain each quarantined saga with
+     `replayAll(sagaId)` (see [Replaying quarantined events](advanced/saga.md#replaying-quarantined-events)).
+
+   The new release reads the rows the previous one wrote: an added field binds as `null` (or the
+   primitive default), so give it a default where `null` is not a valid value. A removed or renamed
+   field fails that read in the same way, so the new class keeps accepting the old property — a
+   class-level `@JsonIgnoreProperties({"oldName"})` for a removed field, `@JsonAlias("oldName")` on
+   a renamed one — for as long as rows of the old shape exist.
 4. **Roll out replica by replica.** For a schema-version bump nothing is quarantined: the old
    replicas fail the commands that load an aggregate with a newer event and lag on the projections
    they lead, the circuit breaker stays closed, and the dead-lettered commands replay on the
-   upgraded replicas. Keep the window short, and send traffic to the upgraded replicas first where
-   the load balancer allows it. A new event type is the exception: use procedure 2.
+   upgraded replicas, their replays on a replica still behind counting no attempt. A saga's
+   forward command is not dead-lettered: its saga is left as it is and its event delivered again
+   until an upgraded replica completes the step. Keep the window short, and send traffic to the
+   upgraded replicas first where the load balancer allows it. Two kinds of change are the
+   exception: a new event type (procedure 2) and a change to a saga's state class (procedure 3b).
 5. **Stop and switch.** Stop every replica of the previous release, then start the new release
    (a blue/green cutover that stops the old fleet before the new one serves writes, or a scale to
    zero). No replica is ever behind.
@@ -1260,6 +1389,7 @@ targets — this guide publishes no numbers for you:
 - **Client-supplied aggregate ids:** build them with `AggregateId.of` in every id extractor. It refuses an id longer than 255 characters or one containing a control character (C0, DEL, C1) with `IllegalArgumentException` before any interceptor runs, so the id never reaches the `aggregate_id` columns beside the registered `aggregate_type` (`event_stream`, `audit_log`, `dead_letter_queue`); map that exception to `400`. The 255 matches the `VARCHAR(255)` `aggregate_id` columns, so a longer id is a client error rather than a failed SQL insert. It is counted in UTF-16 code units (`String.length()`), so a character outside the Basic Multilingual Plane, such as an emoji, counts as two; every id `of` accepts fits the columns. A stream id built from an id longer than 255 characters is refused too, before any interceptor runs. If your extractor adds a prefix to the client's value, bound the client's value at its own ingress so the result stays within 255; two aggregate types that share an id value need no prefix. Bind request fields as `String`, not as `AggregateId`, because Jackson builds the record through its lenient decode constructor. Use that constructor yourself only for ids derived from stored data, such as a saga's state — see [Getting started](getting-started.md).
 - **Authorization identity:** `RequestContext.userId` — the identity every `CommandAuthorizationPolicy` / `@RequireRole` / `Authorization.requireOwner` check trusts and the audit records — fails closed. With an `AuthenticatedUserResolver` (Spring Security on the classpath, Quarkus Security, Micronaut Security enabled, or your own bean) it is the **authenticated principal** and the `X-User-Id` header is ignored; with `streamrune.security.trust-user-id-header=true` it is the `X-User-Id` header (trusted-gateway mode); with neither, every request is **anonymous** and the header is ignored. Startup is refused when a command bus runs an authorization interceptor that reads that identity (the one registered for a `CommandAuthorizationPolicy` or `UserRoleResolver` bean, or one you hand to a bus you build yourself) in the anonymous mode, and the mode is logged once at startup — check that line before going live. Set the flag **only** when a gateway authenticates every caller, overwrites `X-User-Id` with the authenticated id and strips any client-supplied value, and the service is reachable only through it; otherwise any client can act as any user. The `X-User-Role` header is read in that mode only — it becomes baggage `role`, recorded in every event's metadata — so the gateway must own it too (forward the caller's role or strip it); in the other modes it is ignored and there is no `role`. This is the behaviour of all three integrations (Quarkus checks the startup rule in a Quarkus REST application, Micronaut in every application that has not replaced `StreamRuneContextFilter`). See [Authorization](advanced/authorization.md#where-the-identity-comes-from-security).
 - **Micronaut: the caller on every route thread.** `StreamRuneContextFilter` binds `StreamRuneContext.CURRENT` on its own thread, and Micronaut does not always run the route there: with the default `micronaut.server.netty.server-type: streamed` a route whose body arrives after the request head (a slow or chunked client, a large body) runs on a Netty event loop, and a controller annotated `@ExecuteOn(...)` runs on that executor under either server type. The module's command bus and query bus bind the context the filter stored on the request for a dispatch that starts with `CURRENT` unbound, and a saga replay (`SagaDeadLetterReplayer`) run from such a route takes its operator from the same place, so authorization, the command and query audit and the events' metadata name the request's caller on every thread a route runs on, and a dispatch with no request current stays anonymous; no setting is needed and no warning is logged. A task Micronaut propagates the request to (`@ExecuteOn`, `@Async`, a Micronaut executor) dispatches as that request's caller too, also after the response was sent. Two things stay yours: code that reads the caller outside a bus dispatch (in a controller, before it dispatches) reads `StreamRuneContextHelper.get()`, not `CURRENT`; and a `VirtualThreadCommandBus` or `QueryBus` you define yourself is built with `.unboundRequestContext(StreamRuneContextHelper::get)` and wrapped in `UnboundRequestContextQueryBus`. A plain controller that blocks should declare `@ExecuteOn(TaskExecutors.BLOCKING)` (or run under `server-type: full_content`), so it does not block the event loop. See the [Micronaut README](../../streamrune-integration/streamrune-micronaut/README.md#context-propagation).
+- **Quarkus: the caller in every resource method.** A JAX-RS filter cannot wrap the resource method, so `StreamRuneRequestFilter` binds nothing: it stores the request's context in the request-scoped `StreamRuneRequestContextHolder`, and `StreamRuneContext.CURRENT` is unbound while the method runs. The produced command bus and query bus take the holder's context (`StreamRuneRequestContextHolder.ofCurrentRequest()`) for a dispatch that starts with `CURRENT` unbound while a CDI request context is active on the thread, which Quarkus REST keeps on every thread it runs a request on (the event loop, a worker thread, a virtual thread), and a saga replay (`SagaDeadLetterReplayer`) run from a resource method takes its operator from the same place: authorization, the command and query audit and the events' metadata name the request's caller with nothing bound in the method, and a dispatch with no request context active stays anonymous; no setting is needed and no warning is logged. Two things stay yours: code that reads the caller outside a bus dispatch (in a resource method, before it dispatches) binds it with `StreamRuneRequestFilter.withContext(...)` or reads `StreamRuneRequestContextHolder.context()`; and a bus you produce yourself takes the same source: a `VirtualThreadCommandBus` is built with `.unboundRequestContext(StreamRuneRequestContextHolder::ofCurrentRequest)`, and a `QueryBus` is wrapped in an `UnboundRequestContextQueryBus` over it. See the [Quarkus README](../../streamrune-integration/streamrune-quarkus/README.md#request-context-propagation).
 - **Tracing headers are caller-supplied:** `X-Correlation-Id`, `X-Trace-Id` and the allow-listed W3C `baggage` entries are the caller's own values in every identity mode, the trusted-gateway mode included: the gateway contract covers `X-User-Id` and `X-User-Role` and nothing else. Never address, authorize or deduplicate anything by them. The request filters answer `400 Bad Request` to an id longer than 255 characters, an id that holds a control character, and a correlation id that starts with the reserved `streamrune:` prefix; every other correlation id is stored exactly as sent (of a repeated header, the first value). See [What a client controls in event metadata](#what-a-client-controls-in-event-metadata).
 - **Server-Sent Events (`GET /api/sse/{aggregateType}/{aggregateId}`):** disabled by default. It streams an aggregate's **decrypted** domain events by its two-part stream id, so enabling it (`streamrune.sse.enabled=true`) without access control exposes any tenant's events (IDOR/PII). When enabled, provide an `SseAuthorizer` bean that checks the caller against the requested `StreamId`; if you enable SSE without one the framework installs a fail-closed deny-all authorizer (every stream returns `403`). The authorizer receives the caller as the request context of the request, `isAuthorized(StreamRuneContext.RequestContext caller, StreamId streamId)`: `caller.userId()` is the authenticated principal (`null` when the request is unauthenticated) and `caller.authority()` holds the roles and permissions your `UserRoleResolver` resolved for that user at the request edge, so an owner-or-role rule needs nothing else. `caller.authority()` is `null` when nothing was captured (an unauthenticated caller, no `UserRoleResolver`, a resolver that does not declare `requiresRequestContext()`, or a resolver that threw at the request edge) — `null` means the roles are unknown, never "no roles": a rule that reads a role refuses on `null` first, whether the role would admit or refuse, or asks a resolver that is a function of the user id itself (a resolver that threw at the request edge throws again, and the request ends without a stream). Decide by `caller.userId()` and `caller.authority()` only: in `caller.baggage()` the `role` entry is the forwarded `X-User-Role` header in trusted-gateway mode and absent in every other mode, and every other entry is the client's own W3C `baggage` header in every identity mode, so it must not carry an access decision. The endpoint hands the request context over only when it carries the caller the `RequestIdentityPolicy` resolves: a request that reaches the endpoint without one (the integration's request filter replaced, or registered for other paths) or with one that names another user is answered `403`, the authorizer is not called, and a `WARN` line says which. **Authorization is decided once, when the stream opens.** A caller whose access ends afterwards (a role removed, a token expired, an order reassigned) keeps receiving decrypted events until the stream ends, so `streamrune.sse.timeout` (default `5m`) is also the re-authorization bound: the stream is completed after it and the reconnecting client is authorized again. Keep it finite wherever access can change — with `streamrune.sse.timeout=0` a revoked caller reads for as long as the connection lives.
   - **What it emits.** One frame per domain event of the requested stream: `id` is the event's global offset, `data` is the decrypted event as JSON (written by the application's JSON serializer, so on Micronaut the event types must be serializable by Micronaut Serialization and on Quarkus a JSON body writer such as `quarkus-rest-jackson` must be present). A stream opens with one comment frame (`: keepalive`), written as soon as the client is subscribed and whatever the keepalive interval, so the response is committed then and not with the first event; the same comment is written every `streamrune.sse.keep-alive-interval`. A client that has read the opening frame receives every event of the stream stored from then on, while it stays connected. On Spring and Micronaut the status line and the headers arrive with that frame, so an `EventSource`'s `onopen` says the same; Quarkus REST sends them just before it subscribes the client, so on Quarkus the frame, not the response head, is the signal.

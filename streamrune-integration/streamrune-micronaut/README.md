@@ -60,6 +60,32 @@ streamrune:
 The event store borrows its connections from your `DataSource` bean as given and builds no pool of
 its own; size the datasource pool for everything StreamRune runs.
 
+**More than one replica: a database-wide aggregate lock.** The module's `AggregateLocker` is the
+in-process `LocalStripedLocker`, which serializes one aggregate's commands within one replica only.
+On more than one replica declare `PgAdvisoryLocker.withDedicatedPool(...)` as the `AggregateLocker`
+bean; the module's locker is `@Requires(missingBeans = AggregateLocker.class)` and steps aside:
+
+```java
+@Factory
+class AggregateLockerFactory {
+
+    @Singleton
+    @Bean(preDestroy = "close") // the locker owns its pool
+    PgAdvisoryLocker aggregateLocker(
+            @Value("${datasources.default.url}") String url,
+            @Value("${datasources.default.username}") String username,
+            @Value("${datasources.default.password}") String password) {
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+    }
+}
+```
+
+A command holds its lock connection for its whole run and borrows a second one from the
+datasource pool for its load and its append, so size the lock pool for the commands one replica runs
+at once and the datasource pool for the load and the append alone; the two pools of every replica
+together stay below PostgreSQL's `max_connections` (see
+[the aggregate lock across replicas](../../docs/guide/production.md#the-aggregate-lock-across-replicas)).
+
 `streamrune.security.trust-user-id-header` (default `false`) selects where the request identity
 comes from — see [Request identity](#request-identity).
 
@@ -73,7 +99,7 @@ comes from — see [Request identity](#request-identity).
 | `StreamRuneRequestIdentityValidator` | Startup listener: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |
 | `StreamRuneAuthorizationValidator` | Startup listener: refuses startup when a command bus registers `@RequireRole`/`@RequirePermission` commands without an `AnnotationAuthorizationInterceptor` in its chain |
 | `StreamRuneContextHelper` | The request context of the request the calling thread serves, where `StreamRuneContext.CURRENT` is not bound: the context the filter stored on the current request, and otherwise a ThreadLocal mirror kept in sync by Micronaut's `PropagatedContext` (see [Context Propagation](#context-propagation)) |
-| `UnboundRequestContextQueryBus` | The `QueryBus` bean's outer layer: a query dispatched where `StreamRuneContext.CURRENT` is not bound runs under the request's context (see [Context Propagation](#context-propagation)) |
+| `UnboundRequestContextQueryBus` (`streamrune-runtime`) | The `QueryBus` bean's outer layer: a query dispatched where `StreamRuneContext.CURRENT` is not bound runs under the request's context (see [Context Propagation](#context-propagation)) |
 | `StreamRuneLifecycle` | Starts `MultiProjectionRunner`, `ScheduledProjectionRunner`, `OutboxPoller`, the outbox, inbox, saga dead-letter and command dead-letter retention sweepers, and `DeadLetterRetryRunner` on context startup and closes them on shutdown |
 | `SseEventFeedLifecycle` | With `streamrune.sse.enabled=true`: starts the `SseEventFeed` that publishes stored events to the SSE endpoint on `StartupEvent` and stops it when the context closes; independent of `streamrune.runner-lifecycle-enabled` |
 

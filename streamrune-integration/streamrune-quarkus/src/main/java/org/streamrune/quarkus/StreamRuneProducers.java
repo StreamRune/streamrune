@@ -62,6 +62,7 @@ import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.OutboxRetentionSweeper;
 import org.streamrune.runtime.SimpleQueryBus;
 import org.streamrune.runtime.SseEventPublisher;
+import org.streamrune.runtime.UnboundRequestContextQueryBus;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.runtime.gdpr.ExportSubjectDataService;
 import org.streamrune.runtime.gdpr.ForgetSubjectService;
@@ -1038,8 +1039,17 @@ public class StreamRuneProducers {
   /**
    * Produces the primary {@link QueryBus} composing the full chain: SimpleQueryBus →
    * CachingQueryBus (if {@code streamrune.query-cache.enabled=true}) → AuditingQueryBus (if an
-   * AuditStore bean is available). Always yields a working bus — when caching is disabled the
-   * {@link CachingQueryBus} bean simply does not exist and the simple bus is used directly.
+   * AuditStore bean is available), inside an {@link UnboundRequestContextQueryBus} over {@link
+   * StreamRuneRequestContextHolder#ofCurrentRequest()}. Always yields a working bus — when caching
+   * is disabled the {@link CachingQueryBus} bean simply does not exist and the simple bus is used
+   * directly.
+   *
+   * <p><b>The request's caller in every resource method.</b> A JAX-RS filter cannot wrap the
+   * resource method, so {@link StreamRuneRequestFilter} stores the request's context in the
+   * request-scoped {@link StreamRuneRequestContextHolder} and leaves {@link
+   * org.streamrune.core.StreamRuneContext#CURRENT} unbound while the method runs. A query
+   * dispatched there runs under the holder's context, so the audit row and the handler see the
+   * request's caller; a query with no request current is dispatched without a context.
    */
   @Produces
   @Singleton
@@ -1055,7 +1065,7 @@ public class StreamRuneProducers {
         bus = new AuditingQueryBus(bus, store);
       }
     }
-    return bus;
+    return new UnboundRequestContextQueryBus(bus, StreamRuneRequestContextHolder::ofCurrentRequest);
   }
 
   /**
@@ -1088,6 +1098,18 @@ public class StreamRuneProducers {
    * is wired in too, so command-bus meters
    * (dispatched/succeeded/failed/duration/retries/DLQ-published) are recorded instead of NOOPed.
    * Both default to today's behavior (no DLQ / NOOP metrics) when absent.
+   *
+   * <p><b>The request's caller in every resource method.</b> The bus is built with {@link
+   * StreamRuneRequestContextHolder#ofCurrentRequest()} as its {@link
+   * VirtualThreadCommandBus.Builder#unboundRequestContext unbound-request-context source}. A JAX-RS
+   * filter cannot wrap the resource method, so {@link StreamRuneRequestFilter} stores the request's
+   * context in the request-scoped {@link StreamRuneRequestContextHolder} and {@link
+   * org.streamrune.core.StreamRuneContext#CURRENT} is unbound while the method runs: a command the
+   * method dispatches is authorized, audited and recorded as the request's caller, and so are a
+   * command sent through {@code executeAsync} and the commands of a saga replay run from it. A
+   * dispatch with {@code CURRENT} bound (a {@link StreamRuneRequestFilter#withContext} block, a
+   * saga, a replay) keeps its binding, and a dispatch with no request current runs without a
+   * context.
    *
    * <p><b>Snapshot policy:</b> the default is {@code
    * SnapshotPolicy.everyNEvents(streamrune.snapshot-every-n-events)} at snapshot schema version 1.
@@ -1161,7 +1183,8 @@ public class StreamRuneProducers {
             .lockTimeout(properties.lockTimeout())
             .stripeCount(properties.stripeCount())
             .maxInFlightAsyncCommands(properties.maxInFlightAsyncCommands())
-            .interceptors(interceptors);
+            .interceptors(interceptors)
+            .unboundRequestContext(StreamRuneRequestContextHolder::ofCurrentRequest);
 
     // Wire the optional StreamRuneMetrics bean so command-bus meters are recorded (NOOP if absent),
     // mirroring Spring (StreamRuneAutoConfiguration) and the query bus on this framework.

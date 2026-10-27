@@ -16,6 +16,7 @@ import org.streamrune.runtime.AuditingQueryBus;
 import org.streamrune.runtime.CacheInvalidator;
 import org.streamrune.runtime.CachingQueryBus;
 import org.streamrune.runtime.SimpleQueryBus;
+import org.streamrune.runtime.UnboundRequestContextQueryBus;
 
 /**
  * Tests for the query cache producer chain in Quarkus.
@@ -184,7 +185,16 @@ class QuarkusQueryCacheProducerTest {
     Instance<AuditStore> noAudit = unsatisfied();
 
     QueryBus result = producers.queryBus(simpleBus, noCaching, noAudit);
-    assertSame(simpleBus, result);
+    assertSame(simpleBus, unwrapped(result));
+  }
+
+  /**
+   * The chain inside the produced bus: the producer wraps it in an {@link
+   * UnboundRequestContextQueryBus}, so a query dispatched in a resource method runs as the
+   * request's caller.
+   */
+  private static QueryBus unwrapped(QueryBus produced) {
+    return assertInstanceOf(UnboundRequestContextQueryBus.class, produced).delegate();
   }
 
   @Test
@@ -195,7 +205,7 @@ class QuarkusQueryCacheProducerTest {
     Instance<AuditStore> auditStoreInstance = satisfied(store);
 
     QueryBus result = producers.queryBus(simpleBus, noCaching, auditStoreInstance);
-    assertInstanceOf(AuditingQueryBus.class, result);
+    assertInstanceOf(AuditingQueryBus.class, unwrapped(result));
   }
 
   @Test
@@ -205,7 +215,7 @@ class QuarkusQueryCacheProducerTest {
     Instance<AuditStore> nullAudit = satisfied(null);
 
     QueryBus result = producers.queryBus(simpleBus, noCaching, nullAudit);
-    assertSame(simpleBus, result);
+    assertSame(simpleBus, unwrapped(result));
   }
 
   @Test
@@ -217,7 +227,7 @@ class QuarkusQueryCacheProducerTest {
     Instance<AuditStore> auditStoreInstance = satisfied(store);
 
     QueryBus result = producers.queryBus(simpleBus, cachingInstance, auditStoreInstance);
-    assertInstanceOf(AuditingQueryBus.class, result);
+    assertInstanceOf(AuditingQueryBus.class, unwrapped(result));
   }
 
   @Test
@@ -228,6 +238,6 @@ class QuarkusQueryCacheProducerTest {
     Instance<AuditStore> noAudit = unsatisfied();
 
     QueryBus result = producers.queryBus(simpleBus, cachingInstance, noAudit);
-    assertSame(cachingBus, result);
+    assertSame(cachingBus, unwrapped(result));
   }
 }

@@ -60,6 +60,7 @@ import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.ProjectionState;
 import org.streamrune.runtime.SagaDeadLetterRetentionSweeper;
 import org.streamrune.runtime.SimpleQueryBus;
+import org.streamrune.runtime.UnboundRequestContextQueryBus;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryProjectionRepository;

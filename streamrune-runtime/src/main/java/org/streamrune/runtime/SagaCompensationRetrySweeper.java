@@ -63,14 +63,15 @@ import org.streamrune.core.types.SagaType;
  * compensation failure or a throwing {@code compensate()} is bounded even sooner — the former
  * terminalizes {@code FAILED} on the first re-drive, the latter {@code FAULTED}.
  *
- * <p><b>A refused re-drive is not bounded by {@code giveUpAfter}.</b> A re-drive whose every
- * compensation command is refused admission ({@code COMPENSATING_REFUSED}: an open circuit breaker,
- * a closing bus, an interceptor veto) dispatched nothing, so it is not an attempt and the give-up
- * horizon never fires for it. A saga refused on every cycle — a policy veto, a breaker that never
- * closes — stays {@code COMPENSATING} indefinitely unless {@link Builder#inboxRetentionMaxAge} is
- * set (the key-age guard below then faults it once the episode outlives the inbox window) or a
- * {@link SagaTimeoutRunner} for the saga type has {@code maxCompensatingDwell} set (a time-based
- * bound that also applies to a refused resume).
+ * <p><b>A refused re-drive is not bounded by {@code giveUpAfter}.</b> A re-drive whose every failed
+ * compensation command attempted nothing ({@code COMPENSATING_REFUSED}: refused admission by an
+ * open circuit breaker, a closing bus or an interceptor veto, or refused by the event store because
+ * this replica is behind the stored schema of the command's aggregate) is not an attempt, and the
+ * give-up horizon never fires for it. A saga refused on every cycle — a policy veto, a breaker that
+ * never closes, a replica that stays behind — stays {@code COMPENSATING} indefinitely unless {@link
+ * Builder#inboxRetentionMaxAge} is set (the key-age guard below then faults it once the episode
+ * outlives the inbox window) or a {@link SagaTimeoutRunner} for the saga type has {@code
+ * maxCompensatingDwell} set (a time-based bound that also applies to a refused resume).
  *
  * <p><b>Key-age guard.</b> The give-up horizon bounds dwell only while this sweeper actually runs.
  * An episode that dwelled past the <em>command-inbox retention window</em> anyway — a
@@ -654,11 +655,13 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
             LogSanitizer.sanitizeForLog(cs.sagaId().value()));
       }
       case COMPENSATING_REFUSED -> {
-        // Every compensation command was REFUSED ADMISSION (open breaker, closing bus,
-        // interceptor veto) — nothing was attempted, so this is NOT recorded as a re-drive:
+        // Every failed compensation command attempted nothing — REFUSED ADMISSION (open breaker,
+        // closing bus, interceptor veto), or refused by this replica being behind the stored
+        // schema (the store refused the load) — so this is NOT recorded as a re-drive:
         // counting it would, one cycle past giveUpAfter, FAULT the saga with zero actual
         // dispatches (the class DeadLetterRetryRunner also guards against). The saga stays
-        // COMPENSATING and is re-driven next cycle once the gate lifts. The staleKeys route above
+        // COMPENSATING and is re-driven next cycle, until the gate lifts or a replica that reads
+        // the stored schema re-drives it. The staleKeys route above
         // is untouched: an episode whose dedup keys may already be pruned still gives up on the
         // key-age bound regardless of how its re-drives fared.
         // NOT counted in streamrune.saga.compensation_retries either — that series is
@@ -666,9 +669,9 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
         // counting it made a breaker-open window read as a climbing retry rate with zero
         // dispatches behind it. The INFO line below is the refusal's only signal.
         LOG.info(
-            "Re-drive of stuck compensation for {} saga {} was refused admission (circuit breaker"
-                + " open, bus closing, or interceptor veto) — not counted as an attempt; retried"
-                + " next cycle",
+            "Re-drive of stuck compensation for {} saga {} was refused (circuit breaker open, bus"
+                + " closing, interceptor veto, or this replica is behind the stored schema of the"
+                + " command's aggregate) — not counted as an attempt; retried next cycle",
             sagaTypeName,
             LogSanitizer.sanitizeForLog(cs.sagaId().value()));
       }
@@ -779,11 +782,12 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
      * (validated by {@code SagaRetentionValidator}).
      *
      * <p>The horizon is honoured only for a saga this sweeper actually re-drove in the preceding
-     * cycle. A re-drive refused admission ({@code COMPENSATING_REFUSED}: an open circuit breaker, a
-     * closing bus, an interceptor veto) is not an attempt, so a saga refused on every cycle never
-     * reaches this bound and stays {@code COMPENSATING} indefinitely — unless {@link
-     * #inboxRetentionMaxAge} is set, or a {@code SagaTimeoutRunner} for the saga type has {@code
-     * maxCompensatingDwell} set. Configure one of them wherever a permanent refusal is possible.
+     * cycle. A re-drive refused admission or refused by a replica behind the stored schema ({@code
+     * COMPENSATING_REFUSED}: an open circuit breaker, a closing bus, an interceptor veto, an event
+     * the replica cannot read) is not an attempt, so a saga refused on every cycle never reaches
+     * this bound and stays {@code COMPENSATING} indefinitely — unless {@link #inboxRetentionMaxAge}
+     * is set, or a {@code SagaTimeoutRunner} for the saga type has {@code maxCompensatingDwell}
+     * set. Configure one of them wherever a permanent refusal is possible.
      */
     public Builder<S> giveUpAfter(Duration giveUpAfter) {
       this.giveUpAfter = giveUpAfter;

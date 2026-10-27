@@ -21,6 +21,7 @@ import org.streamrune.runtime.AuditingQueryBus;
 import org.streamrune.runtime.CacheInvalidator;
 import org.streamrune.runtime.CachingQueryBus;
 import org.streamrune.runtime.SimpleQueryBus;
+import org.streamrune.runtime.UnboundRequestContextQueryBus;
 
 /**
  * Tests that {@link StreamRuneMicronautModule}'s query-cache factory methods are gated by their

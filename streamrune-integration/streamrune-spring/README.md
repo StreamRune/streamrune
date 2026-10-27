@@ -74,6 +74,28 @@ The event store borrows its connections from your `DataSource` bean as given —
 — and builds no pool of its own; size `spring.datasource.hikari.maximum-pool-size` for everything
 StreamRune runs.
 
+**More than one replica: a database-wide aggregate lock.** The auto-configured `AggregateLocker` is
+the in-process `LocalStripedLocker`, which serializes one aggregate's commands within one replica
+only. On more than one replica declare `PgAdvisoryLocker.withDedicatedPool(...)` as the
+`AggregateLocker` bean; the auto-configured locker is
+`@ConditionalOnMissingBean(AggregateLocker.class)` and steps aside:
+
+```java
+@Bean(destroyMethod = "close") // the locker owns its pool
+AggregateLocker aggregateLocker(
+        @Value("${spring.datasource.url}") String url,
+        @Value("${spring.datasource.username}") String username,
+        @Value("${spring.datasource.password}") String password) {
+    return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+}
+```
+
+A command holds its lock connection for its whole run and borrows a second one from the HikariCP
+pool for its load and its append, so size the lock pool for the commands one replica runs at once
+and the HikariCP pool for the load and the append alone; the two pools of every replica together
+stay below PostgreSQL's `max_connections` (see
+[the aggregate lock across replicas](../../docs/guide/production.md#the-aggregate-lock-across-replicas)).
+
 ## Server-Sent Events
 
 With `streamrune.sse.enabled=true` on a servlet + Spring MVC application the integration serves

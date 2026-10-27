@@ -460,6 +460,7 @@ class MicrometerStreamRuneMetricsTest {
     metrics.recordDeadLetterPublished("PlaceOrder");
     metrics.recordDeadLetterExhausted("PlaceOrder");
     metrics.recordDeadLetterStaleReplayBlocked("PlaceOrder");
+    metrics.recordDeadLetterReaderBehind("PlaceOrder");
     metrics.recordDlqAwaitingOperator(3);
     metrics.recordLockWait(1_000L);
     metrics.recordEventAppended("OrderPlaced");
@@ -947,6 +948,24 @@ class MicrometerStreamRuneMetricsTest {
         typed(
             registry,
             MetricNames.DLQ_STALE_REPLAY_BLOCKED,
+            MicrometerStreamRuneMetrics.UNKNOWN_TAG_VALUE));
+  }
+
+  @Test
+  void readerBehindIsCountedPerCommandType() {
+    var registry = new SimpleMeterRegistry();
+    var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
+
+    metrics.recordDeadLetterReaderBehind("ReserveStock");
+    metrics.recordDeadLetterReaderBehind("ReserveStock");
+    metrics.recordDeadLetterReaderBehind(null);
+
+    assertEquals(2.0, typed(registry, MetricNames.DLQ_READER_BEHIND, "ReserveStock"));
+    assertEquals(
+        1.0,
+        typed(
+            registry,
+            MetricNames.DLQ_READER_BEHIND,
             MicrometerStreamRuneMetrics.UNKNOWN_TAG_VALUE));
   }
 

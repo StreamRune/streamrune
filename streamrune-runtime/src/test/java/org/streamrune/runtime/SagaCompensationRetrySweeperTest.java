@@ -169,6 +169,21 @@ class SagaCompensationRetrySweeperTest {
       refuseAdmission.remove(cmdId);
     }
 
+    private final java.util.Set<String> behindTheStoredSchema = ConcurrentHashMap.newKeySet();
+
+    /**
+     * The store refuses to load the command's aggregate as it does on a replica behind the stored
+     * schema ({@code EventSchemaAheadException}) — nothing is appended.
+     */
+    void behindTheStoredSchema(String cmdId) {
+      behindTheStoredSchema.add(cmdId);
+    }
+
+    /** The replica is upgraded: it reads the stored schema version. */
+    void readsTheStoredSchema(String cmdId) {
+      behindTheStoredSchema.remove(cmdId);
+    }
+
     /**
      * Models the {@code InboxRetentionSweeper} pruning every processed inbox row past the retention
      * window: committed idempotency keys are forgotten, so a later re-dispatch under the same key
@@ -196,6 +211,13 @@ class SagaCompensationRetrySweeperTest {
       if (refuseAdmission.contains(id)) {
         throw new org.streamrune.core.CommandBusClosedException(
             "Command bus is closed, cannot accept new commands");
+      }
+      if (behindTheStoredSchema.contains(id)) {
+        throw new org.streamrune.core.EventSchemaAheadException(
+            "Undone is stored at schema_version 2; this reader's upcaster chain reaches 1",
+            new org.streamrune.core.types.EventType("Undone"),
+            2,
+            1);
       }
       if (failForever.contains(id)) {
         throw new RuntimeException("permanent-but-transient-looking failure for " + id);
@@ -692,6 +714,87 @@ class SagaCompensationRetrySweeperTest {
     assertThat(metrics.compensationRetries.get())
         .as("exactly the one real re-drive is counted")
         .isEqualTo(1);
+  }
+
+  /**
+   * During a rolling deployment of an event-schema change, a replica still on the previous release
+   * refuses to load the undo's aggregate ({@code EventSchemaAheadException}): the store refused the
+   * load before anything was appended, so the re-drive attempted nothing — the verdict the forward
+   * path reaches for the same refusal. The sweeper does not count such a re-drive, so a rollout
+   * longer than {@code giveUpAfter} faults nothing, and the first re-drive on a replica that reads
+   * the event completes the undo.
+   */
+  @Test
+  void reDrivesRefusedByAReplicaBehindTheStoredSchema_areNotAttempts_neverFaultPastTheGiveUp() {
+    bus.failTransientlyNTimes("do-1", 1);
+    bus.behindTheStoredSchema("undo-2");
+    runner.asEventListener().onEvents(List.of(startEnvelope("x", 0L)));
+    assertThat(
+            sagaStore
+                .load(sagaId, SagaType.fromClass(FakeSagaState.class), FakeSagaState.class)
+                .orElseThrow()
+                .status())
+        .isEqualTo(SagaStatus.COMPENSATING);
+
+    var sweeper =
+        sweeper(SubscriptionLeadership.NOOP, Duration.ofSeconds(1), Duration.ofSeconds(5));
+
+    for (int cycle = 0; cycle < 4; cycle++) {
+      clock.advance(Duration.ofSeconds(2)); // ages 2s, 4s, 6s, 8s — past the 5s horizon twice
+      sweeper.sweepOnce();
+      assertThat(
+              sagaStore
+                  .load(sagaId, SagaType.fromClass(FakeSagaState.class), FakeSagaState.class)
+                  .orElseThrow()
+                  .status())
+          .as("cycle %d: a re-drive the stored schema refused is not an attempt", cycle)
+          .isEqualTo(SagaStatus.COMPENSATING);
+    }
+    assertThat(bus.execCount("undo-2")).as("nothing was ever applied").isZero();
+    assertThat(metrics.faulted.get()).as("no give-up FAULT during the rollout").isZero();
+    assertThat(metrics.compensationRetries.get())
+        .as("no re-drive is counted while the replica is behind")
+        .isZero();
+
+    bus.readsTheStoredSchema("undo-2"); // the replica is upgraded
+    clock.advance(Duration.ofSeconds(2));
+    sweeper.sweepOnce();
+    assertThat(
+            sagaStore
+                .load(sagaId, SagaType.fromClass(FakeSagaState.class), FakeSagaState.class)
+                .orElseThrow()
+                .status())
+        .isEqualTo(SagaStatus.COMPENSATED);
+    assertThat(bus.execCount("undo-2")).isEqualTo(1);
+    assertThat(bus.execCount("undo-1"))
+        .as("the compensation that had already run is answered from the inbox")
+        .isEqualTo(1);
+    assertThat(metrics.compensationRetries.get()).isEqualTo(1);
+  }
+
+  @Test
+  void aReplicaBehindTheStoredSchema_doesNotDisarmTheKeyAgeGiveUp() {
+    bus.failTransientlyNTimes("do-1", 1);
+    bus.behindTheStoredSchema("undo-2");
+    runner.asEventListener().onEvents(List.of(startEnvelope("x", 0L)));
+
+    var sweeper =
+        sweeperWithInboxRetention(
+            SubscriptionLeadership.NOOP,
+            Duration.ofSeconds(1),
+            Duration.ofSeconds(5),
+            Duration.ofSeconds(30));
+    clock.advance(Duration.ofSeconds(31)); // past the inbox retention window
+    sweeper.sweepOnce();
+
+    assertThat(
+            sagaStore
+                .load(sagaId, SagaType.fromClass(FakeSagaState.class), FakeSagaState.class)
+                .orElseThrow()
+                .status())
+        .as("the key-age bound still FAULTs without dispatching")
+        .isEqualTo(SagaStatus.FAULTED);
+    assertThat(bus.execCount("undo-2")).isZero();
   }
 
   /**

@@ -30,6 +30,7 @@ import org.streamrune.runtime.CacheInvalidator;
 import org.streamrune.runtime.CachingQueryBus;
 import org.streamrune.runtime.CachingUserRoleResolver;
 import org.streamrune.runtime.SimpleQueryBus;
+import org.streamrune.runtime.UnboundRequestContextQueryBus;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.runtime.gdpr.ExportSubjectDataService;
 import org.streamrune.runtime.gdpr.ForgetSubjectService;

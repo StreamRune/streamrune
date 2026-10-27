@@ -23,17 +23,22 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.audit.AuditEntry;
+import org.streamrune.core.types.UserId;
 import org.streamrune.integration.OutboxWiringMessages;
 import org.streamrune.integration.RequestIdentityPolicy;
 import org.streamrune.integration.SnapshotPurgeSetting;
 import org.streamrune.integration.tck.ContractBeans.CommandInboxBean;
+import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
 import org.streamrune.integration.tck.ContractBeans.ContractProjection;
 import org.streamrune.integration.tck.ContractBeans.ContractSagaState;
 import org.streamrune.integration.tck.ContractBeans.CryptoEngineBean;
 import org.streamrune.integration.tck.ContractBeans.DeadLetterQueueBean;
+import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
 import org.streamrune.integration.tck.ContractBeans.FirstLeadership;
 import org.streamrune.integration.tck.ContractBeans.IdentifiedCallers;
 import org.streamrune.integration.tck.ContractBeans.OutboxStoreBean;
+import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
 import org.streamrune.integration.tck.ContractBeans.SecondLeadership;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 
@@ -232,6 +237,40 @@ public abstract class IntegrationWiringContract {
       assertTrue(
           type != null && type.startsWith("text/event-stream"),
           () -> "the stream is an event stream: " + response);
+    }
+  }
+
+  /**
+   * A command a route of the application dispatches through the integration's command bus is
+   * audited as the request's caller, though the route binds nothing around the dispatch: the
+   * request filter identifies the caller, and the integration hands that identity to the command
+   * the route dispatches, on whatever thread its framework runs the route. Behind a trusted gateway
+   * the {@code X-User-Id} header is the caller.
+   */
+  @Test
+  public void aCommandDispatchedFromARouteIsAuditedAsTheCaller() {
+    try (Application application =
+        start(
+            null,
+            Map.of(RequestIdentityPolicy.TRUST_USER_ID_HEADER_PROPERTY, "true"),
+            Set.of(
+                DispatchingRoute.class,
+                ContractCommandRegistration.class,
+                RecordingAuditStore.class))) {
+      assertStarted(application);
+      HttpResponse response =
+          application.http(
+              "POST",
+              DispatchingRoute.PATH + "/order-1",
+              Map.of(RequestIdentityPolicy.USER_ID_HEADER, "alice"),
+              null);
+      assertEquals(200, response.status(), () -> "the route must execute the command: " + response);
+      List<AuditEntry> entries = application.bean(RecordingAuditStore.class).entries();
+      assertEquals(1, entries.size(), () -> "the command must be audited once: " + entries);
+      assertEquals(
+          UserId.of("alice"),
+          entries.getFirst().userId(),
+          () -> "the audit row must name the request's caller: " + entries);
     }
   }
 

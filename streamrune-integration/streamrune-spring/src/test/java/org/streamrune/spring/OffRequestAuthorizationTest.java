@@ -42,6 +42,7 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
+import org.streamrune.runtime.CommandDeadLetteredException;
 import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.VirtualThreadCommandBus;
@@ -448,6 +449,8 @@ class OffRequestAuthorizationTest {
                   .run(
                       () ->
                           assertThatThrownBy(() -> bus.execute(new ArchiveOrder("order-dlq")))
+                              .isInstanceOf(CommandDeadLetteredException.class)
+                              .cause()
                               .hasMessageContaining("transient downstream failure"));
               SecurityContextHolder.clearContext();
 

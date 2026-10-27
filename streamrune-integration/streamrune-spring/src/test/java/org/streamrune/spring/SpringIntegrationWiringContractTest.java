@@ -50,6 +50,10 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.ResolvableType;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.integration.tck.Application;
@@ -175,6 +179,11 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
       context.registerBean("dataSource", DataSource.class, () -> dataSource);
     }
     for (Class<?> beanClass : extraBeans) {
+      if (beanClass == ContractBeans.DispatchingRoute.class) {
+        // The route an application declares: a controller, built and mapped by Spring MVC.
+        context.registerBean(DispatchingController.class);
+        continue;
+      }
       @SuppressWarnings("unchecked")
       Class<Object> type = (Class<Object>) ContractBeans.beanClassOf(beanClass);
       context.registerBean(
@@ -184,6 +193,26 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
           definition ->
               ((RootBeanDefinition) definition)
                   .setTargetType(ResolvableType.forType(ContractBeans.beanType(beanClass))));
+    }
+  }
+
+  /**
+   * The contract's {@link ContractBeans.DispatchingRoute} as a Spring application writes it: a
+   * controller that executes the command through the command bus bean and binds nothing itself.
+   */
+  @RestController
+  public static class DispatchingController {
+
+    private final CommandBus commandBus;
+
+    public DispatchingController(CommandBus commandBus) {
+      this.commandBus = commandBus;
+    }
+
+    @PostMapping(ContractBeans.DispatchingRoute.PATH + "/{id}")
+    public String dispatch(@PathVariable("id") String id) {
+      commandBus.execute(new ContractBeans.ContractCommand(id));
+      return "executed";
     }
   }
 
