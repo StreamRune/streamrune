@@ -223,7 +223,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   dead-letter replay that fails with it counts no attempt (`RetryOutcome.READER_BEHIND`, an INFO
   line, the entry unchanged), so a rollout that keeps the retry runner's lease on a replica of the
   previous release neither exhausts the entry nor, under `discardAfterMaxRetries`, discards the
-  command. A saga's forward command that fails with it is retry-later: the saga is left as it is
+  command; on the schedule it takes no slot of the poll's batch, so the entries behind it in the
+  page the poll read are replayed in the same poll. A saga's forward command that fails with it is retry-later: the saga is left as it is
   and the event delivered again until a replica that reads it completes the step, instead of
   compensating a flow in which nothing failed; `UnknownEventTypeException` stays deterministic
   there.

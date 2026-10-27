@@ -33,6 +33,7 @@ import org.streamrune.runtime.DeadLetterRetryRunner.RetryOutcome;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryDeadLetterQueue;
 import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.MutableClock;
 import org.streamrune.test.RecordingStreamRuneMetrics;
 
 /**
@@ -121,6 +122,40 @@ class DeadLetterRetryReaderBehindTest {
 
     assertThat(runner.retry(id)).isEqualTo(RetryOutcome.REPLAYED);
     assertThat(deadLetterQueue.find(id)).isEmpty();
+  }
+
+  /**
+   * A replay that answers {@code READER_BEHIND} takes no slot of the poll's batch. The entries left
+   * unchanged keep the head of the least-recently-active order on every poll; counted against the
+   * batch, a batch's worth of them would hold back every entry behind them until the rollout ends.
+   */
+  @Test
+  void entriesBehindTheStoredSchemaTakeNoSlotOfThePollsBatch() {
+    MutableClock clock = MutableClock.startingAt(Instant.parse("2026-01-01T00:00:00Z"));
+    var queue = new InMemoryDeadLetterQueue(clock);
+    List<CommandId> behind = new java.util.ArrayList<>();
+    for (int i = 0; i < 10; i++) {
+      behind.add(publishKeyedEntry(queue, "cmd-behind-head-" + i, new ReserveStock("S", "o-" + i)));
+      clock.advance(Duration.ofSeconds(1));
+    }
+    CommandId fresh = publishKeyedEntry(queue, "cmd-fresh", new ReserveStock("T", "order-2"));
+    clock.advance(Duration.ofSeconds(1));
+    var bus = new BehindForOneAggregateBus("S");
+
+    runner(bus, policy(5, false), queue, clock, 10).processBatch();
+
+    assertThat(queue.find(fresh))
+        .as("the entry behind ten replays behind the stored schema is replayed in the same poll")
+        .isEmpty();
+    assertThat(bus.executed()).isEqualTo(1);
+    assertThat(bus.refused()).as("every entry behind the stored schema was tried").isEqualTo(10);
+    assertThat(behind)
+        .allSatisfy(
+            id -> {
+              DeadLetterQueue.DeadLetterEntry entry = queue.find(id).orElseThrow();
+              assertThat(entry.dlqAttempts()).isZero();
+              assertThat(entry.lastAttemptAt()).isNull();
+            });
   }
 
   @Test
@@ -297,15 +332,46 @@ class DeadLetterRetryReaderBehindTest {
     }
   }
 
+  /**
+   * A bus with a command inbox that refuses every command on one aggregate as the store refuses a
+   * load on a replica behind the stored schema, and executes the commands on every other aggregate.
+   */
+  static final class BehindForOneAggregateBus extends BehindTheStoredSchemaBus {
+    private final String behindItem;
+    private final AtomicInteger refused = new AtomicInteger();
+
+    BehindForOneAggregateBus(String behindItem) {
+      super(0);
+      this.behindItem = behindItem;
+    }
+
+    int refused() {
+      return refused.get();
+    }
+
+    @Override
+    public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+      if (((ReserveStock) command).itemId().equals(behindItem)) {
+        refused.incrementAndGet();
+        throw refusal(command);
+      }
+      return super.execute(command, key);
+    }
+  }
+
   private CommandId publishKeyedEntry(String id) {
+    return publishKeyedEntry(deadLetterQueue, id, new ReserveStock("S", "order-1"));
+  }
+
+  private CommandId publishKeyedEntry(DeadLetterQueue queue, String id, ReserveStock command) {
     CommandId commandId = CommandId.of(id);
     try {
-      deadLetterQueue.publish(
+      queue.publish(
           new DeadLetterQueue.DeadLetterPublishRequest(
-              objectMapper.writeValueAsString(new ReserveStock("S", "order-1")),
+              objectMapper.writeValueAsString(command),
               ReserveStock.class.getName(),
               commandId,
-              StreamId.of(STOCK, AggregateId.of("S")),
+              StreamId.of(STOCK, AggregateId.of(command.itemId())),
               EventSchemaAheadException.class.getName(),
               "stored at schema_version 2, reader reaches 1",
               1,
@@ -338,6 +404,25 @@ class DeadLetterRetryReaderBehindTest {
         .objectMapper(objectMapper)
         .policy(policy)
         .pollInterval(Duration.ofMinutes(1))
+        .registerCommand(ReserveStock.class)
+        .metrics(metrics)
+        .build();
+  }
+
+  private DeadLetterRetryRunner runner(
+      CommandBus bus,
+      DeadLetterRetryPolicy policy,
+      DeadLetterQueue queue,
+      java.time.Clock clock,
+      int batchSize) {
+    return DeadLetterRetryRunner.builder()
+        .deadLetterQueue(queue)
+        .commandBus(bus)
+        .objectMapper(objectMapper)
+        .policy(policy)
+        .pollInterval(Duration.ofMinutes(1))
+        .batchSize(batchSize)
+        .clock(clock)
         .registerCommand(ReserveStock.class)
         .metrics(metrics)
         .build();

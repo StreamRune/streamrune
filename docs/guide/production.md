@@ -955,10 +955,12 @@ replay fails with the same refusal and counts no attempt (`RetryOutcome.READER_B
 line naming the event type and both versions): the entry is left unchanged and replayed again on
 the next poll. A long rollout therefore neither exhausts the entry (five attempts span about 31
 minutes with the integrations' defaults, about 15 under `DeadLetterRetryPolicy.DEFAULT`) nor,
-under `discardAfterMaxRetries`, discards the command. An entry left unchanged stays due on every
-poll, so until the rollout ends such entries can take every slot of a poll's batch and hold back
-the entries queued behind them; nothing is lost, as with an admission refusal. The runner replays a
-keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
+under `discardAfterMaxRetries`, discards the command. Such a replay takes no slot of the poll's
+batch either: an entry left unchanged stays due and keeps the head of the queue's
+least-recently-active order on every poll, and the poll goes on to the entries behind it in the page
+it read (ten batches), which are replayed in the same poll. Only more entries behind the stored
+schema than a page holds keep the entries queued after them waiting until the rollout ends; nothing
+is lost. The runner replays a keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
 operator's `retry(commandId)` on a replica still behind answers `READER_BEHIND` and changes
 nothing.
 

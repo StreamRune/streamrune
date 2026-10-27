@@ -214,7 +214,9 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      * replica that reads that version, so the failure is not counted: the entry is unchanged — its
      * attempt count is not bumped, so the rollout window can neither exhaust it nor, under {@code
      * discardAfterMaxRetries}, discard it — and it is replayed again on the next poll, until a
-     * replica that reads the event holds the runner's lease.
+     * replica that reads the event holds the runner's lease. On the schedule such a replay takes no
+     * slot of the poll's batch, so the entries behind it in the page the poll read are replayed in
+     * the same poll.
      */
     READER_BEHIND,
     /**
@@ -633,8 +635,14 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         staleSkipped++;
         continue;
       }
-      if (isDue(entry, now)) {
-        processEntry(entry, false, false, null);
+      if (isDue(entry, now)
+          && processEntry(entry, false, false, null) != RetryOutcome.READER_BEHIND) {
+        // A replay that answers READER_BEHIND takes no slot of the batch: nothing was attempted,
+        // the entry is left unchanged and keeps the head of the least-recently-active order on
+        // every poll, so counted, a batch's worth of such entries would hold back every entry
+        // behind them for the whole rollout. The page is over-fetched, so the poll reaches those
+        // entries in the same cycle. An admission refusal keeps its slot: the bus is closing or
+        // saturated, and the next entry would meet the same refusal.
         processed++;
       }
     }
