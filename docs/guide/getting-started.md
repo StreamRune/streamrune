@@ -16,14 +16,14 @@ an in-memory event store, and a simple read model — all tested without a datab
 
 ---
 
-## Add the StreamRune preview build
+## Add StreamRune
 
-StreamRune's modules all share the `org.streamrune` group and one version. StreamRune is not
-released yet: the published build is `1.0.0-alpha-SNAPSHOT`, an unreleased preview that lives in the
-Maven Central snapshot repository, not in Maven Central itself (see
-[Preview builds](../../README.md#preview-builds) and the [CHANGELOG](../../CHANGELOG.md)). Add that
-repository next to `mavenCentral()` — there is no local build step, and each module pulls in the
-rest of the framework it needs transitively. The next section shows a complete `build.gradle.kts`.
+StreamRune's modules all share the `org.streamrune` group and one version, and a release resolves
+from `mavenCentral()` — there is no local build step, and each module pulls in the rest of the
+framework it needs transitively. The next section shows a complete `build.gradle.kts` for `1.0.0`,
+the first release (the [CHANGELOG](../../CHANGELOG.md) says what it contains). To try the unsigned
+preview of the next release, `1.0.0-alpha-SNAPSHOT`, add the Maven Central snapshot repository as
+shown in [Preview builds](../../README.md#preview-builds).
 
 ---
 
@@ -45,22 +45,17 @@ java {
 
 repositories {
     mavenCentral()
-    // 1.0.0-alpha-SNAPSHOT lives in the Maven Central snapshot repository only.
-    maven("https://central.sonatype.com/repository/maven-snapshots/") {
-        mavenContent { snapshotsOnly() }
-        content { includeGroup("org.streamrune") }
-    }
 }
 
 dependencies {
     // Core abstractions: Decider, EventStore, DomainEvent, AggregateState
-    implementation("org.streamrune:streamrune-core:1.0.0-alpha-SNAPSHOT")
+    implementation("org.streamrune:streamrune-core:1.0.0")
 
     // Runtime: StreamRune facade, VirtualThreadCommandBus, ProjectionRunner
-    implementation("org.streamrune:streamrune-runtime:1.0.0-alpha-SNAPSHOT")
+    implementation("org.streamrune:streamrune-runtime:1.0.0")
 
     // Testing: InMemoryEventStore, EventStoreFixture
-    testImplementation("org.streamrune:streamrune-test:1.0.0-alpha-SNAPSHOT")
+    testImplementation("org.streamrune:streamrune-test:1.0.0")
 
     // JUnit 5
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.0")
@@ -72,8 +67,7 @@ tasks.test {
 }
 ```
 
-> Every `org.streamrune` coordinate is at version `1.0.0-alpha-SNAPSHOT`, resolved from the snapshot
-> repository above — Gradle
+> Every `org.streamrune` coordinate is at version `1.0.0`, resolved from Maven Central — Gradle
 > pulls in each module's own framework dependencies (e.g. `streamrune-crypto-api`) transitively, so
 > you only declare the modules you use directly.
 
@@ -81,7 +75,7 @@ For production persistence add the PostgreSQL module:
 
 ```kotlin
 // PostgreSQL-backed event store
-implementation("org.streamrune:streamrune-postgres:1.0.0-alpha-SNAPSHOT")
+implementation("org.streamrune:streamrune-postgres:1.0.0")
 ```
 
 ---

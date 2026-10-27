@@ -12,14 +12,14 @@ Step-by-step guide to building your first event-sourced application with StreamR
 
 ---
 
-## 1. Add the StreamRune preview build
+## 1. Add StreamRune
 
-StreamRune's modules all share the `org.streamrune` group and one version. StreamRune is not
-released yet: the published build is `1.0.0-alpha-SNAPSHOT`, an unreleased preview that lives in the
-Maven Central snapshot repository, not in Maven Central itself (see
-[Preview builds](../README.md#preview-builds) and the [CHANGELOG](../CHANGELOG.md)). Add that
-repository next to `mavenCentral()` — there is no local build step, and each module pulls in the
-rest of the framework it needs transitively. The next section shows a complete `build.gradle`.
+StreamRune's modules all share the `org.streamrune` group and one version, and a release resolves
+from `mavenCentral()` — there is no local build step, and each module pulls in the rest of the
+framework it needs transitively. The next section shows a complete `build.gradle` for `1.0.0`, the
+first release (the [CHANGELOG](../CHANGELOG.md) says what it contains). To try the unsigned preview
+of the next release, `1.0.0-alpha-SNAPSHOT`, add the Maven Central snapshot repository as shown in
+[Preview builds](../README.md#preview-builds).
 
 ---
 
@@ -38,18 +38,12 @@ java {
 
 repositories {
     mavenCentral()
-    // 1.0.0-alpha-SNAPSHOT lives in the Maven Central snapshot repository only.
-    maven {
-        url = uri("https://central.sonatype.com/repository/maven-snapshots/")
-        mavenContent { snapshotsOnly() }
-        content { includeGroup("org.streamrune") }
-    }
 }
 
 dependencies {
-    implementation("org.streamrune:streamrune-core:1.0.0-alpha-SNAPSHOT")
-    implementation("org.streamrune:streamrune-runtime:1.0.0-alpha-SNAPSHOT")
-    implementation("org.streamrune:streamrune-postgres:1.0.0-alpha-SNAPSHOT")
+    implementation("org.streamrune:streamrune-core:1.0.0")
+    implementation("org.streamrune:streamrune-runtime:1.0.0")
+    implementation("org.streamrune:streamrune-postgres:1.0.0")
 }
 ```
 
@@ -299,14 +293,14 @@ facade does not expose a generic projection accessor.
 ```groovy
 // build.gradle
 dependencies {
-    implementation("org.streamrune:streamrune-spring:1.0.0-alpha-SNAPSHOT")
+    implementation("org.streamrune:streamrune-spring:1.0.0")
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")   // the DataSource bean
 }
 ```
 
 > `streamrune-spring` brings the rest of the framework with it from the same repositories (see
-> [Step 1](#1-add-the-streamrune-preview-build)): core, runtime and the crypto backends on the
+> [Step 1](#1-add-streamrune)): core, runtime and the crypto backends on the
 > compile classpath, and the PostgreSQL event store with its JDBC driver at **runtime** scope. That
 > is enough for the application below. Code that names a type of `org.streamrune.postgres` itself —
 > `PostgresOffsetStore`, `JdbcProjectionRepository`, `PostgresEventStoreFactory` — needs
