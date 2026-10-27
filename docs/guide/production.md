@@ -955,7 +955,7 @@ holder stops or fails to renew it: until then a replay may run on a replica stil
 replay fails with the same refusal and counts no attempt (`RetryOutcome.READER_BEHIND`): the entry
 keeps its attempt count, and only its last attempt time becomes the replay's, so it is replayed
 again once the backoff of its next attempt has passed. A poll states its replays that answered so
-in one INFO line, which names what the replica lacks — each event type with the schema version it
+in one line, at INFO, which names what the replica lacks — each event type with the schema version it
 is stored at and the version the replica reads up to — and the command types refused, five of each
 at most with a count of the rest (DEBUG names each entry), and `streamrune.dlq.reader_behind`
 counts them by command type: a rate that stays above zero after the rollout ended means the
@@ -966,8 +966,8 @@ batch either: the poll goes on to the entries behind it in the page it read (ten
 replayed in the same poll. The recorded time moves the entry behind the entries queued after it in
 the queue's least-recently-active order, so a run of entries behind the stored schema longer than a
 page delays the entries after it by one poll per page it fills, and a poll that reads a full page
-and reaches its end with its batch not full states its line at WARN, because the entries queued
-after that page were not reached; nothing is lost. The runner replays a keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
+and reaches its end with its batch not full states its line at WARN instead, because the entries
+queued after that page were not reached; nothing is lost. The runner replays a keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
 operator's `retry(commandId)` on a replica still behind answers `READER_BEHIND`, counts no attempt
 and records the replay's time.
 

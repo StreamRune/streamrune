@@ -137,8 +137,8 @@ The endpoint tells the client which case it is in:
         // exhaust its attempts and wait for an operator.
         if (e.pendingOutcome() == CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY) {
             // Queued for replay under the client's key: a re-send under the same key is safe.
-            // Retry-After is at least the retry runner's interval (retry-interval-ms, 60 s): a
-            // sooner re-send meets the same outage.
+            // Retry-After is at least the retry runner's interval
+            // (streamrune.dead-letter.retry-interval-ms, 60 s): a sooner re-send meets the same outage.
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .header(HttpHeaders.RETRY_AFTER, "60")
                     .body(Map.of("reason", "QUEUED_FOR_REPLAY", "commandId", e.commandId().value()));
