@@ -40,7 +40,9 @@ jars. In brief:
   another replica takes over within the lease TTL of a crash.
 - **Command dead-letter queue with operator-confirmed replay.** A command that keeps failing on
   infrastructure, never one the domain rejected, is parked in the dead-letter queue, and its caller
-  receives `CommandDeadLetteredException`: the outcome is pending. The retry runner replays on its
+  receives `CommandDeadLetteredException`, whose `pendingOutcome()` says whether the retry schedule
+  replays the entry (`QUEUED_FOR_REPLAY`) or an operator decides (`AWAITING_OPERATOR`); a keyed
+  command that fails again under its key stores no second entry. The retry runner replays on its
   own only the entries the command inbox can deduplicate; an unkeyed entry, or a keyed one older than
   the inbox retention window, waits for an operator, who replays it with
   `DeadLetterRetryRunner.retry(commandId, true)` or discards it.
@@ -80,7 +82,7 @@ Every area of `1.0.0` — streams and aggregate types, the event store, snapshot
 the command bus and its inbox, aggregates, projections, queries, subscriptions, sagas, the outbox,
 GDPR, security and identity, audit, the framework integrations, observability, operations, the
 test kit — and the guarantees of the shipped code are described in detail in
-[docs/reference/release-1.0.0.md](https://github.com/StreamRune/streamrune/blob/v1.0.0/docs/reference/release-1.0.0.md).
+[docs/reference/release-1.0.0.md](docs/reference/release-1.0.0.md).
 The parts below list its modules, requirements, known limitations and license.
 
 ### Modules
@@ -122,7 +124,9 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   and 18, and enforced at startup. The in-memory stores of `streamrune-test` need no database.
 - **Jackson 2.19.2** (`jackson-databind` 2.19 or newer). `streamrune-core` depends on nothing else.
 - `streamrune-postgres` brings Flyway 13.11.1 (`flyway-core`, `flyway-database-postgresql`), HikariCP
-  6.2.1 (for its dedicated LISTEN and lock pools), the PostgreSQL JDBC driver 42.7.10 and SLF4J 2.0.
+  6.2.1 (for its dedicated LISTEN and lock pools; an `api` dependency, Maven `compile` scope, since
+  `PgAdvisoryLocker.withDedicatedPool` takes a HikariCP `MetricsTrackerFactory`), the PostgreSQL JDBC
+  driver 42.7.10 and SLF4J 2.0.
 - Frameworks: Spring Boot 4.1.x (built and tested against 4.1.1, Spring Security 7.1.x), Quarkus
   3.40.x, Micronaut 5.2.x (Micronaut Security 5.4, Validation 5.2, Serde 3.2). Micrometer 1.16 or
   newer: the framework declares 1.16.3, the floor it is built against, and an application runs the

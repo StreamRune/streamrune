@@ -121,6 +121,12 @@ license.
   trusts the envelope it is given, which is meant to be one read from the event store.
 - `PgAdvisoryLocker` — distributed per-stream pessimistic locking via `pg_advisory_xact_lock` over the
   typed stream, with `withDedicatedPool(...)` so lock connections never starve the application pool.
+  The dedicated pool is named `streamrune-advisory-lock`.
+  `withDedicatedPool(jdbcUrl, username, password, maxPoolSize, MetricsTrackerFactory)` makes it
+  report to the HikariCP metrics tracker factory handed in (`new
+  MicrometerMetricsTrackerFactory(registry)` gives `hikaricp.connections.*` tagged with the pool
+  name); the four-argument form builds it without one, and its saturation then shows only as failed
+  lock acquisitions (a `LockException` after the pool's 10-second connection timeout).
 - Typed identifiers: `StreamId`, `AggregateType`, `AggregateId`, `Version`, `GlobalOffset`, `EventId`,
   `CommandId`, `CorrelationId`, `CausationId`, `TraceId`, `SpanId`, `UserId`, `SubjectId`,
   `IdempotencyKey`, `ProjectionName`, `SubscriptionName`, `SagaId`, `SagaType`, `EventType`. Ingress
@@ -155,12 +161,19 @@ license.
   (`CommandFailureClassification.isReaderBehindStoredSchema`), and `ReadPoisonClassifier` and
   `ProjectionErrorClassifier.DEFAULT` treat it as transient whatever frame wraps it, so a replica on
   the previous release stops at a newer event and retries it instead of quarantining it. A
-  dead-letter replay that fails with it counts no attempt (`RetryOutcome.READER_BEHIND`, the entry
-  unchanged; one INFO line per poll, and the `streamrune.dlq.reader_behind` counter tagged by
-  command type), so a rollout that keeps the retry runner's lease on a replica of the
-  previous release neither exhausts the entry nor, under `discardAfterMaxRetries`, discards the
-  command; on the schedule it takes no slot of the poll's batch, so the entries behind it in the
-  page the poll read are replayed in the same poll. A saga's forward command that fails with it is retry-later: the saga is left as it is
+  dead-letter replay that fails with it counts no attempt (`RetryOutcome.READER_BEHIND`, and the
+  `streamrune.dlq.reader_behind` counter tagged by command type), so a rollout that keeps the retry
+  runner's lease on a replica of the previous release neither exhausts the entry nor, under
+  `discardAfterMaxRetries`, discards the command. The replay records its time (`updateAttempts` with
+  the entry's own count): the entry moves behind the entries queued after it and is replayed again
+  after its backoff, so a run of such entries longer than a page delays the entries after it by one
+  poll per page. On the schedule it takes no slot of the poll's batch, so the entries behind it in
+  the page the poll read are replayed in the same poll. One line per poll names each event type
+  with its stored and read schema versions and the command types refused (five of each, then a
+  count); it is logged at WARN when the poll reached the end of a full page with its batch not full
+  while an entry is queued after the page — the poll reads one row beyond the page to know, and
+  leaves that row to the next poll, which reads it in its own page — and at INFO otherwise. A saga's
+  forward command that fails with it is retry-later: the saga is left as it is
   and the event delivered again until a replica that reads it completes the step, instead of
   compensating a flow in which nothing failed; `UnknownEventTypeException` stays deterministic
   there. A compensation command that fails with it attempted nothing either: the episode stays
@@ -259,11 +272,18 @@ license.
   or waits, and a new key is a second operation. Its message and `toString()` carry neither the
   payload nor the key. The failure itself propagates when no entry is stored (a failed publish, an
   ineligible failure, a replay, a command a saga or a `continuing` listener dispatches), and it is
-  what the interceptors' `onError` and an `executeAsync` future receive. The retry guide and the
-  idempotency guide state the client rule and the HTTP answer: `503` with `Retry-After` and the
-  reason "queued for replay" for a keyed command, `500` with no `Retry-After` and the reason
-  "awaiting an operator" for an unkeyed one, whose re-send would be a second operation beside an
-  operator's replay, and never `202`.
+  what the interceptors' `onError` and an `executeAsync` future receive.
+  `CommandDeadLetteredException.pendingOutcome()` says what happens to the entry:
+  `QUEUED_FOR_REPLAY` while the retry schedule replays it, `AWAITING_OPERATOR` for an unkeyed
+  command and for a keyed entry that exhausted its replays or whose command was first received
+  longer ago than the command-inbox window; a constructor takes it. The retry guide and the
+  idempotency guide map the HTTP answer by it: `QUEUED_FOR_REPLAY` is `503` with a `Retry-After` of
+  at least the retry runner's interval (`streamrune.dead-letter.retry-interval-ms`, 60 s on the
+  integrations) and the reason "queued for replay", and the guides prefer waiting over re-sending;
+  `AWAITING_OPERATOR` is `500` with no `Retry-After` and the reason "awaiting an operator", since a
+  re-send of an unkeyed command would be a second operation beside an operator's replay; never
+  `202`. Under `DeadLetterRetryPolicy.discardAfterMaxRetries` a client that waits is not told when
+  its command is dropped.
   `DeadLetterRetryRunner` re-dispatches entries under the command's original idempotency key (or a
   deterministic `dlq-replay:<commandId>` key), learns command types from the registered deciders
   (sealed roots expand to every permitted class), refuses to replay an entry whose `@Encrypted`
@@ -278,6 +298,20 @@ license.
   after `streamrune.dead-letter.retention-max-age` (default 7 days; zero or negative disables
   pruning) and is registered for any `DeadLetterQueue` bean; `streamrune.dead-letter.enabled=false`
   switches off only the automatic retry runner.
+- One entry per keyed command. A keyed command that fails while the queue holds an entry of the
+  same command (type and stream) under its key stores no second entry, and
+  `CommandDeadLetteredException` names that entry (`commandId()` is then the earlier send's entry
+  id); a queue without the lookup, a failed lookup, a different command under the key and an
+  unkeyed command store an entry of their own. The lookup is
+  `DeadLetterQueue.findByIdempotencyKey(IdempotencyKey)`, an optional capability (the default
+  throws `UnsupportedOperationException`): `PostgresDeadLetterQueue` implements it through the
+  partial index `idx_dlq_idempotency_key` of the baseline migration, and `InMemoryDeadLetterQueue`
+  and `ForwardingDeadLetterQueue` implement it as well. The bus answers such a re-send by the
+  rules of `VirtualThreadCommandBus.Builder.deadLetterRetryPolicy(…)` and `inboxRetentionMaxAge(…)`;
+  the Spring, Quarkus and Micronaut integrations hand the bus the retry runner's policy and window
+  from the same keys. A `DeadLetterRetryRunner` built over a `VirtualThreadCommandBus` with a
+  command inbox logs one WARN when its `maxRetries` or inbox window differs from the bus's, naming
+  both values and the two builder methods.
 - Only replays that the command inbox can deduplicate against the caller's own retry run
   automatically. An unkeyed command's caller may already have retried it successfully, and a replay
   would then apply it a second time (a relative "adjust stock by +50" twice), so under
@@ -440,7 +474,9 @@ license.
   for paginated read models.
 - `@Cacheable(ttlSeconds, maxEntries, scope, invalidateOn)` on a query record opts it into a
   per-query-type Caffeine cache (defaults: 60 s, 1000 entries, `Scope.USER` — keyed by the calling
-  `UserId`; anonymous callers bypass the cache; `Scope.GLOBAL` keys by the query alone).
+  `UserId`; anonymous callers bypass the cache; `Scope.GLOBAL` keys by the query alone). The
+  javadoc of `CachingQueryBus`, on why a `USER`-scope query without a caller bypasses the cache, and
+  of `UnboundRequestContextQueryBus` say where each integration binds the caller.
   `invalidateOn` evicts a query type's entries after the batch that processed a listed event type has
   committed (`CacheInvalidator`, wired through `CacheAwareProjection` or
   `ProjectionRepository.afterCommit`). `evict(Class)` and `evictAll()` for manual eviction.
@@ -970,6 +1006,17 @@ license.
   replaced, and a dispatch with no request current runs without one. A task Micronaut propagates
   the request to (`@ExecuteOn`, `@Async`, a Micronaut executor) dispatches as the caller of that
   request, also after the response was sent.
+- Spring: a `Callable` or a `WebAsyncTask` a controller returns dispatches its commands and queries
+  as the request's caller. `ScopedValueFilter` stores the request context on the request as well,
+  and `RequestAttributeContextSource` answers it on the thread Spring MVC runs the task on, where the
+  request's attributes are current; in a servlet web application the auto-configured command bus
+  takes the caller from it, and the auto-configured `QueryBus` bean is an
+  `UnboundRequestContextQueryBus` over it (reach the chain behind it through `delegate()`). `@Async`
+  methods, `DeferredResult`, threads of the application's own and WebFlux stay the application's to
+  bind. Keep `threadContextInheritable` at its default (`false`) on the `DispatcherServlet` and on
+  any `RequestContextFilter`: with it, a pooled thread created while one request is handled
+  inherits that request's attributes, and a dispatch from another request on that thread is
+  attributed to the first request's caller.
 - Quarkus: the request's caller reaches every command and query a resource method dispatches, with
   nothing bound in the method. A JAX-RS filter cannot wrap the resource method, so
   `StreamRuneRequestFilter` stores the request's context in the request-scoped
@@ -1184,6 +1231,9 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
   (`TracingEventListener`), `projection/{name}/process` (`TracingProjectionDecorator`); attributes
   are `streamrune.`-prefixed. Trace and span ids propagate into `EventMetadata`.
 - Every production log line goes through SLF4J; bring the binding of your choice.
+- The dedicated advisory-lock pool reports HikariCP's `hikaricp.connections.*` meters, tagged with
+  its pool name `streamrune-advisory-lock`, when `PgAdvisoryLocker.withDedicatedPool` is given a
+  `MetricsTrackerFactory`.
 - `BackgroundRelayHealthContributor` for every background relay; a per-cycle aggregated WARN for
   transport and in-flight outbox outages.
 
