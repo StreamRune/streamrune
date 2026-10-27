@@ -43,18 +43,20 @@ import org.streamrune.core.metrics.MetricNames;
  * must be written as {@link DefaultRendering} writes the default.
  *
  * <p>The files read are the guides under {@code docs/guide}, the integration's README, and the
- * {@link #OTHER_PAGES} that name keys too. Every name of every file is held to the code ({@link
- * #unknown}, {@link #wrongDefaults}); a key is documented ({@link #undocumented}) when a guide or
- * the README names it, where a reader looks a key up.
+ * pages {@link #OTHER_PAGES_LIST} lists, which name keys too. Every name of every file is held to
+ * the code ({@link #unknown}, {@link #wrongDefaults}); a key is documented ({@link #undocumented})
+ * when a guide or the README names it, where a reader looks a key up.
  */
 public final class ConfigurationDocs {
 
   /**
-   * The pages outside {@code docs/guide} that name configuration keys: the repository's README, the
-   * quickstart and the API reference, repository-relative.
+   * The repository-relative file that lists the pages outside {@code docs/guide} that name
+   * configuration keys (the repository's README, the quickstart and the API reference), one
+   * repository-relative path per line; a line that starts with {@code #} is a comment. {@code
+   * MetricNamesDocLintTest} reads the same list for the meter names, and the root build declares
+   * the list and its pages as inputs of every {@code docLintTest} task.
    */
-  public static final List<String> OTHER_PAGES =
-      List.of("README.md", "docs/QUICKSTART.md", "docs/reference/api.md");
+  public static final String OTHER_PAGES_LIST = "gradle/doc-lint-pages.txt";
 
   /**
    * The main sources of {@code streamrune-integration-api}, repository-relative: the keys the three
@@ -99,8 +101,23 @@ public final class ConfigurationDocs {
   }
 
   /**
+   * The pages {@link #OTHER_PAGES_LIST} lists in the repository at {@code root},
+   * repository-relative, in the order it lists them.
+   */
+  public static List<String> otherPages(Path root) {
+    try {
+      return Files.readAllLines(root.resolve(OTHER_PAGES_LIST), StandardCharsets.UTF_8).stream()
+          .map(String::strip)
+          .filter(line -> !line.isEmpty() && !line.startsWith("#"))
+          .toList();
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  /**
    * The markdown files under {@code docs/guide} of the repository, the given repository-relative
-   * files (an integration's README) and the {@link #OTHER_PAGES}, read once.
+   * files (an integration's README) and the {@link #otherPages}, read once.
    */
   public static ConfigurationDocs read(Path root, String... moreFiles) {
     Map<String, List<String>> files = new LinkedHashMap<>();
@@ -114,7 +131,7 @@ public final class ConfigurationDocs {
         files.put(file, Files.readAllLines(root.resolve(file), StandardCharsets.UTF_8));
         referenceFiles.add(file);
       }
-      for (String page : OTHER_PAGES) {
+      for (String page : otherPages(root)) {
         files.put(page, Files.readAllLines(root.resolve(page), StandardCharsets.UTF_8));
       }
     } catch (IOException e) {
@@ -164,7 +181,7 @@ public final class ConfigurationDocs {
 
   /**
    * The keys of {@code oracle} that no guide and no given README names, with no placeholder exempt;
-   * a key named on one of the {@link #OTHER_PAGES} only is not documented.
+   * a key named only on one of the {@link #otherPages} is not documented.
    */
   public List<String> undocumented(Map<String, String> oracle) {
     Set<String> named = new TreeSet<>();

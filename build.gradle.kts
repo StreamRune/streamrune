@@ -377,6 +377,19 @@ val docLintModules =
         ":streamrune-integration:streamrune-quarkus",
         ":streamrune-integration:streamrune-micronaut")
 
+// The pages besides the guides that the doc-lint tests of streamrune-core and of the integrations
+// read (the repository's README, the quickstart, the API reference) are listed once, in
+// gradle/doc-lint-pages.txt, which those tests read too. The list and its pages are inputs of every
+// docLintTest task (registered at the end of this file): a doc-lint test that does not read them
+// runs again for nothing when one changes, which takes seconds, and none can keep a stale result.
+val docLintPageList = layout.projectDirectory.file("gradle/doc-lint-pages.txt")
+val docLintPages =
+    providers.fileContents(docLintPageList).asText.get()
+        .lines()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+        .map { file(it) }
+
 // The JaCoCo report finalizes every Test task (subprojects below). A build that requests quickCheck
 // and nothing else leaves the report out of its task graph, so the fast lane never waits for a
 // coverage report it does not read; `quickCheck build` writes the reports as usual, and so does an
@@ -1876,6 +1889,10 @@ configure(subprojects.filter { it.path in docLintModules }) {
             // module's architecture rules here a second time.
             useJUnitPlatform { includeEngines("junit-jupiter") }
             filter { includeTestsMatching("*DocLintTest") }
+            inputs
+                .files(docLintPageList, docLintPages)
+                .withPropertyName("docLintPages")
+                .withPathSensitivity(PathSensitivity.RELATIVE)
             // The JaCoCo report of the module depends on `test`; as a finalizer it would drag the
             // whole suite into a standalone doc-lint run. Coverage is measured by `test`, so only
             // the summary finalizer stays (the same choice as streamrune-e2e's brokerTest).

@@ -1,0 +1,8 @@
+# The pages outside docs/guide that the doc-lint tests read besides the guides, one
+# repository-relative path per line. Every streamrune. name on them is a configuration key, a meter
+# or a span attribute (each integration's ConfigurationDocLintTest), and every meter-shaped one is a
+# meter (MetricNamesDocLintTest). The root build declares this list and its pages as inputs of every
+# docLintTest task.
+README.md
+docs/QUICKSTART.md
+docs/reference/api.md

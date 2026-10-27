@@ -18,13 +18,14 @@ dependencies {
 }
 
 // The contract's own tests read the production guide and the configuration reference, as the
-// integrations' test tasks do when they run the contract: declared, so an edit to either re-runs
-// them.
+// integrations' test tasks do when they run the contract, and the list of the pages the doc-lints
+// read besides the guides: declared, so an edit to any of them re-runs them.
 tasks.named<Test>("test") {
     inputs
         .files(
             rootDir.resolve("docs/guide/production.md"),
             rootDir.resolve("docs/guide/configuration.md"),
+            rootDir.resolve("gradle/doc-lint-pages.txt"),
         )
         .withPropertyName("wiringContractGuides")
         .withPathSensitivity(PathSensitivity.RELATIVE)

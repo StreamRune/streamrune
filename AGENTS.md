@@ -215,7 +215,8 @@ run by `./gradlew docLintTest`, `check` and `quickCheck`) fail when it does not:
 
 - a meter constant in `MetricNames` and the `### Metrics` table of `docs/guide/production.md`
   (`MetricNamesDocLintTest`, which also checks the integration-api README's meter table and every
-  meter name in the guides, the README, `docs/QUICKSTART.md` and `docs/reference/api.md`);
+  meter name in the guides and on the pages `gradle/doc-lint-pages.txt` lists: the README,
+  `docs/QUICKSTART.md` and `docs/reference/api.md`);
 - the kind of meter `MicrometerStreamRuneMetrics` registers and the `Type` column of both meter
   tables (`MeterTypeDocLintTest` in `streamrune-integration-api`);
 - a relay component name in `RelayComponentNames`, or an integration's health check name, and the

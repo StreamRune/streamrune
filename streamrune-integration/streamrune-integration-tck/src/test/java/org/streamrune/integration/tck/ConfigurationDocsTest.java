@@ -279,9 +279,22 @@ class ConfigurationDocsTest {
     assertEquals(root, docs.root());
     assertTrue(docs.fileNames().contains("docs/guide/production.md"), docs.fileNames().toString());
     assertTrue(docs.fileNames().contains("streamrune-integration/streamrune-spring/README.md"));
-    assertTrue(
-        docs.fileNames().containsAll(ConfigurationDocs.OTHER_PAGES), docs.fileNames().toString());
+    List<String> otherPages = ConfigurationDocs.otherPages(root);
+    assertTrue(!otherPages.isEmpty(), ConfigurationDocs.OTHER_PAGES_LIST + " lists no page");
+    assertTrue(docs.fileNames().containsAll(otherPages), docs.fileNames().toString());
     assertTrue(docs.fileNames().size() > 10, docs.fileNames().toString());
+  }
+
+  @Test
+  void theOtherPagesAreTheLinesOfTheirListThatAreNeitherBlankNorAComment(@TempDir Path root)
+      throws Exception {
+    Files.createDirectories(root.resolve(ConfigurationDocs.OTHER_PAGES_LIST).getParent());
+    Files.writeString(
+        root.resolve(ConfigurationDocs.OTHER_PAGES_LIST),
+        String.join("\n", "# the pages", "README.md", "", "  docs/QUICKSTART.md  ", "#", ""));
+
+    assertEquals(List.of("README.md", "docs/QUICKSTART.md"), ConfigurationDocs.otherPages(root));
+    assertThrowsUnchecked(() -> ConfigurationDocs.otherPages(root.resolve("no-such-root")));
   }
 
   @Test

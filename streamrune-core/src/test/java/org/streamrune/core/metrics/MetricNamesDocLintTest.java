@@ -27,23 +27,27 @@ import org.junit.jupiter.api.Test;
  *       {@code MetricNames} exactly once, and nothing else;
  *   <li>the meter table of {@code streamrune-integration/streamrune-integration-api/README.md}
  *       names meters only;
- *   <li>every meter-shaped name in the guides, the repository's README, the quickstart and the API
- *       reference is a meter: a backticked {@code streamrune.} name whose last segment has an
- *       underscore, a shape no configuration key has (keys are kebab case). A meter name without an
- *       underscore is held to the code by the integrations' configuration doc-lint, which knows the
- *       keys as well as the meters.
+ *   <li>every meter-shaped name in the guides and the pages {@code gradle/doc-lint-pages.txt} lists
+ *       (the repository's README, the quickstart and the API reference) is a meter: a backticked
+ *       {@code streamrune.} name whose last segment has an underscore, a shape no configuration key
+ *       has (keys are kebab case). A meter name without an underscore is held to the code by the
+ *       integrations' configuration doc-lint, which knows the keys as well as the meters.
  * </ul>
  *
- * <p>The documents are declared as inputs of this module's {@code docLintTest} task.
+ * <p>The documents are declared as inputs of this module's {@code docLintTest} task; the root build
+ * declares the list of pages and the pages it lists.
  */
 class MetricNamesDocLintTest {
 
   private static final Pattern BACKTICKED_NAME =
       Pattern.compile("`(streamrune(?:\\.[a-z0-9_]+)+)[^`]*`");
 
-  /** The pages outside {@code docs/guide} that name meters too, repository-relative. */
-  private static final List<String> OTHER_PAGES =
-      List.of("README.md", "docs/QUICKSTART.md", "docs/reference/api.md");
+  /**
+   * The file that lists the pages outside {@code docs/guide} that name meters too, one
+   * repository-relative path per line, {@code #} starting a comment line; the integrations'
+   * configuration doc-lint reads the same list.
+   */
+  private static final String OTHER_PAGES_LIST = "gradle/doc-lint-pages.txt";
 
   @Test
   void theProductionGuideMetricsTableNamesEveryMeterOnce() {
@@ -94,7 +98,13 @@ class MetricNamesDocLintTest {
     try (Stream<Path> guides = Files.walk(root().resolve("docs/guide"))) {
       guides.filter(p -> p.toString().endsWith(".md")).sorted().forEach(documents::add);
     }
-    OTHER_PAGES.forEach(page -> documents.add(root().resolve(page)));
+    List<String> otherPages =
+        Files.readAllLines(root().resolve(OTHER_PAGES_LIST), StandardCharsets.UTF_8).stream()
+            .map(String::strip)
+            .filter(line -> !line.isEmpty() && !line.startsWith("#"))
+            .toList();
+    assertTrue(!otherPages.isEmpty(), OTHER_PAGES_LIST + " must list the pages besides the guides");
+    otherPages.forEach(page -> documents.add(root().resolve(page)));
     for (Path document : documents) {
       List<String> lines = Files.readAllLines(document, StandardCharsets.UTF_8);
       for (int i = 0; i < lines.size(); i++) {
@@ -112,8 +122,9 @@ class MetricNamesDocLintTest {
     }
     assertTrue(checked > 50, "the meter names of the guides must be found: " + checked);
     assertNoProblems(
-        "meter-shaped name(s) in the guides, the README, the quickstart or the API reference that"
-            + " MetricNames does not define",
+        "meter-shaped name(s) in the guides or the pages of "
+            + OTHER_PAGES_LIST
+            + " that MetricNames does not define",
         problems);
   }
 

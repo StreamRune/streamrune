@@ -126,7 +126,7 @@ class ConfigurationDocLintTest {
         "streamrune.* name(s) in the guides, "
             + README
             + " or "
-            + ConfigurationDocs.OTHER_PAGES
+            + ConfigurationDocs.otherPages(ConfigurationDocs.repositoryRoot())
             + " that Spring neither binds nor reads",
         docs.unknown(oracle));
   }
