@@ -551,7 +551,7 @@ fails closed rather than binding a newer-shaped payload to an older class. The e
 | Consumer | Verdict |
 |---|---|
 | Command bus dead letter queue | dead-lettered (a replay on an upgraded replica succeeds) |
-| `DeadLetterRetryRunner` | `RetryOutcome.READER_BEHIND`: a replay that fails with it counts no attempt, and the entry is unchanged |
+| `DeadLetterRetryRunner` | `RetryOutcome.READER_BEHIND`: a replay that fails with it counts no attempt; the entry records the replay's time and is replayed again after its backoff |
 | Circuit breaker | **not** counted (the store answered; this replica's code is behind) |
 | A saga's forward command (never dead-lettered) | retry-later: the saga is left as it is and the event delivered again; the refusal compensates nothing |
 | `ReadPoisonClassifier`, `ProjectionErrorClassifier.DEFAULT` | transient: the projection or subscription stops at that event and retries it, never quarantines it |

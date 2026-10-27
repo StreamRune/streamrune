@@ -212,13 +212,17 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      * org.streamrune.core.EventSchemaAheadException} in the cause chain), which is what a replica
      * still on the previous release meets during a rolling deployment of an event-schema change.
      * The store refused the load before anything was appended, and the command succeeds on a
-     * replica that reads that version, so the failure is not counted: the entry is unchanged — its
-     * attempt count is not bumped, so the rollout window can neither exhaust it nor, under {@code
-     * discardAfterMaxRetries}, discard it — and it is replayed again on the next poll, until a
-     * replica that reads the event holds the runner's lease. On the schedule such a replay takes no
-     * slot of the poll's batch, so the entries behind it in the page the poll read are replayed in
-     * the same poll. Every such replay is counted in {@code streamrune.dlq.reader_behind}, and a
-     * poll states its own in one INFO line.
+     * replica that reads that version, so the failure is not counted: the entry's attempt count is
+     * not bumped, so the rollout window can neither exhaust it nor, under {@code
+     * discardAfterMaxRetries}, discard it. Only its last attempt time becomes the replay's: the
+     * entry moves behind the entries queued after it in the least-recently-active order and is
+     * replayed again once the backoff of its next attempt has passed, until a replica that reads
+     * the event holds the runner's lease. On the schedule such a replay takes no slot of the poll's
+     * batch, so the entries behind it in the page the poll read are replayed in the same poll, and
+     * a run of such entries longer than a page delays the entries after it by one poll per page.
+     * Every such replay is counted in {@code streamrune.dlq.reader_behind}, and a poll states its
+     * own in one line: at WARN when the poll read a full page and reached its end with its batch
+     * not full, because the entries queued after that page were not reached; at INFO otherwise.
      */
     READER_BEHIND,
     /**
@@ -609,8 +613,11 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     int processed = 0;
     int staleSkipped = 0;
     int readerBehind = 0;
+    // Whether the loop stopped before the end of the page: the batch is full, or leadership moved.
+    boolean stoppedEarly = false;
     for (var entry : entries) {
       if (processed >= batchSize) {
+        stoppedEarly = true;
         break;
       }
       // The gate above checks leadership ONCE per batch and discards the acquired
@@ -624,6 +631,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
             "Lost leadership for '{}' mid-batch; stopping before processing the remaining entries"
                 + " this cycle",
             CONSUMER_NAME);
+        stoppedEarly = true;
         break;
       }
       if (!includeUnkeyed && !isDeduplicatedAgainstCaller(entry)) {
@@ -642,30 +650,48 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         continue;
       }
       if (processEntry(entry, false, false, null) == RetryOutcome.READER_BEHIND) {
-        // A replay that answers READER_BEHIND takes no slot of the batch: nothing was attempted,
-        // the entry is left unchanged and keeps the head of the least-recently-active order on
-        // every poll, so counted, a batch's worth of such entries would hold back every entry
-        // behind them for the whole rollout. The page is over-fetched, so the poll reaches those
-        // entries in the same cycle. An admission refusal keeps its slot: the bus is closing or
-        // saturated, and the next entry would meet the same refusal. Summarized once below.
+        // A replay that answers READER_BEHIND takes no slot of the batch: nothing was attempted
+        // against the command, and counted, a batch's worth of such entries at the head of the
+        // page would hold back the entries behind them in it. The page is over-fetched, so the
+        // poll reaches those entries in the same cycle; the entry itself moves behind the entries
+        // queued after the page (processEntry records the replay's time). An admission refusal
+        // keeps its slot: the bus is closing or saturated, and the next entry would meet the same
+        // refusal. Summarized once below.
         readerBehind++;
       } else {
         processed++;
       }
     }
     if (readerBehind > 0) {
-      LOG.info(
-          "{} DLQ entr{} of this cycle's page {} not replayed: this replica is behind the stored"
-              + " schema of {} aggregate{} (a newer release stored an event at a schema version"
-              + " this replica's upcaster chain does not reach). Each is left unchanged, with no"
-              + " attempt counted, and replayed again on the next poll; the replay succeeds on a"
-              + " replica that reads the stored version (streamrune.dlq.reader_behind counts"
-              + " them; DEBUG names each).",
-          readerBehind,
-          readerBehind == 1 ? "y" : "ies",
-          readerBehind == 1 ? "was" : "were",
-          readerBehind == 1 ? "its" : "their",
-          readerBehind == 1 ? "" : "s");
+      // The poll read a full page and reached its end with its batch not full: rows queued after
+      // the page may be due and were not read. The entries behind the stored schema have moved
+      // behind them, so a later poll reaches them; until then they wait, which an operator sees.
+      boolean pageExhausted =
+          !stoppedEarly && entries.size() >= fetchLimit && processed < batchSize;
+      LOG.atLevel(pageExhausted ? Level.WARN : Level.INFO)
+          .log(
+              "{} DLQ entr{} of this cycle's page {} not replayed: this replica is behind the"
+                  + " stored schema of {} aggregate{} (a newer release stored an event at a schema"
+                  + " version this replica's upcaster chain does not reach). No attempt is"
+                  + " counted; each is replayed again after its backoff, and the replay succeeds"
+                  + " on a replica that reads the stored version (streamrune.dlq.reader_behind"
+                  + " counts them; DEBUG names each).{}",
+              readerBehind,
+              readerBehind == 1 ? "y" : "ies",
+              readerBehind == 1 ? "was" : "were",
+              readerBehind == 1 ? "its" : "their",
+              readerBehind == 1 ? "" : "s",
+              pageExhausted
+                  ? " The poll read a full page of "
+                      + fetchLimit
+                      + " entries and reached its end with "
+                      + processed
+                      + " of its batch of "
+                      + batchSize
+                      + " replayed, so the entries queued after the page were not reached this"
+                      + " poll; the entries behind the stored schema move behind them, and a"
+                      + " later poll reaches them."
+                  : "");
     }
     if (staleSkipped > 0) {
       LOG.warn(
@@ -1018,12 +1044,10 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         // the command, and the same replay succeeds on a replica that reads that version. During a
         // rolling deployment the lease can stay on a replica of the previous release for the whole
         // window, so counting it would exhaust the entry — and, under discardAfterMaxRetries, drop
-        // the command — for a failure that is not the command's. The entry stays untouched (no
-        // attempt, no lastAttemptAt), exactly like an admission refusal: a crash anywhere here
-        // converges trivially, and the next run replays it again.
+        // the command — for a failure that is not the command's. No attempt is counted.
         // Counted for every such replay; logged per entry at INFO for an operator's retry, and at
         // DEBUG on the schedule, which meets the same entries on every poll of the rollout and
-        // states them in one INFO line per poll (processBatch).
+        // states them in one line per poll (processBatch).
         EventSchemaAheadException behind = schemaAheadCause(e);
         recordMetric(
             "recordDeadLetterReaderBehind",
@@ -1032,13 +1056,23 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
             .log(
                 "Not counting the DLQ replay of {} ({}) as a failed attempt: this replica reads {}"
                     + " only up to schema version {}, and the command's aggregate holds an event"
-                    + " stored at version {} by a newer release. The entry is left unchanged; a"
-                    + " replay on a replica that reads that version succeeds.",
+                    + " stored at version {} by a newer release. The entry keeps its attempt"
+                    + " count and is replayed again after its backoff; a replay on a replica that"
+                    + " reads that version succeeds.",
                 LogSanitizer.sanitizeForLog(entry.commandId().value()),
                 entry.commandType(),
                 LogSanitizer.sanitizeForLog(behind.eventType().name()),
                 behind.readerVersion(),
                 behind.storedVersion());
+        // The replay's time, with the attempt count as it was: the entry leaves the head of the
+        // least-recently-active order to the entries queued after it, and is due again after
+        // delayForAttempt(dlqAttempts + 1) — a page of such entries otherwise stays at the head
+        // and holds every later entry back for the whole rollout, replayed in full on every poll.
+        // The count is unchanged, so neither exhaustion nor discardAfterMaxRetries is reachable.
+        // One single-row write, the last step: a crash before it leaves the entry as it was, at the
+        // head, replayed again on the next poll; a crash after it leaves it behind, replayed after
+        // its backoff. A failure of the write propagates like that of a counted attempt's.
+        deadLetterQueue.updateAttempts(entry.commandId(), entry.dlqAttempts(), clock.instant());
         return RetryOutcome.READER_BEHIND;
       }
       recordFailedAttempt(entry, e);

@@ -288,7 +288,7 @@ single source of truth — the table below tracks it):
 | `streamrune.dlq.pending` | Gauge | Current command dead-letter-queue depth (entries queued for retry/inspection), sampled by `DeadLetterRetryRunner` each poll cycle — a sustained rise means commands are failing faster than they are retried/resolved; alert alongside `dlq.exhausted`. It counts every queued entry — exhausted entries kept for inspection and entries awaiting an operator included — so alert on `dlq.awaiting_operator` for the latter |
 | `streamrune.dlq.awaiting_operator` | Gauge | Command dead-letter entries the `DeadLetterRetryRunner` will never replay on its schedule and that are not exhausted: unkeyed entries under the default `streamrune.dead-letter.unkeyed-replay=operator-only` (on a bus without a command inbox, keyed ones too), and keyed entries first received longer ago than `streamrune.inbox.retention-max-age`. Each waits for an operator to discard it or retry it with `force`, and none ever reaches `dlq.exhausted`. **Alert on it above zero.** Sampled each poll cycle; untagged; stays at zero for a `DeadLetterQueue` without `countAwaitingOperator` |
 | `streamrune.dlq.stale_replay_blocked` | Counter | Operator retries (`retry(commandId)` without `force`) the `DeadLetterRetryRunner` refused because the entry's command ran under an idempotency key and was first received longer ago than `streamrune.inbox.retention-max-age`, so the inbox might not deduplicate it. Nothing was executed. The schedule skips such entries without counting them here — they are in `dlq.awaiting_operator`. Tagged by `command.type` |
-| `streamrune.dlq.reader_behind` | Counter | Dead-letter replays that failed because the replica running them is behind the stored schema (`RetryOutcome.READER_BEHIND`: the command's aggregate holds an event a newer release stored at a `schema_version` the replica's upcaster chain does not reach), on the schedule and on an operator's `retry(commandId)`. No attempt was counted and the entry is unchanged. Expected while a rolling deployment of an event-schema change keeps the retry runner's lease on a replica of the previous release (see [Rolling out an event-schema change](#rolling-out-an-event-schema-change)); a rate that stays above zero after the rollout ended means the replica holding the lease is still behind. Tagged by `command.type` |
+| `streamrune.dlq.reader_behind` | Counter | Dead-letter replays that failed because the replica running them is behind the stored schema (`RetryOutcome.READER_BEHIND`: the command's aggregate holds an event a newer release stored at a `schema_version` the replica's upcaster chain does not reach), on the schedule and on an operator's `retry(commandId)`. No attempt was counted: the entry keeps its attempt count, records the replay's time and is replayed again after its backoff. Expected while a rolling deployment of an event-schema change keeps the retry runner's lease on a replica of the previous release (see [Rolling out an event-schema change](#rolling-out-an-event-schema-change)); a rate that stays above zero after the rollout ended means the replica holding the lease is still behind. Tagged by `command.type` |
 | `streamrune.dlq.swept_rows` | Counter | Command dead-letter-queue rows swept by the housekeeping job |
 | `streamrune.dlq.retry.consecutive_failures` | Gauge | Consecutive poll-cycle failures of the `DeadLetterRetryRunner` — `0` when healthy, rising while the runner is in backoff (DLQ store unreachable); a nonzero value means the runner is DEGRADED but still running |
 | `streamrune.outbox.relay.consecutive_failures` | Gauge | Consecutive poll-cycle failures of the outbox relay (`OutboxPoller`) — `0` when the last cycle succeeded, rising while the relay is in backoff (store/broker unreachable); combine with the relay-liveness health check to catch a wholly dead relay thread |
@@ -953,19 +953,21 @@ A dead-lettered command replays once its entry is retried on an upgraded replica
 is leased, so its automatic attempts run where the lease is, and the lease moves only when its
 holder stops or fails to renew it: until then a replay may run on a replica still behind. Such a
 replay fails with the same refusal and counts no attempt (`RetryOutcome.READER_BEHIND`): the entry
-is left unchanged and replayed again on the next poll. A poll states its replays that answered so
+keeps its attempt count, and only its last attempt time becomes the replay's, so it is replayed
+again once the backoff of its next attempt has passed. A poll states its replays that answered so
 in one INFO line (DEBUG names each entry with the event type and both versions), and
 `streamrune.dlq.reader_behind` counts them by command type: a rate that stays above zero after the
 rollout ended means the replica that holds the runner's lease is still behind. A long rollout therefore neither exhausts the entry (five attempts span about 31
 minutes with the integrations' defaults, about 15 under `DeadLetterRetryPolicy.DEFAULT`) nor,
 under `discardAfterMaxRetries`, discards the command. Such a replay takes no slot of the poll's
-batch either: an entry left unchanged stays due and keeps the head of the queue's
-least-recently-active order on every poll, and the poll goes on to the entries behind it in the page
-it read (ten batches), which are replayed in the same poll. Only more entries behind the stored
-schema than a page holds keep the entries queued after them waiting until the rollout ends; nothing
-is lost. The runner replays a keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
-operator's `retry(commandId)` on a replica still behind answers `READER_BEHIND` and changes
-nothing.
+batch either: the poll goes on to the entries behind it in the page it read (ten batches), which are
+replayed in the same poll. The recorded time moves the entry behind the entries queued after it in
+the queue's least-recently-active order, so a run of entries behind the stored schema longer than a
+page delays the entries after it by one poll per page it fills, and a poll that reads a full page
+and reaches its end with its batch not full states its line at WARN, because the entries queued
+after that page were not reached; nothing is lost. The runner replays a keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
+operator's `retry(commandId)` on a replica still behind answers `READER_BEHIND`, counts no attempt
+and records the replay's time.
 
 A command a saga dispatches is never dead-lettered: the saga subsystem owns its recovery. Its
 forward command that meets the refusal is retry-later, so the saga runner leaves the saga exactly

@@ -371,12 +371,15 @@ discarded), `FAILED` (it failed again or could not be replayed; the attempt is r
 `ADMISSION_REFUSED` (the bus is closing or saturated; the entry is unchanged), `READER_BEHIND`
 (this replica is behind the stored schema: the command's aggregate holds an event stored at a
 `schema_version` its upcaster chain does not reach, the `EventSchemaAheadException` of a rolling
-deployment; the entry is unchanged, no attempt is counted, `streamrune.dlq.reader_behind` counts
-the replay, and a replay on a replica that reads that version succeeds), `STALE_REPLAY_BLOCKED` (see [Stale keyed entries](#stale-keyed-entries)),
-`NOT_DEDUPLICATED` or `NOT_FOUND`. The schedule treats a replay that ends `ADMISSION_REFUSED` or
-`READER_BEHIND` the same way: nothing is counted, and the entry is replayed again on the next poll.
-A `READER_BEHIND` replay also takes no slot of the poll's batch, so the entries behind it in the
-page the poll read are replayed in the same poll.
+deployment; no attempt is counted, the entry records the replay's time,
+`streamrune.dlq.reader_behind` counts the replay, and a replay on a replica that reads that version
+succeeds), `STALE_REPLAY_BLOCKED` (see [Stale keyed entries](#stale-keyed-entries)),
+`NOT_DEDUPLICATED` or `NOT_FOUND`. On the schedule neither a replay that ends `ADMISSION_REFUSED`
+nor one that ends `READER_BEHIND` counts an attempt. An admission refusal leaves the entry
+unchanged, and it is replayed again on the next poll; a `READER_BEHIND` replay records its time,
+which moves the entry behind the entries queued after it, and it is replayed again once the
+backoff of its next attempt has passed. A `READER_BEHIND` replay also takes no slot of the poll's
+batch, so the entries behind it in the page the poll read are replayed in the same poll.
 Without `force` it refuses exactly the entries the schedule leaves to an operator.
 Under `unkeyedReplay = OPERATOR_ONLY`, `NOT_DEDUPLICATED` refuses an entry whose replay nothing can
 pair with a retry its caller may already have made — it ran without an idempotency key, or the bus
