@@ -56,7 +56,8 @@ name: Release
 #
 # When a job fails, "Re-run failed jobs" runs it and the jobs after it again and repeats none that
 # succeeded, so a publish run again uploads on the tag the first attempt pushed; "Re-run all jobs"
-# works too, because verify accepts the tag on the run's commit. Before a publish runs again, open
+# works too, because verify accepts the tag on the run's commit, and the release job gives the draft
+# it created the new run's notes instead of creating a second one. Before a publish runs again, open
 # the Portal's Deployments page: drop a deployment of the version that failed validation, and if
 # one was validated after the job stopped waiting, publish that one instead and create the draft
 # release by hand from the `release-notes` artifact. A fix that needs a new commit needs the tag
@@ -140,12 +141,14 @@ jobs:
 
           # The tag is absent, or on this commit: pushed by an earlier attempt of this run, or by
           # hand (a GPG-signed tag). An annotated tag is compared by the commit it peels to.
+          # ls-remote matches the tail of a ref name, so only the exact ref counts, its peeled line
+          # first: a branch refs/tags/v<version> or a tag x/refs/tags/v<version> is not the tag.
           tag="v$VERSION"
           remote=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}") \
             || fail "Could not read the tags of origin (git ls-remote exited $?)."
-          if [ -n "$remote" ]; then
-            peeled=$(printf '%s\n' "$remote" | awk '$2 ~ /\^\{\}$/ { print $1; exit }')
-            [ -n "$peeled" ] || peeled=$(printf '%s\n' "$remote" | awk '{ print $1; exit }')
+          peeled=$(printf '%s\n' "$remote" | awk -v t="refs/tags/$tag" \
+            '$2 == (t "^{}") { p = $1 } $2 == t { l = $1 } END { print (p != "" ? p : l) }')
+          if [ -n "$peeled" ]; then
             [ "$peeled" = "$GITHUB_SHA" ] \
               || fail "The tag $tag is on $peeled, not on this commit $GITHUB_SHA. A version is released once."
             echo "The tag $tag is on this commit already; the tag job leaves it as it is."
@@ -200,11 +203,12 @@ jobs:
               "$VERSION" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$tag" >> "$notes"
             echo "Release notes: the lead of the CHANGELOG section of $VERSION and a link to the whole section, which exceeds $limit characters."
           fi
-          # A link relative to the repository, a path with no scheme as CHANGELOG.md writes its links
-          # to the repository's pages, resolves in GitHub's file view but not on a release page: it
-          # is pointed at that file at the tag.
+          # A link into docs/ written relative, ](docs/…) or ](./docs/…), as the 1.0.0 entry links its
+          # reference page, resolves in GitHub's file view but not on a release page: it is pointed
+          # at that file at the tag. Images, anchors and absolute links stay as written, and so does
+          # any other relative link; write those absolute in CHANGELOG.md.
           base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$tag"
-          sed -E "s#\]\(([A-Za-z0-9_.-][^ ():]*)\)#](${base}/\1)#g" "$notes" > "$notes.tmp"
+          sed -E "s#(^|[^!])(\[[^]]*\])\((\./)?(docs/[^ ()]*)\)#\1\2(${base}/\4)#g" "$notes" > "$notes.tmp"
           mv "$notes.tmp" "$notes"
           [ "$(wc -m < "$notes")" -le "$limit" ] || fail "The release notes exceed $limit characters."
           echo "Releasing $VERSION from $GITHUB_SHA as $tag."
@@ -289,6 +293,7 @@ jobs:
       - name: Check that every published file is signed
         run: |
           repo="$RUNNER_TEMP/m2/org/streamrune"
+          [ -d "$repo" ] || { echo "::error::No module was published: $repo does not exist."; exit 1; }
           modules=$(find "$repo" -mindepth 1 -maxdepth 1 -type d | wc -l)
           files=0
           unsigned=0
@@ -325,10 +330,11 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           tag="v$VERSION"
+          # Only the exact ref counts (ls-remote matches the tail of a ref name), its peeled line first.
           remote=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}")
-          if [ -n "$remote" ]; then
-            peeled=$(printf '%s\n' "$remote" | awk '$2 ~ /\^\{\}$/ { print $1; exit }')
-            [ -n "$peeled" ] || peeled=$(printf '%s\n' "$remote" | awk '{ print $1; exit }')
+          peeled=$(printf '%s\n' "$remote" | awk -v t="refs/tags/$tag" \
+            '$2 == (t "^{}") { p = $1 } $2 == t { l = $1 } END { print (p != "" ? p : l) }')
+          if [ -n "$peeled" ]; then
             if [ "$peeled" != "$GITHUB_SHA" ]; then
               echo "::error::The tag $tag is on $peeled, not on this commit $GITHUB_SHA."
               exit 1
@@ -407,17 +413,44 @@ jobs:
           name: release-notes
           path: ${{ runner.temp }}/release-notes
 
-      - name: Create the draft GitHub release
+      # A run of this job again, or of the whole workflow, finds the release it created: a draft is
+      # given this run's notes instead of a second draft being created, and a published release
+      # stays as it is. The list of the repository's releases holds drafts for this job's token.
+      - name: Create or update the draft GitHub release
         env:
           VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          options=(--draft --verify-tag --title "StreamRune $VERSION")
+          tag="v$VERSION"
+          notes="$RUNNER_TEMP/release-notes/release-notes.md"
+          options=(--title "StreamRune $VERSION")
           case "$VERSION" in *-*) options+=(--prerelease) ;; esac
-          url=$(gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" "${options[@]}" \
-            --notes-file "$RUNNER_TEMP/release-notes/release-notes.md")
+          releases=$(TAG="$tag" gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq '.[] | select(.tag_name == env.TAG) | if .draft then "draft" else "published" end')
+          state=none
+          while read -r kind; do
+            case "$kind" in
+              published) state=published ;;
+              draft) [ "$state" = published ] || state=draft ;;
+            esac
+          done <<< "$releases"
+          case "$state" in
+            published)
+              echo "::notice::The release $tag is published already; it stays as it is." ;;
+            draft)
+              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" "${options[@]}" --notes-file "$notes" > /dev/null
+              echo "The draft release $tag has this run's notes." ;;
+            none)
+              gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag "${options[@]}" \
+                --notes-file "$notes" > /dev/null ;;
+          esac
+          url=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
           {
-            echo "### Draft release v$VERSION"
+            echo "### Release $tag"
             echo
-            echo "$url — publish it once Maven Central serves $VERSION."
+            if [ "$state" = published ]; then
+              echo "$url is published."
+            else
+              echo "$url is a draft — publish it once Maven Central serves $VERSION."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
