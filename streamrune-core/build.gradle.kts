@@ -73,9 +73,9 @@ val logSinkPolicySourceManifest =
 
 // InternalTrackerIdRatchetTest reads every public text file in the repository (sources, guides,
 // build files, the files without an extension it reads by name), so a change to any of them must
-// re-run it. Mirrors the test's own walk: the same pruned directories, extensions and names. The
-// internal planning directory's name is built from pieces, as in the test, so no published file
-// names it.
+// re-run it. Mirrors the test's own walk: the same pruned directories, extensions and names, and the
+// test fails when the extensions and names included here are not the ones it reads. The internal
+// planning directory's name is built from pieces, as in the test, so no published file names it.
 val planningDirectory = "super" + "powers"
 val publicTextSources =
     fileTree(rootDir) {

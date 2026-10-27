@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
@@ -82,7 +83,8 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The scanned tree is declared as an input of {@code :streamrune-core:test} in {@code
  * streamrune-core/build.gradle.kts}, so Gradle re-runs this test when a file in another module or a
- * guide changes.
+ * guide changes; {@link #theGradleInputsNameTheExtensionsAndNamesTheWalkReads()} holds that
+ * declaration to the extensions and names the walk reads.
  */
 class InternalTrackerIdRatchetTest {
 
@@ -135,7 +137,9 @@ class InternalTrackerIdRatchetTest {
   /**
    * The files without an extension that the repository publishes, scanned by name: the commit
    * template, the ignore list, the license and notice, the code owners, the git hook and the Gradle
-   * wrapper script. {@code streamrune-core/build.gradle.kts} declares the same names.
+   * wrapper script. {@code streamrune-core/build.gradle.kts} declares the same names and {@link
+   * #SCANNED_EXTENSIONS} as the inputs of this test ({@link
+   * #theGradleInputsNameTheExtensionsAndNamesTheWalkReads()}).
    */
   private static final Set<String> SCANNED_NAMES =
       Set.of(
@@ -819,6 +823,39 @@ class InternalTrackerIdRatchetTest {
     assertTrue(
         files.stream().noneMatch(p -> relative(p).startsWith("." + PLANNING + "/")),
         "internal working material is never scanned");
+  }
+
+  /**
+   * The Gradle inputs of this test are the files it reads: the extensions and the names that {@code
+   * streamrune-core/build.gradle.kts} includes in {@code publicTextSources} are {@link
+   * #SCANNED_EXTENSIONS} and {@link #SCANNED_NAMES}. A kind of file the walk reads and the build
+   * does not declare would leave an edit of it with the result of an earlier run; one the build
+   * declares and the walk does not read would run this test again for nothing.
+   */
+  @Test
+  void theGradleInputsNameTheExtensionsAndNamesTheWalkReads() {
+    List<String> build = read(repositoryRoot().resolve("streamrune-core/build.gradle.kts"));
+    int start = 0;
+    while (start < build.size() && !build.get(start).startsWith("val publicTextSources")) {
+      start++;
+    }
+    assertTrue(start < build.size(), "streamrune-core/build.gradle.kts declares publicTextSources");
+    // "**/*.java" includes an extension, "**/NOTICE" a name.
+    Pattern included = Pattern.compile("\"\\*\\*/(\\*\\.)?([^\"*/]+)\"");
+    Set<String> extensions = new TreeSet<>();
+    Set<String> names = new TreeSet<>();
+    for (String line : build.subList(start + 1, build.size())) {
+      String code = line.strip();
+      if (code.equals("}")) {
+        break;
+      }
+      Matcher include = included.matcher(code);
+      while (code.startsWith("include(") && include.find()) {
+        (include.group(1) != null ? extensions : names).add(include.group(2));
+      }
+    }
+    assertEquals(new TreeSet<>(SCANNED_EXTENSIONS), extensions, "the extensions of the inputs");
+    assertEquals(new TreeSet<>(SCANNED_NAMES), names, "the file names of the inputs");
   }
 
   @Test
