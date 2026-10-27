@@ -13,14 +13,14 @@ name: Build
 # verifyReleaseChecks looks up and the 17 leg skips the compile/coverage/Javadoc work that does not
 # depend on the server version.
 #
-# Release gate: the `tags: ['v*']` trigger is what makes this workflow's `check-runs` entry
-# (job name "build") exist for a release commit at all — verifyReleaseChecks in the root
-# build.gradle.kts (dependsOn'd by the Central upload task) queries the GitHub Checks API for
-# that entry on the exact tagged commit and REFUSES to publish unless it concluded `success`.
-# Without this trigger, a release commit would simply have no "build" check to find, and that
-# Gradle-side gate would fail closed for the wrong reason (never having run) rather than the
-# right one (having failed). `postgres-17` is gated the same way — see requiredCiCheckNames in the
-# root build.gradle.kts.
+# Release gate: verifyReleaseChecks in the root build.gradle.kts (dependsOn'd by the Central upload
+# task) queries the GitHub Checks API for this workflow's check-runs, "build" and "postgres-17", on
+# the exact commit being released and REFUSES to publish unless both concluded `success` (see
+# requiredCiCheckNames there). A release that release.yml cuts comes from a commit of main, whose
+# push ran this workflow; the tag release.yml pushes starts no run, because GitHub starts no
+# workflow for a push made with a workflow's own token. The `tags: ['v*']` trigger builds a tag
+# pushed by hand, so its commit has both checks too, and the gate fails closed for the right reason
+# (a check that failed) rather than the wrong one (a check that never ran).
 on:
   push:
     branches: [main]
