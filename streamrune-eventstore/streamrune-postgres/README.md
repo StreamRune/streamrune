@@ -131,7 +131,7 @@ up to 271 characters; every other event holds the caller's own, which the reques
 
 ## Best Practices
 
-- **Size the pools** — the factory pools its own connections (see Usage). `PgAdvisoryLocker` holds a lock connection for the whole command while the store borrows another, so prefer `PgAdvisoryLocker.withDedicatedPool(jdbcUrl, username, password, maxPoolSize)` over sharing the event-store pool.
+- **Size the pools** — the factory pools its own connections (see Usage). `PgAdvisoryLocker` holds a lock connection for the whole command while the store borrows another, so prefer `PgAdvisoryLocker.withDedicatedPool(jdbcUrl, username, password, maxPoolSize)` over sharing the event-store pool; `withDedicatedPool(jdbcUrl, username, password, maxPoolSize, metricsTrackerFactory)` lets you observe that pool, named `streamrune-advisory-lock` (`new MicrometerMetricsTrackerFactory(registry)` gives `hikaricp.connections.*`), whose saturation otherwise shows only as lock timeouts.
 - **Let the factory own the schema** — keep `autoInitializeSchema` on unless you apply `db/streamrune-migration` yourself; keep `validateSchema` on either way.
 - **Use `HybridEventSubscription` for live delivery** — LISTEN/NOTIFY push plus a polling fallback; its javadoc names it the recommended subscription for production.
 - **Combine with `PgAdvisoryLocker`** — for distributed deployments, use advisory locks instead of `LocalStripedLocker`.
