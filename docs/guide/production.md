@@ -862,8 +862,9 @@ connection of the locker's own pool for the whole command. To observe that pool,
 `MetricsTrackerFactory` as a fifth argument,
 `withDedicatedPool(jdbcUrl, username, password, maxPoolSize, metricsTrackerFactory)`:
 `new MicrometerMetricsTrackerFactory(registry)` gives `hikaricp.connections.*` tagged with the pool's
-name, `streamrune-advisory-lock`; without one, the lock pool's saturation shows only as lock
-timeouts. The integration's default steps aside for an application's bean:
+name, `streamrune-advisory-lock`; without one, the lock pool's saturation shows only as failed lock
+acquisitions (a `LockException` after the pool's 10-second connection timeout). The integration's
+default steps aside for an application's bean:
 
 ```java
 // Spring: the auto-configured locker is @ConditionalOnMissingBean(AggregateLocker.class).
@@ -972,7 +973,7 @@ the queue's least-recently-active order, so a run of entries behind the stored s
 page delays the entries after it by one poll per page it fills, and a poll that reaches the end of
 a full page with its batch not full while an entry is queued after the page states its line at WARN
 instead, because it did not reach that entry (the poll reads one row beyond the page to know, and
-replays it in a later poll); nothing is lost. The runner replays a keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
+reaches it in a later poll); nothing is lost. The runner replays a keyed entry automatically; an unkeyed one waits for an operator under the default policy, and an
 operator's `retry(commandId)` on a replica still behind answers `READER_BEHIND`, counts no attempt
 and records the replay's time.
 

@@ -114,7 +114,8 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    * streamrune-advisory-lock}, reporting to {@code metricsTrackerFactory}, HikariCP's metrics SPI.
    * An application passes {@code new MicrometerMetricsTrackerFactory(registry)} to get {@code
    * hikaricp.connections.*} tagged with the pool name; without a tracker the lock pool's saturation
-   * shows only as lock timeouts.
+   * shows only as failed lock acquisitions (a {@code LockException} after the pool's 10-second
+   * connection timeout).
    *
    * @param jdbcUrl the JDBC URL of the same database the event store uses (required)
    * @param username the database username (may be null if encoded in the URL)
