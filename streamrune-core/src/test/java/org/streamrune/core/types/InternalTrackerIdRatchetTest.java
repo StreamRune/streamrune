@@ -84,7 +84,8 @@ import org.junit.jupiter.api.Test;
  * <p>The scanned tree is declared as an input of {@code :streamrune-core:test} in {@code
  * streamrune-core/build.gradle.kts}, so Gradle re-runs this test when a file in another module or a
  * guide changes; {@link #theGradleInputsNameTheExtensionsAndNamesTheWalkReads()} holds that
- * declaration to the extensions and names the walk reads.
+ * declaration to the extensions and names the walk reads, and {@link
+ * #everyScannedFileIsADeclaredGradleInputOfThisTask()} to the files it reads.
  */
 class InternalTrackerIdRatchetTest {
 
@@ -151,6 +152,13 @@ class InternalTrackerIdRatchetTest {
     return SCANNED_NAMES.contains(name)
         || (dot >= 0 && SCANNED_EXTENSIONS.contains(name.substring(dot + 1)));
   }
+
+  /**
+   * System property carrying the path of the file that lists, repository-relative, every file
+   * Gradle resolves for the public-text input of this test task. Set by {@code
+   * streamrune-core/build.gradle.kts}.
+   */
+  private static final String DECLARED_SOURCES_PROPERTY = "streamrune.publictext.declared-sources";
 
   /**
    * The forbidden shapes. Each alternative is anchored on word boundaries so a longer ordinary word
@@ -856,6 +864,46 @@ class InternalTrackerIdRatchetTest {
     }
     assertEquals(new TreeSet<>(SCANNED_EXTENSIONS), extensions, "the extensions of the inputs");
     assertEquals(new TreeSet<>(SCANNED_NAMES), names, "the file names of the inputs");
+  }
+
+  /**
+   * The files Gradle resolves for the public-text input of this test are the files the walk reads.
+   * The lists of {@link #theGradleInputsNameTheExtensionsAndNamesTheWalkReads()} can agree while a
+   * file is still missing from the input: Gradle's default excludes drop some names from every file
+   * tree whatever it includes ({@code .gitignore} among them), so this test compares the files, as
+   * Gradle hands them over through {@link #DECLARED_SOURCES_PROPERTY}.
+   */
+  @Test
+  void everyScannedFileIsADeclaredGradleInputOfThisTask() {
+    String manifestPath = System.getProperty(DECLARED_SOURCES_PROPERTY);
+    if (manifestPath == null) {
+      fail(
+          "-D"
+              + DECLARED_SOURCES_PROPERTY
+              + " is not set, so the declared-inputs check cannot run. Gradle's test task supplies"
+              + " it (streamrune-core/build.gradle.kts); run `./gradlew :streamrune-core:test`.");
+    }
+    Set<String> scanned = new TreeSet<>();
+    publicTextFiles().forEach(file -> scanned.add(relative(file)));
+    Set<String> declared = new TreeSet<>();
+    for (String line : read(Path.of(manifestPath))) {
+      if (!line.isBlank()) {
+        declared.add(line.strip());
+      }
+    }
+    Set<String> scannedButNotDeclared = new TreeSet<>(scanned);
+    scannedButNotDeclared.removeAll(declared);
+    Set<String> declaredButNotScanned = new TreeSet<>(declared);
+    declaredButNotScanned.removeAll(scanned);
+    if (!scannedButNotDeclared.isEmpty() || !declaredButNotScanned.isEmpty()) {
+      fail(
+          "the Gradle inputs of this test are not the files it reads (declare them in"
+              + " streamrune-core/build.gradle.kts):\n  read but NOT declared (an edit of these"
+              + " does not re-run this test): "
+              + scannedButNotDeclared
+              + "\n  declared but not read (an edit of these re-runs it for nothing): "
+              + declaredButNotScanned);
+    }
   }
 
   @Test

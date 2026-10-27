@@ -255,8 +255,11 @@ run by `./gradlew docLintTest`, `check` and `quickCheck`) fail when it does not:
 - **Micronaut collection injection.** A singleton registered at runtime
   (`ApplicationContext.registerSingleton`) is not reliably collected into an injected `List`; a
   test that needs a bean in such a list declares it as a compile-time bean in a `@Factory`.
-- **`LogSinkPolicyRatchetTest` fails outside Gradle by design.** One of its tests reads the
-  `-Dstreamrune.logsink.declared-sources` property that the `test` task supplies. Run it with
+- **`LogSinkPolicyRatchetTest` and `InternalTrackerIdRatchetTest` fail outside Gradle by design.**
+  One test of each compares the files it reads with the files Gradle declares as the inputs of the
+  `test` task, a list the task hands over (`-Dstreamrune.logsink.declared-sources`,
+  `-Dstreamrune.publictext.declared-sources`): Gradle's default excludes leave a `.gitignore` out of
+  every file tree, so the build declares the repository's one on its own. Run them with
   `./gradlew :streamrune-core:test`, not from an IDE.
 - **Broker suites.** Kafka and RabbitMQ containers boot slowly under parallel container start, so the
   `@Tag("broker")` tests run in `brokerTest` (nightly and on release tags), not in `check`.

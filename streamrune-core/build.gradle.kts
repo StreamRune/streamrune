@@ -74,8 +74,10 @@ val logSinkPolicySourceManifest =
 // InternalTrackerIdRatchetTest reads every public text file in the repository (sources, guides,
 // build files, the files without an extension it reads by name), so a change to any of them must
 // re-run it. Mirrors the test's own walk: the same pruned directories, extensions and names, and the
-// test fails when the extensions and names included here are not the ones it reads. The internal
-// planning directory's name is built from pieces, as in the test, so no published file names it.
+// test fails when the extensions and names included here are not the ones it reads, or when the
+// files Gradle resolves for publicTextInputs are not the files it reads (publicTextSourceManifest).
+// The internal planning directory's name is built from pieces, as in the test, so no published file
+// names it.
 val planningDirectory = "super" + "powers"
 val publicTextSources =
     fileTree(rootDir) {
@@ -89,22 +91,62 @@ val publicTextSources =
         exclude("sonar-project.properties", ".git/**", ".gradle/**")
     }
 
+// Gradle's default excludes drop every file named .gitignore from a file tree, whatever the tree
+// includes, so the repository's .gitignore, which the test reads by name, is declared on its own. A
+// .gitignore in a subdirectory needs a line of its own here too: the test fails when it reads a file
+// that is not declared.
+val publicTextInputs = files(publicTextSources, rootDir.resolve(".gitignore"))
+
+// Hands the files Gradle resolves for publicTextInputs to the test, which fails when they are not
+// the files its walk reads: a file the walk reads and Gradle does not declare would let an edit of
+// it keep an earlier result.
+val publicTextSourceManifest =
+    tasks.register("publicTextSourceManifest") {
+        group = "verification"
+        description =
+            "Writes the public-text file list declared as an input of the tracker-id ratchet, so " +
+                "the test can prove the declaration covers what it scans."
+        val sources = publicTextInputs
+        val repoRoot = rootDir
+        val manifest = layout.buildDirectory.file("public-text/declared-sources.txt")
+        inputs
+            .files(sources)
+            .withPropertyName("publicTextSources")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+        outputs.file(manifest)
+        doLast {
+            val file = manifest.get().asFile
+            file.parentFile.mkdirs()
+            file.writeText(
+                sources.files
+                    .filter { it.isFile }
+                    .map { it.relativeTo(repoRoot).invariantSeparatorsPath }
+                    .sorted()
+                    .joinToString("\n"),
+            )
+        }
+    }
+
 tasks.named<Test>("test") {
     inputs
-        .files(publicTextSources)
+        .files(publicTextInputs)
         .withPropertyName("publicTextSources")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs
         .files(logSinkPolicySources)
         .withPropertyName("logSinkPolicySources")
         .withPathSensitivity(PathSensitivity.RELATIVE)
-    dependsOn(logSinkPolicySourceManifest)
+    dependsOn(logSinkPolicySourceManifest, publicTextSourceManifest)
     val manifest = logSinkPolicySourceManifest.map { it.outputs.files.singleFile }
+    val publicTextManifest = publicTextSourceManifest.map { it.outputs.files.singleFile }
     // Passed through an argument provider rather than `systemProperty` so the absolute path never
     // enters the task's cache key (the same shape streamrune-quarkus uses for its jar path).
     jvmArgumentProviders.add(
         org.gradle.process.CommandLineArgumentProvider {
-            listOf("-Dstreamrune.logsink.declared-sources=${manifest.get().absolutePath}")
+            listOf(
+                "-Dstreamrune.logsink.declared-sources=${manifest.get().absolutePath}",
+                "-Dstreamrune.publictext.declared-sources=${publicTextManifest.get().absolutePath}",
+            )
         },
     )
 }
