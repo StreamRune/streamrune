@@ -194,7 +194,8 @@ build files, guides, commit messages and pull request descriptions. All of it fo
 repository, and the files without an extension it publishes (`.gitmessage`, `.gitignore`,
 `LICENSE`, `NOTICE`, `CODEOWNERS`, the git hook, `gradlew`), and fails on tracker and review labels
 (review-finding labels included, and a work-item, audit-round or review-area label at the front of
-an identifier, a test name or a string id, in either letter case and in test sources too), on
+an identifier, a test name or a string id, in either letter case and in test sources too, or glued
+inside a camel-case name), on
 references to private review material and on history wording: a reviewer named by role, a
 numbered roadmap stage, work deferred to the roadmap, and outside test sources and code samples
 the state before or after a fix and the words that narrate an earlier behaviour (the test's
