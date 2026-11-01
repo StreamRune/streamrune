@@ -89,7 +89,7 @@ jmh-plugin = "0.7.3"
 pitest-plugin = "1.19.0"
 graalvm = "0.10.6"
 versions-plugin = "0.54.0"
-version-catalog-update = "1.1.1"
+version-catalog-update = "1.1.2"
 
 [libraries]
 # Jackson
