@@ -1,6 +1,6 @@
 [versions]
 # Frameworks
-spring-boot = "4.1.1"
+spring-boot = "4.1.2"
 quarkus = "3.40.1"
 # The Agroal connection pool Quarkus 3.40 pins; streamrune-quarkus compiles against its API only
 # (compileOnly) to open the crypto-forget LISTEN pool from the application's Agroal datasource.
