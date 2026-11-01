@@ -22,7 +22,7 @@ plugins {
     alias(libs.plugins.version.catalog.update)
     // Declared directly (not via the version catalog) because this plugin is part of the
     // publishing configuration owned by this block; see the publishing section below.
-    id("com.vanniktech.maven.publish") version "0.36.0" apply false
+    id("com.vanniktech.maven.publish") version "0.37.0" apply false
 }
 
 // ── Helpers for verifyModularApiScopes (registered per-subproject below) ──────
