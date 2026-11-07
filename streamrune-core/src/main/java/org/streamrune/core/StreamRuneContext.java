@@ -19,6 +19,12 @@ import org.streamrune.core.types.UserId;
  * <p>Note: Reactive support (Project Reactor, Mutiny, RxJava) is deferred. The current
  * implementation supports synchronous processing. Future versions will add reactive context
  * propagation when needed.
+ *
+ * <p><b>Reading the bindings.</b> {@link #capture()}, {@link #cause()}, {@link #isSagaDispatch()}
+ * and {@link #sagaForwardOf} read the thread's bindings every time ({@link ScopedValueReads}), not
+ * the per-thread cache that {@link ScopedValue#get()} and {@link ScopedValue#isBound()} consult
+ * first, and so does every other read of these values in the framework. Read them through these
+ * methods.
  */
 public final class StreamRuneContext {
 
@@ -99,7 +105,7 @@ public final class StreamRuneContext {
    * @return the cause of the dispatch in progress, or {@code null}
    */
   public static DispatchCause cause() {
-    return CAUSE.isBound() ? CAUSE.get() : null;
+    return ScopedValueReads.valueOrNull(CAUSE);
   }
 
   /**
@@ -145,10 +151,10 @@ public final class StreamRuneContext {
    *     {@code null}) is bound, or the bound marker names another key
    */
   public static SagaOrigin sagaForwardOf(IdempotencyKey key) {
-    if (key == null || !SAGA_FORWARD.isBound()) {
+    if (key == null) {
       return null;
     }
-    SagaForward forward = SAGA_FORWARD.get();
+    SagaForward forward = ScopedValueReads.valueOrNull(SAGA_FORWARD);
     return forward != null && forward.key().equals(key) ? forward.origin() : null;
   }
 
@@ -321,7 +327,7 @@ public final class StreamRuneContext {
    * @return {@code true} inside a saga dispatch, {@code false} otherwise
    */
   public static boolean isSagaDispatch() {
-    return SAGA_OWNED.isBound() && Boolean.TRUE.equals(SAGA_OWNED.get());
+    return Boolean.TRUE.equals(ScopedValueReads.valueOrNull(SAGA_OWNED));
   }
 
   /**
@@ -336,7 +342,7 @@ public final class StreamRuneContext {
    * #requireNoForeignReservedCorrelationId()}).
    */
   public static RequestContext capture() {
-    return CURRENT.isBound() ? CURRENT.get() : null;
+    return ScopedValueReads.valueOrNull(CURRENT);
   }
 
   /**
@@ -389,11 +395,11 @@ public final class StreamRuneContext {
    */
   private static ScopedValue.Carrier capturedBindings() {
     ScopedValue.Carrier bindings = null;
-    if (CURRENT.isBound()) {
-      bindings = ScopedValue.where(CURRENT, CURRENT.get());
+    if (ScopedValueReads.isBound(CURRENT)) {
+      bindings = ScopedValue.where(CURRENT, ScopedValueReads.valueOrNull(CURRENT));
     }
-    if (CAUSE.isBound()) {
-      DispatchCause cause = CAUSE.get();
+    if (ScopedValueReads.isBound(CAUSE)) {
+      DispatchCause cause = ScopedValueReads.valueOrNull(CAUSE);
       bindings = bindings == null ? ScopedValue.where(CAUSE, cause) : bindings.where(CAUSE, cause);
     }
     return bindings;

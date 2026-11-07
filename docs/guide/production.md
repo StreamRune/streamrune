@@ -916,7 +916,10 @@ class AggregateLockerFactory {
 **The connection budget.** A command holds its lock connection for its whole run and borrows a
 second connection from the application's pool for its load and its append, so size the lock pool for
 the commands one replica runs at once, and the application's pool for the load and the append alone;
-the two pools of every replica together stay below PostgreSQL's `max_connections`. A command whose
+the two pools of every replica together stay below PostgreSQL's `max_connections`. The dedicated lock
+pool keeps two connections open while the replica runs no command and opens the others on demand,
+up to its maximum; one beyond the two that stays idle for ten minutes is closed, so the budget of a
+replica's lock pool is its maximum under load and two at rest. A command whose
 `INLINE` projection dispatches a command on another aggregate holds a second lock connection (see
 [the dedicated lock pool](#postgresql-setup) above). `streamrune.lock-timeout` bounds the wait for a
 lock with either locker.
@@ -1298,6 +1301,19 @@ An outbox entry reaches `FAILED` when the transport rejected it for its own sake
 6. **Never** `DELETE` a `FAILED` row by hand. `OutboxStore.delete` refuses one, but a direct SQL `DELETE` releases the aggregate with no record and the framework cannot stop it. Retention will not remove a `FAILED` row for you.
 7. **Mode switch checklist.** Before restarting a channel from `AVAILABILITY_FIRST` to `STRICT_PER_AGGREGATE`: `findByStatus(FAILED, …)` must be empty, or every listed entry must be replayed or skipped first; make sure the mapper sets `streamId` on every entry (the strict store will otherwise fail appends with `OutboxOrderingViolationException`). A strict relay that still finds `FAILED` rows with no `aggregate_id` (and no `aggregate_type`) WARNs once at its first poll and keeps running — resolve them with `replay`/`skip` like any other. Before the reverse switch: understand that unresolved `FAILED` heads stop blocking and their successors go out immediately.
 8. **Retention.** `SKIPPED` rows are kept for `streamrune.outbox.skipped-retention-max-age` (default 30 d; keep it at least as long as your audit requires). `DELIVERED` rows are kept for `streamrune.outbox.retention-max-age` (7 d). `FAILED` is never pruned.
+
+## Scoped values on virtual threads
+
+The request context, the dispatch cause and the saga markers travel in `ScopedValue`s
+(`StreamRuneContext`). The framework reads them by walking the thread's bindings
+(`ScopedValueReads`), never through `ScopedValue.get()` or `isBound()`, which answer from a
+per-thread cache of recent reads first. On GraalVM CE 25.0.1 with its default Graal JIT, a compiled
+read of that cache on a virtual thread that has been unmounted and remounted answers with entries
+that are not the thread's bindings: a bound value reads as unbound, and one that is not bound reads
+as bound. The same reads compiled by C2 (`-XX:-UseJVMCICompiler` on GraalVM, or another JDK 25
+build) answer from the bindings. Read the framework's values through `StreamRuneContext.capture()`,
+`cause()` and `isSagaDispatch()`, and on that JVM read a scoped value of your own with
+`ScopedValue.orElse(...)` or `ScopedValueReads`.
 
 ## Backup, restore and disaster recovery
 

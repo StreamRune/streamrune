@@ -58,6 +58,15 @@ import org.streamrune.core.types.SagaType;
  * before()} refusing, by throwing and by returning {@code false}), and they are now treated alike.
  * Neither decides anything about the business, so neither may trigger an undo.
  *
+ * <p><b>A refusal of the dispatch's own bindings is never an undo.</b> The command bus refuses a
+ * command whose bound reserved correlation id is not the bound saga origin's ({@code
+ * ReservedCorrelationIdException}), and a saga dispatch binds the two together; so a refusal of a
+ * saga's command says that a framework invariant failed on that dispatch ({@link
+ * SagaCommandDispatch#isBindingRefusal}), not that the business said no. On the forward path the
+ * step ends as a retry-later failure ({@link #forwardBindingRefused}), on the compensation path the
+ * episode stays {@code COMPENSATING} as an attempted re-drive ({@link
+ * SagaCommandDispatch#compensateAndClassify}); both log it at {@code ERROR}.
+ *
  * <p><b>The forward fence.</b> With {@link #forwardFence()} on, every forward command is dispatched
  * fenced ({@link SagaCommandDispatch#dispatch}): the event store refuses it, storing nothing, once
  * the saga row carries a compensation episode, is terminal or is gone. A refusal is routed before
@@ -703,6 +712,9 @@ final class SagaStepExecutor<S extends SagaState> {
               routeFencedStep(sagaId, type, rowVersion, fs, index, sagaCommand, executedCommands),
               executedCommands);
         }
+        if (SagaCommandDispatch.isBindingRefusal(primary)) {
+          throw forwardBindingRefused(sagaId, index, sagaCommand, primary);
+        }
         if (SagaCommandDispatch.isRetryLater(primary)) {
           throw forwardRetryLater(sagaId, index, sagaCommand, primary);
         }
@@ -889,6 +901,41 @@ final class SagaStepExecutor<S extends SagaState> {
             + " compensation claimed) and the failure propagates so the subscription redelivers"
             + " the event. Already-dispatched forward commands dedup on their forward keys, so"
             + " only this index re-runs.",
+        failure);
+    return failure instanceof RuntimeException re ? re : new RuntimeException(failure);
+  }
+
+  /**
+   * A forward command was refused by the command bus for the bindings its dispatch made ({@link
+   * SagaCommandDispatch#isBindingRefusal}): a framework invariant failed, and nothing about the
+   * business was decided or attempted. The step ends as a retry-later failure does ({@link
+   * #forwardRetryLater}): the saga is left exactly as it was — no compensation episode is claimed,
+   * nothing is written for the delivery beyond the genesis-pending row a start event writes before
+   * its first dispatch — and the failure propagates, so the subscription delivers the event again
+   * and the forward commands already stored answer from the command inbox under their forward keys.
+   * Undoing the flow here would cancel a business process in which nothing failed.
+   *
+   * <p>It is logged at {@code ERROR}, not as the retry-later {@code WARN}: it is a defect of the
+   * framework or of the wiring around the bus, to be reported with the bus's refusal line, which
+   * names the bindings it read. A refusal that persists holds the subscription — its poll loop
+   * reports every failed delivery and its health records it — until the saga's deadline lets the
+   * timeout runner claim it.
+   */
+  private RuntimeException forwardBindingRefused(
+      SagaId sagaId, int index, SagaCommand sagaCommand, Exception failure) {
+    LOG.error(
+        "Saga "
+            + LogSanitizer.sanitizeForLog(sagaId.value())
+            + " forward command "
+            + sagaCommand.command().getClass().getSimpleName()
+            + " (index "
+            + index
+            + ") was refused by the command bus for the bindings its dispatch made (a reserved"
+            + " correlation id that is not the bound saga origin's): a framework invariant"
+            + " failed, not the business. The saga is left untouched (no compensation claimed)"
+            + " and the failure propagates so the subscription delivers the event again; the"
+            + " forward commands already stored answer from the command inbox. The command bus's"
+            + " refusal line, logged just before, names the bindings it read.",
         failure);
     return failure instanceof RuntimeException re ? re : new RuntimeException(failure);
   }

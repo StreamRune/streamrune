@@ -51,6 +51,7 @@ import org.streamrune.core.LockException;
 import org.streamrune.core.NoDeciderException;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.ScopedValueReads;
 import org.streamrune.core.SnapshotPolicy;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.StreamRuneMetrics;
@@ -344,8 +345,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * @return the context, or {@code null} when there is none
    */
   StreamRuneContext.RequestContext callerRequestContext() {
-    return StreamRuneContext.CURRENT.isBound()
-        ? StreamRuneContext.CURRENT.get()
+    return ScopedValueReads.isBound(StreamRuneContext.CURRENT)
+        ? ScopedValueReads.valueOrNull(StreamRuneContext.CURRENT)
         : requestContextOfAnUnboundCaller();
   }
 
@@ -356,7 +357,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * answers none.
    */
   private StreamRuneContext.RequestContext requestContextOfAnUnboundCaller() {
-    if (unboundRequestContext == null || StreamRuneContext.CURRENT.isBound()) {
+    if (unboundRequestContext == null || ScopedValueReads.isBound(StreamRuneContext.CURRENT)) {
       return null;
     }
     return unboundRequestContext.get();
@@ -862,13 +863,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   private <C extends Command> Runnable prepareAsyncTask(
       C command, CompletableFuture<CommandResult> future, AdmissionSlot slot) {
     var capturedCtx =
-        StreamRuneContext.CURRENT.isBound()
-            ? StreamRuneContext.CURRENT.get()
+        ScopedValueReads.isBound(StreamRuneContext.CURRENT)
+            ? ScopedValueReads.valueOrNull(StreamRuneContext.CURRENT)
             : requestContextOfAnUnboundCaller();
-    var capturedDlqReplay = DLQ_REPLAY.isBound() ? DLQ_REPLAY.get() : null;
-    var capturedSagaOwned =
-        StreamRuneContext.SAGA_OWNED.isBound() ? StreamRuneContext.SAGA_OWNED.get() : null;
-    var capturedCause = StreamRuneContext.CAUSE.isBound() ? StreamRuneContext.CAUSE.get() : null;
+    var capturedDlqReplay = ScopedValueReads.valueOrNull(DLQ_REPLAY);
+    var capturedSagaOwned = ScopedValueReads.valueOrNull(StreamRuneContext.SAGA_OWNED);
+    var capturedCause = ScopedValueReads.valueOrNull(StreamRuneContext.CAUSE);
     // The slot is freed BEFORE the future completes, on success and failure alike: a stage chained
     // on the future runs inside complete() on this very thread, and a caller blocked in get() or
     // join() may resubmit the instant it wakes — either must find its own command's slot free, or
@@ -1471,7 +1471,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       Instant timestamp,
       IdempotencyKey key) {
     if (deadLetterQueue == null) return null;
-    if (DLQ_REPLAY.isBound() && Boolean.TRUE.equals(DLQ_REPLAY.get())) {
+    if (Boolean.TRUE.equals(ScopedValueReads.valueOrNull(DLQ_REPLAY))) {
       // This execution replays an existing DLQ entry; the retry infrastructure tracks attempts
       // on the original entry. Publishing again would add a new entry on every retry cycle.
       LOG.debug(

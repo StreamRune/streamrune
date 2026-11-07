@@ -154,9 +154,9 @@ class SagaProvenanceWriterRatchetTest {
    */
   private static final Map<String, CauseUses> CAUSE_USES =
       Map.of(
-          CONTEXT, new CauseUses(3, 8),
+          CONTEXT, new CauseUses(3, 7),
           SAGA_DISPATCH, new CauseUses(1, 1),
-          BUS, new CauseUses(2, 4),
+          BUS, new CauseUses(2, 3),
           BUS_CONTRACT, new CauseUses(1, 1),
           IN_MEMORY_SUBSCRIPTION, new CauseUses(2, 3));
 

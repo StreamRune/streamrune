@@ -188,6 +188,13 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   of the stream stored from then on, while it stays connected. Quarkus REST sends the status line
   and the headers just before it subscribes the client, so on Quarkus this frame, not the response
   head (an `EventSource`'s `onopen`), is the signal that the client is subscribed.
+- **A client that goes away** — when a client closes its connection, the stream ends as on any
+  other end. A frame already on its way to the closed connection fails with a
+  `ClosedChannelException`, which Quarkus REST's publisher response handler
+  (`org.jboss.resteasy.reactive.server.handlers.PublisherResponseHandler`) logs at `ERROR`; the
+  integration installs a filter on that logger while the endpoint exists, so the record is logged at
+  `DEBUG` by `org.streamrune.quarkus.SseController` instead. Any other failure of a frame keeps its
+  `ERROR` line.
 - **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
   polling subscription that starts at the head of the global stream when the application starts
   and publishes every event stored from then on to the clients of the event's own stream, every
