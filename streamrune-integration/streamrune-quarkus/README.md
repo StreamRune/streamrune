@@ -58,6 +58,9 @@ streamrune.circuit-breaker-cooldown=PT30S
 streamrune.validation-enabled=true
 streamrune.security.trust-user-id-header=false
 # streamrune.metadata.baggage-allowlist=
+# true starts on a JVM on which ScopedValue reads on virtual threads are not reliable (JDK 25 with
+# the Graal JIT, neither workaround set), at your own risk; see production.md "Supported JVMs"
+streamrune.jvm.allow-unreliable-scoped-values=false
 
 # Event store, projections and subscriptions
 streamrune.event-store.schema.auto-initialize=true
@@ -194,7 +197,8 @@ aggregate type plus its id as two path segments; an invalid part answers `400`.
   (`org.jboss.resteasy.reactive.server.handlers.PublisherResponseHandler`) logs at `ERROR`; the
   integration installs a filter on that logger while the endpoint exists, so the record is logged at
   `DEBUG` by `org.streamrune.quarkus.SseController` instead. Any other failure of a frame keeps its
-  `ERROR` line.
+  `ERROR` line. The filter is on Quarkus REST's logger, so it applies application-wide: a client of
+  the application's own streaming endpoint that closes its connection is logged at `DEBUG` as well.
 - **Who feeds it** — the integration. It runs one `SseEventFeed` per application instance: a
   polling subscription that starts at the head of the global stream when the application starts
   and publishes every event stored from then on to the clients of the event's own stream, every

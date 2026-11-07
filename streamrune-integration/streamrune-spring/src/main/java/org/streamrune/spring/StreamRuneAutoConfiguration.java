@@ -603,6 +603,7 @@ public class StreamRuneAutoConfiguration {
 
     var builder =
         VirtualThreadCommandBus.builder()
+            .allowUnreliableScopedValues(properties.jvm().allowUnreliableScopedValues())
             .eventStore(eventStore)
             .locker(locker)
             .retryPolicy(retryPolicy)

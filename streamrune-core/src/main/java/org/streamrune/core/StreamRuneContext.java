@@ -21,10 +21,11 @@ import org.streamrune.core.types.UserId;
  * propagation when needed.
  *
  * <p><b>Reading the bindings.</b> {@link #capture()}, {@link #cause()}, {@link #isSagaDispatch()}
- * and {@link #sagaForwardOf} read the thread's bindings every time ({@link ScopedValueReads}), not
- * the per-thread cache that {@link ScopedValue#get()} and {@link ScopedValue#isBound()} consult
- * first, and so does every other read of these values in the framework. Read them through these
- * methods.
+ * and {@link #sagaForwardOf} read the bindings through {@link ScopedValueReads}, the one place the
+ * framework reads a scoped value, and answer {@code null} or {@code false} where nothing is bound.
+ * Application code reads them through these methods too. On JDK 25 with the Graal JIT, {@code
+ * ScopedValue} reads on virtual threads are not reliable; the JVMs the framework does not start on,
+ * and the two workarounds, are in {@code org.streamrune.runtime.ScopedValueJvmGuard}.
  */
 public final class StreamRuneContext {
 

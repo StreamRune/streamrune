@@ -22,6 +22,10 @@ public class StreamRuneConfigValidator implements SmartInitializingSingleton {
 
   @Override
   public void afterSingletonsInstantiated() {
+    // Every application, also one that builds its own command bus: a JVM on which ScopedValue reads
+    // on virtual threads are not reliable refuses to start (the bus builder runs the same check).
+    org.streamrune.runtime.ScopedValueJvmGuard.check(
+        properties.jvm().allowUnreliableScopedValues());
     int snapshotN =
         env.getProperty(
             "streamrune.snapshot-every-n-events", Integer.class, properties.snapshotEveryNEvents());

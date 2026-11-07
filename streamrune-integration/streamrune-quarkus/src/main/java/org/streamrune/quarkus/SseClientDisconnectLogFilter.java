@@ -1,6 +1,7 @@
 package org.streamrune.quarkus;
 
 import java.nio.channels.ClosedChannelException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Filter;
 import java.util.logging.LogRecord;
 import org.slf4j.Logger;
@@ -23,8 +24,13 @@ import org.slf4j.LoggerFactory;
  * SseController}'s logger at {@code DEBUG} and not published at its own level; every other record
  * passes to the filter that was installed before, or is published. Quarkus logs through JBoss
  * LogManager, an implementation of {@code java.util.logging}, so the filter is one of that API.
- * {@link SseController} installs it when it is created ({@link #install()}) and removes it when it
- * is destroyed.
+ * {@link SseController} installs it when it is created ({@link #install()}) and releases it when it
+ * is destroyed. Installs are counted: the filter stays on the logger while one of them is held, and
+ * the last release removes it.
+ *
+ * <p>The logger is Quarkus REST's, not the endpoint's, so while the filter is installed it applies
+ * to every streaming endpoint of the application: a client of the application's own stream that
+ * closes its connection is logged at {@code DEBUG} too.
  */
 final class SseClientDisconnectLogFilter implements Filter {
 
@@ -67,29 +73,63 @@ final class SseClientDisconnectLogFilter implements Filter {
   }
 
   /**
+   * The filter on the logger and the installs that hold it; guarded by the class's lock. {@code
+   * null} when no install holds one.
+   */
+  private static Installation installation;
+
+  /** One filter on the logger, and how many installs hold it; guarded by the class's lock. */
+  private static final class Installation {
+    private final java.util.logging.Logger logger;
+    private final SseClientDisconnectLogFilter filter;
+    private int holders;
+
+    private Installation(java.util.logging.Logger logger, SseClientDisconnectLogFilter filter) {
+      this.logger = logger;
+      this.filter = filter;
+    }
+  }
+
+  /**
    * Installs the filter on {@value #QUARKUS_REST_PUBLISHER_LOGGER}, in front of the filter
-   * installed there before, unless it is installed already.
+   * installed there before, or holds the one installed already.
    *
-   * @return what removes the filter again, restoring the one before it; does nothing when the
-   *     filter was installed already, or when another filter replaced it since
+   * @return what releases this install, once; the last release of the filter restores the filter
+   *     before it, unless another filter replaced it since
    */
   static Runnable install() {
     java.util.logging.Logger logger =
         java.util.logging.Logger.getLogger(QUARKUS_REST_PUBLISHER_LOGGER);
     synchronized (SseClientDisconnectLogFilter.class) {
-      Filter current = logger.getFilter();
-      if (current instanceof SseClientDisconnectLogFilter) {
-        return () -> {};
+      Installation held = installation;
+      if (held == null || logger.getFilter() != held.filter) {
+        held = new Installation(logger, new SseClientDisconnectLogFilter(logger.getFilter()));
+        logger.setFilter(held.filter);
+        installation = held;
       }
-      SseClientDisconnectLogFilter filter = new SseClientDisconnectLogFilter(current);
-      logger.setFilter(filter);
+      held.holders++;
+      Installation release = held;
+      AtomicBoolean released = new AtomicBoolean();
       return () -> {
-        synchronized (SseClientDisconnectLogFilter.class) {
-          if (logger.getFilter() == filter) {
-            logger.setFilter(current);
-          }
+        if (released.compareAndSet(false, true)) {
+          release(release);
         }
       };
+    }
+  }
+
+  private static void release(Installation held) {
+    synchronized (SseClientDisconnectLogFilter.class) {
+      held.holders--;
+      if (held.holders > 0) {
+        return;
+      }
+      if (held.logger.getFilter() == held.filter) {
+        held.logger.setFilter(held.filter.previous);
+      }
+      if (installation == held) {
+        installation = null;
+      }
     }
   }
 }

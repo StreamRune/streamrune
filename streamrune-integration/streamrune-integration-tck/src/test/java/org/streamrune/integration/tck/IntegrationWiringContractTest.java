@@ -103,6 +103,7 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case ROUTE_CALLER_AUDITED -> this::aCommandDispatchedFromARouteIsAuditedAsTheCaller;
       case BUS_ANSWERS_BY_RUNNER_RULES ->
           this::theCommandBusAnswersAKeyedReSendByTheRetryRunnersRules;
+      case JVM_CHECK_OPT_OUT_REACHES_THE_BUS -> this::theOptOutOfTheJvmCheckReachesTheCommandBus;
     };
   }
 

@@ -1302,18 +1302,35 @@ An outbox entry reaches `FAILED` when the transport rejected it for its own sake
 7. **Mode switch checklist.** Before restarting a channel from `AVAILABILITY_FIRST` to `STRICT_PER_AGGREGATE`: `findByStatus(FAILED, …)` must be empty, or every listed entry must be replayed or skipped first; make sure the mapper sets `streamId` on every entry (the strict store will otherwise fail appends with `OutboxOrderingViolationException`). A strict relay that still finds `FAILED` rows with no `aggregate_id` (and no `aggregate_type`) WARNs once at its first poll and keeps running — resolve them with `replay`/`skip` like any other. Before the reverse switch: understand that unresolved `FAILED` heads stop blocking and their successors go out immediately.
 8. **Retention.** `SKIPPED` rows are kept for `streamrune.outbox.skipped-retention-max-age` (default 30 d; keep it at least as long as your audit requires). `DELIVERED` rows are kept for `streamrune.outbox.retention-max-age` (7 d). `FAILED` is never pruned.
 
-## Scoped values on virtual threads
+## Supported JVMs
 
-The request context, the dispatch cause and the saga markers travel in `ScopedValue`s
-(`StreamRuneContext`). The framework reads them by walking the thread's bindings
-(`ScopedValueReads`), never through `ScopedValue.get()` or `isBound()`, which answer from a
-per-thread cache of recent reads first. On GraalVM CE 25.0.1 with its default Graal JIT, a compiled
-read of that cache on a virtual thread that has been unmounted and remounted answers with entries
-that are not the thread's bindings: a bound value reads as unbound, and one that is not bound reads
-as bound. The same reads compiled by C2 (`-XX:-UseJVMCICompiler` on GraalVM, or another JDK 25
-build) answer from the bindings. Read the framework's values through `StreamRuneContext.capture()`,
-`cause()` and `isSagaDispatch()`, and on that JVM read a scoped value of your own with
-`ScopedValue.orElse(...)` or `ScopedValueReads`.
+StreamRune needs JDK 25. It passes the request context, the dispatch cause and the saga markers in
+`ScopedValue`s, and it runs commands, subscriptions and sagas on virtual threads.
+
+**Known issue: JDK 25 with the Graal JIT.** On JDK 25 with the Graal JIT compiler, `ScopedValue`
+reads on virtual threads are not reliable. We verified this on GraalVM CE 25.0.1, GraalVM CE 25.0.5
+and Oracle GraalVM 25.0.4, where the Graal JIT is the default; treat every GraalVM build of JDK 25 as
+affected until a fixed release is verified. JVMs whose JIT is C2 (Temurin, Zulu, or GraalVM with
+`-XX:-UseJVMCICompiler`) and native images were unaffected in our runs.
+
+StreamRune therefore does not start on JDK 25 with the Graal JIT unless one of these two workarounds
+is set on the JVM:
+
+- `-XX:-UseJVMCICompiler`, which compiles with C2 instead of the Graal JIT, or
+- `-XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache`.
+
+The start fails with an `IllegalStateException` that names both. The check reads the JVM's options
+when the command bus is built and when each integration starts; another JDK release, a JVM without
+the Graal JIT and a native image are not checked. Set the flags wherever the JVM starts: the `java`
+command, `JAVA_TOOL_OPTIONS`, the image's entrypoint, and the test and run tasks of the build. They
+act on the whole JVM, so they cover the application's own scoped values as well. A JVM without the
+Graal JIT does not accept `-XX:-UseJVMCICompiler` and fails to start with it; every JDK 25 HotSpot
+build we ran accepts the second workaround, so a start script shared by several JVMs sets that one.
+
+`streamrune.jvm.allow-unreliable-scoped-values=true` starts StreamRune on such a JVM anyway, at your
+own risk, with one `ERROR` line. It is a configuration key of the three integrations; a runtime built
+by hand reads the system property of that name, or takes
+`VirtualThreadCommandBus.Builder.allowUnreliableScopedValues(true)`. Set the flags instead.
 
 ## Backup, restore and disaster recovery
 

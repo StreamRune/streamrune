@@ -107,8 +107,8 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    * ({@code maxPoolSize} when that is smaller), and it opens the others when commands hold locks at
    * once, up to {@code maxPoolSize}. A connection beyond the two that stays idle for HikariCP's
    * idle timeout, ten minutes, is closed. So a replica that runs no command holds two connections
-   * of PostgreSQL's {@code max_connections} for its locks, and a replica under load as many as it
-   * runs commands at once.
+   * of PostgreSQL's {@code max_connections} for its locks, and a replica under load the connections
+   * its commands hold plus up to two idle ones, at most {@code maxPoolSize}.
    *
    * @param jdbcUrl the JDBC URL of the same database the event store uses (required)
    * @param username the database username (may be null if encoded in the URL)

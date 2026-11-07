@@ -588,6 +588,14 @@ class SagaForwardDispatchClassificationTest {
     assertThat(SagaCommandDispatch.isRetryLater(new ReservedCorrelationIdException()))
         .as("the forward classifier reads it as retry-later")
         .isTrue();
+    assertThat(SagaCommandDispatch.isBindingRefusal(new SagaBindingsMismatchException()))
+        .as("bindings that name another saga than the dispatch's")
+        .isTrue();
+    assertThat(
+            SagaCommandDispatch.isBindingRefusal(
+                new RuntimeException("wrapped", new SagaBindingsMismatchException())))
+        .isTrue();
+    assertThat(SagaCommandDispatch.isRetryLater(new SagaBindingsMismatchException())).isTrue();
     var a = new RuntimeException("a");
     var b = new RuntimeException("b", a);
     a.initCause(b);
@@ -605,6 +613,10 @@ class SagaForwardDispatchClassificationTest {
     var bus = new ScriptedBus();
     bus.failAlways("undo-1", ReservedCorrelationIdException::new);
     assertThat(compensate(bus, "undo-1")).isEqualTo(SagaCommandDispatch.CompensationOutcome.RETRY);
+    var mismatched = new ScriptedBus();
+    mismatched.failAlways("undo-1", SagaBindingsMismatchException::new);
+    assertThat(compensate(mismatched, "undo-1"))
+        .isEqualTo(SagaCommandDispatch.CompensationOutcome.RETRY);
   }
 
   private static SagaCommandDispatch.CompensationOutcome compensate(

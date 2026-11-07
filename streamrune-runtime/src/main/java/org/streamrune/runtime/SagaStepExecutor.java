@@ -58,13 +58,14 @@ import org.streamrune.core.types.SagaType;
  * before()} refusing, by throwing and by returning {@code false}), and they are now treated alike.
  * Neither decides anything about the business, so neither may trigger an undo.
  *
- * <p><b>A refusal of the dispatch's own bindings is never an undo.</b> The command bus refuses a
- * command whose bound reserved correlation id is not the bound saga origin's ({@code
- * ReservedCorrelationIdException}), and a saga dispatch binds the two together; so a refusal of a
- * saga's command says that a framework invariant failed on that dispatch ({@link
- * SagaCommandDispatch#isBindingRefusal}), not that the business said no. On the forward path the
- * step ends as a retry-later failure ({@link #forwardBindingRefused}), on the compensation path the
- * episode stays {@code COMPENSATING} as an attempted re-drive ({@link
+ * <p><b>A refusal of the dispatch's own bindings is never a reason to compensate.</b> The command
+ * bus refuses a command whose bound reserved correlation id is not the bound saga origin's ({@code
+ * ReservedCorrelationIdException}), and one whose bindings name another saga than the one its
+ * dispatch handed it ({@link SagaBindingsMismatchException}); a saga dispatch binds them together,
+ * so either refusal of a saga's command says that a framework invariant failed on that dispatch
+ * ({@link SagaCommandDispatch#isBindingRefusal}), not that the business said no. On the forward
+ * path the step ends as a retry-later failure ({@link #forwardBindingRefused}), on the compensation
+ * path the episode stays {@code COMPENSATING} as an attempted re-drive ({@link
  * SagaCommandDispatch#compensateAndClassify}); both log it at {@code ERROR}.
  *
  * <p><b>The forward fence.</b> With {@link #forwardFence()} on, every forward command is dispatched
@@ -930,9 +931,9 @@ final class SagaStepExecutor<S extends SagaState> {
             + sagaCommand.command().getClass().getSimpleName()
             + " (index "
             + index
-            + ") was refused by the command bus for the bindings its dispatch made (a reserved"
-            + " correlation id that is not the bound saga origin's): a framework invariant"
-            + " failed, not the business. The saga is left untouched (no compensation claimed)"
+            + ") was refused by the command bus for the bindings its dispatch made: a framework"
+            + " invariant failed, not the business. The saga is left untouched (no compensation"
+            + " claimed)"
             + " and the failure propagates so the subscription delivers the event again; the"
             + " forward commands already stored answer from the command inbox. The command bus's"
             + " refusal line, logged just before, names the bindings it read.",

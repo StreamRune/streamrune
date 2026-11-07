@@ -402,6 +402,37 @@ val quickCheckOnly =
         requested.isNotEmpty() && requested.all { it.substringAfterLast(':') == "quickCheck" }
     }
 
+// ── The JVM flags of every test JVM ─────────────────────────────────────────────────────────
+//
+// On JDK 25 with the Graal JIT, ScopedValue reads on virtual threads are not reliable, and the
+// framework refuses to start there unless one of two workarounds is set (ScopedValueJvmGuard,
+// production.md "Supported JVMs"). Every test JVM runs with the workaround every HotSpot JDK 25
+// accepts, so the suites run on GraalVM as on any other JDK 25. The project property
+// -PscopedValueWorkaround picks it: `intrinsics` (the default), `c2` (the other workaround, for a
+// JVM with the JVMCI compiler) or `none`. -PexpectScopedValueJvm=refused|accepted tells
+// ScopedValueJvmGuardLiveTest what the guard answers on the test JVM (default `accepted`); the
+// GraalVM workflow (graalvm-jit.yml) runs it with `none` and `refused`. -PvirtualThreadReadSeconds=N runs
+// StreamRuneContextVirtualThreadReadTest for N seconds instead of its default 4.
+val scopedValueWorkaroundJvmArgs =
+    when (val workaround = (findProperty("scopedValueWorkaround") as String?) ?: "intrinsics") {
+        "intrinsics" ->
+            listOf(
+                "-XX:+UnlockDiagnosticVMOptions",
+                "-XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache")
+        "c2" -> listOf("-XX:-UseJVMCICompiler")
+        "none" -> emptyList()
+        else ->
+            throw GradleException(
+                "-PscopedValueWorkaround must be intrinsics, c2 or none, not '$workaround'")
+    }
+val expectedScopedValueJvm =
+    ((findProperty("expectScopedValueJvm") as String?) ?: "accepted").also {
+        if (it != "accepted" && it != "refused") {
+            throw GradleException("-PexpectScopedValueJvm must be accepted or refused, not '$it'")
+        }
+    }
+val virtualThreadReadSeconds = findProperty("virtualThreadReadSeconds") as String?
+
 // ── PostgreSQL 17+ — one test-image switch, one CI leg per end of the supported range ───────
 //
 // StreamRune declares PostgreSQL 17 or newer. A declaration nobody tests is a guess, so every
@@ -461,6 +492,11 @@ subprojects {
 
     tasks.withType<Test> {
         useJUnitPlatform()
+        jvmArgs(scopedValueWorkaroundJvmArgs)
+        systemProperty("streamrune.test.expectScopedValueJvm", expectedScopedValueJvm)
+        if (virtualThreadReadSeconds != null) {
+            systemProperty("streamrune.test.virtualThreadReadSeconds", virtualThreadReadSeconds)
+        }
         if (!quickCheckOnly) {
             finalizedBy(tasks.named("jacocoTestReport"))
         }

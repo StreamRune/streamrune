@@ -22,7 +22,7 @@ import org.streamrune.core.types.SagaType;
 
 /**
  * The reads of the request context answer with the bindings of the thread that reads them, on
- * virtual threads that are unmounted and remounted between their reads.
+ * virtual threads under load.
  *
  * <p>Saga-like threads bind what saga dispatch binds — the context with the saga's reserved
  * correlation id, {@code SAGA_OWNED}, the cause with the saga's origin and the forward marker — one
@@ -30,19 +30,16 @@ import org.streamrune.core.types.SagaType;
  * StreamRuneContext#requireNoForeignReservedCorrelationId()} first, then {@link
  * StreamRuneContext#capture()}, {@link StreamRuneContext#cause()}, {@link
  * StreamRuneContext#isSagaDispatch()} and {@link StreamRuneContext#sagaForwardOf}. Between their
- * reads they block the way a command does (a contended lock, a monitor, a park), so the scheduler
- * unmounts them and mounts them again, often on another carrier; noise threads keep every carrier
- * busy with bindings of their own. Outside a binding a thread reads that nothing is bound.
+ * reads they block the way a command does (a contended lock, a monitor, a park), and other virtual
+ * threads run with bindings of their own. Every read must name the thread's own saga; outside a
+ * binding a thread reads that nothing is bound.
  *
- * <p>Every read must name the thread's own saga. {@link ScopedValue#get()} and {@link
- * ScopedValue#isBound()} answer from a per-thread cache first, and on GraalVM CE 25.0.1 with its
- * Graal JIT such a read, compiled, answers after a remount with entries that are not the thread's
- * bindings: a bound cause reads as unbound, and the check refuses the saga's own correlation id
- * ({@link ReservedCorrelationIdException}) as if the command bus had been handed foreign bindings.
- * The context reads through {@link ScopedValueReads}, which walks the bindings, so the run finds no
- * disagreement on any JIT. {@code streamrune.test.remountReadSeconds} lengthens the run.
+ * <p>On JDK 25 with the Graal JIT, {@code ScopedValue} reads on virtual threads are not reliable;
+ * every test JVM of the build runs with a workaround (the root build), and the GraalVM workflow
+ * runs this test on the Graal JIT with each of the two. {@code
+ * streamrune.test.virtualThreadReadSeconds} lengthens the run.
  */
-class StreamRuneContextRemountReadTest {
+class StreamRuneContextVirtualThreadReadTest {
 
   private static final SagaType SAGA = SagaType.of("org.example.FulfilmentState");
   private static final Object[] MONITORS = {new Object(), new Object(), new Object()};
@@ -52,7 +49,7 @@ class StreamRuneContextRemountReadTest {
 
   @Test
   void everyReadNamesTheBindingsOfTheReadingThread() throws InterruptedException {
-    Duration run = Duration.ofSeconds(Long.getLong("streamrune.test.remountReadSeconds", 4L));
+    Duration run = Duration.ofSeconds(Long.getLong("streamrune.test.virtualThreadReadSeconds", 4L));
     AtomicBoolean stop = new AtomicBoolean();
     AtomicLong reads = new AtomicLong();
     ConcurrentLinkedQueue<String> disagreements = new ConcurrentLinkedQueue<>();
@@ -80,7 +77,7 @@ class StreamRuneContextRemountReadTest {
                     while (!stop.get()) {
                       ScopedValue.where(
                               StreamRuneContext.SAGA_OWNED, Boolean.valueOf(random.nextBoolean()))
-                          .run(StreamRuneContextRemountReadTest::blockAsACommandDoes);
+                          .run(StreamRuneContextVirtualThreadReadTest::blockAsACommandDoes);
                     }
                   }));
     }

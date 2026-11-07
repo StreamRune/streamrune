@@ -192,7 +192,15 @@ final class SagaCommandDispatch {
           carrier.where(
               StreamRuneContext.SAGA_FORWARD, new StreamRuneContext.SagaForward(origin, key));
     }
-    CommandBus.CommandResult result = carrier.call(() -> commandBus.execute(command, key));
+    // Beside the scoped values, the bus is handed the saga in a field of this thread, and compares
+    // the two before anything of the command runs (VirtualThreadCommandBus refuses a mismatch).
+    new SagaDispatchOffer(origin, key, forwardFenced).offer();
+    CommandBus.CommandResult result;
+    try {
+      result = carrier.call(() -> commandBus.execute(command, key));
+    } finally {
+      SagaDispatchOffer.withdraw();
+    }
     // Null-tolerant like DeadLetterRetryRunner.processEntry: a third-party bus returning null is
     // treated as an executed command, never as a veto.
     if (result != null && result.vetoed()) {
@@ -269,20 +277,22 @@ final class SagaCommandDispatch {
 
   /**
    * Whether {@code failure} is the command bus's refusal of the bindings a saga dispatch made: a
-   * {@link ReservedCorrelationIdException} anywhere in the cause chain (bounded, so a cyclic chain
-   * cannot loop). It is the one refusal of a saga's own command that is a framework invariant and
-   * never an answer about the business.
+   * {@link ReservedCorrelationIdException} or a {@link SagaBindingsMismatchException} anywhere in
+   * the cause chain (bounded, so a cyclic chain cannot loop). They are the refusals of a saga's own
+   * command that are framework invariants and never an answer about the business.
    *
    * <p>{@link #dispatch} binds the saga's reserved correlation id ({@link
    * SagaOrigin#correlationId()}) and the saga's origin together, in one carrier, around the
-   * command, and the bus refuses only a reserved correlation id that is not the bound origin's
-   * ({@link StreamRuneContext#requireNoForeignReservedCorrelationId()}). So under a saga's dispatch
-   * the refusal says that the bindings the bus read are not the ones the dispatch made: something
-   * between the two bound other values (a decorator of the bus that rebinds the context, a dispatch
-   * nested in the command), or the read did not return the values just bound. The bus refuses
-   * before the command is looked up, authorized, executed, stored or dead-lettered, so nothing was
-   * attempted and nothing about the business was decided. Each attempt binds afresh, so a later
-   * attempt is not refused for the same reason unless the cause persists.
+   * command, and hands the saga to the bus beside them ({@link SagaDispatchOffer}). The bus refuses
+   * a reserved correlation id that is not the bound origin's ({@link
+   * StreamRuneContext#requireNoForeignReservedCorrelationId()}) and bindings that name another saga
+   * than the one it was handed. So under a saga's dispatch either refusal says that the bindings
+   * the bus read are not the ones the dispatch made: something between the two bound other values
+   * (a decorator of the bus that rebinds the context, a dispatch nested in the command), or the
+   * read did not return the values just bound. The bus refuses before the command is looked up,
+   * authorized, executed, stored or dead-lettered, so nothing was attempted and nothing about the
+   * business was decided. Each attempt binds afresh, so a later attempt is not refused for the same
+   * reason unless the cause persists.
    *
    * <p>Both saga paths therefore keep the flow and retry: the forward path reads it as retry-later
    * ({@link #isRetryLater}) and the compensation path as an attempted, retried compensation ({@link
@@ -294,7 +304,8 @@ final class SagaCommandDispatch {
   static boolean isBindingRefusal(Throwable failure) {
     Throwable c = failure;
     for (int depth = 0; c != null && depth < MAX_CAUSE_DEPTH; depth++, c = c.getCause()) {
-      if (c instanceof ReservedCorrelationIdException) {
+      if (c instanceof ReservedCorrelationIdException
+          || c instanceof SagaBindingsMismatchException) {
         return true;
       }
     }
@@ -413,15 +424,15 @@ final class SagaCommandDispatch {
    *             it is retry-later like the rest of this set: the event is redelivered until the
    *             engine answers, which for a key an operator must fix means the subscription retries
    *             until the operator fixes it. Again the same rule as {@link SagaStateConversion}.
-   *         <li>{@link ReservedCorrelationIdException} — the bus refused the bindings the dispatch
-   *             made ({@link #isBindingRefusal}): an ADMISSION refusal like the first entries of
-   *             this set, raised before the command was looked up. It is a permanent rejection for
-   *             a command a request, a listener or a dead-letter replay dispatches under bindings
-   *             of its own, which a retry presents again; a saga binds its correlation id and its
-   *             origin afresh on every attempt, from the saga id. The step executor logs it at
-   *             {@code ERROR} instead of the retry-later {@code WARN}. A refusal that persists
-   *             holds the subscription, which reports every failed delivery, until the saga's
-   *             deadline claims it.
+   *         <li>{@link ReservedCorrelationIdException} and {@link SagaBindingsMismatchException} —
+   *             the bus refused the bindings the dispatch made ({@link #isBindingRefusal}): an
+   *             ADMISSION refusal like the first entries of this set, raised before the command was
+   *             looked up. It is a permanent rejection for a command a request, a listener or a
+   *             dead-letter replay dispatches under bindings of its own, which a retry presents
+   *             again; a saga binds its correlation id and its origin afresh on every attempt, from
+   *             the saga id. The step executor logs it at {@code ERROR} instead of the retry-later
+   *             {@code WARN}. A refusal that persists holds the subscription, which reports every
+   *             failed delivery, until the saga's deadline claims it.
    *       </ul>
    *   <li>Anything else ⇒ <b>not</b> retry-later. Never divert a failure that could not be
    *       <em>proven</em> retriable onto an unbounded batch retry.
@@ -448,6 +459,7 @@ final class SagaCommandDispatch {
           || c instanceof SQLException
           || c instanceof EventSchemaAheadException
           || c instanceof ReservedCorrelationIdException
+          || c instanceof SagaBindingsMismatchException
           || (c instanceof CryptoOperationException && !(c instanceof CryptoMappingException))) {
         sawRetryLater = true;
       }
@@ -592,8 +604,8 @@ final class SagaCommandDispatch {
           hadAttemptedTransientFailure = true;
           log.error(
               "Saga {} compensation command {} (index {}) was refused by the command bus for the"
-                  + " bindings this dispatch made (a reserved correlation id that is not the bound"
-                  + " saga origin's): a framework invariant failed, not the compensation. The"
+                  + " bindings this dispatch made: a framework invariant failed, not the"
+                  + " compensation. The"
                   + " episode stays COMPENSATING and is re-driven; a refusal that persists is"
                   + " faulted for an operator once the compensation-retry give-up horizon has"
                   + " passed. The command bus's refusal line, logged just before, names the"

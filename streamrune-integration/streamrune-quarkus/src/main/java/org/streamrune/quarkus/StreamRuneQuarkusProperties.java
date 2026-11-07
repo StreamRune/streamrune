@@ -145,6 +145,9 @@ public interface StreamRuneQuarkusProperties {
   /** Security configuration, {@code streamrune.security.*} (authorization-identity source). */
   SecurityConfig security();
 
+  /** JVM configuration, {@code streamrune.jvm.*}. */
+  JvmConfig jvm();
+
   /** Server-Sent Events configuration, {@code streamrune.sse.*}. */
   SseConfig sse();
 
@@ -430,6 +433,21 @@ public interface StreamRuneQuarkusProperties {
      */
     @WithDefault("false")
     boolean trustUserIdHeader();
+  }
+
+  /** JVM section, {@code streamrune.jvm.*}. */
+  interface JvmConfig {
+
+    /**
+     * {@code true} starts the application on a JVM on which {@code ScopedValue} reads on virtual
+     * threads are not reliable — JDK 25 with the Graal JIT and neither {@code
+     * -XX:-UseJVMCICompiler} nor {@code -XX:+UnlockDiagnosticVMOptions
+     * -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache} set — with one {@code ERROR}
+     * line, at the application's own risk. Defaults to {@code false}: such a JVM refuses to start
+     * ({@code ScopedValueJvmGuard}).
+     */
+    @WithDefault("false")
+    boolean allowUnreliableScopedValues();
   }
 
   /** Server-Sent Events section, {@code streamrune.sse.*}. */

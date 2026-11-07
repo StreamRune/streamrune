@@ -72,7 +72,8 @@ public record StreamRuneProperties(
     @DefaultValue Metadata metadata,
     @DefaultValue Security security,
     @DefaultValue Sse sse,
-    @DefaultValue Gdpr gdpr) {
+    @DefaultValue Gdpr gdpr,
+    @DefaultValue Jvm jvm) {
 
   /**
    * @param enabled whether {@link org.streamrune.runtime.CachingQueryBus} is auto-configured
@@ -272,6 +273,16 @@ public record StreamRuneProperties(
    *     refuses startup.
    */
   public record Security(@DefaultValue("false") boolean trustUserIdHeader) {}
+
+  /**
+   * @param allowUnreliableScopedValues {@code true} starts the application on a JVM on which {@code
+   *     ScopedValue} reads on virtual threads are not reliable — JDK 25 with the Graal JIT and
+   *     neither {@code -XX:-UseJVMCICompiler} nor {@code -XX:+UnlockDiagnosticVMOptions
+   *     -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache} set — with one {@code ERROR}
+   *     line, at the application's own risk. Defaults to {@code false}: such a JVM refuses to start
+   *     ({@code ScopedValueJvmGuard}).
+   */
+  public record Jvm(@DefaultValue("false") boolean allowUnreliableScopedValues) {}
 
   /**
    * @param enabled whether the auto-registered {@code GET /api/sse/{aggregateType}/{aggregateId}}

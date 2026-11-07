@@ -38,6 +38,7 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
@@ -64,16 +65,19 @@ import org.streamrune.test.MutableClock;
  * bus read are not the ones the dispatch made: an invariant of the framework failed on that
  * dispatch. The command was never looked up, authorized, executed or stored, and nothing about the
  * order was decided. Here a bus in front of the real {@link VirtualThreadCommandBus} binds another
- * saga's context over the dispatch's own for the commands a test names, which is what the real bus
- * read when it refused a genesis command in the field.
+ * saga's context over the dispatch's own for the commands a test names, and the real bus refuses
+ * the command for it. A bus that reads another saga's context and cause as a pair passes that
+ * check; the saga dispatch also hands its saga to the bus beside the scoped values, and the bus
+ * refuses a dispatch whose bindings name another saga ({@link SagaBindingsMismatchException}),
+ * which the step treats the same way.
  *
- * <p>Such a refusal never undoes the flow. A forward command refused this way leaves the saga as it
+ * <p>The refusal itself never compensates. A forward command refused this way leaves the saga as it
  * was and propagates, so the subscription delivers the event again: no compensation episode is
- * claimed, the order is not cancelled. A compensation command refused this way keeps the episode
- * {@code COMPENSATING} as an attempted re-drive: the undo is never abandoned as {@code FAILED}, the
- * next re-drive completes it, and a refusal that persists is faulted for an operator once the
- * compensation retry sweeper's give-up horizon has passed. Either way it is logged at {@code
- * ERROR}.
+ * claimed, the order is not cancelled; a refusal that persists ends as the saga's timeout. A
+ * compensation command refused this way keeps the episode {@code COMPENSATING} as an attempted
+ * re-drive: the undo is never abandoned as {@code FAILED}, the next re-drive completes it, and a
+ * refusal that persists is faulted for an operator once the compensation retry sweeper's give-up
+ * horizon has passed. Either way it is logged at {@code ERROR}.
  *
  * <p><b>Crash points of the refused forward step, and why every rerun converges.</b> The step
  * writes in this order: the genesis-pending row (start event only), forward command 0, ..., forward
@@ -182,6 +186,53 @@ class SagaBindingRefusalTest {
         .isEqualTo(f.originOf("o-1"));
     assertThat(f.firstEventOf(PAYMENT, "o-1").metadata().correlationId())
         .isEqualTo(f.originOf("o-1").correlationId());
+  }
+
+  @Test
+  void startEvent_anotherSagasContextAndCauseReadAsAPair_isRefusedBeforeAnythingIsStored() {
+    var f = new Fixture();
+    var listener = f.runner().asEventListener();
+    EventEnvelope orderPlaced = f.storeOrderPlaced("o-4");
+    f.bus.pairTheNext(InitiatePayment.class, 1);
+
+    Throwable thrown = catchThrowable(() -> listener.onEvents(List.of(orderPlaced)));
+
+    assertThat(thrown)
+        .as("the bus compares what it read with the saga the dispatch handed it, and refuses")
+        .isInstanceOf(SagaBindingsMismatchException.class);
+    assertThat(f.eventNames(PAYMENT, "o-4")).as("nothing is stored for the command").isEmpty();
+    assertThat(f.eventsCausedBy(sagaIdOf("another-order")))
+        .as("nothing is stored under the other saga's origin")
+        .isEmpty();
+    LoadedSaga<OrderSagaState> held = f.saga("o-4");
+    assertThat(held.version()).isEqualTo(1L);
+    assertThat(held.genesisApplied()).isFalse();
+    assertThat(held.episodeVersion()).as("no compensation episode is claimed").isNull();
+    assertThat(f.eventNames(ORDER, "o-4")).containsExactly("OrderPlaced");
+    assertThat(errorLines())
+        .singleElement()
+        .satisfies(line -> assertThat(line).contains("order-saga-o-4").contains("InitiatePayment"));
+
+    listener.onEvents(List.of(orderPlaced));
+
+    assertThat(f.eventNames(PAYMENT, "o-4")).containsExactly("PaymentInitiated");
+    assertThat(f.firstEventOf(PAYMENT, "o-4").metadata().sagaOrigin()).isEqualTo(f.originOf("o-4"));
+    assertThat(f.saga("o-4").genesisApplied()).isTrue();
+  }
+
+  @Test
+  void theSagaHandedToTheBus_isTakenByItsOwnDispatch_andLeftToNoLaterOne() {
+    var f = new Fixture();
+    var listener = f.runner().asEventListener();
+
+    listener.onEvents(List.of(f.storeOrderPlaced("o-5")));
+
+    assertThat(SagaDispatchOffer.pending()).as("nothing is left on the thread").isFalse();
+    assertThat(f.firstEventOf(PAYMENT, "o-5").metadata().sagaOrigin()).isEqualTo(f.originOf("o-5"));
+    // A keyed command the thread dispatches later, outside any saga's dispatch, is not compared.
+    assertThat(f.bus.execute(new InitiatePayment("o-6"), IdempotencyKey.of("client-key-o-6")))
+        .isNotNull();
+    assertThat(f.eventNames(PAYMENT, "o-6")).containsExactly("PaymentInitiated");
   }
 
   @Test
@@ -477,12 +528,15 @@ class SagaBindingRefusalTest {
   /**
    * In front of the real bus, on the calling thread: for the next {@code n} commands of a type,
    * binds the context of another saga over the one the saga dispatch bound, and leaves the
-   * dispatch's cause as it is. The real bus then reads a reserved correlation id that is not the
-   * bound origin's and refuses the command, as it did in the field.
+   * dispatch's cause as it is ({@link #refuseTheNext}), or binds the context and the cause of
+   * another saga as a pair ({@link #pairTheNext}). The real bus then reads a reserved correlation
+   * id that is not the bound origin's, or bindings that name another saga than the one the saga
+   * dispatch handed it, and refuses the command.
    */
   static final class AnotherSagasContextInFront implements CommandBus {
     private final VirtualThreadCommandBus delegate;
     private final Map<Class<?>, AtomicInteger> refusals = new ConcurrentHashMap<>();
+    private final Map<Class<?>, AtomicInteger> pairs = new ConcurrentHashMap<>();
 
     AnotherSagasContextInFront(VirtualThreadCommandBus delegate) {
       this.delegate = delegate;
@@ -492,6 +546,15 @@ class SagaBindingRefusalTest {
       refusals.put(type, new AtomicInteger(n));
     }
 
+    void pairTheNext(Class<? extends Command> type, int n) {
+      pairs.put(type, new AtomicInteger(n));
+    }
+
+    private static boolean takeOne(Map<Class<?>, AtomicInteger> counters, Command command) {
+      AtomicInteger remaining = counters.get(command.getClass());
+      return remaining != null && remaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0;
+    }
+
     @Override
     public <C extends Command> CommandResult execute(C command) {
       return delegate.execute(command);
@@ -499,18 +562,21 @@ class SagaBindingRefusalTest {
 
     @Override
     public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
-      AtomicInteger remaining = refusals.get(command.getClass());
-      if (remaining != null && remaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
-        StreamRuneContext.RequestContext anotherSagas =
-            new StreamRuneContext.RequestContext(
-                null,
-                null,
-                SagaOrigin.dispatchedBy(
-                        SagaType.fromClass(OrderSagaState.class), sagaIdOf("another-order"))
-                    .correlationId(),
-                Instant.now(),
-                Map.of());
+      SagaOrigin another =
+          SagaOrigin.dispatchedBy(
+              SagaType.fromClass(OrderSagaState.class), sagaIdOf("another-order"));
+      StreamRuneContext.RequestContext anotherSagas =
+          new StreamRuneContext.RequestContext(
+              null, null, another.correlationId(), Instant.now(), Map.of());
+      if (takeOne(refusals, command)) {
         return ScopedValue.where(StreamRuneContext.CURRENT, anotherSagas)
+            .call(() -> delegate.execute(command, key));
+      }
+      if (takeOne(pairs, command)) {
+        return ScopedValue.where(StreamRuneContext.CURRENT, anotherSagas)
+            .where(
+                StreamRuneContext.CAUSE,
+                new StreamRuneContext.DispatchCause(CausationId.of("evt-another"), another))
             .call(() -> delegate.execute(command, key));
       }
       return delegate.execute(command, key);
@@ -619,6 +685,16 @@ class SagaBindingRefusalTest {
           .readStream(StreamId.of(type, AggregateId.of(id)), Version.initial(), 100)
           .stream()
           .map(e -> e.eventType().name())
+          .toList();
+    }
+
+    /** Every stored event whose saga origin names {@code sagaId}. */
+    List<EventEnvelope> eventsCausedBy(SagaId sagaId) {
+      return store.readGlobalStream(GlobalOffset.initial(), 1_000).stream()
+          .filter(
+              e ->
+                  e.metadata().sagaOrigin() != null
+                      && e.metadata().sagaOrigin().sagaId().equals(sagaId))
           .toList();
     }
 

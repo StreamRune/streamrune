@@ -91,7 +91,8 @@ class MicronautInterceptorOrderingTest {
             List.of(),
             null,
             null,
-            null);
+            null,
+            false);
     try {
       assertThrows(AuthorizationException.class, () -> bus.execute(new WidgetCommand("w-1")));
       assertTrue(

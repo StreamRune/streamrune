@@ -54,10 +54,10 @@ import org.streamrune.test.InMemorySagaStore;
  * unbound-request-context source, as the routes of an application do.
  *
  * <p>Each dispatch binds the context, the cause and the saga markers of its own saga, and every
- * thread blocks inside commands (the aggregate lock, the inbox, the store), so the scheduler
- * unmounts and remounts them across carriers all the time. Every forward command must be admitted
- * and stored under the origin and the correlation id of its own saga, and no healthy order may be
- * compensated. {@code streamrune.test.sagaConcurrencySeconds} lengthens the run.
+ * thread blocks inside commands (the aggregate lock, the inbox, the store) all the time. Every
+ * forward command must be admitted and stored under the origin and the correlation id of its own
+ * saga, and no healthy order may be compensated. {@code streamrune.test.sagaConcurrencySeconds}
+ * lengthens the run.
  */
 class SagaDispatchConcurrencyTest {
 

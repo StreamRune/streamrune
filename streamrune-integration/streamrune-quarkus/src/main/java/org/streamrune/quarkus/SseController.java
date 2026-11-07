@@ -269,7 +269,7 @@ public class SseController {
    */
   private volatile boolean shuttingDown;
 
-  /** Removes the filter {@link #quietClientDisconnects()} installed; nothing until it runs. */
+  /** Releases the install {@link #quietClientDisconnects()} made; nothing until it runs. */
   private volatile Runnable loudClientDisconnects = () -> {};
 
   /** One open stream and the lock that serializes the writes to it. */
@@ -540,8 +540,10 @@ public class SseController {
    * SseClientDisconnectLogFilter} on the logger of Quarkus REST's publisher response handler, which
    * logs a frame it cannot write to a closed connection at {@code ERROR}. A client that goes away
    * makes the next frame fail so whenever that frame is already on its way, and the stream ends as
-   * on every other end. {@link #shutdown()} removes the filter. Public, as the module's lifecycle
-   * callbacks are: the container calls it from the bean class it generates.
+   * on every other end. {@link #shutdown()} releases the install; the filter goes with the last
+   * release. The filter applies to every streaming endpoint of the application, since the logger is
+   * Quarkus REST's. Public, as the module's lifecycle callbacks are: the container calls it from
+   * the bean class it generates.
    */
   @PostConstruct
   public void quietClientDisconnects() {

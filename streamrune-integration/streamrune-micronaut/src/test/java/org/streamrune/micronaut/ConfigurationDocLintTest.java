@@ -27,6 +27,7 @@ import org.streamrune.integration.tck.ConfigurationOracle;
 import org.streamrune.integration.tck.ConfigurationOracle.KeyNaming;
 import org.streamrune.integration.tck.ConfigurationOracle.ReadElsewhere;
 import org.streamrune.integration.tck.DefaultRendering;
+import org.streamrune.runtime.ScopedValueJvmGuard;
 
 /**
  * Holds the Micronaut integration's configuration documentation to its code. The oracle is what the
@@ -52,12 +53,16 @@ class ConfigurationDocLintTest {
 
   private static final String METADATA = "META-INF/configuration-metadata.json";
 
-  /** The keys the projection discovery looks up in code; see the Spring test for the defaults. */
+  /**
+   * The keys looked up in code: the projection discovery's, see the Spring test for the defaults,
+   * and the opt-out of the JVM check, which the startup validator reads.
+   */
   private static final List<ReadElsewhere> LOOKUPS =
       List.of(
           new ReadElsewhere("streamrune.projections.auto-discovery.enabled", "true", "lookup"),
           new ReadElsewhere("streamrune.projections.<name>.enabled", "true", "lookup"),
-          new ReadElsewhere("streamrune.projections.<name>.error-strategy", null, "lookup"));
+          new ReadElsewhere("streamrune.projections.<name>.error-strategy", null, "lookup"),
+          new ReadElsewhere(ScopedValueJvmGuard.ALLOW_PROPERTY, "false", "lookup"));
 
   /**
    * An explicit {@code @Property} name, else the group of a nested {@code @ConfigurationProperties}

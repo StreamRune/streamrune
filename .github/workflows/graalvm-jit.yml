@@ -1,0 +1,80 @@
+name: GraalVM JIT
+
+# StreamRune on the Graal JIT compiler. On JDK 25 with the Graal JIT, ScopedValue reads on virtual
+# threads are not reliable, and StreamRune refuses to start on such a JVM unless one of two
+# workarounds is set: -XX:-UseJVMCICompiler, or -XX:+UnlockDiagnosticVMOptions
+# -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache (docs/guide/production.md, "Supported
+# JVMs"). The Build workflow runs on Temurin, whose JIT is C2, so this is the workflow that runs the
+# framework on GraalVM with its default JIT:
+#
+#   - the JVM check (ScopedValueJvmGuardLiveTest), on a test JVM started with neither workaround:
+#     the check and the command bus builder must refuse it;
+#   - the scoped-value read stress test of streamrune-core (StreamRuneContextVirtualThreadReadTest), on a
+#     test JVM started with each workaround in turn: it must count no wrong read.
+#
+# Every test JVM of the build runs with a workaround unless -PscopedValueWorkaround says otherwise
+# (the root build.gradle.kts). Toolchain detection is switched off, so the test JVMs are the
+# GraalVM that setup-graalvm installs (JAVA_HOME) and no other JDK 25 of the runner.
+#
+# Not on every pull request: on every push to main, nightly, and on demand.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '30 3 * * *'  # nightly 03:30 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: graalvm-jit-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GRADLE_FLAGS: >-
+    --no-daemon --console=plain
+    -Porg.gradle.java.installations.auto-detect=false
+    -Porg.gradle.java.installations.auto-download=false
+
+jobs:
+  graalvm-jit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Show the JVM
+        run: java -version
+
+      - name: The JVM check refuses the Graal JIT with neither workaround
+        run: >-
+          ./gradlew :streamrune-runtime:test --tests 'org.streamrune.runtime.ScopedValueJvmGuardLiveTest' --rerun
+          -PscopedValueWorkaround=none -PexpectScopedValueJvm=refused $GRADLE_FLAGS
+
+      - name: No wrong read with the two intrinsics disabled
+        run: >-
+          ./gradlew :streamrune-core:test --tests 'org.streamrune.core.StreamRuneContextVirtualThreadReadTest' --rerun
+          -PscopedValueWorkaround=intrinsics -PvirtualThreadReadSeconds=60 $GRADLE_FLAGS
+
+      - name: No wrong read with the JVMCI compiler switched off
+        run: >-
+          ./gradlew :streamrune-core:test --tests 'org.streamrune.core.StreamRuneContextVirtualThreadReadTest' --rerun
+          -PscopedValueWorkaround=c2 -PvirtualThreadReadSeconds=60 $GRADLE_FLAGS
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: graalvm-jit-test-reports
+          path: '**/build/reports/tests/'
+          if-no-files-found: ignore

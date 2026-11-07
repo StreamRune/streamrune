@@ -160,6 +160,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   private final List<CommandInterceptor> interceptors;
   private final UnaryOperator<Runnable> asyncTaskWrapper;
   private final Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
+
+  /** Whether this bus was built with the opt-out of {@link ScopedValueJvmGuard}. */
+  private final boolean allowUnreliableScopedValues;
+
   private final Clock clock;
   private final CommandInbox commandInbox;
   private final Predicate<Throwable> dlqEligible;
@@ -198,7 +202,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       Predicate<Throwable> dlqEligible,
       int maxInFlightAsyncCommands,
       DeadLetterRetryPolicy deadLetterRetryPolicy,
-      Duration inboxRetentionMaxAge) {
+      Duration inboxRetentionMaxAge,
+      boolean allowUnreliableScopedValues) {
+    this.allowUnreliableScopedValues = allowUnreliableScopedValues;
     this.eventStore = eventStore;
     this.locker = locker;
     this.retryPolicy = retryPolicy;
@@ -251,7 +257,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       throw new CommandBusClosedException("Command bus is closed, cannot accept new commands");
     }
     try {
-      return executeCountedInTheCallersContext(command, null);
+      return executeCountedInTheCallersContext(command, null, null);
     } finally {
       inFlightCommands.decrementAndGet();
     }
@@ -286,6 +292,17 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
+   * Whether this bus was built with the opt-out of {@link ScopedValueJvmGuard} ({@link
+   * Builder#allowUnreliableScopedValues(boolean)}, or the system property {@value
+   * ScopedValueJvmGuard#ALLOW_PROPERTY}).
+   *
+   * @return {@code true} when a JVM the guard refuses would start with an {@code ERROR} line
+   */
+  public boolean allowsUnreliableScopedValues() {
+    return allowUnreliableScopedValues;
+  }
+
+  /**
    * {@inheritDoc}
    *
    * <p>The event store's {@link EventStore#sagaFenceStorageIdentity()}: this bus hands every keyed
@@ -299,6 +316,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
   @Override
   public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+    // The saga a saga dispatch handed this dispatch beside its scoped values, taken first, so a
+    // command dispatched inside this one is not compared with it.
+    SagaDispatchOffer dispatched = SagaDispatchOffer.take();
     Objects.requireNonNull(key, "idempotencyKey is required");
     if (commandInbox == null) {
       throw new IllegalStateException(
@@ -313,7 +333,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       throw new CommandBusClosedException("Command bus is closed, cannot accept new commands");
     }
     try {
-      return executeCountedInTheCallersContext(command, key);
+      return executeCountedInTheCallersContext(command, key, dispatched);
     } finally {
       inFlightCommands.decrementAndGet();
     }
@@ -327,13 +347,13 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * context.
    */
   private <C extends Command> CommandResult executeCountedInTheCallersContext(
-      C command, IdempotencyKey key) {
+      C command, IdempotencyKey key, SagaDispatchOffer dispatched) {
     StreamRuneContext.RequestContext fromSource = requestContextOfAnUnboundCaller();
     if (fromSource == null) {
-      return executeCounted(command, key);
+      return executeCounted(command, key, dispatched);
     }
     return ScopedValue.where(StreamRuneContext.CURRENT, fromSource)
-        .call(() -> executeCounted(command, key));
+        .call(() -> executeCounted(command, key, dispatched));
   }
 
   /**
@@ -348,6 +368,39 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     return ScopedValueReads.isBound(StreamRuneContext.CURRENT)
         ? ScopedValueReads.valueOrNull(StreamRuneContext.CURRENT)
         : requestContextOfAnUnboundCaller();
+  }
+
+  /**
+   * Refuses the dispatch in progress when the bindings it reads are not the ones the saga dispatch
+   * that handed it {@code dispatched} made: the bound cause must carry that saga's origin, the
+   * bound context that saga's correlation id, {@link StreamRuneContext#SAGA_OWNED} must be bound to
+   * {@code TRUE}, and a fenced forward command's forward marker must name that saga for {@code
+   * key}. The refusal is logged once at {@code WARN}, with what the dispatch read bound ({@link
+   * BoundCorrelationId#bindingsRead()}), before anything of the command is looked up.
+   *
+   * @throws SagaBindingsMismatchException if they differ
+   */
+  private static void refuseUnlessTheSagaDispatchsBindings(
+      SagaDispatchOffer dispatched, Class<?> commandType, IdempotencyKey key) {
+    SagaOrigin origin = dispatched.origin();
+    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
+    StreamRuneContext.RequestContext context = StreamRuneContext.capture();
+    boolean asDispatched =
+        cause != null
+            && origin.equals(cause.sagaOrigin())
+            && context != null
+            && origin.correlationId().equals(context.correlationId())
+            && StreamRuneContext.isSagaDispatch()
+            && (!dispatched.forwardFenced() || origin.equals(StreamRuneContext.sagaForwardOf(key)));
+    if (!asDispatched) {
+      SagaBindingsMismatchException refused = new SagaBindingsMismatchException();
+      LOG.warn(
+          "Refusing command {}: {}. Read bound {}",
+          commandType.getSimpleName(),
+          refused.getMessage(),
+          BoundCorrelationId.bindingsRead());
+      throw refused;
+    }
   }
 
   /**
@@ -371,21 +424,22 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    *
    * @param key nullable idempotency key; {@code null} for unkeyed (hot-path) execution
    */
-  private <C extends Command> CommandResult executeCounted(C command, IdempotencyKey key) {
+  private <C extends Command> CommandResult executeCounted(
+      C command, IdempotencyKey key, SagaDispatchOffer dispatched) {
     if (BoundCorrelationId.inEffect() != null) {
-      return executeCountedUnderItsCorrelationId(command, key);
+      return executeCountedUnderItsCorrelationId(command, key, dispatched);
     }
     // Nothing names a correlation id for this dispatch: no saga origin, no request context (or one
     // without an id). The bus chooses it here, before the interceptors run, so that the audit row
     // of the command names the id its events carry. It belongs to this dispatch alone: a command
     // executed inside it with nothing bound passes here again and gets its own.
     return ScopedValue.where(BoundCorrelationId.GENERATED, IdGenerator.generateCorrelationId())
-        .call(() -> executeCountedUnderItsCorrelationId(command, key));
+        .call(() -> executeCountedUnderItsCorrelationId(command, key, dispatched));
   }
 
   @SuppressWarnings("unchecked")
   private <C extends Command> CommandResult executeCountedUnderItsCorrelationId(
-      C command, IdempotencyKey key) {
+      C command, IdempotencyKey key, SagaDispatchOffer dispatched) {
     // Guarded like every other meter on this method. This is the FIRST statement of the
     // command path and it sits outside the try below, so an unguarded throw here propagated
     // straight out of execute(): the decider never ran, nothing was appended, no interceptor and no
@@ -409,6 +463,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         // Bound without that origin it came from something else, and executing the command would
         // store events, and an audit row, under a saga's correlation id that no saga caused.
         BoundCorrelationId.refuseForeignReserved(LOG, "command", command.getClass());
+        if (dispatched != null) {
+          refuseUnlessTheSagaDispatchsBindings(dispatched, command.getClass(), key);
+        }
         reg = (DeciderRegistration<C, ?, ?>) findRegistration(command);
         aggregateId = reg.idExtractor().apply(command);
         if (aggregateId == null) {
@@ -878,7 +935,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         () -> {
           CommandResult result;
           try {
-            result = executeCounted(command, null);
+            result = executeCounted(command, null, null);
           } catch (Throwable e) {
             slot.release();
             future.completeExceptionally(failureItself(e, command));
@@ -1970,6 +2027,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     private final List<CommandInterceptor> interceptors = new ArrayList<>();
     private UnaryOperator<Runnable> asyncTaskWrapper;
     private Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
+    private Boolean allowUnreliableScopedValues;
     private Clock clock;
     private CommandInbox commandInbox;
     private Predicate<Throwable> dlqEligible;
@@ -2255,6 +2313,22 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
+     * Whether {@link #build()} builds the bus on a JVM that {@link ScopedValueJvmGuard} refuses:
+     * JDK 25 with the Graal JIT and neither of its workarounds set, on which {@code ScopedValue}
+     * reads on virtual threads are not reliable. {@code true} builds it with one {@code ERROR} line
+     * per JVM, at the application's own risk. Not set, the system property {@value
+     * ScopedValueJvmGuard#ALLOW_PROPERTY} decides ({@code false} unless it is {@code true}); the
+     * integrations set it from the configuration key of the same name.
+     *
+     * @param allow {@code true} to build the bus on such a JVM
+     * @return this builder
+     */
+    public Builder allowUnreliableScopedValues(boolean allow) {
+      this.allowUnreliableScopedValues = allow;
+      return this;
+    }
+
+    /**
      * Sets the {@link Clock} that stamps each produced event's {@link EventMetadata#timestamp()} at
      * append time. Defaults to {@link Clock#systemUTC()}. Inject a fixed or stepping clock in tests
      * to assert append-time stamping. The clock is read once per produced event, so events of one
@@ -2343,15 +2417,24 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * {@link AuthorizationConfigurationValidator}. The interceptor counts only as a member of the
      * chain itself: wrapped in {@link CommandInterceptor#compose} or a decorator it is not seen.
      *
-     * @throws IllegalStateException if no event store was set, or if a registered command type
-     *     requires authorization and no {@link AnnotationAuthorizationInterceptor} is among the
-     *     interceptors — the annotations would be ignored and the command would run unguarded
+     * <p>It first runs {@link ScopedValueJvmGuard} on the running JVM.
+     *
+     * @throws IllegalStateException if the JVM is one {@link ScopedValueJvmGuard} refuses and
+     *     {@link #allowUnreliableScopedValues(boolean)} does not allow it, if no event store was
+     *     set, or if a registered command type requires authorization and no {@link
+     *     AnnotationAuthorizationInterceptor} is among the interceptors — the annotations would be
+     *     ignored and the command would run unguarded
      * @throws IllegalArgumentException if a dead letter queue is configured without an objectMapper
      *     — without one, {@code publishToDeadLetterQueue} cannot serialize the command, and failing
      *     fast here is clearer than a later NullPointerException that would shadow the original
      *     command failure
      */
     public VirtualThreadCommandBus build() {
+      boolean allowUnreliable =
+          allowUnreliableScopedValues != null
+              ? allowUnreliableScopedValues
+              : Boolean.getBoolean(ScopedValueJvmGuard.ALLOW_PROPERTY);
+      ScopedValueJvmGuard.check(allowUnreliable);
       if (eventStore == null) {
         throw new IllegalStateException("eventStore is required");
       }
@@ -2388,7 +2471,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           dlqEligible,
           maxInFlightAsyncCommands,
           deadLetterRetryPolicy,
-          inboxRetentionMaxAge);
+          inboxRetentionMaxAge,
+          allowUnreliable);
     }
   }
 }

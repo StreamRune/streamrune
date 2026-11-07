@@ -3,30 +3,23 @@ package org.streamrune.core;
 import java.util.Objects;
 
 /**
- * Reads a {@link ScopedValue} from the bindings of the current thread, every time.
+ * The one place the framework reads a {@link ScopedValue}.
  *
- * <p>{@link ScopedValue#get()} and {@link ScopedValue#isBound()} answer from a small per-thread
- * cache of recently read values and walk the thread's bindings only when the cache has no entry;
- * {@link ScopedValue#orElse} walks the bindings on every call. On GraalVM CE 25.0.1 with its
- * default Graal JIT, a compiled read of that cache on a virtual thread that has been unmounted and
- * remounted answers with entries that are not the thread's bindings: a value that is bound reads as
- * unbound, and one that is not bound reads as bound. The same reads compiled by C2, or interpreted,
- * answer from the bindings.
- *
- * <p>The framework's own scoped values — {@link StreamRuneContext#CURRENT}, {@link
+ * <p>The framework reads its own scoped values — {@link StreamRuneContext#CURRENT}, {@link
  * StreamRuneContext#CAUSE}, {@link StreamRuneContext#SAGA_OWNED}, {@link
- * StreamRuneContext#SAGA_FORWARD} and the command bus's own — decide authorization, the provenance
- * of every stored event and the refusal of a reserved correlation id. The framework reads each of
- * them here, never through {@code get()} or {@code isBound()}. Application code reads the request
- * context through {@link StreamRuneContext#capture()} and {@link StreamRuneContext#cause()}, which
- * read here too.
+ * StreamRuneContext#SAGA_FORWARD} and the command bus's own — here and nowhere else, which an
+ * architecture test of the build holds it to, so every read has one implementation. Application
+ * code reads the request context through {@link StreamRuneContext#capture()} and {@link
+ * StreamRuneContext#cause()}, which read here too.
  *
- * <p>A walk of the bindings costs a few comparisons per binding scope on the thread; the framework
- * nests a handful.
+ * <p>Reading through this class does not make a read reliable on a JVM on which scoped-value reads
+ * are not: on JDK 25 with the Graal JIT, {@code ScopedValue} reads on virtual threads are not
+ * reliable, and the command bus does not start on such a JVM unless one of two workarounds is set
+ * ({@code org.streamrune.runtime.ScopedValueJvmGuard}).
  */
 public final class ScopedValueReads {
 
-  /** What {@link ScopedValue#orElse} answers for a value that is not bound; never bound itself. */
+  /** The answer of a read of a value that is not bound; never bound itself. */
   private static final Object NOT_BOUND = new Object();
 
   private ScopedValueReads() {}

@@ -69,4 +69,49 @@ class SseClientDisconnectLogFilterTest {
       logger.setFilter(original);
     }
   }
+
+  @Test
+  void theFilterStaysWhileAnInstallHoldsIt_andTheLastReleaseRemovesIt() {
+    Logger logger = Logger.getLogger(SseClientDisconnectLogFilter.QUARKUS_REST_PUBLISHER_LOGGER);
+    Filter before = logger.getFilter();
+    Runnable first = SseClientDisconnectLogFilter.install();
+    Runnable second = SseClientDisconnectLogFilter.install();
+    try {
+      first.run();
+      first.run();
+      assertThat(logger.getFilter())
+          .as("the second install still holds the filter, however often the first is released")
+          .isInstanceOf(SseClientDisconnectLogFilter.class);
+      assertThat(logger.getFilter().isLoggable(error(new ClosedChannelException()))).isFalse();
+    } finally {
+      second.run();
+    }
+    assertThat(logger.getFilter())
+        .as("the last release restores the filter before it")
+        .isSameAs(before);
+  }
+
+  @Test
+  void aFilterSetOverIt_isLeftInPlace_andAnInstallAfterItGoesInFrontOfIt() {
+    Logger logger = Logger.getLogger(SseClientDisconnectLogFilter.QUARKUS_REST_PUBLISHER_LOGGER);
+    Filter original = logger.getFilter();
+    try {
+      Runnable first = SseClientDisconnectLogFilter.install();
+      Filter replacement = logRecord -> true;
+      logger.setFilter(replacement);
+      Runnable second = SseClientDisconnectLogFilter.install();
+      assertThat(logger.getFilter())
+          .as("installed in front of the filter that replaced it")
+          .isInstanceOf(SseClientDisconnectLogFilter.class);
+      assertThat(logger.getFilter().isLoggable(error(new ClosedChannelException()))).isFalse();
+      second.run();
+      assertThat(logger.getFilter()).isSameAs(replacement);
+      first.run();
+      assertThat(logger.getFilter())
+          .as("a release leaves a filter that replaced the installed one")
+          .isSameAs(replacement);
+    } finally {
+      logger.setFilter(original);
+    }
+  }
 }
