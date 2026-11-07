@@ -7,10 +7,12 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.LockSupport;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -27,10 +29,12 @@ import org.streamrune.runtime.SseEventPublisher;
  *
  * <p>Quarkus REST writes each frame of a stream asynchronously and logs a frame that cannot be
  * written once the response has started at {@code ERROR}, from its publisher response handler. A
- * frame that meets a connection the client has closed fails with a {@link
- * java.nio.channels.ClosedChannelException}, which is the client going away, not a fault. Here the
- * client reads the opening frame, closes its socket, and events are published to the stream until
- * the stream is torn down.
+ * frame that meets a connection the client has closed fails with a {@link ClosedChannelException},
+ * which is the client going away, not a fault. Here each client reads the opening frame and resets
+ * its connection, and events are published to the stream, one every two milliseconds beside the
+ * keepalive, until the stream is torn down. The records counted are those of a closed connection: a
+ * stream that outran a slow-client bound would end with an {@code ERROR} of its own, which this
+ * test does not provoke.
  */
 class SseClientDisconnectTest {
 
@@ -52,7 +56,8 @@ class SseClientDisconnectTest {
         new Handler() {
           @Override
           public void publish(LogRecord logRecord) {
-            if (logRecord.getLevel().intValue() >= Level.SEVERE.intValue()) {
+            if (logRecord.getLevel().intValue() >= Level.SEVERE.intValue()
+                && causedByAClosedConnection(logRecord.getThrown())) {
               errors.add(logRecord.getMessage() + " " + logRecord.getThrown());
             }
           }
@@ -70,7 +75,7 @@ class SseClientDisconnectTest {
             controller,
             List.of(new StreamRuneRequestFilter(holder)),
             SseWireFormatTest.JacksonJsonWriter.class)) {
-      for (int client = 0; client < 5; client++) {
+      for (int client = 0; client < 10; client++) {
         try (Socket socket = new Socket("localhost", server.port())) {
           OutputStream out = socket.getOutputStream();
           out.write(
@@ -90,12 +95,15 @@ class SseClientDisconnectTest {
           // closed.
           socket.setSoLinger(true, 0);
         }
+        // An event every two milliseconds beside the keepalive, until the stream is torn down:
+        // frames meet the reset connection, and no slow-client bound is reached.
         long published = 0;
         long until = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (controller.openStreamCount() > 0 && System.nanoTime() < until) {
           publisher.publish(
               SseWireFormatTest.envelope(
                   ++published, new SseWireFormatTest.OrderPlaced("o-1", (int) published)));
+          LockSupport.parkNanos(Duration.ofMillis(2).toNanos());
         }
         await().atMost(Duration.ofSeconds(10)).until(() -> controller.openStreamCount() == 0);
       }
@@ -105,5 +113,14 @@ class SseClientDisconnectTest {
     }
 
     assertThat(errors).as("records at ERROR for a client that went away").isEmpty();
+  }
+
+  private static boolean causedByAClosedConnection(Throwable thrown) {
+    for (Throwable c = thrown; c != null; c = c.getCause() == c ? null : c.getCause()) {
+      if (c instanceof ClosedChannelException) {
+        return true;
+      }
+    }
+    return false;
   }
 }
