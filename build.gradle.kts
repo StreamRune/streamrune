@@ -407,11 +407,11 @@ val quickCheckOnly =
 // On JDK 25 the Graal JIT is not reliable with StreamRune, and the framework refuses to start on a
 // JVM that runs it unless the JVMCI compiler is off (GraalJitGuard, production.md "Supported
 // JVMs"). A test JVM that is a JVMCI build (GraalVM: its java.vm.version names jvmci) runs with
-// -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, the pair every HotSpot JDK 25 accepts, so
-// the suites run on GraalVM with C2 as on any other JDK 25; any other
-// JDK 25 runs them as its users run it, with no flag. streamrune-runtime's graalJitGuardTest
-// runs GraalJitGuardLiveTest alone with the flags -PgraalJitGuardTestFlags names (none by default),
-// so that the guard meets the JVM as an application meets it; -PexpectGraalJitGuard=refused|accepted
+// -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, the pair every JDK 25 HotSpot build we
+// ran accepts, so the suites run on GraalVM with C2 as on any other JDK 25; any other JDK 25 runs
+// them as its users run it, with no flag. streamrune-runtime's graalJitGuardTest runs
+// GraalJitGuardLiveTest alone with the flags -PgraalJitGuardTestFlags names (none by default), so
+// that the guard meets the JVM as an application meets it; -PexpectGraalJitGuard=refused|accepted
 // tells that test what the guard answers there (default `accepted`), and the GraalVM workflow
 // (graalvm-jit.yml) runs it with each. -PvirtualThreadReadSeconds=N runs
 // StreamRuneContextVirtualThreadReadTest for N seconds instead of its default 4.

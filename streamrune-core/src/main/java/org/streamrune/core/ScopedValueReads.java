@@ -11,10 +11,6 @@ import java.util.Objects;
  * architecture test of the build holds it to, so every read has one implementation. Application
  * code reads the request context through {@link StreamRuneContext#capture()} and {@link
  * StreamRuneContext#cause()}, which read here too.
- *
- * <p>On JDK 25 the Graal JIT is not reliable with StreamRune, and the command bus does not start on
- * a JVM that runs it unless the JVMCI compiler is off ({@code
- * org.streamrune.runtime.GraalJitGuard}).
  */
 public final class ScopedValueReads {
 

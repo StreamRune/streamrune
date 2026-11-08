@@ -26,7 +26,10 @@ import org.slf4j.LoggerFactory;
  */
 class GraalJitGuardTest {
 
-  /** The flags the guard names: the JVMCI compiler off, in a form every HotSpot JDK 25 accepts. */
+  /**
+   * The flags the guard names: the JVMCI compiler off, in a form every JDK 25 HotSpot build we ran
+   * accepts.
+   */
   private static final String JVMCI_OFF = "-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler";
 
   private final ListAppender<ILoggingEvent> log = new ListAppender<>();

@@ -16,8 +16,8 @@ import org.slf4j.LoggerFactory;
  * GraalVM CE 25.0.5 and Oracle GraalVM 25.0.4, where it is the default compiler — so StreamRune
  * does not support it and does not start on such a JVM unless the JVMCI compiler is off: {@code
  * -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler}, with which GraalVM compiles with C2, and
- * which every HotSpot JDK 25 accepts. JVMs with C2 (Temurin, Zulu, or GraalVM with the JVMCI
- * compiler off) and native images were unaffected in our runs.
+ * which every JDK 25 HotSpot build we ran accepts. JVMs with C2 (Temurin, Zulu, or GraalVM with the
+ * JVMCI compiler off) and native images were unaffected in our runs.
  *
  * <p>The guard reads the JVM's options through its management interface (the module {@code
  * jdk.management}): a JVM whose {@code UseJVMCICompiler} is {@code true} is refused. A later
@@ -51,7 +51,7 @@ public final class GraalJitGuard {
   /**
    * The flags that switch the JVMCI compiler off, with which GraalVM compiles with C2. A JVM
    * without the JVMCI compiler (Temurin, Zulu) accepts {@code -XX:-UseJVMCICompiler} only after
-   * {@code -XX:+UnlockExperimentalVMOptions}, so the pair starts every HotSpot JDK 25.
+   * {@code -XX:+UnlockExperimentalVMOptions}, so the pair starts every JDK 25 HotSpot build we ran.
    */
   private static final String JVMCI_COMPILER_OFF =
       "-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler";

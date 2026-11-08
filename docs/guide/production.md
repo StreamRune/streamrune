@@ -1329,16 +1329,16 @@ the test and run tasks of the build.
 **What the check reads, and when it runs.** The check reads the JVM's options through the module
 `jdk.management`: include that module in a runtime built with `jlink`, so that the check can read
 them. A GraalVM runtime without it is refused even with the flags set, because the check cannot
-verify them: add `jdk.management`, or, where it cannot be added, set the opt-out below once the flags
-are set. A runtime without `jdk.management` that does not identify as a GraalVM build starts with a
-`WARN` line. The check runs when a command bus is built and when an integration starts. Code that runs without
-building a command bus — a runtime built by hand with only a query bus, subscriptions or
-projections, and application tests on the test kit's `InMemoryCommandBus` or `SagaFixture` — is not
-checked: set the flags on those JVMs too.
+verify them: add `jdk.management`, or, where it cannot be added, set the opt-out below once the
+flags are set. A runtime without `jdk.management` that does not identify as a GraalVM build starts
+with a `WARN` line. The check runs when a command bus is built and when an integration starts. Code
+that runs without building a command bus — a runtime built by hand with only a query bus,
+subscriptions or projections, and application tests on the test kit's `InMemoryCommandBus` or
+`SagaFixture` — is not checked: set the flags on those JVMs too.
 
-`streamrune.jvm.allow-graal-jit=true` starts StreamRune on a refused JVM anyway, at
-your own risk, with one `ERROR` line. It is a configuration key of the three integrations; a runtime
-built by hand reads the system property of that name, or takes
+`streamrune.jvm.allow-graal-jit=true` starts StreamRune on a refused JVM anyway, at your own risk,
+with one `ERROR` line. It is a configuration key of the three integrations; a runtime built by hand
+reads the system property of that name, or takes
 `VirtualThreadCommandBus.Builder.allowGraalJit(true)`. Set the flags instead.
 
 ## Backup, restore and disaster recovery

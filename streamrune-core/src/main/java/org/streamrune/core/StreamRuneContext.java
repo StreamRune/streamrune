@@ -23,9 +23,7 @@ import org.streamrune.core.types.UserId;
  * <p><b>Reading the bindings.</b> {@link #capture()}, {@link #cause()}, {@link #isSagaDispatch()}
  * and {@link #sagaForwardOf} read the bindings through {@link ScopedValueReads}, the one place the
  * framework reads a scoped value, and answer {@code null} or {@code false} where nothing is bound.
- * Application code reads them through these methods too. On JDK 25 the Graal JIT is not reliable
- * with StreamRune; the JVMs the framework does not start on are in {@code
- * org.streamrune.runtime.GraalJitGuard}.
+ * Application code reads them through these methods too.
  */
 public final class StreamRuneContext {
 
