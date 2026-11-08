@@ -2,7 +2,10 @@ package org.streamrune.aws;
 
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.Key;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Map;
@@ -12,6 +15,9 @@ import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
@@ -118,13 +124,26 @@ import software.amazon.awssdk.services.kms.model.NotFoundException;
  * envelope version it does not write, or too short for its own header is refused before any KMS
  * call; KMS's {@code InvalidCiphertextException} on the wrapped data key (corrupted, tampered, or
  * wrapped under another subject's context), an unwrapped key that is not a 256-bit key, and a GCM
- * tag failure are refused after it. All of them are {@link CryptoMappingException}: no retry, key
- * change or configuration fix can heal them, so the read-path classifiers quarantine the one blob
- * instead of treating it as a KMS outage and retrying forever. So is a value too large for the
- * envelope ({@link #MAX_PLAINTEXT_LENGTH} bytes, the Java array limit less the envelope), refused
- * on encrypt before any KMS call. Key-level and service-level failures (above; throttling, internal
- * errors, an {@code IncorrectKeyException} from a wrong {@code kms-key-id}) stay the bare {@link
- * CryptoOperationException}.
+ * tag failure on both decryption attempts (below) are refused after it. All of them are {@link
+ * CryptoMappingException}: no retry, key change or configuration fix can heal them, so the
+ * read-path classifiers quarantine the one blob instead of treating it as a KMS outage and retrying
+ * forever. So is a value too large for the envelope ({@link #MAX_PLAINTEXT_LENGTH} bytes, the Java
+ * array limit less the envelope), refused on encrypt before any KMS call. Key-level and
+ * service-level failures (above; throttling, internal errors, an {@code IncorrectKeyException} from
+ * a wrong {@code kms-key-id}) stay the bare {@link CryptoOperationException}.
+ *
+ * <p><b>Verified encryption, retried decryption.</b> Every encryption, its check and every
+ * decryption attempt take a cipher of their own. The engine decrypts each encryption with a second,
+ * independent cipher before it returns it; a result that does not decrypt to the plaintext is
+ * discarded, a data key generated for it is not cached, and the encrypt throws the transient {@link
+ * CryptoOperationException}, so the caller retries and nothing unreadable is stored. An encrypt
+ * writes nothing durable, so the retry starts afresh. A decryption whose GCM tag does not match is
+ * retried once with a fresh cipher before it fails with the deterministic {@link
+ * CryptoMappingException}: a corrupted, tampered or foreign value fails both attempts, while a
+ * transient fault of the JVM or the hardware cannot wedge a reader. Both events are counted ({@code
+ * streamrune.crypto.encrypt_self_check_failed}, {@code streamrune.crypto.decrypt_retried}) through
+ * the {@link StreamRuneMetrics} given to {@link Builder#metrics(StreamRuneMetrics)} and logged at
+ * {@code WARN}.
  *
  * <p><b>Encrypt re-checks the tombstone before it returns.</b> The pre-check alone leaves a TOCTOU
  * window in which a concurrent erasure completes in full — tombstone committed, purgers run, the
@@ -189,18 +208,30 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
 
   private static final String ALGORITHM = "AES/GCM/NoPadding";
 
-  // Cipher.getInstance() does an SPI provider lookup that costs more than the encryption of a
-  // short value, so the cipher is reused per thread, as in the PostgreSQL and filesystem engines.
-  // Cipher is not thread-safe, hence ThreadLocal; init() fully re-initializes it on each use.
-  private static final ThreadLocal<Cipher> CIPHER =
-      ThreadLocal.withInitial(
-          () -> {
-            try {
-              return Cipher.getInstance(ALGORITHM);
-            } catch (GeneralSecurityException e) {
-              throw new CryptoOperationException("AES/GCM cipher unavailable", e);
-            }
-          });
+  private static final Logger log = LoggerFactory.getLogger(AwsKmsCryptoEngine.class);
+
+  /**
+   * Creates the cipher of one operation, initialised for {@code mode} under {@code key}.
+   * Package-private so a test can inject a fault; production always uses {@link #FRESH_CIPHERS}.
+   */
+  @FunctionalInterface
+  interface CipherFactory {
+    Cipher create(int mode, Key key, AlgorithmParameterSpec params) throws GeneralSecurityException;
+  }
+
+  // A new Cipher for every encryption, every check of an encryption and every decryption attempt,
+  // as in the PostgreSQL and filesystem engines. Cipher.getInstance costs about a microsecond, a
+  // few times the encryption of a short value (PerfCandidatesBenchmark, candidate C), and buys
+  // isolation: a cipher reused across operations carries its state (the key schedule among it)
+  // from one operation to the next, so one wrongly computed state would spoil every later
+  // operation under that data key on that thread. A fresh cipher confines a fault to one
+  // operation, which the encryption check or the decryption retry catches.
+  static final CipherFactory FRESH_CIPHERS =
+      (mode, key, params) -> {
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(mode, key, params);
+        return cipher;
+      };
 
   private final KmsClient kmsClient;
   private final String kmsKeyId;
@@ -210,9 +241,13 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
 
   private final int dataKeyCacheMaximumSize;
   private final Duration dataKeyCacheExpireAfterWrite;
+  private final StreamRuneMetrics metrics;
+  private final CipherFactory cipherFactory;
 
   private AwsKmsCryptoEngine(Builder builder) {
     this.kmsClient = builder.kmsClient;
+    this.metrics = builder.metrics;
+    this.cipherFactory = builder.cipherFactory;
     this.kmsKeyId = builder.kmsKeyId;
     this.forgottenSubjects = builder.forgottenSubjects;
     this.dataKeyCacheMaximumSize = builder.dataKeyCacheMaximumSize;
@@ -279,6 +314,9 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
       dataKey = generateDataKey(subjectId);
     }
     byte[] ciphertext = seal(subjectId, dataKey, plaintext);
+    // Before the tombstone re-check and before a generated data key is cached: a discarded value
+    // leaves nothing behind, and the caller's retry encrypts afresh.
+    verifyEncryption(subjectId, dataKey, ciphertext, plaintext);
     // Re-check the tombstone AFTER the data key was obtained and the value encrypted, before the
     // ciphertext is handed to the caller. The pre-check alone leaves a TOCTOU window: a
     // ForgetSubjectService running concurrently can complete the ENTIRE erasure — tombstone
@@ -590,8 +628,9 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
     random.nextBytes(nonce);
     System.arraycopy(nonce, 0, result, headerLength, NONCE_LENGTH);
     try {
-      Cipher cipher = CIPHER.get();
-      cipher.init(Cipher.ENCRYPT_MODE, dataKey.key(), new GCMParameterSpec(TAG_LENGTH * 8, nonce));
+      Cipher cipher =
+          cipherFactory.create(
+              Cipher.ENCRYPT_MODE, dataKey.key(), new GCMParameterSpec(TAG_LENGTH * 8, nonce));
       cipher.updateAAD(result, 0, AAD_HEADER_LENGTH);
       cipher.updateAAD(subjectBinding(subjectId));
       cipher.doFinal(plaintext, 0, plaintext.length, result, headerLength + NONCE_LENGTH);
@@ -602,20 +641,80 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
     }
   }
 
-  /** Decrypts the envelope's value under {@code key}; {@code headerLength} precedes the nonce. */
+  /**
+   * Decrypts a fresh envelope with an independent cipher and compares the result with the
+   * plaintext. A mismatch throws the transient {@link CryptoOperationException} before the value is
+   * returned, so nothing unreadable reaches storage and the caller's retry encrypts it again.
+   */
+  private void verifyEncryption(
+      SubjectId subjectId,
+      DataKeyCache.EncryptionKey dataKey,
+      byte[] ciphertext,
+      byte[] plaintext) {
+    int headerLength = FIXED_HEADER_LENGTH + dataKey.wrapped().length;
+    AEADBadTagException tagFailure = null;
+    try {
+      if (MessageDigest.isEqual(
+          plaintext, openOnce(subjectId, dataKey.key(), ciphertext, headerLength))) {
+        return;
+      }
+    } catch (AEADBadTagException e) {
+      tagFailure = e;
+    } catch (GeneralSecurityException e) {
+      throw new CryptoOperationException(
+          "AES-GCM encryption failed for subject: " + subjectId.redacted(), e);
+    }
+    metrics.recordEncryptSelfCheckFailed();
+    log.warn(
+        "Encryption self-check failed for subject {}: the encrypted value did not decrypt to its"
+            + " plaintext and is discarded; the operation fails as transient and is retried",
+        subjectId.redacted());
+    throw new CryptoOperationException(
+        "Encryption self-check failed for subject: "
+            + subjectId.redacted()
+            + " — the encrypted value did not decrypt to its plaintext and is discarded"
+            + " (transient; retrying encrypts it again)",
+        tagFailure);
+  }
+
+  /** One decryption attempt with a cipher of its own; {@code headerLength} precedes the nonce. */
+  private byte[] openOnce(SubjectId subjectId, SecretKey key, byte[] ciphertext, int headerLength)
+      throws GeneralSecurityException {
+    Cipher cipher =
+        cipherFactory.create(
+            Cipher.DECRYPT_MODE,
+            key,
+            new GCMParameterSpec(TAG_LENGTH * 8, ciphertext, headerLength, NONCE_LENGTH));
+    cipher.updateAAD(ciphertext, 0, AAD_HEADER_LENGTH);
+    cipher.updateAAD(subjectBinding(subjectId));
+    int bodyStart = headerLength + NONCE_LENGTH;
+    return cipher.doFinal(ciphertext, bodyStart, ciphertext.length - bodyStart);
+  }
+
+  /**
+   * Decrypts the envelope's value under {@code key}; {@code headerLength} precedes the nonce. A tag
+   * mismatch is retried once with a fresh cipher; a second one is the value's own fault.
+   */
   private byte[] open(SubjectId subjectId, SecretKey key, byte[] ciphertext, int headerLength) {
     try {
-      Cipher cipher = CIPHER.get();
-      cipher.init(
-          Cipher.DECRYPT_MODE,
-          key,
-          new GCMParameterSpec(TAG_LENGTH * 8, ciphertext, headerLength, NONCE_LENGTH));
-      cipher.updateAAD(ciphertext, 0, AAD_HEADER_LENGTH);
-      cipher.updateAAD(subjectBinding(subjectId));
-      int bodyStart = headerLength + NONCE_LENGTH;
-      return cipher.doFinal(ciphertext, bodyStart, ciphertext.length - bodyStart);
+      try {
+        return openOnce(subjectId, key, ciphertext, headerLength);
+      } catch (AEADBadTagException first) {
+        metrics.recordDecryptRetried();
+        log.warn(
+            "Decryption for subject {} failed its authentication tag; retrying once with a fresh"
+                + " cipher",
+            subjectId.redacted());
+        try {
+          return openOnce(subjectId, key, ciphertext, headerLength);
+        } catch (AEADBadTagException second) {
+          second.addSuppressed(first);
+          throw second;
+        }
+      }
     } catch (AEADBadTagException e) {
-      // Deterministic: the value or its header was altered, or it belongs to another subject.
+      // Deterministic on both attempts: the value or its header was altered, or it belongs to
+      // another subject.
       throw new CryptoMappingException(
           "AES-GCM tag mismatch for subject: "
               + subjectId.redacted()
@@ -694,9 +793,28 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
     private Duration dataKeyCacheExpireAfterWrite = DEFAULT_DATA_KEY_CACHE_EXPIRE_AFTER_WRITE;
     private long maxEncryptionsPerDataKey = MAX_ENCRYPTIONS_PER_DATA_KEY;
     private LongSupplier nanoClock = System::nanoTime;
+    private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
+    private CipherFactory cipherFactory = FRESH_CIPHERS;
 
     public Builder kmsClient(KmsClient client) {
       this.kmsClient = client;
+      return this;
+    }
+
+    /**
+     * The metrics collector that counts discarded encryptions ({@code
+     * streamrune.crypto.encrypt_self_check_failed}) and retried decryptions ({@code
+     * streamrune.crypto.decrypt_retried}). Defaults to {@link StreamRuneMetrics#NOOP}; {@code null}
+     * keeps it.
+     */
+    public Builder metrics(StreamRuneMetrics metrics) {
+      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      return this;
+    }
+
+    /** Test-only seam (package-private): creates the cipher of every operation. */
+    Builder cipherFactory(CipherFactory cipherFactory) {
+      this.cipherFactory = cipherFactory;
       return this;
     }
 

@@ -5,6 +5,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.lang.Nullable;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.crypto.postgres.PostgresCryptoEngine;
@@ -23,13 +25,18 @@ public class PostgresCryptoEngineConfiguration {
   // the bare PostgresCryptoEngine has no close() and inference skips it (an explicit
   // destroyMethod = "close" would fail bean creation with "Invalid destruction signature").
   @Bean
-  CryptoEngine postgresCryptoEngine(DataSource dataSource, StreamRuneCryptoProperties props) {
+  CryptoEngine postgresCryptoEngine(
+      DataSource dataSource,
+      StreamRuneCryptoProperties props,
+      @Nullable StreamRuneMetrics metrics) {
     // Honor the configured key-table name (validated as a SQL identifier inside the
     // engine builder). Default keeps the migration-created "encryption_keys" table.
     var delegate =
         PostgresCryptoEngine.builder()
             .dataSource(dataSource)
             .tableName(props.postgres().tableName())
+            // Counts discarded encryptions and retried decryptions; NOOP without a metrics bean.
+            .metrics(metrics)
             .build();
 
     var cacheProps = props.cache();

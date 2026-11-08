@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.lang.Nullable;
 import org.streamrune.aws.AwsKmsCryptoEngine;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.crypto.postgres.JdbcForgottenSubjectStore;
@@ -69,7 +70,8 @@ public class AwsKmsCryptoEngineConfiguration {
   CryptoEngine awsKmsCryptoEngine(
       StreamRuneKmsClient kmsClient,
       @Nullable DataSource dataSource,
-      StreamRuneCryptoProperties props) {
+      StreamRuneCryptoProperties props,
+      @Nullable StreamRuneMetrics metrics) {
     String kmsKeyId = props.aws().kmsKeyId();
     if (kmsKeyId == null || kmsKeyId.isBlank()) {
       throw new IllegalStateException(
@@ -85,6 +87,8 @@ public class AwsKmsCryptoEngineConfiguration {
         AwsKmsCryptoEngine.builder()
             .kmsClient(kmsClient.client())
             .kmsKeyId(kmsKeyId)
+            // Counts discarded encryptions and retried decryptions; NOOP without a metrics bean.
+            .metrics(metrics)
             .dataKeyCacheExpireAfterWrite(
                 requirePositive(
                     dataKeyCache.expireAfterWrite(),

@@ -429,6 +429,16 @@ public class RecordingStreamRuneMetrics implements StreamRuneMetrics {
   }
 
   @Override
+  public void recordEncryptSelfCheckFailed() {
+    record(MetricNames.CRYPTO_ENCRYPT_SELF_CHECK_FAILED, 1);
+  }
+
+  @Override
+  public void recordDecryptRetried() {
+    record(MetricNames.CRYPTO_DECRYPT_RETRIED, 1);
+  }
+
+  @Override
   public void recordGdprPurgeFailed(String purgerName) {
     record(MetricNames.GDPR_PURGE_FAILED, 1, MetricNames.TAG_PURGER, purgerName);
   }

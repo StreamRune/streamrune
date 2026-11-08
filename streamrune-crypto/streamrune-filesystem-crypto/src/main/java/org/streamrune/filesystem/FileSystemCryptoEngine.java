@@ -7,8 +7,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.GeneralSecurityException;
+import java.security.Key;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HexFormat;
@@ -24,6 +26,9 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
@@ -45,6 +50,18 @@ import org.streamrune.core.types.SubjectId;
  * format version, a generation of {@code < 1} or above the current key's — fails with a clear
  * {@link CryptoMappingException} (the deterministic subtype of {@link CryptoOperationException}:
  * retrying cannot succeed) instead of a generic GCM tag failure.
+ *
+ * <p><b>Verified encryption, retried decryption.</b> Every encryption, its check and every
+ * decryption attempt take a cipher of their own. The engine decrypts each encryption with a second,
+ * independent cipher before it returns it; a result that does not decrypt to the plaintext is
+ * discarded and the encrypt throws the transient {@link CryptoOperationException}, so the caller
+ * retries and nothing unreadable is stored. A decryption whose authentication tag does not match is
+ * retried once with a fresh cipher before it fails with the deterministic {@link
+ * CryptoMappingException}: a corrupted, tampered or foreign value fails both attempts, while a
+ * transient fault of the JVM or the hardware cannot wedge a reader. Both events are counted ({@code
+ * streamrune.crypto.encrypt_self_check_failed}, {@code streamrune.crypto.decrypt_retried}) through
+ * the {@link StreamRuneMetrics} given to {@link Builder#metrics(StreamRuneMetrics)} and logged at
+ * {@code WARN}.
  *
  * <p><b>Key generations across erasures.</b> {@link #deleteKey(SubjectId)} records the destroyed
  * key's generation in a per-subject {@code <hash>.generation} file (max-merge, so idempotent forget
@@ -191,25 +208,38 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
    */
   private static final int MAX_KEY_VERSION = Byte.MAX_VALUE;
 
-  // Cipher.getInstance() does an SPI provider lookup that measured ~8.6us — ~3.7x the cost of the
-  // actual encrypt — so the AES/GCM cipher is reused per thread instead of re-resolved per call.
-  // Cipher is not thread-safe, hence ThreadLocal; init() fully re-initializes it on each use, so
-  // reuse across encrypt/decrypt calls on the same thread is safe.
-  private static final ThreadLocal<Cipher> CIPHER =
-      ThreadLocal.withInitial(
-          () -> {
-            try {
-              return Cipher.getInstance(ALGORITHM);
-            } catch (GeneralSecurityException e) {
-              throw new CryptoOperationException("AES/GCM cipher unavailable", e);
-            }
-          });
+  private static final Logger log = LoggerFactory.getLogger(FileSystemCryptoEngine.class);
+
+  /**
+   * Creates the cipher of one operation, initialised for {@code mode} under {@code key}.
+   * Package-private so a test can inject a fault; production always uses {@link #FRESH_CIPHERS}.
+   */
+  @FunctionalInterface
+  interface CipherFactory {
+    Cipher create(int mode, Key key, AlgorithmParameterSpec params) throws GeneralSecurityException;
+  }
+
+  // A new Cipher for every encryption, every check of an encryption and every decryption attempt.
+  // Cipher.getInstance costs about a microsecond, a few times the encryption of a short value
+  // (PerfCandidatesBenchmark, candidate C), and buys isolation: a cipher reused across operations
+  // carries its state (the key schedule among it) from one operation to the next, so one wrongly
+  // computed state would spoil every later operation under that key on that thread. A fresh
+  // cipher confines a fault to one operation, which the encryption check or the decryption retry
+  // then catches.
+  static final CipherFactory FRESH_CIPHERS =
+      (mode, key, params) -> {
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(mode, key, params);
+        return cipher;
+      };
 
   /** Number of lock stripes. Bounds lock memory; each subject maps to one stripe by hash. */
   private static final int LOCK_STRIPES = 64;
 
   private final Path keyDirectory;
   private final SecureRandom random = new SecureRandom();
+  private final StreamRuneMetrics metrics;
+  private final CipherFactory cipherFactory;
 
   // Per-subject (not global) IN-JVM lock guarding the tombstone-check + key-file-create sequence
   // in encrypt() against deleteKey() for the SAME subject id. A FIXED-SIZE striped array keyed by
@@ -272,9 +302,15 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
   }
 
   private FileSystemCryptoEngine(
-      Path keyDirectory, Durability durability, int keyDurabilityMemoCapacity) {
+      Path keyDirectory,
+      Durability durability,
+      int keyDurabilityMemoCapacity,
+      StreamRuneMetrics metrics,
+      CipherFactory cipherFactory) {
     if (keyDirectory == null) throw new IllegalArgumentException("keyDirectory must not be null");
     this.keyDirectory = keyDirectory;
+    this.metrics = metrics;
+    this.cipherFactory = cipherFactory;
     this.durability =
         durability != null ? durability : PlatformDurability.forFileSystemOf(keyDirectory);
     this.keyDurability = boundedLru(keyDurabilityMemoCapacity);
@@ -326,19 +362,88 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
     VersionedKey key = loadOrCreateKey(subjectId, keyPath);
     byte[] iv = new byte[GCM_IV_LENGTH];
     random.nextBytes(iv);
+    byte[] result;
     try {
-      Cipher cipher = CIPHER.get();
-      cipher.init(Cipher.ENCRYPT_MODE, key.key(), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+      Cipher cipher =
+          cipherFactory.create(
+              Cipher.ENCRYPT_MODE, key.key(), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
       byte[] ciphertext = cipher.doFinal(plaintext);
-      byte[] result = new byte[HEADER_LENGTH + GCM_IV_LENGTH + ciphertext.length];
+      result = new byte[HEADER_LENGTH + GCM_IV_LENGTH + ciphertext.length];
       result[0] = FORMAT_VERSION;
       result[1] = (byte) key.version();
       System.arraycopy(iv, 0, result, HEADER_LENGTH, GCM_IV_LENGTH);
       System.arraycopy(ciphertext, 0, result, HEADER_LENGTH + GCM_IV_LENGTH, ciphertext.length);
-      return result;
     } catch (Exception e) {
       throw new CryptoOperationException(
           "Encryption failed for subject: " + subjectId.redacted(), e);
+    }
+    verifyEncryption(subjectId, key.key(), result, plaintext);
+    return result;
+  }
+
+  /**
+   * Decrypts a fresh encryption with an independent cipher and compares the result with the
+   * plaintext. A mismatch throws the transient {@link CryptoOperationException} before the value is
+   * returned, so nothing unreadable reaches storage and the caller's retry encrypts it again. The
+   * key file is durable before any cipher work, so the retry reuses the same key.
+   */
+  private void verifyEncryption(
+      SubjectId subjectId, SecretKey key, byte[] encrypted, byte[] plaintext) {
+    AEADBadTagException tagFailure = null;
+    try {
+      if (MessageDigest.isEqual(plaintext, open(key, encrypted))) {
+        return;
+      }
+    } catch (AEADBadTagException e) {
+      tagFailure = e;
+    } catch (GeneralSecurityException e) {
+      throw new CryptoOperationException(
+          "Encryption failed for subject: " + subjectId.redacted(), e);
+    }
+    metrics.recordEncryptSelfCheckFailed();
+    log.warn(
+        "Encryption self-check failed for subject {}: the encrypted value did not decrypt to its"
+            + " plaintext and is discarded; the operation fails as transient and is retried",
+        subjectId.redacted());
+    throw new CryptoOperationException(
+        "Encryption self-check failed for subject: "
+            + subjectId.redacted()
+            + " — the encrypted value did not decrypt to its plaintext and is discarded"
+            + " (transient; retrying encrypts it again)",
+        tagFailure);
+  }
+
+  /** One decryption attempt with a cipher of its own. */
+  private byte[] open(SecretKey key, byte[] encrypted) throws GeneralSecurityException {
+    Cipher cipher =
+        cipherFactory.create(
+            Cipher.DECRYPT_MODE,
+            key,
+            new GCMParameterSpec(GCM_TAG_LENGTH, encrypted, HEADER_LENGTH, GCM_IV_LENGTH));
+    return cipher.doFinal(
+        encrypted, HEADER_LENGTH + GCM_IV_LENGTH, encrypted.length - HEADER_LENGTH - GCM_IV_LENGTH);
+  }
+
+  /**
+   * Decrypts, and retries once with a fresh cipher when the authentication tag does not match. A
+   * second mismatch propagates with the first attached as suppressed: the value itself is bad.
+   */
+  private byte[] openWithOneRetry(SubjectId subjectId, SecretKey key, byte[] encrypted)
+      throws GeneralSecurityException {
+    try {
+      return open(key, encrypted);
+    } catch (AEADBadTagException first) {
+      metrics.recordDecryptRetried();
+      log.warn(
+          "Decryption for subject {} failed its authentication tag; retrying once with a fresh"
+              + " cipher",
+          subjectId.redacted());
+      try {
+        return open(key, encrypted);
+      } catch (AEADBadTagException second) {
+        second.addSuppressed(first);
+        throw second;
+      }
     }
   }
 
@@ -353,16 +458,9 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
     VersionedKey key = loadKey(keyPath);
     validateCiphertextHeader(subjectId.redacted(), ciphertext, key.version());
     try {
-      byte[] iv = new byte[GCM_IV_LENGTH];
-      System.arraycopy(ciphertext, HEADER_LENGTH, iv, 0, GCM_IV_LENGTH);
-      Cipher cipher = CIPHER.get();
-      cipher.init(Cipher.DECRYPT_MODE, key.key(), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
-      return cipher.doFinal(
-          ciphertext,
-          HEADER_LENGTH + GCM_IV_LENGTH,
-          ciphertext.length - HEADER_LENGTH - GCM_IV_LENGTH);
+      return openWithOneRetry(subjectId, key.key(), ciphertext);
     } catch (AEADBadTagException e) {
-      // A GCM tag mismatch is DETERMINISTIC — the blob is
+      // A GCM tag mismatch on both attempts is DETERMINISTIC — the blob is
       // corrupted, tampered, or was written under a different key — and retrying can never
       // succeed. The family classifiers (SagaStateConversion, ReadPoisonClassifier,
       // SagaCommandDispatch.isRetryLater, the event stores' hasTransientCryptoCause) read a BARE
@@ -1404,9 +1502,28 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
     private Path keyDirectory;
     private Durability durability;
     private int keyDurabilityMemoCapacity = DEFAULT_KEY_DURABILITY_MEMO_CAPACITY;
+    private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
+    private CipherFactory cipherFactory = FRESH_CIPHERS;
 
     public Builder keyDirectory(Path path) {
       this.keyDirectory = path;
+      return this;
+    }
+
+    /**
+     * The metrics collector that counts discarded encryptions ({@code
+     * streamrune.crypto.encrypt_self_check_failed}) and retried decryptions ({@code
+     * streamrune.crypto.decrypt_retried}). Defaults to {@link StreamRuneMetrics#NOOP}; {@code null}
+     * keeps it.
+     */
+    public Builder metrics(StreamRuneMetrics metrics) {
+      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      return this;
+    }
+
+    /** Test-only seam (package-private): creates the cipher of every operation. */
+    Builder cipherFactory(CipherFactory cipherFactory) {
+      this.cipherFactory = cipherFactory;
       return this;
     }
 
@@ -1428,7 +1545,8 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
 
     public FileSystemCryptoEngine build() {
       if (keyDirectory == null) throw new IllegalStateException("keyDirectory is required");
-      return new FileSystemCryptoEngine(keyDirectory, durability, keyDurabilityMemoCapacity);
+      return new FileSystemCryptoEngine(
+          keyDirectory, durability, keyDurabilityMemoCapacity, metrics, cipherFactory);
     }
   }
 }

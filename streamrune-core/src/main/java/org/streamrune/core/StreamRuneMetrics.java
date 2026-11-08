@@ -256,6 +256,20 @@ public interface StreamRuneMetrics {
   default void recordSystemicKeyStoreFailure() {}
 
   /**
+   * Records an encryption a crypto engine discarded because its result did not decrypt to the
+   * plaintext with an independent cipher; the engine throws the transient {@code
+   * CryptoOperationException} and the caller retries. See {@link
+   * org.streamrune.core.metrics.MetricNames#CRYPTO_ENCRYPT_SELF_CHECK_FAILED}.
+   */
+  default void recordEncryptSelfCheckFailed() {}
+
+  /**
+   * Records a decryption a crypto engine retried once with a fresh cipher after its authentication
+   * tag did not match. See {@link org.streamrune.core.metrics.MetricNames#CRYPTO_DECRYPT_RETRIED}.
+   */
+  default void recordDecryptRetried() {}
+
+  /**
    * Records a GDPR right-to-erasure read-model purge that FAILED after the subject's key was
    * already crypto-shredded (a lock timeout, a renamed table, a revoked grant). The key deletion is
    * irreversible, so the forget cannot be rolled back — but the failed purge leaves unencrypted

@@ -165,6 +165,8 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   private final Counter snapshotsRefused;
   private final Counter cryptoSubjectRedacted;
   private final Counter cryptoKeystoreSystemicFailure;
+  private final Counter cryptoEncryptSelfCheckFailed;
+  private final Counter cryptoDecryptRetried;
 
   /**
    * Backing value for the {@code outbox.pending} gauge, updated in place on every {@link
@@ -358,6 +360,16 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
         Counter.builder(meter(MetricNames.CRYPTO_KEYSTORE_SYSTEMIC_FAILURE))
             .description(
                 "Detected systemic key-store failures (mass redaction, not lawful erasure)")
+            .register(registry);
+    this.cryptoEncryptSelfCheckFailed =
+        Counter.builder(meter(MetricNames.CRYPTO_ENCRYPT_SELF_CHECK_FAILED))
+            .description(
+                "Encryptions discarded because the result did not decrypt to the plaintext"
+                    + " (retried by the caller)")
+            .register(registry);
+    this.cryptoDecryptRetried =
+        Counter.builder(meter(MetricNames.CRYPTO_DECRYPT_RETRIED))
+            .description("Decryptions retried with a fresh cipher after a tag mismatch")
             .register(registry);
 
     // These four query meter names are registered eagerly for discoverability (matching
@@ -795,6 +807,16 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   @Override
   public void recordSystemicKeyStoreFailure() {
     cryptoKeystoreSystemicFailure.increment();
+  }
+
+  @Override
+  public void recordEncryptSelfCheckFailed() {
+    cryptoEncryptSelfCheckFailed.increment();
+  }
+
+  @Override
+  public void recordDecryptRetried() {
+    cryptoDecryptRetried.increment();
   }
 
   @Override

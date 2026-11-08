@@ -2,20 +2,26 @@ package org.streamrune.crypto.postgres;
 
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.Key;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.HexFormat;
 import java.util.Locale;
+import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import javax.sql.DataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
@@ -39,6 +45,19 @@ import org.streamrune.core.types.SubjectId;
  * clear {@link CryptoMappingException} (the deterministic subtype of {@link
  * CryptoOperationException}: retrying cannot succeed) instead of a generic GCM tag failure, so a
  * misconfigured engine swap, a rolled-back version byte, or a future format change is detectable.
+ *
+ * <p><b>Verified encryption, retried decryption.</b> Every encryption, its check and every
+ * decryption attempt take a cipher of their own. The engine decrypts each encryption with a second,
+ * independent cipher before it returns it; a result that does not decrypt to the plaintext is
+ * discarded and the encrypt throws the transient {@link CryptoOperationException}, so the caller
+ * retries and nothing unreadable is stored. The key a first encryption mints is committed in its
+ * own transaction before any cipher work, so the retry loads that key and mints no second one. A
+ * decryption whose authentication tag does not match is retried once with a fresh cipher before it
+ * fails with the deterministic {@link CryptoMappingException}: a corrupted, tampered or foreign
+ * value fails both attempts, while a transient fault of the JVM or the hardware cannot wedge a
+ * reader. Both events are counted ({@code streamrune.crypto.encrypt_self_check_failed}, {@code
+ * streamrune.crypto.decrypt_retried}) through the {@link StreamRuneMetrics} given to {@link
+ * Builder#metrics(StreamRuneMetrics)} and logged at {@code WARN}.
  *
  * <p><b>Terminal erasure.</b> {@link #deleteKey(SubjectId)} deletes the {@code encryption_keys} row
  * and records a durable tombstone in the {@code forgotten_subjects} table (atomically, in one
@@ -102,28 +121,47 @@ public final class PostgresCryptoEngine implements CryptoEngine {
    */
   private static final int MAX_KEY_VERSION = Byte.MAX_VALUE;
 
-  // Cipher.getInstance() does an SPI provider lookup that measured ~8.6us — ~3.7x the cost of the
-  // actual encrypt — so the AES/GCM cipher is reused per thread instead of re-resolved per call.
-  // Cipher is not thread-safe, hence ThreadLocal; init() fully re-initializes it on each use, so
-  // reuse across encrypt/decrypt calls on the same thread is safe.
-  private static final ThreadLocal<Cipher> CIPHER =
-      ThreadLocal.withInitial(
-          () -> {
-            try {
-              return Cipher.getInstance(ALGORITHM);
-            } catch (GeneralSecurityException e) {
-              throw new CryptoOperationException("AES/GCM cipher unavailable", e);
-            }
-          });
+  private static final Logger log = LoggerFactory.getLogger(PostgresCryptoEngine.class);
+
+  /**
+   * Creates the cipher of one operation, initialised for {@code mode} under {@code key}.
+   * Package-private so a test can inject a fault; production always uses {@link #FRESH_CIPHERS}.
+   */
+  @FunctionalInterface
+  interface CipherFactory {
+    Cipher create(int mode, Key key, AlgorithmParameterSpec params) throws GeneralSecurityException;
+  }
+
+  // A new Cipher for every encryption, every check of an encryption and every decryption attempt.
+  // Cipher.getInstance costs about a microsecond, a few times the encryption of a short value
+  // (PerfCandidatesBenchmark, candidate C), and buys isolation: a cipher reused across operations
+  // carries its state (the key schedule among it) from one operation to the next, so one wrongly
+  // computed state would spoil every later operation under that key on that thread. A fresh
+  // cipher confines a fault to one operation, which the encryption check or the decryption retry
+  // then catches.
+  static final CipherFactory FRESH_CIPHERS =
+      (mode, key, params) -> {
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(mode, key, params);
+        return cipher;
+      };
 
   private final DataSource dataSource;
   private final String tableName;
   private final SecureRandom random = new SecureRandom();
+  private final StreamRuneMetrics metrics;
+  private final CipherFactory cipherFactory;
 
-  private PostgresCryptoEngine(DataSource dataSource, String tableName) {
+  private PostgresCryptoEngine(
+      DataSource dataSource,
+      String tableName,
+      StreamRuneMetrics metrics,
+      CipherFactory cipherFactory) {
     if (dataSource == null) throw new IllegalArgumentException("dataSource must not be null");
     this.dataSource = dataSource;
     this.tableName = validateTableName(tableName);
+    this.metrics = metrics;
+    this.cipherFactory = cipherFactory;
   }
 
   /**
@@ -165,24 +203,95 @@ public final class PostgresCryptoEngine implements CryptoEngine {
   public byte[] encrypt(SubjectId subjectId, byte[] plaintext) {
     if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
     if (plaintext == null) throw new IllegalArgumentException("plaintext must not be null");
+    VersionedKey key;
+    byte[] result;
     try (Connection conn = dataSource.getConnection()) {
-      VersionedKey key = inTransaction(conn, c -> loadOrCreateKey(c, subjectId));
+      // The mint commits in its own transaction before any cipher work: an encryption discarded
+      // below leaves a committed key that the caller's retry loads (no second mint).
+      key = inTransaction(conn, c -> loadOrCreateKey(c, subjectId));
       byte[] iv = new byte[GCM_IV_LENGTH];
       random.nextBytes(iv);
-      Cipher cipher = CIPHER.get();
-      cipher.init(Cipher.ENCRYPT_MODE, key.key(), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+      Cipher cipher =
+          cipherFactory.create(
+              Cipher.ENCRYPT_MODE, key.key(), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
       byte[] ciphertext = cipher.doFinal(plaintext);
-      byte[] result = new byte[HEADER_LENGTH + GCM_IV_LENGTH + ciphertext.length];
+      result = new byte[HEADER_LENGTH + GCM_IV_LENGTH + ciphertext.length];
       result[0] = FORMAT_VERSION;
       result[1] = (byte) key.version();
       System.arraycopy(iv, 0, result, HEADER_LENGTH, GCM_IV_LENGTH);
       System.arraycopy(ciphertext, 0, result, HEADER_LENGTH + GCM_IV_LENGTH, ciphertext.length);
-      return result;
     } catch (KeyNotFoundException | SubjectForgottenException e) {
       throw e;
     } catch (Exception e) {
       throw new CryptoOperationException(
           "Encryption failed for subject: " + subjectId.redacted(), e);
+    }
+    verifyEncryption(subjectId, key.key(), result, plaintext);
+    return result;
+  }
+
+  /**
+   * Decrypts a fresh encryption with an independent cipher and compares the result with the
+   * plaintext. A mismatch throws the transient {@link CryptoOperationException} before the value is
+   * returned, so nothing unreadable reaches storage and the caller's retry encrypts it again.
+   */
+  private void verifyEncryption(
+      SubjectId subjectId, SecretKey key, byte[] encrypted, byte[] plaintext) {
+    AEADBadTagException tagFailure = null;
+    try {
+      if (MessageDigest.isEqual(plaintext, open(key, encrypted))) {
+        return;
+      }
+    } catch (AEADBadTagException e) {
+      tagFailure = e;
+    } catch (GeneralSecurityException e) {
+      throw new CryptoOperationException(
+          "Encryption failed for subject: " + subjectId.redacted(), e);
+    }
+    metrics.recordEncryptSelfCheckFailed();
+    log.warn(
+        "Encryption self-check failed for subject {}: the encrypted value did not decrypt to its"
+            + " plaintext and is discarded; the operation fails as transient and is retried",
+        subjectId.redacted());
+    throw new CryptoOperationException(
+        "Encryption self-check failed for subject: "
+            + subjectId.redacted()
+            + " — the encrypted value did not decrypt to its plaintext and is discarded"
+            + " (transient; retrying encrypts it again)",
+        tagFailure);
+  }
+
+  /** One decryption attempt with a cipher of its own. */
+  private byte[] open(SecretKey key, byte[] encrypted) throws GeneralSecurityException {
+    Cipher cipher =
+        cipherFactory.create(
+            Cipher.DECRYPT_MODE,
+            key,
+            new GCMParameterSpec(GCM_TAG_LENGTH, encrypted, HEADER_LENGTH, GCM_IV_LENGTH));
+    return cipher.doFinal(
+        encrypted, HEADER_LENGTH + GCM_IV_LENGTH, encrypted.length - HEADER_LENGTH - GCM_IV_LENGTH);
+  }
+
+  /**
+   * Decrypts, and retries once with a fresh cipher when the authentication tag does not match. A
+   * second mismatch propagates with the first attached as suppressed: the value itself is bad.
+   */
+  private byte[] openWithOneRetry(SubjectId subjectId, SecretKey key, byte[] encrypted)
+      throws GeneralSecurityException {
+    try {
+      return open(key, encrypted);
+    } catch (AEADBadTagException first) {
+      metrics.recordDecryptRetried();
+      log.warn(
+          "Decryption for subject {} failed its authentication tag; retrying once with a fresh"
+              + " cipher",
+          subjectId.redacted());
+      try {
+        return open(key, encrypted);
+      } catch (AEADBadTagException second) {
+        second.addSuppressed(first);
+        throw second;
+      }
     }
   }
 
@@ -193,19 +302,13 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     try (Connection conn = dataSource.getConnection()) {
       VersionedKey key = loadKey(conn, subjectId);
       validateCiphertextHeader(subjectId.redacted(), ciphertext, key.version());
-      byte[] iv = new byte[GCM_IV_LENGTH];
-      System.arraycopy(ciphertext, HEADER_LENGTH, iv, 0, GCM_IV_LENGTH);
-      Cipher cipher = CIPHER.get();
-      cipher.init(Cipher.DECRYPT_MODE, key.key(), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
-      return cipher.doFinal(
-          ciphertext,
-          HEADER_LENGTH + GCM_IV_LENGTH,
-          ciphertext.length - HEADER_LENGTH - GCM_IV_LENGTH);
+      return openWithOneRetry(subjectId, key.key(), ciphertext);
     } catch (KeyNotFoundException | CryptoOperationException e) {
       throw e;
-    } catch (javax.crypto.AEADBadTagException e) {
-      // A GCM tag mismatch is DETERMINISTIC — the blob is corrupted, tampered, or was
-      // written under a different key — and retrying can never succeed. The family classifiers
+    } catch (AEADBadTagException e) {
+      // A GCM tag mismatch on both attempts is DETERMINISTIC — the blob is corrupted, tampered,
+      // or was written under a different key — and retrying can never succeed. The family
+      // classifiers
       // (SagaStateConversion, ReadPoisonClassifier, hasTransientCryptoCause) read a BARE
       // CryptoOperationException as key-store OUTAGE evidence and retry forever; the deterministic
       // subtype is what routes this to poison/quarantine instead.
@@ -716,9 +819,28 @@ public final class PostgresCryptoEngine implements CryptoEngine {
   public static final class Builder {
     private DataSource dataSource;
     private String tableName = DEFAULT_TABLE_NAME;
+    private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
+    private CipherFactory cipherFactory = FRESH_CIPHERS;
 
     public Builder dataSource(DataSource ds) {
       this.dataSource = ds;
+      return this;
+    }
+
+    /**
+     * The metrics collector that counts discarded encryptions ({@code
+     * streamrune.crypto.encrypt_self_check_failed}) and retried decryptions ({@code
+     * streamrune.crypto.decrypt_retried}). Defaults to {@link StreamRuneMetrics#NOOP}; {@code null}
+     * keeps it.
+     */
+    public Builder metrics(StreamRuneMetrics metrics) {
+      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      return this;
+    }
+
+    /** Test-only seam (package-private): creates the cipher of every operation. */
+    Builder cipherFactory(CipherFactory cipherFactory) {
+      this.cipherFactory = cipherFactory;
       return this;
     }
 
@@ -749,7 +871,7 @@ public final class PostgresCryptoEngine implements CryptoEngine {
 
     public PostgresCryptoEngine build() {
       if (dataSource == null) throw new IllegalStateException("dataSource is required");
-      return new PostgresCryptoEngine(dataSource, tableName);
+      return new PostgresCryptoEngine(dataSource, tableName, metrics, cipherFactory);
     }
   }
 }

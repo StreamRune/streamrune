@@ -57,6 +57,8 @@ class RecordingStreamRuneMetricsTest {
           entry("recordSnapshotDiscarded", MetricNames.SNAPSHOTS_DISCARDED),
           entry("recordSubjectRedacted", MetricNames.CRYPTO_SUBJECT_REDACTED),
           entry("recordSystemicKeyStoreFailure", MetricNames.CRYPTO_KEYSTORE_SYSTEMIC_FAILURE),
+          entry("recordEncryptSelfCheckFailed", MetricNames.CRYPTO_ENCRYPT_SELF_CHECK_FAILED),
+          entry("recordDecryptRetried", MetricNames.CRYPTO_DECRYPT_RETRIED),
           entry("recordGdprPurgeFailed", MetricNames.GDPR_PURGE_FAILED),
           entry("recordProjectionProcessed", MetricNames.PROJECTIONS_PROCESSED),
           entry("recordProjectionFailed", MetricNames.PROJECTIONS_FAILED),
@@ -171,7 +173,7 @@ class RecordingStreamRuneMetricsTest {
   @Test
   void everyMethodOfTheInterfaceIsOverridden() {
     ForwardingDecoratorChecks.assertEveryMethodOverridden(
-        StreamRuneMetrics.class, RecordingStreamRuneMetrics.class, 87);
+        StreamRuneMetrics.class, RecordingStreamRuneMetrics.class, 89);
   }
 
   @Test
