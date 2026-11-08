@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -166,8 +167,27 @@ class AwsKmsCryptoEngineCipherTest {
         CryptoOperationException.class,
         failure.getClass(),
         "an unchecked failure of the check is transient (the bare type), so the caller retries");
-    assertSame(injected, failure.getCause());
+    assertNull(failure.getCause());
+    assertSame(injected, failure.getSuppressed()[0]);
     assertEquals(1, metrics.selfCheckFailures.get());
+  }
+
+  @Test
+  void anIllegalArgumentExceptionInsideTheEncryptionCheckIsTransientAndNothingIsStored() {
+    IllegalArgumentException injected = new IllegalArgumentException("injected");
+    AwsKmsCryptoEngine engine =
+        engineWith(new FaultyCiphers().throwOnce(Cipher.DECRYPT_MODE, injected));
+
+    CryptoOperationException failure =
+        assertThrows(CryptoOperationException.class, () -> engine.encrypt(SUBJECT, PLAINTEXT));
+
+    assertEquals(CryptoOperationException.class, failure.getClass());
+    assertSame(injected, failure.getSuppressed()[0]);
+    assertNoPermanentEvidenceInTheCauseChain(failure);
+    assertEquals(1, metrics.selfCheckFailures.get());
+    assertFalse(engine.holdsDataKeysOf(SUBJECT), "the data key of a discarded value is not cached");
+    assertArrayEquals(
+        PLAINTEXT, plainEngine().decrypt(SUBJECT, engine.encrypt(SUBJECT, PLAINTEXT)));
   }
 
   @Test
@@ -300,6 +320,15 @@ class AwsKmsCryptoEngineCipherTest {
       created.add(cipher);
       modes.add(mode);
       return cipher;
+    }
+  }
+
+  /** No exception in the chain a classifier walks reads as permanent evidence. */
+  private static void assertNoPermanentEvidenceInTheCauseChain(Throwable failure) {
+    for (Throwable c = failure.getCause(); c != null; c = c.getCause()) {
+      assertFalse(
+          c instanceof IllegalArgumentException || c instanceof CryptoMappingException,
+          "cause " + c + " would classify the failed check as permanent");
     }
   }
 }

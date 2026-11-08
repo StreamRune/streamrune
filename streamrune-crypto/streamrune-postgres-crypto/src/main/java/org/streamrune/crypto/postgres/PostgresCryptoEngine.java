@@ -257,19 +257,31 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     throw selfCheckFailed(subjectId, failure);
   }
 
-  /** Counts and logs a failed encryption check; the returned exception is the transient type. */
+  /**
+   * Counts and logs a failed encryption check; the returned exception is the transient type. A
+   * checked failure of the check (a tag failure) is its cause. An unchecked one — any {@code
+   * RuntimeException}, an {@code IllegalArgumentException} or a {@link CryptoMappingException}
+   * among them — is attached as suppressed instead: the classifiers walk the cause chain and read
+   * those types as permanent evidence, while a failed check is transient whatever raised it.
+   */
   private CryptoOperationException selfCheckFailed(SubjectId subjectId, Exception failure) {
     metrics.recordEncryptSelfCheckFailed();
     log.warn(
         "Encryption self-check failed for subject {}: the encrypted value did not decrypt to its"
             + " plaintext and is discarded; the operation fails as transient and is retried",
         subjectId.redacted());
-    return new CryptoOperationException(
-        "Encryption self-check failed for subject: "
-            + subjectId.redacted()
-            + " — the encrypted value did not decrypt to its plaintext and is discarded"
-            + " (transient; retrying encrypts it again)",
-        failure);
+    boolean unchecked = failure instanceof RuntimeException;
+    CryptoOperationException transientFailure =
+        new CryptoOperationException(
+            "Encryption self-check failed for subject: "
+                + subjectId.redacted()
+                + " — the encrypted value did not decrypt to its plaintext and is discarded"
+                + " (transient; retrying encrypts it again)",
+            unchecked ? null : failure);
+    if (unchecked) {
+      transientFailure.addSuppressed(failure);
+    }
+    return transientFailure;
   }
 
   /** One decryption attempt with a cipher of its own. */

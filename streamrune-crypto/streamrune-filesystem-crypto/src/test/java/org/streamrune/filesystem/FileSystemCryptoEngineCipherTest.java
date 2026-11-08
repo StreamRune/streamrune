@@ -4,11 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.Key;
@@ -153,8 +155,42 @@ class FileSystemCryptoEngineCipherTest {
         CryptoOperationException.class,
         failure.getClass(),
         "an unchecked failure of the check is transient (the bare type), so the caller retries");
-    assertSame(injected, failure.getCause());
+    assertNull(failure.getCause());
+    assertSame(injected, failure.getSuppressed()[0]);
     assertEquals(1, metrics.selfCheckFailures.get());
+  }
+
+  @Test
+  void anIllegalArgumentExceptionInsideTheEncryptionCheckIsTransientAndNothingIsStored()
+      throws Exception {
+    IllegalArgumentException injected = new IllegalArgumentException("injected");
+    FileSystemCryptoEngine engine =
+        engineWith(new FaultyCiphers().throwOnce(Cipher.DECRYPT_MODE, injected));
+
+    CryptoOperationException failure =
+        assertThrows(CryptoOperationException.class, () -> engine.encrypt(SUBJECT, PLAINTEXT));
+
+    assertEquals(CryptoOperationException.class, failure.getClass());
+    assertSame(injected, failure.getSuppressed()[0]);
+    assertNoPermanentEvidenceInTheCauseChain(failure);
+    assertEquals(1, metrics.selfCheckFailures.get());
+    List<Path> filesAfterFailure = filesUnder(keyDirectory);
+    byte[] keyBytes = Files.readAllBytes(onlyKeyFile(filesAfterFailure));
+    byte[] retried = engine.encrypt(SUBJECT, PLAINTEXT);
+    assertEquals(filesAfterFailure, filesUnder(keyDirectory), "the retry writes nothing new");
+    assertArrayEquals(keyBytes, Files.readAllBytes(onlyKeyFile(filesAfterFailure)));
+    assertArrayEquals(PLAINTEXT, plainEngine().decrypt(SUBJECT, retried));
+  }
+
+  private static List<Path> filesUnder(Path directory) throws java.io.IOException {
+    try (var walk = Files.walk(directory)) {
+      return walk.filter(Files::isRegularFile).sorted().toList();
+    }
+  }
+
+  private static Path onlyKeyFile(List<Path> files) {
+    assertEquals(1, files.size(), "only the key file the first attempt minted: " + files);
+    return files.get(0);
   }
 
   @Test
@@ -260,6 +296,15 @@ class FileSystemCryptoEngineCipherTest {
       created.add(cipher);
       modes.add(mode);
       return cipher;
+    }
+  }
+
+  /** No exception in the chain a classifier walks reads as permanent evidence. */
+  private static void assertNoPermanentEvidenceInTheCauseChain(Throwable failure) {
+    for (Throwable c = failure.getCause(); c != null; c = c.getCause()) {
+      assertFalse(
+          c instanceof IllegalArgumentException || c instanceof CryptoMappingException,
+          "cause " + c + " would classify the failed check as permanent");
     }
   }
 }

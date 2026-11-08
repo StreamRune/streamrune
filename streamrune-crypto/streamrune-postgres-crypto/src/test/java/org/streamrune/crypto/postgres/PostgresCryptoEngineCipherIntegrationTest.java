@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -199,8 +200,31 @@ class PostgresCryptoEngineCipherIntegrationTest {
         CryptoOperationException.class,
         failure.getClass(),
         "an unchecked failure of the check is transient (the bare type), so the caller retries");
-    assertSame(injected, failure.getCause());
+    assertNull(failure.getCause());
+    assertSame(injected, failure.getSuppressed()[0]);
     assertEquals(1, metrics.selfCheckFailures.get());
+  }
+
+  @Test
+  void anIllegalArgumentExceptionInsideTheEncryptionCheckIsTransientAndNothingIsStored()
+      throws Exception {
+    SubjectId subject = SubjectId.of("pg-cipher-check-iae");
+    IllegalArgumentException injected = new IllegalArgumentException("injected");
+    PostgresCryptoEngine engine =
+        engineWith(new FaultyCiphers().throwOnce(Cipher.DECRYPT_MODE, injected));
+
+    CryptoOperationException failure =
+        assertThrows(CryptoOperationException.class, () -> engine.encrypt(subject, PLAINTEXT));
+
+    assertEquals(CryptoOperationException.class, failure.getClass());
+    assertSame(injected, failure.getSuppressed()[0]);
+    assertNoPermanentEvidenceInTheCauseChain(failure);
+    assertEquals(1, metrics.selfCheckFailures.get());
+    StoredKey minted = storedKey(subject);
+    byte[] retried = engine.encrypt(subject, PLAINTEXT);
+    assertArrayEquals(minted.bytes(), storedKey(subject).bytes(), "no second mint");
+    assertEquals(minted.version(), storedKey(subject).version());
+    assertArrayEquals(PLAINTEXT, plainEngine.decrypt(subject, retried));
   }
 
   @Test
@@ -323,6 +347,15 @@ class PostgresCryptoEngineCipherIntegrationTest {
       created.add(cipher);
       modes.add(mode);
       return cipher;
+    }
+  }
+
+  /** No exception in the chain a classifier walks reads as permanent evidence. */
+  private static void assertNoPermanentEvidenceInTheCauseChain(Throwable failure) {
+    for (Throwable c = failure.getCause(); c != null; c = c.getCause()) {
+      assertFalse(
+          c instanceof IllegalArgumentException || c instanceof CryptoMappingException,
+          "cause " + c + " would classify the failed check as permanent");
     }
   }
 }
