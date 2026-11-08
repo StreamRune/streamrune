@@ -494,26 +494,73 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         return;
       }
 
-      try (var conn = dataSource.getConnection()) {
-        // Committed before the table is recorded as created: on a pool that hands out
-        // autoCommit=false connections an uncommitted CREATE TABLE is rolled back on return, and a
-        // recorded table would then be skipped by the batch transaction that needs it.
-        PostgresTransactions.commitIfManual(
-            conn,
-            "projection table creation",
-            c -> {
-              createTable(c, projectionName);
-              return null;
-            });
-        tablesChecked.add(projectionName);
-      } catch (SQLException e) {
-        throw new EventStoreException(
-            "Failed to create projection table: " + tableName(projectionName), e);
+      SQLException lost = null;
+      for (int attempt = 1; ; attempt++) {
+        try {
+          createTableCommitted(projectionName);
+          break;
+        } catch (SQLException failure) {
+          if (lost != null) {
+            failure.addSuppressed(lost);
+          }
+          if (!lostCreationRace(failure) || attempt == TABLE_CREATION_ATTEMPTS) {
+            throw new EventStoreException(
+                "Failed to create projection table: " + tableName(projectionName), failure);
+          }
+          logLostCreationRace(projectionName);
+          lost = failure;
+        }
       }
+      tablesChecked.add(projectionName);
     }
   }
 
-  private void createTable(Connection conn, ProjectionName projectionName) {
+  /**
+   * Creates {@code projectionName}'s table if it does not exist, committed before it returns: on a
+   * pool that hands out autoCommit=false connections an uncommitted CREATE TABLE is rolled back on
+   * return, and a recorded table would then be skipped by the batch transaction that needs it.
+   */
+  private void createTableCommitted(ProjectionName projectionName) throws SQLException {
+    try (var conn = dataSource.getConnection()) {
+      PostgresTransactions.commitIfManual(
+          conn,
+          "projection table creation",
+          c -> {
+            createTable(c, projectionName);
+            return null;
+          });
+    }
+  }
+
+  /**
+   * How often a projection table's creation runs when it loses the creation race ({@link
+   * #lostCreationRace}). PostgreSQL reports the loser of concurrent {@code CREATE TABLE IF NOT
+   * EXISTS} statements only after the winner's commit, so the next run finds the table; the further
+   * attempts cover the instant between the winner's commit becoming visible and its catalog
+   * invalidation reaching the loser.
+   */
+  private static final int TABLE_CREATION_ATTEMPTS = 3;
+
+  private static void logLostCreationRace(ProjectionName projectionName) {
+    log.debug(
+        "Projection table {} was created concurrently by another session; creating it again finds"
+            + " it",
+        tableName(projectionName));
+  }
+
+  /**
+   * Whether {@code failure} is how PostgreSQL fails a {@code CREATE TABLE IF NOT EXISTS} that raced
+   * another session's committed creation of the same table: a unique violation on the catalog
+   * ({@code 23505}), a duplicate table ({@code 42P07}) or a duplicate object ({@code 42710}, the
+   * table's row type).
+   */
+  private static boolean lostCreationRace(SQLException failure) {
+    String state = failure.getSQLState();
+    return "23505".equals(state) || "42P07".equals(state) || "42710".equals(state);
+  }
+
+  private static void createTable(Connection conn, ProjectionName projectionName)
+      throws SQLException {
     String table = tableName(projectionName);
     String createSql =
         "CREATE TABLE IF NOT EXISTS "
@@ -526,8 +573,6 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
             + ")";
     try (var stmt = conn.createStatement()) {
       stmt.execute(createSql);
-    } catch (SQLException e) {
-      throw new EventStoreException("Failed to create projection table: " + table, e);
     }
   }
 
@@ -1094,8 +1139,46 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
           || tablesEnsuredInTransaction.contains(projectionName)) {
         return;
       }
-      createTable(conn, projectionName);
+      try {
+        createTableInTransaction(projectionName);
+      } catch (SQLException e) {
+        throw new EventStoreException(
+            "Failed to create projection table: " + tableName(projectionName), e);
+      }
       tablesEnsuredInTransaction.add(projectionName);
+    }
+
+    /**
+     * Creates the table inside this transaction, each attempt under a savepoint, so that losing the
+     * creation race to another replica's committed table ({@link #lostCreationRace}) rolls back
+     * only the failed statement, and the statement run again finds the table ({@link
+     * #TABLE_CREATION_ATTEMPTS}).
+     */
+    private void createTableInTransaction(ProjectionName projectionName) throws SQLException {
+      SQLException lost = null;
+      for (int attempt = 1; ; attempt++) {
+        Savepoint beforeCreate = conn.setSavepoint();
+        try {
+          createTable(conn, projectionName);
+          conn.releaseSavepoint(beforeCreate);
+          return;
+        } catch (SQLException failure) {
+          if (lost != null) {
+            failure.addSuppressed(lost);
+          }
+          if (!lostCreationRace(failure) || attempt == TABLE_CREATION_ATTEMPTS) {
+            throw failure;
+          }
+          try {
+            conn.rollback(beforeCreate);
+          } catch (SQLException rollbackFailure) {
+            rollbackFailure.addSuppressed(failure);
+            throw rollbackFailure;
+          }
+          logLostCreationRace(projectionName);
+          lost = failure;
+        }
+      }
     }
 
     @Override

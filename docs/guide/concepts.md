@@ -246,7 +246,8 @@ holds.
 
 **Projection names under `JdbcProjectionRepository`.** Each name is stored in its own table,
 `<name>_view`, created by the first read or write of that name through the repository, or by the
-runner before the first batch of a `TRANSACTIONAL_LOCAL` / `EXTERNAL_EFFECT` registration. An
+runner before the first batch of a `TRANSACTIONAL_LOCAL` / `EXTERNAL_EFFECT` registration; replicas
+that create it at once all succeed. An
 `AT_LEAST_ONCE_IDEMPOTENT` registration that keeps its read models elsewhere gets no table: the
 processor only commits its checkpoint. A name must match `[a-z_][a-z0-9_]{0,57}`: lower-case ASCII letters, digits and
 underscores, starting with a letter or an underscore, at most 58 characters. The name is used
