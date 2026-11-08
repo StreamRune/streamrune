@@ -130,14 +130,32 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
   }
 
   @Test
-  void aCollisionThatPersists_failsAfterOneRetry() {
-    var injecting = new FailingCreate(dataSource, true, "23505", 2);
+  void aSecondCollision_isRecoveredByTheThirdAttempt() {
+    var injecting = new FailingCreate(dataSource, true, "42P07", 2);
     var repo = new JdbcProjectionRepository(injecting.proxy());
 
-    assertThatThrownBy(() -> repo.findById(ProjectionName.of("dup_twice"), "id-1", View.class))
+    assertThat(repo.findById(ProjectionName.of("dup_twice"), "id-1", View.class)).isEmpty();
+
+    assertThat(injecting.creates.get()).isEqualTo(3);
+    assertThat(tableExists("dup_twice_view")).isTrue();
+  }
+
+  @Test
+  void aCollisionThatPersists_failsAfterThreeAttempts_andTheNextCallCreatesTheTable() {
+    var injecting = new FailingCreate(dataSource, true, "23505", 3);
+    var repo = new JdbcProjectionRepository(injecting.proxy());
+    var name = ProjectionName.of("dup_thrice");
+
+    assertThatThrownBy(() -> repo.findById(name, "id-1", View.class))
         .isInstanceOf(EventStoreException.class)
-        .hasMessageContaining("dup_twice_view");
-    assertThat(injecting.creates.get()).isEqualTo(2);
+        .hasMessageContaining("dup_thrice_view");
+    assertThat(injecting.creates.get()).isEqualTo(3);
+    assertThat(tableExists("dup_thrice_view")).isFalse();
+
+    // the failure was not recorded as a created table: the next call creates it
+    assertThat(repo.findById(name, "id-1", View.class)).isEmpty();
+    assertThat(injecting.creates.get()).isEqualTo(4);
+    assertThat(tableExists("dup_thrice_view")).isTrue();
   }
 
   @Test
@@ -172,8 +190,8 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
   }
 
   @Test
-  void inABatchTransaction_aCollisionThatPersists_failsTheBatch() {
-    var injecting = new FailingCreate(dataSource, false, "42P07", 2);
+  void inABatchTransaction_aCollisionThatPersists_failsTheBatch_andTheNextBatchCreatesTheTable() {
+    var injecting = new FailingCreate(dataSource, false, "42P07", 3);
     var repo = new JdbcProjectionRepository(injecting.proxy());
     var name = ProjectionName.of("dup_in_batch_twice");
 
@@ -188,8 +206,19 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
                     new PostgresOffsetStore(dataSource)))
         .isInstanceOf(EventStoreException.class)
         .hasMessageContaining("dup_in_batch_twice_view");
-    assertThat(injecting.creates.get()).isEqualTo(2);
+    assertThat(injecting.creates.get()).isEqualTo(3);
     assertThat(tableExists("dup_in_batch_twice_view")).isFalse();
+
+    repo.executeAtomically(
+        name,
+        List.of(),
+        GlobalOffset.of(1),
+        0L,
+        tx -> tx.save(name, "a", new View("a")),
+        new PostgresOffsetStore(dataSource));
+    assertThat(injecting.creates.get()).isEqualTo(4);
+    assertThat(new JdbcProjectionRepository(dataSource).findById(name, "a", View.class))
+        .contains(new View("a"));
   }
 
   @Test
@@ -210,6 +239,98 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
         .isInstanceOf(EventStoreException.class)
         .hasMessageContaining("denied_in_batch_view");
     assertThat(injecting.creates.get()).isEqualTo(1);
+    assertThat(tableExists("denied_in_batch_view")).isFalse();
+  }
+
+  @Test
+  void aReadThatWaitsOnAnotherSessionsCreation_succeedsOnceThatSessionCommits() throws Exception {
+    var name = ProjectionName.of("real_race_read");
+    var counting = new FailingCreate(dataSource, true, "unused", 0);
+    var repo = new JdbcProjectionRepository(counting.proxy());
+
+    try (Connection other = dataSource.getConnection()) {
+      other.setAutoCommit(false);
+      createUncommitted(other, "real_race_read_view");
+      Future<?> read = runAsync(() -> repo.findById(name, "id-1", View.class));
+      awaitBlockedCreate("real_race_read_view");
+      other.commit();
+      read.get(30, TimeUnit.SECONDS);
+    }
+
+    // the first attempt waited on the other session's commit and then lost; the second found it
+    assertThat(counting.creates.get()).isEqualTo(2);
+  }
+
+  @Test
+  void aBatchThatWaitsOnAnotherSessionsCreation_commitsOnceThatSessionCommits() throws Exception {
+    var name = ProjectionName.of("real_race_batch");
+    var counting = new FailingCreate(dataSource, false, "unused", 0);
+    var repo = new JdbcProjectionRepository(counting.proxy());
+
+    try (Connection other = dataSource.getConnection()) {
+      other.setAutoCommit(false);
+      createUncommitted(other, "real_race_batch_view");
+      Future<?> batch =
+          runAsync(
+              () ->
+                  repo.executeAtomically(
+                      name,
+                      List.of(),
+                      GlobalOffset.of(1),
+                      0L,
+                      tx -> tx.save(name, "a", new View("a")),
+                      new PostgresOffsetStore(dataSource)));
+      awaitBlockedCreate("real_race_batch_view");
+      other.commit();
+      batch.get(30, TimeUnit.SECONDS);
+    }
+
+    // the lost statement was rolled back to its savepoint, and the batch went on and committed
+    assertThat(counting.creates.get()).isEqualTo(2);
+    assertThat(new JdbcProjectionRepository(dataSource).findById(name, "a", View.class))
+        .contains(new View("a"));
+  }
+
+  /** Another session's creation of {@code table}, the repository's own statement, not committed. */
+  private static void createUncommitted(Connection other, String table) throws SQLException {
+    try (Statement stmt = other.createStatement()) {
+      stmt.execute(
+          "CREATE TABLE IF NOT EXISTS "
+              + table
+              + " (id VARCHAR(255) PRIMARY KEY, data JSONB NOT NULL,"
+              + " version BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW())");
+    }
+  }
+
+  private static Future<?> runAsync(Runnable work) {
+    ExecutorService single = Executors.newSingleThreadExecutor();
+    try {
+      return single.submit(work);
+    } finally {
+      single.shutdown();
+    }
+  }
+
+  /** Waits until a session's CREATE TABLE of {@code table} waits on a lock. */
+  private static void awaitBlockedCreate(String table) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+    try (Connection c = dataSource.getConnection();
+        var ps =
+            c.prepareStatement(
+                "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'"
+                    + " AND query LIKE ?")) {
+      ps.setString(1, "CREATE TABLE IF NOT EXISTS " + table + "%");
+      while (System.nanoTime() < deadline) {
+        try (var rs = ps.executeQuery()) {
+          rs.next();
+          if (rs.getInt(1) > 0) {
+            return;
+          }
+        }
+        Thread.sleep(20);
+      }
+    }
+    throw new AssertionError("no CREATE TABLE of " + table + " waited on a lock");
   }
 
   /** The failure and its causes, each with its SQLState, so a failed race names what lost. */

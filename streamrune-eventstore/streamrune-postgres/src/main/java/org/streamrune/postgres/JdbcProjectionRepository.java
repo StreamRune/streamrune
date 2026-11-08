@@ -494,22 +494,21 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         return;
       }
 
-      try {
-        createTableCommitted(projectionName);
-      } catch (SQLException first) {
-        if (!lostCreationRace(first)) {
-          throw new EventStoreException(
-              "Failed to create projection table: " + tableName(projectionName), first);
-        }
-        // Another replica created the table between our check and our insert into the catalog,
-        // and has committed it: PostgreSQL reports the loser of concurrent CREATE TABLE IF NOT
-        // EXISTS statements only after the winner's commit. Once more, the statement finds it.
+      SQLException lost = null;
+      for (int attempt = 1; ; attempt++) {
         try {
           createTableCommitted(projectionName);
-        } catch (SQLException second) {
-          second.addSuppressed(first);
-          throw new EventStoreException(
-              "Failed to create projection table: " + tableName(projectionName), second);
+          break;
+        } catch (SQLException failure) {
+          if (lost != null) {
+            failure.addSuppressed(lost);
+          }
+          if (!lostCreationRace(failure) || attempt == TABLE_CREATION_ATTEMPTS) {
+            throw new EventStoreException(
+                "Failed to create projection table: " + tableName(projectionName), failure);
+          }
+          logLostCreationRace(projectionName);
+          lost = failure;
         }
       }
       tablesChecked.add(projectionName);
@@ -531,6 +530,22 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
             return null;
           });
     }
+  }
+
+  /**
+   * How often a projection table's creation runs when it loses the creation race ({@link
+   * #lostCreationRace}). PostgreSQL reports the loser of concurrent {@code CREATE TABLE IF NOT
+   * EXISTS} statements only after the winner's commit, so the next run finds the table; the further
+   * attempts cover the instant between the winner's commit becoming visible and its catalog
+   * invalidation reaching the loser.
+   */
+  private static final int TABLE_CREATION_ATTEMPTS = 3;
+
+  private static void logLostCreationRace(ProjectionName projectionName) {
+    log.debug(
+        "Projection table {} was created concurrently by another session; creating it again finds"
+            + " it",
+        tableName(projectionName));
   }
 
   /**
@@ -1134,27 +1149,36 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
 
     /**
-     * Creates the table inside this transaction under a savepoint, so that losing the creation race
-     * to another replica's committed table ({@link #lostCreationRace}) rolls back only the failed
-     * statement, and the statement run once more finds the table.
+     * Creates the table inside this transaction, each attempt under a savepoint, so that losing the
+     * creation race to another replica's committed table ({@link #lostCreationRace}) rolls back
+     * only the failed statement, and the statement run again finds the table ({@link
+     * #TABLE_CREATION_ATTEMPTS}).
      */
     private void createTableInTransaction(ProjectionName projectionName) throws SQLException {
-      Savepoint beforeCreate = conn.setSavepoint();
-      try {
-        createTable(conn, projectionName);
-      } catch (SQLException first) {
-        if (!lostCreationRace(first)) {
-          throw first;
-        }
+      SQLException lost = null;
+      for (int attempt = 1; ; attempt++) {
+        Savepoint beforeCreate = conn.setSavepoint();
         try {
-          conn.rollback(beforeCreate);
           createTable(conn, projectionName);
-        } catch (SQLException second) {
-          second.addSuppressed(first);
-          throw second;
+          conn.releaseSavepoint(beforeCreate);
+          return;
+        } catch (SQLException failure) {
+          if (lost != null) {
+            failure.addSuppressed(lost);
+          }
+          if (!lostCreationRace(failure) || attempt == TABLE_CREATION_ATTEMPTS) {
+            throw failure;
+          }
+          try {
+            conn.rollback(beforeCreate);
+          } catch (SQLException rollbackFailure) {
+            rollbackFailure.addSuppressed(failure);
+            throw rollbackFailure;
+          }
+          logLostCreationRace(projectionName);
+          lost = failure;
         }
       }
-      conn.releaseSavepoint(beforeCreate);
     }
 
     @Override
