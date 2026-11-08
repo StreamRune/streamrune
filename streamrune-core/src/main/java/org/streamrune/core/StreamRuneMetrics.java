@@ -266,8 +266,11 @@ public interface StreamRuneMetrics {
   /**
    * Records a decryption a crypto engine retried once with a fresh cipher after its authentication
    * tag did not match. See {@link org.streamrune.core.metrics.MetricNames#CRYPTO_DECRYPT_RETRIED}.
+   *
+   * @param outcome {@code "RECOVERED"} when the retry read the value, {@code "FAILED"} when it
+   *     failed too
    */
-  default void recordDecryptRetried() {}
+  default void recordDecryptRetried(String outcome) {}
 
   /**
    * Records a GDPR right-to-erasure read-model purge that FAILED after the subject's key was

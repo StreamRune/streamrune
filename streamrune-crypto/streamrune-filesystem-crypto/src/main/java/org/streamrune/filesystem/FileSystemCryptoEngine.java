@@ -52,16 +52,18 @@ import org.streamrune.core.types.SubjectId;
  * retrying cannot succeed) instead of a generic GCM tag failure.
  *
  * <p><b>Verified encryption, retried decryption.</b> Every encryption, its check and every
- * decryption attempt take a cipher of their own. The engine decrypts each encryption with a second,
- * independent cipher before it returns it; a result that does not decrypt to the plaintext is
- * discarded and the encrypt throws the transient {@link CryptoOperationException}, so the caller
- * retries and nothing unreadable is stored. A decryption whose authentication tag does not match is
- * retried once with a fresh cipher before it fails with the deterministic {@link
- * CryptoMappingException}: a corrupted, tampered or foreign value fails both attempts, while a
- * transient fault of the JVM or the hardware cannot wedge a reader. Both events are counted ({@code
- * streamrune.crypto.encrypt_self_check_failed}, {@code streamrune.crypto.decrypt_retried}) through
- * the {@link StreamRuneMetrics} given to {@link Builder#metrics(StreamRuneMetrics)} and logged at
- * {@code WARN}.
+ * decryption attempt take a cipher of their own. The engine checks each encryption the way decrypt
+ * reads it — the header against the key's generation, then the value with a second, independent
+ * cipher — before it returns it; a result that does not decrypt to the plaintext, or a check that
+ * fails in any way, discards the value and throws the transient {@link CryptoOperationException},
+ * so a wrong cipher result is never returned and the caller's retry encrypts again under the same,
+ * already durable key file. A decryption whose authentication tag does not match is retried once
+ * with a fresh cipher before it fails with the deterministic {@link CryptoMappingException}: a
+ * corrupted, tampered or foreign value fails both attempts, while a transient fault of the JVM or
+ * the hardware cannot wedge a reader. Both events are counted ({@code
+ * streamrune.crypto.encrypt_self_check_failed}; {@code streamrune.crypto.decrypt_retried}, tagged
+ * {@code RECOVERED} or {@code FAILED}) through the {@link StreamRuneMetrics} given to {@link
+ * Builder#metrics(StreamRuneMetrics)} and logged at {@code WARN}.
  *
  * <p><b>Key generations across erasures.</b> {@link #deleteKey(SubjectId)} records the destroyed
  * key's generation in a per-subject {@code <hash>.generation} file (max-merge, so idempotent forget
@@ -210,6 +212,11 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
 
   private static final Logger log = LoggerFactory.getLogger(FileSystemCryptoEngine.class);
 
+  /** The {@code outcome} of {@code streamrune.crypto.decrypt_retried}. */
+  private static final String RETRY_RECOVERED = "RECOVERED";
+
+  private static final String RETRY_FAILED = "FAILED";
+
   /**
    * Creates the cipher of one operation, initialised for {@code mode} under {@code key}.
    * Package-private so a test can inject a fault; production always uses {@link #FRESH_CIPHERS}.
@@ -222,10 +229,9 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
   // A new Cipher for every encryption, every check of an encryption and every decryption attempt.
   // Cipher.getInstance costs about a microsecond, a few times the encryption of a short value
   // (PerfCandidatesBenchmark, candidate C), and buys isolation: a cipher reused across operations
-  // carries its state (the key schedule among it) from one operation to the next, so one wrongly
-  // computed state would spoil every later operation under that key on that thread. A fresh
-  // cipher confines a fault to one operation, which the encryption check or the decryption retry
-  // then catches.
+  // carries internal state from one operation to the next, so a fault in one operation could
+  // spoil later ones on the same thread. A fresh cipher confines a fault to one operation, which
+  // the encryption check or the decryption retry then catches.
   static final CipherFactory FRESH_CIPHERS =
       (mode, key, params) -> {
         Cipher cipher = Cipher.getInstance(ALGORITHM);
@@ -377,40 +383,44 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
       throw new CryptoOperationException(
           "Encryption failed for subject: " + subjectId.redacted(), e);
     }
-    verifyEncryption(subjectId, key.key(), result, plaintext);
+    verifyEncryption(subjectId, key, result, plaintext);
     return result;
   }
 
   /**
-   * Decrypts a fresh encryption with an independent cipher and compares the result with the
-   * plaintext. A mismatch throws the transient {@link CryptoOperationException} before the value is
-   * returned, so nothing unreadable reaches storage and the caller's retry encrypts it again. The
-   * key file is durable before any cipher work, so the retry reuses the same key.
+   * Checks a fresh encryption the way decrypt reads it: its header against the key's generation,
+   * then its value with an independent cipher, compared with the plaintext. Any failure — a
+   * mismatch, a tag failure or an exception of the check itself — throws the transient {@link
+   * CryptoOperationException} before the value is returned, so a wrong cipher result is never
+   * handed to the caller, whose retry encrypts it again.
    */
   private void verifyEncryption(
-      SubjectId subjectId, SecretKey key, byte[] encrypted, byte[] plaintext) {
-    AEADBadTagException tagFailure = null;
+      SubjectId subjectId, VersionedKey key, byte[] encrypted, byte[] plaintext) {
+    Exception failure = null;
     try {
-      if (MessageDigest.isEqual(plaintext, open(key, encrypted))) {
+      validateCiphertextHeader(subjectId.redacted(), encrypted, key.version());
+      if (MessageDigest.isEqual(plaintext, open(key.key(), encrypted))) {
         return;
       }
-    } catch (AEADBadTagException e) {
-      tagFailure = e;
-    } catch (GeneralSecurityException e) {
-      throw new CryptoOperationException(
-          "Encryption failed for subject: " + subjectId.redacted(), e);
+    } catch (GeneralSecurityException | RuntimeException e) {
+      failure = e;
     }
+    throw selfCheckFailed(subjectId, failure);
+  }
+
+  /** Counts and logs a failed encryption check; the returned exception is the transient type. */
+  private CryptoOperationException selfCheckFailed(SubjectId subjectId, Exception failure) {
     metrics.recordEncryptSelfCheckFailed();
     log.warn(
         "Encryption self-check failed for subject {}: the encrypted value did not decrypt to its"
             + " plaintext and is discarded; the operation fails as transient and is retried",
         subjectId.redacted());
-    throw new CryptoOperationException(
+    return new CryptoOperationException(
         "Encryption self-check failed for subject: "
             + subjectId.redacted()
             + " — the encrypted value did not decrypt to its plaintext and is discarded"
             + " (transient; retrying encrypts it again)",
-        tagFailure);
+        failure);
   }
 
   /** One decryption attempt with a cipher of its own. */
@@ -433,18 +443,26 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
     try {
       return open(key, encrypted);
     } catch (AEADBadTagException first) {
-      metrics.recordDecryptRetried();
-      log.warn(
-          "Decryption for subject {} failed its authentication tag; retrying once with a fresh"
-              + " cipher",
-          subjectId.redacted());
       try {
-        return open(key, encrypted);
+        byte[] plaintext = open(key, encrypted);
+        retried(subjectId, RETRY_RECOVERED);
+        return plaintext;
       } catch (AEADBadTagException second) {
+        retried(subjectId, RETRY_FAILED);
         second.addSuppressed(first);
         throw second;
       }
     }
+  }
+
+  /** Counts and logs a retried decryption with its outcome. */
+  private void retried(SubjectId subjectId, String outcome) {
+    metrics.recordDecryptRetried(outcome);
+    log.warn(
+        "Decryption for subject {} failed its authentication tag and was retried once with a fresh"
+            + " cipher; outcome {}",
+        subjectId.redacted(),
+        outcome);
   }
 
   @Override

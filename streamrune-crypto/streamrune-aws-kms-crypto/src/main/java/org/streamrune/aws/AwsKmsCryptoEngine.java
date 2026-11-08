@@ -133,16 +133,18 @@ import software.amazon.awssdk.services.kms.model.NotFoundException;
  * a wrong {@code kms-key-id}) stay the bare {@link CryptoOperationException}.
  *
  * <p><b>Verified encryption, retried decryption.</b> Every encryption, its check and every
- * decryption attempt take a cipher of their own. The engine decrypts each encryption with a second,
- * independent cipher before it returns it; a result that does not decrypt to the plaintext is
- * discarded, a data key generated for it is not cached, and the encrypt throws the transient {@link
- * CryptoOperationException}, so the caller retries and nothing unreadable is stored. An encrypt
- * writes nothing durable, so the retry starts afresh. A decryption whose GCM tag does not match is
- * retried once with a fresh cipher before it fails with the deterministic {@link
- * CryptoMappingException}: a corrupted, tampered or foreign value fails both attempts, while a
- * transient fault of the JVM or the hardware cannot wedge a reader. Both events are counted ({@code
- * streamrune.crypto.encrypt_self_check_failed}, {@code streamrune.crypto.decrypt_retried}) through
- * the {@link StreamRuneMetrics} given to {@link Builder#metrics(StreamRuneMetrics)} and logged at
+ * decryption attempt take a cipher of their own. The engine decrypts each encryption the way
+ * decrypt reads it, with a second, independent cipher, before it returns it; a result that does not
+ * decrypt to the plaintext, or a check that fails in any way, discards the value, caches no data
+ * key generated for it and throws the transient {@link CryptoOperationException}, so a wrong cipher
+ * result is never returned and the caller's retry encrypts afresh (an encrypt writes nothing
+ * durable). Any other unexpected failure of the cipher is the transient type too. A decryption
+ * whose GCM tag does not match is retried once with a fresh cipher before it fails with the
+ * deterministic {@link CryptoMappingException}: a corrupted, tampered or foreign value fails both
+ * attempts, while a transient fault of the JVM or the hardware cannot wedge a reader. Both events
+ * are counted ({@code streamrune.crypto.encrypt_self_check_failed}; {@code
+ * streamrune.crypto.decrypt_retried}, tagged {@code RECOVERED} or {@code FAILED}) through the
+ * {@link StreamRuneMetrics} given to {@link Builder#metrics(StreamRuneMetrics)} and logged at
  * {@code WARN}.
  *
  * <p><b>Encrypt re-checks the tombstone before it returns.</b> The pre-check alone leaves a TOCTOU
@@ -210,6 +212,11 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
 
   private static final Logger log = LoggerFactory.getLogger(AwsKmsCryptoEngine.class);
 
+  /** The {@code outcome} of {@code streamrune.crypto.decrypt_retried}. */
+  private static final String RETRY_RECOVERED = "RECOVERED";
+
+  private static final String RETRY_FAILED = "FAILED";
+
   /**
    * Creates the cipher of one operation, initialised for {@code mode} under {@code key}.
    * Package-private so a test can inject a fault; production always uses {@link #FRESH_CIPHERS}.
@@ -222,10 +229,10 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
   // A new Cipher for every encryption, every check of an encryption and every decryption attempt,
   // as in the PostgreSQL and filesystem engines. Cipher.getInstance costs about a microsecond, a
   // few times the encryption of a short value (PerfCandidatesBenchmark, candidate C), and buys
-  // isolation: a cipher reused across operations carries its state (the key schedule among it)
-  // from one operation to the next, so one wrongly computed state would spoil every later
-  // operation under that data key on that thread. A fresh cipher confines a fault to one
-  // operation, which the encryption check or the decryption retry catches.
+  // isolation: a cipher reused across operations carries internal state from one operation to the
+  // next, so a fault in one operation could spoil later ones on the same thread. A fresh cipher
+  // confines a fault to one operation, which the encryption check or the decryption retry then
+  // catches.
   static final CipherFactory FRESH_CIPHERS =
       (mode, key, params) -> {
         Cipher cipher = Cipher.getInstance(ALGORITHM);
@@ -635,16 +642,18 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
       cipher.updateAAD(subjectBinding(subjectId));
       cipher.doFinal(plaintext, 0, plaintext.length, result, headerLength + NONCE_LENGTH);
       return result;
-    } catch (GeneralSecurityException e) {
+    } catch (GeneralSecurityException | RuntimeException e) {
+      // Any failure of the cipher is transient: the caller's retry encrypts again.
       throw new CryptoOperationException(
           "AES-GCM encryption failed for subject: " + subjectId.redacted(), e);
     }
   }
 
   /**
-   * Decrypts a fresh envelope with an independent cipher and compares the result with the
-   * plaintext. A mismatch throws the transient {@link CryptoOperationException} before the value is
-   * returned, so nothing unreadable reaches storage and the caller's retry encrypts it again.
+   * Checks a fresh envelope the way decrypt reads it, with an independent cipher, and compares the
+   * result with the plaintext. Any failure — a mismatch, a tag failure or an exception of the check
+   * itself — throws the transient {@link CryptoOperationException} before the value is returned, so
+   * a wrong cipher result is never handed to the caller, whose retry encrypts it again.
    */
   private void verifyEncryption(
       SubjectId subjectId,
@@ -652,29 +661,31 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
       byte[] ciphertext,
       byte[] plaintext) {
     int headerLength = FIXED_HEADER_LENGTH + dataKey.wrapped().length;
-    AEADBadTagException tagFailure = null;
+    Exception failure = null;
     try {
       if (MessageDigest.isEqual(
           plaintext, openOnce(subjectId, dataKey.key(), ciphertext, headerLength))) {
         return;
       }
-    } catch (AEADBadTagException e) {
-      tagFailure = e;
-    } catch (GeneralSecurityException e) {
-      throw new CryptoOperationException(
-          "AES-GCM encryption failed for subject: " + subjectId.redacted(), e);
+    } catch (GeneralSecurityException | RuntimeException e) {
+      failure = e;
     }
+    throw selfCheckFailed(subjectId, failure);
+  }
+
+  /** Counts and logs a failed encryption check; the returned exception is the transient type. */
+  private CryptoOperationException selfCheckFailed(SubjectId subjectId, Exception failure) {
     metrics.recordEncryptSelfCheckFailed();
     log.warn(
         "Encryption self-check failed for subject {}: the encrypted value did not decrypt to its"
             + " plaintext and is discarded; the operation fails as transient and is retried",
         subjectId.redacted());
-    throw new CryptoOperationException(
+    return new CryptoOperationException(
         "Encryption self-check failed for subject: "
             + subjectId.redacted()
             + " — the encrypted value did not decrypt to its plaintext and is discarded"
             + " (transient; retrying encrypts it again)",
-        tagFailure);
+        failure);
   }
 
   /** One decryption attempt with a cipher of its own; {@code headerLength} precedes the nonce. */
@@ -700,14 +711,12 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
       try {
         return openOnce(subjectId, key, ciphertext, headerLength);
       } catch (AEADBadTagException first) {
-        metrics.recordDecryptRetried();
-        log.warn(
-            "Decryption for subject {} failed its authentication tag; retrying once with a fresh"
-                + " cipher",
-            subjectId.redacted());
         try {
-          return openOnce(subjectId, key, ciphertext, headerLength);
+          byte[] plaintext = openOnce(subjectId, key, ciphertext, headerLength);
+          retried(subjectId, RETRY_RECOVERED);
+          return plaintext;
         } catch (AEADBadTagException second) {
+          retried(subjectId, RETRY_FAILED);
           second.addSuppressed(first);
           throw second;
         }
@@ -721,10 +730,21 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
               + " — the ciphertext is corrupted, tampered, or belongs to another subject"
               + " (deterministic, retrying cannot succeed)",
           e);
-    } catch (GeneralSecurityException e) {
+    } catch (GeneralSecurityException | RuntimeException e) {
+      // Any other failure of the cipher is transient: the caller's retry decrypts again.
       throw new CryptoOperationException(
           "AES-GCM decryption failed for subject: " + subjectId.redacted(), e);
     }
+  }
+
+  /** Counts and logs a retried decryption with its outcome. */
+  private void retried(SubjectId subjectId, String outcome) {
+    metrics.recordDecryptRetried(outcome);
+    log.warn(
+        "Decryption for subject {} failed its authentication tag and was retried once with a fresh"
+            + " cipher; outcome {}",
+        subjectId.redacted(),
+        outcome);
   }
 
   /**

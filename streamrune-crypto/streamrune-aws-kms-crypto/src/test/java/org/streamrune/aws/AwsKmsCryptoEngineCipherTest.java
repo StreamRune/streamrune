@@ -3,6 +3,8 @@ package org.streamrune.aws;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -13,6 +15,7 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.Key;
+import java.security.ProviderException;
 import java.security.spec.AlgorithmParameterSpec;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -23,6 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
+import javax.crypto.spec.GCMParameterSpec;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoMappingException;
@@ -33,8 +37,9 @@ import software.amazon.awssdk.services.kms.model.GenerateDataKeyRequest;
 
 /**
  * The engine verifies each encryption before it returns it and retries a failed decryption once
- * with a fresh cipher, so a transient fault of the JVM or the hardware cannot persist an unreadable
- * value or wedge a reader. The faults are injected through the package-private cipher factory.
+ * with a fresh cipher, so a wrong cipher result is caught before the value is returned and a
+ * transient fault of the JVM or the hardware cannot wedge a reader. The faults are injected through
+ * the package-private cipher factory.
  */
 class AwsKmsCryptoEngineCipherTest {
 
@@ -103,7 +108,7 @@ class AwsKmsCryptoEngineCipherTest {
     byte[] plaintext = engine.decrypt(SUBJECT, blob);
 
     assertArrayEquals(PLAINTEXT, plaintext);
-    assertEquals(1, metrics.decryptRetries.get());
+    assertEquals(List.of("RECOVERED"), metrics.decryptRetries);
     assertEquals(2, distinct(ciphers.created), "the retry takes a cipher of its own");
     assertTrue(engine.holdsDataKeysOf(SUBJECT), "the unwrapped key opened the value");
   }
@@ -119,7 +124,7 @@ class AwsKmsCryptoEngineCipherTest {
         assertThrows(CryptoMappingException.class, () -> engine.decrypt(SUBJECT, blob));
 
     assertEquals(2, ciphers.created.size());
-    assertEquals(1, metrics.decryptRetries.get());
+    assertEquals(List.of("FAILED"), metrics.decryptRetries);
     assertEquals(AEADBadTagException.class, failure.getCause().getClass());
     assertEquals(1, failure.getCause().getSuppressed().length, "the first attempt's failure");
     assertFalse(engine.holdsDataKeysOf(SUBJECT));
@@ -145,7 +150,69 @@ class AwsKmsCryptoEngineCipherTest {
         "an encryption and its check, twice, then a decryption");
     assertEquals(5, distinct(ciphers.created));
     assertEquals(0, metrics.selfCheckFailures.get());
-    assertEquals(0, metrics.decryptRetries.get());
+    assertEquals(List.of(), metrics.decryptRetries);
+  }
+
+  @Test
+  void aFailureInsideTheEncryptionCheckIsDiscardedAsTransient() {
+    ProviderException injected = new ProviderException("injected");
+    AwsKmsCryptoEngine engine =
+        engineWith(new FaultyCiphers().throwOnce(Cipher.DECRYPT_MODE, injected));
+
+    CryptoOperationException failure =
+        assertThrows(CryptoOperationException.class, () -> engine.encrypt(SUBJECT, PLAINTEXT));
+
+    assertEquals(
+        CryptoOperationException.class,
+        failure.getClass(),
+        "an unchecked failure of the check is transient (the bare type), so the caller retries");
+    assertSame(injected, failure.getCause());
+    assertEquals(1, metrics.selfCheckFailures.get());
+  }
+
+  @Test
+  void theProductionFactoryCreatesAFreshCipherForEveryCall() throws Exception {
+    KeyGenerator generator = KeyGenerator.getInstance("AES");
+    generator.init(256);
+    Key key = generator.generateKey();
+    GCMParameterSpec params = new GCMParameterSpec(128, new byte[12]);
+
+    assertNotSame(
+        AwsKmsCryptoEngine.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params),
+        AwsKmsCryptoEngine.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params));
+    Field factory = AwsKmsCryptoEngine.class.getDeclaredField("cipherFactory");
+    factory.setAccessible(true);
+    assertSame(
+        AwsKmsCryptoEngine.FRESH_CIPHERS,
+        factory.get(plainEngine()),
+        "an engine built without the test seam uses the production factory");
+  }
+
+  @Test
+  void anUncheckedFailureOfTheEncryptionCipherIsTransient() {
+    AwsKmsCryptoEngine engine =
+        engineWith(
+            new FaultyCiphers().throwOnce(Cipher.ENCRYPT_MODE, new ProviderException("injected")));
+
+    CryptoOperationException failure =
+        assertThrows(CryptoOperationException.class, () -> engine.encrypt(SUBJECT, PLAINTEXT));
+
+    assertEquals(CryptoOperationException.class, failure.getClass());
+    assertEquals(ProviderException.class, failure.getCause().getClass());
+  }
+
+  @Test
+  void anUncheckedFailureOfTheDecryptionCipherIsTransient() {
+    byte[] blob = plainEngine().encrypt(SUBJECT, PLAINTEXT);
+    AwsKmsCryptoEngine engine =
+        engineWith(
+            new FaultyCiphers().throwOnce(Cipher.DECRYPT_MODE, new ProviderException("injected")));
+
+    CryptoOperationException failure =
+        assertThrows(CryptoOperationException.class, () -> engine.decrypt(SUBJECT, blob));
+
+    assertEquals(CryptoOperationException.class, failure.getClass());
+    assertEquals(ProviderException.class, failure.getCause().getClass());
   }
 
   @Test
@@ -167,7 +234,7 @@ class AwsKmsCryptoEngineCipherTest {
   /** Counts the two meters the engine records. */
   private static final class CountingMetrics implements StreamRuneMetrics {
     final AtomicInteger selfCheckFailures = new AtomicInteger();
-    final AtomicInteger decryptRetries = new AtomicInteger();
+    final List<String> decryptRetries = new ArrayList<>();
 
     @Override
     public void recordEncryptSelfCheckFailed() {
@@ -175,8 +242,8 @@ class AwsKmsCryptoEngineCipherTest {
     }
 
     @Override
-    public void recordDecryptRetried() {
-      decryptRetries.incrementAndGet();
+    public void recordDecryptRetried(String outcome) {
+      decryptRetries.add(outcome);
     }
   }
 
@@ -190,6 +257,8 @@ class AwsKmsCryptoEngineCipherTest {
     final List<Integer> modes = new ArrayList<>();
     private int wrongKeyMode = -1;
     private int encryptInsteadMode = -1;
+    private int throwMode = -1;
+    private RuntimeException toThrow;
 
     FaultyCiphers wrongKeyOnce(int mode) {
       this.wrongKeyMode = mode;
@@ -201,9 +270,19 @@ class AwsKmsCryptoEngineCipherTest {
       return this;
     }
 
+    FaultyCiphers throwOnce(int mode, RuntimeException failure) {
+      this.throwMode = mode;
+      this.toThrow = failure;
+      return this;
+    }
+
     @Override
     public Cipher create(int mode, Key key, AlgorithmParameterSpec params)
         throws GeneralSecurityException {
+      if (mode == throwMode) {
+        throwMode = -1;
+        throw toThrow;
+      }
       Key used = key;
       int usedMode = mode;
       if (mode == wrongKeyMode) {

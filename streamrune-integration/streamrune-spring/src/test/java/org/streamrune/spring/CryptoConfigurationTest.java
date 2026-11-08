@@ -564,7 +564,7 @@ class CryptoConfigurationTest {
     return field.get(engine);
   }
 
-  /** A decryption of an altered value is retried once, and the retry is counted. */
+  /** A decryption of an altered value is retried once, and the failed retry is counted. */
   private static void assertCountsRetriedDecryptions(
       CryptoEngine engine, org.streamrune.test.RecordingStreamRuneMetrics metrics) {
     var subject = org.streamrune.core.types.SubjectId.of("metrics-subject");
@@ -573,6 +573,11 @@ class CryptoConfigurationTest {
     assertThrows(
         org.streamrune.core.crypto.CryptoMappingException.class,
         () -> engine.decrypt(subject, blob));
-    assertEquals(1, metrics.count(org.streamrune.core.metrics.MetricNames.CRYPTO_DECRYPT_RETRIED));
+    assertEquals(
+        1,
+        metrics.count(
+            org.streamrune.core.metrics.MetricNames.CRYPTO_DECRYPT_RETRIED,
+            org.streamrune.core.metrics.MetricNames.TAG_OUTCOME,
+            "FAILED"));
   }
 }

@@ -343,7 +343,8 @@ class MicrometerStreamRuneMetricsPrometheusTest {
     metrics.recordSubjectRedacted();
     metrics.recordSystemicKeyStoreFailure();
     metrics.recordEncryptSelfCheckFailed();
-    metrics.recordDecryptRetried();
+    metrics.recordDecryptRetried("RECOVERED");
+    metrics.recordDecryptRetried("FAILED");
     metrics.recordGdprPurgeFailed("orders-read-model");
 
     metrics.recordQueryDispatched("FindOrder");

@@ -495,12 +495,6 @@ public class StreamRuneCryptoProducers {
   }
 
   /**
-   * Guards against a build-time/runtime configuration mismatch: the producer only exists because
-   * the key was {@code true} at build time, so flipping it to {@code false} at runtime (e.g. via an
-   * environment variable) cannot remove the bean — fail fast instead of producing a broken null
-   * engine.
-   */
-  /**
    * The application's metrics bean, or {@code null} without one; the engines count discarded
    * encryptions and retried decryptions with it and fall back to NOOP on {@code null}.
    */
@@ -508,6 +502,12 @@ public class StreamRuneCryptoProducers {
     return metrics.isResolvable() ? metrics.get() : null;
   }
 
+  /**
+   * Guards against a build-time/runtime configuration mismatch: the producer only exists because
+   * the key was {@code true} at build time, so flipping it to {@code false} at runtime (e.g. via an
+   * environment variable) cannot remove the bean — fail fast instead of producing a broken null
+   * engine.
+   */
   private static void requireRuntimeEnabled(boolean enabled, String key) {
     if (!enabled) {
       throw new IllegalStateException(

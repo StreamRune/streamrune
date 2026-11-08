@@ -434,8 +434,8 @@ public class RecordingStreamRuneMetrics implements StreamRuneMetrics {
   }
 
   @Override
-  public void recordDecryptRetried() {
-    record(MetricNames.CRYPTO_DECRYPT_RETRIED, 1);
+  public void recordDecryptRetried(String outcome) {
+    record(MetricNames.CRYPTO_DECRYPT_RETRIED, 1, MetricNames.TAG_OUTCOME, outcome);
   }
 
   @Override
