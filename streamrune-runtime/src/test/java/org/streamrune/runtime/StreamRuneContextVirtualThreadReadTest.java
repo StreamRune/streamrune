@@ -37,8 +37,8 @@ import org.streamrune.core.types.SagaType;
  * bindings, and the test counts the reads that do not.
  *
  * <p>It runs only on a JVM that {@link ScopedValueJvmGuard} accepts: StreamRune does not start on
- * any other. Every test JVM of a GraalVM build runs with a workaround (the root build), and the
- * GraalVM workflow runs this test on the Graal JIT with each of the two. {@code
+ * any other. Every test JVM of a GraalVM build runs with the JVMCI compiler off (the root build),
+ * and the GraalVM workflow runs this test on GraalVM that way. {@code
  * streamrune.test.virtualThreadReadSeconds} lengthens the run.
  */
 class StreamRuneContextVirtualThreadReadTest {

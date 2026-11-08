@@ -1304,44 +1304,43 @@ An outbox entry reaches `FAILED` when the transport rejected it for its own sake
 
 ## Supported JVMs
 
-StreamRune needs JDK 25. It passes the request context, the dispatch cause and the saga markers in
-`ScopedValue`s, and it runs commands, subscriptions and sagas on virtual threads.
+StreamRune needs JDK 25.
 
-**Known issue: JDK 25 with the Graal JIT.** On JDK 25 with the Graal JIT compiler, `ScopedValue`
-reads on virtual threads are not reliable. We verified this on GraalVM CE 25.0.1, GraalVM CE 25.0.5
-and Oracle GraalVM 25.0.4, where the Graal JIT is the default; treat every GraalVM build of JDK 25 as
-affected until a fixed release is verified. JVMs whose JIT is C2 (Temurin, Zulu, or GraalVM with
+**Known issue: the Graal JIT on JDK 25.** On JDK 25 the Graal JIT compiler is not reliable with
+StreamRune, and StreamRune does not support it. We verified this on GraalVM CE 25.0.1, GraalVM CE
+25.0.5 and Oracle GraalVM 25.0.4, where the Graal JIT is the default; treat every GraalVM build of
+JDK 25 as affected until a fixed release is verified. Run GraalVM with the JVMCI compiler off:
+
+```
+-XX:-UseJVMCICompiler
+```
+
+GraalVM then compiles with C2. JVMs whose JIT is C2 (Temurin, Zulu, or GraalVM with
 `-XX:-UseJVMCICompiler`) and native images were unaffected in our runs.
 
-StreamRune therefore does not start on JDK 25 with the Graal JIT unless one of these two workarounds
-is set on the JVM:
-
-- `-XX:-UseJVMCICompiler`, which compiles with C2 instead of the Graal JIT, or
-- `-XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache`.
-
-The start fails with an `IllegalStateException` that names both. A later JDK release with the Graal
-JIT is refused the same way, as not verified; a JVM without the Graal JIT and a native image are not
-checked. Set the flags wherever the JVM starts: the `java` command, `JAVA_TOOL_OPTIONS`, the image's
-entrypoint, and the test and run tasks of the build. They act on the whole JVM, so they cover the
-application's own scoped values as well. A JVM without the Graal JIT does not accept
-`-XX:-UseJVMCICompiler` and fails to start with it; every JDK 25 HotSpot build we ran accepts the
-second workaround, so a start script shared by several JVMs sets that one.
+StreamRune refuses to start on a JVM that runs the Graal JIT: the start fails with an
+`IllegalStateException` that names the flag. A later JDK release with the Graal JIT is refused the
+same way, as not verified; a JVM without the Graal JIT and a native image are not checked. Set the
+flag wherever the JVM starts: the `java` command, `JAVA_TOOL_OPTIONS`, the image's entrypoint, and
+the test and run tasks of the build. A JVM without the JVMCI compiler (Temurin, Zulu) accepts
+`-XX:-UseJVMCICompiler` only after `-XX:+UnlockExperimentalVMOptions`, so a start script shared with
+such a JVM sets both: `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`, which every JDK 25
+HotSpot build we ran accepts.
 
 **What the check reads, and when it runs.** The check reads the JVM's options through the module
 `jdk.management`: include that module in a runtime built with `jlink`, so that the check can read
-them. A GraalVM runtime without it is refused even with a workaround set, because the check cannot
-verify the workaround: add `jdk.management`, or, where it cannot be added, set the opt-out below once
-a workaround is set. A runtime without `jdk.management` that does not identify as a GraalVM build
-starts with a `WARN` line. The check runs when a command bus is built and when an integration
-starts. Code that reads the framework's scoped values without building a command bus — a runtime
-built by hand with only a query bus, subscriptions or projections, and application tests on the
-test kit's `InMemoryCommandBus` or `SagaFixture` — is not checked: set a workaround on those JVMs
-too.
+them. A GraalVM runtime without it is refused even with the flag set, because the check cannot verify
+it: add `jdk.management`, or, where it cannot be added, set the opt-out below once the flag is set. A
+runtime without `jdk.management` that does not identify as a GraalVM build starts with a `WARN` line.
+The check runs when a command bus is built and when an integration starts. Code that runs without
+building a command bus — a runtime built by hand with only a query bus, subscriptions or
+projections, and application tests on the test kit's `InMemoryCommandBus` or `SagaFixture` — is not
+checked: set the flag on those JVMs too.
 
-`streamrune.jvm.allow-unreliable-scoped-values=true` starts StreamRune on such a JVM anyway, at your
-own risk, with one `ERROR` line. It is a configuration key of the three integrations; a runtime built
-by hand reads the system property of that name, or takes
-`VirtualThreadCommandBus.Builder.allowUnreliableScopedValues(true)`. Set the flags instead.
+`streamrune.jvm.allow-unreliable-scoped-values=true` starts StreamRune on a refused JVM anyway, at
+your own risk, with one `ERROR` line. It is a configuration key of the three integrations; a runtime
+built by hand reads the system property of that name, or takes
+`VirtualThreadCommandBus.Builder.allowUnreliableScopedValues(true)`. Set the flag instead.
 
 ## Backup, restore and disaster recovery
 

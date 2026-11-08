@@ -10,9 +10,10 @@ import org.streamrune.test.InMemoryEventStore;
  * {@link ScopedValueJvmGuard} on the JVM the test runs on, and the command bus builder that runs
  * it. The build states what the guard must answer there: {@code
  * streamrune.test.expectScopedValueJvm} is {@code accepted} unless {@code -PexpectScopedValueJvm}
- * says otherwise. The {@code test} task runs it as every other test, with a workaround on a GraalVM
- * build; {@code scopedValueJvmGuardTest} runs it alone without one, and the GraalVM workflow runs
- * that task on the Graal JIT with {@code -PexpectScopedValueJvm=refused}.
+ * says otherwise. The {@code test} task runs it as every other test, with the JVMCI compiler off on
+ * a GraalVM build; {@code scopedValueJvmGuardTest} runs it alone with the JVM flags {@code
+ * -PjvmGuardTestFlags} names, none by default, and the GraalVM workflow runs that task on GraalVM
+ * with each of them.
  */
 class ScopedValueJvmGuardLiveTest {
 
@@ -24,8 +25,7 @@ class ScopedValueJvmGuardLiveTest {
     if (REFUSED) {
       assertThatThrownBy(() -> ScopedValueJvmGuard.check(false))
           .isInstanceOf(IllegalStateException.class)
-          .hasMessageContaining("-XX:-UseJVMCICompiler")
-          .hasMessageContaining("-XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache");
+          .hasMessageContaining("-XX:-UseJVMCICompiler");
       assertThatThrownBy(
               () -> VirtualThreadCommandBus.builder().eventStore(new InMemoryEventStore()).build())
           .as("the bus builder runs the guard")

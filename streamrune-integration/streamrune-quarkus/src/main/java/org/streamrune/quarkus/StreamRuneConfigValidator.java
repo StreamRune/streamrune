@@ -144,8 +144,9 @@ public class StreamRuneConfigValidator {
   // separate class that may live in a different classloader.
   public void validate(
       @Observes @Priority(Interceptor.Priority.LIBRARY_BEFORE) StartupEvent event) {
-    // Every application, also one that builds its own command bus: a JVM on which ScopedValue reads
-    // on virtual threads are not reliable refuses to start (the bus builder runs the same check).
+    // Every application, also one that builds its own command bus: a JVM that runs the Graal JIT,
+    // which is not reliable with StreamRune, refuses to start (the bus builder runs the same
+    // check).
     org.streamrune.runtime.ScopedValueJvmGuard.check(
         properties.jvm().allowUnreliableScopedValues());
     if (properties.snapshotEveryNEvents() <= 0) {

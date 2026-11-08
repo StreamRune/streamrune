@@ -2394,12 +2394,11 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
     /**
      * Whether {@link #build()} builds the bus on a JVM that {@link ScopedValueJvmGuard} refuses:
-     * the Graal JIT with neither of its workarounds set, on which {@code ScopedValue} reads on
-     * virtual threads are not reliable, or a GraalVM runtime whose options the guard cannot read.
-     * {@code true} builds it with one {@code ERROR} line per JVM, at the application's own risk.
-     * Not set, the system property {@value ScopedValueJvmGuard#ALLOW_PROPERTY} decides ({@code
-     * false} unless it is {@code true}); the integrations set it from the configuration key of the
-     * same name.
+     * one that runs the Graal JIT, which is not reliable with StreamRune, or a GraalVM runtime
+     * whose options the guard cannot read. {@code true} builds it with one {@code ERROR} line per
+     * JVM, at the application's own risk. Not set, the system property {@value
+     * ScopedValueJvmGuard#ALLOW_PROPERTY} decides ({@code false} unless it is {@code true}); the
+     * integrations set it from the configuration key of the same name.
      *
      * @param allow {@code true} to build the bus on such a JVM
      * @return this builder

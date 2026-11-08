@@ -58,8 +58,8 @@ streamrune.circuit-breaker-cooldown=PT30S
 streamrune.validation-enabled=true
 streamrune.security.trust-user-id-header=false
 # streamrune.metadata.baggage-allowlist=
-# true starts on a JVM the startup check refuses (the Graal JIT with neither workaround set, or a
-# GraalVM runtime whose options it cannot read), at your own risk; see production.md "Supported JVMs"
+# true starts on a JVM the startup check refuses (one that runs the Graal JIT, or a GraalVM runtime
+# whose options it cannot read), at your own risk; see production.md "Supported JVMs"
 streamrune.jvm.allow-unreliable-scoped-values=false
 
 # Event store, projections and subscriptions

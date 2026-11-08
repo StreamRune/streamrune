@@ -20,13 +20,13 @@ import org.slf4j.LoggerFactory;
 
 /**
  * {@link ScopedValueJvmGuard} on every kind of JVM it tells apart, through the seam of the VM facts
- * it reads: a JDK 25 or later with the Graal JIT is refused unless one of the two workarounds is
- * set or the application opts out, and so is a GraalVM build whose compiler options cannot be read;
- * every other JVM starts, without a line when its options can be read.
+ * it reads: a JDK 25 or later with the Graal JIT is refused unless the JVMCI compiler is off or the
+ * application opts out, and so is a GraalVM build whose compiler options cannot be read; every
+ * other JVM starts, without a line when its options can be read.
  */
 class ScopedValueJvmGuardTest {
 
-  private static final String DISABLED_INTRINSICS = "_scopedValueCache,_setScopedValueCache";
+  private static final String JVMCI_OFF = "-XX:-UseJVMCICompiler";
 
   private final ListAppender<ILoggingEvent> log = new ListAppender<>();
   private Logger logger;
@@ -115,42 +115,29 @@ class ScopedValueJvmGuardTest {
   }
 
   @Test
-  void jdk25WithTheGraalJit_isRefused_andTheRefusalNamesBothWorkaroundsAndTheOptOut() {
+  void jdk25WithTheGraalJit_isRefused_andTheRefusalNamesTheJvmciCompilerFlagAndTheOptOut() {
     assertThatThrownBy(() -> check(graalJit(Map.of()), false))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("JDK 25 with the Graal JIT")
-        .hasMessageContaining("-XX:-UseJVMCICompiler")
-        .hasMessageContaining(
-            "-XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=" + DISABLED_INTRINSICS)
-        .hasMessageContaining(ScopedValueJvmGuard.ALLOW_PROPERTY + "=true");
+        .hasMessageContaining("not reliable with StreamRune")
+        .hasMessageContaining("Start the JVM with " + JVMCI_OFF)
+        .hasMessageContaining(ScopedValueJvmGuard.ALLOW_PROPERTY + "=true")
+        .hasMessageNotContaining("DisableIntrinsic");
   }
 
   @Test
-  void theGraalJitWithBothIntrinsicsDisabled_starts() {
-    assertThatCode(() -> check(graalJit(Map.of("DisableIntrinsic", DISABLED_INTRINSICS)), false))
-        .doesNotThrowAnyException();
-    assertThat(log.list).isEmpty();
-  }
-
-  @Test
-  void bothIntrinsicsAmongOthers_orOnLinesOfTheirOwn_start() {
+  void theGraalJitWithIntrinsicsDisabled_isRefused_whichEverIntrinsicsTheyAre() {
     for (String disabled :
         List.of(
+            "_scopedValueCache,_setScopedValueCache",
             "_hashCode,_setScopedValueCache,_scopedValueCache",
-            "_hashCode\n_scopedValueCache,_setScopedValueCache",
-            "_scopedValueCache\n_setScopedValueCache")) {
-      assertThatCode(() -> check(graalJit(Map.of("DisableIntrinsic", disabled)), false))
-          .as(disabled)
-          .doesNotThrowAnyException();
-    }
-  }
-
-  @Test
-  void theGraalJitWithOneOfTheTwoIntrinsicsDisabled_isRefused() {
-    for (String disabled : List.of("_scopedValueCache", "_setScopedValueCache", "_hashCode")) {
+            "_scopedValueCache\n_setScopedValueCache",
+            "_hashCode")) {
       assertThatThrownBy(() -> check(graalJit(Map.of("DisableIntrinsic", disabled)), false))
           .as(disabled)
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining(JVMCI_OFF)
+          .hasMessageNotContaining("DisableIntrinsic");
     }
   }
 
@@ -175,18 +162,9 @@ class ScopedValueJvmGuardTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("JDK 26 with the Graal JIT")
         .hasMessageContaining("not verified")
-        .hasMessageContaining("-XX:-UseJVMCICompiler")
-        .hasMessageContaining("-XX:DisableIntrinsic=" + DISABLED_INTRINSICS);
-    assertThatCode(
-            () ->
-                check(
-                    new FakeVm(
-                        26,
-                        false,
-                        Map.of(
-                            "UseJVMCICompiler", "true", "DisableIntrinsic", DISABLED_INTRINSICS)),
-                    false))
-        .as("a workaround starts it")
+        .hasMessageContaining(JVMCI_OFF);
+    assertThatCode(() -> check(new FakeVm(26, false, Map.of("UseJVMCICompiler", "false")), false))
+        .as("the JVMCI compiler off starts it")
         .doesNotThrowAnyException();
   }
 
@@ -211,13 +189,13 @@ class ScopedValueJvmGuardTest {
             line ->
                 assertThat(line)
                     .contains(ScopedValueJvmGuard.ALLOW_PROPERTY + "=true")
-                    .contains("-XX:-UseJVMCICompiler")
-                    .contains("-XX:DisableIntrinsic=" + DISABLED_INTRINSICS));
+                    .contains(JVMCI_OFF)
+                    .doesNotContain("DisableIntrinsic"));
   }
 
   @Test
   void theOptOutOnAnUnaffectedJvm_logsNothing() {
-    check(graalJit(Map.of("DisableIntrinsic", DISABLED_INTRINSICS)), true);
+    check(new FakeVm(25, false, Map.of("UseJVMCICompiler", "false")), true);
     check(new FakeVm(25, false, Map.of()), true);
     assertThat(log.list).isEmpty();
   }
@@ -228,10 +206,9 @@ class ScopedValueJvmGuardTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("could not read")
         .hasMessageContaining("jdk.management")
-        .hasMessageContaining("-XX:-UseJVMCICompiler")
-        .hasMessageContaining(
-            "-XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=" + DISABLED_INTRINSICS)
-        .hasMessageContaining(ScopedValueJvmGuard.ALLOW_PROPERTY + "=true");
+        .hasMessageContaining(JVMCI_OFF)
+        .hasMessageContaining(ScopedValueJvmGuard.ALLOW_PROPERTY + "=true")
+        .hasMessageNotContaining("DisableIntrinsic");
   }
 
   @Test
@@ -253,8 +230,7 @@ class ScopedValueJvmGuardTest {
   }
 
   @Test
-  void
-      optionsThatCannotBeRead_onAJvmThatIsNotJvmci_startTheJvm_withAWarningThatNamesTheWorkarounds() {
+  void optionsThatCannotBeRead_onAJvmThatIsNotJvmci_startTheJvm_withAWarningThatNamesTheFlag() {
     for (Map<String, String> properties : List.of(TEMURIN_PROPERTIES, Map.<String, String>of())) {
       log.list.clear();
       assertThatCode(() -> check(unreadable(properties), false))
@@ -266,8 +242,8 @@ class ScopedValueJvmGuardTest {
               line ->
                   assertThat(line)
                       .contains("could not read")
-                      .contains("-XX:-UseJVMCICompiler")
-                      .contains("-XX:DisableIntrinsic=" + DISABLED_INTRINSICS));
+                      .contains(JVMCI_OFF)
+                      .doesNotContain("DisableIntrinsic"));
     }
   }
 
@@ -287,8 +263,8 @@ class ScopedValueJvmGuardTest {
                     .contains("could not read")
                     .contains("jdk.management")
                     .contains(ScopedValueJvmGuard.ALLOW_PROPERTY + "=true")
-                    .contains("-XX:-UseJVMCICompiler")
-                    .contains("-XX:DisableIntrinsic=" + DISABLED_INTRINSICS));
+                    .contains(JVMCI_OFF)
+                    .doesNotContain("DisableIntrinsic"));
     assertThat(lines(Level.WARN)).isEmpty();
   }
 

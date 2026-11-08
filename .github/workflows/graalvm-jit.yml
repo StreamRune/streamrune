@@ -1,21 +1,21 @@
 name: GraalVM JIT
 
-# StreamRune on the Graal JIT compiler. On JDK 25 with the Graal JIT, ScopedValue reads on virtual
-# threads are not reliable, and StreamRune refuses to start on such a JVM unless one of two
-# workarounds is set: -XX:-UseJVMCICompiler, or -XX:+UnlockDiagnosticVMOptions
-# -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache (docs/guide/production.md, "Supported
-# JVMs"). The Build workflow runs on Temurin, whose JIT is C2, so this is the workflow that runs the
-# framework on GraalVM with its default JIT:
+# StreamRune on GraalVM. On JDK 25 the Graal JIT is not reliable with StreamRune, so StreamRune does
+# not support it and refuses to start on a JVM that runs it unless the JVMCI compiler is off:
+# -XX:-UseJVMCICompiler, with which GraalVM compiles with C2 (docs/guide/production.md, "Supported
+# JVMs"). The Build workflow runs on Temurin, whose JIT is C2, so this is the workflow that meets
+# GraalVM with its default JIT:
 #
 #   - the JVM check (streamrune-runtime's scopedValueJvmGuardTest, which runs
-#     ScopedValueJvmGuardLiveTest on a test JVM without a workaround): the check and the command bus
-#     builder must refuse the JVM;
+#     ScopedValueJvmGuardLiveTest alone with the flags -PjvmGuardTestFlags names): the check and the
+#     command bus builder must refuse the JVM with no flag and with the ScopedValue intrinsics
+#     disabled, and accept it with -XX:-UseJVMCICompiler;
 #   - the read stress test of streamrune-runtime (StreamRuneContextVirtualThreadReadTest), on a test
-#     JVM with each workaround in turn: it must pass, and it must have run.
+#     JVM with the JVMCI compiler off: it must pass, and it must have run.
 #
-# Every other test JVM of a GraalVM build runs with a workaround (the root build.gradle.kts).
-# Toolchain detection is switched off, so the test JVMs are the GraalVM that setup-graalvm installs
-# (JAVA_HOME) and no other JDK 25 of the runner.
+# Every other test JVM of a GraalVM build runs with the JVMCI compiler off (the root
+# build.gradle.kts). Toolchain detection is switched off, so the test JVMs are the GraalVM that
+# setup-graalvm installs (JAVA_HOME) and no other JDK 25 of the runner.
 #
 # Not on every pull request: on every push to main, nightly, and on demand.
 
@@ -58,21 +58,25 @@ jobs:
       - name: Show the JVM
         run: java -version
 
-      - name: The JVM check refuses the Graal JIT with neither workaround
+      - name: The JVM check refuses the Graal JIT with no flag
         run: >-
           ./gradlew :streamrune-runtime:scopedValueJvmGuardTest --rerun
-          -PexpectScopedValueJvm=refused $GRADLE_FLAGS
+          -PjvmGuardTestFlags=none -PexpectScopedValueJvm=refused $GRADLE_FLAGS
 
-      - name: The read stress test passes with the two intrinsics disabled
+      - name: The JVM check refuses the Graal JIT with the ScopedValue intrinsics disabled
+        run: >-
+          ./gradlew :streamrune-runtime:scopedValueJvmGuardTest --rerun
+          -PjvmGuardTestFlags=intrinsics -PexpectScopedValueJvm=refused $GRADLE_FLAGS
+
+      - name: The JVM check accepts the JVM with the JVMCI compiler off
+        run: >-
+          ./gradlew :streamrune-runtime:scopedValueJvmGuardTest --rerun
+          -PjvmGuardTestFlags=c2 -PexpectScopedValueJvm=accepted $GRADLE_FLAGS
+
+      - name: The read stress test passes with the JVMCI compiler off
         run: |
           ./gradlew :streamrune-runtime:test --tests 'org.streamrune.runtime.StreamRuneContextVirtualThreadReadTest' --rerun \
-            -PscopedValueWorkaround=intrinsics -PvirtualThreadReadSeconds=60 $GRADLE_FLAGS
-          grep -q 'tests="1" skipped="0" failures="0" errors="0"' "$READ_TEST_RESULT"
-
-      - name: The read stress test passes with the JVMCI compiler switched off
-        run: |
-          ./gradlew :streamrune-runtime:test --tests 'org.streamrune.runtime.StreamRuneContextVirtualThreadReadTest' --rerun \
-            -PscopedValueWorkaround=c2 -PvirtualThreadReadSeconds=60 $GRADLE_FLAGS
+            -PvirtualThreadReadSeconds=60 $GRADLE_FLAGS
           grep -q 'tests="1" skipped="0" failures="0" errors="0"' "$READ_TEST_RESULT"
 
       - name: Upload test reports on failure

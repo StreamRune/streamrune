@@ -2,43 +2,32 @@ package org.streamrune.runtime;
 
 import com.sun.management.HotSpotDiagnosticMXBean;
 import java.lang.management.ManagementFactory;
-import java.util.Arrays;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Refuses to start StreamRune on a JVM on which {@link ScopedValue} reads on virtual threads are
- * not reliable.
+ * Refuses to start StreamRune on a JVM that runs the Graal JIT.
  *
- * <p>On JDK 25 with the Graal JIT — verified on GraalVM CE 25.0.1, GraalVM CE 25.0.5 and Oracle
- * GraalVM 25.0.4 — {@code ScopedValue} reads on virtual threads are not reliable. StreamRune passes
- * the request context, the dispatch cause and the saga markers in scoped values ({@code
- * StreamRuneContext}) and runs commands, subscriptions and sagas on virtual threads, so it does not
- * start on such a JVM unless one of these is set:
+ * <p>On JDK 25 the Graal JIT is not reliable with StreamRune — verified on GraalVM CE 25.0.1,
+ * GraalVM CE 25.0.5 and Oracle GraalVM 25.0.4, where it is the default compiler — so StreamRune
+ * does not support it and does not start on such a JVM unless the JVMCI compiler is off: {@code
+ * -XX:-UseJVMCICompiler}, with which GraalVM compiles with C2. JVMs with C2 (Temurin, Zulu, or
+ * GraalVM with {@code -XX:-UseJVMCICompiler}) and native images were unaffected in our runs.
  *
- * <ul>
- *   <li>{@code -XX:-UseJVMCICompiler}, or
- *   <li>{@code -XX:+UnlockDiagnosticVMOptions
- *       -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache}.
- * </ul>
- *
- * <p>JVMs with C2 (Temurin, Zulu, or GraalVM with {@code -XX:-UseJVMCICompiler}) and native images
- * were unaffected in our runs. The guard reads the JVM's options through its management interface
- * (the module {@code jdk.management}): a JVM whose {@code UseJVMCICompiler} is {@code true} and
- * whose {@code DisableIntrinsic} does not name both intrinsics above is refused. A later feature
- * release with the Graal JIT is refused the same way, as not verified. A JVM without the JVMCI
- * compiler and a native image are not checked.
+ * <p>The guard reads the JVM's options through its management interface (the module {@code
+ * jdk.management}): a JVM whose {@code UseJVMCICompiler} is {@code true} is refused. A later
+ * feature release with the Graal JIT is refused the same way, as not verified. A JVM without the
+ * JVMCI compiler and a native image are not checked.
  *
  * <p>A JVM whose options cannot be read — a runtime built without {@code jdk.management} — is
  * judged by what every JVM states: one that identifies as a GraalVM (JVMCI) build, by its {@code
  * java.vm.version}, {@code java.vendor.version} or {@code java.vm.name}, or by a {@code
  * jdk.graal.*}, {@code graal.*} or {@code jvmci.*} system property, is refused, because the guard
- * cannot verify that a workaround is set; any other starts with a {@code WARN} line.
+ * cannot verify that the JVMCI compiler is off; any other starts with a {@code WARN} line.
  *
  * <p>{@link VirtualThreadCommandBus.Builder#build()} runs it, so every application that builds a
  * command bus — the three integrations, which also run it when they start, the {@link StreamRune}
@@ -58,13 +47,8 @@ public final class ScopedValueJvmGuard {
 
   private static final Logger LOG = LoggerFactory.getLogger(ScopedValueJvmGuard.class);
 
-  private static final Set<String> WORKAROUND_INTRINSICS =
-      Set.of("_scopedValueCache", "_setScopedValueCache");
-
-  /** The two workarounds, as the flags of the java command. */
-  private static final String WORKAROUND_FLAGS =
-      "-XX:-UseJVMCICompiler, or with -XX:+UnlockDiagnosticVMOptions"
-          + " -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache";
+  /** The flag that switches the JVMCI compiler off, with which GraalVM compiles with C2. */
+  private static final String JVMCI_COMPILER_OFF = "-XX:-UseJVMCICompiler";
 
   /** The system properties whose value names a JVMCI build. */
   private static final Set<String> IDENTIFYING_PROPERTIES =
@@ -84,9 +68,9 @@ public final class ScopedValueJvmGuard {
    *
    * @param allowUnreliable {@code true} to start on a JVM the guard refuses, with one {@code ERROR}
    *     line per JVM ({@value #ALLOW_PROPERTY})
-   * @throws IllegalStateException if the JVM runs the Graal JIT with neither workaround set, or is
-   *     a GraalVM build whose options cannot be read, and {@code allowUnreliable} is {@code false};
-   *     the message names both workarounds and the opt-out
+   * @throws IllegalStateException if the JVM runs the Graal JIT, or is a GraalVM build whose
+   *     options cannot be read, and {@code allowUnreliable} is {@code false}; the message names
+   *     {@code -XX:-UseJVMCICompiler} and the opt-out
    */
   public static void check(boolean allowUnreliable) {
     check(allowUnreliable, Vm.platform(), OPT_OUT_LOGGED);
@@ -102,51 +86,48 @@ public final class ScopedValueJvmGuard {
       case UNKNOWN ->
           LOG.warn(
               "StreamRune could not read the compiler options of this JVM, which does not identify"
-                  + " as a GraalVM build. On JDK 25 with the Graal JIT, ScopedValue reads on virtual"
-                  + " threads are not reliable; if this JVM runs it, start it with {}.",
-              WORKAROUND_FLAGS);
+                  + " as a GraalVM build. On JDK 25 the Graal JIT is not reliable with StreamRune;"
+                  + " if this JVM runs it, start it with {}.",
+              JVMCI_COMPILER_OFF);
       case UNRELIABLE, UNVERIFIED -> {
         if (!allowUnreliable) {
           throw new IllegalStateException(refusal(verdict, vm.featureVersion()));
         }
         if (optOutLogged.compareAndSet(false, true)) {
-          LOG.error(optOutLine(verdict), ALLOW_PROPERTY, WORKAROUND_FLAGS);
+          LOG.error(optOutLine(verdict), ALLOW_PROPERTY, JVMCI_COMPILER_OFF);
         }
       }
     }
   }
 
   private static String refusal(Verdict verdict, int featureVersion) {
-    String start = "Start the JVM with " + WORKAROUND_FLAGS;
     String optOut = "To start anyway, at your own risk, set " + ALLOW_PROPERTY + "=true.";
     if (verdict == Verdict.UNVERIFIED) {
       return "StreamRune does not start on this JVM: it identifies as a GraalVM build, and"
           + " StreamRune could not read its compiler options, which it reads through the module"
-          + " jdk.management, so it cannot verify that the Graal JIT is off or worked around. On"
-          + " JDK 25 with the Graal JIT, ScopedValue reads on virtual threads are not reliable, and"
-          + " StreamRune passes the request context, the dispatch cause and the saga markers in"
-          + " ScopedValues on virtual threads. "
-          + start
-          + ", and add the module jdk.management to the runtime so that StreamRune can verify it;"
+          + " jdk.management, so it cannot verify that the Graal JIT is off. On JDK 25 the Graal"
+          + " JIT is not reliable with StreamRune. Start the JVM with "
+          + JVMCI_COMPILER_OFF
+          + " and add the module jdk.management to the runtime so that StreamRune can verify it;"
           + " where it cannot be added, set "
           + ALLOW_PROPERTY
-          + "=true once one of the two is set. "
+          + "=true once "
+          + JVMCI_COMPILER_OFF
+          + " is set. "
           + optOut;
     }
     String jvm =
         featureVersion == 25
-            ? "it runs JDK 25 with the Graal JIT, on which ScopedValue reads on virtual threads are"
-                + " not reliable"
+            ? "it runs JDK 25 with the Graal JIT, which is not reliable with StreamRune"
             : "it runs JDK "
                 + featureVersion
-                + " with the Graal JIT, which is not verified: on JDK 25 with the Graal JIT,"
-                + " ScopedValue reads on virtual threads are not reliable";
+                + " with the Graal JIT, which is not verified: on JDK 25 the Graal JIT is not"
+                + " reliable with StreamRune";
     return "StreamRune does not start on this JVM: "
         + jvm
-        + ", and StreamRune passes the request context, the dispatch cause and the saga markers in"
-        + " ScopedValues on virtual threads. "
-        + start
-        + ". "
+        + ". Start the JVM with "
+        + JVMCI_COMPILER_OFF
+        + ", with which GraalVM compiles with C2. "
         + optOut;
   }
 
@@ -154,18 +135,17 @@ public final class ScopedValueJvmGuard {
     if (verdict == Verdict.UNVERIFIED) {
       return "StreamRune starts on a GraalVM build whose compiler options it could not read (they"
           + " are read through the module jdk.management), because {}=true. Unless the JVM runs"
-          + " with {}, ScopedValue reads on virtual threads are not reliable on it.";
+          + " with {}, the Graal JIT is not reliable with StreamRune.";
     }
-    return "StreamRune starts on a JVM on which ScopedValue reads on virtual threads are not"
-        + " reliable (the Graal JIT with neither workaround set), because {}=true. Start the JVM"
-        + " with {} instead.";
+    return "StreamRune starts on a JVM that runs the Graal JIT, which is not reliable with"
+        + " StreamRune, because {}=true. Start the JVM with {} instead.";
   }
 
   /** What the guard concludes about a JVM. */
   enum Verdict {
-    /** No JVMCI compiler, a workaround set, or a native image. */
+    /** No JVMCI compiler, the JVMCI compiler off, or a native image. */
     RELIABLE,
-    /** The Graal JIT with neither workaround. */
+    /** The Graal JIT. */
     UNRELIABLE,
     /** The options could not be read, and the JVM identifies as a GraalVM build. */
     UNVERIFIED,
@@ -178,21 +158,14 @@ public final class ScopedValueJvmGuard {
       return Verdict.RELIABLE;
     }
     Optional<String> jvmciCompiler;
-    Optional<String> disabledIntrinsics;
     try {
       jvmciCompiler = vm.option("UseJVMCICompiler");
-      disabledIntrinsics = vm.option("DisableIntrinsic");
     } catch (RuntimeException | LinkageError unreadable) {
       return identifiesAsJvmci(vm) ? Verdict.UNVERIFIED : Verdict.UNKNOWN;
     }
-    if (jvmciCompiler.isEmpty() || !Boolean.parseBoolean(jvmciCompiler.get().strip())) {
-      return Verdict.RELIABLE;
-    }
-    Set<String> disabled =
-        Arrays.stream(disabledIntrinsics.orElse("").split("[,\\s]+"))
-            .filter(name -> !name.isEmpty())
-            .collect(Collectors.toSet());
-    return disabled.containsAll(WORKAROUND_INTRINSICS) ? Verdict.RELIABLE : Verdict.UNRELIABLE;
+    return jvmciCompiler.isPresent() && Boolean.parseBoolean(jvmciCompiler.get().strip())
+        ? Verdict.UNRELIABLE
+        : Verdict.RELIABLE;
   }
 
   /**

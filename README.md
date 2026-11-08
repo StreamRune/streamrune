@@ -62,8 +62,8 @@ The other modules in the [Modules](#modules) table use the same group and versio
 
 ## Requirements
 
-- **Java 25**. On JDK 25 with the Graal JIT (GraalVM's default), StreamRune starts only with one of
-  two JVM workarounds set — see [Supported JVMs](docs/guide/production.md#supported-jvms).
+- **Java 25**. The Graal JIT (GraalVM's default compiler) is not supported on JDK 25: run GraalVM
+  with `-XX:-UseJVMCICompiler` — see [Supported JVMs](docs/guide/production.md#supported-jvms).
 - **PostgreSQL 17 or newer**, when you use `streamrune-postgres` (the in-memory `streamrune-test`
   store needs no database). Every PostgreSQL-backed suite of `postgresTest` runs on 17 and on 18 in
   CI (the broker end-to-end suite on 18 only), nothing older is tested, and the runtime refuses an

@@ -404,28 +404,17 @@ val quickCheckOnly =
 
 // ── The JVM flags of the test JVMs of a GraalVM build ───────────────────────────────────────
 //
-// On JDK 25 with the Graal JIT, ScopedValue reads on virtual threads are not reliable, and the
-// framework refuses to start there unless one of two workarounds is set (ScopedValueJvmGuard,
-// production.md "Supported JVMs"). A test JVM that is a JVMCI build (GraalVM: its java.vm.version
-// names jvmci) runs with a workaround, so the suites run on GraalVM as on any other JDK 25; any
-// other JDK 25 runs them as its users run it, with no flag. The project property
-// -PscopedValueWorkaround picks the workaround: `intrinsics` (the default, accepted by every HotSpot
-// JDK 25) or `c2`. streamrune-runtime's scopedValueJvmGuardTest runs ScopedValueJvmGuardLiveTest
-// alone without one, so that the guard meets the JVM as an application meets it;
-// -PexpectScopedValueJvm=refused|accepted tells that test what the guard answers there (default
-// `accepted`), and the GraalVM workflow (graalvm-jit.yml) runs it with `refused`.
-// -PvirtualThreadReadSeconds=N runs StreamRuneContextVirtualThreadReadTest for N seconds instead of
-// its default 4.
-val scopedValueWorkaroundJvmArgs =
-    when (val workaround = (findProperty("scopedValueWorkaround") as String?) ?: "intrinsics") {
-        "intrinsics" ->
-            listOf(
-                "-XX:+UnlockDiagnosticVMOptions",
-                "-XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache")
-        "c2" -> listOf("-XX:-UseJVMCICompiler")
-        else ->
-            throw GradleException("-PscopedValueWorkaround must be intrinsics or c2, not '$workaround'")
-    }
+// On JDK 25 the Graal JIT is not reliable with StreamRune, and the framework refuses to start on a
+// JVM that runs it unless the JVMCI compiler is off (ScopedValueJvmGuard, production.md "Supported
+// JVMs"). A test JVM that is a JVMCI build (GraalVM: its java.vm.version names jvmci) runs with
+// -XX:-UseJVMCICompiler, so the suites run on GraalVM with C2 as on any other JDK 25; any other
+// JDK 25 runs them as its users run it, with no flag. streamrune-runtime's scopedValueJvmGuardTest
+// runs ScopedValueJvmGuardLiveTest alone with the flags -PjvmGuardTestFlags names (none by default),
+// so that the guard meets the JVM as an application meets it; -PexpectScopedValueJvm=refused|accepted
+// tells that test what the guard answers there (default `accepted`), and the GraalVM workflow
+// (graalvm-jit.yml) runs it with each. -PvirtualThreadReadSeconds=N runs
+// StreamRuneContextVirtualThreadReadTest for N seconds instead of its default 4.
+val jvmciCompilerOffJvmArgs = listOf("-XX:-UseJVMCICompiler")
 val expectedScopedValueJvm =
     ((findProperty("expectScopedValueJvm") as String?) ?: "accepted").also {
         if (it != "accepted" && it != "refused") {
@@ -494,13 +483,13 @@ subprojects {
     tasks.withType<Test> {
         useJUnitPlatform()
         // The JVM the task runs its tests on: its toolchain's, or Gradle's own when it has none.
-        // streamrune-runtime's scopedValueJvmGuardTest runs without a workaround and without the
-        // coverage report, whose task would run the module's whole test task after it.
+        // streamrune-runtime's scopedValueJvmGuardTest runs with the flags of its own choosing and
+        // without the coverage report, whose task would run the module's whole test task after it.
         val testJvmVersion =
             javaLauncher.orNull?.metadata?.jvmVersion ?: System.getProperty("java.vm.version")
         val guardOnly = name == "scopedValueJvmGuardTest"
         if (!guardOnly && testJvmVersion.contains("jvmci", ignoreCase = true)) {
-            jvmArgs(scopedValueWorkaroundJvmArgs)
+            jvmArgs(jvmciCompilerOffJvmArgs)
         }
         systemProperty("streamrune.test.expectScopedValueJvm", expectedScopedValueJvm)
         if (virtualThreadReadSeconds != null) {

@@ -12,10 +12,9 @@ import java.util.Objects;
  * code reads the request context through {@link StreamRuneContext#capture()} and {@link
  * StreamRuneContext#cause()}, which read here too.
  *
- * <p>Reading through this class does not make a read reliable on a JVM on which scoped-value reads
- * are not: on JDK 25 with the Graal JIT, {@code ScopedValue} reads on virtual threads are not
- * reliable, and the command bus does not start on such a JVM unless one of two workarounds is set
- * ({@code org.streamrune.runtime.ScopedValueJvmGuard}).
+ * <p>On JDK 25 the Graal JIT is not reliable with StreamRune, and the command bus does not start on
+ * a JVM that runs it unless the JVMCI compiler is off ({@code
+ * org.streamrune.runtime.ScopedValueJvmGuard}).
  */
 public final class ScopedValueReads {
 
