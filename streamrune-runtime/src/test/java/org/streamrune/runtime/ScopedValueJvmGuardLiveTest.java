@@ -25,12 +25,12 @@ class ScopedValueJvmGuardLiveTest {
     if (REFUSED) {
       assertThatThrownBy(() -> ScopedValueJvmGuard.check(false))
           .isInstanceOf(IllegalStateException.class)
-          .hasMessageContaining("-XX:-UseJVMCICompiler");
+          .hasMessageContaining("-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler");
       assertThatThrownBy(
               () -> VirtualThreadCommandBus.builder().eventStore(new InMemoryEventStore()).build())
           .as("the bus builder runs the guard")
           .isInstanceOf(IllegalStateException.class)
-          .hasMessageContaining("-XX:-UseJVMCICompiler");
+          .hasMessageContaining("-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler");
       assertThatCode(
               () ->
                   VirtualThreadCommandBus.builder()

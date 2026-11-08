@@ -441,9 +441,9 @@ public interface StreamRuneQuarkusProperties {
     /**
      * {@code true} starts the application on a JVM the startup check refuses — one that runs the
      * Graal JIT, which is not reliable with StreamRune on JDK 25 (run GraalVM with {@code
-     * -XX:-UseJVMCICompiler} instead), or a GraalVM runtime whose options the check cannot read —
-     * with one {@code ERROR} line, at the application's own risk. Defaults to {@code false}: such a
-     * JVM refuses to start ({@code ScopedValueJvmGuard}).
+     * -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler} instead), or a GraalVM runtime whose
+     * options the check cannot read — with one {@code ERROR} line, at the application's own risk.
+     * Defaults to {@code false}: such a JVM refuses to start ({@code ScopedValueJvmGuard}).
      */
     @WithDefault("false")
     boolean allowUnreliableScopedValues();

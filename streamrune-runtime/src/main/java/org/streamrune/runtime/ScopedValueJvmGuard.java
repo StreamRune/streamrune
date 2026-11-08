@@ -15,8 +15,9 @@ import org.slf4j.LoggerFactory;
  * <p>On JDK 25 the Graal JIT is not reliable with StreamRune — verified on GraalVM CE 25.0.1,
  * GraalVM CE 25.0.5 and Oracle GraalVM 25.0.4, where it is the default compiler — so StreamRune
  * does not support it and does not start on such a JVM unless the JVMCI compiler is off: {@code
- * -XX:-UseJVMCICompiler}, with which GraalVM compiles with C2. JVMs with C2 (Temurin, Zulu, or
- * GraalVM with {@code -XX:-UseJVMCICompiler}) and native images were unaffected in our runs.
+ * -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler}, with which GraalVM compiles with C2, and
+ * which every HotSpot JDK 25 accepts. JVMs with C2 (Temurin, Zulu, or GraalVM with the JVMCI
+ * compiler off) and native images were unaffected in our runs.
  *
  * <p>The guard reads the JVM's options through its management interface (the module {@code
  * jdk.management}): a JVM whose {@code UseJVMCICompiler} is {@code true} is refused. A later
@@ -47,8 +48,13 @@ public final class ScopedValueJvmGuard {
 
   private static final Logger LOG = LoggerFactory.getLogger(ScopedValueJvmGuard.class);
 
-  /** The flag that switches the JVMCI compiler off, with which GraalVM compiles with C2. */
-  private static final String JVMCI_COMPILER_OFF = "-XX:-UseJVMCICompiler";
+  /**
+   * The flags that switch the JVMCI compiler off, with which GraalVM compiles with C2. A JVM
+   * without the JVMCI compiler (Temurin, Zulu) accepts {@code -XX:-UseJVMCICompiler} only after
+   * {@code -XX:+UnlockExperimentalVMOptions}, so the pair starts every HotSpot JDK 25.
+   */
+  private static final String JVMCI_COMPILER_OFF =
+      "-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler";
 
   /** The system properties whose value names a JVMCI build. */
   private static final Set<String> IDENTIFYING_PROPERTIES =
@@ -70,7 +76,7 @@ public final class ScopedValueJvmGuard {
    *     line per JVM ({@value #ALLOW_PROPERTY})
    * @throws IllegalStateException if the JVM runs the Graal JIT, or is a GraalVM build whose
    *     options cannot be read, and {@code allowUnreliable} is {@code false}; the message names
-   *     {@code -XX:-UseJVMCICompiler} and the opt-out
+   *     {@code -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler} and the opt-out
    */
   public static void check(boolean allowUnreliable) {
     check(allowUnreliable, Vm.platform(), OPT_OUT_LOGGED);
@@ -111,9 +117,7 @@ public final class ScopedValueJvmGuard {
           + " and add the module jdk.management to the runtime so that StreamRune can verify it;"
           + " where it cannot be added, set "
           + ALLOW_PROPERTY
-          + "=true once "
-          + JVMCI_COMPILER_OFF
-          + " is set. "
+          + "=true once the JVMCI compiler is off. "
           + optOut;
     }
     String jvm =

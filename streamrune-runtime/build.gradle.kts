@@ -97,7 +97,8 @@ tasks.named("check") {
 // -PjvmGuardTestFlags names, so that the guard meets the JVM as an application meets it: `none` (the
 // default), `intrinsics` (-XX:+UnlockDiagnosticVMOptions
 // -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache, which the guard refuses on the Graal
-// JIT) or `c2` (-XX:-UseJVMCICompiler, which it accepts). Every other test JVM of a GraalVM build runs
+// JIT) or `c2` (-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, which it accepts). Every
+// other test JVM of a GraalVM build runs
 // with the JVMCI compiler off (the root build). Not part of `check`: the GraalVM workflow
 // (graalvm-jit.yml) runs it on the Graal JIT with each, and -PexpectScopedValueJvm says what the
 // guard must answer.
@@ -108,7 +109,7 @@ val jvmGuardTestFlags =
             listOf(
                 "-XX:+UnlockDiagnosticVMOptions",
                 "-XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache")
-        "c2" -> listOf("-XX:-UseJVMCICompiler")
+        "c2" -> listOf("-XX:+UnlockExperimentalVMOptions", "-XX:-UseJVMCICompiler")
         else -> throw GradleException("-PjvmGuardTestFlags must be none, intrinsics or c2, not '$flags'")
     }
 tasks.register<Test>("scopedValueJvmGuardTest") {

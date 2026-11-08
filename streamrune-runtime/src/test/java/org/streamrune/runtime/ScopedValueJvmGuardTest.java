@@ -26,7 +26,8 @@ import org.slf4j.LoggerFactory;
  */
 class ScopedValueJvmGuardTest {
 
-  private static final String JVMCI_OFF = "-XX:-UseJVMCICompiler";
+  /** The flags the guard names: the JVMCI compiler off, in a form every HotSpot JDK 25 accepts. */
+  private static final String JVMCI_OFF = "-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler";
 
   private final ListAppender<ILoggingEvent> log = new ListAppender<>();
   private Logger logger;

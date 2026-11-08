@@ -2,14 +2,15 @@ name: GraalVM JIT
 
 # StreamRune on GraalVM. On JDK 25 the Graal JIT is not reliable with StreamRune, so StreamRune does
 # not support it and refuses to start on a JVM that runs it unless the JVMCI compiler is off:
-# -XX:-UseJVMCICompiler, with which GraalVM compiles with C2 (docs/guide/production.md, "Supported
+# -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, with which GraalVM compiles with C2
+# (docs/guide/production.md, "Supported
 # JVMs"). The Build workflow runs on Temurin, whose JIT is C2, so this is the workflow that meets
 # GraalVM with its default JIT:
 #
 #   - the JVM check (streamrune-runtime's scopedValueJvmGuardTest, which runs
 #     ScopedValueJvmGuardLiveTest alone with the flags -PjvmGuardTestFlags names): the check and the
 #     command bus builder must refuse the JVM with no flag and with the ScopedValue intrinsics
-#     disabled, and accept it with -XX:-UseJVMCICompiler;
+#     disabled, and accept it with -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler;
 #   - the read stress test of streamrune-runtime (StreamRuneContextVirtualThreadReadTest), on a test
 #     JVM with the JVMCI compiler off: it must pass, and it must have run.
 #

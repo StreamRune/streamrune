@@ -407,14 +407,15 @@ val quickCheckOnly =
 // On JDK 25 the Graal JIT is not reliable with StreamRune, and the framework refuses to start on a
 // JVM that runs it unless the JVMCI compiler is off (ScopedValueJvmGuard, production.md "Supported
 // JVMs"). A test JVM that is a JVMCI build (GraalVM: its java.vm.version names jvmci) runs with
-// -XX:-UseJVMCICompiler, so the suites run on GraalVM with C2 as on any other JDK 25; any other
+// -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, the pair every HotSpot JDK 25 accepts, so
+// the suites run on GraalVM with C2 as on any other JDK 25; any other
 // JDK 25 runs them as its users run it, with no flag. streamrune-runtime's scopedValueJvmGuardTest
 // runs ScopedValueJvmGuardLiveTest alone with the flags -PjvmGuardTestFlags names (none by default),
 // so that the guard meets the JVM as an application meets it; -PexpectScopedValueJvm=refused|accepted
 // tells that test what the guard answers there (default `accepted`), and the GraalVM workflow
 // (graalvm-jit.yml) runs it with each. -PvirtualThreadReadSeconds=N runs
 // StreamRuneContextVirtualThreadReadTest for N seconds instead of its default 4.
-val jvmciCompilerOffJvmArgs = listOf("-XX:-UseJVMCICompiler")
+val jvmciCompilerOffJvmArgs = listOf("-XX:+UnlockExperimentalVMOptions", "-XX:-UseJVMCICompiler")
 val expectedScopedValueJvm =
     ((findProperty("expectScopedValueJvm") as String?) ?: "accepted").also {
         if (it != "accepted" && it != "refused") {
