@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.lang.Nullable;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.filesystem.FileSystemCryptoEngine;
@@ -26,13 +27,20 @@ public class FileSystemCryptoEngineConfiguration {
   // destruction signature".
   @Bean
   CryptoEngine fileSystemCryptoEngine(
-      @Nullable DataSource dataSource, StreamRuneCryptoProperties props) {
+      @Nullable DataSource dataSource,
+      StreamRuneCryptoProperties props,
+      @Nullable StreamRuneMetrics metrics) {
     String keyDirectory = props.filesystem().keyDirectory();
     if (keyDirectory == null || keyDirectory.isBlank()) {
       throw new IllegalStateException(
           "streamrune.crypto.filesystem.key-directory must be set when streamrune.crypto.filesystem.enabled is true");
     }
-    var delegate = FileSystemCryptoEngine.builder().keyDirectory(Path.of(keyDirectory)).build();
+    // The metrics count discarded encryptions and retried decryptions; NOOP without a bean.
+    var delegate =
+        FileSystemCryptoEngine.builder()
+            .keyDirectory(Path.of(keyDirectory))
+            .metrics(metrics)
+            .build();
 
     var cacheProps = props.cache();
     // Honor streamrune.crypto.cache.enabled=false (parity with Quarkus) — return the bare

@@ -2,4 +2,5 @@ description = "StreamRune crypto: filesystem-backed per-subject key store for en
 
 dependencies {
     api(project(":streamrune-core"))
+    implementation(libs.slf4j.api)
 }

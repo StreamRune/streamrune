@@ -474,6 +474,9 @@ class MicrometerStreamRuneMetricsTest {
     metrics.recordSnapshotDiscarded("deserialize_failure");
     metrics.recordSubjectRedacted();
     metrics.recordSystemicKeyStoreFailure();
+    metrics.recordEncryptSelfCheckFailed();
+    metrics.recordDecryptRetried("RECOVERED");
+    metrics.recordDecryptRetried("FAILED");
     metrics.recordGdprPurgeFailed("orders-read-model");
     metrics.recordProjectionProcessed();
     metrics.recordProjectionFailed();

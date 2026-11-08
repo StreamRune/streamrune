@@ -281,6 +281,27 @@ public final class MetricNames {
       "streamrune.crypto.keystore_systemic_failure";
 
   /**
+   * A crypto engine discarded an encryption because its result did not decrypt to the plaintext
+   * with an independent cipher, or because the check itself failed. The engine verifies every
+   * encryption before it returns it; on a failure it returns nothing and throws the transient
+   * {@code CryptoOperationException}, so the caller retries and the value is encrypted again. A
+   * healthy JVM never fails the check: any nonzero value points at a fault of the JVM or the
+   * hardware, alongside a {@code WARN} log per occurrence.
+   */
+  public static final String CRYPTO_ENCRYPT_SELF_CHECK_FAILED =
+      "streamrune.crypto.encrypt_self_check_failed";
+
+  /**
+   * A crypto engine retried a decryption whose authentication tag did not match, once, with a fresh
+   * cipher, tagged by {@link #TAG_OUTCOME}: {@code RECOVERED} when the retry read the value (a
+   * transient fault failed the first attempt; a healthy JVM never produces one, so alert on any
+   * nonzero value), {@code FAILED} when it failed too (the value is corrupted, tampered or written
+   * under another key, and stays the deterministic {@code CryptoMappingException}). Logged at
+   * {@code WARN} per occurrence with its outcome.
+   */
+  public static final String CRYPTO_DECRYPT_RETRIED = "streamrune.crypto.decrypt_retried";
+
+  /**
    * A GDPR right-to-erasure read-model purge FAILED after the subject's key was already
    * crypto-shredded — unencrypted derived PII may remain in that read model (an Article-17 gap the
    * caller must not report as fully erased). Terminal and alert-worthy: page on any nonzero value.

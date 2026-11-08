@@ -13,6 +13,8 @@ dependencies {
     // and fails a MODULAR consumer outright, since javac resolves the full `requires` graph on the
     // COMPILE module path ("module not found: software.amazon.awssdk.services.kms").
     api(libs.aws.kms)
+    // module-info requires org.slf4j (the engine's WARN logs), so `api`, as above.
+    api(libs.slf4j.api)
     testImplementation(project(":streamrune-test"))
     // Prove the auto-wired ForgetSubjectService (in streamrune-runtime) completes a
     // GDPR forget end-to-end on the KMS backend — crypto-shred tombstone + read-model purger.

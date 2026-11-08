@@ -165,6 +165,9 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   private final Counter snapshotsRefused;
   private final Counter cryptoSubjectRedacted;
   private final Counter cryptoKeystoreSystemicFailure;
+  private final Counter cryptoEncryptSelfCheckFailed;
+  private final Counter cryptoDecryptRetriedRecovered;
+  private final Counter cryptoDecryptRetriedFailed;
 
   /**
    * Backing value for the {@code outbox.pending} gauge, updated in place on every {@link
@@ -359,6 +362,16 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
             .description(
                 "Detected systemic key-store failures (mass redaction, not lawful erasure)")
             .register(registry);
+    this.cryptoEncryptSelfCheckFailed =
+        Counter.builder(meter(MetricNames.CRYPTO_ENCRYPT_SELF_CHECK_FAILED))
+            .description(
+                "Encryptions discarded because the result did not decrypt to the plaintext"
+                    + " (retried by the caller)")
+            .register(registry);
+    // Both outcomes are registered at construction, so the RECOVERED series exists at 0 for an
+    // "alert on any nonzero value" rule.
+    this.cryptoDecryptRetriedRecovered = decryptRetried("RECOVERED");
+    this.cryptoDecryptRetriedFailed = decryptRetried("FAILED");
 
     // These four query meter names are registered eagerly for discoverability (matching
     // every other meter's "registered at construction" contract), but a BARE registration would
@@ -795,6 +808,25 @@ public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   @Override
   public void recordSystemicKeyStoreFailure() {
     cryptoKeystoreSystemicFailure.increment();
+  }
+
+  @Override
+  public void recordEncryptSelfCheckFailed() {
+    cryptoEncryptSelfCheckFailed.increment();
+  }
+
+  private Counter decryptRetried(String outcome) {
+    return Counter.builder(meter(MetricNames.CRYPTO_DECRYPT_RETRIED))
+        .tag(MetricNames.TAG_OUTCOME, outcome)
+        .description("Decryptions retried with a fresh cipher after a tag mismatch, by outcome")
+        .register(registry);
+  }
+
+  @Override
+  public void recordDecryptRetried(String outcome) {
+    // The engines report one of the two outcomes; anything but RECOVERED counts as FAILED.
+    ("RECOVERED".equals(outcome) ? cryptoDecryptRetriedRecovered : cryptoDecryptRetriedFailed)
+        .increment();
   }
 
   @Override

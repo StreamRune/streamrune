@@ -58,9 +58,11 @@ a `StreamRuneMetrics` is passed to its builder's `metrics(...)`:
   `projections.*`.
 - `PollingEventSubscription` and `StreamEventSubscription` record `subscriptions.events.received`
   and `subscriptions.delivery.latency`.
+- `FileSystemCryptoEngine`, `PostgresCryptoEngine` and `AwsKmsCryptoEngine` record
+  `crypto.encrypt_self_check_failed` and `crypto.decrypt_retried`.
 
-The Spring, Quarkus and Micronaut integrations pass their `StreamRuneMetrics` bean to the command bus
-and the projection runners they build.
+The Spring, Quarkus and Micronaut integrations pass their `StreamRuneMetrics` bean to the command bus,
+the projection runners and the crypto engines they build.
 
 ## Requirements
 
