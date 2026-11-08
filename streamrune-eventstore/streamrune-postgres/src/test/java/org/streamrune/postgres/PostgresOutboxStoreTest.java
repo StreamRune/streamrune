@@ -633,11 +633,11 @@ class PostgresOutboxStoreTest {
                   maxInFlightA.accumulateAndGet(now, Math::max);
                   deliveredA.add(e.id().value());
                   Thread.sleep(2); // hold the claim briefly to widen any race window
-                }
-                own.markDelivered(e.id(), own.claimedBy());
-                if (ofA) {
+                  // leave the in-flight count while the claim is still held: once markDelivered
+                  // commits, the next head of A is claimable and another relay may count it
                   inFlightA.decrementAndGet();
                 }
+                own.markDelivered(e.id(), own.claimedBy());
                 delivered.incrementAndGet();
               }
               if (batch.isEmpty()) {
