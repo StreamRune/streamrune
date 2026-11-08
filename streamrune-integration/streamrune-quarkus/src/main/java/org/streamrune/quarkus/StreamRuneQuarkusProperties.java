@@ -439,12 +439,13 @@ public interface StreamRuneQuarkusProperties {
   interface JvmConfig {
 
     /**
-     * {@code true} starts the application on a JVM on which {@code ScopedValue} reads on virtual
-     * threads are not reliable — JDK 25 with the Graal JIT and neither {@code
-     * -XX:-UseJVMCICompiler} nor {@code -XX:+UnlockDiagnosticVMOptions
-     * -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache} set — with one {@code ERROR}
-     * line, at the application's own risk. Defaults to {@code false}: such a JVM refuses to start
-     * ({@code ScopedValueJvmGuard}).
+     * {@code true} starts the application on a JVM the startup check refuses — one that runs the
+     * Graal JIT with neither {@code -XX:-UseJVMCICompiler} nor {@code
+     * -XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache}
+     * set, on which {@code ScopedValue} reads on virtual threads are not reliable, or a GraalVM
+     * runtime whose options the check cannot read — with one {@code ERROR} line, at the
+     * application's own risk. Defaults to {@code false}: such a JVM refuses to start ({@code
+     * ScopedValueJvmGuard}).
      */
     @WithDefault("false")
     boolean allowUnreliableScopedValues();

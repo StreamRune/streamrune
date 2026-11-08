@@ -9,10 +9,10 @@ import org.streamrune.test.InMemoryEventStore;
 /**
  * {@link ScopedValueJvmGuard} on the JVM the test runs on, and the command bus builder that runs
  * it. The build states what the guard must answer there: {@code
- * streamrune.test.expectScopedValueJvm} is {@code accepted} for every test JVM of the build, which
- * runs with a workaround on GraalVM and needs none elsewhere, and {@code refused} where the GraalVM
- * workflow starts the test JVM on the Graal JIT with neither workaround ({@code
- * -PscopedValueWorkaround=none -PexpectScopedValueJvm=refused}).
+ * streamrune.test.expectScopedValueJvm} is {@code accepted} unless {@code -PexpectScopedValueJvm}
+ * says otherwise. The {@code test} task runs it as every other test, with a workaround on a GraalVM
+ * build; {@code scopedValueJvmGuardTest} runs it alone without one, and the GraalVM workflow runs
+ * that task on the Graal JIT with {@code -PexpectScopedValueJvm=refused}.
  */
 class ScopedValueJvmGuardLiveTest {
 

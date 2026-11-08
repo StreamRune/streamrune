@@ -180,21 +180,20 @@ final class SagaCommandDispatch {
             // the very path where the caller IS authenticated. Null on every background entry point
             // (subscription poll, timeout runner, compensation sweeper), where ambient is null too.
             ambient != null ? ambient.authority() : null);
+    CausationId causation = causingEvent == null ? null : CausationId.of(causingEvent.value());
     ScopedValue.Carrier carrier =
         ScopedValue.where(StreamRuneContext.CURRENT, ctx)
             .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
-            .where(
-                StreamRuneContext.CAUSE,
-                new StreamRuneContext.DispatchCause(
-                    causingEvent == null ? null : CausationId.of(causingEvent.value()), origin));
+            .where(StreamRuneContext.CAUSE, new StreamRuneContext.DispatchCause(causation, origin));
     if (forwardFenced) {
       carrier =
           carrier.where(
               StreamRuneContext.SAGA_FORWARD, new StreamRuneContext.SagaForward(origin, key));
     }
-    // Beside the scoped values, the bus is handed the saga in a field of this thread, and compares
-    // the two before anything of the command runs (VirtualThreadCommandBus refuses a mismatch).
-    new SagaDispatchOffer(origin, key, forwardFenced).offer();
+    // Beside the scoped values, the bus is handed the saga in a field of this thread. It compares
+    // the two before anything of the command runs (VirtualThreadCommandBus refuses a mismatch) and
+    // takes the provenance of the command's events, and the forward fence, from the handed saga.
+    new SagaDispatchOffer(origin, causation, key, forwardFenced).offer();
     CommandBus.CommandResult result;
     try {
       result = carrier.call(() -> commandBus.execute(command, key));

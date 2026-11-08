@@ -66,10 +66,10 @@ import org.streamrune.test.MutableClock;
  * dispatch. The command was never looked up, authorized, executed or stored, and nothing about the
  * order was decided. Here a bus in front of the real {@link VirtualThreadCommandBus} binds another
  * saga's context over the dispatch's own for the commands a test names, and the real bus refuses
- * the command for it. A bus that reads another saga's context and cause as a pair passes that
- * check; the saga dispatch also hands its saga to the bus beside the scoped values, and the bus
- * refuses a dispatch whose bindings name another saga ({@link SagaBindingsMismatchException}),
- * which the step treats the same way.
+ * the command for it. Another saga's context and cause, bound as a pair, pass that check; the saga
+ * dispatch also hands its saga to the bus beside the scoped values, and the bus refuses a dispatch
+ * whose bindings name another saga ({@link SagaBindingsMismatchException}), which the step treats
+ * the same way.
  *
  * <p>The refusal itself never compensates. A forward command refused this way leaves the saga as it
  * was and propagates, so the subscription delivers the event again: no compensation episode is

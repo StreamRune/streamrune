@@ -1,19 +1,21 @@
-package org.streamrune.core;
+package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.ReservedCorrelationIdException;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.CausationId;
@@ -31,12 +33,12 @@ import org.streamrune.core.types.SagaType;
  * StreamRuneContext#capture()}, {@link StreamRuneContext#cause()}, {@link
  * StreamRuneContext#isSagaDispatch()} and {@link StreamRuneContext#sagaForwardOf}. Between their
  * reads they block the way a command does (a contended lock, a monitor, a park), and other virtual
- * threads run with bindings of their own. Every read must name the thread's own saga; outside a
- * binding a thread reads that nothing is bound.
+ * threads run with bindings of their own. Every read must answer with the reading thread's own
+ * bindings, and the test counts the reads that do not.
  *
- * <p>On JDK 25 with the Graal JIT, {@code ScopedValue} reads on virtual threads are not reliable;
- * every test JVM of the build runs with a workaround (the root build), and the GraalVM workflow
- * runs this test on the Graal JIT with each of the two. {@code
+ * <p>It runs only on a JVM that {@link ScopedValueJvmGuard} accepts: StreamRune does not start on
+ * any other. Every test JVM of a GraalVM build runs with a workaround (the root build), and the
+ * GraalVM workflow runs this test on the Graal JIT with each of the two. {@code
  * streamrune.test.virtualThreadReadSeconds} lengthens the run.
  */
 class StreamRuneContextVirtualThreadReadTest {
@@ -49,10 +51,14 @@ class StreamRuneContextVirtualThreadReadTest {
 
   @Test
   void everyReadNamesTheBindingsOfTheReadingThread() throws InterruptedException {
+    assumeTrue(
+        ScopedValueJvmGuard.assess(ScopedValueJvmGuard.Vm.platform())
+            == ScopedValueJvmGuard.Verdict.RELIABLE,
+        "StreamRune does not start on this JVM");
     Duration run = Duration.ofSeconds(Long.getLong("streamrune.test.virtualThreadReadSeconds", 4L));
     AtomicBoolean stop = new AtomicBoolean();
     AtomicLong reads = new AtomicLong();
-    ConcurrentLinkedQueue<String> disagreements = new ConcurrentLinkedQueue<>();
+    AtomicLong mismatches = new AtomicLong();
     List<Thread> threads = new ArrayList<>();
     AtomicLong sagas = new AtomicLong();
     for (int t = 0; t < 6; t++) {
@@ -63,7 +69,7 @@ class StreamRuneContextVirtualThreadReadTest {
                   () -> {
                     while (!stop.get()) {
                       dispatchAsASagaDoes(
-                          SagaId.of("saga-" + sagas.incrementAndGet()), reads, disagreements);
+                          SagaId.of("saga-" + sagas.incrementAndGet()), reads, mismatches);
                     }
                   }));
     }
@@ -88,13 +94,16 @@ class StreamRuneContextVirtualThreadReadTest {
     }
 
     assertThat(reads.get()).as("the run read the bindings").isPositive();
-    assertThat(disagreements).as("reads that did not name the thread's own bindings").isEmpty();
+    assertThat(mismatches.get())
+        .as("reads, of %d, that did not answer with the reading thread's own bindings", reads.get())
+        .isZero();
   }
 
   /** What saga dispatch binds around a forward command, and what the command bus reads under it. */
-  private static void dispatchAsASagaDoes(
-      SagaId sagaId, AtomicLong reads, ConcurrentLinkedQueue<String> disagreements) {
-    expectNothingBound(sagaId, "before the dispatch", disagreements);
+  private static void dispatchAsASagaDoes(SagaId sagaId, AtomicLong reads, AtomicLong mismatches) {
+    if (!nothingIsBound()) {
+      mismatches.incrementAndGet();
+    }
     SagaOrigin origin = SagaOrigin.dispatchedBy(SAGA, sagaId);
     IdempotencyKey key = new IdempotencyKey("saga:" + sagaId.value() + ":1:0");
     var context =
@@ -108,62 +117,37 @@ class StreamRuneContextVirtualThreadReadTest {
         .where(StreamRuneContext.SAGA_FORWARD, new StreamRuneContext.SagaForward(origin, key))
         .run(
             () -> {
-              expectTheSagasBindings(origin, key, "at the dispatch", disagreements);
+              if (!theSagasBindingsAreRead(origin, key)) {
+                mismatches.incrementAndGet();
+              }
               blockAsACommandDoes();
-              expectTheSagasBindings(origin, key, "after blocking", disagreements);
-              reads.addAndGet(2);
+              if (!theSagasBindingsAreRead(origin, key)) {
+                mismatches.incrementAndGet();
+              }
+              reads.addAndGet(3);
             });
   }
 
-  private static void expectTheSagasBindings(
-      SagaOrigin origin,
-      IdempotencyKey key,
-      String where,
-      ConcurrentLinkedQueue<String> disagreements) {
+  private static boolean theSagasBindingsAreRead(SagaOrigin origin, IdempotencyKey key) {
     try {
       StreamRuneContext.requireNoForeignReservedCorrelationId();
     } catch (ReservedCorrelationIdException refused) {
-      disagreements.add(where + ": the saga's own correlation id was refused");
-      return;
+      return false;
     }
     StreamRuneContext.RequestContext context = StreamRuneContext.capture();
     StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
-    if (context == null
-        || !origin.correlationId().equals(context.correlationId())
-        || cause == null
-        || !origin.equals(cause.sagaOrigin())
-        || !StreamRuneContext.isSagaDispatch()
-        || !origin.equals(StreamRuneContext.sagaForwardOf(key))) {
-      disagreements.add(
-          where
-              + ": context "
-              + (context == null ? null : context.correlationId())
-              + ", cause "
-              + (cause == null ? null : cause.sagaOrigin())
-              + ", saga dispatch "
-              + StreamRuneContext.isSagaDispatch()
-              + ", expected "
-              + origin);
-    }
+    return context != null
+        && origin.correlationId().equals(context.correlationId())
+        && cause != null
+        && origin.equals(cause.sagaOrigin())
+        && StreamRuneContext.isSagaDispatch()
+        && origin.equals(StreamRuneContext.sagaForwardOf(key));
   }
 
-  private static void expectNothingBound(
-      SagaId sagaId, String where, ConcurrentLinkedQueue<String> disagreements) {
-    StreamRuneContext.RequestContext context = StreamRuneContext.capture();
-    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
-    boolean sagaDispatch = StreamRuneContext.isSagaDispatch();
-    if (context != null || cause != null || sagaDispatch) {
-      disagreements.add(
-          where
-              + " "
-              + sagaId.value()
-              + ": read outside every binding: context "
-              + (context == null ? null : context.correlationId())
-              + ", cause "
-              + (cause == null ? null : cause.sagaOrigin())
-              + ", saga dispatch "
-              + sagaDispatch);
-    }
+  private static boolean nothingIsBound() {
+    return StreamRuneContext.capture() == null
+        && StreamRuneContext.cause() == null
+        && !StreamRuneContext.isSagaDispatch();
   }
 
   private static void blockAsACommandDoes() {

@@ -93,6 +93,19 @@ tasks.named("check") {
     dependsOn(jmhSmokeTestTask)
 }
 
+// Runs ScopedValueJvmGuardLiveTest, and only that class, on a test JVM without the workaround that
+// every other test JVM of a GraalVM build runs with (the root build), so that the guard meets the
+// JVM as an application meets it. Not part of `check`: the GraalVM workflow (graalvm-jit.yml) runs
+// it on the Graal JIT with -PexpectScopedValueJvm=refused.
+tasks.register<Test>("scopedValueJvmGuardTest") {
+    description = "Runs ScopedValueJvmGuardLiveTest on a test JVM without a scoped-value workaround."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform()
+    filter { includeTestsMatching("org.streamrune.runtime.ScopedValueJvmGuardLiveTest") }
+}
+
 // RelayComponentNamesDocLintTest reads the production guide and the three integrations' health
 // sources as text (docLintTest, see the root build): declared, so an edit to any of them re-runs it.
 tasks.named<Test>("docLintTest") {

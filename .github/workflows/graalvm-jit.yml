@@ -7,14 +7,15 @@ name: GraalVM JIT
 # JVMs"). The Build workflow runs on Temurin, whose JIT is C2, so this is the workflow that runs the
 # framework on GraalVM with its default JIT:
 #
-#   - the JVM check (ScopedValueJvmGuardLiveTest), on a test JVM started with neither workaround:
-#     the check and the command bus builder must refuse it;
-#   - the scoped-value read stress test of streamrune-core (StreamRuneContextVirtualThreadReadTest), on a
-#     test JVM started with each workaround in turn: it must count no wrong read.
+#   - the JVM check (streamrune-runtime's scopedValueJvmGuardTest, which runs
+#     ScopedValueJvmGuardLiveTest on a test JVM without a workaround): the check and the command bus
+#     builder must refuse the JVM;
+#   - the read stress test of streamrune-runtime (StreamRuneContextVirtualThreadReadTest), on a test
+#     JVM with each workaround in turn: it must pass, and it must have run.
 #
-# Every test JVM of the build runs with a workaround unless -PscopedValueWorkaround says otherwise
-# (the root build.gradle.kts). Toolchain detection is switched off, so the test JVMs are the
-# GraalVM that setup-graalvm installs (JAVA_HOME) and no other JDK 25 of the runner.
+# Every other test JVM of a GraalVM build runs with a workaround (the root build.gradle.kts).
+# Toolchain detection is switched off, so the test JVMs are the GraalVM that setup-graalvm installs
+# (JAVA_HOME) and no other JDK 25 of the runner.
 #
 # Not on every pull request: on every push to main, nightly, and on demand.
 
@@ -37,6 +38,7 @@ env:
     --no-daemon --console=plain
     -Porg.gradle.java.installations.auto-detect=false
     -Porg.gradle.java.installations.auto-download=false
+  READ_TEST_RESULT: streamrune-runtime/build/test-results/test/TEST-org.streamrune.runtime.StreamRuneContextVirtualThreadReadTest.xml
 
 jobs:
   graalvm-jit:
@@ -58,18 +60,20 @@ jobs:
 
       - name: The JVM check refuses the Graal JIT with neither workaround
         run: >-
-          ./gradlew :streamrune-runtime:test --tests 'org.streamrune.runtime.ScopedValueJvmGuardLiveTest' --rerun
-          -PscopedValueWorkaround=none -PexpectScopedValueJvm=refused $GRADLE_FLAGS
+          ./gradlew :streamrune-runtime:scopedValueJvmGuardTest --rerun
+          -PexpectScopedValueJvm=refused $GRADLE_FLAGS
 
-      - name: No wrong read with the two intrinsics disabled
-        run: >-
-          ./gradlew :streamrune-core:test --tests 'org.streamrune.core.StreamRuneContextVirtualThreadReadTest' --rerun
-          -PscopedValueWorkaround=intrinsics -PvirtualThreadReadSeconds=60 $GRADLE_FLAGS
+      - name: The read stress test passes with the two intrinsics disabled
+        run: |
+          ./gradlew :streamrune-runtime:test --tests 'org.streamrune.runtime.StreamRuneContextVirtualThreadReadTest' --rerun \
+            -PscopedValueWorkaround=intrinsics -PvirtualThreadReadSeconds=60 $GRADLE_FLAGS
+          grep -q 'tests="1" skipped="0" failures="0" errors="0"' "$READ_TEST_RESULT"
 
-      - name: No wrong read with the JVMCI compiler switched off
-        run: >-
-          ./gradlew :streamrune-core:test --tests 'org.streamrune.core.StreamRuneContextVirtualThreadReadTest' --rerun
-          -PscopedValueWorkaround=c2 -PvirtualThreadReadSeconds=60 $GRADLE_FLAGS
+      - name: The read stress test passes with the JVMCI compiler switched off
+        run: |
+          ./gradlew :streamrune-runtime:test --tests 'org.streamrune.runtime.StreamRuneContextVirtualThreadReadTest' --rerun \
+            -PscopedValueWorkaround=c2 -PvirtualThreadReadSeconds=60 $GRADLE_FLAGS
+          grep -q 'tests="1" skipped="0" failures="0" errors="0"' "$READ_TEST_RESULT"
 
       - name: Upload test reports on failure
         if: failure()

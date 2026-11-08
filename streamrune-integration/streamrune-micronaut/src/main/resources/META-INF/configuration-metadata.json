@@ -255,7 +255,7 @@
     {
       "name": "streamrune.jvm.allow-unreliable-scoped-values",
       "type": "java.lang.Boolean",
-      "description": "Start on a JVM on which ScopedValue reads on virtual threads are not reliable (JDK 25 with the Graal JIT, with neither -XX:-UseJVMCICompiler nor -XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache set), with one ERROR line, at the application's own risk. When false (the default) such a JVM refuses to start.",
+      "description": "Start on a JVM the startup check refuses: one that runs the Graal JIT with neither -XX:-UseJVMCICompiler nor -XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache set (on JDK 25 with the Graal JIT, ScopedValue reads on virtual threads are not reliable), or a GraalVM runtime whose compiler options the check cannot read (without the module jdk.management). It starts with one ERROR line, at the application's own risk. When false (the default) such a JVM refuses to start.",
       "defaultValue": false
     },
     {

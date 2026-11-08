@@ -402,17 +402,20 @@ val quickCheckOnly =
         requested.isNotEmpty() && requested.all { it.substringAfterLast(':') == "quickCheck" }
     }
 
-// ── The JVM flags of every test JVM ─────────────────────────────────────────────────────────
+// ── The JVM flags of the test JVMs of a GraalVM build ───────────────────────────────────────
 //
 // On JDK 25 with the Graal JIT, ScopedValue reads on virtual threads are not reliable, and the
 // framework refuses to start there unless one of two workarounds is set (ScopedValueJvmGuard,
-// production.md "Supported JVMs"). Every test JVM runs with the workaround every HotSpot JDK 25
-// accepts, so the suites run on GraalVM as on any other JDK 25. The project property
-// -PscopedValueWorkaround picks it: `intrinsics` (the default), `c2` (the other workaround, for a
-// JVM with the JVMCI compiler) or `none`. -PexpectScopedValueJvm=refused|accepted tells
-// ScopedValueJvmGuardLiveTest what the guard answers on the test JVM (default `accepted`); the
-// GraalVM workflow (graalvm-jit.yml) runs it with `none` and `refused`. -PvirtualThreadReadSeconds=N runs
-// StreamRuneContextVirtualThreadReadTest for N seconds instead of its default 4.
+// production.md "Supported JVMs"). A test JVM that is a JVMCI build (GraalVM: its java.vm.version
+// names jvmci) runs with a workaround, so the suites run on GraalVM as on any other JDK 25; any
+// other JDK 25 runs them as its users run it, with no flag. The project property
+// -PscopedValueWorkaround picks the workaround: `intrinsics` (the default, accepted by every HotSpot
+// JDK 25) or `c2`. streamrune-runtime's scopedValueJvmGuardTest runs ScopedValueJvmGuardLiveTest
+// alone without one, so that the guard meets the JVM as an application meets it;
+// -PexpectScopedValueJvm=refused|accepted tells that test what the guard answers there (default
+// `accepted`), and the GraalVM workflow (graalvm-jit.yml) runs it with `refused`.
+// -PvirtualThreadReadSeconds=N runs StreamRuneContextVirtualThreadReadTest for N seconds instead of
+// its default 4.
 val scopedValueWorkaroundJvmArgs =
     when (val workaround = (findProperty("scopedValueWorkaround") as String?) ?: "intrinsics") {
         "intrinsics" ->
@@ -420,10 +423,8 @@ val scopedValueWorkaroundJvmArgs =
                 "-XX:+UnlockDiagnosticVMOptions",
                 "-XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache")
         "c2" -> listOf("-XX:-UseJVMCICompiler")
-        "none" -> emptyList()
         else ->
-            throw GradleException(
-                "-PscopedValueWorkaround must be intrinsics, c2 or none, not '$workaround'")
+            throw GradleException("-PscopedValueWorkaround must be intrinsics or c2, not '$workaround'")
     }
 val expectedScopedValueJvm =
     ((findProperty("expectScopedValueJvm") as String?) ?: "accepted").also {
@@ -492,12 +493,20 @@ subprojects {
 
     tasks.withType<Test> {
         useJUnitPlatform()
-        jvmArgs(scopedValueWorkaroundJvmArgs)
+        // The JVM the task runs its tests on: its toolchain's, or Gradle's own when it has none.
+        // streamrune-runtime's scopedValueJvmGuardTest runs without a workaround and without the
+        // coverage report, whose task would run the module's whole test task after it.
+        val testJvmVersion =
+            javaLauncher.orNull?.metadata?.jvmVersion ?: System.getProperty("java.vm.version")
+        val guardOnly = name == "scopedValueJvmGuardTest"
+        if (!guardOnly && testJvmVersion.contains("jvmci", ignoreCase = true)) {
+            jvmArgs(scopedValueWorkaroundJvmArgs)
+        }
         systemProperty("streamrune.test.expectScopedValueJvm", expectedScopedValueJvm)
         if (virtualThreadReadSeconds != null) {
             systemProperty("streamrune.test.virtualThreadReadSeconds", virtualThreadReadSeconds)
         }
-        if (!quickCheckOnly) {
+        if (!quickCheckOnly && !guardOnly) {
             finalizedBy(tasks.named("jacocoTestReport"))
         }
         // A declared output, so a result served UP-TO-DATE or from the build cache keeps the

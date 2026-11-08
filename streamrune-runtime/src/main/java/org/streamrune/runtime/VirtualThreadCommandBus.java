@@ -372,15 +372,16 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
   /**
    * Refuses the dispatch in progress when the bindings it reads are not the ones the saga dispatch
-   * that handed it {@code dispatched} made: the bound cause must carry that saga's origin, the
-   * bound context that saga's correlation id, {@link StreamRuneContext#SAGA_OWNED} must be bound to
-   * {@code TRUE}, and a fenced forward command's forward marker must name that saga for {@code
-   * key}. The refusal is logged once at {@code WARN}, with what the dispatch read bound ({@link
-   * BoundCorrelationId#bindingsRead()}), before anything of the command is looked up.
+   * that handed it {@code dispatched} made: the bound cause must carry that saga's origin and
+   * causation id, the bound context that saga's correlation id, {@link
+   * StreamRuneContext#SAGA_OWNED} must be bound to {@code TRUE}, and a fenced forward command's
+   * forward marker must name that saga for {@code key}. The refusal is logged once at {@code WARN},
+   * with what the dispatch read bound ({@link BoundCorrelationId#bindingsRead()}), before anything
+   * of the command is looked up.
    *
    * @throws SagaBindingsMismatchException if they differ
    */
-  private static void refuseUnlessTheSagaDispatchsBindings(
+  static void refuseUnlessTheSagaDispatchsBindings(
       SagaDispatchOffer dispatched, Class<?> commandType, IdempotencyKey key) {
     SagaOrigin origin = dispatched.origin();
     StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
@@ -388,6 +389,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     boolean asDispatched =
         cause != null
             && origin.equals(cause.sagaOrigin())
+            && Objects.equals(dispatched.causationId(), cause.causationId())
             && context != null
             && origin.correlationId().equals(context.correlationId())
             && StreamRuneContext.isSagaDispatch()
@@ -591,6 +593,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
                 streamId,
                 commandTimestamp,
                 key,
+                dispatched,
                 // Invoked from INSIDE executeWithRetry's
                 // try-with-resources — i.e. while the per-stream lock is still held; see that
                 // method's javadoc. notifyAfter() itself already swallows and logs every
@@ -984,9 +987,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       StreamId streamId,
       Instant commandTimestamp,
       IdempotencyKey key,
+      SagaDispatchOffer dispatched,
       Consumer<CommandResult> postCommitAfterPhase) {
     return executeWithRetry(
-        command, reg, commandId, streamId, commandTimestamp, key, postCommitAfterPhase);
+        command, reg, commandId, streamId, commandTimestamp, key, dispatched, postCommitAfterPhase);
   }
 
   /**
@@ -1034,6 +1038,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * the same lock timeout, so a stuck after() callback still fails through the existing {@link
    * LockException}/retry path rather than hanging indefinitely.
    *
+   * @param dispatched the saga a saga dispatch handed this dispatch, compared with the bindings at
+   *     its start, or {@code null}: the events then carry its provenance ({@link EventProvenance})
+   *     and a fenced forward command is fenced against it ({@link #fenceOrigin})
    * @param postCommitAfterPhase invoked, still under the stream lock, with the {@link
    *     CommandResult} of every attempt that reaches a return statement inside the locked section
    *     (a committed append, a keyed zero-event no-op, a keyed duplicate answered from the inbox,
@@ -1048,6 +1055,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           StreamId streamId,
           Instant commandTimestamp,
           IdempotencyKey key,
+          SagaDispatchOffer dispatched,
           Consumer<CommandResult> postCommitAfterPhase) {
     Decider<C, S, E> decider = reg.decider();
     String commandType = command.getClass().getSimpleName();
@@ -1134,7 +1142,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           // Keyed zero-event: record the key atomically so re-runs short-circuit via inbox.
           var keyed =
               appendWithKeyTimed(
-                  streamId, List.of(), history.version(), key, command.getClass().getName());
+                  streamId,
+                  List.of(),
+                  history.version(),
+                  key,
+                  command.getClass().getName(),
+                  dispatched);
           committed = true;
           committedResult =
               new CommandResult(
@@ -1152,7 +1165,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         }
 
         List<EventEnvelope> envelopes =
-            buildEnvelopes(streamId, newEvents, history.version(), commandId);
+            buildEnvelopes(streamId, newEvents, history.version(), commandId, dispatched);
 
         if (key == null) {
           var appendResult = appendTimed(streamId, envelopes, history.version());
@@ -1168,7 +1181,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         } else {
           var keyed =
               appendWithKeyTimed(
-                  streamId, envelopes, history.version(), key, command.getClass().getName());
+                  streamId,
+                  envelopes,
+                  history.version(),
+                  key,
+                  command.getClass().getName(),
+                  dispatched);
           committed = true;
           if (keyed.alreadyApplied()) {
             // Concurrent winner recorded it first — return an already-applied result, no
@@ -1328,18 +1346,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       List<EventEnvelope> envelopes,
       Version expectedVersion,
       IdempotencyKey key,
-      String commandType) {
+      String commandType,
+      SagaDispatchOffer dispatched) {
     long startNanos = System.nanoTime();
     try {
-      // The saga to fence this append against: set only for the key of the saga forward command
-      // whose dispatch bound it, so a keyed command nested inside that command is not fenced.
       return eventStore.appendWithKey(
-          streamId,
-          envelopes,
-          expectedVersion,
-          key,
-          commandType,
-          StreamRuneContext.sagaForwardOf(key));
+          streamId, envelopes, expectedVersion, key, commandType, fenceOrigin(dispatched, key));
     } finally {
       recordAppendDuration(envelopes, startNanos);
     }
@@ -1788,14 +1800,22 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   private <E extends DomainEvent> List<EventEnvelope> buildEnvelopes(
-      StreamId streamId, List<E> events, Version currentVersion, CommandId commandId) {
-    CorrelationId correlationId = getCorrelationId();
+      StreamId streamId,
+      List<E> events,
+      Version currentVersion,
+      CommandId commandId,
+      SagaDispatchOffer dispatched) {
+    EventProvenance provenance =
+        EventProvenance.of(
+            dispatched,
+            dispatched == null ? StreamRuneContext.cause() : null,
+            this::getCorrelationId);
     List<EventEnvelope> envelopes = new ArrayList<>(events.size());
     Version version = currentVersion;
     for (E event : events) {
       version = version.next();
       EventType eventType = EventType.fromClass(event.getClass());
-      EventMetadata metadata = buildMetadata(correlationId, commandId);
+      EventMetadata metadata = buildMetadata(provenance, commandId);
       envelopes.add(
           new EventEnvelope(GlobalOffset.initial(), streamId, version, eventType, event, metadata));
     }
@@ -1816,6 +1836,63 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
+   * Where the events of a dispatch take their saga origin, causation id and correlation id from.
+   *
+   * <p>A saga dispatch hands the bus its saga beside the scoped values it binds ({@link
+   * SagaDispatchOffer}), and the bus compares the two at the start of the dispatch ({@link
+   * #refuseUnlessTheSagaDispatchsBindings}). The events of that command then carry the handed
+   * saga's origin, causation id and correlation id, not values read again later. Any other dispatch
+   * takes the origin and the causation id from the bound {@link StreamRuneContext#CAUSE} and from
+   * nowhere else — no component of the request context and no baggage entry reaches {@link
+   * EventMetadata#sagaOrigin()} or {@link EventMetadata#causationId()}; with no cause bound the
+   * event carries neither and is a causation root — and the correlation id the dispatch records
+   * ({@link #getCorrelationId()}).
+   *
+   * @param origin the saga origin of the events, or {@code null}
+   * @param causationId the causation id of the events, or {@code null}
+   * @param correlationId the correlation id of the events
+   */
+  record EventProvenance(SagaOrigin origin, CausationId causationId, CorrelationId correlationId) {
+
+    /**
+     * The provenance of the events of a dispatch.
+     *
+     * @param dispatched the saga a saga dispatch handed the dispatch, or {@code null}
+     * @param cause the bound cause, read only when {@code dispatched} is {@code null}; {@code null}
+     *     when none is bound
+     * @param recorded the correlation id the dispatch records, asked for only when {@code
+     *     dispatched} is {@code null}
+     * @return the provenance
+     */
+    static EventProvenance of(
+        SagaDispatchOffer dispatched,
+        StreamRuneContext.DispatchCause cause,
+        Supplier<CorrelationId> recorded) {
+      if (dispatched != null) {
+        return new EventProvenance(
+            dispatched.origin(), dispatched.causationId(), dispatched.origin().correlationId());
+      }
+      return new EventProvenance(
+          cause == null ? null : cause.sagaOrigin(),
+          cause == null ? null : cause.causationId(),
+          recorded.get());
+    }
+  }
+
+  /**
+   * The saga to fence a keyed append against. For a dispatch a saga handed its saga to, the handed
+   * saga when its command is a fenced forward command, and none otherwise. For any other dispatch,
+   * the forward marker bound for {@code key} ({@link StreamRuneContext#sagaForwardOf}), so a keyed
+   * command nested inside a saga's forward command is not fenced.
+   */
+  static SagaOrigin fenceOrigin(SagaDispatchOffer dispatched, IdempotencyKey key) {
+    if (dispatched != null) {
+      return dispatched.forwardFenced() ? dispatched.origin() : null;
+    }
+    return StreamRuneContext.sagaForwardOf(key);
+  }
+
+  /**
    * Builds the metadata for one produced event. The timestamp is stamped from the bus {@link
    * #clock} at the moment of envelope construction (append time) — never the {@link
    * StreamRuneContext.RequestContext#timestamp() request-creation instant}. Reusing the
@@ -1823,21 +1900,13 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * re-dispatched request bound to the same context — the same stale timestamp, undermining audit
    * ordering. Each call reads the clock afresh, so events of one command, and successive commands
    * under one bound context, receive distinct, monotonically-sensible timestamps. Trace and user
-   * identity are taken from the bound context; the correlation id is the caller's ({@link
-   * #getCorrelationId()}).
-   *
-   * <p>The saga origin and the causation id come from the bound {@link StreamRuneContext#CAUSE} and
-   * from nowhere else: no component of the request context and no baggage entry reaches {@link
-   * EventMetadata#sagaOrigin()} or {@link EventMetadata#causationId()}. With no cause bound the
-   * event carries neither and is a causation root. The command's own id is recorded separately in
-   * {@link EventMetadata#commandId()}.
+   * identity are taken from the bound context; the saga origin, the causation id and the
+   * correlation id from {@code provenance}. The command's own id is recorded separately in {@link
+   * EventMetadata#commandId()}.
    */
-  private EventMetadata buildMetadata(CorrelationId correlationId, CommandId commandId) {
+  private EventMetadata buildMetadata(EventProvenance provenance, CommandId commandId) {
     EventId eventId = IdGenerator.generateEventId();
     Instant now = clock.instant();
-    StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();
-    SagaOrigin origin = cause == null ? null : cause.sagaOrigin();
-    CausationId causation = cause == null ? null : cause.causationId();
 
     // capture(): a context bound to null is no context.
     StreamRuneContext.RequestContext ctx = StreamRuneContext.capture();
@@ -1847,15 +1916,24 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           commandId,
           ctx.traceId(),
           null,
-          correlationId,
-          causation,
+          provenance.correlationId(),
+          provenance.causationId(),
           ctx.userId(),
           now,
           ctx.baggage(),
-          origin);
+          provenance.origin());
     }
     return new EventMetadata(
-        eventId, commandId, null, null, correlationId, causation, null, now, null, origin);
+        eventId,
+        commandId,
+        null,
+        null,
+        provenance.correlationId(),
+        provenance.causationId(),
+        null,
+        now,
+        null,
+        provenance.origin());
   }
 
   @SuppressWarnings("unchecked")
@@ -2314,11 +2392,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
     /**
      * Whether {@link #build()} builds the bus on a JVM that {@link ScopedValueJvmGuard} refuses:
-     * JDK 25 with the Graal JIT and neither of its workarounds set, on which {@code ScopedValue}
-     * reads on virtual threads are not reliable. {@code true} builds it with one {@code ERROR} line
-     * per JVM, at the application's own risk. Not set, the system property {@value
-     * ScopedValueJvmGuard#ALLOW_PROPERTY} decides ({@code false} unless it is {@code true}); the
-     * integrations set it from the configuration key of the same name.
+     * the Graal JIT with neither of its workarounds set, on which {@code ScopedValue} reads on
+     * virtual threads are not reliable, or a GraalVM runtime whose options the guard cannot read.
+     * {@code true} builds it with one {@code ERROR} line per JVM, at the application's own risk.
+     * Not set, the system property {@value ScopedValueJvmGuard#ALLOW_PROPERTY} decides ({@code
+     * false} unless it is {@code true}); the integrations set it from the configuration key of the
+     * same name.
      *
      * @param allow {@code true} to build the bus on such a JVM
      * @return this builder
