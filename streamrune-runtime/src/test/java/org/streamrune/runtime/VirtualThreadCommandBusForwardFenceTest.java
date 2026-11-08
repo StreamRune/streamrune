@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -32,6 +33,7 @@ import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
@@ -185,6 +187,64 @@ class VirtualThreadCommandBusForwardFenceTest {
         .run(() -> bus.execute(new Ship("s-3", false), key));
 
     assertEquals(List.of(ORIGIN), store.forwardOf);
+  }
+
+  /**
+   * A saga's own command that is not fenced (a compensation, or a forward command of a saga without
+   * the fence) reaches the store with no fence, through saga dispatch, even where a forward marker
+   * for its key is bound around the dispatch: the bus fences a command a saga handed it by the
+   * handed saga, not by the bindings — on the event path and on the keyed zero-event path.
+   */
+  @Test
+  void aSagasUnfencedCommandIsNotFenced_whateverForwardMarkerIsBoundAroundItsDispatch() {
+    var store = new RecordingEventStore();
+    var bus = bus(store, new ShipDecider()).build();
+    var withEvent = IdempotencyKey.of("saga:saga-1:cmd:2");
+    var zeroEvent = IdempotencyKey.of("saga:saga-1:cmd:3");
+
+    ScopedValue.where(StreamRuneContext.SAGA_FORWARD, forward(withEvent))
+        .run(
+            () ->
+                SagaCommandDispatch.dispatch(
+                    bus, ORIGIN, EventId.of("evt-2"), new Ship("s-5", true), withEvent, false));
+    ScopedValue.where(StreamRuneContext.SAGA_FORWARD, forward(zeroEvent))
+        .run(
+            () ->
+                SagaCommandDispatch.dispatch(
+                    bus, ORIGIN, EventId.of("evt-3"), new Ship("s-6", false), zeroEvent, false));
+
+    assertEquals(
+        Arrays.asList(null, null),
+        store.forwardOf,
+        "the event append and the zero-event append of an unfenced saga command carry no fence");
+    assertEquals(
+        1,
+        store.inner.readGlobalStream(GlobalOffset.initial(), 10).size(),
+        "the command with an event stored it");
+  }
+
+  /** A saga's fenced forward command is fenced by the saga that handed it, on both paths. */
+  @Test
+  void aSagasFencedForwardCommandIsFencedByTheHandedSaga_onTheEventAndTheZeroEventPath() {
+    var store = new RecordingEventStore();
+    var bus = bus(store, new ShipDecider()).build();
+
+    SagaCommandDispatch.dispatch(
+        bus,
+        ORIGIN,
+        EventId.of("evt-4"),
+        new Ship("s-7", true),
+        IdempotencyKey.of("saga:saga-1:cmd:4"),
+        true);
+    SagaCommandDispatch.dispatch(
+        bus,
+        ORIGIN,
+        EventId.of("evt-5"),
+        new Ship("s-8", false),
+        IdempotencyKey.of("saga:saga-1:cmd:5"),
+        true);
+
+    assertEquals(List.of(ORIGIN, ORIGIN), store.forwardOf);
   }
 
   @Test

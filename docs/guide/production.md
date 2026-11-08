@@ -918,7 +918,10 @@ class AggregateLockerFactory {
 **The connection budget.** A command holds its lock connection for its whole run and borrows a
 second connection from the application's pool for its load and its append, so size the lock pool for
 the commands one replica runs at once, and the application's pool for the load and the append alone;
-the two pools of every replica together stay below PostgreSQL's `max_connections`. A command whose
+the two pools of every replica together stay below PostgreSQL's `max_connections`. The dedicated lock
+pool keeps two connections open while the replica runs no command and opens the others on demand,
+up to its maximum; one beyond the two that stays idle for ten minutes is closed, so the budget of a
+replica's lock pool is its maximum under load and two at rest. A command whose
 `INLINE` projection dispatches a command on another aggregate holds a second lock connection (see
 [the dedicated lock pool](#postgresql-setup) above). `streamrune.lock-timeout` bounds the wait for a
 lock with either locker.
@@ -1300,6 +1303,45 @@ An outbox entry reaches `FAILED` when the transport rejected it for its own sake
 6. **Never** `DELETE` a `FAILED` row by hand. `OutboxStore.delete` refuses one, but a direct SQL `DELETE` releases the aggregate with no record and the framework cannot stop it. Retention will not remove a `FAILED` row for you.
 7. **Mode switch checklist.** Before restarting a channel from `AVAILABILITY_FIRST` to `STRICT_PER_AGGREGATE`: `findByStatus(FAILED, …)` must be empty, or every listed entry must be replayed or skipped first; make sure the mapper sets `streamId` on every entry (the strict store will otherwise fail appends with `OutboxOrderingViolationException`). A strict relay that still finds `FAILED` rows with no `aggregate_id` (and no `aggregate_type`) WARNs once at its first poll and keeps running — resolve them with `replay`/`skip` like any other. Before the reverse switch: understand that unresolved `FAILED` heads stop blocking and their successors go out immediately.
 8. **Retention.** `SKIPPED` rows are kept for `streamrune.outbox.skipped-retention-max-age` (default 30 d; keep it at least as long as your audit requires). `DELIVERED` rows are kept for `streamrune.outbox.retention-max-age` (7 d). `FAILED` is never pruned.
+
+## Supported JVMs
+
+StreamRune needs JDK 25.
+
+**Known issue: the Graal JIT on JDK 25.** On JDK 25 the Graal JIT compiler is not reliable with
+StreamRune, and StreamRune does not support it. We verified this on GraalVM CE 25.0.1, GraalVM CE
+25.0.5 and Oracle GraalVM 25.0.4, where the Graal JIT is the default; treat every GraalVM build of
+JDK 25 as affected until a fixed release is verified. Run GraalVM with the JVMCI compiler off:
+
+```
+-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler
+```
+
+GraalVM then compiles with C2. Every JDK 25 HotSpot build we ran accepts the pair; a JVM without
+the JVMCI compiler (Temurin, Zulu) refuses a bare `-XX:-UseJVMCICompiler`, so set both flags, also
+in a start script shared with such a JVM. JVMs whose JIT is C2 (Temurin, Zulu, or GraalVM with the
+JVMCI compiler off) and native images were unaffected in our runs.
+
+StreamRune refuses to start on a JVM that runs the Graal JIT: the start fails with an
+`IllegalStateException` that names the flags. A later JDK release with the Graal JIT is refused the
+same way, as not verified; a JVM without the Graal JIT and a native image are not checked. Set the
+flags wherever the JVM starts: the `java` command, `JAVA_TOOL_OPTIONS`, the image's entrypoint, and
+the test and run tasks of the build.
+
+**What the check reads, and when it runs.** The check reads the JVM's options through the module
+`jdk.management`: include that module in a runtime built with `jlink`, so that the check can read
+them. A GraalVM runtime without it is refused even with the flags set, because the check cannot
+verify them: add `jdk.management`, or, where it cannot be added, set the opt-out below once the
+flags are set. A runtime without `jdk.management` that does not identify as a GraalVM build starts
+with a `WARN` line. The check runs when a command bus is built and when an integration starts. Code
+that runs without building a command bus — a runtime built by hand with only a query bus,
+subscriptions or projections, and application tests on the test kit's `InMemoryCommandBus` or
+`SagaFixture` — is not checked: set the flags on those JVMs too.
+
+`streamrune.jvm.allow-graal-jit=true` starts StreamRune on a refused JVM anyway, at your own risk,
+with one `ERROR` line. It is a configuration key of the three integrations; a runtime built by hand
+reads the system property of that name, or takes
+`VirtualThreadCommandBus.Builder.allowGraalJit(true)`. Set the flags instead.
 
 ## Backup, restore and disaster recovery
 

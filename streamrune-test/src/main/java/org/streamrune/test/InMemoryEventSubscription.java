@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.ScopedValueReads;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.EventSubscription;
@@ -236,16 +237,16 @@ public final class InMemoryEventSubscription implements EventSubscription {
    */
   private void deliver(List<EventEnvelope> batch) {
     ScopedValue.Carrier detached = null;
-    if (StreamRuneContext.CURRENT.isBound()) {
+    if (ScopedValueReads.isBound(StreamRuneContext.CURRENT)) {
       detached = ScopedValue.where(StreamRuneContext.CURRENT, emptyContext());
     }
-    if (StreamRuneContext.SAGA_OWNED.isBound()) {
+    if (ScopedValueReads.isBound(StreamRuneContext.SAGA_OWNED)) {
       detached =
           detached == null
               ? ScopedValue.where(StreamRuneContext.SAGA_OWNED, Boolean.FALSE)
               : detached.where(StreamRuneContext.SAGA_OWNED, Boolean.FALSE);
     }
-    if (StreamRuneContext.CAUSE.isBound()) {
+    if (ScopedValueReads.isBound(StreamRuneContext.CAUSE)) {
       detached =
           detached == null
               ? ScopedValue.where(StreamRuneContext.CAUSE, null)

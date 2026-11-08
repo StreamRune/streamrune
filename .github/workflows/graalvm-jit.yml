@@ -1,0 +1,88 @@
+name: GraalVM JIT
+
+# StreamRune on GraalVM. On JDK 25 the Graal JIT is not reliable with StreamRune, so StreamRune does
+# not support it and refuses to start on a JVM that runs it unless the JVMCI compiler is off:
+# -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, with which GraalVM compiles with C2
+# (docs/guide/production.md, "Supported JVMs"). The Build workflow runs on Temurin, whose JIT is
+# C2, so this is the workflow that meets GraalVM with its default JIT:
+#
+#   - the JVM check (streamrune-runtime's graalJitGuardTest, which runs
+#     GraalJitGuardLiveTest alone with the flags -PgraalJitGuardTestFlags names): the check and the
+#     command bus builder must refuse the JVM with no flag and with the DisableIntrinsic pair, and
+#     accept it with -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler;
+#   - the read stress test of streamrune-runtime (StreamRuneContextVirtualThreadReadTest), on a test
+#     JVM with the JVMCI compiler off: it must pass, and it must have run.
+#
+# Every other test JVM of a GraalVM build runs with the JVMCI compiler off (the root
+# build.gradle.kts). Toolchain detection is switched off, so the test JVMs are the GraalVM that
+# setup-graalvm installs (JAVA_HOME) and no other JDK 25 of the runner.
+#
+# Not on every pull request: on every push to main, nightly, and on demand.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '30 3 * * *'  # nightly 03:30 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: graalvm-jit-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GRADLE_FLAGS: >-
+    --no-daemon --console=plain
+    -Porg.gradle.java.installations.auto-detect=false
+    -Porg.gradle.java.installations.auto-download=false
+  READ_TEST_RESULT: streamrune-runtime/build/test-results/test/TEST-org.streamrune.runtime.StreamRuneContextVirtualThreadReadTest.xml
+
+jobs:
+  graalvm-jit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Show the JVM
+        run: java -version
+
+      - name: The JVM check refuses the Graal JIT with no flag
+        run: >-
+          ./gradlew :streamrune-runtime:graalJitGuardTest --rerun
+          -PgraalJitGuardTestFlags=none -PexpectGraalJitGuard=refused $GRADLE_FLAGS
+
+      - name: The JVM check refuses the Graal JIT with the DisableIntrinsic pair
+        run: >-
+          ./gradlew :streamrune-runtime:graalJitGuardTest --rerun
+          -PgraalJitGuardTestFlags=intrinsics -PexpectGraalJitGuard=refused $GRADLE_FLAGS
+
+      - name: The JVM check accepts the JVM with the JVMCI compiler off
+        run: >-
+          ./gradlew :streamrune-runtime:graalJitGuardTest --rerun
+          -PgraalJitGuardTestFlags=c2 -PexpectGraalJitGuard=accepted $GRADLE_FLAGS
+
+      - name: The read stress test passes with the JVMCI compiler off
+        run: |
+          ./gradlew :streamrune-runtime:test --tests 'org.streamrune.runtime.StreamRuneContextVirtualThreadReadTest' --rerun \
+            -PvirtualThreadReadSeconds=60 $GRADLE_FLAGS
+          grep -q 'tests="1" skipped="0" failures="0" errors="0"' "$READ_TEST_RESULT"
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: graalvm-jit-test-reports
+          path: '**/build/reports/tests/'
+          if-no-files-found: ignore

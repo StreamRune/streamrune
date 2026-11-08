@@ -43,6 +43,7 @@ import org.streamrune.integration.tck.ContractBeans.ContractProjection;
 import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
 import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
 import org.streamrune.runtime.DeadLetterRetryRunner;
+import org.streamrune.runtime.GraalJitGuard;
 import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.VirtualThreadCommandBus;
@@ -69,7 +70,8 @@ final class ReferenceApplication implements Application {
     RUNNERS_STOP_FIRST,
     DOCUMENTED_DEFAULTS,
     ROUTE_CALLER_AUDITED,
-    BUS_ANSWERS_BY_RUNNER_RULES
+    BUS_ANSWERS_BY_RUNNER_RULES,
+    JVM_CHECK_OPT_OUT_REACHES_THE_BUS
   }
 
   private final List<Object> beans;
@@ -98,6 +100,10 @@ final class ReferenceApplication implements Application {
     try {
       validate();
       buildDeadLetterRetry();
+      if (commandBus == null) {
+        commandBus = commandBusBuilder().build();
+      }
+      beans.add(commandBus);
       startRunner();
       startServer();
     } catch (RuntimeException e) {
@@ -159,6 +165,19 @@ final class ReferenceApplication implements Application {
   }
 
   /**
+   * The builder of the application's command bus, as an integration starts it: on an in-memory
+   * event store, with the opt-out of the JVM check that {@value GraalJitGuard#ALLOW_PROPERTY}
+   * configures, unless the rule is broken.
+   */
+  private VirtualThreadCommandBus.Builder commandBusBuilder() {
+    var bus = VirtualThreadCommandBus.builder().eventStore(new InMemoryEventStore());
+    if (keeps(Rule.JVM_CHECK_OPT_OUT_REACHES_THE_BUS)) {
+      bus.allowGraalJit(Boolean.parseBoolean(properties.get(GraalJitGuard.ALLOW_PROPERTY)));
+    }
+    return bus;
+  }
+
+  /**
    * With a command inbox and a dead-letter queue, builds the command bus and the retry runner from
    * the same keys, as an integration does, and keeps what the runner logs when it is built: the bus
    * answers a keyed re-send by the runner's {@code maxRetries} and inbox window, unless the rule is
@@ -182,8 +201,7 @@ final class ReferenceApplication implements Application {
     Duration window =
         Duration.parse(properties.getOrDefault("streamrune.inbox.retention-max-age", "PT168H"));
     var bus =
-        VirtualThreadCommandBus.builder()
-            .eventStore(new InMemoryEventStore())
+        commandBusBuilder()
             .commandInbox(inboxes.getFirst())
             .deadLetterQueue(queues.getFirst())
             .objectMapper(DeadLetterRetryRunner.createObjectMapper(null));

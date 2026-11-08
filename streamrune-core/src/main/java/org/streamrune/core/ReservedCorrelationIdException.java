@@ -27,6 +27,13 @@ import org.streamrune.core.types.IdConstraints;
  * CommandFailureClassification#isPermanentRejection}): a retry or a replay under the same bindings
  * is refused again.
  *
+ * <p><b>Under a saga's own dispatch it is a failed invariant, not a rejection.</b> Saga dispatch
+ * binds the saga's correlation id and its origin together, afresh on every attempt, so a saga
+ * command refused this way met bindings the dispatch did not make. The saga runner never
+ * compensates on it: a forward command refused this way leaves the saga as it was and is delivered
+ * again, a compensation command refused this way keeps its episode open for the next re-drive, and
+ * both are logged at {@code ERROR}.
+ *
  * <p>The message names the prefix and the two binders, and never the bound value.
  */
 public final class ReservedCorrelationIdException extends RuntimeException {

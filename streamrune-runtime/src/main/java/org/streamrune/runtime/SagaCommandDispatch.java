@@ -17,6 +17,7 @@ import org.streamrune.core.DomainException;
 import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.LockException;
 import org.streamrune.core.OptimisticLockException;
+import org.streamrune.core.ReservedCorrelationIdException;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
@@ -29,6 +30,7 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.LogSanitizer;
 
 /**
  * Shared saga command dispatch + compensation classification used by SagaRunner and
@@ -178,19 +180,26 @@ final class SagaCommandDispatch {
             // the very path where the caller IS authenticated. Null on every background entry point
             // (subscription poll, timeout runner, compensation sweeper), where ambient is null too.
             ambient != null ? ambient.authority() : null);
+    CausationId causation = causingEvent == null ? null : CausationId.of(causingEvent.value());
     ScopedValue.Carrier carrier =
         ScopedValue.where(StreamRuneContext.CURRENT, ctx)
             .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
-            .where(
-                StreamRuneContext.CAUSE,
-                new StreamRuneContext.DispatchCause(
-                    causingEvent == null ? null : CausationId.of(causingEvent.value()), origin));
+            .where(StreamRuneContext.CAUSE, new StreamRuneContext.DispatchCause(causation, origin));
     if (forwardFenced) {
       carrier =
           carrier.where(
               StreamRuneContext.SAGA_FORWARD, new StreamRuneContext.SagaForward(origin, key));
     }
-    CommandBus.CommandResult result = carrier.call(() -> commandBus.execute(command, key));
+    // Beside the scoped values, the bus is handed the saga in a field of this thread. It compares
+    // the two before anything of the command runs (VirtualThreadCommandBus refuses a mismatch) and
+    // takes the provenance of the command's events, and the forward fence, from the handed saga.
+    new SagaDispatchOffer(origin, causation, key, forwardFenced).offer();
+    CommandBus.CommandResult result;
+    try {
+      result = carrier.call(() -> commandBus.execute(command, key));
+    } finally {
+      SagaDispatchOffer.withdraw();
+    }
     // Null-tolerant like DeadLetterRetryRunner.processEntry: a third-party bus returning null is
     // treated as an executed command, never as a veto.
     if (result != null && result.vetoed()) {
@@ -259,6 +268,43 @@ final class SagaCommandDispatch {
     Throwable c = failure;
     for (int depth = 0; c != null && depth < MAX_CAUSE_DEPTH; depth++, c = c.getCause()) {
       if (c instanceof SagaForwardFencedException) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether {@code failure} is the command bus's refusal of the bindings a saga dispatch made: a
+   * {@link ReservedCorrelationIdException} or a {@link SagaBindingsMismatchException} anywhere in
+   * the cause chain (bounded, so a cyclic chain cannot loop). They are the refusals of a saga's own
+   * command that are framework invariants and never an answer about the business.
+   *
+   * <p>{@link #dispatch} binds the saga's reserved correlation id ({@link
+   * SagaOrigin#correlationId()}) and the saga's origin together, in one carrier, around the
+   * command, and hands the saga to the bus beside them ({@link SagaDispatchOffer}). The bus refuses
+   * a reserved correlation id that is not the bound origin's ({@link
+   * StreamRuneContext#requireNoForeignReservedCorrelationId()}) and bindings that name another saga
+   * than the one it was handed. So under a saga's dispatch either refusal says that the bindings
+   * the bus read are not the ones the dispatch made: something between the two bound other values
+   * (a decorator of the bus that rebinds the context, a dispatch nested in the command), or the
+   * read did not return the values just bound. The bus refuses before the command is looked up,
+   * authorized, executed, stored or dead-lettered, so nothing was attempted and nothing about the
+   * business was decided. Each attempt binds afresh, so a later attempt is not refused for the same
+   * reason unless the cause persists.
+   *
+   * <p>Both saga paths therefore keep the flow and retry: the forward path reads it as retry-later
+   * ({@link #isRetryLater}) and the compensation path as an attempted, retried compensation ({@link
+   * #compensateAndClassify}). Both log it at {@code ERROR}: it is a defect to report, not an
+   * operational condition.
+   *
+   * @param failure the exception a saga command dispatch threw (never null)
+   */
+  static boolean isBindingRefusal(Throwable failure) {
+    Throwable c = failure;
+    for (int depth = 0; c != null && depth < MAX_CAUSE_DEPTH; depth++, c = c.getCause()) {
+      if (c instanceof ReservedCorrelationIdException
+          || c instanceof SagaBindingsMismatchException) {
         return true;
       }
     }
@@ -377,6 +423,15 @@ final class SagaCommandDispatch {
    *             it is retry-later like the rest of this set: the event is redelivered until the
    *             engine answers, which for a key an operator must fix means the subscription retries
    *             until the operator fixes it. Again the same rule as {@link SagaStateConversion}.
+   *         <li>{@link ReservedCorrelationIdException} and {@link SagaBindingsMismatchException} —
+   *             the bus refused the bindings the dispatch made ({@link #isBindingRefusal}): an
+   *             ADMISSION refusal like the first entries of this set, raised before the command was
+   *             looked up. It is a permanent rejection for a command a request, a listener or a
+   *             dead-letter replay dispatches under bindings of its own, which a retry presents
+   *             again; a saga binds its correlation id and its origin afresh on every attempt, from
+   *             the saga id. The step executor logs it at {@code ERROR} instead of the retry-later
+   *             {@code WARN}. A refusal that persists holds the subscription, which reports every
+   *             failed delivery, until the saga's deadline claims it.
    *       </ul>
    *   <li>Anything else ⇒ <b>not</b> retry-later. Never divert a failure that could not be
    *       <em>proven</em> retriable onto an unbounded batch retry.
@@ -402,6 +457,8 @@ final class SagaCommandDispatch {
           || c instanceof SagaStepLockException
           || c instanceof SQLException
           || c instanceof EventSchemaAheadException
+          || c instanceof ReservedCorrelationIdException
+          || c instanceof SagaBindingsMismatchException
           || (c instanceof CryptoOperationException && !(c instanceof CryptoMappingException))) {
         sawRetryLater = true;
       }
@@ -430,7 +487,9 @@ final class SagaCommandDispatch {
     FAILED(SagaStatus.FAILED),
     /**
      * A transient/infra compensation failure (and no permanent one) → NOT terminal: the saga must
-     * be left {@code COMPENSATING} so the resume path re-drives it. Carries no terminal status.
+     * be left {@code COMPENSATING} so the resume path re-drives it. Carries no terminal status. A
+     * command the bus refused for the bindings its dispatch made ({@link #isBindingRefusal}) is
+     * such a failure, and an attempt.
      */
     RETRY(null),
     /**
@@ -480,6 +539,14 @@ final class SagaCommandDispatch {
    * nothing ({@link #attemptedNothing}). A permanent failure dominates a transient one: retrying a
    * deterministic failure forever is worse than terminalizing.
    *
+   * <p>A command the bus refused for the bindings its dispatch made ({@link #isBindingRefusal}) is
+   * not a business rejection, although the dead letter queue reads a {@link
+   * ReservedCorrelationIdException} as permanent: a saga binds its correlation id and its origin
+   * afresh on every attempt. It is a transient failure that counts as an attempt ({@code RETRY}),
+   * logged at {@code ERROR}: the episode stays {@code COMPENSATING}, the undo is never abandoned as
+   * {@code FAILED}, and a refusal that persists is faulted for an operator by {@code
+   * SagaCompensationRetrySweeper} once its give-up horizon has passed.
+   *
    * <p>Caller-supplied key scheme: the one caller, {@code SagaStepExecutor}, supplies the shared,
    * episode-scoped {@link #episodeCompensationKey}-derived keys on every path, scoped by the
    * episode version the saga row carries (the row version at which {@code COMPENSATING} was first
@@ -527,7 +594,26 @@ final class SagaCommandDispatch {
         // costs a bounded dwell and then actually issues the refund, whereas terminalizing
         // abandoned the undo permanently for a gate that lifts in minutes. What is unchanged is the
         // guarantee that a veto is never COMPENSATED.
-        if (VirtualThreadCommandBus.DEFAULT_DLQ_ELIGIBLE.test(e)) {
+        if (isBindingRefusal(e)) {
+          // The bus refused the bindings this dispatch made: a framework invariant failed, and the
+          // refusal is no answer about the undo. It is retried like a transient failure and counted
+          // as an attempt, so a refusal that persists is faulted for an operator past the sweeper's
+          // give-up horizon instead of being re-driven without end.
+          hadTransientFailure = true;
+          hadAttemptedTransientFailure = true;
+          log.error(
+              "Saga {} compensation command {} (index {}) was refused by the command bus for the"
+                  + " bindings this dispatch made: a framework invariant failed, not the"
+                  + " compensation. The"
+                  + " episode stays COMPENSATING and is re-driven; a refusal that persists is"
+                  + " faulted for an operator once the compensation-retry give-up horizon has"
+                  + " passed. The command bus's refusal line, logged just before, names the"
+                  + " bindings it read.",
+              LogSanitizer.sanitizeForLog(origin.sagaId().value()),
+              compensations.get(i).command().getClass().getSimpleName(),
+              i,
+              e);
+        } else if (VirtualThreadCommandBus.DEFAULT_DLQ_ELIGIBLE.test(e)) {
           hadTransientFailure = true;
           // A refused admission attempted nothing, and neither did a load the store refused on a
           // replica behind the stored schema; only a failure that actually reached the command
