@@ -34,19 +34,19 @@ import org.slf4j.LoggerFactory;
  * command bus — the three integrations, which also run it when they start, the {@link StreamRune}
  * facade and a runtime built by hand — goes through it. {@value #ALLOW_PROPERTY}{@code =true} (a
  * configuration key of the integrations, a system property of a runtime built by hand, or {@link
- * VirtualThreadCommandBus.Builder#allowUnreliableScopedValues(boolean)}) starts a refused JVM
- * anyway, at the application's own risk, with one {@code ERROR} line.
+ * VirtualThreadCommandBus.Builder#allowGraalJit(boolean)}) starts a refused JVM anyway, at the
+ * application's own risk, with one {@code ERROR} line.
  */
-public final class ScopedValueJvmGuard {
+public final class GraalJitGuard {
 
   /**
    * The opt-out: {@code true} starts StreamRune on a JVM the guard refuses, with an {@code ERROR}
    * line. The same name is the configuration key of the three integrations and the system property
    * a runtime built by hand reads.
    */
-  public static final String ALLOW_PROPERTY = "streamrune.jvm.allow-unreliable-scoped-values";
+  public static final String ALLOW_PROPERTY = "streamrune.jvm.allow-graal-jit";
 
-  private static final Logger LOG = LoggerFactory.getLogger(ScopedValueJvmGuard.class);
+  private static final Logger LOG = LoggerFactory.getLogger(GraalJitGuard.class);
 
   /**
    * The flags that switch the JVMCI compiler off, with which GraalVM compiles with C2. A JVM
@@ -67,23 +67,23 @@ public final class ScopedValueJvmGuard {
   /** Whether the opt-out's {@code ERROR} line was logged in this JVM. */
   private static final AtomicBoolean OPT_OUT_LOGGED = new AtomicBoolean();
 
-  private ScopedValueJvmGuard() {}
+  private GraalJitGuard() {}
 
   /**
    * Checks the running JVM.
    *
-   * @param allowUnreliable {@code true} to start on a JVM the guard refuses, with one {@code ERROR}
+   * @param allowGraalJit {@code true} to start on a JVM the guard refuses, with one {@code ERROR}
    *     line per JVM ({@value #ALLOW_PROPERTY})
    * @throws IllegalStateException if the JVM runs the Graal JIT, or is a GraalVM build whose
-   *     options cannot be read, and {@code allowUnreliable} is {@code false}; the message names
+   *     options cannot be read, and {@code allowGraalJit} is {@code false}; the message names
    *     {@code -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler} and the opt-out
    */
-  public static void check(boolean allowUnreliable) {
-    check(allowUnreliable, Vm.platform(), OPT_OUT_LOGGED);
+  public static void check(boolean allowGraalJit) {
+    check(allowGraalJit, Vm.platform(), OPT_OUT_LOGGED);
   }
 
   /** {@link #check(boolean)} on the given VM facts; the seam of the tests. */
-  static void check(boolean allowUnreliable, Vm vm, AtomicBoolean optOutLogged) {
+  static void check(boolean allowGraalJit, Vm vm, AtomicBoolean optOutLogged) {
     Verdict verdict = assess(vm);
     switch (verdict) {
       case RELIABLE -> {
@@ -96,7 +96,7 @@ public final class ScopedValueJvmGuard {
                   + " if this JVM runs it, start it with {}.",
               JVMCI_COMPILER_OFF);
       case UNRELIABLE, UNVERIFIED -> {
-        if (!allowUnreliable) {
+        if (!allowGraalJit) {
           throw new IllegalStateException(refusal(verdict, vm.featureVersion()));
         }
         if (optOutLogged.compareAndSet(false, true)) {

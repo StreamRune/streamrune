@@ -275,14 +275,14 @@ public record StreamRuneProperties(
   public record Security(@DefaultValue("false") boolean trustUserIdHeader) {}
 
   /**
-   * @param allowUnreliableScopedValues {@code true} starts the application on a JVM the startup
-   *     check refuses — one that runs the Graal JIT, which is not reliable with StreamRune on JDK
-   *     25 (run GraalVM with {@code -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler}
-   *     instead), or a GraalVM runtime whose options the check cannot read — with one {@code ERROR}
-   *     line, at the application's own risk. Defaults to {@code false}: such a JVM refuses to start
-   *     ({@code ScopedValueJvmGuard}).
+   * @param allowGraalJit {@code true} starts the application on a JVM the startup check refuses —
+   *     one that runs the Graal JIT, which is not reliable with StreamRune on JDK 25 (run GraalVM
+   *     with {@code -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler} instead), or a GraalVM
+   *     runtime whose options the check cannot read — with one {@code ERROR} line, at the
+   *     application's own risk. Defaults to {@code false}: such a JVM refuses to start ({@code
+   *     GraalJitGuard}).
    */
-  public record Jvm(@DefaultValue("false") boolean allowUnreliableScopedValues) {}
+  public record Jvm(@DefaultValue("false") boolean allowGraalJit) {}
 
   /**
    * @param enabled whether the auto-registered {@code GET /api/sse/{aggregateType}/{aggregateId}}

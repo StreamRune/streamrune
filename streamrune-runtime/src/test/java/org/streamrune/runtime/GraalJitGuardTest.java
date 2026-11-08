@@ -19,12 +19,12 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
 /**
- * {@link ScopedValueJvmGuard} on every kind of JVM it tells apart, through the seam of the VM facts
- * it reads: a JDK 25 or later with the Graal JIT is refused unless the JVMCI compiler is off or the
+ * {@link GraalJitGuard} on every kind of JVM it tells apart, through the seam of the VM facts it
+ * reads: a JDK 25 or later with the Graal JIT is refused unless the JVMCI compiler is off or the
  * application opts out, and so is a GraalVM build whose compiler options cannot be read; every
  * other JVM starts, without a line when its options can be read.
  */
-class ScopedValueJvmGuardTest {
+class GraalJitGuardTest {
 
   /** The flags the guard names: the JVMCI compiler off, in a form every HotSpot JDK 25 accepts. */
   private static final String JVMCI_OFF = "-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler";
@@ -34,7 +34,7 @@ class ScopedValueJvmGuardTest {
 
   @BeforeEach
   void captureTheLog() {
-    logger = (Logger) LoggerFactory.getLogger(ScopedValueJvmGuard.class);
+    logger = (Logger) LoggerFactory.getLogger(GraalJitGuard.class);
     log.start();
     logger.addAppender(log);
   }
@@ -68,7 +68,7 @@ class ScopedValueJvmGuardTest {
       boolean nativeImage,
       Map<String, String> options,
       Map<String, String> properties)
-      implements ScopedValueJvmGuard.Vm {
+      implements GraalJitGuard.Vm {
 
     FakeVm(int featureVersion, boolean nativeImage, Map<String, String> options) {
       this(featureVersion, nativeImage, options, GRAALVM_PROPERTIES);
@@ -104,8 +104,8 @@ class ScopedValueJvmGuardTest {
     return new FakeVm(25, false, null, properties);
   }
 
-  private void check(ScopedValueJvmGuard.Vm vm, boolean allow) {
-    ScopedValueJvmGuard.check(allow, vm, new AtomicBoolean());
+  private void check(GraalJitGuard.Vm vm, boolean allow) {
+    GraalJitGuard.check(allow, vm, new AtomicBoolean());
   }
 
   private List<String> lines(Level level) {
@@ -122,7 +122,7 @@ class ScopedValueJvmGuardTest {
         .hasMessageContaining("JDK 25 with the Graal JIT")
         .hasMessageContaining("not reliable with StreamRune")
         .hasMessageContaining("Start the JVM with " + JVMCI_OFF)
-        .hasMessageContaining(ScopedValueJvmGuard.ALLOW_PROPERTY + "=true")
+        .hasMessageContaining(GraalJitGuard.ALLOW_PROPERTY + "=true")
         .hasMessageNotContaining("DisableIntrinsic");
   }
 
@@ -181,15 +181,15 @@ class ScopedValueJvmGuardTest {
     var once = new AtomicBoolean();
     var affected = graalJit(Map.of());
 
-    ScopedValueJvmGuard.check(true, affected, once);
-    ScopedValueJvmGuard.check(true, affected, once);
+    GraalJitGuard.check(true, affected, once);
+    GraalJitGuard.check(true, affected, once);
 
     assertThat(lines(Level.ERROR))
         .singleElement()
         .satisfies(
             line ->
                 assertThat(line)
-                    .contains(ScopedValueJvmGuard.ALLOW_PROPERTY + "=true")
+                    .contains(GraalJitGuard.ALLOW_PROPERTY + "=true")
                     .contains(JVMCI_OFF)
                     .doesNotContain("DisableIntrinsic"));
   }
@@ -208,7 +208,7 @@ class ScopedValueJvmGuardTest {
         .hasMessageContaining("could not read")
         .hasMessageContaining("jdk.management")
         .hasMessageContaining(JVMCI_OFF)
-        .hasMessageContaining(ScopedValueJvmGuard.ALLOW_PROPERTY + "=true")
+        .hasMessageContaining(GraalJitGuard.ALLOW_PROPERTY + "=true")
         .hasMessageNotContaining("DisableIntrinsic");
   }
 
@@ -253,8 +253,8 @@ class ScopedValueJvmGuardTest {
     var once = new AtomicBoolean();
     var unverified = unreadable(GRAALVM_PROPERTIES);
 
-    ScopedValueJvmGuard.check(true, unverified, once);
-    ScopedValueJvmGuard.check(true, unverified, once);
+    GraalJitGuard.check(true, unverified, once);
+    GraalJitGuard.check(true, unverified, once);
 
     assertThat(lines(Level.ERROR))
         .singleElement()
@@ -263,7 +263,7 @@ class ScopedValueJvmGuardTest {
                 assertThat(line)
                     .contains("could not read")
                     .contains("jdk.management")
-                    .contains(ScopedValueJvmGuard.ALLOW_PROPERTY + "=true")
+                    .contains(GraalJitGuard.ALLOW_PROPERTY + "=true")
                     .contains(JVMCI_OFF)
                     .doesNotContain("DisableIntrinsic"));
     assertThat(lines(Level.WARN)).isEmpty();
@@ -278,7 +278,7 @@ class ScopedValueJvmGuardTest {
 
   @Test
   void theRunningJvm_isReadThroughItsManagementInterface() {
-    ScopedValueJvmGuard.Vm platform = ScopedValueJvmGuard.Vm.platform();
+    GraalJitGuard.Vm platform = GraalJitGuard.Vm.platform();
     assertThat(platform.featureVersion()).isEqualTo(Runtime.version().feature());
     assertThat(platform.nativeImage()).isFalse();
     assertThat(platform.option("NoSuchVmOption")).isEmpty();

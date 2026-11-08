@@ -25,8 +25,7 @@ public class StreamRuneConfigValidator implements SmartInitializingSingleton {
     // Every application, also one that builds its own command bus: a JVM that runs the Graal JIT,
     // which is not reliable with StreamRune, refuses to start (the bus builder runs the same
     // check).
-    org.streamrune.runtime.ScopedValueJvmGuard.check(
-        properties.jvm().allowUnreliableScopedValues());
+    org.streamrune.runtime.GraalJitGuard.check(properties.jvm().allowGraalJit());
     int snapshotN =
         env.getProperty(
             "streamrune.snapshot-every-n-events", Integer.class, properties.snapshotEveryNEvents());

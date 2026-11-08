@@ -7,23 +7,22 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.test.InMemoryEventStore;
 
 /**
- * {@link ScopedValueJvmGuard} on the JVM the test runs on, and the command bus builder that runs
- * it. The build states what the guard must answer there: {@code
- * streamrune.test.expectScopedValueJvm} is {@code accepted} unless {@code -PexpectScopedValueJvm}
- * says otherwise. The {@code test} task runs it as every other test, with the JVMCI compiler off on
- * a GraalVM build; {@code scopedValueJvmGuardTest} runs it alone with the JVM flags {@code
- * -PjvmGuardTestFlags} names, none by default, and the GraalVM workflow runs that task on GraalVM
- * with each of them.
+ * {@link GraalJitGuard} on the JVM the test runs on, and the command bus builder that runs it. The
+ * build states what the guard must answer there: {@code streamrune.test.expectGraalJitGuard} is
+ * {@code accepted} unless {@code -PexpectGraalJitGuard} says otherwise. The {@code test} task runs
+ * it as every other test, with the JVMCI compiler off on a GraalVM build; {@code graalJitGuardTest}
+ * runs it alone with the JVM flags {@code -PgraalJitGuardTestFlags} names, none by default, and the
+ * GraalVM workflow runs that task on GraalVM with each of them.
  */
-class ScopedValueJvmGuardLiveTest {
+class GraalJitGuardLiveTest {
 
   private static final boolean REFUSED =
-      "refused".equals(System.getProperty("streamrune.test.expectScopedValueJvm", "accepted"));
+      "refused".equals(System.getProperty("streamrune.test.expectGraalJitGuard", "accepted"));
 
   @Test
   void theGuardAndTheBusBuilderAnswerAsTheBuildExpects() {
     if (REFUSED) {
-      assertThatThrownBy(() -> ScopedValueJvmGuard.check(false))
+      assertThatThrownBy(() -> GraalJitGuard.check(false))
           .isInstanceOf(IllegalStateException.class)
           .hasMessageContaining("-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler");
       assertThatThrownBy(
@@ -35,13 +34,13 @@ class ScopedValueJvmGuardLiveTest {
               () ->
                   VirtualThreadCommandBus.builder()
                       .eventStore(new InMemoryEventStore())
-                      .allowUnreliableScopedValues(true)
+                      .allowGraalJit(true)
                       .build()
                       .close())
           .as("the opt-out builds it")
           .doesNotThrowAnyException();
     } else {
-      assertThatCode(() -> ScopedValueJvmGuard.check(false)).doesNotThrowAnyException();
+      assertThatCode(() -> GraalJitGuard.check(false)).doesNotThrowAnyException();
       assertThatCode(
               () ->
                   VirtualThreadCommandBus.builder()

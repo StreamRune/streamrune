@@ -161,8 +161,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   private final UnaryOperator<Runnable> asyncTaskWrapper;
   private final Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
 
-  /** Whether this bus was built with the opt-out of {@link ScopedValueJvmGuard}. */
-  private final boolean allowUnreliableScopedValues;
+  /** Whether this bus was built with the opt-out of {@link GraalJitGuard}. */
+  private final boolean allowGraalJit;
 
   private final Clock clock;
   private final CommandInbox commandInbox;
@@ -203,8 +203,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       int maxInFlightAsyncCommands,
       DeadLetterRetryPolicy deadLetterRetryPolicy,
       Duration inboxRetentionMaxAge,
-      boolean allowUnreliableScopedValues) {
-    this.allowUnreliableScopedValues = allowUnreliableScopedValues;
+      boolean allowGraalJit) {
+    this.allowGraalJit = allowGraalJit;
     this.eventStore = eventStore;
     this.locker = locker;
     this.retryPolicy = retryPolicy;
@@ -292,14 +292,13 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
-   * Whether this bus was built with the opt-out of {@link ScopedValueJvmGuard} ({@link
-   * Builder#allowUnreliableScopedValues(boolean)}, or the system property {@value
-   * ScopedValueJvmGuard#ALLOW_PROPERTY}).
+   * Whether this bus was built with the opt-out of {@link GraalJitGuard} ({@link
+   * Builder#allowGraalJit(boolean)}, or the system property {@value GraalJitGuard#ALLOW_PROPERTY}).
    *
    * @return {@code true} when a JVM the guard refuses would start with an {@code ERROR} line
    */
-  public boolean allowsUnreliableScopedValues() {
-    return allowUnreliableScopedValues;
+  public boolean allowsGraalJit() {
+    return allowGraalJit;
   }
 
   /**
@@ -2107,7 +2106,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     private final List<CommandInterceptor> interceptors = new ArrayList<>();
     private UnaryOperator<Runnable> asyncTaskWrapper;
     private Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
-    private Boolean allowUnreliableScopedValues;
+    private Boolean allowGraalJit;
     private Clock clock;
     private CommandInbox commandInbox;
     private Predicate<Throwable> dlqEligible;
@@ -2393,18 +2392,18 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
-     * Whether {@link #build()} builds the bus on a JVM that {@link ScopedValueJvmGuard} refuses:
-     * one that runs the Graal JIT, which is not reliable with StreamRune, or a GraalVM runtime
-     * whose options the guard cannot read. {@code true} builds it with one {@code ERROR} line per
-     * JVM, at the application's own risk. Not set, the system property {@value
-     * ScopedValueJvmGuard#ALLOW_PROPERTY} decides ({@code false} unless it is {@code true}); the
-     * integrations set it from the configuration key of the same name.
+     * Whether {@link #build()} builds the bus on a JVM that {@link GraalJitGuard} refuses: one that
+     * runs the Graal JIT, which is not reliable with StreamRune, or a GraalVM runtime whose options
+     * the guard cannot read. {@code true} builds it with one {@code ERROR} line per JVM, at the
+     * application's own risk. Not set, the system property {@value GraalJitGuard#ALLOW_PROPERTY}
+     * decides ({@code false} unless it is {@code true}); the integrations set it from the
+     * configuration key of the same name.
      *
      * @param allow {@code true} to build the bus on such a JVM
      * @return this builder
      */
-    public Builder allowUnreliableScopedValues(boolean allow) {
-      this.allowUnreliableScopedValues = allow;
+    public Builder allowGraalJit(boolean allow) {
+      this.allowGraalJit = allow;
       return this;
     }
 
@@ -2497,24 +2496,22 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * {@link AuthorizationConfigurationValidator}. The interceptor counts only as a member of the
      * chain itself: wrapped in {@link CommandInterceptor#compose} or a decorator it is not seen.
      *
-     * <p>It first runs {@link ScopedValueJvmGuard} on the running JVM.
+     * <p>It first runs {@link GraalJitGuard} on the running JVM.
      *
-     * @throws IllegalStateException if the JVM is one {@link ScopedValueJvmGuard} refuses and
-     *     {@link #allowUnreliableScopedValues(boolean)} does not allow it, if no event store was
-     *     set, or if a registered command type requires authorization and no {@link
-     *     AnnotationAuthorizationInterceptor} is among the interceptors — the annotations would be
-     *     ignored and the command would run unguarded
+     * @throws IllegalStateException if the JVM is one {@link GraalJitGuard} refuses and {@link
+     *     #allowGraalJit(boolean)} does not allow it, if no event store was set, or if a registered
+     *     command type requires authorization and no {@link AnnotationAuthorizationInterceptor} is
+     *     among the interceptors — the annotations would be ignored and the command would run
+     *     unguarded
      * @throws IllegalArgumentException if a dead letter queue is configured without an objectMapper
      *     — without one, {@code publishToDeadLetterQueue} cannot serialize the command, and failing
      *     fast here is clearer than a later NullPointerException that would shadow the original
      *     command failure
      */
     public VirtualThreadCommandBus build() {
-      boolean allowUnreliable =
-          allowUnreliableScopedValues != null
-              ? allowUnreliableScopedValues
-              : Boolean.getBoolean(ScopedValueJvmGuard.ALLOW_PROPERTY);
-      ScopedValueJvmGuard.check(allowUnreliable);
+      boolean graalJitAllowed =
+          allowGraalJit != null ? allowGraalJit : Boolean.getBoolean(GraalJitGuard.ALLOW_PROPERTY);
+      GraalJitGuard.check(graalJitAllowed);
       if (eventStore == null) {
         throw new IllegalStateException("eventStore is required");
       }
@@ -2552,7 +2549,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           maxInFlightAsyncCommands,
           deadLetterRetryPolicy,
           inboxRetentionMaxAge,
-          allowUnreliable);
+          graalJitAllowed);
     }
   }
 }

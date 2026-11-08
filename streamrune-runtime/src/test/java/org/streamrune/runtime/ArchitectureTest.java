@@ -44,7 +44,7 @@ class ArchitectureTest {
           .resideInAnyPackage(
               "java..",
               "javax..",
-              // The JDK's HotSpot diagnostic interface, which ScopedValueJvmGuard reads the JVM's
+              // The JDK's HotSpot diagnostic interface, which GraalJitGuard reads the JVM's
               // compiler options through.
               "com.sun.management..",
               "jakarta.validation..",

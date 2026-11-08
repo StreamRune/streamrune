@@ -60,7 +60,7 @@ streamrune.security.trust-user-id-header=false
 # streamrune.metadata.baggage-allowlist=
 # true starts on a JVM the startup check refuses (one that runs the Graal JIT, or a GraalVM runtime
 # whose options it cannot read), at your own risk; see production.md "Supported JVMs"
-streamrune.jvm.allow-unreliable-scoped-values=false
+streamrune.jvm.allow-graal-jit=false
 
 # Event store, projections and subscriptions
 streamrune.event-store.schema.auto-initialize=true

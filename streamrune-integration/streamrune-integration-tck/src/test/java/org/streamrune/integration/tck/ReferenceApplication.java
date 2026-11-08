@@ -43,9 +43,9 @@ import org.streamrune.integration.tck.ContractBeans.ContractProjection;
 import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
 import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
 import org.streamrune.runtime.DeadLetterRetryRunner;
+import org.streamrune.runtime.GraalJitGuard;
 import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
-import org.streamrune.runtime.ScopedValueJvmGuard;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.test.InMemoryEventStore;
 
@@ -166,14 +166,13 @@ final class ReferenceApplication implements Application {
 
   /**
    * The builder of the application's command bus, as an integration starts it: on an in-memory
-   * event store, with the opt-out of the JVM check that {@value ScopedValueJvmGuard#ALLOW_PROPERTY}
+   * event store, with the opt-out of the JVM check that {@value GraalJitGuard#ALLOW_PROPERTY}
    * configures, unless the rule is broken.
    */
   private VirtualThreadCommandBus.Builder commandBusBuilder() {
     var bus = VirtualThreadCommandBus.builder().eventStore(new InMemoryEventStore());
     if (keeps(Rule.JVM_CHECK_OPT_OUT_REACHES_THE_BUS)) {
-      bus.allowUnreliableScopedValues(
-          Boolean.parseBoolean(properties.get(ScopedValueJvmGuard.ALLOW_PROPERTY)));
+      bus.allowGraalJit(Boolean.parseBoolean(properties.get(GraalJitGuard.ALLOW_PROPERTY)));
     }
     return bus;
   }

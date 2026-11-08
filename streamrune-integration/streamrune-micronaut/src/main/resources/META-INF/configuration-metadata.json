@@ -253,7 +253,7 @@
       "defaultValue": "1s"
     },
     {
-      "name": "streamrune.jvm.allow-unreliable-scoped-values",
+      "name": "streamrune.jvm.allow-graal-jit",
       "type": "java.lang.Boolean",
       "description": "Start on a JVM the startup check refuses: one that runs the Graal JIT, which is not reliable with StreamRune on JDK 25 (run GraalVM with -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler instead), or a GraalVM runtime whose compiler options the check cannot read (without the module jdk.management). It starts with one ERROR line, at the application's own risk. When false (the default) such a JVM refuses to start.",
       "defaultValue": false

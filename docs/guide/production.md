@@ -1336,10 +1336,10 @@ building a command bus — a runtime built by hand with only a query bus, subscr
 projections, and application tests on the test kit's `InMemoryCommandBus` or `SagaFixture` — is not
 checked: set the flags on those JVMs too.
 
-`streamrune.jvm.allow-unreliable-scoped-values=true` starts StreamRune on a refused JVM anyway, at
+`streamrune.jvm.allow-graal-jit=true` starts StreamRune on a refused JVM anyway, at
 your own risk, with one `ERROR` line. It is a configuration key of the three integrations; a runtime
 built by hand reads the system property of that name, or takes
-`VirtualThreadCommandBus.Builder.allowUnreliableScopedValues(true)`. Set the flags instead.
+`VirtualThreadCommandBus.Builder.allowGraalJit(true)`. Set the flags instead.
 
 ## Backup, restore and disaster recovery
 

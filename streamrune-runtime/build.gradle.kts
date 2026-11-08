@@ -93,33 +93,33 @@ tasks.named("check") {
     dependsOn(jmhSmokeTestTask)
 }
 
-// Runs ScopedValueJvmGuardLiveTest, and only that class, on a test JVM with the flags
-// -PjvmGuardTestFlags names, so that the guard meets the JVM as an application meets it: `none` (the
+// Runs GraalJitGuardLiveTest, and only that class, on a test JVM with the flags
+// -PgraalJitGuardTestFlags names, so that the guard meets the JVM as an application meets it: `none` (the
 // default), `intrinsics` (-XX:+UnlockDiagnosticVMOptions
 // -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache, which the guard refuses on the Graal
 // JIT) or `c2` (-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, which it accepts). Every
 // other test JVM of a GraalVM build runs
 // with the JVMCI compiler off (the root build). Not part of `check`: the GraalVM workflow
-// (graalvm-jit.yml) runs it on the Graal JIT with each, and -PexpectScopedValueJvm says what the
+// (graalvm-jit.yml) runs it on the Graal JIT with each, and -PexpectGraalJitGuard says what the
 // guard must answer.
-val jvmGuardTestFlags =
-    when (val flags = (findProperty("jvmGuardTestFlags") as String?) ?: "none") {
+val graalJitGuardTestFlags =
+    when (val flags = (findProperty("graalJitGuardTestFlags") as String?) ?: "none") {
         "none" -> emptyList()
         "intrinsics" ->
             listOf(
                 "-XX:+UnlockDiagnosticVMOptions",
                 "-XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache")
         "c2" -> listOf("-XX:+UnlockExperimentalVMOptions", "-XX:-UseJVMCICompiler")
-        else -> throw GradleException("-PjvmGuardTestFlags must be none, intrinsics or c2, not '$flags'")
+        else -> throw GradleException("-PgraalJitGuardTestFlags must be none, intrinsics or c2, not '$flags'")
     }
-tasks.register<Test>("scopedValueJvmGuardTest") {
-    description = "Runs ScopedValueJvmGuardLiveTest on a test JVM with the flags -PjvmGuardTestFlags names."
+tasks.register<Test>("graalJitGuardTest") {
+    description = "Runs GraalJitGuardLiveTest on a test JVM with the flags -PgraalJitGuardTestFlags names."
     group = "verification"
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     useJUnitPlatform()
-    filter { includeTestsMatching("org.streamrune.runtime.ScopedValueJvmGuardLiveTest") }
-    jvmArgs(jvmGuardTestFlags)
+    filter { includeTestsMatching("org.streamrune.runtime.GraalJitGuardLiveTest") }
+    jvmArgs(graalJitGuardTestFlags)
 }
 
 // RelayComponentNamesDocLintTest reads the production guide and the three integrations' health

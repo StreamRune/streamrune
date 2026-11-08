@@ -25,7 +25,7 @@ import org.streamrune.core.types.UserId;
  * framework reads a scoped value, and answer {@code null} or {@code false} where nothing is bound.
  * Application code reads them through these methods too. On JDK 25 the Graal JIT is not reliable
  * with StreamRune; the JVMs the framework does not start on are in {@code
- * org.streamrune.runtime.ScopedValueJvmGuard}.
+ * org.streamrune.runtime.GraalJitGuard}.
  */
 public final class StreamRuneContext {
 

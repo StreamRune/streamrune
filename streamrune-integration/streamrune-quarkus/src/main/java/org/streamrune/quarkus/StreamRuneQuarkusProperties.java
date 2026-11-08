@@ -443,10 +443,10 @@ public interface StreamRuneQuarkusProperties {
      * Graal JIT, which is not reliable with StreamRune on JDK 25 (run GraalVM with {@code
      * -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler} instead), or a GraalVM runtime whose
      * options the check cannot read — with one {@code ERROR} line, at the application's own risk.
-     * Defaults to {@code false}: such a JVM refuses to start ({@code ScopedValueJvmGuard}).
+     * Defaults to {@code false}: such a JVM refuses to start ({@code GraalJitGuard}).
      */
     @WithDefault("false")
-    boolean allowUnreliableScopedValues();
+    boolean allowGraalJit();
   }
 
   /** Server-Sent Events section, {@code streamrune.sse.*}. */

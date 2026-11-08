@@ -27,7 +27,7 @@ import org.streamrune.integration.tck.ConfigurationOracle;
 import org.streamrune.integration.tck.ConfigurationOracle.KeyNaming;
 import org.streamrune.integration.tck.ConfigurationOracle.ReadElsewhere;
 import org.streamrune.integration.tck.DefaultRendering;
-import org.streamrune.runtime.ScopedValueJvmGuard;
+import org.streamrune.runtime.GraalJitGuard;
 
 /**
  * Holds the Micronaut integration's configuration documentation to its code. The oracle is what the
@@ -62,7 +62,7 @@ class ConfigurationDocLintTest {
           new ReadElsewhere("streamrune.projections.auto-discovery.enabled", "true", "lookup"),
           new ReadElsewhere("streamrune.projections.<name>.enabled", "true", "lookup"),
           new ReadElsewhere("streamrune.projections.<name>.error-strategy", null, "lookup"),
-          new ReadElsewhere(ScopedValueJvmGuard.ALLOW_PROPERTY, "false", "lookup"));
+          new ReadElsewhere(GraalJitGuard.ALLOW_PROPERTY, "false", "lookup"));
 
   /**
    * An explicit {@code @Property} name, else the group of a nested {@code @ConfigurationProperties}

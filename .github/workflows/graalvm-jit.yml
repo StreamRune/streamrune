@@ -3,14 +3,13 @@ name: GraalVM JIT
 # StreamRune on GraalVM. On JDK 25 the Graal JIT is not reliable with StreamRune, so StreamRune does
 # not support it and refuses to start on a JVM that runs it unless the JVMCI compiler is off:
 # -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, with which GraalVM compiles with C2
-# (docs/guide/production.md, "Supported
-# JVMs"). The Build workflow runs on Temurin, whose JIT is C2, so this is the workflow that meets
-# GraalVM with its default JIT:
+# (docs/guide/production.md, "Supported JVMs"). The Build workflow runs on Temurin, whose JIT is
+# C2, so this is the workflow that meets GraalVM with its default JIT:
 #
-#   - the JVM check (streamrune-runtime's scopedValueJvmGuardTest, which runs
-#     ScopedValueJvmGuardLiveTest alone with the flags -PjvmGuardTestFlags names): the check and the
-#     command bus builder must refuse the JVM with no flag and with the ScopedValue intrinsics
-#     disabled, and accept it with -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler;
+#   - the JVM check (streamrune-runtime's graalJitGuardTest, which runs
+#     GraalJitGuardLiveTest alone with the flags -PgraalJitGuardTestFlags names): the check and the
+#     command bus builder must refuse the JVM with no flag and with the DisableIntrinsic pair, and
+#     accept it with -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler;
 #   - the read stress test of streamrune-runtime (StreamRuneContextVirtualThreadReadTest), on a test
 #     JVM with the JVMCI compiler off: it must pass, and it must have run.
 #
@@ -61,18 +60,18 @@ jobs:
 
       - name: The JVM check refuses the Graal JIT with no flag
         run: >-
-          ./gradlew :streamrune-runtime:scopedValueJvmGuardTest --rerun
-          -PjvmGuardTestFlags=none -PexpectScopedValueJvm=refused $GRADLE_FLAGS
+          ./gradlew :streamrune-runtime:graalJitGuardTest --rerun
+          -PgraalJitGuardTestFlags=none -PexpectGraalJitGuard=refused $GRADLE_FLAGS
 
-      - name: The JVM check refuses the Graal JIT with the ScopedValue intrinsics disabled
+      - name: The JVM check refuses the Graal JIT with the DisableIntrinsic pair
         run: >-
-          ./gradlew :streamrune-runtime:scopedValueJvmGuardTest --rerun
-          -PjvmGuardTestFlags=intrinsics -PexpectScopedValueJvm=refused $GRADLE_FLAGS
+          ./gradlew :streamrune-runtime:graalJitGuardTest --rerun
+          -PgraalJitGuardTestFlags=intrinsics -PexpectGraalJitGuard=refused $GRADLE_FLAGS
 
       - name: The JVM check accepts the JVM with the JVMCI compiler off
         run: >-
-          ./gradlew :streamrune-runtime:scopedValueJvmGuardTest --rerun
-          -PjvmGuardTestFlags=c2 -PexpectScopedValueJvm=accepted $GRADLE_FLAGS
+          ./gradlew :streamrune-runtime:graalJitGuardTest --rerun
+          -PgraalJitGuardTestFlags=c2 -PexpectGraalJitGuard=accepted $GRADLE_FLAGS
 
       - name: The read stress test passes with the JVMCI compiler off
         run: |

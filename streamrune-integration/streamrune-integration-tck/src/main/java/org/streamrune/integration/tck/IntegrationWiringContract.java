@@ -42,7 +42,7 @@ import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
 import org.streamrune.integration.tck.ContractBeans.SecondLeadership;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 import org.streamrune.runtime.DeadLetterRetryRunner;
-import org.streamrune.runtime.ScopedValueJvmGuard;
+import org.streamrune.runtime.GraalJitGuard;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 
 /**
@@ -232,21 +232,21 @@ public abstract class IntegrationWiringContract {
   }
 
   /**
-   * The opt-out of the JVM check, {@value ScopedValueJvmGuard#ALLOW_PROPERTY}, is one key in the
-   * three integrations, and it reaches the command bus the integration builds: unset, the bus is
-   * built without it; set to {@code true}, with it. The JVM the tests run on is one the check
-   * accepts, so both start.
+   * The opt-out of the JVM check, {@value GraalJitGuard#ALLOW_PROPERTY}, is one key in the three
+   * integrations, and it reaches the command bus the integration builds: unset, the bus is built
+   * without it; set to {@code true}, with it. The JVM the tests run on is one the check accepts, so
+   * both start.
    */
   @Test
   public void theOptOutOfTheJvmCheckReachesTheCommandBus() {
     for (boolean allow : List.of(false, true)) {
       Map<String, String> properties =
-          allow ? Map.of(ScopedValueJvmGuard.ALLOW_PROPERTY, "true") : Map.of();
+          allow ? Map.of(GraalJitGuard.ALLOW_PROPERTY, "true") : Map.of();
       try (Application application = start(null, properties, Set.of())) {
         assertStarted(application);
         assertEquals(
             allow,
-            application.bean(VirtualThreadCommandBus.class).allowsUnreliableScopedValues(),
+            application.bean(VirtualThreadCommandBus.class).allowsGraalJit(),
             "the bus is built with the configured opt-out");
       }
     }

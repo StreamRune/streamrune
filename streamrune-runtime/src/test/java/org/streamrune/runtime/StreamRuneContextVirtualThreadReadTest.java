@@ -36,9 +36,9 @@ import org.streamrune.core.types.SagaType;
  * threads run with bindings of their own. Every read must answer with the reading thread's own
  * bindings, and the test counts the reads that do not.
  *
- * <p>It runs only on a JVM that {@link ScopedValueJvmGuard} accepts: StreamRune does not start on
- * any other. Every test JVM of a GraalVM build runs with the JVMCI compiler off (the root build),
- * and the GraalVM workflow runs this test on GraalVM that way. {@code
+ * <p>It runs only on a JVM that {@link GraalJitGuard} accepts: StreamRune does not start on any
+ * other. Every test JVM of a GraalVM build runs with the JVMCI compiler off (the root build), and
+ * the GraalVM workflow runs this test on GraalVM that way. {@code
  * streamrune.test.virtualThreadReadSeconds} lengthens the run.
  */
 class StreamRuneContextVirtualThreadReadTest {
@@ -52,8 +52,7 @@ class StreamRuneContextVirtualThreadReadTest {
   @Test
   void everyReadNamesTheBindingsOfTheReadingThread() throws InterruptedException {
     assumeTrue(
-        ScopedValueJvmGuard.assess(ScopedValueJvmGuard.Vm.platform())
-            == ScopedValueJvmGuard.Verdict.RELIABLE,
+        GraalJitGuard.assess(GraalJitGuard.Vm.platform()) == GraalJitGuard.Verdict.RELIABLE,
         "StreamRune does not start on this JVM");
     Duration run = Duration.ofSeconds(Long.getLong("streamrune.test.virtualThreadReadSeconds", 4L));
     AtomicBoolean stop = new AtomicBoolean();

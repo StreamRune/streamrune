@@ -1192,7 +1192,7 @@ public class StreamRuneProducers {
 
     var builder =
         VirtualThreadCommandBus.builder()
-            .allowUnreliableScopedValues(properties.jvm().allowUnreliableScopedValues())
+            .allowGraalJit(properties.jvm().allowGraalJit())
             .eventStore(eventStore)
             .locker(locker)
             .retryPolicy(retryPolicy)
