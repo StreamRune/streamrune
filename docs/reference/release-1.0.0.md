@@ -126,7 +126,10 @@ license.
   report to the HikariCP metrics tracker factory handed in (`new
   MicrometerMetricsTrackerFactory(registry)` gives `hikaricp.connections.*` tagged with the pool
   name); the four-argument form builds it without one, and its saturation then shows only as failed
-  lock acquisitions (a `LockException` after the pool's 10-second connection timeout).
+  lock acquisitions (a `LockException` after the pool's 10-second connection timeout). The dedicated
+  pool keeps two idle connections (`maxPoolSize` when smaller) and opens the others on demand, up to
+  `maxPoolSize`; one beyond the two that stays idle for ten minutes is closed, so an idle replica
+  holds two lock connections.
 - Typed identifiers: `StreamId`, `AggregateType`, `AggregateId`, `Version`, `GlobalOffset`, `EventId`,
   `CommandId`, `CorrelationId`, `CausationId`, `TraceId`, `SpanId`, `UserId`, `SubjectId`,
   `IdempotencyKey`, `ProjectionName`, `SubscriptionName`, `SagaId`, `SagaType`, `EventType`. Ingress
@@ -721,9 +724,22 @@ license.
   `EventSchemaAheadException` — a replica behind the stored schema during a rolling deployment)
   leaves the saga untouched and propagates so the event is redelivered; everything else claims
   `COMPENSATING` first, then calls `compensate(state, failure, failedCommand)` and dispatches the undo.
+- Binding refusals: a saga command that the command bus refuses for the bindings of the saga's own
+  dispatch (`ReservedCorrelationIdException`, `SagaBindingsMismatchException`) is a failed invariant,
+  never an answer about the business, and is never compensated because of the refusal. A forward
+  command refused so is retried later — the saga stays as it was (a running saga stays `RUNNING`) and
+  its event is delivered again, and a refusal that persists ends as the saga's timeout; a
+  compensation command refused so leaves its episode `COMPENSATING` and is re-driven as a counted
+  attempt, faulted (`FAULTED`) for an operator once
+  `streamrune.saga.compensation-retry-give-up-after` has passed. Both log at `ERROR`, after the
+  bus's own `WARN` line. Saga dispatch hands its saga (origin and causation id) to the command bus
+  outside the scoped values, and the bus refuses a mismatch with what it reads
+  (`SagaBindingsMismatchException`) before anything is looked up or stored; the command's events take
+  their origin, causation id and correlation id, and a fenced forward command its fence, from the
+  handed saga.
 - Compensation outcomes: all undo commands succeed → `COMPENSATED`; a deterministic rejection or an
-  empty `compensate()` list → `FAILED`; a transient failure or a veto → the episode stays
-  `COMPENSATING` and is re-driven under the same keys by a redelivered correlated event, by
+  empty `compensate()` list → `FAILED`; a transient failure, a veto or a binding refusal → the episode
+  stays `COMPENSATING` and is re-driven under the same keys by a redelivered correlated event, by
   `SagaTimeoutRunner`, or by the leadership-gated `SagaCompensationRetrySweeper` (default on, interval
   60 s, give-up horizon 1 h → `FAULTED`). The sweeper faults past the horizon only a saga it
   re-drove in the cycle just before; a cycle that re-drives nothing (standby, a failed store read)
@@ -907,6 +923,18 @@ license.
     permissions are `kms:GenerateDataKey`, `kms:Decrypt` and `kms:DescribeKey`. Erasure is a durable
     per-subject tombstone, read before every cache lookup and KMS call; `deleteKey` also drops the
     subject's cached data keys.
+- Verified encryption and retried decryption: the PostgreSQL, filesystem and AWS KMS engines verify
+  each encryption before they return it, the way `decrypt` reads it, with an independent cipher. A
+  value that does not decrypt to its plaintext, or a check that fails in any way, is discarded and
+  `encrypt` throws the transient (bare) `CryptoOperationException`, so the caller retries and nothing
+  unreadable is stored; on postgres and filesystem the retry reuses the key the first attempt
+  minted. A decryption whose authentication tag does not match is retried once with a fresh cipher
+  before it fails with `CryptoMappingException`, so a corrupted, tampered or foreign value keeps its
+  verdict. Each discarded encryption counts in
+  `streamrune.crypto.encrypt_self_check_failed` and each retried decryption in
+  `streamrune.crypto.decrypt_retried` (tagged `outcome`: `RECOVERED` or `FAILED`), recorded through
+  `metrics(StreamRuneMetrics)` on the three engine builders — the integrations pass their metrics
+  bean — and each logs a `WARN`.
 - Vault and AWS KMS `build()` fail closed without a `ForgottenSubjectStore`; `JdbcForgottenSubjectStore`
   is the durable one, auto-wired by the integrations whenever a `DataSource` is present.
 - postgres and filesystem keep a key-generation byte in every ciphertext header, so a subject that is
@@ -1145,10 +1173,12 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
   transactional mode or when leadership must fence, fails to start when it needs one and none (or
   more than one) exists, and otherwise runs on `nonAtomicAtLeastOnce()`.
 - Crypto engines bind through `streamrune.crypto.<filesystem|postgres|vault|aws>.enabled` and their
-  keys; the Vault and AWS KMS engines get a `JdbcForgottenSubjectStore` on the application `DataSource`.
+  keys; the Vault and AWS KMS engines get a `JdbcForgottenSubjectStore` on the application `DataSource`,
+  and the PostgreSQL, filesystem and AWS KMS engines the integration's `StreamRuneMetrics` bean.
 - Startup validators, all fail-closed: `StreamRuneConfigValidator` (durations), `CommandInboxWiringValidator`,
   `SagaRetentionValidator`, `SagaStateCryptoValidator`, `StreamRuneAuthorizationValidator`,
-  `StreamRuneRequestIdentityValidator`, the `@Encrypted`-without-engine check. A startup banner
+  `StreamRuneRequestIdentityValidator`, the `@Encrypted`-without-engine check, and the JVM check
+  (`GraalJitGuard`, see Operations; `streamrune.jvm.allow-graal-jit`). A startup banner
   (`streamrune.startup-log`) reports the active configuration.
 - Health: Spring Boot Actuator `streamRune` (`StreamRuneHealthIndicator`), Quarkus `@Readiness`
   `streamrune` (`StreamRuneHealthCheck`, always listed in `/q/health/ready`), Micronaut `streamrune`
@@ -1178,7 +1208,10 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
   `streamrune.crypto.cache.expire-after-write` and
   `streamrune.crypto.aws.data-key-cache.expire-after-write` bind as `Duration`s with a default of
   `PT5M`, and `streamrune.crypto.cache.expire-after-access` as an optional one; an empty
-  `expire-after-write=` is a binding error.
+  `expire-after-write=` is a binding error. A Server-Sent Events client that closes its connection is
+  logged at `DEBUG` by `org.streamrune.quarkus.SseController`: Quarkus REST's `ERROR` line for the
+  `ClosedChannelException` is filtered on Quarkus REST's publisher logger, so the filter applies to
+  every streaming endpoint of the application; any other failure of a frame keeps its `ERROR` line.
 - **Micronaut**: `StreamRuneMicronautModule`, `ProjectionFactory`, `StreamRuneLifecycle`,
   `StreamRuneContextFilter` with `StreamRuneContextHelper`, `BeanValidationInterceptor` with Micronaut's
   compile-time validator (`@Introspected` commands), `configuration-metadata.json`, `reflect-config.json`.
@@ -1225,6 +1258,7 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
     `outbox.skipped`, `outbox.skipped_swept`, `outbox.replayed`, `outbox.swept_rows`,
     `outbox.relay.consecutive_failures`
   - crypto and GDPR: `crypto.subject_redacted`, `crypto.keystore_systemic_failure`,
+    `crypto.encrypt_self_check_failed`, `crypto.decrypt_retried{outcome}`,
     `gdpr.purge_failed{purger}`
 - OpenTelemetry spans, names and attribute keys defined in `org.streamrune.runtime.TraceAttributes`:
   `command/{CommandType}` (`OpenTelemetryCommandInterceptor`), `subscription/{name}/deliver`
@@ -1239,6 +1273,23 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
 
 ## Operations
 
+- Supported JVMs: JDK 25 without the Graal JIT. On JDK 25 the Graal JIT is not reliable with
+  StreamRune and is not supported; `org.streamrune.runtime.GraalJitGuard`, run by
+  `VirtualThreadCommandBus.Builder.build()` and when an integration starts, refuses to start on a JVM
+  that runs it — and on a later JDK release with it, as not verified — with an
+  `IllegalStateException` that names the flags. Run GraalVM with
+  `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`, which every JDK 25 HotSpot build we ran
+  accepts; no other set of flags is accepted. JVMs whose JIT is C2 (Temurin, Zulu) and native images
+  were unaffected in our runs. The check reads the JVM's options through the module
+  `jdk.management`: a runtime without it that identifies as GraalVM is refused even with the JVMCI
+  compiler off (add the module, or set the opt-out once the compiler is off), and one that does not
+  identify as GraalVM starts with a `WARN` line. `streamrune.jvm.allow-graal-jit=true` (default
+  `false`) starts anyway, at the application's own risk, with one `ERROR` line: a configuration key
+  of the three integrations, the system property of that name for a runtime built by hand, or
+  `VirtualThreadCommandBus.Builder.allowGraalJit(true)`. Code that builds no command bus (a runtime
+  with only a query bus, subscriptions or projections; tests on `InMemoryCommandBus` or
+  `SagaFixture`) is not checked. See the production guide's
+  [Supported JVMs](../guide/production.md#supported-jvms).
 - Never add `classpath:db/streamrune-migration` or `classpath:db/crypto-migration` to your own
   `flyway.locations`; apply them out of band with `baseline-on-migrate=true`, `baseline-version=0`
   when the runtime role has DML-only grants (`streamrune.event-store.schema.auto-initialize=false`).
@@ -1259,7 +1310,7 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
   letters, outbox `FAILED` entries, multi-replica deployment and write capacity, offset reset /
   rebuild, switching a projection's delivery mode, backup, restore and disaster recovery (erased
   subjects must stay erased — re-apply `deleteKey` from an external erasure record before taking
-  traffic), a security checklist.
+  traffic), supported JVMs, a security checklist.
 
 ## Testing support — `streamrune-test`
 

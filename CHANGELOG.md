@@ -31,7 +31,9 @@ jars. In brief:
   transit engine or under an AWS KMS key. `ForgetSubjectService.forget` deletes the key and then
   runs the registered purgers — the aggregate snapshots among them, unless the application declares
   that it keeps none. A field whose key is gone reads `[REDACTED]`, so replays and rebuilds keep
-  working. `ExportSubjectDataService` collects a subject's data for an access request.
+  working. The PostgreSQL, filesystem and AWS KMS engines verify every encryption before they
+  return it, so nothing unreadable is stored, and retry a decryption that fails its authentication
+  tag once. `ExportSubjectDataService` collects a subject's data for an access request.
 - **Sagas with subscription leadership.** `SagaRunner` drives a saga from any subscription: every
   command it dispatches is keyed for the command inbox, a failed step opens a compensation episode,
   and the event store's forward fence (on by default) refuses a forward command once that episode
@@ -120,6 +122,19 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 
 - **Java 25** (virtual threads and `ScopedValue` are used throughout; every jar is built with the Java
   25 toolchain).
+- **No Graal JIT on JDK 25.** The Graal JIT (GraalVM's default compiler) is not reliable with
+  StreamRune on JDK 25 and is not supported: StreamRune refuses to start on a JDK 25 JVM that runs it,
+  and on a later JDK release with it, as not verified. Run GraalVM with
+  `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`, which every JDK 25 HotSpot build we ran
+  accepts; no other set of flags is accepted. JVMs whose JIT is C2 (Temurin, Zulu) and native images
+  were unaffected in our runs. The check is `org.streamrune.runtime.GraalJitGuard`, run when a command
+  bus is built and when an integration starts. A runtime without the module `jdk.management` that
+  identifies as GraalVM is refused even with the JVMCI compiler off — add the module, or set the
+  opt-out below once the compiler is off — and one that does not identify as GraalVM starts with a
+  `WARN` line. `streamrune.jvm.allow-graal-jit=true` (default `false`; for a runtime built by hand the
+  system property of that name, or `VirtualThreadCommandBus.Builder.allowGraalJit(true)`) starts
+  anyway, at your own risk, with one `ERROR` line. See
+  [Supported JVMs](docs/guide/production.md#supported-jvms).
 - **PostgreSQL 17 or newer** for `streamrune-postgres` and `streamrune-postgres-crypto` — tested on 17
   and 18, and enforced at startup. The in-memory stores of `streamrune-test` need no database.
 - **Jackson 2.19.2** (`jackson-databind` 2.19 or newer). `streamrune-core` depends on nothing else.
@@ -127,7 +142,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   6.2.1 (for its dedicated LISTEN and lock pools; an `api` dependency, Maven `compile` scope, since
   `PgAdvisoryLocker.withDedicatedPool` takes a HikariCP `MetricsTrackerFactory`), the PostgreSQL JDBC
   driver 42.7.10 and SLF4J 2.0.
-- Frameworks: Spring Boot 4.1.x (built and tested against 4.1.1, Spring Security 7.1.x), Quarkus
+- Frameworks: Spring Boot 4.1.x (built and tested against 4.1.2, Spring Security 7.1.x), Quarkus
   3.40.x, Micronaut 5.2.x (Micronaut Security 5.4, Validation 5.2, Serde 3.2). Micrometer 1.16 or
   newer: the framework declares 1.16.3, the floor it is built against, and an application runs the
   version its framework manages (1.17 with Spring Boot 4.1 and Quarkus 3.40). OpenTelemetry API 1.47 (optional).
