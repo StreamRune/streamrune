@@ -3,16 +3,28 @@ package org.streamrune.runtime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.mockStatic;
 
 import java.time.Instant;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.types.AggregateId;
+import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CausationId;
+import org.streamrune.core.types.EventId;
+import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
+import org.streamrune.test.InMemoryCommandInbox;
+import org.streamrune.test.InMemoryEventStore;
 
 /**
  * Where the command bus takes the saga provenance of a dispatch's events from, and what it compares
@@ -110,5 +122,56 @@ class SagaDispatchOfferProvenanceTest {
                                 handed(true), Object.class, KEY))
                     .as("the dispatch's own bindings pass")
                     .doesNotThrowAnyException());
+  }
+
+  /**
+   * The command bus builds the events of a command a saga handed it from the handed saga: through
+   * saga dispatch, the events' provenance is asked of {@link
+   * VirtualThreadCommandBus.EventProvenance#of} with the handed saga and without a cause read from
+   * the bindings. On a JVM whose reads agree with the comparison the stored values are the same
+   * either way, so the call itself is what this test pins.
+   */
+  @Test
+  void theEventsOfAHandedSagasCommand_areBuiltFromTheHandedSaga() {
+    var inbox = new InMemoryCommandInbox();
+    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(store)
+            .commandInbox(inbox)
+            .register(
+                AggregateType.of("shipment"),
+                VirtualThreadCommandBusForwardFenceTest.Ship.class,
+                command -> AggregateId.of(command.shipmentId()),
+                new VirtualThreadCommandBusForwardFenceTest.ShipDecider())
+            .build();
+    var key = new IdempotencyKey("saga:handed:2:0");
+
+    try (MockedStatic<VirtualThreadCommandBus.EventProvenance> provenance =
+        mockStatic(VirtualThreadCommandBus.EventProvenance.class, CALLS_REAL_METHODS)) {
+      SagaCommandDispatch.dispatch(
+          bus,
+          HANDED,
+          EventId.of("evt-handed"),
+          new VirtualThreadCommandBusForwardFenceTest.Ship("s-1", true),
+          key,
+          false);
+
+      provenance.verify(
+          () ->
+              VirtualThreadCommandBus.EventProvenance.of(
+                  argThat(
+                      handed ->
+                          handed != null
+                              && HANDED.equals(handed.origin())
+                              && key.equals(handed.key())),
+                  isNull(),
+                  any()));
+    }
+    var stored = store.readGlobalStream(GlobalOffset.initial(), 10);
+    assertThat(stored).singleElement();
+    assertThat(stored.getFirst().metadata().sagaOrigin()).isEqualTo(HANDED);
+    assertThat(stored.getFirst().metadata().causationId()).isEqualTo(HANDED_CAUSE);
+    assertThat(stored.getFirst().metadata().correlationId()).isEqualTo(HANDED.correlationId());
   }
 }

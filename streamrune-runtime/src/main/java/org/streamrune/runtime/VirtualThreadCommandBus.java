@@ -306,8 +306,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * {@inheritDoc}
    *
    * <p>The event store's {@link EventStore#sagaFenceStorageIdentity()}: this bus hands every keyed
-   * append the saga origin of the forward command it stores ({@link
-   * StreamRuneContext#sagaForwardOf}), and the event store fences it.
+   * append the saga to fence it against ({@code fenceOrigin}) — for a command a saga handed it, the
+   * handed saga when the command is a fenced forward command; for any other command, the forward
+   * marker bound for its key ({@link StreamRuneContext#sagaForwardOf}) — and the event store fences
+   * it.
    */
   @Override
   public Object sagaFenceStorageIdentity() {
