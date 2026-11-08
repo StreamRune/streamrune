@@ -134,8 +134,9 @@ public class PerfCandidatesBenchmark {
   }
 
   // ====================================================================================
-  // C. Crypto engine cipher: Cipher.getInstance("AES/GCM/NoPadding") per encrypt vs a reused
-  //    (thread-local) Cipher. init()+doFinal() are common to both; getInstance is the delta.
+  // C. Crypto engine cipher: Cipher.getInstance("AES/GCM/NoPadding") per encrypt (what the engines
+  //    do) vs a reused (thread-local) Cipher. init()+doFinal() are common to both; getInstance is
+  //    the delta.
   // ====================================================================================
 
   @State(Scope.Thread)

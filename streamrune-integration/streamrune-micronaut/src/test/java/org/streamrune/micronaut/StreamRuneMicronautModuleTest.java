@@ -81,7 +81,8 @@ class StreamRuneMicronautModuleTest {
             List.of(),
             null,
             null,
-            null);
+            null,
+            false);
     assertNotNull(bus);
     bus.close();
   }
@@ -119,7 +120,8 @@ class StreamRuneMicronautModuleTest {
                     List.of(),
                     null,
                     null,
-                    null));
+                    null,
+                    false));
     assertTrue(ex.getMessage().contains("PiiCommand"), ex.getMessage());
     assertTrue(ex.getMessage().contains("email"), ex.getMessage());
   }
@@ -153,7 +155,8 @@ class StreamRuneMicronautModuleTest {
             List.of(new InMemoryCryptoEngine()),
             null,
             null,
-            null);
+            null,
+            false);
     assertNotNull(bus);
     bus.close();
   }
@@ -176,7 +179,8 @@ class StreamRuneMicronautModuleTest {
                 List.of(new InMemoryCryptoEngine(), new InMemoryCryptoEngine()),
                 null,
                 null,
-                null));
+                null,
+                false));
   }
 
   /**
@@ -214,7 +218,8 @@ class StreamRuneMicronautModuleTest {
                     List.of(new InMemoryCryptoEngine()),
                     null,
                     null,
-                    null));
+                    null,
+                    false));
     assertTrue(
         ex.getMessage().contains("is already registered (aggregate type 'pii')"), ex.getMessage());
     assertTrue(ex.getMessage().contains(PiiCommand.class.getName()), ex.getMessage());
@@ -257,7 +262,8 @@ class StreamRuneMicronautModuleTest {
             List.of(), // no CryptoEngine
             null, // no CommandInbox
             dlq,
-            metrics);
+            metrics,
+            false);
 
     var command = new FailingCommand("agg-1");
     assertThrows(RuntimeException.class, () -> bus.execute(command));
@@ -319,7 +325,8 @@ class StreamRuneMicronautModuleTest {
             List.of(),
             inbox,
             dlq,
-            null);
+            null,
+            false);
 
     assertEquals(
         org.streamrune.runtime.CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR,
@@ -1106,7 +1113,8 @@ class StreamRuneMicronautModuleTest {
             List.of(),
             null,
             null,
-            null);
+            null,
+            false);
     var dlq = new org.streamrune.test.InMemoryDeadLetterQueue();
 
     var byDefault =
@@ -1157,7 +1165,8 @@ class StreamRuneMicronautModuleTest {
             List.of(),
             null,
             null,
-            null);
+            null,
+            false);
 
     var runner =
         module.deadLetterRetryRunner(

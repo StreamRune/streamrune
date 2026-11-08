@@ -5,6 +5,7 @@ open module org.streamrune.aws.kms.crypto {
   // module so both the KMS and Vault backends consume one tombstone abstraction. Transitive so a
   // consumer of the public Builder.forgottenSubjectStore(ForgottenSubjectStore) sees the type.
   requires transitive org.streamrune.crypto;
+  requires org.slf4j;
 
   exports org.streamrune.aws;
 }

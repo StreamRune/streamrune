@@ -12,6 +12,7 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.aws.AwsKmsCryptoEngine;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.crypto.CryptoForgetSignal;
@@ -115,11 +116,13 @@ public class StreamRuneCryptoFactory {
   @Requires(property = "streamrune.crypto.cache.enabled", notEquals = "false")
   @Bean(preDestroy = "close")
   CachedCryptoEngine fileSystemCryptoEngine(
-      @Nullable DataSource dataSource, StreamRuneMicronautCryptoProperties props) {
+      @Nullable DataSource dataSource,
+      StreamRuneMicronautCryptoProperties props,
+      @Nullable StreamRuneMetrics metrics) {
     // Wire the LISTEN/NOTIFY forget channel when a DataSource is present so a
     // deleteKey on any replica promptly evicts a forgotten subject's cached plaintext on peers.
     return wrapWithCache(
-        buildFileSystemDelegate(props),
+        buildFileSystemDelegate(props, metrics),
         props.cache(),
         resolveForgetSignal(dataSource, props.cache().expireAfterWrite(), "filesystem"));
   }
@@ -128,8 +131,9 @@ public class StreamRuneCryptoFactory {
   @Singleton
   @Requires(property = "streamrune.crypto.filesystem.enabled", value = "true")
   @Requires(property = "streamrune.crypto.cache.enabled", value = "false")
-  CryptoEngine fileSystemCryptoEngineUncached(StreamRuneMicronautCryptoProperties props) {
-    return buildFileSystemDelegate(props);
+  CryptoEngine fileSystemCryptoEngineUncached(
+      StreamRuneMicronautCryptoProperties props, @Nullable StreamRuneMetrics metrics) {
+    return buildFileSystemDelegate(props, metrics);
   }
 
   @Singleton
@@ -137,13 +141,15 @@ public class StreamRuneCryptoFactory {
   @Requires(property = "streamrune.crypto.cache.enabled", notEquals = "false")
   @Bean(preDestroy = "close")
   CachedCryptoEngine postgresCryptoEngine(
-      DataSource dataSource, StreamRuneMicronautCryptoProperties props) {
+      DataSource dataSource,
+      StreamRuneMicronautCryptoProperties props,
+      @Nullable StreamRuneMetrics metrics) {
     // A Postgres DataSource is present, so wire the LISTEN/NOTIFY forget channel for
     // prompt cross-replica cache invalidation on deleteKey. Micronaut does NOT auto-close
     // @Factory-produced AutoCloseable beans, so @Bean(preDestroy = "close") is required for
     // the container to stop the listener and release its dedicated connection on context shutdown.
     return wrapWithCache(
-        buildPostgresDelegate(dataSource, props),
+        buildPostgresDelegate(dataSource, props, metrics),
         props.cache(),
         new PostgresCryptoForgetSignal(dataSource));
   }
@@ -153,8 +159,10 @@ public class StreamRuneCryptoFactory {
   @Requires(property = "streamrune.crypto.postgres.enabled", value = "true")
   @Requires(property = "streamrune.crypto.cache.enabled", value = "false")
   CryptoEngine postgresCryptoEngineUncached(
-      DataSource dataSource, StreamRuneMicronautCryptoProperties props) {
-    return buildPostgresDelegate(dataSource, props);
+      DataSource dataSource,
+      StreamRuneMicronautCryptoProperties props,
+      @Nullable StreamRuneMetrics metrics) {
+    return buildPostgresDelegate(dataSource, props, metrics);
   }
 
   /**
@@ -203,11 +211,12 @@ public class StreamRuneCryptoFactory {
   CachedCryptoEngine awsKmsCryptoEngine(
       StreamRuneKmsClient kmsClient,
       @Nullable DataSource dataSource,
-      StreamRuneMicronautCryptoProperties props) {
+      StreamRuneMicronautCryptoProperties props,
+      @Nullable StreamRuneMetrics metrics) {
     // The same DataSource that backs the durable tombstone
     // store also wires the LISTEN/NOTIFY forget channel for prompt cross-replica cache eviction.
     return wrapWithCache(
-        buildAwsKmsDelegate(kmsClient.client(), dataSource, props, true),
+        buildAwsKmsDelegate(kmsClient.client(), dataSource, props, true, metrics),
         props.cache(),
         resolveForgetSignal(dataSource, props.cache().expireAfterWrite(), "aws-kms"));
   }
@@ -219,17 +228,21 @@ public class StreamRuneCryptoFactory {
   CryptoEngine awsKmsCryptoEngineUncached(
       StreamRuneKmsClient kmsClient,
       @Nullable DataSource dataSource,
-      StreamRuneMicronautCryptoProperties props) {
+      StreamRuneMicronautCryptoProperties props,
+      @Nullable StreamRuneMetrics metrics) {
     // The no-cache posture keeps no data key in heap either.
-    return buildAwsKmsDelegate(kmsClient.client(), dataSource, props, false);
+    return buildAwsKmsDelegate(kmsClient.client(), dataSource, props, false, metrics);
   }
 
   // ── delegate builders (shared by the cached + bare beans above) ──────────────────────────────
 
-  private CryptoEngine buildFileSystemDelegate(StreamRuneMicronautCryptoProperties props) {
+  // The metrics count discarded encryptions and retried decryptions; NOOP without a metrics bean.
+  private CryptoEngine buildFileSystemDelegate(
+      StreamRuneMicronautCryptoProperties props, @Nullable StreamRuneMetrics metrics) {
     try {
       return FileSystemCryptoEngine.builder()
           .keyDirectory(Path.of(props.filesystem().keyDirectory()))
+          .metrics(metrics)
           .build();
     } catch (Exception e) {
       throw new IllegalStateException(
@@ -239,12 +252,15 @@ public class StreamRuneCryptoFactory {
   }
 
   private CryptoEngine buildPostgresDelegate(
-      DataSource dataSource, StreamRuneMicronautCryptoProperties props) {
+      DataSource dataSource,
+      StreamRuneMicronautCryptoProperties props,
+      @Nullable StreamRuneMetrics metrics) {
     // Honor the configured key-table name (validated as a SQL identifier in the engine
     // builder). Default keeps the migration-created "encryption_keys" table.
     return PostgresCryptoEngine.builder()
         .dataSource(dataSource)
         .tableName(props.postgres().tableName())
+        .metrics(metrics)
         .build();
   }
 
@@ -273,7 +289,8 @@ public class StreamRuneCryptoFactory {
       KmsClient kmsClient,
       @Nullable DataSource dataSource,
       StreamRuneMicronautCryptoProperties props,
-      boolean dataKeyCacheOn) {
+      boolean dataKeyCacheOn,
+      @Nullable StreamRuneMetrics metrics) {
     var ap = props.aws();
     if (ap.region() == null || ap.region().isBlank()) {
       throw new IllegalStateException(
@@ -302,6 +319,7 @@ public class StreamRuneCryptoFactory {
         AwsKmsCryptoEngine.builder()
             .kmsClient(kmsClient)
             .kmsKeyId(ap.kmsKeyId())
+            .metrics(metrics)
             .dataKeyCacheMaximumSize(dataKeyCacheOn ? maximumSize : 0)
             .dataKeyCacheExpireAfterWrite(expireAfterWrite);
     if (dataSource != null) {

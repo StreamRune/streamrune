@@ -10,7 +10,7 @@ an in-memory event store, and a simple read model — all tested without a datab
 
 | Requirement | Minimum | Check |
 |---|---|---|
-| Java | 25 | `java -version` |
+| Java | 25 | `java -version`. On GraalVM, start the JVM with `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`: the Graal JIT is not supported (see [Supported JVMs](production.md#supported-jvms)) |
 | Gradle | 9.1 | `gradle --version`. 9.1 is the first Gradle release that runs on Java 25; StreamRune itself is built and tested with Gradle 9.3.1 (its wrapper) |
 | PostgreSQL | 17 | Only required for production; unit tests use `InMemoryEventStore`. Tested on 17 and 18; an older server is refused at startup |
 

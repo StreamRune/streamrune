@@ -40,6 +40,11 @@ public class StreamRuneConfigValidator implements ApplicationEventListener<Start
 
   @Override
   public void onApplicationEvent(StartupEvent event) {
+    // Singletons are created on first use, so the command bus builder's own check could run only
+    // at the first command: the JVM is checked when the application starts.
+    org.streamrune.runtime.GraalJitGuard.check(
+        ctx.getProperty(org.streamrune.runtime.GraalJitGuard.ALLOW_PROPERTY, Boolean.class)
+            .orElse(false));
     if (properties.snapshotEveryNEvents() <= 0) {
       throw new IllegalStateException(
           "streamrune.snapshot-every-n-events must be > 0, got: "

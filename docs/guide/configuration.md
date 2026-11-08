@@ -107,6 +107,7 @@ integration does not bind.
 | `streamrune.metrics.enabled` | `true` | Whether the Micrometer `StreamRuneMetrics` bean is created. |
 | `streamrune.metrics.prefix` | `streamrune` | The prefix of every meter name. |
 | `streamrune.startup-log` | `true` | Whether the integration logs its banner at startup. |
+| `streamrune.jvm.allow-graal-jit` | `false` | `true` starts on a JVM the startup check refuses (one that runs the Graal JIT, or a GraalVM runtime whose options the check cannot read), with an `ERROR` line; see [Supported JVMs](production.md#supported-jvms). |
 
 ## GDPR and encryption
 

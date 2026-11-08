@@ -91,7 +91,7 @@ class StreamRuneCryptoFactoryTest {
         CryptoTestProps.builder()
             .keyDirectory(Files.createTempDirectory("sr-keys-uncached").toString())
             .build();
-    CryptoEngine engine = factory.fileSystemCryptoEngineUncached(props);
+    CryptoEngine engine = factory.fileSystemCryptoEngineUncached(props, null);
     assertFalse(engine instanceof CachedCryptoEngine);
     assertInstanceOf(org.streamrune.filesystem.FileSystemCryptoEngine.class, engine);
   }
@@ -99,7 +99,7 @@ class StreamRuneCryptoFactoryTest {
   @Test
   void postgresCryptoEngineUncached_returnsBareEngine() {
     var props = CryptoTestProps.builder().build();
-    CryptoEngine engine = factory.postgresCryptoEngineUncached(mock(DataSource.class), props);
+    CryptoEngine engine = factory.postgresCryptoEngineUncached(mock(DataSource.class), props, null);
     assertFalse(engine instanceof CachedCryptoEngine);
     assertInstanceOf(PostgresCryptoEngine.class, engine);
   }
@@ -125,7 +125,7 @@ class StreamRuneCryptoFactoryTest {
             .awsKmsKeyId("arn:aws:kms:us-west-2:123456789012:key/test-key-id")
             .build();
     CryptoEngine engine =
-        factory.awsKmsCryptoEngineUncached(kmsClient(), mock(DataSource.class), props);
+        factory.awsKmsCryptoEngineUncached(kmsClient(), mock(DataSource.class), props, null);
     assertFalse(engine instanceof CachedCryptoEngine);
   }
 
@@ -143,7 +143,8 @@ class StreamRuneCryptoFactoryTest {
         factory.awsKmsCryptoEngineUncached(
             kmsClient(),
             mock(DataSource.class),
-            awsProps().cacheEnabled(false).awsDataKeyCacheMaximumSize(500).build());
+            awsProps().cacheEnabled(false).awsDataKeyCacheMaximumSize(500).build(),
+            null);
     var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, engine);
     assertEquals(0, kms.dataKeyCacheMaximumSize());
   }
@@ -151,7 +152,7 @@ class StreamRuneCryptoFactoryTest {
   @Test
   void awsKmsDataKeyCacheTakesItsDefaultsAndItsTunedValues() throws Exception {
     try (var cached =
-        factory.awsKmsCryptoEngine(kmsClient(), mock(DataSource.class), awsProps().build())) {
+        factory.awsKmsCryptoEngine(kmsClient(), mock(DataSource.class), awsProps().build(), null)) {
       var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, cached.delegate());
       assertEquals(1_000, kms.dataKeyCacheMaximumSize());
       assertEquals(java.time.Duration.ofMinutes(5), kms.dataKeyCacheExpireAfterWrite());
@@ -163,7 +164,8 @@ class StreamRuneCryptoFactoryTest {
             awsProps()
                 .awsDataKeyCacheMaximumSize(50)
                 .awsDataKeyCacheExpireAfterWrite(java.time.Duration.ofMinutes(2))
-                .build())) {
+                .build(),
+            null)) {
       var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, cached.delegate());
       assertEquals(50, kms.dataKeyCacheMaximumSize());
       assertEquals(java.time.Duration.ofMinutes(2), kms.dataKeyCacheExpireAfterWrite());
@@ -179,7 +181,8 @@ class StreamRuneCryptoFactoryTest {
                 factory.awsKmsCryptoEngine(
                     kmsClient(),
                     mock(DataSource.class),
-                    awsProps().awsDataKeyCacheMaximumSize(-1).build()));
+                    awsProps().awsDataKeyCacheMaximumSize(-1).build(),
+                    null));
     assertTrue(
         size.getMessage().contains("streamrune.crypto.aws.data-key-cache.maximum-size"),
         size.getMessage());
@@ -194,7 +197,8 @@ class StreamRuneCryptoFactoryTest {
                   factory.awsKmsCryptoEngineUncached(
                       kmsClient(),
                       mock(DataSource.class),
-                      awsProps().awsDataKeyCacheExpireAfterWrite(bad).build()));
+                      awsProps().awsDataKeyCacheExpireAfterWrite(bad).build(),
+                      null));
       assertTrue(
           ttl.getMessage().contains("streamrune.crypto.aws.data-key-cache.expire-after-write"),
           ttl.getMessage());
@@ -335,7 +339,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props));
+            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props, null));
     assertTrue(e.getMessage().contains("streamrune.crypto.aws.region"));
   }
 
@@ -347,7 +351,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props));
+            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props, null));
     assertTrue(e.getMessage().contains("streamrune.crypto.aws.kms-key-id"));
   }
 
@@ -362,7 +366,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props));
+            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props, null));
     assertTrue(
         e.getMessage().contains("Failed to build AwsKmsCryptoEngine")
             || e.getMessage().contains("region"));
@@ -375,7 +379,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props));
+            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props, null));
     assertTrue(e.getMessage().contains("streamrune.crypto.aws.kms-key-id"));
   }
 
@@ -392,7 +396,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props));
+            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props, null));
     assertTrue(e.getMessage().contains("ForgottenSubjectStore"));
     assertTrue(e.getMessage().contains("durable GDPR erasure"));
   }
@@ -406,7 +410,7 @@ class StreamRuneCryptoFactoryTest {
             .awsKmsKeyId("arn:aws:kms:us-west-2:123456789012:key/test-key-id")
             .build();
 
-    var engine = factory.awsKmsCryptoEngine(kmsClient(), mock(DataSource.class), props);
+    var engine = factory.awsKmsCryptoEngine(kmsClient(), mock(DataSource.class), props, null);
     assertNotNull(engine);
   }
 
@@ -450,7 +454,7 @@ class StreamRuneCryptoFactoryTest {
           }
         };
 
-    CryptoEngine engine = factory.postgresCryptoEngine(ds, props);
+    CryptoEngine engine = factory.postgresCryptoEngine(ds, props, null);
 
     assertNotNull(engine);
     assertTrue(
@@ -522,5 +526,65 @@ class StreamRuneCryptoFactoryTest {
   void resolveForgetSignal_fallsBackToNoop_whenNoDataSource() {
     var signal = StreamRuneCryptoFactory.resolveForgetSignal(null, null, "vault");
     assertSame(org.streamrune.crypto.CryptoForgetSignal.NOOP, signal);
+  }
+
+  @Test
+  void everyEngineIsBuiltWithTheMetricsBean() throws Exception {
+    var metrics = new org.streamrune.test.RecordingStreamRuneMetrics();
+    CryptoEngine fileSystem =
+        factory.fileSystemCryptoEngineUncached(
+            CryptoTestProps.builder()
+                .keyDirectory(Files.createTempDirectory("sr-keys-metrics").toString())
+                .build(),
+            metrics);
+    assertCountsRetriedDecryptions(fileSystem, metrics);
+    try (var cached =
+        factory.fileSystemCryptoEngine(
+            null,
+            CryptoTestProps.builder()
+                .keyDirectory(Files.createTempDirectory("sr-keys-metrics").toString())
+                .build(),
+            metrics)) {
+      assertSame(metrics, metricsOf(cached.delegate()));
+    }
+    assertSame(
+        metrics,
+        metricsOf(
+            factory.postgresCryptoEngineUncached(
+                mock(DataSource.class), CryptoTestProps.builder().build(), metrics)));
+    assertSame(
+        metrics,
+        metricsOf(
+            factory.awsKmsCryptoEngineUncached(
+                kmsClient(), mock(DataSource.class), awsProps().build(), metrics)));
+    try (var cached =
+        factory.awsKmsCryptoEngine(
+            kmsClient(), mock(DataSource.class), awsProps().build(), metrics)) {
+      assertSame(metrics, metricsOf(cached.delegate()));
+    }
+  }
+
+  /** The metrics collector an engine was built with (a private field, read for the test). */
+  private static Object metricsOf(Object engine) throws ReflectiveOperationException {
+    java.lang.reflect.Field field = engine.getClass().getDeclaredField("metrics");
+    field.setAccessible(true);
+    return field.get(engine);
+  }
+
+  /** A decryption of an altered value is retried once, and the failed retry is counted. */
+  private static void assertCountsRetriedDecryptions(
+      CryptoEngine engine, org.streamrune.test.RecordingStreamRuneMetrics metrics) {
+    var subject = org.streamrune.core.types.SubjectId.of("metrics-subject");
+    byte[] blob = engine.encrypt(subject, "x".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    blob[blob.length - 1] ^= 0x01;
+    assertThrows(
+        org.streamrune.core.crypto.CryptoMappingException.class,
+        () -> engine.decrypt(subject, blob));
+    assertEquals(
+        1,
+        metrics.count(
+            org.streamrune.core.metrics.MetricNames.CRYPTO_DECRYPT_RETRIED,
+            org.streamrune.core.metrics.MetricNames.TAG_OUTCOME,
+            "FAILED"));
   }
 }

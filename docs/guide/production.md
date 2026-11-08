@@ -312,6 +312,8 @@ single source of truth — the table below tracks it):
 | `streamrune.snapshots.discarded` | Counter | Stored snapshots discarded on load — the aggregate is rebuilt by replaying all events instead of wedging. Tagged by `reason`: `deserialize_failure` (the payload could not be deserialized — a plain Jackson/IO failure, e.g. an aggregate-state field renamed/removed without a snapshot-version bump) or `migration_failure` (a registered `SnapshotMigration` step threw). Expected near-zero; a nonzero rate flags a snapshot-schema evolution mistake |
 | `streamrune.crypto.subject_redacted` | Counter | A decrypt fell back to the `[REDACTED]` tombstone because the subject's key was absent. Expected at a low, steady rate for lawfully crypto-shredded (GDPR-erased) subjects; a **spike** signals a whole key store is unavailable/empty (restored DB without key rows, truncated key table, wrong datasource) — every `@Encrypted` field would then be silently redacted. Alert on the rate |
 | `streamrune.crypto.keystore_systemic_failure` | Counter | A **systemic** key-store failure was detected: many distinct subjects redacted with no successful decrypt in between — the signature of a wiped/misconfigured key store, NOT lawful per-subject erasure. Emitted once per detected outage episode alongside an `ERROR` log — **page on any nonzero value** |
+| `streamrune.crypto.encrypt_self_check_failed` | Counter | A crypto engine discarded an encryption whose result did not decrypt to the plaintext with an independent cipher, or whose check failed. The engines verify every encryption before they return it, so a wrong cipher result is never returned: the engine throws the transient `CryptoOperationException` and the caller retries. A healthy JVM never fails the check — **alert on any nonzero value**, a fault of the JVM or the hardware; each occurrence also logs a `WARN` |
+| `streamrune.crypto.decrypt_retried` | Counter | A decryption failed its authentication tag and the engine retried it once with a fresh cipher. Tagged by `outcome`: `RECOVERED` — the retry read the value, so a transient fault failed the first attempt; a healthy JVM never produces one — **alert on any nonzero value**; `FAILED` — the retry failed too: the value is corrupted, tampered or written under another key and stays the deterministic `CryptoMappingException`. Each occurrence logs a `WARN` with its outcome |
 | `streamrune.gdpr.purge_failed` | Counter | A GDPR right-to-erasure read-model purge FAILED after the subject's key was already crypto-shredded — unencrypted derived PII may remain in that read model (an Article-17 gap that must not be reported as fully erased). Terminal and alert-worthy — **page on any nonzero value**. Tagged by `purger` |
 | `streamrune.queries.dispatched` | Counter | Queries dispatched on the query bus |
 | `streamrune.queries.duration` | Timer | Query handling duration |
@@ -916,7 +918,10 @@ class AggregateLockerFactory {
 **The connection budget.** A command holds its lock connection for its whole run and borrows a
 second connection from the application's pool for its load and its append, so size the lock pool for
 the commands one replica runs at once, and the application's pool for the load and the append alone;
-the two pools of every replica together stay below PostgreSQL's `max_connections`. A command whose
+the two pools of every replica together stay below PostgreSQL's `max_connections`. The dedicated lock
+pool keeps two connections open while the replica runs no command and opens the others on demand,
+up to its maximum; one beyond the two that stays idle for ten minutes is closed, so the budget of a
+replica's lock pool is its maximum under load and two at rest. A command whose
 `INLINE` projection dispatches a command on another aggregate holds a second lock connection (see
 [the dedicated lock pool](#postgresql-setup) above). `streamrune.lock-timeout` bounds the wait for a
 lock with either locker.
@@ -1298,6 +1303,45 @@ An outbox entry reaches `FAILED` when the transport rejected it for its own sake
 6. **Never** `DELETE` a `FAILED` row by hand. `OutboxStore.delete` refuses one, but a direct SQL `DELETE` releases the aggregate with no record and the framework cannot stop it. Retention will not remove a `FAILED` row for you.
 7. **Mode switch checklist.** Before restarting a channel from `AVAILABILITY_FIRST` to `STRICT_PER_AGGREGATE`: `findByStatus(FAILED, …)` must be empty, or every listed entry must be replayed or skipped first; make sure the mapper sets `streamId` on every entry (the strict store will otherwise fail appends with `OutboxOrderingViolationException`). A strict relay that still finds `FAILED` rows with no `aggregate_id` (and no `aggregate_type`) WARNs once at its first poll and keeps running — resolve them with `replay`/`skip` like any other. Before the reverse switch: understand that unresolved `FAILED` heads stop blocking and their successors go out immediately.
 8. **Retention.** `SKIPPED` rows are kept for `streamrune.outbox.skipped-retention-max-age` (default 30 d; keep it at least as long as your audit requires). `DELIVERED` rows are kept for `streamrune.outbox.retention-max-age` (7 d). `FAILED` is never pruned.
+
+## Supported JVMs
+
+StreamRune needs JDK 25.
+
+**Known issue: the Graal JIT on JDK 25.** On JDK 25 the Graal JIT compiler is not reliable with
+StreamRune, and StreamRune does not support it. We verified this on GraalVM CE 25.0.1, GraalVM CE
+25.0.5 and Oracle GraalVM 25.0.4, where the Graal JIT is the default; treat every GraalVM build of
+JDK 25 as affected until a fixed release is verified. Run GraalVM with the JVMCI compiler off:
+
+```
+-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler
+```
+
+GraalVM then compiles with C2. Every JDK 25 HotSpot build we ran accepts the pair; a JVM without
+the JVMCI compiler (Temurin, Zulu) refuses a bare `-XX:-UseJVMCICompiler`, so set both flags, also
+in a start script shared with such a JVM. JVMs whose JIT is C2 (Temurin, Zulu, or GraalVM with the
+JVMCI compiler off) and native images were unaffected in our runs.
+
+StreamRune refuses to start on a JVM that runs the Graal JIT: the start fails with an
+`IllegalStateException` that names the flags. A later JDK release with the Graal JIT is refused the
+same way, as not verified; a JVM without the Graal JIT and a native image are not checked. Set the
+flags wherever the JVM starts: the `java` command, `JAVA_TOOL_OPTIONS`, the image's entrypoint, and
+the test and run tasks of the build.
+
+**What the check reads, and when it runs.** The check reads the JVM's options through the module
+`jdk.management`: include that module in a runtime built with `jlink`, so that the check can read
+them. A GraalVM runtime without it is refused even with the flags set, because the check cannot
+verify them: add `jdk.management`, or, where it cannot be added, set the opt-out below once the
+flags are set. A runtime without `jdk.management` that does not identify as a GraalVM build starts
+with a `WARN` line. The check runs when a command bus is built and when an integration starts. Code
+that runs without building a command bus — a runtime built by hand with only a query bus,
+subscriptions or projections, and application tests on the test kit's `InMemoryCommandBus` or
+`SagaFixture` — is not checked: set the flags on those JVMs too.
+
+`streamrune.jvm.allow-graal-jit=true` starts StreamRune on a refused JVM anyway, at your own risk,
+with one `ERROR` line. It is a configuration key of the three integrations; a runtime built by hand
+reads the system property of that name, or takes
+`VirtualThreadCommandBus.Builder.allowGraalJit(true)`. Set the flags instead.
 
 ## Backup, restore and disaster recovery
 

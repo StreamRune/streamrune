@@ -22,7 +22,7 @@ plugins {
     alias(libs.plugins.version.catalog.update)
     // Declared directly (not via the version catalog) because this plugin is part of the
     // publishing configuration owned by this block; see the publishing section below.
-    id("com.vanniktech.maven.publish") version "0.36.0" apply false
+    id("com.vanniktech.maven.publish") version "0.37.0" apply false
 }
 
 // ── Helpers for verifyModularApiScopes (registered per-subproject below) ──────
@@ -402,6 +402,28 @@ val quickCheckOnly =
         requested.isNotEmpty() && requested.all { it.substringAfterLast(':') == "quickCheck" }
     }
 
+// ── The JVM flags of the test JVMs of a GraalVM build ───────────────────────────────────────
+//
+// On JDK 25 the Graal JIT is not reliable with StreamRune, and the framework refuses to start on a
+// JVM that runs it unless the JVMCI compiler is off (GraalJitGuard, production.md "Supported
+// JVMs"). A test JVM that is a JVMCI build (GraalVM: its java.vm.version names jvmci) runs with
+// -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, the pair every JDK 25 HotSpot build we
+// ran accepts, so the suites run on GraalVM with C2 as on any other JDK 25; any other JDK 25 runs
+// them as its users run it, with no flag. streamrune-runtime's graalJitGuardTest runs
+// GraalJitGuardLiveTest alone with the flags -PgraalJitGuardTestFlags names (none by default), so
+// that the guard meets the JVM as an application meets it; -PexpectGraalJitGuard=refused|accepted
+// tells that test what the guard answers there (default `accepted`), and the GraalVM workflow
+// (graalvm-jit.yml) runs it with each. -PvirtualThreadReadSeconds=N runs
+// StreamRuneContextVirtualThreadReadTest for N seconds instead of its default 4.
+val jvmciCompilerOffJvmArgs = listOf("-XX:+UnlockExperimentalVMOptions", "-XX:-UseJVMCICompiler")
+val expectedGraalJitGuard =
+    ((findProperty("expectGraalJitGuard") as String?) ?: "accepted").also {
+        if (it != "accepted" && it != "refused") {
+            throw GradleException("-PexpectGraalJitGuard must be accepted or refused, not '$it'")
+        }
+    }
+val virtualThreadReadSeconds = findProperty("virtualThreadReadSeconds") as String?
+
 // ── PostgreSQL 17+ — one test-image switch, one CI leg per end of the supported range ───────
 //
 // StreamRune declares PostgreSQL 17 or newer. A declaration nobody tests is a guess, so every
@@ -461,7 +483,20 @@ subprojects {
 
     tasks.withType<Test> {
         useJUnitPlatform()
-        if (!quickCheckOnly) {
+        // The JVM the task runs its tests on: its toolchain's, or Gradle's own when it has none.
+        // streamrune-runtime's graalJitGuardTest runs with the flags of its own choosing and
+        // without the coverage report, whose task would run the module's whole test task after it.
+        val testJvmVersion =
+            javaLauncher.orNull?.metadata?.jvmVersion ?: System.getProperty("java.vm.version")
+        val guardOnly = name == "graalJitGuardTest"
+        if (!guardOnly && testJvmVersion.contains("jvmci", ignoreCase = true)) {
+            jvmArgs(jvmciCompilerOffJvmArgs)
+        }
+        systemProperty("streamrune.test.expectGraalJitGuard", expectedGraalJitGuard)
+        if (virtualThreadReadSeconds != null) {
+            systemProperty("streamrune.test.virtualThreadReadSeconds", virtualThreadReadSeconds)
+        }
+        if (!quickCheckOnly && !guardOnly) {
             finalizedBy(tasks.named("jacocoTestReport"))
         }
         // A declared output, so a result served UP-TO-DATE or from the build cache keeps the

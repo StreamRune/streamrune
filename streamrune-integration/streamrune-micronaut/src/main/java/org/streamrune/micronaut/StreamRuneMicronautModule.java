@@ -634,9 +634,12 @@ public class StreamRuneMicronautModule {
    * @param deadLetterQueue optional dead-letter queue; when present, failed commands are published
    *     to it through a crypto-aware mapper
    * @param metrics optional metrics collector; when present, command-bus meters are recorded
+   * @param allowGraalJit the value of {@value org.streamrune.runtime.GraalJitGuard#ALLOW_PROPERTY}:
+   *     {@code true} builds the bus on a JVM {@link org.streamrune.runtime.GraalJitGuard} refuses
    * @return a new {@link VirtualThreadCommandBus}
-   * @throws IllegalStateException if multiple CryptoEngine beans exist, or if a registered command
-   *     type has an {@code @Encrypted} field with no CryptoEngine configured
+   * @throws IllegalStateException if multiple CryptoEngine beans exist, if a registered command
+   *     type has an {@code @Encrypted} field with no CryptoEngine configured, or if {@link
+   *     org.streamrune.runtime.GraalJitGuard} refuses the JVM
    */
   @Singleton
   @Requires(beans = EventStore.class)
@@ -652,7 +655,9 @@ public class StreamRuneMicronautModule {
       List<CryptoEngine> cryptoEngines,
       @jakarta.annotation.Nullable CommandInbox commandInbox,
       @jakarta.annotation.Nullable org.streamrune.core.DeadLetterQueue deadLetterQueue,
-      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
+      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
+      @Property(name = org.streamrune.runtime.GraalJitGuard.ALLOW_PROPERTY, defaultValue = "false")
+          boolean allowGraalJit) {
 
     // Fail fast when a registered command type carries an @Encrypted field but no
     // CryptoEngine is configured — otherwise that PII would be dead-lettered as PLAINTEXT.
@@ -696,7 +701,8 @@ public class StreamRuneMicronautModule {
             .stripeCount(properties.stripeCount())
             .maxInFlightAsyncCommands(properties.maxInFlightAsyncCommands())
             .interceptors(orderedInterceptors)
-            .unboundRequestContext(StreamRuneContextHelper::get);
+            .unboundRequestContext(StreamRuneContextHelper::get)
+            .allowGraalJit(allowGraalJit);
 
     // Wire the optional StreamRuneMetrics bean so command-bus meters are recorded (NOOP if absent),
     // mirroring Spring (StreamRuneAutoConfiguration) and the query bus on this framework.

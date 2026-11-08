@@ -13,6 +13,7 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.aws.AwsKmsCryptoEngine;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.crypto.CryptoForgetSignal;
@@ -101,9 +102,11 @@ public class StreamRuneCryptoProducers {
     @Produces
     @Singleton
     public CryptoEngine fileSystemCryptoEngine(
-        Instance<DataSource> dataSource, StreamRuneQuarkusCryptoProperties props) {
+        Instance<DataSource> dataSource,
+        StreamRuneQuarkusCryptoProperties props,
+        Instance<StreamRuneMetrics> metrics) {
       return build.buildFileSystemCryptoEngine(
-          dataSource.isResolvable() ? dataSource.get() : null, props);
+          dataSource.isResolvable() ? dataSource.get() : null, props, resolvedOrNull(metrics));
     }
 
     /** Disposer for {@link #fileSystemCryptoEngine}. */
@@ -129,8 +132,10 @@ public class StreamRuneCryptoProducers {
     @Produces
     @Singleton
     public CryptoEngine postgresCryptoEngine(
-        DataSource dataSource, StreamRuneQuarkusCryptoProperties props) {
-      return build.buildPostgresCryptoEngine(dataSource, props);
+        DataSource dataSource,
+        StreamRuneQuarkusCryptoProperties props,
+        Instance<StreamRuneMetrics> metrics) {
+      return build.buildPostgresCryptoEngine(dataSource, props, resolvedOrNull(metrics));
     }
 
     /** Disposer for {@link #postgresCryptoEngine}. */
@@ -252,9 +257,13 @@ public class StreamRuneCryptoProducers {
     public CryptoEngine awsKmsCryptoEngine(
         StreamRuneKmsClient kmsClient,
         Instance<DataSource> dataSource,
-        StreamRuneQuarkusCryptoProperties props) {
+        StreamRuneQuarkusCryptoProperties props,
+        Instance<StreamRuneMetrics> metrics) {
       return build.buildAwsKmsCryptoEngine(
-          kmsClient.client(), dataSource.isResolvable() ? dataSource.get() : null, props);
+          kmsClient.client(),
+          dataSource.isResolvable() ? dataSource.get() : null,
+          props,
+          resolvedOrNull(metrics));
     }
 
     /** Disposer for {@link #awsKmsCryptoEngine}. */
@@ -270,13 +279,16 @@ public class StreamRuneCryptoProducers {
    * #resolveForgetSignal}).
    */
   CryptoEngine buildFileSystemCryptoEngine(
-      DataSource dataSource, StreamRuneQuarkusCryptoProperties props) {
+      DataSource dataSource, StreamRuneQuarkusCryptoProperties props, StreamRuneMetrics metrics) {
     var filesystem = props.filesystem();
     requireRuntimeEnabled(filesystem.enabled(), "streamrune.crypto.filesystem.enabled");
     CryptoEngine delegate;
     try {
       delegate =
-          FileSystemCryptoEngine.builder().keyDirectory(Path.of(filesystem.keyDirectory())).build();
+          FileSystemCryptoEngine.builder()
+              .keyDirectory(Path.of(filesystem.keyDirectory()))
+              .metrics(metrics)
+              .build();
     } catch (Exception e) {
       throw new IllegalStateException(
           "Failed to build FileSystemCryptoEngine. Check streamrune.crypto.filesystem.key-directory.",
@@ -299,7 +311,7 @@ public class StreamRuneCryptoProducers {
    * closes its dedicated LISTEN pool.
    */
   CryptoEngine buildPostgresCryptoEngine(
-      DataSource dataSource, StreamRuneQuarkusCryptoProperties props) {
+      DataSource dataSource, StreamRuneQuarkusCryptoProperties props, StreamRuneMetrics metrics) {
     requireRuntimeEnabled(props.postgres().enabled(), "streamrune.crypto.postgres.enabled");
     CryptoEngine delegate;
     try {
@@ -307,6 +319,7 @@ public class StreamRuneCryptoProducers {
           PostgresCryptoEngine.builder()
               .dataSource(dataSource)
               .tableName(props.postgres().tableName())
+              .metrics(metrics)
               .build();
     } catch (Exception e) {
       throw new IllegalStateException(
@@ -404,7 +417,7 @@ public class StreamRuneCryptoProducers {
    * build's fail-fast order.
    */
   CryptoEngine buildAwsKmsCryptoEngine(
-      DataSource dataSource, StreamRuneQuarkusCryptoProperties props) {
+      DataSource dataSource, StreamRuneQuarkusCryptoProperties props, StreamRuneMetrics metrics) {
     var aws = props.aws();
     requireRuntimeEnabled(aws.enabled(), "streamrune.crypto.aws.enabled");
     String region =
@@ -413,7 +426,7 @@ public class StreamRuneCryptoProducers {
     requirePresent(
         aws.kmsKeyId(), "streamrune.crypto.aws.kms-key-id", "the ARN or id of a KMS symmetric key");
     return buildAwsKmsCryptoEngine(
-        KmsClient.builder().region(Region.of(region)).build(), dataSource, props);
+        KmsClient.builder().region(Region.of(region)).build(), dataSource, props, metrics);
   }
 
   /**
@@ -422,7 +435,10 @@ public class StreamRuneCryptoProducers {
    * Instance} is impractical to stub). Not a producer (no {@code @Produces}), so Arc ignores it.
    */
   CryptoEngine buildAwsKmsCryptoEngine(
-      KmsClient kmsClient, DataSource dataSource, StreamRuneQuarkusCryptoProperties props) {
+      KmsClient kmsClient,
+      DataSource dataSource,
+      StreamRuneQuarkusCryptoProperties props,
+      StreamRuneMetrics metrics) {
     var aws = props.aws();
     requireRuntimeEnabled(aws.enabled(), "streamrune.crypto.aws.enabled");
     requirePresent(
@@ -453,6 +469,7 @@ public class StreamRuneCryptoProducers {
           AwsKmsCryptoEngine.builder()
               .kmsClient(kmsClient)
               .kmsKeyId(kmsKeyId)
+              .metrics(metrics)
               // streamrune.crypto.cache.enabled=false is the no-cache posture: neither decrypted
               // plaintext nor plaintext data keys are kept in heap.
               .dataKeyCacheMaximumSize(props.cache().enabled() ? dataKeyCacheMaximumSize : 0)
@@ -475,6 +492,14 @@ public class StreamRuneCryptoProducers {
         delegate,
         props.cache(),
         resolveForgetSignal(dataSource, props.cache().expireAfterWrite(), "aws-kms"));
+  }
+
+  /**
+   * The application's metrics bean, or {@code null} without one; the engines count discarded
+   * encryptions and retried decryptions with it and fall back to NOOP on {@code null}.
+   */
+  static StreamRuneMetrics resolvedOrNull(Instance<StreamRuneMetrics> metrics) {
+    return metrics.isResolvable() ? metrics.get() : null;
   }
 
   /**

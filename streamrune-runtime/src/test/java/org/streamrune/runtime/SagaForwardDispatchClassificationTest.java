@@ -31,6 +31,7 @@ import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.LockException;
 import org.streamrune.core.OptimisticLockException;
+import org.streamrune.core.ReservedCorrelationIdException;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.CryptoMappingException;
@@ -559,6 +560,62 @@ class SagaForwardDispatchClassificationTest {
     mixed.failAlways("undo-2", () -> new EventStoreException("connection reset"));
     assertThat(compensate(mixed, "undo-1", "undo-2"))
         .as("a real attempt happened beside the refusal")
+        .isEqualTo(SagaCommandDispatch.CompensationOutcome.RETRY);
+  }
+
+  /**
+   * The command bus refused the correlation id it read bound under the saga's own dispatch ({@link
+   * ReservedCorrelationIdException}). Saga dispatch binds that id together with the saga's origin,
+   * so the refusal says that the bindings the bus read are not the ones the dispatch made: an
+   * invariant of the framework failed. Nothing was attempted and nothing about the business was
+   * decided, so the saga is left as it was and the event is delivered again.
+   */
+  @Test
+  void aRefusalOfTheDispatchsBindings_propagates_leavingTheSagaRunningAtItsLoadedVersion() {
+    assertForwardFailurePropagates(ReservedCorrelationIdException::new);
+  }
+
+  /** Recognized bare and anywhere in the cause chain, like every sibling marker. */
+  @Test
+  void isBindingRefusal_recognizesTheRefusalAnywhereInTheChain() {
+    assertThat(SagaCommandDispatch.isBindingRefusal(new ReservedCorrelationIdException())).isTrue();
+    assertThat(
+            SagaCommandDispatch.isBindingRefusal(
+                new RuntimeException("wrapped", new ReservedCorrelationIdException())))
+        .isTrue();
+    assertThat(SagaCommandDispatch.isBindingRefusal(new DomainException("no"))).isFalse();
+    assertThat(SagaCommandDispatch.isBindingRefusal(new IllegalArgumentException("bad"))).isFalse();
+    assertThat(SagaCommandDispatch.isRetryLater(new ReservedCorrelationIdException()))
+        .as("the forward classifier reads it as retry-later")
+        .isTrue();
+    assertThat(SagaCommandDispatch.isBindingRefusal(new SagaBindingsMismatchException()))
+        .as("bindings that name another saga than the dispatch's")
+        .isTrue();
+    assertThat(
+            SagaCommandDispatch.isBindingRefusal(
+                new RuntimeException("wrapped", new SagaBindingsMismatchException())))
+        .isTrue();
+    assertThat(SagaCommandDispatch.isRetryLater(new SagaBindingsMismatchException())).isTrue();
+    var a = new RuntimeException("a");
+    var b = new RuntimeException("b", a);
+    a.initCause(b);
+    assertThatCode(() -> SagaCommandDispatch.isBindingRefusal(a)).doesNotThrowAnyException();
+  }
+
+  /**
+   * On the compensation path the refusal is an attempted re-drive ({@code RETRY}): the episode
+   * stays {@code COMPENSATING}, it is never terminal {@code FAILED}, so the undo is not abandoned,
+   * and the compensation retry sweeper counts it toward its give-up horizon, so a refusal that
+   * persists faults the episode for an operator.
+   */
+  @Test
+  void compensationPath_aRefusalOfTheDispatchsBindings_isAnAttemptedRetry() {
+    var bus = new ScriptedBus();
+    bus.failAlways("undo-1", ReservedCorrelationIdException::new);
+    assertThat(compensate(bus, "undo-1")).isEqualTo(SagaCommandDispatch.CompensationOutcome.RETRY);
+    var mismatched = new ScriptedBus();
+    mismatched.failAlways("undo-1", SagaBindingsMismatchException::new);
+    assertThat(compensate(mismatched, "undo-1"))
         .isEqualTo(SagaCommandDispatch.CompensationOutcome.RETRY);
   }
 

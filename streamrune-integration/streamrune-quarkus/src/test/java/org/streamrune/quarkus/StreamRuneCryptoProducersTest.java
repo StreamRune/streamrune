@@ -110,7 +110,8 @@ class StreamRuneCryptoProducersTest {
             props(
                 Map.of(
                     "streamrune.crypto.filesystem.enabled", "true",
-                    "streamrune.crypto.filesystem.key-directory", "/var/lib/streamrune/keys")));
+                    "streamrune.crypto.filesystem.key-directory", "/var/lib/streamrune/keys")),
+            null);
     assertNotNull(engine);
     assertInstanceOf(CachedCryptoEngine.class, engine);
   }
@@ -123,7 +124,8 @@ class StreamRuneCryptoProducersTest {
             props(
                 Map.of(
                     "streamrune.crypto.filesystem.enabled", "true",
-                    "streamrune.crypto.cache.enabled", "false")));
+                    "streamrune.crypto.cache.enabled", "false")),
+            null);
     assertNotNull(engine);
     assertFalse(engine instanceof CachedCryptoEngine);
   }
@@ -137,7 +139,8 @@ class StreamRuneCryptoProducersTest {
                 Map.of(
                     "streamrune.crypto.filesystem.enabled", "true",
                     "streamrune.crypto.cache.expire-after-write", "PT30M",
-                    "streamrune.crypto.cache.expire-after-access", "PT10M")));
+                    "streamrune.crypto.cache.expire-after-access", "PT10M")),
+            null);
     assertNotNull(engine);
     assertInstanceOf(CachedCryptoEngine.class, engine);
   }
@@ -165,7 +168,7 @@ class StreamRuneCryptoProducersTest {
             .build()
             .getConfigMapping(StreamRuneQuarkusCryptoProperties.class);
     assertTrue(crypto.cache().expireAfterAccess().isEmpty());
-    var engine = producers.buildFileSystemCryptoEngine(mock(DataSource.class), crypto);
+    var engine = producers.buildFileSystemCryptoEngine(mock(DataSource.class), crypto, null);
     assertInstanceOf(CachedCryptoEngine.class, engine);
   }
 
@@ -176,7 +179,9 @@ class StreamRuneCryptoProducersTest {
     var ex =
         assertThrows(
             IllegalStateException.class,
-            () -> producers.buildFileSystemCryptoEngine(mock(DataSource.class), props(Map.of())));
+            () ->
+                producers.buildFileSystemCryptoEngine(
+                    mock(DataSource.class), props(Map.of()), null));
     assertTrue(ex.getMessage().contains("streamrune.crypto.filesystem.enabled"));
   }
 
@@ -186,7 +191,9 @@ class StreamRuneCryptoProducersTest {
   void postgresCryptoEngineBuilt() {
     var engine =
         producers.buildPostgresCryptoEngine(
-            mock(DataSource.class), props(Map.of("streamrune.crypto.postgres.enabled", "true")));
+            mock(DataSource.class),
+            props(Map.of("streamrune.crypto.postgres.enabled", "true")),
+            null);
     assertNotNull(engine);
     assertInstanceOf(CachedCryptoEngine.class, engine);
   }
@@ -196,7 +203,8 @@ class StreamRuneCryptoProducersTest {
     var ex =
         assertThrows(
             IllegalStateException.class,
-            () -> producers.buildPostgresCryptoEngine(mock(DataSource.class), props(Map.of())));
+            () ->
+                producers.buildPostgresCryptoEngine(mock(DataSource.class), props(Map.of()), null));
     assertTrue(ex.getMessage().contains("streamrune.crypto.postgres.enabled"));
   }
 
@@ -289,7 +297,8 @@ class StreamRuneCryptoProducersTest {
                     Map.of(
                         "streamrune.crypto.aws.region", "us-west-2",
                         "streamrune.crypto.aws.kms-key-id",
-                            "arn:aws:kms:us-west-2:123456789012:key/test-key-id"))));
+                            "arn:aws:kms:us-west-2:123456789012:key/test-key-id"))),
+            null);
     assertNotNull(engine);
     assertInstanceOf(CachedCryptoEngine.class, engine);
   }
@@ -304,7 +313,8 @@ class StreamRuneCryptoProducersTest {
                     Map.of(
                         "streamrune.crypto.aws.region", "us-west-2",
                         "streamrune.crypto.aws.kms-key-id", "key-1",
-                        "streamrune.crypto.cache.enabled", "false"))));
+                        "streamrune.crypto.cache.enabled", "false"))),
+            null);
     assertNotNull(engine);
     assertFalse(engine instanceof CachedCryptoEngine);
   }
@@ -315,7 +325,7 @@ class StreamRuneCryptoProducersTest {
     map.put("streamrune.crypto.aws.kms-key-id", "key-1");
     map.putAll(extra);
     return producers.buildAwsKmsCryptoEngine(
-        mock(KmsClient.class), mock(DataSource.class), props(awsEnabled(map)));
+        mock(KmsClient.class), mock(DataSource.class), props(awsEnabled(map)), null);
   }
 
   @Test
@@ -387,7 +397,8 @@ class StreamRuneCryptoProducersTest {
                         awsEnabled(
                             Map.of(
                                 "streamrune.crypto.aws.region", "us-west-2",
-                                "streamrune.crypto.aws.kms-key-id", "key-1")))));
+                                "streamrune.crypto.aws.kms-key-id", "key-1"))),
+                    null));
     assertTrue(ex.getMessage().contains("Failed to build AwsKmsCryptoEngine"));
     assertTrue(ex.getCause().getMessage().contains("ForgottenSubjectStore"));
     assertTrue(ex.getCause().getMessage().contains("durable GDPR erasure"));
@@ -401,7 +412,8 @@ class StreamRuneCryptoProducersTest {
             () ->
                 producers.buildAwsKmsCryptoEngine(
                     mock(DataSource.class),
-                    props(awsEnabled(Map.of("streamrune.crypto.aws.kms-key-id", "key-1")))));
+                    props(awsEnabled(Map.of("streamrune.crypto.aws.kms-key-id", "key-1"))),
+                    null));
     assertTrue(ex.getMessage().contains("streamrune.crypto.aws.region"));
   }
 
@@ -413,7 +425,8 @@ class StreamRuneCryptoProducersTest {
             () ->
                 producers.buildAwsKmsCryptoEngine(
                     mock(DataSource.class),
-                    props(awsEnabled(Map.of("streamrune.crypto.aws.region", "us-west-2")))));
+                    props(awsEnabled(Map.of("streamrune.crypto.aws.region", "us-west-2"))),
+                    null));
     assertTrue(ex.getMessage().contains("streamrune.crypto.aws.kms-key-id"));
   }
 
@@ -429,7 +442,8 @@ class StreamRuneCryptoProducersTest {
                         awsEnabled(
                             Map.of(
                                 "streamrune.crypto.aws.region", "us-west-2",
-                                "streamrune.crypto.aws.kms-key-id", "  ")))));
+                                "streamrune.crypto.aws.kms-key-id", "  "))),
+                    null));
     assertTrue(ex.getMessage().contains("streamrune.crypto.aws.kms-key-id"));
   }
 
@@ -444,7 +458,8 @@ class StreamRuneCryptoProducersTest {
                     props(
                         Map.of(
                             "streamrune.crypto.aws.region", "us-west-2",
-                            "streamrune.crypto.aws.kms-key-id", "key-1"))));
+                            "streamrune.crypto.aws.kms-key-id", "key-1")),
+                    null));
     assertTrue(ex.getMessage().contains("streamrune.crypto.aws.enabled"));
   }
 
@@ -565,5 +580,68 @@ class StreamRuneCryptoProducersTest {
         StreamRuneCryptoProducers.resolveForgetSignal(
             null, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "vault");
     assertSame(org.streamrune.crypto.CryptoForgetSignal.NOOP, signal);
+  }
+
+  @Test
+  void everyEngineIsBuiltWithTheMetricsBean() throws Exception {
+    var metrics = new org.streamrune.test.RecordingStreamRuneMetrics();
+    CryptoEngine fileSystem =
+        producers.buildFileSystemCryptoEngine(
+            null,
+            props(
+                Map.of(
+                    "streamrune.crypto.filesystem.enabled", "true",
+                    "streamrune.crypto.filesystem.key-directory",
+                        java.nio.file.Files.createTempDirectory("sr-keys-metrics").toString(),
+                    "streamrune.crypto.cache.enabled", "false")),
+            metrics);
+    assertCountsRetriedDecryptions(fileSystem, metrics);
+    assertSame(
+        metrics,
+        metricsOf(
+            producers.buildPostgresCryptoEngine(
+                mock(DataSource.class),
+                props(
+                    Map.of(
+                        "streamrune.crypto.postgres.enabled", "true",
+                        "streamrune.crypto.cache.enabled", "false")),
+                metrics)));
+    assertSame(
+        metrics,
+        metricsOf(
+            producers.buildAwsKmsCryptoEngine(
+                mock(KmsClient.class),
+                mock(DataSource.class),
+                props(
+                    awsEnabled(
+                        Map.of(
+                            "streamrune.crypto.aws.region", "us-west-2",
+                            "streamrune.crypto.aws.kms-key-id", "key-1",
+                            "streamrune.crypto.cache.enabled", "false"))),
+                metrics)));
+  }
+
+  /** The metrics collector an engine was built with (a private field, read for the test). */
+  private static Object metricsOf(Object engine) throws ReflectiveOperationException {
+    java.lang.reflect.Field field = engine.getClass().getDeclaredField("metrics");
+    field.setAccessible(true);
+    return field.get(engine);
+  }
+
+  /** A decryption of an altered value is retried once, and the failed retry is counted. */
+  private static void assertCountsRetriedDecryptions(
+      CryptoEngine engine, org.streamrune.test.RecordingStreamRuneMetrics metrics) {
+    var subject = org.streamrune.core.types.SubjectId.of("metrics-subject");
+    byte[] blob = engine.encrypt(subject, "x".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    blob[blob.length - 1] ^= 0x01;
+    assertThrows(
+        org.streamrune.core.crypto.CryptoMappingException.class,
+        () -> engine.decrypt(subject, blob));
+    assertEquals(
+        1,
+        metrics.count(
+            org.streamrune.core.metrics.MetricNames.CRYPTO_DECRYPT_RETRIED,
+            org.streamrune.core.metrics.MetricNames.TAG_OUTCOME,
+            "FAILED"));
   }
 }

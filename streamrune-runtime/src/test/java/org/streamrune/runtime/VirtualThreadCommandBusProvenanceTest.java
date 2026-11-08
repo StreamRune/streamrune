@@ -311,8 +311,77 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
                           ScopedValue.where(StreamRuneContext.CURRENT, reservedContext())
                               .run(() -> guarded.bus().execute(new Mark("refused-4")))));
 
-      assertEquals(List.of("WARN Refusing command Mark: " + REFUSAL), warnings);
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertEquals(
+          "WARN Refusing command Mark: "
+              + REFUSAL
+              + ". Read bound on thread "
+              + Thread.currentThread().getName()
+              + ": a request context, no dispatch cause, not a saga's dispatch",
+          warnings.getFirst());
       assertTrue(warnings.getFirst().indexOf("victim") < 0, "the bound value is not logged");
+    }
+  }
+
+  /**
+   * Under a saga's dispatch the line names the sagas the dispatch read: the cause's origin and the
+   * bound correlation id, which saga dispatch binds together. A context of another saga bound over
+   * the dispatch's own shows as a correlation id of that saga beside a cause of this one.
+   */
+  @Test
+  void aRefusalUnderASagasDispatch_namesTheSagaOfEveryBindingItRead() {
+    var cause = new StreamRuneContext.DispatchCause(CausationId.of("evt-1"), ORIGIN);
+    var anotherSagas =
+        new StreamRuneContext.RequestContext(
+            null,
+            null,
+            org.streamrune.core.saga.SagaOrigin.dispatchedBy(
+                    ORIGIN.sagaType(), org.streamrune.core.saga.SagaId.of("another-saga"))
+                .correlationId(),
+            Instant.now(),
+            Map.of());
+    var key = org.streamrune.core.types.IdempotencyKey.of("saga:k:1:0");
+
+    try (Guarded guarded = Guarded.create()) {
+      var thrown = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+      List<String> warnings =
+          warningsOfTheBus(
+              () -> {
+                Thread poll =
+                    Thread.ofVirtual()
+                        .name("saga-poll")
+                        .start(
+                            () -> {
+                              try {
+                                ScopedValue.where(StreamRuneContext.CURRENT, anotherSagas)
+                                    .where(StreamRuneContext.SAGA_OWNED, Boolean.TRUE)
+                                    .where(StreamRuneContext.CAUSE, cause)
+                                    .where(
+                                        StreamRuneContext.SAGA_FORWARD,
+                                        new StreamRuneContext.SagaForward(ORIGIN, key))
+                                    .run(() -> guarded.bus().execute(new Mark("refused-5")));
+                              } catch (RuntimeException e) {
+                                thrown.set(e);
+                              }
+                            });
+                try {
+                  poll.join();
+                } catch (InterruptedException e) {
+                  Thread.currentThread().interrupt();
+                  throw new IllegalStateException(e);
+                }
+              });
+
+      assertInstanceOf(ReservedCorrelationIdException.class, thrown.get());
+      assertEquals(
+          List.of(
+              "WARN Refusing command Mark: "
+                  + REFUSAL
+                  + ". Read bound on virtual thread saga-poll: a request context, a dispatch cause"
+                  + " of saga "
+                  + ORIGIN.sagaId().value()
+                  + ", a saga's dispatch, a correlation id of saga another-saga"),
+          warnings);
     }
   }
 

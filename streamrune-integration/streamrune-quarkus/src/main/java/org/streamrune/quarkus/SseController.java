@@ -7,6 +7,7 @@ import io.smallrye.common.annotation.Blocking;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.subscription.BackPressureStrategy;
 import io.smallrye.mutiny.subscription.MultiEmitter;
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
@@ -268,6 +269,9 @@ public class SseController {
    */
   private volatile boolean shuttingDown;
 
+  /** Releases the install {@link #quietClientDisconnects()} made; nothing until it runs. */
+  private volatile Runnable loudClientDisconnects = () -> {};
+
   /** One open stream and the lock that serializes the writes to it. */
   private record OpenStream(
       MultiEmitter<? super OutboundSseEvent> emitter, ReentrantLock sendLock) {}
@@ -528,6 +532,22 @@ public class SseController {
     if (keepAlive != null) {
       keepAlive.shutdownNow();
     }
+    loudClientDisconnects.run();
+  }
+
+  /**
+   * Logs a client that closed its connection at {@code DEBUG}: installs {@link
+   * SseClientDisconnectLogFilter} on the logger of Quarkus REST's publisher response handler, which
+   * logs a frame it cannot write to a closed connection at {@code ERROR}. A client that goes away
+   * makes the next frame fail so whenever that frame is already on its way, and the stream ends as
+   * on every other end. {@link #shutdown()} releases the install; the filter goes with the last
+   * release. The filter applies to every streaming endpoint of the application, since the logger is
+   * Quarkus REST's. Public, as the module's lifecycle callbacks are: the container calls it from
+   * the bean class it generates.
+   */
+  @PostConstruct
+  public void quietClientDisconnects() {
+    loudClientDisconnects = SseClientDisconnectLogFilter.install();
   }
 
   /** Test seam: exposes the shared scheduler so a test can inspect its delay queue. */

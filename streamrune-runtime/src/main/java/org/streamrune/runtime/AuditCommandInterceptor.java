@@ -78,13 +78,8 @@ public final class AuditCommandInterceptor implements CommandInterceptor {
 
   @Override
   public boolean before(CommandContext ctx) {
-    UserId userId = null;
-    if (StreamRuneContext.CURRENT.isBound()) {
-      StreamRuneContext.RequestContext requestCtx = StreamRuneContext.CURRENT.get();
-      if (requestCtx != null) {
-        userId = requestCtx.userId();
-      }
-    }
+    StreamRuneContext.RequestContext requestCtx = StreamRuneContext.capture();
+    UserId userId = requestCtx != null ? requestCtx.userId() : null;
     // The id the command bus writes into the events of this command: the bound saga origin's when
     // an origin is bound, otherwise the bound context's, otherwise the one the bus generated for
     // this dispatch. The row and the events agree.

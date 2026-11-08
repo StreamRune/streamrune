@@ -68,6 +68,12 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
 
   private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
 
+  /**
+   * The connections the pool of {@link #withDedicatedPool} keeps open while no command holds a
+   * lock, or its maximum when that is smaller.
+   */
+  static final int DEDICATED_POOL_MINIMUM_IDLE = 2;
+
   private final DataSource dataSource;
 
   /**
@@ -96,6 +102,13 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    * <p>The returned locker <em>owns</em> the pool and must be {@link #close() closed} to release
    * it. The pool reports to no metrics tracker; {@link #withDedicatedPool(String, String, String,
    * int, MetricsTrackerFactory)} takes one.
+   *
+   * <p><b>Idle connections.</b> While no command holds a lock the pool keeps two connections open
+   * ({@code maxPoolSize} when that is smaller), and it opens the others when commands hold locks at
+   * once, up to {@code maxPoolSize}. A connection beyond the two that stays idle for HikariCP's
+   * idle timeout, ten minutes, is closed. So a replica that runs no command holds two connections
+   * of PostgreSQL's {@code max_connections} for its locks, and a replica under load the connections
+   * its commands hold plus up to two idle ones, at most {@code maxPoolSize}.
    *
    * @param jdbcUrl the JDBC URL of the same database the event store uses (required)
    * @param username the database username (may be null if encoded in the URL)
@@ -147,6 +160,9 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
       config.setPassword(password);
     }
     config.setMaximumPoolSize(maxPoolSize);
+    // Idle, the pool holds a couple of connections, not its maximum: every replica holds its lock
+    // pool's idle connections of PostgreSQL's max_connections whether it writes or not.
+    config.setMinimumIdle(Math.min(DEDICATED_POOL_MINIMUM_IDLE, maxPoolSize));
     config.setPoolName("streamrune-advisory-lock");
     // Fail fast instead of queueing forever if the dedicated pool is itself exhausted.
     config.setConnectionTimeout(10_000);
@@ -157,6 +173,14 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
     }
     var pool = new HikariDataSource(config);
     return new PgAdvisoryLocker(pool, pool);
+  }
+
+  /** The minimum idle connections of the pool this locker owns; for the tests of this package. */
+  int dedicatedPoolMinimumIdle() {
+    if (ownedPool == null) {
+      throw new IllegalStateException("this locker owns no pool");
+    }
+    return ownedPool.getMinimumIdle();
   }
 
   /**

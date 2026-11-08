@@ -72,7 +72,8 @@ public record StreamRuneProperties(
     @DefaultValue Metadata metadata,
     @DefaultValue Security security,
     @DefaultValue Sse sse,
-    @DefaultValue Gdpr gdpr) {
+    @DefaultValue Gdpr gdpr,
+    @DefaultValue Jvm jvm) {
 
   /**
    * @param enabled whether {@link org.streamrune.runtime.CachingQueryBus} is auto-configured
@@ -272,6 +273,16 @@ public record StreamRuneProperties(
    *     refuses startup.
    */
   public record Security(@DefaultValue("false") boolean trustUserIdHeader) {}
+
+  /**
+   * @param allowGraalJit {@code true} starts the application on a JVM the startup check refuses —
+   *     one that runs the Graal JIT, which is not reliable with StreamRune on JDK 25 (run GraalVM
+   *     with {@code -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler} instead), or a GraalVM
+   *     runtime whose options the check cannot read — with one {@code ERROR} line, at the
+   *     application's own risk. Defaults to {@code false}: such a JVM refuses to start ({@code
+   *     GraalJitGuard}).
+   */
+  public record Jvm(@DefaultValue("false") boolean allowGraalJit) {}
 
   /**
    * @param enabled whether the auto-registered {@code GET /api/sse/{aggregateType}/{aggregateId}}

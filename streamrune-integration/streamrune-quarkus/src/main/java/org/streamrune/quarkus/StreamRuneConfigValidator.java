@@ -144,6 +144,10 @@ public class StreamRuneConfigValidator {
   // separate class that may live in a different classloader.
   public void validate(
       @Observes @Priority(Interceptor.Priority.LIBRARY_BEFORE) StartupEvent event) {
+    // Every application, also one that builds its own command bus: a JVM that runs the Graal JIT,
+    // which is not reliable with StreamRune, refuses to start (the bus builder runs the same
+    // check).
+    org.streamrune.runtime.GraalJitGuard.check(properties.jvm().allowGraalJit());
     if (properties.snapshotEveryNEvents() <= 0) {
       throw new IllegalStateException(
           "streamrune.snapshot-every-n-events must be > 0, got: "

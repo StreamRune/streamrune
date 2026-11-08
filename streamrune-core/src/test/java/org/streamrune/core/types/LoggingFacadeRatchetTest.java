@@ -38,7 +38,11 @@ class LoggingFacadeRatchetTest {
       java.util.Map.of(
           "streamrune-integration/streamrune-integration-tck/src/main/java/org/streamrune/integration/tck/RecordingDataSource.java",
           "a javax.sql.DataSource declares getParentLogger(), whose type is"
-              + " java.util.logging.Logger; the test-support data source logs nothing");
+              + " java.util.logging.Logger; the test-support data source logs nothing",
+          "streamrune-integration/streamrune-quarkus/src/main/java/org/streamrune/quarkus/SseClientDisconnectLogFilter.java",
+          "Quarkus logs through JBoss LogManager, a java.util.logging implementation, and a filter"
+              + " on the logger of Quarkus REST is a java.util.logging.Filter; it logs through"
+              + " SLF4J");
 
   private static final List<Pattern> FORBIDDEN =
       List.of(

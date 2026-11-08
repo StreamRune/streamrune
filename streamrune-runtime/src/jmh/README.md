@@ -35,7 +35,7 @@ framework's landed performance work.
 | --- | --- | --- |
 | A. Upcast payload re-bind: `writeValueAsString` + `readValue` vs `convertValue` | 7497 → 2092 ns/op (~3.6x) | **Landed** in `PostgresEventStore.toEnvelope` |
 | B. Cache-key hash: `MessageDigest.getInstance("SHA-256")` per call vs a reused digest | no measurable win | **Hypothesis killed** — `getInstance` is cheap; the digest itself dominates |
-| C. AES/GCM `Cipher.getInstance` per encrypt vs a thread-local reused `Cipher` | 11781 → 3148 ns/op (~3.7x) | **Landed** in `FileSystemCryptoEngine` + `PostgresCryptoEngine` |
+| C. AES/GCM `Cipher.getInstance` per encrypt vs a thread-local reused `Cipher` | 1330 → 341 ns/op (~3.9x) | **Not used** — the crypto engines take a fresh `Cipher` for every encryption, check and decryption attempt: a reused cipher carries its state from one operation to the next, and a fresh one confines a fault to the one operation the encryption check or the decryption retry catches. The engines pay about one microsecond per operation for that |
 | D. Id RNG under 8 threads: shared `SecureRandom` vs thread-local `SecureRandom` vs `ThreadLocalRandom` | thread-local `SecureRandom` did not help | **Hypothesis refined** — `SecureRandom` is slow from entropy work, not lock contention; only a non-cryptographic RNG helps |
 
 Candidate D's result is why `IdGenerator` moved to `ThreadLocalRandom`: ids are

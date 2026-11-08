@@ -145,6 +145,9 @@ public interface StreamRuneQuarkusProperties {
   /** Security configuration, {@code streamrune.security.*} (authorization-identity source). */
   SecurityConfig security();
 
+  /** JVM configuration, {@code streamrune.jvm.*}. */
+  JvmConfig jvm();
+
   /** Server-Sent Events configuration, {@code streamrune.sse.*}. */
   SseConfig sse();
 
@@ -430,6 +433,20 @@ public interface StreamRuneQuarkusProperties {
      */
     @WithDefault("false")
     boolean trustUserIdHeader();
+  }
+
+  /** JVM section, {@code streamrune.jvm.*}. */
+  interface JvmConfig {
+
+    /**
+     * {@code true} starts the application on a JVM the startup check refuses — one that runs the
+     * Graal JIT, which is not reliable with StreamRune on JDK 25 (run GraalVM with {@code
+     * -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler} instead), or a GraalVM runtime whose
+     * options the check cannot read — with one {@code ERROR} line, at the application's own risk.
+     * Defaults to {@code false}: such a JVM refuses to start ({@code GraalJitGuard}).
+     */
+    @WithDefault("false")
+    boolean allowGraalJit();
   }
 
   /** Server-Sent Events section, {@code streamrune.sse.*}. */
