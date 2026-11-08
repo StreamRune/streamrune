@@ -46,8 +46,7 @@ public final class Authorization {
    * no context is bound or no user is set.
    */
   public static UserId currentUserId() {
-    if (!StreamRuneContext.CURRENT.isBound()) return null;
-    var ctx = StreamRuneContext.CURRENT.get();
+    var ctx = StreamRuneContext.capture();
     return ctx != null ? ctx.userId() : null;
   }
 

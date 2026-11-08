@@ -603,6 +603,7 @@ public class StreamRuneAutoConfiguration {
 
     var builder =
         VirtualThreadCommandBus.builder()
+            .allowGraalJit(properties.jvm().allowGraalJit())
             .eventStore(eventStore)
             .locker(locker)
             .retryPolicy(retryPolicy)

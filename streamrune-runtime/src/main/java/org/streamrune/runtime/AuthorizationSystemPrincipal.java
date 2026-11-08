@@ -4,6 +4,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.streamrune.core.CommandInterceptor.CommandContext;
+import org.streamrune.core.ScopedValueReads;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.LogSanitizer;
 
@@ -86,7 +87,7 @@ final class AuthorizationSystemPrincipal {
 
   /** Whether this execution replays an existing dead-letter entry. */
   static boolean dlqReplay() {
-    return isBoundTrue(VirtualThreadCommandBus.DLQ_REPLAY);
+    return Boolean.TRUE.equals(ScopedValueReads.valueOrNull(VirtualThreadCommandBus.DLQ_REPLAY));
   }
 
   /** Records a saga-principal skip: WARN once per command type per process, DEBUG thereafter. */
@@ -105,10 +106,5 @@ final class AuthorizationSystemPrincipal {
           type.getName(),
           Kind.SAGA);
     }
-  }
-
-  /** Whether {@code flag} is bound to {@code TRUE} on the current thread. */
-  private static boolean isBoundTrue(ScopedValue<Boolean> flag) {
-    return flag.isBound() && Boolean.TRUE.equals(flag.get());
   }
 }

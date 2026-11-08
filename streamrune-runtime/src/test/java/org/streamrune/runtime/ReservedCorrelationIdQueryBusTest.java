@@ -271,6 +271,11 @@ class ReservedCorrelationIdQueryBusTest {
 
     assertThat(appender.list)
         .extracting(event -> event.getLevel() + " " + event.getFormattedMessage())
-        .containsExactly("WARN Refusing query FindOrder: " + REFUSAL);
+        .containsExactly(
+            "WARN Refusing query FindOrder: "
+                + REFUSAL
+                + ". Read bound on thread "
+                + Thread.currentThread().getName()
+                + ": a request context, no dispatch cause, not a saga's dispatch");
   }
 }

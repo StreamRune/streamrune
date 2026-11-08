@@ -5,6 +5,7 @@ import java.util.function.Supplier;
 import org.streamrune.core.Query;
 import org.streamrune.core.QueryBus;
 import org.streamrune.core.QueryHandler;
+import org.streamrune.core.ScopedValueReads;
 import org.streamrune.core.StreamRuneContext;
 
 /**
@@ -47,7 +48,7 @@ public final class UnboundRequestContextQueryBus implements QueryBus {
 
   @Override
   public <R> R dispatch(Query<R> query) {
-    if (StreamRuneContext.CURRENT.isBound()) {
+    if (ScopedValueReads.isBound(StreamRuneContext.CURRENT)) {
       return delegate.dispatch(query);
     }
     StreamRuneContext.RequestContext context = unboundRequestContext.get();

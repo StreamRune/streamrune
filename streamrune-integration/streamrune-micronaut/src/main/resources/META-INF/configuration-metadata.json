@@ -253,6 +253,12 @@
       "defaultValue": "1s"
     },
     {
+      "name": "streamrune.jvm.allow-graal-jit",
+      "type": "java.lang.Boolean",
+      "description": "Start on a JVM the startup check refuses: one that runs the Graal JIT, which is not reliable with StreamRune on JDK 25 (run GraalVM with -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler instead), or a GraalVM runtime whose compiler options the check cannot read (without the module jdk.management). It starts with one ERROR line, at the application's own risk. When false (the default) such a JVM refuses to start.",
+      "defaultValue": false
+    },
+    {
       "name": "streamrune.security.trust-user-id-header",
       "type": "java.lang.Boolean",
       "description": "Trusted-gateway mode: when true, the request filter and the SSE endpoint take the authorization identity (RequestContext.userId) from the X-User-Id header, even when Micronaut Security is present. Enable it only when a gateway in front of the service authenticates every caller, overwrites X-User-Id with the authenticated id and strips any client-supplied value, and the service is reachable only through that gateway; otherwise any client can act as any user. When false, the identity is the authenticated principal if an AuthenticatedUserResolver is available (Micronaut Security enabled), and otherwise every request is anonymous and the header is ignored; in that anonymous mode a configured CommandAuthorizationPolicy or UserRoleResolver refuses startup",

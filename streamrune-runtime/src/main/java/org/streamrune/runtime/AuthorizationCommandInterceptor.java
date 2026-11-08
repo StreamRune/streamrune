@@ -93,13 +93,8 @@ public final class AuthorizationCommandInterceptor implements CommandInterceptor
       systemPrincipal.recordSagaSkip(ctx);
       return true;
     }
-    UserId userId = null;
-    if (StreamRuneContext.CURRENT.isBound()) {
-      StreamRuneContext.RequestContext requestCtx = StreamRuneContext.CURRENT.get();
-      if (requestCtx != null) {
-        userId = requestCtx.userId();
-      }
-    }
+    StreamRuneContext.RequestContext requestCtx = StreamRuneContext.capture();
+    UserId userId = requestCtx != null ? requestCtx.userId() : null;
     policy.authorize(userId, ctx.command());
     return true;
   }
