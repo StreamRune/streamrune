@@ -441,7 +441,7 @@ Instead, treat a subscription that keeps failing as **degraded but still running
 
 > **Single-active-consumer is enforced for projections, the command dead-letter retry runner and the saga compensation retry sweeper, and for an event subscription built with a lease (`.lease(...)`, `.leadership(...)` or `.sagaRunner(runner)`). A saga's subscription joins them when its runner carries a lease (`SagaRunner.Builder.leadership(...)`), and then its timeout runner and its sweeper follow it. Other event subscriptions are not gated, and a saga's correctness does not rest on a single consumer either way (see [Multi-replica deployment](#multi-replica-deployment)).**
 
-Polling interval: `pollingIntervalMs` default 5000ms. For near-real-time delivery, use `HybridEventSubscription` rather than reducing below 1000ms.
+Polling interval: `streamrune.polling-interval`, default `5s`. For near-real-time delivery, use `HybridEventSubscription` rather than reducing it below `1s`.
 
 Jitter: keep at 20–30% of polling interval.
 

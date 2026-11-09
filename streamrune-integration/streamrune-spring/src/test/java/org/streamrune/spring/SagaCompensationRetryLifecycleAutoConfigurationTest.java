@@ -250,10 +250,10 @@ class SagaCompensationRetryLifecycleAutoConfigurationTest {
                   new StreamRuneProperties(
                       properties.snapshotEveryNEvents(),
                       properties.retryMaxAttempts(),
-                      properties.retryInitialDelayMs(),
+                      properties.retryInitialDelay(),
                       properties.retryBackoffMultiplier(),
-                      properties.pollingIntervalMs(),
-                      properties.pollingJitterMs(),
+                      properties.pollingInterval(),
+                      properties.pollingJitter(),
                       properties.lockTimeout(),
                       properties.stripeCount(),
                       properties.maxInFlightAsyncCommands(),

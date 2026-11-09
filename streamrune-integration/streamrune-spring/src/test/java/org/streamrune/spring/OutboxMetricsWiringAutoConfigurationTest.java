@@ -41,7 +41,7 @@ class OutboxMetricsWiringAutoConfigurationTest {
           .withBean(OutboxPublisher.class, () -> (OutboxPublisher) entry -> {})
           // Keep the auto-started poller idle for the test's lifetime.
           .withPropertyValues(
-              "streamrune.outbox.enabled=true", "streamrune.outbox.flush-interval-ms=3600000");
+              "streamrune.outbox.enabled=true", "streamrune.outbox.flush-interval=1h");
 
   @Test
   void autoConfiguredPollerCarriesTheMicrometerMetricsBean() {
@@ -73,8 +73,8 @@ class OutboxMetricsWiringAutoConfigurationTest {
     runner
         .withPropertyValues(
             "streamrune.outbox.retry-max-attempts=7",
-            "streamrune.outbox.retry-initial-delay-ms=250",
-            "streamrune.outbox.retry-multiplier=3.0")
+            "streamrune.outbox.retry-initial-delay=250ms",
+            "streamrune.outbox.retry-backoff-multiplier=3.0")
         .run(
             ctx -> {
               RetryPolicy rp = retryPolicyOf(ctx.getBean(OutboxPoller.class));
@@ -97,8 +97,7 @@ class OutboxMetricsWiringAutoConfigurationTest {
         .withBean(DataSource.class, () -> mock(DataSource.class))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean(OutboxPublisher.class, () -> (OutboxPublisher) entry -> {})
-        .withPropertyValues(
-            "streamrune.outbox.enabled=true", "streamrune.outbox.flush-interval-ms=3600000")
+        .withPropertyValues("streamrune.outbox.enabled=true", "streamrune.outbox.flush-interval=1h")
         .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
         .withBean(PostgresOutboxStore.class, () -> new PostgresOutboxStore(mock(DataSource.class)))
         .withPropertyValues("streamrune.outbox.skipped-retention-max-age=45d")

@@ -677,7 +677,7 @@ public class StreamRuneMicronautModule {
     var retryPolicy =
         new RetryPolicy(
             properties.retryMaxAttempts(),
-            java.time.Duration.ofMillis(properties.retryInitialDelayMs()),
+            properties.retryInitialDelay(),
             properties.retryBackoffMultiplier());
 
     // Micronaut injects the interceptor List in an unspecified order. Sort it into the
@@ -744,7 +744,7 @@ public class StreamRuneMicronautModule {
       StreamRuneMicronautProperties properties) {
     return new org.streamrune.core.DeadLetterRetryPolicy(
         properties.deadLetterMaxRetries(),
-        java.time.Duration.ofMillis(properties.deadLetterRetryIntervalMs()),
+        properties.deadLetterRetryInterval(),
         2.0,
         false,
         org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(
@@ -1371,7 +1371,7 @@ public class StreamRuneMicronautModule {
             // The window the inbox retention sweeper prunes with: a keyed entry older than it is
             // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
             .inboxRetentionMaxAge(properties.inboxRetentionMaxAge())
-            .pollInterval(java.time.Duration.ofMillis(properties.deadLetterRetryIntervalMs()))
+            .pollInterval(properties.deadLetterRetryInterval())
             // Metrics bean (MicrometerStreamRuneMetrics when present) so retry-exhaustion emits
             // streamrune.dlq.exhausted + a terminal ERROR log under the default policy; NOOP when
             // absent (behavior unchanged).
@@ -1455,13 +1455,13 @@ public class StreamRuneMicronautModule {
             .outboxStore(store)
             .publisher(publisher)
             .batchSize(properties.outboxBatchSize())
-            .pollInterval(java.time.Duration.ofMillis(properties.outboxFlushIntervalMs()))
+            .pollInterval(properties.outboxFlushInterval())
             // Expose the retry ladder; transport failures are non-counting regardless.
             .retryPolicy(
                 new org.streamrune.core.RetryPolicy(
                     properties.outboxRetryMaxAttempts(),
-                    java.time.Duration.ofMillis(properties.outboxRetryInitialDelayMs()),
-                    properties.outboxRetryMultiplier()))
+                    properties.outboxRetryInitialDelay(),
+                    properties.outboxRetryBackoffMultiplier()))
             .metrics(metrics != null ? metrics : org.streamrune.core.StreamRuneMetrics.NOOP)
             .build();
     // Register for relay liveness health so /health degrades if the relay thread dies.

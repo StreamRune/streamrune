@@ -55,10 +55,10 @@
       "defaultValue": 3
     },
     {
-      "name": "streamrune.retry-initial-delay-ms",
-      "type": "java.lang.Long",
-      "description": "Initial delay in milliseconds between retry attempts",
-      "defaultValue": 50
+      "name": "streamrune.retry-initial-delay",
+      "type": "java.time.Duration",
+      "description": "Initial delay between retry attempts",
+      "defaultValue": "50ms"
     },
     {
       "name": "streamrune.retry-backoff-multiplier",
@@ -67,16 +67,16 @@
       "defaultValue": 2.0
     },
     {
-      "name": "streamrune.polling-interval-ms",
-      "type": "java.lang.Long",
-      "description": "Subscription polling interval in milliseconds",
-      "defaultValue": 5000
+      "name": "streamrune.polling-interval",
+      "type": "java.time.Duration",
+      "description": "Subscription polling interval",
+      "defaultValue": "5s"
     },
     {
-      "name": "streamrune.polling-jitter-ms",
-      "type": "java.lang.Long",
-      "description": "Random jitter added to polling interval in milliseconds",
-      "defaultValue": 1000
+      "name": "streamrune.polling-jitter",
+      "type": "java.time.Duration",
+      "description": "Random jitter added to polling interval",
+      "defaultValue": "1s"
     },
     {
       "name": "streamrune.lock-timeout",
@@ -145,10 +145,10 @@
       "defaultValue": 100
     },
     {
-      "name": "streamrune.outbox.flush-interval-ms",
-      "type": "java.lang.Long",
-      "description": "Outbox polling interval in milliseconds",
-      "defaultValue": 5000
+      "name": "streamrune.outbox.flush-interval",
+      "type": "java.time.Duration",
+      "description": "Interval between two polls of the outbox relay",
+      "defaultValue": "5s"
     },
     {
       "name": "streamrune.outbox.skipped-retention-max-age",
@@ -169,10 +169,10 @@
       "defaultValue": 5
     },
     {
-      "name": "streamrune.dead-letter.retry-interval-ms",
-      "type": "java.lang.Long",
-      "description": "Interval between dead letter retry attempts in milliseconds",
-      "defaultValue": 60000
+      "name": "streamrune.dead-letter.retry-interval",
+      "type": "java.time.Duration",
+      "description": "Interval between dead letter retry attempts",
+      "defaultValue": "1m"
     },
     {
       "name": "streamrune.dead-letter.retention-max-age",
@@ -392,10 +392,10 @@
       "defaultValue": "7d"
     },
     {
-      "name": "streamrune.outbox.retry-initial-delay-ms",
-      "type": "java.lang.Long",
-      "description": "First retry delay, in milliseconds; it grows by the multiplier, up to 60s.",
-      "defaultValue": 1000
+      "name": "streamrune.outbox.retry-initial-delay",
+      "type": "java.time.Duration",
+      "description": "First retry delay; it grows by the multiplier, up to 60s.",
+      "defaultValue": "1s"
     },
     {
       "name": "streamrune.outbox.retry-max-attempts",
@@ -404,7 +404,7 @@
       "defaultValue": 10
     },
     {
-      "name": "streamrune.outbox.retry-multiplier",
+      "name": "streamrune.outbox.retry-backoff-multiplier",
       "type": "java.lang.Double",
       "description": "Factor by which the retry delay grows with each attempt.",
       "defaultValue": 2.0

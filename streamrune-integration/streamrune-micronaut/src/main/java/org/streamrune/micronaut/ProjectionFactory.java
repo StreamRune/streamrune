@@ -11,7 +11,6 @@ import io.micronaut.context.env.Environment;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -159,16 +158,13 @@ public class ProjectionFactory {
       throw new IllegalStateException("No enabled CONTINUOUS projections found");
     }
 
-    // streamrune.polling-interval-ms / polling-jitter-ms drive the catch-up polling cadence of each
+    // streamrune.polling-interval / polling-jitter drive the catch-up polling cadence of each
     // projection's event subscription. listenNotifyEnabled=true only takes effect if a
     // HybridEventSubscription is wired via a subscription factory; the default
     // MultiProjectionRunner path builds a PollingEventSubscription, which has no LISTEN/NOTIFY
     // push, so the flag is dormant there. Same wiring as the Spring and Quarkus integrations.
     var subscriptionConfig =
-        new SubscriptionConfig(
-            true,
-            Duration.ofMillis(properties.pollingIntervalMs()),
-            Duration.ofMillis(properties.pollingJitterMs()));
+        new SubscriptionConfig(true, properties.pollingInterval(), properties.pollingJitter());
 
     var builder =
         MultiProjectionRunner.builder()

@@ -80,8 +80,8 @@ class ProjectionAutoConfigTest {
         .withUserConfiguration(ContinuousBean.class)
         .withPropertyValues(
             "streamrune.projections.auto-discovery.enabled=true",
-            "streamrune.polling-interval-ms=123",
-            "streamrune.polling-jitter-ms=45")
+            "streamrune.polling-interval=123ms",
+            "streamrune.polling-jitter=PT0.045S")
         .run(
             ctx -> {
               var mpr = ctx.getBean(MultiProjectionRunner.class);

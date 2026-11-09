@@ -251,8 +251,8 @@ Because an in-flight failure **holds the claim**, a sustained post-hand-off outa
 | Property | Default | Notes |
 |---|---|---|
 | `streamrune.outbox.retry-max-attempts` | `10` | Per-entry attempts before terminal `FAILED` |
-| `streamrune.outbox.retry-initial-delay-ms` | `1000` | Initial backoff (ms); grows by the multiplier, capped at 60s — for a transport outage it is also the first (fast) retry before the cadence escalates |
-| `streamrune.outbox.retry-multiplier` | `2.0` | Exponential backoff multiplier |
+| `streamrune.outbox.retry-initial-delay` | `1s` | Initial backoff; grows by the multiplier, capped at 60s — for a transport outage it is also the first (fast) retry before the cadence escalates |
+| `streamrune.outbox.retry-backoff-multiplier` | `2.0` | Exponential backoff multiplier |
 
 ### Sizing the claim lease
 

@@ -558,7 +558,7 @@ public class StreamRuneAutoConfiguration {
     var retryPolicy =
         new RetryPolicy(
             properties.retryMaxAttempts(),
-            java.time.Duration.ofMillis(properties.retryInitialDelayMs()),
+            properties.retryInitialDelay(),
             properties.retryBackoffMultiplier());
 
     // Normalize the chain the same way Quarkus and Micronaut do. Spring's own
@@ -650,7 +650,7 @@ public class StreamRuneAutoConfiguration {
       StreamRuneProperties properties) {
     return new org.streamrune.core.DeadLetterRetryPolicy(
         properties.deadLetter().maxRetries(),
-        java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()),
+        properties.deadLetter().retryInterval(),
         2.0,
         false,
         properties.deadLetter().unkeyedReplayPolicy());
@@ -1343,7 +1343,7 @@ public class StreamRuneAutoConfiguration {
             // The window the inbox retention sweeper prunes with: a keyed entry older than it is
             // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
             .inboxRetentionMaxAge(properties.inbox().retentionMaxAge())
-            .pollInterval(java.time.Duration.ofMillis(properties.deadLetter().retryIntervalMs()));
+            .pollInterval(properties.deadLetter().retryInterval());
 
     registrationProvider
         .orderedStream()
@@ -1480,14 +1480,14 @@ public class StreamRuneAutoConfiguration {
             .outboxStore(outboxStore)
             .publisher(publisher)
             .batchSize(properties.outbox().batchSize())
-            .pollInterval(java.time.Duration.ofMillis(properties.outbox().flushIntervalMs()))
+            .pollInterval(properties.outbox().flushInterval())
             // Expose the retry ladder so an operator can widen it; transport failures are
             // non-counting regardless (see OutboxPoller.recordFailure).
             .retryPolicy(
                 new RetryPolicy(
                     properties.outbox().retryMaxAttempts(),
-                    java.time.Duration.ofMillis(properties.outbox().retryInitialDelayMs()),
-                    properties.outbox().retryMultiplier()))
+                    properties.outbox().retryInitialDelay(),
+                    properties.outbox().retryBackoffMultiplier()))
             .metrics(
                 metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP))
             .build();

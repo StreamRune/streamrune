@@ -14,10 +14,10 @@ class StreamRuneMicronautPropertiesTest {
     var p = StreamRuneMicronautProperties.withDefaults();
     assertEquals(100, p.snapshotEveryNEvents());
     assertEquals(3, p.retryMaxAttempts());
-    assertEquals(50L, p.retryInitialDelayMs());
+    assertEquals(Duration.ofMillis(50), p.retryInitialDelay());
     assertEquals(2.0, p.retryBackoffMultiplier());
-    assertEquals(5000L, p.pollingIntervalMs());
-    assertEquals(1000L, p.pollingJitterMs());
+    assertEquals(Duration.ofSeconds(5), p.pollingInterval());
+    assertEquals(Duration.ofSeconds(1), p.pollingJitter());
     assertEquals(Duration.ofSeconds(5), p.lockTimeout());
     assertEquals(1024, p.stripeCount());
     assertEquals(5, p.circuitBreakerFailureThreshold());
@@ -100,10 +100,10 @@ class StreamRuneMicronautPropertiesTest {
         new StreamRuneMicronautProperties(
             10,
             1,
-            1L,
+            Duration.ofMillis(1),
             1.0,
-            100L,
-            10L,
+            Duration.ofMillis(100),
+            Duration.ofMillis(10),
             Duration.ofMillis(500),
             8,
             10_000,
@@ -115,10 +115,10 @@ class StreamRuneMicronautPropertiesTest {
             Duration.ofDays(60),
             false,
             100,
-            5000L,
+            Duration.ofSeconds(5),
             true,
             5,
-            60000L,
+            Duration.ofMinutes(1),
             Duration.ofDays(45),
             true,
             "streamrune",
@@ -131,7 +131,7 @@ class StreamRuneMicronautPropertiesTest {
             Duration.ofDays(90),
             "false",
             15,
-            2000L,
+            Duration.ofSeconds(2),
             3.5,
             Duration.ofSeconds(20),
             Duration.ofMinutes(5),
@@ -145,10 +145,10 @@ class StreamRuneMicronautPropertiesTest {
             "operator-only");
     assertEquals(10, p.snapshotEveryNEvents());
     assertEquals(1, p.retryMaxAttempts());
-    assertEquals(1L, p.retryInitialDelayMs());
+    assertEquals(Duration.ofMillis(1), p.retryInitialDelay());
     assertEquals(1.0, p.retryBackoffMultiplier());
-    assertEquals(100L, p.pollingIntervalMs());
-    assertEquals(10L, p.pollingJitterMs());
+    assertEquals(Duration.ofMillis(100), p.pollingInterval());
+    assertEquals(Duration.ofMillis(10), p.pollingJitter());
     assertEquals(Duration.ofMillis(500), p.lockTimeout());
     assertEquals(8, p.stripeCount());
     assertEquals(3, p.circuitBreakerFailureThreshold());
@@ -162,9 +162,39 @@ class StreamRuneMicronautPropertiesTest {
     assertEquals(Duration.ofDays(90), p.outboxSkippedRetentionMaxAge());
     assertEquals("false", p.subscriptionSingleActiveConsumerEnabled());
     assertEquals(15, p.outboxRetryMaxAttempts());
-    assertEquals(2000L, p.outboxRetryInitialDelayMs());
-    assertEquals(3.5, p.outboxRetryMultiplier());
+    assertEquals(Duration.ofSeconds(2), p.outboxRetryInitialDelay());
+    assertEquals(3.5, p.outboxRetryBackoffMultiplier());
     assertEquals(Duration.ofSeconds(20), p.subscriptionLeaseTtl());
+  }
+
+  /**
+   * The six interval keys are durations: each binds from the short form the configuration reference
+   * writes ({@code 5s}) and from ISO-8601 ({@code PT5S}) alike, through a started context.
+   */
+  @Test
+  void theIntervalKeysBindTheShortFormAndIso8601() {
+    for (String value : new String[] {"5s", "PT5S"}) {
+      try (var ctx =
+          io.micronaut.context.ApplicationContext.run(
+              java.util.Map.of(
+                  "streamrune.retry-initial-delay", value,
+                  "streamrune.polling-interval", value,
+                  "streamrune.polling-jitter", value,
+                  "streamrune.dead-letter.retry-interval", value,
+                  "streamrune.outbox.flush-interval", value,
+                  "streamrune.outbox.retry-initial-delay", value,
+                  "streamrune.outbox.retry-backoff-multiplier", "2.5"))) {
+        var p = ctx.getBean(StreamRuneMicronautProperties.class);
+        Duration five = Duration.ofSeconds(5);
+        assertEquals(five, p.retryInitialDelay(), value);
+        assertEquals(five, p.pollingInterval(), value);
+        assertEquals(five, p.pollingJitter(), value);
+        assertEquals(five, p.deadLetterRetryInterval(), value);
+        assertEquals(five, p.outboxFlushInterval(), value);
+        assertEquals(five, p.outboxRetryInitialDelay(), value);
+        assertEquals(2.5, p.outboxRetryBackoffMultiplier(), value);
+      }
+    }
   }
 
   @Test
