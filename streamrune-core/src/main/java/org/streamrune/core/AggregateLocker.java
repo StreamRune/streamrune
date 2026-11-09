@@ -57,8 +57,10 @@ public interface AggregateLocker {
   /**
    * The finest lock timeout the framework can express. Every wait bound in the lock path is a whole
    * number of milliseconds, so this is a property of the contract rather than of any one backend.
+   *
+   * @hidden
    */
-  int MIN_TIMEOUT_MILLIS = 1;
+  @Internal int MIN_TIMEOUT_MILLIS = 1;
 
   /**
    * Enforces the timeout contract above. One rule in one place, called by every implementation at
@@ -77,7 +79,9 @@ public interface AggregateLocker {
    *     "streamrune.lock-timeout"}) at boot, {@code "lock timeout"} at acquire time
    * @throws IllegalArgumentException if {@code timeout} is negative, or positive and shorter than
    *     {@value #MIN_TIMEOUT_MILLIS} ms
+   * @hidden
    */
+  @Internal
   static void requireValidTimeout(Duration timeout, String name) {
     if (timeout == null) {
       return;

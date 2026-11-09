@@ -1,5 +1,7 @@
 package org.streamrune.integration;
 
+import org.streamrune.core.Internal;
+
 /**
  * The messages the three framework integrations refuse startup with when {@code
  * streamrune.outbox.enabled=true} has nothing to store or relay the outbox, in one place so the
@@ -10,7 +12,10 @@ package org.streamrune.integration;
  * OutboxEventMapper} and a {@code PostgresOutboxStore} are declared, whatever the property says, so
  * an application whose entries an external relay reads (change data capture on the outbox table)
  * runs with the property off.
+ *
+ * @hidden
  */
+@Internal
 public final class OutboxWiringMessages {
 
   private static final String EXTERNAL_RELAY =

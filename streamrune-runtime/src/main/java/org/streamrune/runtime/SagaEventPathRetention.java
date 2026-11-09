@@ -2,6 +2,7 @@ package org.streamrune.runtime;
 
 import java.time.Duration;
 import java.util.Collection;
+import org.streamrune.core.Internal;
 
 /**
  * Supplies {@code streamrune.inbox.retention-max-age} to the <b>event path's</b> key-age guard on
@@ -30,7 +31,10 @@ import java.util.Collection;
  * <p>Lives in {@code org.streamrune.runtime} for the same reason {@link SagaStateCryptoValidation}
  * does: it needs {@link SagaRunner}'s package-private state, and the three integration modules call
  * a small public entry point.
+ *
+ * @hidden
  */
+@Internal
 public final class SagaEventPathRetention {
 
   private SagaEventPathRetention() {}

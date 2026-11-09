@@ -2,6 +2,7 @@ package org.streamrune.core.projection;
 
 import java.util.List;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.Internal;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
@@ -330,7 +331,10 @@ public interface AtomicBatchProcessor {
    * damage site: the read-model write happens inside {@code projectionUpdater.update}, so a
    * processor that shrugged off the epoch would apply a superseded leader's batch before any guard
    * could run.
+   *
+   * @hidden
    */
+  @Internal
   final class NonAtomicAtLeastOnce implements AtomicBatchProcessor {
 
     private static final NonAtomicAtLeastOnce INSTANCE = new NonAtomicAtLeastOnce();

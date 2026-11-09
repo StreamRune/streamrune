@@ -24,7 +24,10 @@ import java.util.TreeMap;
  * <b>any</b> step is missing before the expected version is reached, or a step would overshoot the
  * expected version, it returns {@link Optional#empty()} — the snapshot is unmigratable and the
  * caller must discard it and replay from events. A partial chain is never applied.
+ *
+ * @hidden
  */
+@Internal
 public final class SnapshotMigrationChain {
 
   private static final SnapshotMigrationChain EMPTY = new SnapshotMigrationChain(Map.of());

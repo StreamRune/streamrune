@@ -259,12 +259,13 @@ public class ProjectionAutoConfig {
   }
 
   /**
-   * Runs innermost in the command interceptor chain (see the {@code ORDER_*} constants on {@link
-   * StreamRuneAutoConfiguration}): {@code after()} executes in reverse order, so inline projections
-   * are applied first once events are committed.
+   * Runs innermost in the command interceptor chain (see the {@code ORDER_*} constants of {@link
+   * org.streamrune.runtime.CommandInterceptorOrdering}): {@code after()} executes in reverse order,
+   * so inline projections are applied first once events are committed.
    */
   @Bean
-  @org.springframework.core.annotation.Order(StreamRuneAutoConfiguration.ORDER_INLINE_PROJECTION)
+  @org.springframework.core.annotation.Order(
+      org.streamrune.runtime.CommandInterceptorOrdering.ORDER_INLINE_PROJECTION)
   @ConditionalOnMissingBean
   public InlineProjectionInterceptor streamRuneInlineProjectionInterceptor(
       ApplicationContext ctx, Environment env, ObjectProvider<StreamRuneMetrics> metricsProvider) {

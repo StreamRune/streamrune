@@ -1,6 +1,7 @@
 package org.streamrune.integration;
 
 import java.util.List;
+import org.streamrune.core.Internal;
 
 /**
  * The refusal the three integrations share when an application declares two or more {@code
@@ -12,7 +13,10 @@ import java.util.List;
  * fall back to the always-leading {@code NOOP}, so every replica would lead. Spring and Quarkus
  * throw the exception built here; Micronaut's container already refuses the non-unique bean at the
  * injection point.
+ *
+ * @hidden
  */
+@Internal
 public final class SubscriptionLeadershipResolution {
 
   private SubscriptionLeadershipResolution() {}

@@ -3,6 +3,7 @@ package org.streamrune.integration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import org.streamrune.core.Internal;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.subscription.SubscriptionLeadership;
@@ -18,7 +19,10 @@ import org.streamrune.core.types.LogSanitizer;
  * <p>The INLINE rule lives here too: an INLINE projection runs post-commit on the command thread
  * with no checkpoint and no transaction of its own, so it can only keep the {@link
  * ProjectionDeliveryMode#AT_LEAST_ONCE_IDEMPOTENT} promise.
+ *
+ * @hidden
  */
+@Internal
 public final class ProjectionProcessorResolution {
 
   private ProjectionProcessorResolution() {}

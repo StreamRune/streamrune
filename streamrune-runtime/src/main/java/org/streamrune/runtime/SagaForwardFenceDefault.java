@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import java.util.Collection;
+import org.streamrune.core.Internal;
 
 /**
  * Supplies a deployment's default for the forward fence ({@link
@@ -20,7 +21,10 @@ import java.util.Collection;
  * <p>Lives in {@code org.streamrune.runtime} for the same reason {@link SagaEventPathRetention}
  * does: it needs {@link SagaRunner}'s package-private state, and the integration modules call a
  * small public entry point.
+ *
+ * @hidden
  */
+@Internal
 public final class SagaForwardFenceDefault {
 
   private SagaForwardFenceDefault() {}

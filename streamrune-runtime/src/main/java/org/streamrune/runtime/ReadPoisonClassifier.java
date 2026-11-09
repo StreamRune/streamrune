@@ -5,6 +5,7 @@ import java.io.UncheckedIOException;
 import java.sql.SQLException;
 import org.streamrune.core.EventDeserializationException;
 import org.streamrune.core.EventSchemaAheadException;
+import org.streamrune.core.Internal;
 import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
@@ -72,7 +73,10 @@ import org.streamrune.core.crypto.SubjectForgottenException;
  * use; keeping it package-private is what left {@code PostgresNotificationSubscription} — a public,
  * documented production subscription — unable to comply, retrying a deterministic poison forever
  * while the projection reported healthy.
+ *
+ * @hidden
  */
+@Internal
 public final class ReadPoisonClassifier {
 
   private ReadPoisonClassifier() {}

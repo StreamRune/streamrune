@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Set;
 import org.streamrune.core.AuthorizationAnnotations;
 import org.streamrune.core.CommandInterceptor;
+import org.streamrune.core.Internal;
 import org.streamrune.core.RequirePermission;
 import org.streamrune.core.RequireRole;
 import org.streamrune.core.SealedHierarchy;
@@ -33,7 +34,10 @@ import org.streamrune.core.UserRoleResolver;
  * registered type or seal the hierarchy to get startup validation. A sealed type whose permitted
  * subclasses cannot be read — what a GraalVM native image reports for a sealed type not registered
  * for reflection — is refused with an {@link IllegalStateException} (see {@link SealedHierarchy}).
+ *
+ * @hidden
  */
+@Internal
 public final class AuthorizationConfigurationValidator {
 
   private AuthorizationConfigurationValidator() {}

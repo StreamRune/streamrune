@@ -47,6 +47,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.Internal;
 import org.streamrune.core.LockException;
 import org.streamrune.core.NoDeciderException;
 import org.streamrune.core.OptimisticLockException;
@@ -90,8 +91,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * execute(...)}: while bound, a failing execution is NOT published to the DLQ again — the retry
    * infrastructure already tracks attempts on the original entry, and republishing would create a
    * new entry on every retry cycle (unbounded entry multiplication).
+   *
+   * <p>Bound by the runtime only; application code does not bind it.
+   *
+   * @hidden
    */
-  public static final ScopedValue<Boolean> DLQ_REPLAY = ScopedValue.newInstance();
+  @Internal public static final ScopedValue<Boolean> DLQ_REPLAY = ScopedValue.newInstance();
 
   /**
    * Default {@link Builder#dlqEligible(Predicate)}: excludes permanent rejections — {@link

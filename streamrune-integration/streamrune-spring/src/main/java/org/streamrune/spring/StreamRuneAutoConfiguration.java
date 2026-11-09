@@ -103,44 +103,14 @@ public class StreamRuneAutoConfiguration {
 
   private static final Logger LOG = LoggerFactory.getLogger(StreamRuneAutoConfiguration.class);
 
-  // Interceptor chain order. The command bus calls before() in ascending order and
-  // after()/onError() in reverse (see CommandInterceptor's lifecycle contract). Values leave
-  // gaps so user interceptors can slot between framework ones with @Order; user interceptors
-  // without an explicit order default to Ordered.LOWEST_PRECEDENCE and run innermost.
-  //
-  // These mirror org.streamrune.runtime.CommandInterceptorOrdering — the single source of truth
-  // shared with the Quarkus and Micronaut integrations (which sort their container-assembled chain
-  // by it), so all three frameworks run the identical, security-relevant order. Referencing the
-  // shared constants (rather than restating literals) keeps them from drifting apart.
-
-  /** Outermost interceptor: the OTel span covers the whole pipeline, including rejections. */
-  public static final int ORDER_OPEN_TELEMETRY = CommandInterceptorOrdering.ORDER_OPEN_TELEMETRY;
-
-  /** Audits every command attempt, including ones later rejected by authorization/validation. */
-  public static final int ORDER_AUDIT = CommandInterceptorOrdering.ORDER_AUDIT;
-
-  /** Policy-based authorization gate ({@link CommandAuthorizationPolicy}). */
-  public static final int ORDER_AUTHORIZATION = CommandInterceptorOrdering.ORDER_AUTHORIZATION;
-
-  /** Annotation-based ({@code @RequireRole}/{@code @RequirePermission}) authorization gate. */
-  public static final int ORDER_ANNOTATION_AUTHORIZATION =
-      CommandInterceptorOrdering.ORDER_ANNOTATION_AUTHORIZATION;
-
-  /** Bean Validation runs after authorization so unauthorized callers cannot probe validation. */
-  public static final int ORDER_VALIDATION = CommandInterceptorOrdering.ORDER_VALIDATION;
-
-  /**
-   * Innermost gate: registered after authorization/validation so the breaker counts only command
-   * execution failures, never client rejections.
-   */
-  public static final int ORDER_CIRCUIT_BREAKER = CommandInterceptorOrdering.ORDER_CIRCUIT_BREAKER;
-
-  /**
-   * Innermost interceptor: {@code after()} runs in reverse order, so inline projections are applied
-   * first once events are committed.
-   */
-  public static final int ORDER_INLINE_PROJECTION =
-      CommandInterceptorOrdering.ORDER_INLINE_PROJECTION;
+  // Interceptor chain order: the interceptor beans below carry
+  // @Order(CommandInterceptorOrdering.*),
+  // the single source of truth shared with the Quarkus and Micronaut integrations (which sort their
+  // container-assembled chain by it), so all three frameworks run the identical,
+  // security-relevant order. The command bus calls before() in ascending order and
+  // after()/onError() in reverse (see CommandInterceptor's lifecycle contract). Values leave gaps
+  // so user interceptors can slot between framework ones with @Order; user interceptors without an
+  // explicit order default to Ordered.LOWEST_PRECEDENCE and run innermost.
 
   /**
    * Servlet filter-chain order for {@link ScopedValueFilter}: <em>after</em> Spring Security's
@@ -519,9 +489,9 @@ public class StreamRuneAutoConfiguration {
    * command and event metrics are actually recorded.
    *
    * <p><b>Interceptor ordering:</b> auto-registered interceptors carry explicit {@link Order}
-   * values (the {@code ORDER_*} constants on this class), so the chain is deterministic:
-   * OpenTelemetry → Audit → Authorization → AnnotationAuthorization → BeanValidation →
-   * CircuitBreaker → InlineProjection. {@code before()} runs in that order; {@code after()} and
+   * values (the {@code ORDER_*} constants of {@link CommandInterceptorOrdering}), so the chain is
+   * deterministic: OpenTelemetry → Audit → Authorization → AnnotationAuthorization → BeanValidation
+   * → CircuitBreaker → InlineProjection. {@code before()} runs in that order; {@code after()} and
    * {@code onError()} in reverse. User interceptors without {@code @Order} run innermost (after all
    * framework interceptors); declare {@code @Order} on the bean to slot in between.
    *
@@ -906,7 +876,7 @@ public class StreamRuneAutoConfiguration {
 
     /** Registers the OTel command interceptor when an OpenTelemetry bean is available. */
     @Bean
-    @Order(ORDER_OPEN_TELEMETRY)
+    @Order(CommandInterceptorOrdering.ORDER_OPEN_TELEMETRY)
     @ConditionalOnBean(io.opentelemetry.api.OpenTelemetry.class)
     @ConditionalOnMissingBean(OpenTelemetryCommandInterceptor.class)
     public OpenTelemetryCommandInterceptor openTelemetryCommandInterceptor(
@@ -995,7 +965,7 @@ public class StreamRuneAutoConfiguration {
      * validation deserves a visible signal on every framework.
      */
     @Bean
-    @Order(ORDER_VALIDATION)
+    @Order(CommandInterceptorOrdering.ORDER_VALIDATION)
     @ConditionalOnMissingBean(BeanValidationInterceptor.class)
     @ConditionalOnProperty(
         name = "streamrune.validation-enabled",
@@ -1043,7 +1013,7 @@ public class StreamRuneAutoConfiguration {
 
   /** Registers a circuit breaker interceptor with configured failure threshold and cooldown. */
   @Bean
-  @Order(ORDER_CIRCUIT_BREAKER)
+  @Order(CommandInterceptorOrdering.ORDER_CIRCUIT_BREAKER)
   @ConditionalOnMissingBean(CircuitBreakerCommandInterceptor.class)
   public CircuitBreakerCommandInterceptor circuitBreakerCommandInterceptor(
       StreamRuneProperties properties) {
@@ -1056,7 +1026,7 @@ public class StreamRuneAutoConfiguration {
    * CommandAuthorizationPolicy} bean.
    */
   @Bean
-  @Order(ORDER_AUTHORIZATION)
+  @Order(CommandInterceptorOrdering.ORDER_AUTHORIZATION)
   @ConditionalOnBean(CommandAuthorizationPolicy.class)
   @ConditionalOnMissingBean(AuthorizationCommandInterceptor.class)
   public AuthorizationCommandInterceptor authorizationCommandInterceptor(
@@ -1088,7 +1058,7 @@ public class StreamRuneAutoConfiguration {
    * in explicitly by defining a {@code CachingUserRoleResolver} bean wrapping their resolver.
    */
   @Bean
-  @Order(ORDER_ANNOTATION_AUTHORIZATION)
+  @Order(CommandInterceptorOrdering.ORDER_ANNOTATION_AUTHORIZATION)
   @ConditionalOnBean(UserRoleResolver.class)
   @ConditionalOnMissingBean(AnnotationAuthorizationInterceptor.class)
   public AnnotationAuthorizationInterceptor annotationAuthorizationInterceptor(
@@ -1267,7 +1237,7 @@ public class StreamRuneAutoConfiguration {
 
   /** Registers an audit interceptor when an AuditStore bean is available. */
   @Bean
-  @Order(ORDER_AUDIT)
+  @Order(CommandInterceptorOrdering.ORDER_AUDIT)
   @ConditionalOnBean(AuditStore.class)
   @ConditionalOnMissingBean(AuditCommandInterceptor.class)
   public AuditCommandInterceptor auditCommandInterceptor(AuditStore auditStore) {

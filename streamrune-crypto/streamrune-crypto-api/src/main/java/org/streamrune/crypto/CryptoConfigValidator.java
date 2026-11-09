@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.Internal;
 import org.streamrune.core.SealedHierarchy;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.Encrypted;
@@ -31,7 +32,10 @@ import org.streamrune.core.crypto.Encrypted;
  *
  * <p>This is a startup-time guard only: it does not change serialization behavior. When a {@link
  * CryptoEngine} is configured, the guard passes and {@link CryptoShreddingModule} owns encryption.
+ *
+ * @hidden
  */
+@Internal
 public final class CryptoConfigValidator {
 
   private static final Logger log = LoggerFactory.getLogger(CryptoConfigValidator.class);

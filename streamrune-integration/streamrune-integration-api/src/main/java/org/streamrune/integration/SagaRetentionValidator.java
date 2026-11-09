@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.Internal;
 
 /**
  * Validates the effectively-once-compensation invariant across the framework auto-configs: the saga
@@ -35,7 +36,10 @@ import org.slf4j.LoggerFactory;
  * compensation — the {@code SagaCompensationRetrySweeper}'s key-age guard, wired with {@code
  * streamrune.inbox.retention-max-age}, faults an episode that outlives the inbox retention window
  * instead of re-driving it. The WARN makes the misconfiguration impossible to miss in the logs.
+ *
+ * @hidden
  */
+@Internal
 public final class SagaRetentionValidator {
 
   private static final Logger LOG = LoggerFactory.getLogger(SagaRetentionValidator.class);

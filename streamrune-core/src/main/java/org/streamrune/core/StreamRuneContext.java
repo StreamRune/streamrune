@@ -20,10 +20,16 @@ import org.streamrune.core.types.UserId;
  * implementation supports synchronous processing. Future versions will add reactive context
  * propagation when needed.
  *
- * <p><b>Reading the bindings.</b> {@link #capture()}, {@link #cause()}, {@link #isSagaDispatch()}
- * and {@link #sagaForwardOf} read the bindings through {@link ScopedValueReads}, the one place the
- * framework reads a scoped value, and answer {@code null} or {@code false} where nothing is bound.
- * Application code reads them through these methods too.
+ * <p><b>Reading the bindings.</b> {@link #capture()}, {@link #cause()} and {@link
+ * #isSagaDispatch()} read the bindings through one helper, the one place the framework reads a
+ * scoped value, and answer {@code null} or {@code false} where nothing is bound. Application code
+ * reads them through these methods too.
+ *
+ * <p><b>Who binds what.</b> Applications bind {@link #CURRENT} (the integrations' request filters
+ * do it for them) and bind a dispatch cause only through {@link #continuing(EventEnvelope)}. The
+ * runtime binds {@link #SAGA_OWNED} and {@link #CAUSE} around a saga's commands. The members marked
+ * {@link Internal} are the protocol the runtime shares with the event stores; they are not part of
+ * the public API.
  */
 public final class StreamRuneContext {
 
@@ -52,6 +58,10 @@ public final class StreamRuneContext {
    * Authorization#requireOwnerOrSaga} admits it and {@link Authorization#requireOwner} denies it.
    * Domain code reads it through {@link #isSagaDispatch()}; only the saga dispatch path binds it.
    *
+   * <p><b>Bound by the runtime.</b> Application code reads it through {@link #isSagaDispatch()} and
+   * does not bind it in production: binding it to {@code TRUE} runs a command with the authority of
+   * the saga system principal. A test that exercises domain code under saga dispatch may bind it.
+   *
    * <p>It states authority and dead-letter suppression, nothing else. Which saga caused a dispatch
    * is stated by {@link #CAUSE}.
    */
@@ -71,6 +81,12 @@ public final class StreamRuneContext {
    */
   public record DispatchCause(CausationId causationId, SagaOrigin sagaOrigin) {
 
+    /**
+     * Creates a cause; the runtime and {@link #continuing(EventEnvelope)} create them.
+     *
+     * @hidden
+     */
+    @Internal
     public DispatchCause {
       if (causationId == null && sagaOrigin == null) {
         throw new IllegalArgumentException(
@@ -92,8 +108,9 @@ public final class StreamRuneContext {
    * dead letter queue. Whoever bound the cause retries the command: the saga subsystem for a saga's
    * dispatch, the listener's subscription for a continuation.
    *
-   * <p>Application code reads it through {@link #cause()} and binds it only through {@link
-   * #continuing(EventEnvelope)}.
+   * <p><b>Bound by the runtime.</b> Application code reads it through {@link #cause()} and binds it
+   * only through {@link #continuing(EventEnvelope)}; the constructor of {@link DispatchCause} is
+   * {@link Internal}.
    */
   public static final ScopedValue<DispatchCause> CAUSE = ScopedValue.newInstance();
 
@@ -109,10 +126,13 @@ public final class StreamRuneContext {
 
   /**
    * A saga's forward command in dispatch: the saga, and the idempotency key of that one command.
+   * Part of the protocol between the runtime's saga dispatch and the event stores.
    *
    * @param origin the saga whose forward command is dispatched
    * @param key the idempotency key the command is executed under
+   * @hidden
    */
+  @Internal
   public record SagaForward(SagaOrigin origin, IdempotencyKey key) {
 
     public SagaForward {
@@ -137,8 +157,10 @@ public final class StreamRuneContext {
    * values itself, leaves the marker behind on the dispatching thread: the event store then
    * receives no saga to fence, and the runner's wiring check cannot see it. A decorator in front of
    * a fencing bus calls it on the calling thread.
+   *
+   * @hidden
    */
-  public static final ScopedValue<SagaForward> SAGA_FORWARD = ScopedValue.newInstance();
+  @Internal public static final ScopedValue<SagaForward> SAGA_FORWARD = ScopedValue.newInstance();
 
   /**
    * The saga to fence the keyed append of {@code key} against, or {@code null}: answers only for
@@ -148,7 +170,9 @@ public final class StreamRuneContext {
    * @return the bound {@link SagaForward#origin()} when {@link #SAGA_FORWARD} is bound to a value
    *     whose key equals {@code key}; {@code null} when {@code key} is {@code null}, nothing (or
    *     {@code null}) is bound, or the bound marker names another key
+   * @hidden
    */
+  @Internal
   public static SagaOrigin sagaForwardOf(IdempotencyKey key) {
     if (key == null) {
       return null;

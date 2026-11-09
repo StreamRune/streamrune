@@ -1,5 +1,6 @@
 package org.streamrune.integration;
 
+import org.streamrune.core.Internal;
 import org.streamrune.core.types.LogSanitizer;
 
 /**
@@ -13,7 +14,10 @@ import org.streamrune.core.types.LogSanitizer;
  * quotes it. Names therefore pass through {@link LogSanitizer#sanitizeForLog(String)} and free
  * configuration text through {@link LogSanitizer#sanitizeFreeText(String)}; the messages stay
  * readable for any ordinary name.
+ *
+ * @hidden
  */
+@Internal
 public final class ProjectionDiscoveryMessages {
 
   private ProjectionDiscoveryMessages() {}

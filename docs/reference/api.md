@@ -6,7 +6,9 @@ parameters and return values), and **extension points** (interfaces you optional
 snapshotting, schema migration, interception, and subscriptions). The runtime entry-point is the
 `StreamRune` facade in `streamrune-runtime`, which wires everything together through a fluent
 builder. Persistence is provided by `streamrune-postgres` (`PostgresEventStore` /
-`PostgresEventStoreFactory`).
+`PostgresEventStoreFactory`). Types and members marked `@Internal` are public only because another
+StreamRune module uses them and are not part of the public API; see
+[API stability](../../README.md#api-stability).
 
 ## Section 1: Overview
 
