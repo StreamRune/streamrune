@@ -14,7 +14,8 @@ A default is written in one form in this guide and in every other table with a `
 - a duration as the shortest exact one of `Nd`, `Nh`, `Nm`, `Ns` and `Nms`: `7d`, `1m`, `30s`,
   `500ms`. All three integrations accept that form as it is, and ISO-8601 (`PT168H` for `7d`,
   `PT60S` for `1m`, `PT0.05S` for `50ms`) as well. A bare number is not portable — Spring reads
-  `5000` as milliseconds, Quarkus as seconds — so always write the unit;
+  `5000` as milliseconds, Quarkus as seconds, and Micronaut refuses to start on it — so always
+  write the unit;
 - a boolean or a number as its value: `true`, `100`, `2.0`; a text as it is: `operator-only`;
 - `—` where the property has no default.
 
