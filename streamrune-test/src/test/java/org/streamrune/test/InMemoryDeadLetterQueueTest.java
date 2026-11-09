@@ -127,7 +127,7 @@ class InMemoryDeadLetterQueueTest {
     queue.publish(keyedRequest("cmd-other", "k-2"));
     queue.publish(request("cmd-unkeyed", "Cmd"));
     clock.advance(Duration.ofSeconds(1));
-    queue.publish(keyedRequest("cmd-b", "k-1"));
+    queue.publish(keyedRequest("cmd-b", "k-1", "s2"));
 
     assertEquals(
         java.util.List.of(CommandId.of("cmd-a"), CommandId.of("cmd-b")),
@@ -138,12 +138,66 @@ class InMemoryDeadLetterQueueTest {
     assertThrows(NullPointerException.class, () -> queue.findByIdempotencyKey(null));
   }
 
+  @Test
+  void aKeyedRequestForACommandHeldUnderTheKey_storesNothing_butAnotherCommandUnderItIsStored() {
+    var queue = new InMemoryDeadLetterQueue();
+    queue.publish(keyedRequest("cmd-first", "k-1"));
+
+    queue.publish(keyedRequest("cmd-again", "k-1"));
+    queue.publish(keyedRequest("cmd-other-stream", "k-1", "s2"));
+    queue.publish(request("cmd-unkeyed-1", "Keyed"));
+    queue.publish(request("cmd-unkeyed-2", "Keyed"));
+
+    assertEquals(
+        java.util.Set.of(
+            CommandId.of("cmd-first"),
+            CommandId.of("cmd-other-stream"),
+            CommandId.of("cmd-unkeyed-1"),
+            CommandId.of("cmd-unkeyed-2")),
+        queue.all().stream()
+            .map(DeadLetterQueue.DeadLetterEntry::commandId)
+            .collect(java.util.stream.Collectors.toSet()));
+  }
+
+  @Test
+  void twoConcurrentKeyedRequestsForOneCommand_storeOneEntry() throws Exception {
+    for (int round = 0; round < 50; round++) {
+      var queue = new InMemoryDeadLetterQueue();
+      var start = new java.util.concurrent.CyclicBarrier(2);
+      int r = round;
+      try (var threads = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+        var a =
+            threads.submit(
+                () -> {
+                  start.await();
+                  queue.publish(keyedRequest("a-" + r, "k-race"));
+                  return null;
+                });
+        var b =
+            threads.submit(
+                () -> {
+                  start.await();
+                  queue.publish(keyedRequest("b-" + r, "k-race"));
+                  return null;
+                });
+        a.get();
+        b.get();
+      }
+      assertEquals(1, queue.all().size(), "round " + round);
+    }
+  }
+
   private DeadLetterQueue.DeadLetterPublishRequest keyedRequest(String id, String key) {
+    return keyedRequest(id, key, "s1");
+  }
+
+  private DeadLetterQueue.DeadLetterPublishRequest keyedRequest(
+      String id, String key, String stream) {
     return new DeadLetterQueue.DeadLetterPublishRequest(
         "{}",
         "Keyed",
         CommandId.of(id),
-        StreamId.of(TYPE, AggregateId.of("s1")),
+        StreamId.of(TYPE, AggregateId.of(stream)),
         "Err",
         "msg",
         1,

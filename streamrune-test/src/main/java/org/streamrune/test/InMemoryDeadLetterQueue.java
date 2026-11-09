@@ -39,6 +39,11 @@ import org.streamrune.core.types.IdempotencyKey;
  * document the concurrent gap here. See {@link InMemoryOutboxStore} for a store whose production
  * counterpart <em>does</em> persist claims and which therefore models them.
  *
+ * <p><b>One entry per command under a key</b>, as {@link DeadLetterQueue#publish} requires of a
+ * queue that looks entries up by key: a keyed request for a command — its type and its stream —
+ * this queue already holds under the key stores nothing. Publishing is serialized, so two
+ * concurrent such requests store one entry, as the production unique index does.
+ *
  * <p>Use {@link #all()} in assertions to inspect all stored entries directly.
  */
 public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
@@ -57,8 +62,17 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
   }
 
   @Override
-  public void publish(DeadLetterPublishRequest request) {
+  public synchronized void publish(DeadLetterPublishRequest request) {
     Objects.requireNonNull(request, "request is required");
+    if (request.idempotencyKey() != null
+        && entries.stream()
+            .anyMatch(
+                e ->
+                    request.idempotencyKey().equals(e.idempotencyKey())
+                        && request.commandType().equals(e.commandType())
+                        && Objects.equals(request.streamId(), e.streamId()))) {
+      return;
+    }
     entries.add(
         new DeadLetterEntry(
             request.commandId(),

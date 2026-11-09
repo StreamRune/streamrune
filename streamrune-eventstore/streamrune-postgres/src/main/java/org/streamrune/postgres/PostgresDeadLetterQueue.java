@@ -46,7 +46,9 @@ import org.streamrune.core.types.UserId;
  *         CHECK (aggregate_type ~ '^[a-z][a-z0-9_]{0,31}$')
  * );
  * CREATE INDEX idx_dlq_published_at ON dead_letter_queue (published_at DESC);
- * CREATE INDEX idx_dlq_idempotency_key ON dead_letter_queue (idempotency_key)
+ * CREATE UNIQUE INDEX idx_dlq_idempotency_key
+ *     ON dead_letter_queue (idempotency_key, command_type, aggregate_type, aggregate_id)
+ *     NULLS NOT DISTINCT
  *     WHERE idempotency_key IS NOT NULL;
  * </pre>
  *
@@ -62,6 +64,13 @@ import org.streamrune.core.types.UserId;
  * (events produced exactly once). Commands that ran unkeyed store null and are replayed under the
  * synthetic key. {@link #findByIdempotencyKey(IdempotencyKey)} reads the entries stored under a key
  * through the partial index on the column.
+ *
+ * <p><b>One entry per command under a key.</b> That index is unique over the key, the command type
+ * and the stream, and {@link #publish} inserts with {@code ON CONFLICT DO NOTHING} on it: a keyed
+ * request for a command the table already holds under the key stores nothing, also when two
+ * replicas publish it at the same moment. The caller finds the entry that holds the command with
+ * {@link #findByIdempotencyKey}. A duplicate {@code command_id} is still refused by the primary
+ * key.
  */
 public final class PostgresDeadLetterQueue implements DeadLetterQueue {
 
@@ -70,7 +79,12 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
           + "(command_id, command_type, payload, aggregate_type, aggregate_id, "
           + "error_type, error_message, attempts, first_attempt_at, published_at, "
           + "correlation_id, user_id, trace_id, idempotency_key) "
-          + "VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?)";
+          + "VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?) "
+          // The arbiter is the unique partial index idx_dlq_idempotency_key only: a keyed request
+          // for a command already stored under the key inserts nothing, while a duplicate
+          // command_id still fails on the primary key.
+          + "ON CONFLICT (idempotency_key, command_type, aggregate_type, aggregate_id) "
+          + "WHERE idempotency_key IS NOT NULL DO NOTHING";
 
   private static final String SELECT =
       "SELECT command_id, command_type, payload, aggregate_type, aggregate_id, "
@@ -87,8 +101,8 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
           + "dlq_attempts, last_attempt_at, correlation_id, user_id, trace_id, idempotency_key "
           + "FROM dead_letter_queue WHERE command_id = ?";
 
-  // Served by the partial index idx_dlq_idempotency_key: a point lookup on the failure path of
-  // every keyed command the bus dead-letters.
+  // Served by the unique partial index idx_dlq_idempotency_key (the key is its leading column): a
+  // point lookup on the failure path of every keyed command the bus dead-letters.
   private static final String SELECT_BY_IDEMPOTENCY_KEY =
       "SELECT command_id, command_type, payload, aggregate_type, aggregate_id, "
           + "error_type, error_message, attempts, first_attempt_at, published_at, "

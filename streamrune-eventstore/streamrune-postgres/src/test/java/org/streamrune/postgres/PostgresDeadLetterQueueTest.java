@@ -532,7 +532,8 @@ class PostgresDeadLetterQueueTest {
   void findByIdempotencyKeyReturnsTheEntriesStoredUnderTheKey_oldestFirst() throws Exception {
     dlq.publish(keyedRequest("e3000000-0000-0000-0000-000000000001", "client-op-1"));
     dlq.publish(keyedRequest("e3000000-0000-0000-0000-000000000002", "client-op-2"));
-    dlq.publish(keyedRequest("e3000000-0000-0000-0000-000000000003", "client-op-1"));
+    dlq.publish(
+        keyedRequest("e3000000-0000-0000-0000-000000000003", "client-op-1", "order-keyed-2"));
     dlq.publish(
         new DeadLetterQueue.DeadLetterPublishRequest(
             "{}",
@@ -567,8 +568,117 @@ class PostgresDeadLetterQueueTest {
         found.stream().map(DeadLetterQueue.DeadLetterEntry::commandId).toList());
     assertEquals(IdempotencyKey.of("client-op-1"), found.getFirst().idempotencyKey());
     assertEquals("KeyedCmd", found.getFirst().commandType());
-    assertEquals(TestStreams.stream("order-keyed"), found.getFirst().streamId());
+    assertEquals(TestStreams.stream("order-keyed-2"), found.getFirst().streamId());
     assertTrue(dlq.findByIdempotencyKey(IdempotencyKey.of("client-op-none")).isEmpty());
+  }
+
+  /**
+   * One entry per command under a key: a keyed request for a command — its type and its stream —
+   * the table holds under the key stores nothing and returns normally; another command under the
+   * key, an unkeyed request and a keyed request without a stream are stored as before (the latter
+   * once: the index treats the two empty stream columns as equal).
+   */
+  @Test
+  void aKeyedRequestForACommandHeldUnderTheKey_storesNothing() throws Exception {
+    dlq.publish(keyedRequest("e4000000-0000-0000-0000-000000000001", "client-op-1"));
+
+    dlq.publish(keyedRequest("e4000000-0000-0000-0000-000000000002", "client-op-1"));
+    dlq.publish(
+        keyedRequest("e4000000-0000-0000-0000-000000000003", "client-op-1", "order-keyed-2"));
+    for (String id :
+        List.of("e4000000-0000-0000-0000-000000000004", "e4000000-0000-0000-0000-000000000005")) {
+      dlq.publish(
+          new DeadLetterQueue.DeadLetterPublishRequest(
+              "{}",
+              "KeyedCmd",
+              CommandId.of(id),
+              TestStreams.stream("order-keyed"),
+              "Err",
+              "msg",
+              1,
+              Instant.now(),
+              null,
+              null,
+              null,
+              null));
+    }
+    for (String id :
+        List.of("e4000000-0000-0000-0000-000000000006", "e4000000-0000-0000-0000-000000000007")) {
+      dlq.publish(
+          new DeadLetterQueue.DeadLetterPublishRequest(
+              "{}",
+              "Streamless",
+              CommandId.of(id),
+              null,
+              "Err",
+              "msg",
+              1,
+              Instant.now(),
+              null,
+              null,
+              null,
+              IdempotencyKey.of("client-op-streamless")));
+    }
+
+    Set<String> stored = new HashSet<>();
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement();
+        var rs = stmt.executeQuery("SELECT command_id FROM dead_letter_queue")) {
+      while (rs.next()) {
+        stored.add(rs.getString(1));
+      }
+    }
+    assertEquals(
+        Set.of(
+            "e4000000-0000-0000-0000-000000000001",
+            "e4000000-0000-0000-0000-000000000003",
+            "e4000000-0000-0000-0000-000000000004",
+            "e4000000-0000-0000-0000-000000000005",
+            "e4000000-0000-0000-0000-000000000006"),
+        stored);
+  }
+
+  /** The conflict target is the key index only: a duplicate command id still fails loudly. */
+  @Test
+  void aDuplicateCommandIdIsStillRefused() {
+    dlq.publish(keyedRequest("e5000000-0000-0000-0000-000000000001", "client-op-a"));
+
+    assertThrows(
+        org.streamrune.core.EventStoreException.class,
+        () -> dlq.publish(keyedRequest("e5000000-0000-0000-0000-000000000001", "client-op-b")));
+  }
+
+  /**
+   * Two replicas that dead-letter the same keyed command at the same moment: both inserts are
+   * released together, and one row is stored every time.
+   */
+  @Test
+  void twoConcurrentKeyedRequestsForOneCommand_storeOneRow() throws Exception {
+    for (int round = 0; round < 20; round++) {
+      var start = new CyclicBarrier(2);
+      var key = "client-op-race-" + round;
+      var errors = new ConcurrentLinkedQueue<Throwable>();
+      List<Thread> threads = new ArrayList<>();
+      for (int publisher = 0; publisher < 2; publisher++) {
+        String id = String.format("e6000000-0000-0000-%04d-%012d", round, publisher);
+        threads.add(
+            Thread.ofVirtual()
+                .start(
+                    () -> {
+                      try {
+                        start.await();
+                        dlq.publish(keyedRequest(id, key));
+                      } catch (Throwable t) {
+                        errors.add(t);
+                      }
+                    }));
+      }
+      for (Thread thread : threads) {
+        thread.join();
+      }
+      assertTrue(errors.isEmpty(), () -> "round failed: " + errors);
+      assertEquals(1, dlq.findByIdempotencyKey(IdempotencyKey.of(key)).size(), key);
+    }
   }
 
   @Test
@@ -585,11 +695,16 @@ class PostgresDeadLetterQueueTest {
   }
 
   private static DeadLetterQueue.DeadLetterPublishRequest keyedRequest(String id, String key) {
+    return keyedRequest(id, key, "order-keyed");
+  }
+
+  private static DeadLetterQueue.DeadLetterPublishRequest keyedRequest(
+      String id, String key, String stream) {
     return new DeadLetterQueue.DeadLetterPublishRequest(
         "{\"amount\":1}",
         "KeyedCmd",
         CommandId.of(id),
-        TestStreams.stream("order-keyed"),
+        TestStreams.stream(stream),
         "EventStoreException",
         "connection reset",
         1,

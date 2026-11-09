@@ -140,6 +140,9 @@ What a caller does with it, and how an HTTP endpoint answers it:
   from re-sending into the same outage. A re-send under the same key that fails again stores no
   second entry: the queue holds one of the command — its type and its stream — under the key
   (`DeadLetterQueue.findByIdempotencyKey`), and the bus answers with that entry and its outcome.
+  Two sends that fail at the same moment on two replicas store one entry as well: the queue keeps
+  one entry per command under a key (`PostgresDeadLetterQueue` through a unique index), and both
+  callers are answered with the entry that is stored.
 - **A keyed command whose entry the schedule does not replay awaits an operator**
   (`AWAITING_OPERATOR`). When the entry's replays have exhausted their attempts, or its command was
   first received longer ago than the command-inbox window ([Stale keyed entries](#stale-keyed-entries)),
