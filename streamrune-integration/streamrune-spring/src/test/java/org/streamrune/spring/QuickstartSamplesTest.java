@@ -37,7 +37,7 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.crypto.CachedCryptoEngine;
-import org.streamrune.filesystem.FileSystemCryptoEngine;
+import org.streamrune.crypto.filesystem.FileSystemCryptoEngine;
 import org.streamrune.postgres.PostgresEventStoreFactory;
 import org.streamrune.postgres.PostgresOffsetStore;
 import org.streamrune.runtime.ContinuousProjectionRunner;

@@ -337,14 +337,15 @@ class StreamRuneCryptoProducersTest {
             Map.of(
                 "streamrune.crypto.cache.enabled", "false",
                 "streamrune.crypto.aws.data-key-cache.maximum-size", "500"));
-    var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, engine);
+    var kms = assertInstanceOf(org.streamrune.crypto.aws.AwsKmsCryptoEngine.class, engine);
     assertEquals(0, kms.dataKeyCacheMaximumSize());
   }
 
   @Test
   void awsKmsDataKeyCacheTakesItsDefaultsAndItsTunedValues() throws Exception {
     try (var cached = (CachedCryptoEngine) awsEngine(Map.of())) {
-      var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, cached.delegate());
+      var kms =
+          assertInstanceOf(org.streamrune.crypto.aws.AwsKmsCryptoEngine.class, cached.delegate());
       assertEquals(1_000, kms.dataKeyCacheMaximumSize());
       assertEquals(java.time.Duration.ofMinutes(5), kms.dataKeyCacheExpireAfterWrite());
     }
@@ -354,7 +355,8 @@ class StreamRuneCryptoProducersTest {
                 Map.of(
                     "streamrune.crypto.aws.data-key-cache.maximum-size", "50",
                     "streamrune.crypto.aws.data-key-cache.expire-after-write", "PT2M"))) {
-      var kms = assertInstanceOf(org.streamrune.aws.AwsKmsCryptoEngine.class, cached.delegate());
+      var kms =
+          assertInstanceOf(org.streamrune.crypto.aws.AwsKmsCryptoEngine.class, cached.delegate());
       assertEquals(50, kms.dataKeyCacheMaximumSize());
       assertEquals(java.time.Duration.ofMinutes(2), kms.dataKeyCacheExpireAfterWrite());
     }

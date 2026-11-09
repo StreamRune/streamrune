@@ -439,7 +439,7 @@ Each engine implements the `CryptoEngine` interface from `streamrune-core`.
 ```java
 import java.nio.file.Path;
 import org.streamrune.core.crypto.CryptoEngine;
-import org.streamrune.filesystem.FileSystemCryptoEngine;  // or other engine
+import org.streamrune.crypto.filesystem.FileSystemCryptoEngine;  // or other engine
 import org.streamrune.postgres.PostgresEventStoreFactory;
 
 CryptoEngine crypto = FileSystemCryptoEngine.builder()
