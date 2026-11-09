@@ -68,7 +68,7 @@ QueryBus bus = CachingQueryBus.builder()
     .build();
 ```
 
-The caller comes first and the query second, as in `CommandAuthorizationPolicy`. Pre-release builds took `(query, user)`: a lambda written for that order whose body only null-checks its arguments still compiles, and then checks the wrong one, so rename the parameters to `(user, query)` when you move it.
+The caller comes first and the query second, as in `CommandAuthorizationPolicy`.
 
 `CachingQueryBus` consults the configured authorizer on **every** dispatch of a `@Cacheable` query — hit or miss, `USER`- or `GLOBAL`-scoped, identified or not — strictly *before* the cache is touched. A denial serves nothing (no stale hit) and stores nothing (a miss is never computed or cached). This means revocation is honoured **immediately, on the very next dispatch** — not after the TTL, and not only for a fresh miss.
 
