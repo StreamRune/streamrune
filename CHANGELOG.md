@@ -250,9 +250,7 @@ the calling thread (the class javadoc of each says why); `ForwardingCommandBus` 
 - **Query cache**: TTL and event-driven invalidation are caching controls, not security controls;
   eviction is per query type; without a `QueryAuthorizer` a cache hit skips the handler's
   authorization. `QueryAuthorizer.authorize(UserId user, Query<?> query)` takes the caller first,
-  as `CommandAuthorizationPolicy` does: a lambda whose body uses its parameters by type does not
-  compile in the wrong order, but one that only null-checks them does, so a lambda written for the
-  preview builds' `(query, user)` order checks the wrong one until its parameters are swapped.
+  as `CommandAuthorizationPolicy` does.
 - **Metrics**: `stream.id` is never a metric tag; `subscriptions.listener.reconnects` cannot signal a
   dead push path — use the health detail.
 - **Integrations**: `@StreamRuneComponent` needs component scan; the `StreamRune` facade is a
