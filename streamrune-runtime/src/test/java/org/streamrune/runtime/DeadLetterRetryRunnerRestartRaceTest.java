@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -54,5 +55,43 @@ class DeadLetterRetryRunnerRestartRaceTest {
         pollThread.get().isAlive(),
         "close() must join the poll thread before returning so a restart is not silently killed"
             + "");
+  }
+
+  @Test
+  void aSecondCloseAfterATimedOutJoin_keepsTheRunnerNotRestartableUntilTheThreadStops()
+      throws Exception {
+    var pollThread = new AtomicReference<Thread>();
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    DeadLetterQueue blockingDlq = mock(DeadLetterQueue.class);
+    when(blockingDlq.readRetryable(anyInt(), anyInt(), anyBoolean(), any()))
+        .thenAnswer(
+            RestartRaceTestSupport.parkIgnoringInterruptsUntilReleased(
+                pollThread, entered, release, List.of()));
+    CommandBus bus = mock(CommandBus.class);
+    when(bus.supportsIdempotentExecution()).thenReturn(true);
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(blockingDlq)
+            .commandBus(bus)
+            .objectMapper(new ObjectMapper())
+            .pollInterval(Duration.ofSeconds(1))
+            .build();
+    runner.closeJoinTimeoutMs(20);
+    runner.start();
+    assertTrue(entered.await(5, TimeUnit.SECONDS), "poll thread should have entered readRetryable");
+
+    runner.close(); // the join times out
+    runner.close(); // a second close finds the same stuck thread, not none
+
+    assertTrue(pollThread.get().isAlive(), "the poll thread is still running");
+    assertTrue(runner.isStarted(), "still not restartable while the stale thread runs");
+    assertThrows(IllegalStateException.class, runner::start);
+
+    release.countDown();
+    pollThread.get().join(5_000);
+    runner.close(); // the thread has stopped: the guard is reset
+
+    assertFalse(runner.isStarted(), "restartable once the stale thread has stopped");
   }
 }

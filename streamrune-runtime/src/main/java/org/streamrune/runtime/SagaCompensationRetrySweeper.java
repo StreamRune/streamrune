@@ -128,6 +128,11 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
    */
   private static final long CLOSE_JOIN_TIMEOUT_MS = 30_000L;
 
+  /**
+   * The join bound {@link #close()} uses; {@link #CLOSE_JOIN_TIMEOUT_MS} unless a test shrinks it.
+   */
+  private volatile long closeJoinTimeoutMs = CLOSE_JOIN_TIMEOUT_MS;
+
   private final SagaRunner<S> sagaRunner;
   private final SagaStore sagaStore;
   private final SagaType sagaType;
@@ -300,6 +305,11 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
    * <p>A started sweeper that re-drives under a lease this process holds logs an INFO: while its
    * subscription keeps the lease, no replica retries the compensations of the saga type.
    */
+  /** Shrinks the join bound of {@link #close()}; for the tests of this package. */
+  void closeJoinTimeoutMs(long millis) {
+    this.closeJoinTimeoutMs = millis;
+  }
+
   @Override
   public void close() {
     // INFO, not WARN: the integration closes the sweeper in an order, relative to the
@@ -327,7 +337,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
       // itself (close() invoked from within the sweep thread).
       if (t != Thread.currentThread()) {
         try {
-          t.join(CLOSE_JOIN_TIMEOUT_MS);
+          t.join(closeJoinTimeoutMs);
         } catch (InterruptedException _) {
           Thread.currentThread().interrupt();
         }
@@ -364,11 +374,14 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     // drive before the give-up horizon is honored.
     previouslyReDriven = java.util.Set.of();
     if (stuck) {
+      // Keep the stuck thread as the sweep thread: a repeated close() interrupts and joins it
+      // again instead of finding no thread and resetting the guard while it still runs.
+      thread = t;
       LOG.warn(
           "SagaCompensationRetrySweeper thread did not stop within {}ms; leaving the sweeper"
               + " not-restartable so a restart cannot duplicate or silently kill it. Investigate"
               + " the stuck sweep.",
-          CLOSE_JOIN_TIMEOUT_MS);
+          closeJoinTimeoutMs);
     } else {
       started.set(false);
     }

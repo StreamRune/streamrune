@@ -175,6 +175,11 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   private static final long CLOSE_JOIN_TIMEOUT_MS = 30_000L;
 
   /**
+   * The join bound {@link #close()} uses; {@link #CLOSE_JOIN_TIMEOUT_MS} unless a test shrinks it.
+   */
+  private volatile long closeJoinTimeoutMs = CLOSE_JOIN_TIMEOUT_MS;
+
+  /**
    * How many times {@code batchSize} the poll over-fetches retry-eligible rows so a page of
    * not-yet-due entries at the head cannot starve due entries behind them. The store returns rows
    * least-recently-active first (most-likely-due first), so due entries concentrate at the front of
@@ -369,6 +374,11 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     pollThread = Thread.ofVirtual().name("streamrune-dlq-retry").start(this::runPollLoop);
   }
 
+  /** Shrinks the join bound of {@link #close()}; for the tests of this package. */
+  void closeJoinTimeoutMs(long millis) {
+    this.closeJoinTimeoutMs = millis;
+  }
+
   @Override
   public void close() {
     running = false;
@@ -384,7 +394,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       // poll callback).
       if (t != Thread.currentThread()) {
         try {
-          t.join(CLOSE_JOIN_TIMEOUT_MS);
+          t.join(closeJoinTimeoutMs);
         } catch (InterruptedException _) {
           Thread.currentThread().interrupt();
         }
@@ -411,11 +421,14 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
           resignFailure);
     }
     if (stuck) {
+      // Keep the stuck thread as the poll thread: a repeated close() interrupts and joins it
+      // again instead of finding no thread and resetting the guard while it still runs.
+      pollThread = t;
       LOG.warn(
           "DeadLetterRetryRunner poll thread did not stop within {}ms; leaving the runner"
               + " not-restartable so a restart cannot duplicate or silently kill it. Investigate the"
               + " stuck poll.",
-          CLOSE_JOIN_TIMEOUT_MS);
+          closeJoinTimeoutMs);
     } else {
       // Reset the started guard so start() can be called again on the same instance after
       // close() — matches the restartable lifecycle contract (actuator restart, context refresh).
