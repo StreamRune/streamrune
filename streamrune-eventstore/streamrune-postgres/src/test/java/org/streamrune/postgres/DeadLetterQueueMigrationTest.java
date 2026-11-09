@@ -188,7 +188,7 @@ class DeadLetterQueueMigrationTest {
   }
 
   @Test
-  void migrationCreatesThePartialIdempotencyKeyIndex() throws Exception {
+  void migrationCreatesTheUniquePartialIdempotencyKeyIndex() throws Exception {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement();
         var rs =
@@ -198,7 +198,10 @@ class DeadLetterQueueMigrationTest {
       assertTrue(rs.next(), "idx_dlq_idempotency_key must exist after migration");
       String definition = rs.getString("indexdef");
       assertTrue(
-          definition.contains("(idempotency_key)")
+          definition.startsWith("CREATE UNIQUE INDEX")
+              && definition.contains(
+                  "(idempotency_key, command_type, aggregate_type, aggregate_id)")
+              && definition.contains("NULLS NOT DISTINCT")
               && definition.contains("WHERE (idempotency_key IS NOT NULL)"),
           definition);
     }

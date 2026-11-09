@@ -59,8 +59,8 @@ import org.streamrune.core.types.SubjectId;
  * so a wrong cipher result is never returned and the caller's retry encrypts again under the same,
  * already durable key file. A decryption whose authentication tag does not match is retried once
  * with a fresh cipher before it fails with the deterministic {@link CryptoMappingException}: a
- * corrupted, tampered or foreign value fails both attempts, while a transient fault of the JVM or
- * the hardware cannot wedge a reader. Both events are counted ({@code
+ * corrupted, tampered or foreign value fails both attempts, while a one-off wrong cipher result,
+ * whatever its cause, cannot wedge a reader. Both events are counted ({@code
  * streamrune.crypto.encrypt_self_check_failed}; {@code streamrune.crypto.decrypt_retried}, tagged
  * {@code RECOVERED} or {@code FAILED}) through the {@link StreamRuneMetrics} given to {@link
  * Builder#metrics(StreamRuneMetrics)} and logged at {@code WARN}.

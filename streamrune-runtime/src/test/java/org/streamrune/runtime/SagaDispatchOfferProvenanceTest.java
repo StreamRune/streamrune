@@ -44,7 +44,43 @@ class SagaDispatchOfferProvenanceTest {
   private static final IdempotencyKey KEY = new IdempotencyKey("saga:handed:1:0");
 
   private static SagaDispatchOffer handed(boolean forwardFenced) {
-    return new SagaDispatchOffer(HANDED, HANDED_CAUSE, KEY, forwardFenced);
+    return new SagaDispatchOffer(HANDED, HANDED_CAUSE, null, KEY, forwardFenced);
+  }
+
+  record SagasCommand(String id) implements org.streamrune.core.Command {}
+
+  /**
+   * Only the saga's own dispatch takes the offer: the saga's command instance under any key, or the
+   * saga's key. A keyed dispatch of another command under another key — a bus decorator's own
+   * command, dispatched on the thread before it delegates — leaves the offer for the saga's.
+   */
+  @Test
+  void theOfferIsTakenByTheSagasCommandOrKeyOnly_andLeftInPlaceForAnyOtherDispatch() {
+    var sagas = new SagasCommand("saga's");
+    var offer = new SagaDispatchOffer(HANDED, HANDED_CAUSE, sagas, KEY, true);
+    try {
+      offer.offer();
+
+      assertThat(SagaDispatchOffer.take(new SagasCommand("audit"), IdempotencyKey.of("audit-1")))
+          .as("another command under another key")
+          .isNull();
+      assertThat(SagaDispatchOffer.pending()).as("left for the saga's own dispatch").isTrue();
+      assertThat(SagaDispatchOffer.take(sagas, KEY)).isSameAs(offer);
+      assertThat(SagaDispatchOffer.pending()).isFalse();
+      assertThat(SagaDispatchOffer.take(sagas, KEY)).as("taken once").isNull();
+
+      offer.offer();
+      assertThat(SagaDispatchOffer.take(sagas, IdempotencyKey.of("rewritten:" + KEY.value())))
+          .as("the saga's command under a key a decorator rewrote is still the saga's")
+          .isSameAs(offer);
+
+      offer.offer();
+      assertThat(SagaDispatchOffer.take(new SagasCommand("saga's"), KEY))
+          .as("the saga's key, whatever the instance")
+          .isSameAs(offer);
+    } finally {
+      SagaDispatchOffer.withdraw();
+    }
   }
 
   @Test

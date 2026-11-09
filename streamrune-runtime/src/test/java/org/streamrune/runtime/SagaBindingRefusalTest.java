@@ -73,11 +73,12 @@ import org.streamrune.test.MutableClock;
  *
  * <p>The refusal itself never compensates. A forward command refused this way leaves the saga as it
  * was and propagates, so the subscription delivers the event again: no compensation episode is
- * claimed, the order is not cancelled; a refusal that persists ends as the saga's timeout. A
- * compensation command refused this way keeps the episode {@code COMPENSATING} as an attempted
- * re-drive: the undo is never abandoned as {@code FAILED}, the next re-drive completes it, and a
- * refusal that persists is faulted for an operator once the compensation retry sweeper's give-up
- * horizon has passed. Either way it is logged at {@code ERROR}.
+ * claimed, the order is not cancelled; a refusal that persists ends as the saga's timeout, or, for
+ * a saga that declares none, holds the saga subscription until the cause is fixed. A compensation
+ * command refused this way keeps the episode {@code COMPENSATING} as an attempted re-drive: the
+ * undo is never abandoned as {@code FAILED}, the next re-drive completes it, and a refusal that
+ * persists is faulted for an operator once the compensation retry sweeper's give-up horizon has
+ * passed. Either way it is logged at {@code ERROR}.
  *
  * <p><b>Crash points of the refused forward step, and why every rerun converges.</b> The step
  * writes in this order: the genesis-pending row (start event only), forward command 0, ..., forward
@@ -117,6 +118,7 @@ class SagaBindingRefusalTest {
   private static final AggregateType ORDER = AggregateType.of("order");
   private static final AggregateType PAYMENT = AggregateType.of("payment");
   private static final AggregateType STOCK = AggregateType.of("stock");
+  private static final AggregateType AUDIT = AggregateType.of("audit");
 
   private final ListAppender<ILoggingEvent> executorLog = new ListAppender<>();
   private Logger executorLogger;
@@ -233,6 +235,37 @@ class SagaBindingRefusalTest {
     assertThat(f.bus.execute(new InitiatePayment("o-6"), IdempotencyKey.of("client-key-o-6")))
         .isNotNull();
     assertThat(f.eventNames(PAYMENT, "o-6")).containsExactly("PaymentInitiated");
+  }
+
+  /**
+   * A bus decorator that dispatches a keyed command of its own on the dispatching thread before it
+   * delegates — an audit record here — does not take the saga's offer: the saga's own command takes
+   * it and is compared with it and fenced against it, and the decorator's command runs as any
+   * command under the saga's bindings does, unfenced. The forward step completes.
+   */
+  @Test
+  void aDecoratorsOwnKeyedCommandBeforeTheSagas_leavesTheOfferToTheSagasCommand() {
+    var f = new Fixture();
+    var listener = f.runner().asEventListener();
+    f.bus.auditFirst(InitiatePayment.class);
+
+    listener.onEvents(List.of(f.storeOrderPlaced("o-7")));
+
+    assertThat(f.bus.offerLeftForTheSagasCommand)
+        .as("after the decorator's own dispatch the offer still waits for the saga's command")
+        .containsExactly(true);
+    assertThat(SagaDispatchOffer.pending()).as("the saga's command took it").isFalse();
+    assertThat(f.eventNames(PAYMENT, "o-7")).containsExactly("PaymentInitiated");
+    assertThat(f.eventNames(STOCK, "o-7")).containsExactly("StockReserved");
+    assertThat(f.eventNames(AUDIT, "o-7")).containsExactly("Audited");
+    assertThat(f.firstEventOf(PAYMENT, "o-7").metadata().sagaOrigin()).isEqualTo(f.originOf("o-7"));
+    assertThat(f.firstEventOf(AUDIT, "o-7").metadata().sagaOrigin())
+        .as("the decorator's command carries the bound saga provenance, as before")
+        .isEqualTo(f.originOf("o-7"));
+    LoadedSaga<OrderSagaState> completed = f.saga("o-7");
+    assertThat(completed.genesisApplied()).isTrue();
+    assertThat(completed.episodeVersion()).isNull();
+    assertThat(errorLines()).isEmpty();
   }
 
   @Test
@@ -409,6 +442,29 @@ class SagaBindingRefusalTest {
 
   record InitiatePayment(String orderId) implements Command {}
 
+  record RecordAudit(String subject) implements Command {}
+
+  record Audited(String subject) implements DomainEvent {}
+
+  record AuditAggregate(int records) implements AggregateState {}
+
+  static final class AuditDecider implements Decider<RecordAudit, AuditAggregate, Audited> {
+    @Override
+    public AuditAggregate initialState() {
+      return new AuditAggregate(0);
+    }
+
+    @Override
+    public List<Audited> decide(RecordAudit command, AuditAggregate state) {
+      return List.of(new Audited(command.subject()));
+    }
+
+    @Override
+    public AuditAggregate evolve(AuditAggregate state, Audited event) {
+      return new AuditAggregate(state.records() + 1);
+    }
+  }
+
   record PaymentInitiated(String orderId) implements DomainEvent {}
 
   record PaymentAggregate(boolean initiated) implements AggregateState {}
@@ -537,6 +593,9 @@ class SagaBindingRefusalTest {
     private final VirtualThreadCommandBus delegate;
     private final Map<Class<?>, AtomicInteger> refusals = new ConcurrentHashMap<>();
     private final Map<Class<?>, AtomicInteger> pairs = new ConcurrentHashMap<>();
+    private final java.util.Set<Class<?>> auditedFirst = ConcurrentHashMap.newKeySet();
+    final List<Boolean> offerLeftForTheSagasCommand =
+        new java.util.concurrent.CopyOnWriteArrayList<>();
 
     AnotherSagasContextInFront(VirtualThreadCommandBus delegate) {
       this.delegate = delegate;
@@ -548,6 +607,14 @@ class SagaBindingRefusalTest {
 
     void pairTheNext(Class<? extends Command> type, int n) {
       pairs.put(type, new AtomicInteger(n));
+    }
+
+    /**
+     * For every command of {@code type}: dispatches a keyed audit command of its own on the calling
+     * thread first, then delegates.
+     */
+    void auditFirst(Class<? extends Command> type) {
+      auditedFirst.add(type);
     }
 
     private static boolean takeOne(Map<Class<?>, AtomicInteger> counters, Command command) {
@@ -571,6 +638,11 @@ class SagaBindingRefusalTest {
       if (takeOne(refusals, command)) {
         return ScopedValue.where(StreamRuneContext.CURRENT, anotherSagas)
             .call(() -> delegate.execute(command, key));
+      }
+      if (auditedFirst.contains(command.getClass())) {
+        String subject = command instanceof InitiatePayment p ? p.orderId() : "unknown";
+        delegate.execute(new RecordAudit(subject), IdempotencyKey.of("audit:" + key.value()));
+        offerLeftForTheSagasCommand.add(SagaDispatchOffer.pending());
       }
       if (takeOne(pairs, command)) {
         return ScopedValue.where(StreamRuneContext.CURRENT, anotherSagas)
@@ -624,6 +696,8 @@ class SagaBindingRefusalTest {
                     new PaymentDecider())
                 .register(
                     STOCK, ReserveStock.class, c -> AggregateId.of(c.orderId()), new StockDecider())
+                .register(
+                    AUDIT, RecordAudit.class, c -> AggregateId.of(c.subject()), new AuditDecider())
                 .build());
 
     SagaRunner<OrderSagaState> runner() {

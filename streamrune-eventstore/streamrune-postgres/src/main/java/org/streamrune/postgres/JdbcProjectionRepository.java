@@ -181,6 +181,15 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     this.objectMapper = objectMapper;
   }
 
+  // Connection discipline: with PostgresCryptoEngine (all three integrations wire it onto the
+  // application DataSource), serialising or deserialising an @Encrypted read model borrows a
+  // connection from THIS SAME POOL. Every outer path below therefore turns the read model into JSON
+  // BEFORE dataSource.getConnection() and turns the rows back into objects AFTER the connection is
+  // closed, so no call holds one connection while it waits for a second (PostgresEventStore and
+  // PostgresSagaStore follow the same rule). Only TransactionScopedRepository (de)serialises while
+  // a connection is held: the batch transaction it is bound to is the point of it, so a batch over
+  // @Encrypted read models needs a second connection while it runs.
+
   @Override
   public <T> void save(ProjectionName projectionName, String id, T readModel) {
     validateInputs(projectionName, id);
@@ -188,12 +197,13 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       throw new IllegalArgumentException("readModel cannot be null");
     }
     ensureTableExists(projectionName);
+    String json = toJson(readModel, "Failed to save projection: ", projectionName, id);
     try (var conn = dataSource.getConnection()) {
       PostgresTransactions.commitIfManual(
           conn,
           "projection save",
           c -> {
-            saveOn(c, projectionName, id, readModel);
+            saveJsonOn(c, projectionName, id, json);
             return null;
           });
     } catch (SQLException e) {
@@ -201,13 +211,13 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
   }
 
-  private <T> void saveOn(Connection conn, ProjectionName projectionName, String id, T readModel) {
+  private void saveJsonOn(Connection conn, ProjectionName projectionName, String id, String json) {
     String table = tableName(projectionName);
     try (var ps = conn.prepareStatement(String.format(UPSERT, table))) {
       ps.setString(1, id);
-      ps.setString(2, objectMapper.writeValueAsString(readModel));
+      ps.setString(2, json);
       ps.executeUpdate();
-    } catch (SQLException | JsonProcessingException e) {
+    } catch (SQLException e) {
       throw new EventStoreException("Failed to save projection: " + shown(projectionName, id), e);
     }
   }
@@ -219,26 +229,27 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       throw new IllegalArgumentException("type cannot be null");
     }
     ensureTableExists(projectionName);
+    Optional<String> json;
     try (var conn = dataSource.getConnection()) {
-      return findByIdOn(conn, projectionName, id, type);
+      json = findJsonByIdOn(conn, projectionName, id);
     } catch (SQLException e) {
       throw new EventStoreException("Failed to find projection: " + shown(projectionName, id), e);
     }
+    return json.map(j -> fromJson(j, type, "Failed to find projection: ", projectionName, id));
   }
 
-  private <T> Optional<T> findByIdOn(
-      Connection conn, ProjectionName projectionName, String id, Class<T> type) {
+  private Optional<String> findJsonByIdOn(
+      Connection conn, ProjectionName projectionName, String id) {
     String table = tableName(projectionName);
     try (var ps = conn.prepareStatement(String.format(SELECT_BY_ID, table))) {
       ps.setString(1, id);
       try (var rs = ps.executeQuery()) {
         if (rs.next()) {
-          String json = rs.getString("data");
-          return Optional.of(objectMapper.readValue(json, type));
+          return Optional.of(rs.getString("data"));
         }
         return Optional.empty();
       }
-    } catch (SQLException | JsonProcessingException e) {
+    } catch (SQLException e) {
       throw new EventStoreException("Failed to find projection: " + shown(projectionName, id), e);
     }
   }
@@ -250,14 +261,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       throw new IllegalArgumentException("type cannot be null");
     }
     ensureTableExists(projectionName);
+    List<String> rows;
     try (var conn = dataSource.getConnection()) {
       // Read inside an explicit transaction so the driver streams the rows in
-      // FIND_ALL_FETCH_SIZE batches instead of materializing the whole table.
+      // FIND_ALL_FETCH_SIZE batches instead of materializing the whole result set twice.
       conn.setAutoCommit(false);
       try {
-        List<T> results = findAllOn(conn, projectionName, type);
+        rows = findAllJsonOn(conn, projectionName);
         conn.commit();
-        return results;
       } catch (RuntimeException e) {
         conn.rollback();
         throw e;
@@ -268,23 +279,23 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     } catch (SQLException e) {
       throw new EventStoreException("Failed to find all projections: " + shown(projectionName), e);
     }
+    return fromJson(rows, type, "Failed to find all projections: ", projectionName);
   }
 
-  private <T> List<T> findAllOn(Connection conn, ProjectionName projectionName, Class<T> type) {
+  private List<String> findAllJsonOn(Connection conn, ProjectionName projectionName) {
     String table = tableName(projectionName);
-    List<T> results = new ArrayList<>();
+    List<String> rows = new ArrayList<>();
     try (var ps = conn.prepareStatement(String.format(SELECT_ALL, table))) {
       // Streams only when the connection is in an explicit transaction: the public findAll
       // opens one, executeAtomically's TransactionScopedRepository already runs in one.
       ps.setFetchSize(FIND_ALL_FETCH_SIZE);
       try (var rs = ps.executeQuery()) {
         while (rs.next()) {
-          String json = rs.getString("data");
-          results.add(objectMapper.readValue(json, type));
+          rows.add(rs.getString("data"));
         }
       }
-      return results;
-    } catch (SQLException | JsonProcessingException e) {
+      return rows;
+    } catch (SQLException e) {
       throw new EventStoreException("Failed to find all projections: " + shown(projectionName), e);
     }
   }
@@ -327,16 +338,18 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       throw new IllegalArgumentException("pageRequest cannot be null");
     }
     ensureTableExists(projectionName);
+    Page<String> rows;
     try (var conn = dataSource.getConnection()) {
-      return findAllOn(conn, projectionName, type, pageRequest);
+      rows = findAllJsonOn(conn, projectionName, pageRequest);
     } catch (SQLException e) {
       throw new EventStoreException(
           "Failed to find paginated projections: " + shown(projectionName), e);
     }
+    return fromJson(rows, type, projectionName);
   }
 
-  private <T> Page<T> findAllOn(
-      Connection conn, ProjectionName projectionName, Class<T> type, PageRequest pageRequest) {
+  private Page<String> findAllJsonOn(
+      Connection conn, ProjectionName projectionName, PageRequest pageRequest) {
     String table = tableName(projectionName);
     String orderClause = buildOrderClause(pageRequest.sort());
 
@@ -352,22 +365,30 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         totalElements = countRs.getLong(1);
       }
 
-      List<T> content = new ArrayList<>();
+      List<String> content = new ArrayList<>();
       try (var ps = conn.prepareStatement(contentSql)) {
         ps.setInt(1, pageRequest.size());
         ps.setInt(2, pageRequest.offset());
         try (var rs = ps.executeQuery()) {
           while (rs.next()) {
-            content.add(objectMapper.readValue(rs.getString("data"), type));
+            content.add(rs.getString("data"));
           }
         }
       }
 
       return new Page<>(content, totalElements, pageRequest.page(), pageRequest.size());
-    } catch (SQLException | JsonProcessingException e) {
+    } catch (SQLException e) {
       throw new EventStoreException(
           "Failed to find paginated projections: " + shown(projectionName), e);
     }
+  }
+
+  private <T> Page<T> fromJson(Page<String> rows, Class<T> type, ProjectionName projectionName) {
+    return new Page<>(
+        fromJson(rows.content(), type, "Failed to find paginated projections: ", projectionName),
+        rows.totalElements(),
+        rows.page(),
+        rows.size());
   }
 
   private String buildOrderClause(Sort sort) {
@@ -404,16 +425,18 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       throw new IllegalArgumentException("lockMode cannot be null");
     }
     ensureTableExists(projectionName);
+    Optional<Versioned<String>> row;
     try (var conn = dataSource.getConnection()) {
-      return findByIdOn(conn, projectionName, id, type, lockMode);
+      row = findVersionedJsonByIdOn(conn, projectionName, id, lockMode);
     } catch (SQLException e) {
       throw new EventStoreException(
           "Failed to find projection with lock: " + shown(projectionName, id), e);
     }
+    return fromJson(row, type, projectionName, id);
   }
 
-  private <T> Optional<Versioned<T>> findByIdOn(
-      Connection conn, ProjectionName projectionName, String id, Class<T> type, LockMode lockMode) {
+  private Optional<Versioned<String>> findVersionedJsonByIdOn(
+      Connection conn, ProjectionName projectionName, String id, LockMode lockMode) {
     String table = tableName(projectionName);
     String sql =
         String.format(
@@ -423,16 +446,26 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       ps.setString(1, id);
       try (var rs = ps.executeQuery()) {
         if (rs.next()) {
-          T data = objectMapper.readValue(rs.getString("data"), type);
+          String data = rs.getString("data");
           long version = rs.getLong("version");
           return Optional.of(new Versioned<>(data, version));
         }
         return Optional.empty();
       }
-    } catch (SQLException | JsonProcessingException e) {
+    } catch (SQLException e) {
       throw new EventStoreException(
           "Failed to find projection with lock: " + shown(projectionName, id), e);
     }
+  }
+
+  private <T> Optional<Versioned<T>> fromJson(
+      Optional<Versioned<String>> row, Class<T> type, ProjectionName projectionName, String id) {
+    return row.map(
+        r ->
+            new Versioned<>(
+                fromJson(
+                    r.data(), type, "Failed to find projection with lock: ", projectionName, id),
+                r.version()));
   }
 
   @Override
@@ -446,12 +479,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       throw new IllegalArgumentException("expectedVersion must be >= 0");
     }
     ensureTableExists(projectionName);
+    String json =
+        toJson(readModel, "Failed to save projection with version check: ", projectionName, id);
     try (var conn = dataSource.getConnection()) {
       PostgresTransactions.commitIfManual(
           conn,
           "projection versioned save",
           c -> {
-            saveOn(c, projectionName, id, readModel, expectedVersion);
+            saveJsonOn(c, projectionName, id, json, expectedVersion);
             return null;
           });
     } catch (SQLException e) {
@@ -460,15 +495,15 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
   }
 
-  private <T> void saveOn(
+  private void saveJsonOn(
       Connection conn,
       ProjectionName projectionName,
       String id,
-      T readModel,
+      String json,
       long expectedVersion) {
     String table = tableName(projectionName);
     try (var ps = conn.prepareStatement(String.format(VERSIONED_UPDATE, table))) {
-      ps.setString(1, objectMapper.writeValueAsString(readModel));
+      ps.setString(1, json);
       ps.setString(2, id);
       ps.setLong(3, expectedVersion);
       int updated = ps.executeUpdate();
@@ -477,10 +512,43 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
             "Optimistic lock conflict on projection '%s/%s': expected version %d"
                 .formatted(projectionName.value(), id, expectedVersion));
       }
-    } catch (SQLException | JsonProcessingException e) {
+    } catch (SQLException e) {
       throw new EventStoreException(
           "Failed to save projection with version check: " + shown(projectionName, id), e);
     }
+  }
+
+  // The (de)serialisation step, kept apart from every connection scope (see the note above save).
+
+  private String toJson(
+      Object readModel, String failure, ProjectionName projectionName, String id) {
+    try {
+      return objectMapper.writeValueAsString(readModel);
+    } catch (JsonProcessingException e) {
+      throw new EventStoreException(failure + shown(projectionName, id), e);
+    }
+  }
+
+  private <T> T fromJson(
+      String json, Class<T> type, String failure, ProjectionName projectionName, String id) {
+    try {
+      return objectMapper.readValue(json, type);
+    } catch (JsonProcessingException e) {
+      throw new EventStoreException(failure + shown(projectionName, id), e);
+    }
+  }
+
+  private <T> List<T> fromJson(
+      List<String> rows, Class<T> type, String failure, ProjectionName projectionName) {
+    List<T> results = new ArrayList<>(rows.size());
+    try {
+      for (String json : rows) {
+        results.add(objectMapper.readValue(json, type));
+      }
+    } catch (JsonProcessingException e) {
+      throw new EventStoreException(failure + shown(projectionName), e);
+    }
+    return results;
   }
 
   private void ensureTableExists(ProjectionName projectionName) {
@@ -1098,8 +1166,16 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   /**
    * {@link ProjectionRepository} view bound to the single connection of an open transaction. Handed
    * to the projection updater by {@link #executeAtomically} so projection writes commit — or roll
-   * back — together with the offset save. Never requests a pooled connection: table creation also
-   * runs on the bound connection, eliminating self-deadlock on exhausted pools.
+   * back — together with the offset save. Never requests a pooled connection itself: table creation
+   * also runs on the bound connection, eliminating self-deadlock on exhausted pools.
+   *
+   * <p><b>The crypto engine is the exception.</b> The read models are (de)serialised while the
+   * bound connection is held — the batch transaction cannot be released mid-batch — so a read model
+   * with an {@code @Encrypted} component reaches the {@link CryptoEngine} inside the batch. A
+   * {@code PostgresCryptoEngine} on the same pool borrows a second connection for each encrypt and
+   * for each decrypt the decrypt cache does not answer; a Vault or KMS engine holds the batch
+   * connection across its remote call. Size the pool for it: the guide's production page gives the
+   * budget.
    */
   private final class TransactionScopedRepository implements ProjectionRepository {
 
@@ -1188,7 +1264,11 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         throw new IllegalArgumentException("readModel cannot be null");
       }
       ensureTableOnConnection(projectionName);
-      saveOn(conn, projectionName, id, readModel);
+      saveJsonOn(
+          conn,
+          projectionName,
+          id,
+          toJson(readModel, "Failed to save projection: ", projectionName, id));
     }
 
     @Override
@@ -1198,7 +1278,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         throw new IllegalArgumentException("type cannot be null");
       }
       ensureTableOnConnection(projectionName);
-      return findByIdOn(conn, projectionName, id, type);
+      return findJsonByIdOn(conn, projectionName, id)
+          .map(j -> fromJson(j, type, "Failed to find projection: ", projectionName, id));
     }
 
     @Override
@@ -1208,7 +1289,11 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         throw new IllegalArgumentException("type cannot be null");
       }
       ensureTableOnConnection(projectionName);
-      return findAllOn(conn, projectionName, type);
+      return fromJson(
+          findAllJsonOn(conn, projectionName),
+          type,
+          "Failed to find all projections: ",
+          projectionName);
     }
 
     @Override
@@ -1229,7 +1314,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         throw new IllegalArgumentException("pageRequest cannot be null");
       }
       ensureTableOnConnection(projectionName);
-      return findAllOn(conn, projectionName, type, pageRequest);
+      return fromJson(findAllJsonOn(conn, projectionName, pageRequest), type, projectionName);
     }
 
     @Override
@@ -1243,7 +1328,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         throw new IllegalArgumentException("lockMode cannot be null");
       }
       ensureTableOnConnection(projectionName);
-      return findByIdOn(conn, projectionName, id, type, lockMode);
+      return fromJson(
+          findVersionedJsonByIdOn(conn, projectionName, id, lockMode), type, projectionName, id);
     }
 
     @Override
@@ -1257,7 +1343,12 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         throw new IllegalArgumentException("expectedVersion must be >= 0");
       }
       ensureTableOnConnection(projectionName);
-      saveOn(conn, projectionName, id, readModel, expectedVersion);
+      saveJsonOn(
+          conn,
+          projectionName,
+          id,
+          toJson(readModel, "Failed to save projection with version check: ", projectionName, id),
+          expectedVersion);
     }
   }
 

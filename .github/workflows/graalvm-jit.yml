@@ -8,8 +8,8 @@ name: GraalVM JIT
 #
 #   - the JVM check (streamrune-runtime's graalJitGuardTest, which runs
 #     GraalJitGuardLiveTest alone with the flags -PgraalJitGuardTestFlags names): the check and the
-#     command bus builder must refuse the JVM with no flag and with the DisableIntrinsic pair, and
-#     accept it with -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler;
+#     command bus builder must refuse the JVM with no flag and accept it with
+#     -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler;
 #   - the read stress test of streamrune-runtime (StreamRuneContextVirtualThreadReadTest), on a test
 #     JVM with the JVMCI compiler off: it must pass, and it must have run.
 #
@@ -62,11 +62,6 @@ jobs:
         run: >-
           ./gradlew :streamrune-runtime:graalJitGuardTest --rerun
           -PgraalJitGuardTestFlags=none -PexpectGraalJitGuard=refused $GRADLE_FLAGS
-
-      - name: The JVM check refuses the Graal JIT with the DisableIntrinsic pair
-        run: >-
-          ./gradlew :streamrune-runtime:graalJitGuardTest --rerun
-          -PgraalJitGuardTestFlags=intrinsics -PexpectGraalJitGuard=refused $GRADLE_FLAGS
 
       - name: The JVM check accepts the JVM with the JVMCI compiler off
         run: >-

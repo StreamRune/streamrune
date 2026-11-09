@@ -318,8 +318,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   @Override
   public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
     // The saga a saga dispatch handed this dispatch beside its scoped values, taken first, so a
-    // command dispatched inside this one is not compared with it.
-    SagaDispatchOffer dispatched = SagaDispatchOffer.take();
+    // command dispatched inside this one is not compared with it. Only the saga's own command takes
+    // it: a keyed command a bus decorator dispatches first on this thread leaves it in place.
+    SagaDispatchOffer dispatched = SagaDispatchOffer.take(command, key);
     Objects.requireNonNull(key, "idempotencyKey is required");
     if (commandInbox == null) {
       throw new IllegalStateException(
@@ -1522,9 +1523,16 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * again: nothing is stored, and the caller is answered with that entry and its outcome ({@link
    * #outcomeOf}). A client that re-sends under its key during an outage therefore leaves one entry,
    * not one per re-send. The lookup is a read before the insert and adds no crash point: a crash
-   * before the insert leaves what a failed send leaves without it. Two sends that fail at the same
-   * instant can each store an entry; the inbox deduplicates their replays. A lookup that fails
-   * costs the command nothing: the bus stores the entry as without it.
+   * before the insert leaves what a failed send leaves without it. A lookup that fails costs the
+   * command nothing: the bus stores the entry as without it.
+   *
+   * <p><b>Two sends at the same moment.</b> Two replicas whose sends under one key fail together
+   * both find nothing before they insert. The queue keeps one entry per command under a key ({@link
+   * DeadLetterQueue#publish}), so one of the two inserts stores nothing; after a keyed publish the
+   * bus reads the entries under the key again, and when the one that holds the command is not its
+   * own it answers its caller with that entry, exactly as a re-send after the first is answered.
+   * The read after the insert is a read too and adds no crash point: a crash between the insert and
+   * the read leaves the row the insert stored, or none when it lost to the other send.
    *
    * @return the entry that holds the command — the one this call stored, or the one the queue held
    *     under the key already — or {@code null} when none does: no queue is configured, the
@@ -1655,6 +1663,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
               // the original key would NOT dedup against it at the inbox — running the handler
               // twice and duplicating the committed domain events (the double-execution defect).
               key));
+      if (key != null) {
+        DeadLetterRecord other = entryStoredInsteadOf(key, command, commandId, streamId);
+        if (other != null) {
+          return other;
+        }
+      }
       recordMetric(
           () -> metrics.recordDeadLetterPublished(command.getClass().getSimpleName()),
           "recordDeadLetterPublished");
@@ -1687,8 +1701,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   /**
    * The entry the queue holds of {@code command} under {@code key} — same command type, same stream
    * — or {@code null} when it holds none, the queue does not look entries up by key, or the lookup
-   * failed. Of several such entries (sends that failed at the same instant) one the retry schedule
-   * still replays answers, since the command is then queued for replay.
+   * failed.
    */
   private DeadLetterRecord entryStoredUnder(
       IdempotencyKey key, Command command, CommandId commandId, StreamId streamId) {
@@ -1714,20 +1727,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           LogSanitizer.sanitizeFreeText(lookupFailure.getMessage()));
       return null;
     }
-    String commandType = command.getClass().getName();
-    DeadLetterQueue.DeadLetterEntry match = null;
-    for (DeadLetterQueue.DeadLetterEntry entry : underKey) {
-      if (!commandType.equals(entry.commandType()) || !streamId.equals(entry.streamId())) {
-        continue;
-      }
-      if (outcomeOf(entry) == CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY) {
-        match = entry;
-        break;
-      }
-      if (match == null) {
-        match = entry;
-      }
-    }
+    DeadLetterQueue.DeadLetterEntry match = entryOf(underKey, command, streamId);
     if (match == null) {
       return null;
     }
@@ -1735,6 +1735,80 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     LOG.info(
         "Not storing a second dead-letter entry for command {} ({}): entry {} holds it under its"
             + " idempotency key and is {}",
+        LogSanitizer.sanitizeForLog(commandId.value()),
+        command.getClass().getSimpleName(),
+        LogSanitizer.sanitizeForLog(match.commandId().value()),
+        outcome == CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY
+            ? "queued for replay"
+            : "awaiting an operator");
+    return new DeadLetterRecord(match.commandId(), outcome);
+  }
+
+  /**
+   * Of the entries under a key, the one that holds {@code command} — same command type, same stream
+   * — or {@code null} when none does. Of several (a queue that does not keep one entry per command
+   * under a key) one the retry schedule still replays is chosen, since the command is then queued
+   * for replay.
+   */
+  private DeadLetterQueue.DeadLetterEntry entryOf(
+      List<DeadLetterQueue.DeadLetterEntry> underKey, Command command, StreamId streamId) {
+    String commandType = command.getClass().getName();
+    DeadLetterQueue.DeadLetterEntry match = null;
+    for (DeadLetterQueue.DeadLetterEntry entry : underKey) {
+      if (!commandType.equals(entry.commandType()) || !streamId.equals(entry.streamId())) {
+        continue;
+      }
+      if (outcomeOf(entry) == CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY) {
+        return entry;
+      }
+      if (match == null) {
+        match = entry;
+      }
+    }
+    return match;
+  }
+
+  /**
+   * After a keyed publish: the entry that holds {@code command} under {@code key} when it is not
+   * the one this publish asked to store ({@code commandId}) — another send of the command stored
+   * its entry at the same moment, and the queue, which keeps one entry per command under a key,
+   * stored nothing for this one — or {@code null} when this publish's entry is the one, the queue
+   * does not look entries up by key, or the read failed (the publish then counts as stored, as it
+   * does without the read).
+   */
+  private DeadLetterRecord entryStoredInsteadOf(
+      IdempotencyKey key, Command command, CommandId commandId, StreamId streamId) {
+    if (!deadLetterLookupSupported) {
+      return null;
+    }
+    List<DeadLetterQueue.DeadLetterEntry> underKey;
+    try {
+      underKey = deadLetterQueue.findByIdempotencyKey(key);
+    } catch (RuntimeException readFailure) {
+      LOG.warn(
+          "Could not read back the dead-letter entries under the key of command {} ({}) after"
+              + " storing its entry: {}",
+          LogSanitizer.sanitizeForLog(commandId.value()),
+          command.getClass().getSimpleName(),
+          LogSanitizer.sanitizeFreeText(readFailure.getMessage()));
+      return null;
+    }
+    String commandType = command.getClass().getName();
+    for (DeadLetterQueue.DeadLetterEntry entry : underKey) {
+      if (entry.commandId().equals(commandId)
+          && commandType.equals(entry.commandType())
+          && streamId.equals(entry.streamId())) {
+        return null;
+      }
+    }
+    DeadLetterQueue.DeadLetterEntry match = entryOf(underKey, command, streamId);
+    if (match == null) {
+      return null;
+    }
+    CommandDeadLetteredException.PendingOutcome outcome = outcomeOf(match);
+    LOG.info(
+        "Not storing a second dead-letter entry for command {} ({}): another send under its"
+            + " idempotency key stored entry {} at the same moment, which is {}",
         LogSanitizer.sanitizeForLog(commandId.value()),
         command.getClass().getSimpleName(),
         LogSanitizer.sanitizeForLog(match.commandId().value()),
