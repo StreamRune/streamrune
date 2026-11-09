@@ -853,7 +853,12 @@ class PostgresDeadLetterQueueTest {
 
   @Test
   void deleteOlderThanKeepsEntriesExactlyAtCutoff() throws Exception {
-    Instant cutoff = Instant.now().minus(1, java.time.temporal.ChronoUnit.DAYS);
+    // PostgreSQL stores microseconds: a cutoff with sub-microsecond digits is rounded on the way
+    // in, and the insert literal and the bound parameter need not round it alike.
+    Instant cutoff =
+        Instant.now()
+            .minus(1, java.time.temporal.ChronoUnit.DAYS)
+            .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
     insertWithPublishedAt("e1000000-0000-0000-0000-000000000001", cutoff);
 
     int deleted = dlq.deleteOlderThan(cutoff);
