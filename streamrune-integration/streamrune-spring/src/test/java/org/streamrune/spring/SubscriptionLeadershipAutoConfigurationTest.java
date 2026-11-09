@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * Bean presence/absence for the single-active-consumer wiring: the {@code LeaseBasedLeadership}
@@ -111,17 +112,17 @@ class SubscriptionLeadershipAutoConfigurationTest {
   /** A leadership that holds nothing and grants nothing. */
   static class LeadershipA implements SubscriptionLeadership {
     @Override
-    public Optional<Lease> tryAcquire(String consumerName) {
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
       return Optional.empty();
     }
 
     @Override
-    public Optional<Lease> current(String consumerName) {
+    public Optional<Lease> current(SubscriptionName consumerName) {
       return Optional.empty();
     }
 
     @Override
-    public void resign(String consumerName) {}
+    public void resign(SubscriptionName consumerName) {}
 
     @Override
     public void close() {}

@@ -92,7 +92,7 @@ class StreamEventSubscriptionTest {
     var offsetStore = new InMemoryOffsetStore();
     var sub =
         StreamEventSubscription.builder()
-            .subscriptionName("cart-42-watcher")
+            .subscriptionName(SubscriptionName.of("cart-42-watcher"))
             .streamId(s)
             .eventStore(store)
             .offsetStore(offsetStore)
@@ -464,7 +464,7 @@ class StreamEventSubscriptionTest {
     var store = new InMemoryEventStore();
     var sub =
         StreamEventSubscription.builder()
-            .subscriptionName("cart-9-watcher")
+            .subscriptionName(SubscriptionName.of("cart-9-watcher"))
             .streamId(StreamId.of(TYPE, AggregateId.of("cart-9")))
             .eventStore(store)
             .offsetStore(new InMemoryOffsetStore())
@@ -576,7 +576,7 @@ class StreamEventSubscriptionTest {
     // poison" from "idle".
     StreamSubscription sub =
         StreamEventSubscription.builder()
-            .subscriptionName("poison-sub")
+            .subscriptionName(SubscriptionName.of("poison-sub"))
             .streamId(StreamId.of(TYPE, AggregateId.of("cart-1")))
             .eventStore(poisonedStore())
             .offsetStore(new InMemoryOffsetStore())
@@ -620,7 +620,7 @@ class StreamEventSubscriptionTest {
     // without the test itself waiting out a full production-sized (60s-capped) backoff.
     StreamSubscription sub =
         StreamEventSubscription.builder()
-            .subscriptionName("poison-restart-sub")
+            .subscriptionName(SubscriptionName.of("poison-restart-sub"))
             .streamId(StreamId.of(TYPE, AggregateId.of("cart-1")))
             .eventStore(poisonedStore())
             .offsetStore(new InMemoryOffsetStore())
@@ -668,7 +668,7 @@ class StreamEventSubscriptionTest {
     // readPoisonError() then exposes.
     var impl =
         StreamEventSubscription.builder()
-            .subscriptionName("poison-direct")
+            .subscriptionName(SubscriptionName.of("poison-direct"))
             .streamId(StreamId.of(TYPE, AggregateId.of("cart-1")))
             .eventStore(poisonedStore())
             .offsetStore(new InMemoryOffsetStore())
@@ -711,7 +711,7 @@ class StreamEventSubscriptionTest {
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     var impl =
         StreamEventSubscription.builder()
-            .subscriptionName("blip-sub")
+            .subscriptionName(SubscriptionName.of("blip-sub"))
             .streamId(s)
             .eventStore(store)
             .offsetStore(new InMemoryOffsetStore())
@@ -739,7 +739,7 @@ class StreamEventSubscriptionTest {
     // Opt-out: readPoisonBound(0) keeps the unbounded retry for callers that prefer it.
     var impl =
         StreamEventSubscription.builder()
-            .subscriptionName("unbounded-sub")
+            .subscriptionName(SubscriptionName.of("unbounded-sub"))
             .streamId(StreamId.of(TYPE, AggregateId.of("cart-1")))
             .eventStore(poisonedStore())
             .offsetStore(new InMemoryOffsetStore())

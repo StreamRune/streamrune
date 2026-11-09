@@ -314,8 +314,8 @@ MultiProjectionRunner.builder()
     .eventStore(eventStore)
     .offsetStore(offsetStore)
     .atomicProcessor(jdbcRepo)                       // the JdbcProjectionRepository the TRANSACTIONAL_LOCAL projections write to
-    .register("orders", new OrderProjection(jdbcRepo), ProjectionDeliveryMode.TRANSACTIONAL_LOCAL)
-    .register("audit",  auditProjection,              ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+    .register(ProjectionName.of("orders"), new OrderProjection(jdbcRepo), ProjectionDeliveryMode.TRANSACTIONAL_LOCAL)
+    .register(ProjectionName.of("audit"),  auditProjection,              ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
     .build();
 ```
 

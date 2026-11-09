@@ -40,8 +40,8 @@ public final class SimpleEventTypeRegistry implements EventTypeRegistry {
     if (clazz == null) {
       throw new UnknownEventTypeException(
           "event type",
-          eventType.name(),
-          eventTypes.keySet().stream().map(EventType::name).toList());
+          eventType.value(),
+          eventTypes.keySet().stream().map(EventType::value).toList());
     }
     return clazz;
   }

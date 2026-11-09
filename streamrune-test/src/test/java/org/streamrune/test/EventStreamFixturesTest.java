@@ -247,7 +247,7 @@ class EventStreamFixturesTest {
           }
         } ]
         """
-            .formatted(EventType.fromClass(OrderPlaced.class).name()));
+            .formatted(EventType.fromClass(OrderPlaced.class).value()));
     var store = InMemoryEventStore.serializing(orders(), null).withUpcasters(List.of(QUANTITY));
 
     EventStreamFixtures.appendTo(store, EventStreamFixtures.read(file));

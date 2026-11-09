@@ -13,6 +13,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * A follower says "no subscription anchored" at INFO only when its second consecutive poll finds
@@ -58,7 +59,7 @@ class LeaseFollowerTest {
   @Test
   void anAnchorThatOpensBeforeTheSecondPoll_costsNoLine() {
     leadership.grant(NAME);
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME, now::get);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME), now::get);
     LeaseFollower follower = follower(lease);
     follower.started();
     assertThat(follower.mayAct()).isFalse();
@@ -126,7 +127,7 @@ class LeaseFollowerTest {
   }
 
   private LeaseFollower follower() {
-    return follower(SubscriptionLease.of(leadership, NAME, now::get));
+    return follower(SubscriptionLease.of(leadership, SubscriptionName.of(NAME), now::get));
   }
 
   private LeaseFollower follower(SubscriptionLease lease) {

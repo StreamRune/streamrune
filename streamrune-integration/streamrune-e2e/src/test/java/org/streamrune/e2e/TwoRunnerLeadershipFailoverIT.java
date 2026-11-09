@@ -26,6 +26,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.LeaseBasedLeadership;
@@ -113,7 +114,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
     try {
       // 1. Leader A acquires the name → epoch a (== 1) and commits event 1 under it. Its advancing
       //    commit stamps epoch a onto the checkpoint (GREATEST(0, a)).
-      long epochA = leadershipA.tryAcquire(CONSUMER).orElseThrow().epoch();
+      long epochA = leadershipA.tryAcquire(SubscriptionName.of(CONSUMER)).orElseThrow().epoch();
       assertThat(epochA).as("a first-ever acquisition yields fencing epoch 1").isEqualTo(1L);
 
       commit(repo, projection, offsetStore, /* offset= */ 1L, /* n= */ 0, epochA);
@@ -126,8 +127,8 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
       await()
           .atMost(Duration.ofSeconds(30))
           .pollInterval(Duration.ofMillis(50))
-          .until(() -> leadershipB.tryAcquire(CONSUMER).isPresent());
-      long epochB = leadershipB.current(CONSUMER).orElseThrow().epoch();
+          .until(() -> leadershipB.tryAcquire(SubscriptionName.of(CONSUMER)).isPresent());
+      long epochB = leadershipB.current(SubscriptionName.of(CONSUMER)).orElseThrow().epoch();
       assertThat(epochB)
           .as("taking over the expired lease bumps the fencing epoch by exactly one")
           .isEqualTo(epochA + 1);
@@ -197,15 +198,15 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
     LeaseBasedLeadership leadershipA = new LeaseBasedLeadership(dataSource, SHORT_TTL);
     LeaseBasedLeadership leadershipB = new LeaseBasedLeadership(dataSource, LONG_TTL);
     try {
-      long epochA = leadershipA.tryAcquire(CONSUMER).orElseThrow().epoch();
+      long epochA = leadershipA.tryAcquire(SubscriptionName.of(CONSUMER)).orElseThrow().epoch();
       commit(repo, projection, offsetStore, /* offset= */ 1L, /* n= */ 0, epochA);
       leadershipA.close();
 
       await()
           .atMost(Duration.ofSeconds(30))
           .pollInterval(Duration.ofMillis(50))
-          .until(() -> leadershipB.tryAcquire(CONSUMER).isPresent());
-      long epochB = leadershipB.current(CONSUMER).orElseThrow().epoch();
+          .until(() -> leadershipB.tryAcquire(SubscriptionName.of(CONSUMER)).isPresent());
+      long epochB = leadershipB.current(SubscriptionName.of(CONSUMER)).orElseThrow().epoch();
       assertThat(storedEpoch())
           .as("precondition: the takeover window is open — the row still carries A's epoch")
           .isEqualTo(epochA);
@@ -258,7 +259,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
     try {
       // Seed the checkpoint at (offset 1, epoch a) with A's first commit, then A dies and B takes
       // over at epoch b — but B has NOT yet committed, so the checkpoint still carries epoch a.
-      long epochA = leadershipA.tryAcquire(CONSUMER).orElseThrow().epoch();
+      long epochA = leadershipA.tryAcquire(SubscriptionName.of(CONSUMER)).orElseThrow().epoch();
       assertThat(epochA).isEqualTo(1L);
       commit(repo, projection, offsetStore, /* offset= */ 1L, /* n= */ 0, epochA);
       leadershipA.close();
@@ -266,8 +267,8 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
       await()
           .atMost(Duration.ofSeconds(30))
           .pollInterval(Duration.ofMillis(50))
-          .until(() -> leadershipB.tryAcquire(CONSUMER).isPresent());
-      long epochB = leadershipB.current(CONSUMER).orElseThrow().epoch();
+          .until(() -> leadershipB.tryAcquire(SubscriptionName.of(CONSUMER)).isPresent());
+      long epochB = leadershipB.current(SubscriptionName.of(CONSUMER)).orElseThrow().epoch();
       assertThat(epochB).isEqualTo(epochA + 1);
 
       // Precondition for GENUINE contention: with the checkpoint still at epoch a, a stale-A commit

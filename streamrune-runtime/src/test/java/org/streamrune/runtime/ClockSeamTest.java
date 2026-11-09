@@ -29,6 +29,7 @@ import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.EventStoreFixture;
 import org.streamrune.test.InMemoryEventStore;
@@ -80,7 +81,7 @@ class ClockSeamTest {
     var metrics = new RecordingStreamRuneMetrics();
     var subscription =
         PollingEventSubscription.builder()
-            .subscriptionName("orders")
+            .subscriptionName(SubscriptionName.of("orders"))
             .eventStore(storeWithOneOrder())
             .offsetStore(new InMemoryOffsetStore())
             .listener(taking250ms(clock))
@@ -100,7 +101,7 @@ class ClockSeamTest {
     var metrics = new RecordingStreamRuneMetrics();
     var subscription =
         StreamEventSubscription.builder()
-            .subscriptionName("order-1")
+            .subscriptionName(SubscriptionName.of("order-1"))
             .streamId(ORDER_1)
             .eventStore(storeWithOneOrder())
             .offsetStore(new InMemoryOffsetStore())
@@ -161,7 +162,7 @@ class ClockSeamTest {
             .deadLetterStore(deadLetters)
             .subscriptionConfig(SubscriptionConfig.pollingOnly(Duration.ofMillis(20)))
             .register(
-                "orders",
+                ProjectionName.of("orders"),
                 batch -> {
                   throw new IllegalArgumentException("poison");
                 },
@@ -187,11 +188,12 @@ class ClockSeamTest {
             .eventStore(new InMemoryEventStore())
             .offsetStore(new InMemoryOffsetStore())
             .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
-            .register("orders", batch -> {}, "0 * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("orders"), batch -> {}, "0 * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .clock(clock)
             .build();
 
-    assertThat(runner.status().get("orders").nextFireAt())
+    assertThat(runner.status().get(ProjectionName.of("orders")).nextFireAt())
         .isEqualTo(Instant.parse("2026-01-01T00:01:00Z"));
   }
 

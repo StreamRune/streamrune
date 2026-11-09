@@ -37,6 +37,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
@@ -133,7 +134,7 @@ class MetricsWiringTest {
     var received = new ArrayList<EventEnvelope>();
     var sub =
         PollingEventSubscription.builder()
-            .subscriptionName("sub-1")
+            .subscriptionName(SubscriptionName.of("sub-1"))
             .eventStore(store)
             .offsetStore(offsets)
             .listener(received::addAll)

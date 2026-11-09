@@ -588,8 +588,8 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
      * projection names and other subscription names — required, no default, so two subscriptions on
      * the same stream can never silently share a checkpoint.
      */
-    public Builder subscriptionName(String name) {
-      this.subscriptionName = SubscriptionName.of(name);
+    public Builder subscriptionName(SubscriptionName name) {
+      this.subscriptionName = name;
       return this;
     }
 

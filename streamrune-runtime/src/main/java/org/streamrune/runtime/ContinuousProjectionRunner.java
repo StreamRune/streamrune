@@ -1,5 +1,7 @@
 package org.streamrune.runtime;
 
+import static org.streamrune.runtime.RunnerLeaseRole.consumerName;
+
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
@@ -309,7 +311,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         if (!isRunning()) {
           continue; // stopped during catch-up
         }
-        if (leadership.current(projectionName.value()).isEmpty()) {
+        if (leadership.current(consumerName(projectionName)).isEmpty()) {
           // Lost leadership during (or at the pre-commit re-check of) catch-up: nothing was
           // committed on the lost lease. Drop to STANDBY and back off one poll interval before
           // retrying acquisition, so a flapping/liveness-failing lease does not busy-spin.
@@ -319,7 +321,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         state.set(ProjectionState.LIVE);
         subscribeToLiveEvents(projectionName, projection, mode);
         // Live mode returned. If it was leadership loss (not a stop), stand by before reacquiring.
-        if (isRunning() && leadership.current(projectionName.value()).isEmpty()) {
+        if (isRunning() && leadership.current(consumerName(projectionName)).isEmpty()) {
           standByBeforeRetry(projectionName);
         }
       }
@@ -360,7 +362,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         // socket and leave the lease to expire at its TTL. Clear the flag around it and restore it.
         runHeldFromClose(
             () -> {
-              leadership.resign(projectionName.value());
+              leadership.resign(consumerName(projectionName));
               return null;
             });
       } catch (RuntimeException resignFailure) {
@@ -377,7 +379,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           // unregistration in subscribeToLiveEvents would miss the stop-while-STANDBY and
           // stop-during-catch-up paths, which never reach it).
           if (healthContributor != null) {
-            healthContributor.unregister(projectionName.value());
+            healthContributor.unregister(consumerName(projectionName));
           }
         } else if (healthContributor != null) {
           // Permanent ERROR exit (HALT exhaustion, a live subscription that died, or any thrown
@@ -386,7 +388,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           // frozen. A CLEAN stop already unregistered inside subscribeToLiveEvents; a STANDBY wait
           // never reaches this ERROR branch. A catch-up HALT that never registered a live
           // subscription gets a fresh terminal-DOWN entry created here.
-          healthContributor.markTerminalError(projectionName.value());
+          healthContributor.markTerminalError(consumerName(projectionName));
         }
         // Release the runner BEFORE counting down, so a close() returning from its join finds
         // it IDLE and an immediate restart claims it rather than being refused as a still-stopping
@@ -424,7 +426,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     long standbyMillis = standbyPollMillis();
     boolean announcedStandby = false;
     while (isRunning()) {
-      Optional<SubscriptionLeadership.Lease> lease = leadership.tryAcquire(projectionName.value());
+      Optional<SubscriptionLeadership.Lease> lease =
+          leadership.tryAcquire(consumerName(projectionName));
       if (lease.isPresent()) {
         return lease;
       }
@@ -541,7 +544,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    */
   private boolean stillLeader(ProjectionName projectionName) {
     try {
-      return leadership.current(projectionName.value()).isPresent();
+      return leadership.current(consumerName(projectionName)).isPresent();
     } catch (RuntimeException probeFailed) {
       logger.warn(
           "Projection '{}' could not re-check leadership while classifying an epoch regression;"
@@ -699,7 +702,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       // reading the next page; if we are not the leader, stop catching up so the outer loop drops
       // to STANDBY without advancing the offset. NOOP always returns true, so this is a no-op
       // there.
-      if (leadership.current(projectionName.value()).isEmpty()) {
+      if (leadership.current(consumerName(projectionName)).isEmpty()) {
         return;
       }
       List<EventEnvelope> events;
@@ -884,7 +887,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         // leader re-reads (and re-skips) from the last committed checkpoint. NOOP is always leader,
         // so this path is byte-identical to before for single-instance deployments.
         Optional<SubscriptionLeadership.Lease> skipLease =
-            leadership.current(projectionName.value());
+            leadership.current(consumerName(projectionName));
         if (skipLease.isEmpty()) {
           logger.info(
               "Projection '{}' lost leadership before a SKIP checkpoint advance; abandoning batch"
@@ -948,7 +951,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         // Re-check leadership before advancing past the dead-lettered range: advancing is a forward
         // checkpoint move the monotonic guard cannot reject, so a stale leader must NOT advance.
         Optional<SubscriptionLeadership.Lease> dlqLease =
-            leadership.current(projectionName.value());
+            leadership.current(consumerName(projectionName));
         if (dlqLease.isEmpty()) {
           logger.info(
               "Projection '{}' lost leadership before a DLQ checkpoint advance; abandoning batch"
@@ -1205,7 +1208,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     // committing; the outer loop drops to STANDBY and the next leader re-reads from the last
     // committed checkpoint. NOOP is always leader (epoch 0, unfenced), so single-instance behavior
     // is unchanged.
-    Optional<SubscriptionLeadership.Lease> lease = leadership.current(projectionName.value());
+    Optional<SubscriptionLeadership.Lease> lease = leadership.current(consumerName(projectionName));
     if (lease.isEmpty()) {
       throw new LeadershipLostException(projectionName.value());
     }
@@ -1350,7 +1353,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       // Create default polling subscription with the same wrapped listener.
       PollingEventSubscription.Builder live =
           PollingEventSubscription.builder()
-              .subscriptionName(projectionName.value())
+              .subscriptionName(consumerName(projectionName))
               .eventStore(eventStore)
               .offsetStore(offsetStore)
               .listener(liveListener)
@@ -1389,7 +1392,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         // STANDBY (do NOT error — a failover is expected). Returning here closes the subscription
         // via the finally block; the next leader resumes from the last committed checkpoint. NOOP
         // is always leader, so this never fires in single-instance deployments.
-        if (leadership.current(projectionName.value()).isEmpty()) {
+        if (leadership.current(consumerName(projectionName)).isEmpty()) {
           logger.info(
               "Projection '{}' lost leadership in live mode; stopping subscription and standing by",
               projectionName.value());
@@ -1470,7 +1473,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    */
   private void recordHealthSuccess(ProjectionName projectionName) {
     if (healthContributor != null) {
-      healthContributor.recordSuccess(projectionName.value());
+      healthContributor.recordSuccess(consumerName(projectionName));
     }
   }
 
@@ -1483,7 +1486,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    */
   private void recordHealthError(ProjectionName projectionName) {
     if (healthContributor != null) {
-      healthContributor.recordError(projectionName.value());
+      healthContributor.recordError(consumerName(projectionName));
     }
   }
 
@@ -1534,7 +1537,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       return;
     }
     healthContributor.replaceLifecycle(
-        projectionName.value(), new LiveHealthView(projectionName, lifecycle));
+        consumerName(projectionName), new LiveHealthView(projectionName, lifecycle));
   }
 
   /**
@@ -1589,7 +1592,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     if (healthContributor == null) {
       return;
     }
-    healthContributor.register(projectionName.value(), new RunnerHealthView(projectionName));
+    healthContributor.register(consumerName(projectionName), new RunnerHealthView(projectionName));
   }
 
   /**
@@ -1610,7 +1613,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       return;
     }
     healthContributor.replaceLifecycle(
-        projectionName.value(), new RunnerHealthView(projectionName));
+        consumerName(projectionName), new RunnerHealthView(projectionName));
   }
 
   /**
@@ -1654,7 +1657,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
 
     @Override
     public LeaseRole leaseRole() {
-      return RunnerLeaseRole.of(leadership, projectionName.value());
+      return RunnerLeaseRole.of(leadership, projectionName);
     }
 
     @Override
@@ -1716,7 +1719,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       if (leadership == SubscriptionLeadership.NOOP && live instanceof LeaseRoleAware aware) {
         return aware.leaseRole();
       }
-      return RunnerLeaseRole.of(leadership, projectionName.value());
+      return RunnerLeaseRole.of(leadership, projectionName);
     }
 
     @Override
@@ -1843,7 +1846,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           // subscription's own saveOffset to the same offset is a monotonic no-op. NOOP is always
           // leader at epoch 0 (unfenced), so single-instance behavior is unchanged.
           Optional<SubscriptionLeadership.Lease> skipLease =
-              leadership.current(projectionName.value());
+              leadership.current(consumerName(projectionName));
           if (skipLease.isEmpty()) {
             logger.info(
                 "Projection '{}' lost leadership before a SKIP checkpoint advance in live mode;"
@@ -1885,7 +1888,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           // guard cannot reject, so a stale leader must NOT advance. Capture the held
           // lease so the advance below can be epoch-fenced.
           Optional<SubscriptionLeadership.Lease> dlqLease =
-              leadership.current(projectionName.value());
+              leadership.current(consumerName(projectionName));
           if (dlqLease.isEmpty()) {
             logger.info(
                 "Projection '{}' lost leadership before a DLQ checkpoint advance in live mode; not"

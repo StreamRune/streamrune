@@ -32,6 +32,7 @@ import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.test.InMemoryOffsetStore;
 import org.streamrune.test.InMemoryProjectionRepository;
 
@@ -54,7 +55,8 @@ class ScheduledProjectionRunnerTest {
                     .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
                     .eventStore(emptyStore())
                     .offsetStore(memOffsetStore())
-                    .register("p", b -> {}, "not a cron", AT_LEAST_ONCE_IDEMPOTENT))
+                    .register(
+                        ProjectionName.of("p"), b -> {}, "not a cron", AT_LEAST_ONCE_IDEMPOTENT))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("invalid cron");
   }
@@ -67,7 +69,7 @@ class ScheduledProjectionRunnerTest {
                     .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
                     .eventStore(emptyStore())
                     .offsetStore(memOffsetStore())
-                    .register("p", b -> {}, "", AT_LEAST_ONCE_IDEMPOTENT))
+                    .register(ProjectionName.of("p"), b -> {}, "", AT_LEAST_ONCE_IDEMPOTENT))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -79,8 +81,10 @@ class ScheduledProjectionRunnerTest {
                     .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
                     .eventStore(emptyStore())
                     .offsetStore(memOffsetStore())
-                    .register("p", b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
-                    .register("p", b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+                    .register(
+                        ProjectionName.of("p"), b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+                    .register(
+                        ProjectionName.of("p"), b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("Duplicate");
@@ -99,8 +103,16 @@ class ScheduledProjectionRunnerTest {
                     .eventStore(emptyStore())
                     .offsetStore(memOffsetStore())
                     .atomicProcessor(processor)
-                    .register("orders", b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
-                    .register("order-summary", b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+                    .register(
+                        ProjectionName.of("orders"),
+                        b -> {},
+                        "* * * * * *",
+                        AT_LEAST_ONCE_IDEMPOTENT)
+                    .register(
+                        ProjectionName.of("order-summary"),
+                        b -> {},
+                        "* * * * * *",
+                        AT_LEAST_ONCE_IDEMPOTENT)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("order-summary");
@@ -118,7 +130,7 @@ class ScheduledProjectionRunnerTest {
                     .eventStore(emptyStore())
                     .offsetStore(memOffsetStore())
                     .register(
-                        "p",
+                        ProjectionName.of("p"),
                         b -> {},
                         "* * * * * *",
                         ProjectionErrorStrategy.DLQ,
@@ -180,7 +192,11 @@ class ScheduledProjectionRunnerTest {
                     .eventStore(emptyStore())
                     .offsetStore(repository)
                     .atomicProcessor(repository)
-                    .register("non-write-through", lambda, "* * * * * *", TRANSACTIONAL_LOCAL)
+                    .register(
+                        ProjectionName.of("non-write-through"),
+                        lambda,
+                        "* * * * * *",
+                        TRANSACTIONAL_LOCAL)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("ScheduledProjectionRunner")
@@ -193,7 +209,11 @@ class ScheduledProjectionRunnerTest {
             .eventStore(emptyStore())
             .offsetStore(repository)
             .atomicProcessor(repository)
-            .register("non-write-through", lambda, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("non-write-through"),
+                lambda,
+                "* * * * * *",
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     assertThat(runner).isNotNull();
   }
@@ -205,7 +225,11 @@ class ScheduledProjectionRunnerTest {
                 ScheduledProjectionRunner.builder()
                     .eventStore(emptyStore())
                     .offsetStore(memOffsetStore())
-                    .register("orders", batch -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+                    .register(
+                        ProjectionName.of("orders"),
+                        batch -> {},
+                        "* * * * * *",
+                        AT_LEAST_ONCE_IDEMPOTENT)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage(
@@ -238,7 +262,11 @@ class ScheduledProjectionRunnerTest {
             .batchSize(10)
             .fetchSize(10)
             .atomicProcessor(transactionalProcessor())
-            .register("at-least-once", nonWriteThrough, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("at-least-once"),
+                nonWriteThrough,
+                "* * * * * *",
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -289,12 +317,16 @@ class ScheduledProjectionRunnerTest {
             .fetchSize(10)
             .atomicProcessor(transactionalProcessor())
             .register(
-                "at-least-once",
+                ProjectionName.of("at-least-once"),
                 atLeastOnceLambda,
                 "* * * * * *",
                 ProjectionErrorStrategy.HALT,
                 AT_LEAST_ONCE_IDEMPOTENT)
-            .register("write-through", writeThrough, "* * * * * *", TRANSACTIONAL_LOCAL)
+            .register(
+                ProjectionName.of("write-through"),
+                writeThrough,
+                "* * * * * *",
+                TRANSACTIONAL_LOCAL)
             .build();
     runner.start();
 
@@ -316,12 +348,16 @@ class ScheduledProjectionRunnerTest {
                     .offsetStore(memOffsetStore())
                     .atomicProcessor(transactionalProcessor())
                     .register(
-                        "at-least-once",
+                        ProjectionName.of("at-least-once"),
                         atLeastOnce,
                         "* * * * * *",
                         ProjectionErrorStrategy.HALT,
                         AT_LEAST_ONCE_IDEMPOTENT)
-                    .register("transactional", transactional, "* * * * * *", TRANSACTIONAL_LOCAL)
+                    .register(
+                        ProjectionName.of("transactional"),
+                        transactional,
+                        "* * * * * *",
+                        TRANSACTIONAL_LOCAL)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("'transactional'")
@@ -342,7 +378,7 @@ class ScheduledProjectionRunnerTest {
             .offsetStore(offsets)
             .batchSize(10)
             .fetchSize(10)
-            .register("p", p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("p"), p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -395,7 +431,7 @@ class ScheduledProjectionRunnerTest {
             .batchSize(1)
             .fetchSize(10)
             .atomicProcessor(guarded)
-            .register("p", p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("p"), p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -427,17 +463,17 @@ class ScheduledProjectionRunnerTest {
           final java.util.Optional<Lease> held = java.util.Optional.of(new Lease(1L));
 
           @Override
-          public java.util.Optional<Lease> tryAcquire(String consumerName) {
+          public java.util.Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public java.util.Optional<Lease> current(String consumerName) {
+          public java.util.Optional<Lease> current(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -464,7 +500,7 @@ class ScheduledProjectionRunnerTest {
             .leadership(staleLeadership)
             .deadLetterStore(dlq)
             .register(
-                "fenced",
+                ProjectionName.of("fenced"),
                 batch -> applyCount.addAndGet(batch.size()),
                 "* * * * * *",
                 ProjectionErrorStrategy.SKIP,
@@ -499,17 +535,17 @@ class ScheduledProjectionRunnerTest {
           final java.util.Optional<Lease> held = java.util.Optional.of(new Lease(7L));
 
           @Override
-          public java.util.Optional<Lease> tryAcquire(String consumerName) {
+          public java.util.Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public java.util.Optional<Lease> current(String consumerName) {
+          public java.util.Optional<Lease> current(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -552,7 +588,8 @@ class ScheduledProjectionRunnerTest {
             .fetchSize(10)
             .atomicProcessor(stampingProcessor)
             .leadership(leadership)
-            .register("stamped", batch -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("stamped"), batch -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -577,17 +614,17 @@ class ScheduledProjectionRunnerTest {
           final java.util.Optional<Lease> held = java.util.Optional.of(new Lease(9L));
 
           @Override
-          public java.util.Optional<Lease> tryAcquire(String consumerName) {
+          public java.util.Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public java.util.Optional<Lease> current(String consumerName) {
+          public java.util.Optional<Lease> current(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -635,7 +672,11 @@ class ScheduledProjectionRunnerTest {
             .fetchSize(10)
             .atomicProcessor(failingThenStampingProcessor)
             .leadership(leadership)
-            .register("stamp-fail", batch -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("stamp-fail"),
+                batch -> {},
+                "* * * * * *",
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -670,17 +711,17 @@ class ScheduledProjectionRunnerTest {
           final java.util.Optional<Lease> held = java.util.Optional.of(new Lease(1L));
 
           @Override
-          public java.util.Optional<Lease> tryAcquire(String consumerName) {
+          public java.util.Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public java.util.Optional<Lease> current(String consumerName) {
+          public java.util.Optional<Lease> current(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -711,7 +752,7 @@ class ScheduledProjectionRunnerTest {
             .deadLetterStore(dlq)
             .drainRetryBackoff(Duration.ofMillis(2), Duration.ofMillis(10))
             .register(
-                "a6-skip-fenced",
+                ProjectionName.of("a6-skip-fenced"),
                 batch -> {
                   throw new RuntimeException("poison batch"); // a genuine processing error → SKIP
                 },
@@ -777,7 +818,7 @@ class ScheduledProjectionRunnerTest {
             .fetchSize(10)
             .atomicProcessor(guarded)
             .register(
-                "a6-skip-single-node",
+                ProjectionName.of("a6-skip-single-node"),
                 p,
                 "* * * * * *",
                 ProjectionErrorStrategy.SKIP,
@@ -820,7 +861,7 @@ class ScheduledProjectionRunnerTest {
             .offsetStore(offsets)
             .batchSize(100)
             .fetchSize(100)
-            .register("holed", p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("holed"), p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -851,14 +892,17 @@ class ScheduledProjectionRunnerTest {
             // Fast, small bounds so the terminal HALT is reached quickly instead of over minutes.
             .drainRetryBackoff(Duration.ofMillis(1), Duration.ofMillis(5))
             .maxReadPoisonRetries(3)
-            .register("poison", b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("poison"), b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
     Awaitility.await()
         .atMost(Duration.ofSeconds(5))
-        .until(() -> runner.status().get("poison").state() == ScheduledProjectionState.ERROR);
-    assertThat(runner.status().get("poison").lastError())
+        .until(
+            () ->
+                runner.status().get(ProjectionName.of("poison")).state()
+                    == ScheduledProjectionState.ERROR);
+    assertThat(runner.status().get(ProjectionName.of("poison")).lastError())
         .contains("read/deserialization-level poison");
     // The projection never advanced past the un-readable event.
     assertThat(offsets.getLastOffset(ProjectionName.of("poison")))
@@ -875,15 +919,15 @@ class ScheduledProjectionRunnerTest {
             .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
             .eventStore(store)
             .offsetStore(offsets)
-            .register("p", b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("p"), b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
     Awaitility.await()
         .atMost(Duration.ofSeconds(3))
-        .until(() -> runner.status().get("p").lastFireAt() != null);
+        .until(() -> runner.status().get(ProjectionName.of("p")).lastFireAt() != null);
 
-    var status = runner.status().get("p");
+    var status = runner.status().get(ProjectionName.of("p"));
     assertThat(status.name()).isEqualTo(ProjectionName.of("p"));
     assertThat(status.lastFireAt()).isNotNull();
     assertThat(status.nextFireAt()).isAfter(status.lastFireAt());
@@ -916,7 +960,12 @@ class ScheduledProjectionRunnerTest {
             .fetchSize(10)
             // Tiny backoff so the tick-retry after the transient failure is fast.
             .drainRetryBackoff(Duration.ofMillis(5), Duration.ofMillis(20))
-            .register("p", p, "* * * * * *", ProjectionErrorStrategy.HALT, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("p"),
+                p,
+                "* * * * * *",
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -924,7 +973,8 @@ class ScheduledProjectionRunnerTest {
     Awaitility.await()
         .atMost(Duration.ofSeconds(5))
         .until(() -> offsets.getLastOffset(ProjectionName.of("p")).value() == 1L);
-    assertThat(runner.status().get("p").state()).isNotEqualTo(ScheduledProjectionState.ERROR);
+    assertThat(runner.status().get(ProjectionName.of("p")).state())
+        .isNotEqualTo(ScheduledProjectionState.ERROR);
   }
 
   @Test
@@ -949,15 +999,23 @@ class ScheduledProjectionRunnerTest {
             .offsetStore(offsets)
             .maxTransientRetries(2)
             .drainRetryBackoff(Duration.ofMillis(2), Duration.ofMillis(10))
-            .register("p", p, "* * * * * *", ProjectionErrorStrategy.HALT, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("p"),
+                p,
+                "* * * * * *",
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
     Awaitility.await()
         .atMost(Duration.ofSeconds(5))
-        .until(() -> runner.status().get("p").state() == ScheduledProjectionState.ERROR);
+        .until(
+            () ->
+                runner.status().get(ProjectionName.of("p")).state()
+                    == ScheduledProjectionState.ERROR);
 
-    assertThat(runner.status().get("p").lastError()).contains("boom");
+    assertThat(runner.status().get(ProjectionName.of("p")).lastError()).contains("boom");
     assertThat(offsets.getLastOffset(ProjectionName.of("p")))
         .isEqualTo(GlobalOffset.initial()); // never advanced
     // Halts after EXACTLY maxTransientRetries (=2) consecutive failures of the same chunk,
@@ -990,14 +1048,22 @@ class ScheduledProjectionRunnerTest {
             .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
             .eventStore(store)
             .offsetStore(offsets)
-            .register("p", p, "* * * * * *", ProjectionErrorStrategy.HALT, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("p"),
+                p,
+                "* * * * * *",
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
     Awaitility.await()
         .atMost(Duration.ofSeconds(5))
-        .until(() -> runner.status().get("p").state() == ScheduledProjectionState.ERROR);
-    assertThat(runner.status().get("p").lastError()).contains("scheduled fatal");
+        .until(
+            () ->
+                runner.status().get(ProjectionName.of("p")).state()
+                    == ScheduledProjectionState.ERROR);
+    assertThat(runner.status().get(ProjectionName.of("p")).lastError()).contains("scheduled fatal");
     // The projection never advanced past the fatal chunk.
     assertThat(offsets.getLastOffset(ProjectionName.of("p"))).isEqualTo(GlobalOffset.initial());
   }
@@ -1022,7 +1088,12 @@ class ScheduledProjectionRunnerTest {
             .offsetStore(offsets)
             .batchSize(10)
             .fetchSize(10)
-            .register("p", p, "* * * * * *", ProjectionErrorStrategy.SKIP, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("p"),
+                p,
+                "* * * * * *",
+                ProjectionErrorStrategy.SKIP,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -1030,7 +1101,8 @@ class ScheduledProjectionRunnerTest {
         .atMost(Duration.ofSeconds(5))
         .until(() -> offsets.getLastOffset(ProjectionName.of("p")).value() == 2L);
 
-    assertThat(runner.status().get("p").state()).isNotEqualTo(ScheduledProjectionState.ERROR);
+    assertThat(runner.status().get(ProjectionName.of("p")).state())
+        .isNotEqualTo(ScheduledProjectionState.ERROR);
   }
 
   @Test
@@ -1051,7 +1123,12 @@ class ScheduledProjectionRunnerTest {
             .batchSize(10)
             .fetchSize(10)
             .deadLetterStore(dlq)
-            .register("p", p, "* * * * * *", ProjectionErrorStrategy.DLQ, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("p"),
+                p,
+                "* * * * * *",
+                ProjectionErrorStrategy.DLQ,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -1085,7 +1162,12 @@ class ScheduledProjectionRunnerTest {
             .batchSize(10)
             .fetchSize(10)
             .deadLetterStore(dlq)
-            .register("p", p, "* * * * * *", ProjectionErrorStrategy.DLQ, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("p"),
+                p,
+                "* * * * * *",
+                ProjectionErrorStrategy.DLQ,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -1154,7 +1236,12 @@ class ScheduledProjectionRunnerTest {
             .deadLetterStore(flakyDlq)
             // Tiny drain-retry backoff so the whole-tick retry after a failed write is fast.
             .drainRetryBackoff(Duration.ofMillis(10), Duration.ofMillis(50))
-            .register("p", p, "* * * * * *", ProjectionErrorStrategy.DLQ, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("p"),
+                p,
+                "* * * * * *",
+                ProjectionErrorStrategy.DLQ,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -1165,7 +1252,8 @@ class ScheduledProjectionRunnerTest {
     assertThat(offsets.getLastOffset(ProjectionName.of("p")).value())
         .as("offset must not advance while the dead-letter write is failing")
         .isZero();
-    assertThat(runner.status().get("p").state()).isNotEqualTo(ScheduledProjectionState.ERROR);
+    assertThat(runner.status().get(ProjectionName.of("p")).state())
+        .isNotEqualTo(ScheduledProjectionState.ERROR);
 
     // Recover the store: the next retry dead-letters the range and advances the offset past it.
     storeUp.set(true);
@@ -1173,7 +1261,8 @@ class ScheduledProjectionRunnerTest {
         .atMost(Duration.ofSeconds(10))
         .until(() -> offsets.getLastOffset(ProjectionName.of("p")).value() == 1L);
     assertThat(written).hasSize(1);
-    assertThat(runner.status().get("p").state()).isNotEqualTo(ScheduledProjectionState.ERROR);
+    assertThat(runner.status().get(ProjectionName.of("p")).state())
+        .isNotEqualTo(ScheduledProjectionState.ERROR);
   }
 
   /**
@@ -1228,7 +1317,11 @@ class ScheduledProjectionRunnerTest {
               .deadLetterStore(downDlq)
               .drainRetryBackoff(Duration.ofMillis(10), Duration.ofMillis(50))
               .register(
-                  "p", p, "* * * * * *", ProjectionErrorStrategy.DLQ, AT_LEAST_ONCE_IDEMPOTENT)
+                  ProjectionName.of("p"),
+                  p,
+                  "* * * * * *",
+                  ProjectionErrorStrategy.DLQ,
+                  AT_LEAST_ONCE_IDEMPOTENT)
               .build();
       runner.start();
 
@@ -1338,7 +1431,7 @@ class ScheduledProjectionRunnerTest {
             .offsetStore(offsets)
             .batchSize(10)
             .fetchSize(10)
-            .register("p", p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("p"), p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -1346,9 +1439,12 @@ class ScheduledProjectionRunnerTest {
     // projection thread must NOT die and must NOT be misreported as a clean STOPPED.
     Awaitility.await()
         .atMost(Duration.ofSeconds(15))
-        .until(() -> processed.size() == 1 && runner.status().get("p").lastError() == null);
+        .until(
+            () ->
+                processed.size() == 1
+                    && runner.status().get(ProjectionName.of("p")).lastError() == null);
 
-    var state = runner.status().get("p").state();
+    var state = runner.status().get(ProjectionName.of("p")).state();
     assertThat(state).isNotEqualTo(ScheduledProjectionState.STOPPED);
     assertThat(state).isNotEqualTo(ScheduledProjectionState.ERROR);
   }
@@ -1360,13 +1456,14 @@ class ScheduledProjectionRunnerTest {
             .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
             .eventStore(emptyStore())
             .offsetStore(memOffsetStore())
-            .register("p", b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("p"), b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
     runner.stop();
 
-    assertThat(runner.status().get("p").state()).isEqualTo(ScheduledProjectionState.STOPPED);
+    assertThat(runner.status().get(ProjectionName.of("p")).state())
+        .isEqualTo(ScheduledProjectionState.STOPPED);
   }
 
   @Test
@@ -1381,8 +1478,16 @@ class ScheduledProjectionRunnerTest {
             .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
             .eventStore(store)
             .offsetStore(offsets)
-            .register("a", b -> firedA.set(Instant.now()), "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
-            .register("b", b -> firedB.set(Instant.now()), "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("a"),
+                b -> firedA.set(Instant.now()),
+                "* * * * * *",
+                AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("b"),
+                b -> firedB.set(Instant.now()),
+                "* * * * * *",
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -1390,10 +1495,10 @@ class ScheduledProjectionRunnerTest {
         .atMost(Duration.ofSeconds(3))
         .until(
             () ->
-                runner.status().get("a").lastFireAt() != null
-                    && runner.status().get("b").lastFireAt() != null);
+                runner.status().get(ProjectionName.of("a")).lastFireAt() != null
+                    && runner.status().get(ProjectionName.of("b")).lastFireAt() != null);
 
-    assertThat(runner.status()).containsKeys("a", "b");
+    assertThat(runner.status()).containsKeys(ProjectionName.of("a"), ProjectionName.of("b"));
   }
 
   // === restart: stop()->start() on the same instance ===
@@ -1405,25 +1510,26 @@ class ScheduledProjectionRunnerTest {
             .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
             .eventStore(emptyStore())
             .offsetStore(memOffsetStore())
-            .register("p", b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("p"), b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
     // Wait for at least one cron fire (reported via status.lastFireAt), then stop
     Awaitility.await()
         .atMost(Duration.ofSeconds(5))
-        .until(() -> runner.status().get("p").lastFireAt() != null);
+        .until(() -> runner.status().get(ProjectionName.of("p")).lastFireAt() != null);
     runner.stop();
-    assertThat(runner.status().get("p").state()).isEqualTo(ScheduledProjectionState.STOPPED);
+    assertThat(runner.status().get(ProjectionName.of("p")).state())
+        .isEqualTo(ScheduledProjectionState.STOPPED);
 
     // Second start must not throw and must fire again (lastFireAt advances)
-    Instant fireBeforeRestart = runner.status().get("p").lastFireAt();
+    Instant fireBeforeRestart = runner.status().get(ProjectionName.of("p")).lastFireAt();
     assertThatCode(() -> runner.start()).doesNotThrowAnyException();
     Awaitility.await()
         .atMost(Duration.ofSeconds(5))
         .until(
             () -> {
-              Instant lastFire = runner.status().get("p").lastFireAt();
+              Instant lastFire = runner.status().get(ProjectionName.of("p")).lastFireAt();
               return lastFire != null && lastFire.isAfter(fireBeforeRestart);
             });
     runner.stop();
@@ -1462,7 +1568,7 @@ class ScheduledProjectionRunnerTest {
             .eventStore(store)
             .offsetStore(offsets)
             .stopTimeoutMs(100)
-            .register("p", stuck, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("p"), stuck, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
     try {

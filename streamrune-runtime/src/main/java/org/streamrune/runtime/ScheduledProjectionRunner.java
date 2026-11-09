@@ -1,5 +1,7 @@
 package org.streamrune.runtime;
 
+import static org.streamrune.runtime.RunnerLeaseRole.consumerName;
+
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -208,7 +210,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     if (healthContributor == null) {
       return;
     }
-    healthContributor.register(name.value(), new ScheduledSubscriptionView(name));
+    healthContributor.register(consumerName(name), new ScheduledSubscriptionView(name));
   }
 
   /**
@@ -231,7 +233,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
 
     @Override
     public LeaseRole leaseRole() {
-      return RunnerLeaseRole.of(leadership, name.value());
+      return RunnerLeaseRole.of(leadership, name);
     }
 
     @Override
@@ -312,7 +314,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
         // skips entirely (no read/process/advance) and re-checks on the next fire — takes over on
         // the leader's death. NOOP is always leader, so single-instance behavior is unchanged.
         Optional<SubscriptionLeadership.Lease> tickLease =
-            leadership.tryAcquire(reg.name().value());
+            leadership.tryAcquire(consumerName(reg.name()));
         if (tickLease.isEmpty()) {
           logger.info(
               "Projection '{}' is STANDBY — another instance holds leadership; skipping this tick",
@@ -390,7 +392,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
         runHeldFromStop(
             reg.name(),
             () -> {
-              leadership.resign(reg.name().value());
+              leadership.resign(consumerName(reg.name()));
               return null;
             });
       } catch (RuntimeException resignFailure) {
@@ -410,7 +412,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
           // the /health endpoint — stays DOWN, not merely DEGRADED via lag/error-count. A clean
           // stop() unregisters instead; a STANDBY tick stays SLEEPING and never reaches this ERROR
           // branch.
-          healthContributor.markTerminalError(reg.name().value());
+          healthContributor.markTerminalError(consumerName(reg.name()));
         }
       }
     }
@@ -505,7 +507,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    */
   private boolean stillLeader(ProjectionName projectionName) {
     try {
-      return leadership.current(projectionName.value()).isPresent();
+      return leadership.current(consumerName(projectionName)).isPresent();
     } catch (RuntimeException probeFailed) {
       logger.warn(
           "Projection '{}' could not re-check leadership while classifying an epoch regression;"
@@ -592,7 +594,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
       // stale leader cannot advance offsets — the drain gates every offset-advancing write on live
       // leadership, matching ContinuousProjectionRunner's per-advance re-check. NOOP is always
       // leader, so this is a no-op for single-instance deployments.
-      if (leadership.current(reg.name().value()).isEmpty()) {
+      if (leadership.current(consumerName(reg.name())).isEmpty()) {
         logger.info(
             "Projection '{}' lost leadership before reading the next page; stopping this drain",
             reg.name().value());
@@ -648,7 +650,8 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
           // must NOT commit. Abandon and stop draining without recording success; the next leader
           // re-reads from the last committed offset. NOOP is always leader (epoch 0, unfenced), so
           // this is a no-op for single-instance deployments.
-          Optional<SubscriptionLeadership.Lease> lease = leadership.current(reg.name().value());
+          Optional<SubscriptionLeadership.Lease> lease =
+              leadership.current(consumerName(reg.name()));
           if (lease.isEmpty()) {
             logger.info(
                 "Projection '{}' lost leadership before a checkpoint advance; abandoning batch and"
@@ -865,7 +868,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
         // Re-check leadership before the SKIP checkpoint advance: a forward move the
         // monotonic guard cannot reject, so a stale leader must NOT advance. Return false to stop
         // draining without advancing; the next leader re-reads (and re-skips) from the checkpoint.
-        Optional<SubscriptionLeadership.Lease> lease = leadership.current(reg.name().value());
+        Optional<SubscriptionLeadership.Lease> lease = leadership.current(consumerName(reg.name()));
         if (lease.isEmpty()) {
           logger.info(
               "Projection '{}' lost leadership before a SKIP checkpoint advance; abandoning batch",
@@ -922,7 +925,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
         // advancing is a forward checkpoint move the monotonic guard cannot reject, so a stale
         // leader must NOT advance (and must not write a spurious dead-letter). Return false to stop
         // draining; the next leader re-reads from the last committed checkpoint.
-        Optional<SubscriptionLeadership.Lease> lease = leadership.current(reg.name().value());
+        Optional<SubscriptionLeadership.Lease> lease = leadership.current(consumerName(reg.name()));
         if (lease.isEmpty()) {
           logger.info(
               "Projection '{}' lost leadership before a DLQ checkpoint advance; abandoning batch",
@@ -1195,14 +1198,14 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    */
   private void recordHealthSuccess(ProjectionName projectionName) {
     if (healthContributor != null) {
-      healthContributor.recordSuccess(projectionName.value());
+      healthContributor.recordSuccess(consumerName(projectionName));
     }
   }
 
   /** Feeds a chunk processing failure to the health contributor. No-op when none is wired. */
   private void recordHealthError(ProjectionName projectionName) {
     if (healthContributor != null) {
-      healthContributor.recordError(projectionName.value());
+      healthContributor.recordError(consumerName(projectionName));
     }
   }
 
@@ -1261,7 +1264,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     // registered subscription. No-op when no contributor is wired.
     if (healthContributor != null) {
       for (var reg : registrations) {
-        healthContributor.unregister(reg.name().value());
+        healthContributor.unregister(consumerName(reg.name()));
       }
     }
     // Clear thread references and reset both guards so start() can be called again on the same
@@ -1286,12 +1289,12 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    * Returns an immutable snapshot of the current status for each registered projection, keyed by
    * projection name.
    */
-  public Map<String, ScheduledProjectionStatus> status() {
-    var result = new LinkedHashMap<String, ScheduledProjectionStatus>();
+  public Map<ProjectionName, ScheduledProjectionStatus> status() {
+    var result = new LinkedHashMap<ProjectionName, ScheduledProjectionStatus>();
     for (var reg : registrations) {
       var rs = statuses.get(reg.name());
       result.put(
-          reg.name().value(),
+          reg.name(),
           new ScheduledProjectionStatus(
               reg.name(),
               rs.state,
@@ -1568,7 +1571,8 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
      * @param mode the delivery guarantee this projection declares
      * @throws IllegalArgumentException if the cron is invalid
      */
-    public Builder register(String name, Projection p, String cron, ProjectionDeliveryMode mode) {
+    public Builder register(
+        ProjectionName name, Projection p, String cron, ProjectionDeliveryMode mode) {
       return register(name, p, cron, ProjectionErrorStrategy.HALT, mode);
     }
 
@@ -1584,14 +1588,13 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
      * @throws IllegalArgumentException if the cron is invalid
      */
     public Builder register(
-        String name,
+        ProjectionName name,
         Projection p,
         String cron,
         ProjectionErrorStrategy strategy,
         ProjectionDeliveryMode mode) {
       var parsed = CronExpression.parse(cron, ZoneOffset.UTC);
-      registrations.add(
-          new ScheduledProjectionRegistration(ProjectionName.of(name), p, parsed, strategy, mode));
+      registrations.add(new ScheduledProjectionRegistration(name, p, parsed, strategy, mode));
       return this;
     }
 

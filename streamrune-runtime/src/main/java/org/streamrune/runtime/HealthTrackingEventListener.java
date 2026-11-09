@@ -35,9 +35,9 @@ public final class HealthTrackingEventListener implements EventListener {
   public void onEvents(List<EventEnvelope> events) {
     try {
       delegate.onEvents(events);
-      healthContributor.recordSuccess(subscriptionName.value());
+      healthContributor.recordSuccess(subscriptionName);
     } catch (Throwable t) {
-      healthContributor.recordError(subscriptionName.value());
+      healthContributor.recordError(subscriptionName);
       throw t;
     }
   }

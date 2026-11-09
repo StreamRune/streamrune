@@ -88,7 +88,7 @@ public final class EventPayloadAssertions {
       return STRICT.convertValue(upcast, eventClass);
     } catch (IllegalArgumentException e) {
       throw new AssertionError(
-          upcaster.eventType().name()
+          upcaster.eventType().value()
               + " upcast from version "
               + fromVersion
               + " does not bind to "

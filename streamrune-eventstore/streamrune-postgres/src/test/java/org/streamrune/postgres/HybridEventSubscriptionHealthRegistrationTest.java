@@ -72,7 +72,7 @@ class HybridEventSubscriptionHealthRegistrationTest {
   void startRegistersUnderItsName_closeUnregisters() {
     subscription =
         HybridEventSubscription.builder()
-            .subscriptionName(NAME)
+            .subscriptionName(SubscriptionName.of(NAME))
             .dataSource(deadPool())
             .eventStore(eventStore)
             .offsetStore(offsetStore)
@@ -98,7 +98,7 @@ class HybridEventSubscriptionHealthRegistrationTest {
     leadership.grant(NAME);
     subscription =
         HybridEventSubscription.builder()
-            .subscriptionName(NAME)
+            .subscriptionName(SubscriptionName.of(NAME))
             .dataSource(deadPool())
             .eventStore(eventStore)
             .offsetStore(offsetStore)
@@ -158,7 +158,7 @@ class HybridEventSubscriptionHealthRegistrationTest {
     appendOne();
     subscription =
         HybridEventSubscription.builder()
-            .subscriptionName(NAME)
+            .subscriptionName(SubscriptionName.of(NAME))
             .dataSource(deadPool())
             .eventStore(eventStore)
             .offsetStore(offsetStore)
@@ -199,7 +199,7 @@ class HybridEventSubscriptionHealthRegistrationTest {
     appendOne();
     subscription =
         HybridEventSubscription.builder()
-            .subscriptionName(NAME)
+            .subscriptionName(SubscriptionName.of(NAME))
             .dataSource(deadPool())
             .eventStore(eventStore)
             .offsetStore(offsetStore)
@@ -228,7 +228,7 @@ class HybridEventSubscriptionHealthRegistrationTest {
     appendOne();
     subscription =
         HybridEventSubscription.builder()
-            .subscriptionName(NAME)
+            .subscriptionName(SubscriptionName.of(NAME))
             .dataSource(deadPool())
             .eventStore(eventStore)
             .offsetStore(offsetStore)
@@ -276,7 +276,7 @@ class HybridEventSubscriptionHealthRegistrationTest {
   }
 
   private Optional<SubscriptionHealth> entry(String name) {
-    return contributor.health().stream().filter(h -> h.name().equals(name)).findFirst();
+    return contributor.health().stream().filter(h -> h.name().value().equals(name)).findFirst();
   }
 
   /** A pool whose database nothing listens on: the push path cannot connect. */

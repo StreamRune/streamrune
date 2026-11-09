@@ -45,6 +45,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
@@ -250,17 +251,17 @@ class SagaCompensationRetrySweeperTest {
     }
 
     @Override
-    public Optional<Lease> tryAcquire(String consumerName) {
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
       return leader ? LEASE : Optional.empty();
     }
 
     @Override
-    public Optional<Lease> current(String consumerName) {
+    public Optional<Lease> current(SubscriptionName consumerName) {
       return leader ? LEASE : Optional.empty();
     }
 
     @Override
-    public void resign(String consumerName) {
+    public void resign(SubscriptionName consumerName) {
       resigns++;
     }
 
@@ -432,17 +433,17 @@ class SagaCompensationRetrySweeperTest {
     var leadership =
         new SubscriptionLeadership() {
           @Override
-          public Optional<Lease> tryAcquire(String consumerName) {
+          public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return Optional.of(new Lease(1L));
           }
 
           @Override
-          public Optional<Lease> current(String consumerName) {
+          public Optional<Lease> current(SubscriptionName consumerName) {
             return Optional.of(new Lease(1L));
           }
 
           @Override
-          public void resign(String consumerName) {
+          public void resign(SubscriptionName consumerName) {
             throw new IllegalStateException("wrapped DataSource torn down");
           }
 
@@ -1541,7 +1542,7 @@ class SagaCompensationRetrySweeperTest {
     verifyNoInteractions(leadership);
 
     // Control: the default (re-drive enabled) sweeper DOES take the lease on the same cycle.
-    when(leadership.tryAcquire(org.mockito.ArgumentMatchers.anyString()))
+    when(leadership.tryAcquire(org.mockito.ArgumentMatchers.any(SubscriptionName.class)))
         .thenReturn(java.util.Optional.empty());
     var reDriving =
         SagaCompensationRetrySweeper.<FakeSagaState>builder()
@@ -1555,7 +1556,7 @@ class SagaCompensationRetrySweeperTest {
             .build();
     assertThat(reDriving.isCompensationRetryEnabled()).isTrue();
     reDriving.sweepOnce();
-    verify(leadership).tryAcquire(org.mockito.ArgumentMatchers.anyString());
+    verify(leadership).tryAcquire(org.mockito.ArgumentMatchers.any(SubscriptionName.class));
   }
 
   @Test

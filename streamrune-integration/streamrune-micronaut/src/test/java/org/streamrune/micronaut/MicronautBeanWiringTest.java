@@ -915,16 +915,17 @@ class MicronautBeanWiringTest {
       runner = ctx.getBean(MultiProjectionRunner.class);
 
       long deadline = System.currentTimeMillis() + 10_000;
-      ProjectionState state = runner.status().get("wiring-test-projection").state();
+      ProjectionState state =
+          runner.status().get(ProjectionName.of("wiring-test-projection")).state();
       while (state == ProjectionState.PENDING && System.currentTimeMillis() < deadline) {
         Thread.sleep(50);
-        state = runner.status().get("wiring-test-projection").state();
+        state = runner.status().get(ProjectionName.of("wiring-test-projection")).state();
       }
       assertNotEquals(ProjectionState.PENDING, state, "lifecycle must start the projection runner");
     }
     assertEquals(
         ProjectionState.STOPPED,
-        runner.status().get("wiring-test-projection").state(),
+        runner.status().get(ProjectionName.of("wiring-test-projection")).state(),
         "context shutdown must stop the projection runner");
   }
 
@@ -964,7 +965,7 @@ class MicronautBeanWiringTest {
       var runner = ctx.getBean(MultiProjectionRunner.class);
       assertEquals(
           ProjectionState.PENDING,
-          runner.status().get("wiring-test-projection").state(),
+          runner.status().get(ProjectionName.of("wiring-test-projection")).state(),
           "runner must not start when lifecycle is disabled");
     }
   }
@@ -2204,7 +2205,9 @@ class MicronautBeanWiringTest {
   static class InlineProjectionOverrideFixture {
 
     static final InlineProjectionInterceptor USER =
-        InlineProjectionInterceptor.builder().register("user-inline", batch -> {}).build();
+        InlineProjectionInterceptor.builder()
+            .register(ProjectionName.of("user-inline"), batch -> {})
+            .build();
 
     @Singleton
     InlineProjectionInterceptor userInlineProjectionInterceptor() {

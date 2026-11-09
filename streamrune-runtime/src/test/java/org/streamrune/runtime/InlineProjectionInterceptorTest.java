@@ -16,6 +16,7 @@ import org.streamrune.core.projection.Projection;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
+import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
@@ -32,7 +33,10 @@ class InlineProjectionInterceptorTest {
     Projection b = batch -> calls.add("b:" + batch.size());
 
     var interceptor =
-        InlineProjectionInterceptor.builder().register("a", a).register("b", b).build();
+        InlineProjectionInterceptor.builder()
+            .register(ProjectionName.of("a"), a)
+            .register(ProjectionName.of("b"), b)
+            .build();
 
     interceptor.after(ctxWith(List.of(evt(Instant.parse("2026-01-01T00:00:00Z")))));
 
@@ -49,7 +53,10 @@ class InlineProjectionInterceptorTest {
     Projection b = batch -> calls.add("b");
 
     var interceptor =
-        InlineProjectionInterceptor.builder().register("a", a).register("b", b).build();
+        InlineProjectionInterceptor.builder()
+            .register(ProjectionName.of("a"), a)
+            .register(ProjectionName.of("b"), b)
+            .build();
 
     assertThatThrownBy(
             () -> interceptor.after(ctxWith(List.of(evt(Instant.parse("2026-01-01T00:00:00Z"))))))
@@ -75,9 +82,9 @@ class InlineProjectionInterceptorTest {
 
     var interceptor =
         InlineProjectionInterceptor.builder()
-            .register("a", a)
-            .register("b", b)
-            .register("c", c)
+            .register(ProjectionName.of("a"), a)
+            .register(ProjectionName.of("b"), b)
+            .register(ProjectionName.of("c"), c)
             .build();
 
     assertThatThrownBy(
@@ -100,7 +107,8 @@ class InlineProjectionInterceptorTest {
     var calls = new ArrayList<Integer>();
     Projection p = batch -> calls.add(batch.size());
 
-    var interceptor = InlineProjectionInterceptor.builder().register("p", p).build();
+    var interceptor =
+        InlineProjectionInterceptor.builder().register(ProjectionName.of("p"), p).build();
 
     interceptor.after(ctxWith(List.of()));
 
@@ -132,7 +140,8 @@ class InlineProjectionInterceptorTest {
     var calls = new ArrayList<String>();
     Projection p = batch -> calls.add("p:" + batch.size());
 
-    var interceptor = InlineProjectionInterceptor.builder().register("p", p).build();
+    var interceptor =
+        InlineProjectionInterceptor.builder().register(ProjectionName.of("p"), p).build();
 
     var shortCircuit =
         new CommandBus.CommandResult(
@@ -161,7 +170,8 @@ class InlineProjectionInterceptorTest {
     var calls = new ArrayList<String>();
     Projection p = batch -> calls.add("p:" + batch.size());
 
-    var interceptor = InlineProjectionInterceptor.builder().register("p", p).build();
+    var interceptor =
+        InlineProjectionInterceptor.builder().register(ProjectionName.of("p"), p).build();
 
     interceptor.after(
         new CommandContext(

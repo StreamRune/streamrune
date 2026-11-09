@@ -14,6 +14,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 
 /**
@@ -148,7 +149,8 @@ import org.streamrune.core.types.Version;
 public final class SseEventFeed implements AutoCloseable {
 
   /** The name of the feed's polling subscription; its thread is named after it. */
-  public static final String SUBSCRIPTION_NAME = "streamrune-sse-feed";
+  public static final SubscriptionName SUBSCRIPTION_NAME =
+      SubscriptionName.of("streamrune-sse-feed");
 
   /** The polling interval the integrations use when none is configured. */
   public static final Duration DEFAULT_POLLING_INTERVAL = Duration.ofSeconds(1);

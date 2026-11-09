@@ -213,7 +213,8 @@ public class ProjectionFactory {
     }
 
     for (var e : entries) {
-      builder.register(e.name(), e.projection(), e.errorStrategy(), e.deliveryMode());
+      builder.register(
+          ProjectionName.of(e.name()), e.projection(), e.errorStrategy(), e.deliveryMode());
     }
 
     return builder.build();
@@ -310,7 +311,8 @@ public class ProjectionFactory {
       if (cron == null || cron.isBlank()) {
         throw new IllegalStateException(ProjectionDiscoveryMessages.cronRequired(e.name()));
       }
-      builder.register(e.name(), e.projection(), cron, e.errorStrategy(), e.deliveryMode());
+      builder.register(
+          ProjectionName.of(e.name()), e.projection(), cron, e.errorStrategy(), e.deliveryMode());
     }
 
     return builder.build();
@@ -357,7 +359,7 @@ public class ProjectionFactory {
       if (metrics != null) {
         metrics.recordProjectionDeliveryMode(ProjectionName.of(e.name()), e.deliveryMode());
       }
-      builder.register(e.name(), e.projection());
+      builder.register(ProjectionName.of(e.name()), e.projection());
     }
 
     return builder.build();

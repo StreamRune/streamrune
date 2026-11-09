@@ -40,6 +40,7 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.crypto.CryptoConfigValidator;
 import org.streamrune.crypto.CryptoShreddingModule;
 
@@ -192,7 +193,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
    * The single-active-consumer name this runner coordinates on. There is exactly one dead-letter
    * retry consumer per deployment, so the name is a fixed constant rather than configurable.
    */
-  static final String CONSUMER_NAME = "dead-letter-retry";
+  static final SubscriptionName CONSUMER_NAME = SubscriptionName.of("dead-letter-retry");
 
   /** What one replay of a dead-letter entry did. */
   public enum RetryOutcome {
@@ -1152,7 +1153,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
                     + " reads that version succeeds.",
                 LogSanitizer.sanitizeForLog(entry.commandId().value()),
                 entry.commandType(),
-                LogSanitizer.sanitizeForLog(behind.eventType().name()),
+                LogSanitizer.sanitizeForLog(behind.eventType().value()),
                 behind.readerVersion(),
                 behind.storedVersion());
         // The replay's time, with the attempt count as it was: the entry leaves the head of the
@@ -1790,7 +1791,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     void add(String commandType, EventSchemaAheadException behind) {
       replays++;
       schemas.add(
-          LogSanitizer.sanitizeForLog(behind.eventType().name())
+          LogSanitizer.sanitizeForLog(behind.eventType().value())
               + " stored at schema version "
               + behind.storedVersion()
               + ", read up to "

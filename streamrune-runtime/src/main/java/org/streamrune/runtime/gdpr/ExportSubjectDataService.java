@@ -123,7 +123,7 @@ public final class ExportSubjectDataService {
           // a partial export that application code may handle and carry on from.
           throw error;
         }
-        throw new GdprExportException(subjectId.value(), name, sections, t);
+        throw new GdprExportException(subjectId, name, sections, t);
       }
     }
 

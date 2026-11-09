@@ -42,10 +42,16 @@ public interface QueryAuthorizer {
    * serves nothing (no stale hit) and stores nothing (the delegate is never called, so there is
    * nothing to cache).
    *
-   * @param query the query about to be served from cache or dispatched to the delegate
+   * <p>The parameter order matches {@link CommandAuthorizationPolicy#authorize}: the caller first,
+   * then what it asks for. Pre-release builds took {@code (query, user)}. A lambda written for that
+   * order whose body uses its parameters only through untyped checks (such as a {@code null} check
+   * of the user) still compiles against this order and then checks the wrong argument, so name the
+   * parameters {@code (user, query)} when moving such a lambda.
+   *
    * @param user the calling user's {@link UserId} from {@link StreamRuneContext}, or {@code null}
    *     when no identity is bound
+   * @param query the query about to be served from cache or dispatched to the delegate
    * @throws AuthorizationException if {@code user} is not authorized for {@code query}
    */
-  void authorize(Query<?> query, UserId user);
+  void authorize(UserId user, Query<?> query);
 }

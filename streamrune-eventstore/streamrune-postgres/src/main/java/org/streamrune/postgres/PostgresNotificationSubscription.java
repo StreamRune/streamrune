@@ -387,7 +387,7 @@ public final class PostgresNotificationSubscription implements EventSubscription
         return lease;
       }
       if (leadership != null && subscriptionName != null) {
-        return SubscriptionLease.of(leadership, subscriptionName.value());
+        return SubscriptionLease.of(leadership, subscriptionName);
       }
       return SubscriptionLease.ungated();
     }

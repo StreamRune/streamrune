@@ -50,6 +50,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.SagaStepLockFixture.Opened;
 import org.streamrune.test.InMemoryOffsetStore;
@@ -171,7 +172,7 @@ class PollingEventSubscriptionLeaseTest {
     await().atMost(5, TimeUnit.SECONDS).until(() -> leadership.resigns(NAME) == 1);
     InOrder order = inOrder(offsetStore, leadership);
     order.verify(offsetStore).saveOffset(eq(CHECKPOINT), eq(GlobalOffset.of(1)));
-    order.verify(leadership).resign(NAME);
+    order.verify(leadership).resign(SubscriptionName.of(NAME));
 
     subscription.resume();
     await().atMost(5, TimeUnit.SECONDS).until(() -> leadership.tryAcquires(NAME) == 2);
@@ -201,7 +202,7 @@ class PollingEventSubscriptionLeaseTest {
     assertThat(leadership.resigns(NAME)).isEqualTo(1);
     InOrder order = inOrder(offsetStore, leadership);
     order.verify(offsetStore).saveOffset(eq(CHECKPOINT), eq(GlobalOffset.of(1)));
-    order.verify(leadership).resign(NAME);
+    order.verify(leadership).resign(SubscriptionName.of(NAME));
     assertThat(subscription.lease().isLeadingHere()).isFalse();
   }
 
@@ -274,7 +275,7 @@ class PollingEventSubscriptionLeaseTest {
 
   @Test
   void aSecondSubscriptionOfTheSameLeaseIsRefusedAtStart() {
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME));
     PollingEventSubscription first = track(builder().lease(lease).build());
     PollingEventSubscription second = track(builder().lease(lease).build());
     first.start();
@@ -292,7 +293,7 @@ class PollingEventSubscriptionLeaseTest {
       assertThatThrownBy(
               () ->
                   PollingEventSubscription.builder()
-                      .subscriptionName(NAME)
+                      .subscriptionName(SubscriptionName.of(NAME))
                       .eventStore(eventStore)
                       .offsetStore(offsetStore)
                       .sagaRunner(process.runner)
@@ -312,7 +313,7 @@ class PollingEventSubscriptionLeaseTest {
       assertThatThrownBy(
               () ->
                   PollingEventSubscription.builder()
-                      .subscriptionName(NAME)
+                      .subscriptionName(SubscriptionName.of(NAME))
                       .eventStore(eventStore)
                       .offsetStore(offsetStore)
                       .sagaRunner(process.runner)
@@ -331,7 +332,7 @@ class PollingEventSubscriptionLeaseTest {
       assertThatThrownBy(
               () ->
                   PollingEventSubscription.builder()
-                      .subscriptionName(NAME)
+                      .subscriptionName(SubscriptionName.of(NAME))
                       .eventStore(eventStore)
                       .offsetStore(offsetStore)
                       .sagaRunner(process.runner)
@@ -349,7 +350,7 @@ class PollingEventSubscriptionLeaseTest {
     assertThatThrownBy(
             () ->
                 builder()
-                    .lease(SubscriptionLease.of(leadership, NAME))
+                    .lease(SubscriptionLease.of(leadership, SubscriptionName.of(NAME)))
                     .leadership(leadership)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
@@ -385,7 +386,7 @@ class PollingEventSubscriptionLeaseTest {
       PollingEventSubscription subscription =
           track(
               PollingEventSubscription.builder()
-                  .subscriptionName("orders-saga")
+                  .subscriptionName(SubscriptionName.of("orders-saga"))
                   .eventStore(process.eventStore)
                   .offsetStore(new InMemoryOffsetStore())
                   .config(SubscriptionConfig.pollingOnly(POLLING))
@@ -406,7 +407,7 @@ class PollingEventSubscriptionLeaseTest {
     PollingEventSubscription subscription =
         track(
             PollingEventSubscription.builder()
-                .subscriptionName("payments")
+                .subscriptionName(SubscriptionName.of("payments"))
                 .eventStore(eventStore)
                 .offsetStore(offsetStore)
                 .listener(delivered::addAll)
@@ -417,7 +418,7 @@ class PollingEventSubscriptionLeaseTest {
     subscription.start();
 
     await().atMost(5, TimeUnit.SECONDS).until(() -> leadership.tryAcquires("payments") == 1);
-    assertThat(subscription.lease().name()).isEqualTo("payments");
+    assertThat(subscription.lease().name()).isEqualTo(SubscriptionName.of("payments"));
     assertThat(subscription.lease().isGated()).isTrue();
   }
 
@@ -475,7 +476,7 @@ class PollingEventSubscriptionLeaseTest {
     await().atMost(5, TimeUnit.SECONDS).until(() -> leadership.resigns(NAME) == 1);
     InOrder order = inOrder(offsetStore, leadership);
     order.verify(offsetStore).saveOffset(eq(CHECKPOINT), eq(GlobalOffset.of(1)));
-    order.verify(leadership).resign(NAME);
+    order.verify(leadership).resign(SubscriptionName.of(NAME));
   }
 
   @Test
@@ -539,7 +540,7 @@ class PollingEventSubscriptionLeaseTest {
     assertThat(self[0].state()).isEqualTo(SubscriptionLifecycleState.STOPPED);
     InOrder order = inOrder(offsetStore, leadership);
     order.verify(offsetStore).saveOffset(eq(CHECKPOINT), eq(GlobalOffset.of(2)));
-    order.verify(leadership).resign(NAME);
+    order.verify(leadership).resign(SubscriptionName.of(NAME));
     assertThat(leadership.resigns(NAME)).isEqualTo(1);
   }
 
@@ -601,7 +602,7 @@ class PollingEventSubscriptionLeaseTest {
     assertThat(self[0].state()).isEqualTo(SubscriptionLifecycleState.STOPPED);
     InOrder order = inOrder(offsetStore, leadership);
     order.verify(offsetStore).saveOffset(eq(CHECKPOINT), eq(GlobalOffset.of(1)));
-    order.verify(leadership).resign(NAME);
+    order.verify(leadership).resign(SubscriptionName.of(NAME));
     assertThat(leadership.resigns(NAME)).isEqualTo(1);
   }
 
@@ -668,7 +669,7 @@ class PollingEventSubscriptionLeaseTest {
 
   private PollingEventSubscription.Builder builder() {
     return PollingEventSubscription.builder()
-        .subscriptionName(NAME)
+        .subscriptionName(SubscriptionName.of(NAME))
         .eventStore(eventStore)
         .offsetStore(offsetStore)
         .listener(delivered::addAll)
@@ -677,7 +678,9 @@ class PollingEventSubscriptionLeaseTest {
 
   /** A subscription over the lease {@link #NAME} of {@link #leadership}. */
   private PollingEventSubscription leased(UnaryOperator<PollingEventSubscription.Builder> more) {
-    return track(more.apply(builder().lease(SubscriptionLease.of(leadership, NAME))).build());
+    return track(
+        more.apply(builder().lease(SubscriptionLease.of(leadership, SubscriptionName.of(NAME))))
+            .build());
   }
 
   private PollingEventSubscription track(PollingEventSubscription subscription) {

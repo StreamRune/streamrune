@@ -80,7 +80,7 @@ class ScheduledProjectionDeadLetterBacklogMetricTest {
             .deadLetterStore(dlq)
             .metrics(metrics)
             .register(
-                "orders",
+                ProjectionName.of("orders"),
                 batch -> {},
                 "* * * * * *",
                 ProjectionErrorStrategy.SKIP,
@@ -137,7 +137,7 @@ class ScheduledProjectionDeadLetterBacklogMetricTest {
             .deadLetterStore(uncountable)
             .metrics(metrics)
             .register(
-                "orders",
+                ProjectionName.of("orders"),
                 batch -> {},
                 "* * * * * *",
                 ProjectionErrorStrategy.SKIP,

@@ -30,6 +30,7 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * Bridges a {@link SagaOrchestrator} to an {@link EventListener}.
@@ -336,7 +337,7 @@ public final class SagaRunner<S extends SagaState> {
     this.lease =
         SubscriptionLease.of(
             builder.leadership != null ? builder.leadership : SubscriptionLeadership.NOOP,
-            LEASE_NAME_PREFIX + sagaType.value());
+            SubscriptionName.of(LEASE_NAME_PREFIX + sagaType.value()));
   }
 
   /**

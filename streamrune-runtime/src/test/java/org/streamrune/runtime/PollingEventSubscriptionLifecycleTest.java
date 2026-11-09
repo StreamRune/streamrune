@@ -20,6 +20,7 @@ import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SubscriptionName;
 
 /** Lifecycle state-machine tests for PollingEventSubscription. */
 @ExtendWith(MockitoExtension.class)
@@ -37,7 +38,7 @@ class PollingEventSubscriptionLifecycleTest {
 
   private PollingEventSubscription buildSub() {
     return PollingEventSubscription.builder()
-        .subscriptionName("test")
+        .subscriptionName(SubscriptionName.of("test"))
         .eventStore(eventStore)
         .offsetStore(offsetStore)
         .listener(listener)
@@ -136,7 +137,7 @@ class PollingEventSubscriptionLifecycleTest {
 
     var sub =
         PollingEventSubscription.builder()
-            .subscriptionName("b6-regression")
+            .subscriptionName(SubscriptionName.of("b6-regression"))
             .eventStore(eventStore)
             .offsetStore(blockingOffsetStore)
             .listener(listener)

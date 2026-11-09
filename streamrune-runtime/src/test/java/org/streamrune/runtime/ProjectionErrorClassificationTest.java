@@ -329,7 +329,7 @@ class ProjectionErrorClassificationTest {
             .fetchSize(10)
             .deadLetterStore(dlq)
             .register(
-                "sched-transient",
+                ProjectionName.of("sched-transient"),
                 failsTwiceThenOk,
                 "* * * * * *",
                 ProjectionErrorStrategy.DLQ,
@@ -365,7 +365,7 @@ class ProjectionErrorClassificationTest {
             .fetchSize(10)
             .deadLetterStore(dlq)
             .register(
-                "sched-poison",
+                ProjectionName.of("sched-poison"),
                 poison,
                 "* * * * * *",
                 ProjectionErrorStrategy.DLQ,

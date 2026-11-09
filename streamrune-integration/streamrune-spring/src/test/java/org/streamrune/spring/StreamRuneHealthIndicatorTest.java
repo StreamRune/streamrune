@@ -25,6 +25,7 @@ import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.runtime.BackgroundRelayHealthContributor;
 import org.streamrune.runtime.SubscriptionHealthContributor;
 
@@ -147,7 +148,7 @@ class StreamRuneHealthIndicatorTest {
         .thenReturn(
             List.of(
                 new SubscriptionHealth(
-                    "orders",
+                    SubscriptionName.of("orders"),
                     SubscriptionLifecycleState.RUNNING,
                     5,
                     0,
@@ -171,14 +172,14 @@ class StreamRuneHealthIndicatorTest {
         .thenReturn(
             List.of(
                 new SubscriptionHealth(
-                    "orders-saga",
+                    SubscriptionName.of("orders-saga"),
                     SubscriptionLifecycleState.RUNNING,
                     5,
                     0,
                     SubscriptionHealth.Status.UP,
                     LeaseRole.LEADING),
                 new SubscriptionHealth(
-                    "orders",
+                    SubscriptionName.of("orders"),
                     SubscriptionLifecycleState.RUNNING,
                     5,
                     0,
@@ -206,7 +207,7 @@ class StreamRuneHealthIndicatorTest {
         .thenReturn(
             List.of(
                 new SubscriptionHealth(
-                    "orders",
+                    SubscriptionName.of("orders"),
                     SubscriptionLifecycleState.STOPPED,
                     0,
                     0,
@@ -235,7 +236,7 @@ class StreamRuneHealthIndicatorTest {
     SubscriptionLifecycle orders = mock(SubscriptionLifecycle.class);
     when(orders.state()).thenReturn(SubscriptionLifecycleState.RUNNING);
     var contributor = new SubscriptionHealthContributor(eventStore, offsetStore);
-    contributor.register("orders", orders);
+    contributor.register(SubscriptionName.of("orders"), orders);
     return contributor;
   }
 
@@ -263,7 +264,7 @@ class StreamRuneHealthIndicatorTest {
     DataSource ds = validDataSource();
     stubEmptyEventStream(ds);
     var contributor = contributorWithOrdersAt(10, 10);
-    contributor.markTerminalError("orders");
+    contributor.markTerminalError(SubscriptionName.of("orders"));
 
     Health health = new StreamRuneHealthIndicator(ds, contributor).health();
 
@@ -284,7 +285,7 @@ class StreamRuneHealthIndicatorTest {
         .thenReturn(
             List.of(
                 new SubscriptionHealth(
-                    "orders",
+                    SubscriptionName.of("orders"),
                     SubscriptionLifecycleState.STOPPED,
                     0,
                     0,

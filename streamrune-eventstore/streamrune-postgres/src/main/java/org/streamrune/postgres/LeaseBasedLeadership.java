@@ -17,6 +17,7 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * PostgreSQL {@link SubscriptionLeadership} backed by a persisted, <b>DB-clocked</b> lease with a
@@ -148,7 +149,7 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
   private final long ttlNanos;
   private final LongSupplier nanoTime;
   private final String holderId = UUID.randomUUID().toString();
-  private final ConcurrentHashMap<String, HeldLease> held = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<SubscriptionName, HeldLease> held = new ConcurrentHashMap<>();
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private final Thread heartbeat;
 
@@ -210,7 +211,7 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
   }
 
   @Override
-  public Optional<Lease> tryAcquire(String consumerName) {
+  public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
     if (closed.get()) {
       return Optional.empty();
     }
@@ -288,7 +289,7 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
   }
 
   @Override
-  public Optional<Lease> current(String consumerName) {
+  public Optional<Lease> current(SubscriptionName consumerName) {
     HeldLease lease = held.get(consumerName);
     if (lease == null) {
       return Optional.empty();
@@ -303,11 +304,11 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
   }
 
   @Override
-  public void resign(String consumerName) {
+  public void resign(SubscriptionName consumerName) {
     held.remove(consumerName);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(EXPIRE_SQL)) {
-      ps.setString(1, consumerName);
+      ps.setString(1, consumerName.value());
       ps.setString(2, holderId);
       PostgresTransactions.commitIfManual(conn, "lease expire", c -> ps.executeUpdate());
     } catch (SQLException | RuntimeException e) {
@@ -332,7 +333,7 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
       return;
     }
     heartbeat.interrupt();
-    for (String consumerName : List.copyOf(held.keySet())) {
+    for (SubscriptionName consumerName : List.copyOf(held.keySet())) {
       resign(consumerName);
     }
   }
@@ -378,14 +379,14 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
    */
   private void standDownTerminally(Error fatal) {
     closed.set(true);
-    List<String> names = List.copyOf(held.keySet());
+    List<SubscriptionName> names = List.copyOf(held.keySet());
     held.clear();
     LOG.error(
         "lease heartbeat terminated on an unrecoverable error — standing down from leases {}"
             + " permanently; this replica will not lead again until restarted",
         names,
         fatal);
-    for (String name : names) {
+    for (SubscriptionName name : names) {
       try {
         resign(name);
       } catch (RuntimeException e) {
@@ -407,7 +408,7 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
     }
     try (Connection conn = dataSource.getConnection()) {
       for (var entry : held.entrySet()) {
-        String consumerName = entry.getKey();
+        SubscriptionName consumerName = entry.getKey();
         HeldLease current = entry.getValue();
         try {
           if (PostgresTransactions.commitIfManual(
@@ -458,9 +459,10 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
     return elapsed > ttlNanos || elapsed < 0;
   }
 
-  private Optional<Long> acquire(Connection conn, String consumerName) throws SQLException {
+  private Optional<Long> acquire(Connection conn, SubscriptionName consumerName)
+      throws SQLException {
     try (PreparedStatement ps = conn.prepareStatement(ACQUIRE_SQL)) {
-      ps.setString(1, consumerName);
+      ps.setString(1, consumerName.value());
       ps.setString(2, holderId);
       ps.setLong(3, ttlMillis);
       try (ResultSet rs = ps.executeQuery()) {
@@ -469,10 +471,11 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
     }
   }
 
-  Optional<Long> renew(Connection conn, String consumerName, long epoch) throws SQLException {
+  Optional<Long> renew(Connection conn, SubscriptionName consumerName, long epoch)
+      throws SQLException {
     try (PreparedStatement ps = conn.prepareStatement(RENEW_SQL)) {
       ps.setLong(1, ttlMillis);
-      ps.setString(2, consumerName);
+      ps.setString(2, consumerName.value());
       ps.setString(3, holderId);
       ps.setLong(4, epoch);
       try (ResultSet rs = ps.executeQuery()) {

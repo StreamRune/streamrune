@@ -95,7 +95,7 @@ class PollingEventSubscriptionTest {
   void shouldThrowOnMissingEventStore() {
     var builder =
         PollingEventSubscription.builder()
-            .subscriptionName("test")
+            .subscriptionName(SubscriptionName.of("test"))
             .offsetStore(null)
             .listener(null)
             .config(config);
@@ -107,7 +107,7 @@ class PollingEventSubscriptionTest {
   void shouldThrowOnMissingOffsetStore() {
     var builder =
         PollingEventSubscription.builder()
-            .subscriptionName("test")
+            .subscriptionName(SubscriptionName.of("test"))
             .eventStore(null)
             .listener(null)
             .config(config);
@@ -119,7 +119,7 @@ class PollingEventSubscriptionTest {
   void shouldThrowOnMissingListener() {
     var builder =
         PollingEventSubscription.builder()
-            .subscriptionName("test")
+            .subscriptionName(SubscriptionName.of("test"))
             .eventStore(null)
             .offsetStore(null)
             .config(config);
@@ -131,7 +131,7 @@ class PollingEventSubscriptionTest {
   void shouldThrowOnMissingConfig() {
     var builder =
         PollingEventSubscription.builder()
-            .subscriptionName("test")
+            .subscriptionName(SubscriptionName.of("test"))
             .eventStore(null)
             .offsetStore(null)
             .listener(null)
@@ -144,7 +144,7 @@ class PollingEventSubscriptionTest {
   void shouldThrowOnInvalidFetchSize() {
     var builder =
         PollingEventSubscription.builder()
-            .subscriptionName("test")
+            .subscriptionName(SubscriptionName.of("test"))
             .eventStore(null)
             .offsetStore(null)
             .listener(null)
@@ -168,7 +168,7 @@ class PollingEventSubscriptionTest {
 
     var sub =
         PollingEventSubscription.builder()
-            .subscriptionName("test-sub")
+            .subscriptionName(SubscriptionName.of("test-sub"))
             .eventStore(store)
             .offsetStore(offsetStore)
             .listener(listener)
@@ -527,7 +527,7 @@ class PollingEventSubscriptionTest {
     var store = new InMemoryEventStore();
     var sub =
         PollingEventSubscription.builder()
-            .subscriptionName("with-defaults")
+            .subscriptionName(SubscriptionName.of("with-defaults"))
             .eventStore(store)
             .offsetStore(new InMemoryOffsetStore())
             .listener(e -> {})

@@ -147,14 +147,14 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
               Released.class,
               Refunded.class)
           .stream()
-          .collect(Collectors.toMap(type -> EventType.fromClass(type).name(), type -> type));
+          .collect(Collectors.toMap(type -> EventType.fromClass(type).value(), type -> type));
 
   /** Resolves the saga's trigger events and the events its commands store. */
   static final EventTypeRegistry REGISTRY =
       new EventTypeRegistry() {
         @Override
         public Class<?> resolveEventType(EventType eventType) {
-          Class<?> type = EVENT_TYPES.get(eventType.name());
+          Class<?> type = EVENT_TYPES.get(eventType.value());
           if (type == null) {
             throw new IllegalArgumentException("Unknown event type: " + eventType);
           }

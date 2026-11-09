@@ -156,8 +156,8 @@ class ProjectionDeliveryModeRunnerTest {
             .offsetStore(repo)
             .atomicProcessor(repo)
             .batchSize(10)
-            .register("tl", tl, TRANSACTIONAL_LOCAL)
-            .register("alo", alo, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("tl"), tl, TRANSACTIONAL_LOCAL)
+            .register(ProjectionName.of("alo"), alo, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
     try {
@@ -187,8 +187,8 @@ class ProjectionDeliveryModeRunnerTest {
             .offsetStore(repo)
             .atomicProcessor(repo)
             .batchSize(10)
-            .register("tl", tl, "* * * * * *", TRANSACTIONAL_LOCAL)
-            .register("alo", alo, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("tl"), tl, "* * * * * *", TRANSACTIONAL_LOCAL)
+            .register(ProjectionName.of("alo"), alo, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
     try {
@@ -441,7 +441,7 @@ class ProjectionDeliveryModeRunnerTest {
             .deadLetterStore(dlq)
             .batchSize(10)
             .register(
-                "ctr",
+                ProjectionName.of("ctr"),
                 batch -> counter.addAndGet(batch.size()),
                 "* * * * * *",
                 ProjectionErrorStrategy.DLQ,
@@ -475,8 +475,8 @@ class ProjectionDeliveryModeRunnerTest {
             .offsetStore(repo)
             .atomicProcessor(repo)
             .metrics(metrics)
-            .register("orders", tl, TRANSACTIONAL_LOCAL)
-            .register("audit", batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("orders"), tl, TRANSACTIONAL_LOCAL)
+            .register(ProjectionName.of("audit"), batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
     try {

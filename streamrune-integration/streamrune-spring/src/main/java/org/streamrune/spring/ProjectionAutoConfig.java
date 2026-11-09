@@ -153,7 +153,8 @@ public class ProjectionAutoConfig {
       requireNoDlqStrategy(entries);
     }
     for (var e : entries) {
-      builder.register(e.name(), e.projection(), e.errorStrategy(), e.deliveryMode());
+      builder.register(
+          ProjectionName.of(e.name()), e.projection(), e.errorStrategy(), e.deliveryMode());
     }
     return builder.build();
   }
@@ -230,7 +231,12 @@ public class ProjectionAutoConfig {
       if (e.cron() == null || e.cron().isBlank()) {
         throw new IllegalStateException(ProjectionDiscoveryMessages.cronRequired(e.name()));
       }
-      builder.register(e.name(), e.projection(), e.cron(), e.errorStrategy(), e.deliveryMode());
+      builder.register(
+          ProjectionName.of(e.name()),
+          e.projection(),
+          e.cron(),
+          e.errorStrategy(),
+          e.deliveryMode());
     }
     return builder.build();
   }
@@ -278,7 +284,7 @@ public class ProjectionAutoConfig {
       log.info(ProjectionProcessorResolution.INLINE_INFO, LogSanitizer.sanitizeForLog(e.name()));
       metricsProvider.ifAvailable(
           m -> m.recordProjectionDeliveryMode(ProjectionName.of(e.name()), e.deliveryMode()));
-      builder.register(e.name(), e.projection());
+      builder.register(ProjectionName.of(e.name()), e.projection());
     }
     return builder.build();
   }

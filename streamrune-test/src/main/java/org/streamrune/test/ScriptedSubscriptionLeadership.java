@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.locks.ReentrantLock;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * A {@link SubscriptionLeadership} the test scripts: it hands out a lease only after {@link
@@ -37,7 +38,7 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
 public class ScriptedSubscriptionLeadership implements SubscriptionLeadership {
 
   private final ReentrantLock lock = new ReentrantLock();
-  private final Map<String, Lease> held = new HashMap<>();
+  private final Map<SubscriptionName, Lease> held = new HashMap<>();
   private boolean granting;
   private long lastEpoch;
   private int attempts;
@@ -148,7 +149,7 @@ public class ScriptedSubscriptionLeadership implements SubscriptionLeadership {
   }
 
   @Override
-  public Optional<Lease> tryAcquire(String consumerName) {
+  public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
     Objects.requireNonNull(consumerName, "consumerName is required");
     lock.lock();
     try {
@@ -169,7 +170,7 @@ public class ScriptedSubscriptionLeadership implements SubscriptionLeadership {
   }
 
   @Override
-  public Optional<Lease> current(String consumerName) {
+  public Optional<Lease> current(SubscriptionName consumerName) {
     Objects.requireNonNull(consumerName, "consumerName is required");
     lock.lock();
     try {
@@ -180,7 +181,7 @@ public class ScriptedSubscriptionLeadership implements SubscriptionLeadership {
   }
 
   @Override
-  public void resign(String consumerName) {
+  public void resign(SubscriptionName consumerName) {
     Objects.requireNonNull(consumerName, "consumerName is required");
     lock.lock();
     try {

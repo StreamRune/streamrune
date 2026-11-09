@@ -54,7 +54,7 @@ class HybridEventSubscriptionPushHealthTest {
             100);
     try {
       subscription.start();
-      contributor.register("orders", subscription);
+      contributor.register(SubscriptionName.of("orders"), subscription);
 
       awaitPushPathDead(subscription);
 
@@ -96,7 +96,7 @@ class HybridEventSubscriptionPushHealthTest {
             100);
     try {
       subscription.start();
-      contributor.register("orders-polling-only", subscription);
+      contributor.register(SubscriptionName.of("orders-polling-only"), subscription);
 
       assertEquals(SubscriptionHealth.Status.UP, contributor.health().getFirst().status());
     } finally {

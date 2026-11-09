@@ -40,7 +40,7 @@ public record EventEnvelope(
     if (version == null) {
       throw new IllegalArgumentException("version is required");
     }
-    if (eventType == null || eventType.name().isBlank()) {
+    if (eventType == null || eventType.value().isBlank()) {
       throw new IllegalArgumentException("eventType is required");
     }
     if (event == null) {

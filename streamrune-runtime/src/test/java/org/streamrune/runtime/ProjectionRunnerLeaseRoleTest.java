@@ -78,7 +78,7 @@ class ProjectionRunnerLeaseRoleTest {
 
   private SubscriptionHealth entry() {
     return contributor.health().stream()
-        .filter(health -> health.name().equals(ORDERS.value()))
+        .filter(health -> health.name().value().equals(ORDERS.value()))
         .findFirst()
         .orElseThrow(() -> new AssertionError("no health entry for orders"));
   }
@@ -203,7 +203,7 @@ class ProjectionRunnerLeaseRoleTest {
             .atomicProcessor(TestFencingProcessor.fencingClaimOnly())
             .leadership(leadership)
             .healthContributor(contributor)
-            .register(ORDERS.value(), batch -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ORDERS, batch -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     var ungated =
         ScheduledProjectionRunner.builder()
@@ -211,7 +211,8 @@ class ProjectionRunnerLeaseRoleTest {
             .offsetStore(offsetStore)
             .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
             .healthContributor(contributor)
-            .register("ungated", batch -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("ungated"), batch -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     scheduled.start();
     ungated.start();
@@ -221,7 +222,7 @@ class ProjectionRunnerLeaseRoleTest {
       await().atMost(Duration.ofSeconds(10)).until(() -> role() == LeaseRole.LEADING);
       assertThat(
               contributor.health().stream()
-                  .filter(health -> health.name().equals("ungated"))
+                  .filter(health -> health.name().value().equals("ungated"))
                   .findFirst()
                   .orElseThrow()
                   .role())
