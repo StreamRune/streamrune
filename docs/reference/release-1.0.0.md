@@ -120,23 +120,31 @@ license.
   the dead letter queue dispatches it outside `continuing`. `continuing`
   trusts the envelope it is given, which is meant to be one read from the event store.
 - `PgAdvisoryLocker` — distributed per-stream pessimistic locking via `pg_advisory_xact_lock` over the
-  typed stream, with `withDedicatedPool(...)` so lock connections never starve the application pool.
-  The dedicated pool is named `streamrune-advisory-lock`.
-  `withDedicatedPool(jdbcUrl, username, password, maxPoolSize, MetricsTrackerFactory)` makes it
-  report to the HikariCP metrics tracker factory handed in (`new
+  typed stream, on a dedicated pool so lock connections never starve the application pool.
+  `withDedicatedPool(DataSource)` takes a pool built with any library; the locker owns it and closes
+  it with itself. The HikariCP conveniences `withDedicatedPool(jdbcUrl, username, password,
+  maxPoolSize[, MetricsTrackerFactory])` build one named `streamrune-advisory-lock`; the five-argument
+  form makes it report to the HikariCP metrics tracker factory handed in (`new
   MicrometerMetricsTrackerFactory(registry)` gives `hikaricp.connections.*` tagged with the pool
   name); the four-argument form builds it without one, and its saturation then shows only as failed
   lock acquisitions (a `LockException` after the pool's 10-second connection timeout). The dedicated
   pool keeps two idle connections (`maxPoolSize` when smaller) and opens the others on demand, up to
   `maxPoolSize`; one beyond the two that stays idle for ten minutes is closed, so an idle replica
   holds two lock connections.
-- Typed identifiers: `StreamId`, `AggregateType`, `AggregateId`, `Version`, `GlobalOffset`, `EventId`,
-  `CommandId`, `CorrelationId`, `CausationId`, `TraceId`, `SpanId`, `UserId`, `SubjectId`,
-  `IdempotencyKey`, `ProjectionName`, `SubscriptionName`, `SagaId`, `SagaType`, `EventType`. Ingress
-  factories (`AggregateId.of`, `AggregateType.of`, `IdempotencyKey.of`/`scopedTo`,
-  `RequestContext.fromRequest`) refuse malformed values before any interceptor runs; the canonical
-  constructors are the decode path for values read back from storage. Exception messages quote ids,
-  names and configuration text sanitized.
+- Typed identifiers: `StreamId`, `AggregateType`, `AggregateId`, `Version`, `GlobalOffset`,
+  `EventId`, `CommandId`, `CorrelationId`, `CausationId`, `TraceId`, `SpanId`, `UserId`,
+  `SubjectId`, `IdempotencyKey`, `ProjectionName`, `SubscriptionName`, `SagaId`, `SagaType`,
+  `EventType`; every one but `StreamId` is a single `value()` that serializes as a plain JSON value
+  (`EventType.value()` included). The leadership, lease, health, subscription and
+  projection-registration surfaces take the typed names: `SubscriptionLeadership.tryAcquire` /
+  `current` / `resign`, `SubscriptionHealth.name()`, `SubscriptionHealthContributor`,
+  `SubscriptionLease.of`, the subscription builders' `subscriptionName(...)`, the projection
+  registrations of `MultiProjectionRunner`, `ScheduledProjectionRunner`,
+  `InlineProjectionInterceptor` and `StreamRune.Builder`, and the runners' `status()` maps, keyed by
+  `ProjectionName`. Ingress factories (`AggregateId.of`, `AggregateType.of`,
+  `IdempotencyKey.of`/`scopedTo`, `RequestContext.fromRequest`) refuse malformed values before any
+  interceptor runs; the canonical constructors are the decode path for values read back from
+  storage. Exception messages quote ids, names and configuration text sanitized.
 
 ## Snapshots, schema evolution and upcasting
 
@@ -153,14 +161,14 @@ license.
   `toType()` result check) are registered on the store (`PostgresEventStoreFactory.snapshotMigrations(...)`,
   `InMemoryEventStore.withMigrations(...)`) and applied on load against the old state class resolved
   by the `EventTypeRegistry`.
-- `EventUpcaster` / `UpcasterChain`: one upcaster owns every version step of one event type; a stored
-  `schema_version` below the chain's version is upcast one step at a time before the payload is bound
-  to its class. The stored version records the writer's chain, not the payload shape, so upcaster
-  steps keep values the payload already has (`putIfAbsent`). A store refuses to read an event stored
-  at a schema version above what its chain reaches rather than mis-binding it, with
+- `EventUpcaster`: one upcaster owns every version step of one event type; a stored `schema_version`
+  below the upcaster chain's version is upcast one step at a time before the payload is bound to its
+  class. The stored version records the writer's chain, not the payload shape, so upcaster steps
+  keep values the payload already has (`putIfAbsent`). A store refuses to read an event stored at a
+  schema version above what its chain reaches rather than mis-binding it, with
   `EventSchemaAheadException` (`eventType()`, `storedVersion()`, `readerVersion()`): an
-  `EventStoreException`, not an `EventDeserializationException`, classified as retry-later. A command
-  that fails with it is dead-lettered and does not count toward the circuit breaker
+  `EventStoreException`, not an `EventDeserializationException`, classified as retry-later. A
+  command that fails with it is dead-lettered and does not count toward the circuit breaker
   (`CommandFailureClassification.isReaderBehindStoredSchema`), and `ReadPoisonClassifier` and
   `ProjectionErrorClassifier.DEFAULT` treat it as transient whatever frame wraps it, so a replica on
   the previous release stops at a newer event and retries it instead of quarantining it. A
@@ -171,19 +179,18 @@ license.
   the entry's own count): the entry moves behind the entries queued after it and is replayed again
   after its backoff, so a run of such entries longer than a page delays the entries after it by one
   poll per page. On the schedule it takes no slot of the poll's batch, so the entries behind it in
-  the page the poll read are replayed in the same poll. One line per poll names each event type
-  with its stored and read schema versions and the command types refused (five of each, then a
-  count); it is logged at WARN when the poll reached the end of a full page with its batch not full
-  while an entry is queued after the page — the poll reads one row beyond the page to know, and
-  leaves that row to the next poll, which reads it in its own page — and at INFO otherwise. A saga's
-  forward command that fails with it is retry-later: the saga is left as it is
-  and the event delivered again until a replica that reads it completes the step, instead of
-  compensating a flow in which nothing failed; `UnknownEventTypeException` stays deterministic
-  there. A compensation command that fails with it attempted nothing either: the episode stays
-  `COMPENSATING`, the outcome is `RETRY_REFUSED` (as for a refused admission), and
-  `SagaCompensationRetrySweeper` does not count the re-drive toward its give-up horizon, so a
-  rollout longer than `compensation-retry-give-up-after` faults no saga; the key-age bound still
-  applies.
+  the page the poll read are replayed in the same poll. One line per poll names each event type with
+  its stored and read schema versions and the command types refused (five of each, then a count); it
+  is logged at WARN when the poll reached the end of a full page with its batch not full while an
+  entry is queued after the page — the poll reads one row beyond the page to know, and leaves that
+  row to the next poll, which reads it in its own page — and at INFO otherwise. A saga's forward
+  command that fails with it is retry-later: the saga is left as it is and the event delivered again
+  until a replica that reads it completes the step, instead of compensating a flow in which nothing
+  failed; `UnknownEventTypeException` stays deterministic there. A compensation command that fails
+  with it attempted nothing either: the episode stays `COMPENSATING`, the outcome is `RETRY_REFUSED`
+  (as for a refused admission), and `SagaCompensationRetrySweeper` does not count the re-drive
+  toward its give-up horizon, so a rollout longer than `compensation-retry-give-up-after` faults no
+  saga; the key-age bound still applies.
 - Event payloads bind strictly: a stored property the event class does not declare fails the read
   with `EventDeserializationException`. Every change to an event payload's shape, an added field
   included, therefore bumps the type's schema version through its upcaster (a step that returns the
@@ -258,6 +265,14 @@ license.
   `AuditCommandInterceptor`, `AuthorizationCommandInterceptor`, `AnnotationAuthorizationInterceptor`,
   `CircuitBreakerCommandInterceptor`, `BeanValidationInterceptor` (Jakarta Validation →
   `ValidationException`), `OpenTelemetryCommandInterceptor`, `InlineProjectionInterceptor`.
+- A bus decorator forwards every `CommandBus` method to the bus it wraps, the `default` ones
+  included: both `execute` methods with the command instance and the idempotency key it received,
+  on the calling thread, and the wiring probes `supportsIdempotentExecution()` and
+  `sagaFenceStorageIdentity()`. A decorator that leaves the probes to their defaults reports a bus
+  without a command inbox and without a saga fence: `SagaRunner` and `SagaTimeoutRunner` refuse it at
+  `build()` with a message that names the bus class and the decorator case. `ForwardingCommandBus`
+  (`streamrune-test`) forwards them all. An `EventStore` decorator likewise forwards every method,
+  `sagaFenceStorageIdentity()` included (`ForwardingEventStore`).
 - Circuit breaker: `CLOSED → OPEN` after `failureThreshold` consecutive infrastructure failures,
   `HALF_OPEN` after `cooldown` with exactly one probe (30 s probe timeout). Business rejections
   (`DomainException`, `IllegalArgumentException`, a `SubjectForgottenException` in the cause chain)
@@ -281,7 +296,7 @@ license.
   command and for a keyed entry that exhausted its replays or whose command was first received
   longer ago than the command-inbox window; a constructor takes it. The retry guide and the
   idempotency guide map the HTTP answer by it: `QUEUED_FOR_REPLAY` is `503` with a `Retry-After` of
-  at least the retry runner's interval (`streamrune.dead-letter.retry-interval-ms`, 60 s on the
+  at least the retry runner's interval (`streamrune.dead-letter.retry-interval`, `1m` on the
   integrations) and the reason "queued for replay", and the guides prefer waiting over re-sending;
   `AWAITING_OPERATOR` is `500` with no `Retry-After` and the reason "awaiting an operator", since a
   re-send of an unkeyed command would be a second operation beside an operator's replay; never
@@ -301,15 +316,21 @@ license.
   after `streamrune.dead-letter.retention-max-age` (default 7 days; zero or negative disables
   pruning) and is registered for any `DeadLetterQueue` bean; `streamrune.dead-letter.enabled=false`
   switches off only the automatic retry runner.
-- One entry per keyed command. A keyed command that fails while the queue holds an entry of the
-  same command (type and stream) under its key stores no second entry, and
-  `CommandDeadLetteredException` names that entry (`commandId()` is then the earlier send's entry
-  id); a queue without the lookup, a failed lookup, a different command under the key and an
-  unkeyed command store an entry of their own. The lookup is
-  `DeadLetterQueue.findByIdempotencyKey(IdempotencyKey)`, an optional capability (the default
-  throws `UnsupportedOperationException`): `PostgresDeadLetterQueue` implements it through the
-  partial index `idx_dlq_idempotency_key` of the baseline migration, and `InMemoryDeadLetterQueue`
-  and `ForwardingDeadLetterQueue` implement it as well. The bus answers such a re-send by the
+- One entry per keyed command. The queue keeps one entry per command — its type and its stream —
+  under a key: a keyed command that fails while an entry of the same command is stored under its
+  key stores no second entry, also when two replicas dead-letter it at the same moment, and
+  `CommandDeadLetteredException` names the stored entry (`commandId()` is then that entry's id,
+  which another send stored); a different command under the key and an unkeyed command store an
+  entry of their own. `PostgresDeadLetterQueue` decides it atomically, through the unique partial
+  index `idx_dlq_idempotency_key` of the baseline migration over the key, the command type and the
+  stream (`NULLS NOT DISTINCT`) and an insert `ON CONFLICT DO NOTHING`; a duplicate command id is
+  still refused by the primary key. `InMemoryDeadLetterQueue` applies the same rule under a lock.
+  The bus looks the key up before it publishes and reads the key's entries back after a keyed
+  publish, so the send whose publish stored nothing is answered with the entry that holds the
+  command. The lookup is `DeadLetterQueue.findByIdempotencyKey(IdempotencyKey)`, an optional
+  capability (the default throws `UnsupportedOperationException`, and the bus then stores an entry
+  for every failed send, as for an unkeyed command); `ForwardingDeadLetterQueue` forwards it. The
+  bus answers such a re-send by the
   rules of `VirtualThreadCommandBus.Builder.deadLetterRetryPolicy(…)` and `inboxRetentionMaxAge(…)`;
   the Spring, Quarkus and Micronaut integrations hand the bus the retry runner's policy and window
   from the same keys. A `DeadLetterRetryRunner` built over a `VirtualThreadCommandBus` with a
@@ -350,11 +371,13 @@ license.
 - `Authorization.requireOwner(ownerId)`, `Authorization.requireOwnerOrSaga(ownerId)` (admits a
   saga-dispatched command, which carries no end user), `@RequireRole`, `@RequirePermission` and
   `CommandAuthorizationPolicy` for ownership and role checks (see Security).
-- `StreamRune` facade (`streamrune-runtime`): a fluent builder wiring the event store (`eventStore`,
-  `eventStoreFactory`, or `eventStoreFactoryProvider`, which threads the crypto engine, upcasters and
-  type registry into the store it constructs), deciders, locker, retry and snapshot policies,
-  interceptors, metrics, dead-letter queue, projections and subscription config. It implements
-  `CommandBus` and `AutoCloseable`.
+- `StreamRune` facade (`streamrune-runtime`): a bootstrap convenience, a fluent builder wiring the
+  event store (`eventStore`, `eventStoreFactory`, or `eventStoreFactoryProvider`, which threads the
+  crypto engine, upcasters and type registry into the store it constructs), deciders (`register`),
+  the command inbox (`commandInbox`, which keyed execution, saga runners and keyed dead-letter
+  replays need), locker, retry and snapshot policies, interceptors, metrics, dead-letter queue,
+  projections and subscription config. It implements `CommandBus` and `AutoCloseable`. The complete
+  option set is `VirtualThreadCommandBus.Builder`, which the integrations use.
 
 ## Projections and read models
 
@@ -371,8 +394,7 @@ license.
 - The mode is required on `MultiProjectionRunner.Builder.register(name, projection[, strategy], mode)`,
   `ScheduledProjectionRunner.Builder.register(name, projection, cron[, strategy], mode)`,
   `StreamRune.Builder.registerProjection(name, projection, mode)`,
-  `ProjectionRunner.run(name, projection, mode)`, the `ProjectionRegistration` constructors and
-  `@ProjectionConfig(deliveryMode = …)`.
+  `ProjectionRunner.run(name, projection, mode)` and `@ProjectionConfig(deliveryMode = …)`.
 - Every runner requires an explicit `AtomicBatchProcessor` (the `PollingProjectionRunner`
   constructors take it as their fifth argument). `JdbcProjectionRepository` is the transactional,
   fencing processor; the non-transactional two-commit processor is reachable only as
@@ -439,7 +461,18 @@ license.
   on rollback. A `<name>_view` table is created by the first read or write of that name, or by
   `AtomicBatchProcessor.prepareReadModel(name)`, which the runners call before each batch of a
   `TRANSACTIONAL_LOCAL` / `EXTERNAL_EFFECT` registration; a checkpoint commit creates none, so an
-  at-least-once projection that keeps its read models elsewhere leaves no empty table.
+  at-least-once projection that keeps its read models elsewhere leaves no empty table. Replicas that
+  create one table at once all succeed: a session that loses the creation race takes the failure as
+  the table the other session created and runs the statement again, up to three attempts, under a
+  savepoint inside a batch transaction.
+- `JdbcProjectionRepository` calls the crypto engine outside its connection: its saves, finds and
+  queries outside a batch serialise a read model before they borrow a connection and deserialise it
+  after they returned it, so they never hold two connections when an engine on the same pool
+  (`PostgresCryptoEngine`) borrows one. A `TRANSACTIONAL_LOCAL` or `EXTERNAL_EFFECT` batch cannot
+  release its transaction's connection: over `@Encrypted` read models with `PostgresCryptoEngine` it
+  holds two while the engine runs, so P such projections catching up at once need at least P+1
+  connections, and 2P keeps their encrypts from queuing behind one spare (the production guide's
+  pool section).
 - `ProjectionCommitFencedException.guard()` names the guard that rejected a commit (`EPOCH_FENCE`,
   `OVERLAP`, `MONOTONIC`). A runner stands by on `EPOCH_FENCE`. It tolerates one `OVERLAP` or
   `MONOTONIC` rejection and re-reads; a second consecutive one while the checkpoint its
@@ -483,9 +516,10 @@ license.
   `invalidateOn` evicts a query type's entries after the batch that processed a listed event type has
   committed (`CacheInvalidator`, wired through `CacheAwareProjection` or
   `ProjectionRepository.afterCommit`). `evict(Class)` and `evictAll()` for manual eviction.
-- `QueryAuthorizer` runs before the cache is touched on every dispatch of a `@Cacheable` query, hit or
-  miss. Without one the cache has no authorization opinion — a cache hit skips the handler and
-  whatever check it performs.
+- `QueryAuthorizer` (`authorize(UserId user, Query<?> query)`, the caller first, as in
+  `CommandAuthorizationPolicy`) runs before the cache is touched on every dispatch of a `@Cacheable`
+  query, hit or miss. Without one the cache has no authorization opinion — a cache hit skips the
+  handler and whatever check it performs.
 - `streamrune.query-cache.enabled=true` (default `false`) makes the integrations produce the
   `CachingQueryBus` as the primary `QueryBus` plus a `CacheInvalidator` bean; an application
   `QueryAuthorizer` bean is auto-detected.
@@ -496,7 +530,10 @@ license.
   `close()` is terminal) with `PollingEventSubscription` (global stream), `StreamEventSubscription`
   (one stream) and `HybridEventSubscription` (PostgreSQL LISTEN/NOTIFY push plus polling fallback —
   the recommended production subscription). `PostgresNotificationSubscription` listens on any
-  `DataSource` it is given. Closing a subscription never interrupts a delivery in progress.
+  `DataSource` it is given; `PostgresNotificationSubscription.createListenDataSource(DataSource)`
+  builds a one-connection `ListenDataSource` (`DataSource` and `AutoCloseable`, naming no pool
+  library) for one listener, and the subscription or listener it is handed to closes it with
+  itself. Closing a subscription never interrupts a delivery in progress.
 - `SubscriptionConfig.DEFAULT` = LISTEN/NOTIFY on, 5 s polling interval, 1 s jitter;
   `SubscriptionConfig.pollingOnly(interval)` for transaction-pooling proxies.
 - `ResilientPollLoop`: a transient `RuntimeException` in the poll loop is logged and retried with
@@ -519,7 +556,10 @@ license.
   and resign are each one statement on a borrowed connection, correct under any connection-pooling
   mode including PgBouncer transaction mode; a renew queued behind a resign cannot extend the resigned
   lease. Failover completes within `streamrune.subscription.single-active-consumer.lease-ttl` (default
-  15 s) regardless of how the leader died. The leader stamps its epoch on the checkpoint row at
+  15 s) regardless of how the leader died. A leader whose renews cannot reach the database stops
+  reporting the lease (`current()` empty) once one TTL has passed since its last successful renew,
+  measured on the monotonic clock, so a step of the system clock neither delays that nor stands a
+  healthy leader down. The leader stamps its epoch on the checkpoint row at
   takeover before reading anything (a failed stamp fails closed), and `JdbcProjectionRepository`
   rejects any checkpoint commit whose epoch is below the stamped one. `single-active-consumer.enabled=false`
   selects `SubscriptionLeadership.NOOP` (always leader, epoch 0, unfenced) for single-instance
@@ -655,7 +695,7 @@ license.
   node claims underneath a step in flight, and the forward fence (below) refuses that step's next
   forward command.
 - Forward fence, on any number of processes: `SagaRunner` dispatches each forward command with its
-  saga named (`StreamRuneContext.SagaForward`), and the event store refuses the command in the
+  saga named, and the event store refuses the command in the
   transaction that would store it once the saga row carries a compensation episode, is terminal or
   is gone — so no forward command of a saga is stored after its compensation opened, or after it
   ended, whatever runs the claim and however long the step takes. The refused step goes on from the
@@ -666,8 +706,9 @@ license.
   Each refusal logs one INFO line and counts one `saga.forward_commands_fenced` sample.
   Compensation commands are not fenced. On by default: `SagaRunner.Builder.forwardFence(false)`
   switches it off, and `build()` refuses a runner whose command bus cannot fence, or fences against
-  other saga rows than its `SagaStore` keeps, naming that opt-out. `SagaForwardFenceDefault` is the
-  entry point through which an integration applies a default to runners that named none. The
+  other saga rows than its `SagaStore` keeps, naming that opt-out. The integrations apply their
+  default (`streamrune.saga.forward-fence`) to runners that named none, and
+  `SagaForwardFenceDefault.effectiveOf(runner)` reads the setting a runner ended up with. The
   in-memory stores fence when the `InMemorySagaStore` is wired into the `InMemoryEventStore` with
   `withSagaStore`.
 - Saga-row write bound: every `UPDATE` and `DELETE` of `saga_state` by `PostgresSagaStore`, the
@@ -728,7 +769,8 @@ license.
   dispatch (`ReservedCorrelationIdException`, `SagaBindingsMismatchException`) is a failed invariant,
   never an answer about the business, and is never compensated because of the refusal. A forward
   command refused so is retried later — the saga stays as it was (a running saga stays `RUNNING`) and
-  its event is delivered again, and a refusal that persists ends as the saga's timeout; a
+  its event is delivered again, and a refusal that persists ends as the saga's timeout, or, for a
+  saga that declares none, holds the saga subscription until fixed; a
   compensation command refused so leaves its episode `COMPENSATING` and is re-driven as a counted
   attempt, faulted (`FAULTED`) for an operator once
   `streamrune.saga.compensation-retry-give-up-after` has passed. Both log at `ERROR`, after the
@@ -736,7 +778,13 @@ license.
   outside the scoped values, and the bus refuses a mismatch with what it reads
   (`SagaBindingsMismatchException`) before anything is looked up or stored; the command's events take
   their origin, causation id and correlation id, and a fenced forward command its fence, from the
-  handed saga.
+  handed saga. Only the saga's own command takes what the dispatch hands over — the same command
+  instance or the saga's key, so also under a key a bus decorator rewrote: a keyed command a
+  decorator dispatches of its own on the same thread before it delegates (an audit or metering
+  command) is not compared and not fenced, and runs under the saga's bindings, its events carrying
+  the saga's provenance. A decorator that hands the bus another command object under another key
+  makes the saga's own command neither compared nor fenced, as a bus of another kind does, so a
+  decorator forwards the command instance or its key.
 - Compensation outcomes: all undo commands succeed → `COMPENSATED`; a deterministic rejection or an
   empty `compensate()` list → `FAILED`; a transient failure, a veto or a binding refusal → the episode
   stays `COMPENSATING` and is re-driven under the same keys by a redelivered correlated event, by
@@ -748,7 +796,8 @@ license.
 - `SagaTimeoutRunner` serves forward timeouts (by start instant) and `COMPENSATING` re-picks (by last
   write) as two populations interleaved in each batch, retries a failing poll with capped exponential
   backoff (up to one minute, jittered), and refuses at `build()` a decider without a `timeout()`, a
-  non-positive `pollInterval` and a non-positive `batchSize`.
+  non-positive `pollInterval` and a non-positive `batchSize`. It is `AutoCloseable`: `start()` begins
+  polling and `close()` stops it.
 - Failure model: an exception (or a `null` router result) from `isStartEvent`,
   `correlateByEventData`, `extractSagaId`, `initialState`, `evolve`, `handle` or `compensate` is poison — the event is
   quarantined in the `SagaDeadLetterStore` as metadata only (never the payload), the saga is marked
@@ -798,7 +847,7 @@ license.
   subscription of its process anchored logs one INFO on its second unanchored poll within 15 s of
   its start and one WARN past it, and its relay health reads `DEGRADED`; a runner with a lease delivering through
   `listener(runner.asEventListener())` logs one WARN. A sweeper of a runner without a lease keeps its
-  own lease, `"saga-compensation-retry:" + saga type`. Stopping a started timeout runner on the
+  own lease, `"saga-compensation-retry:" + saga type`. Closing a started timeout runner on the
   replica that leads its saga type logs a WARN naming the consequence (no replica claims that saga
   type's deadlines until the runner starts again or the replica stops leading); closing a started
   sweeper there logs an INFO to the same effect.
@@ -865,12 +914,13 @@ license.
 - `OutboxRetentionSweeper` (hourly in the integrations) prunes `DELIVERED` rows after
   `streamrune.outbox.retention-max-age` (7 days) and `SKIPPED` rows after
   `streamrune.outbox.skipped-retention-max-age` (30 days); `FAILED` is never pruned. Integration
-  properties: `streamrune.outbox.enabled` (default `false`), `batch-size` (100), `flush-interval-ms`
-  (5000), `retry-max-attempts` (10), `retry-initial-delay-ms` (1000), `retry-multiplier` (2.0). On
+  properties: `streamrune.outbox.enabled` (default `false`), `batch-size` (`100`), `flush-interval`
+  (`5s`), `retry-max-attempts` (`10`), `retry-initial-delay` (`1s`), `retry-backoff-multiplier`
+  (`2.0`). On
   all three integrations startup fails when `streamrune.outbox.enabled=true` has no `OutboxStore`
   (the message names `PostgresOutboxStore`; the broker modules ship publishers only) or has neither
   an `OutboxPublisher` nor an application `OutboxPoller`, since nothing would relay the entries the
-  event store writes; the messages are shared (`OutboxWiringMessages`), and say that an application
+  event store writes; the messages are the same on the three, and say that an application
   whose outbox table an external relay reads sets `streamrune.outbox.enabled=false` (the property
   switches the framework's relay, not the event store's write). Quarkus says so when more than one
   publisher bean matches, and when the only publisher beans carry a qualifier. On Micronaut, startup also fails when an `OutboxEventMapper` is paired with a
@@ -926,11 +976,11 @@ license.
 - Verified encryption and retried decryption: the PostgreSQL, filesystem and AWS KMS engines verify
   each encryption before they return it, the way `decrypt` reads it, with an independent cipher. A
   value that does not decrypt to its plaintext, or a check that fails in any way, is discarded and
-  `encrypt` throws the transient (bare) `CryptoOperationException`, so the caller retries and nothing
-  unreadable is stored; on postgres and filesystem the retry reuses the key the first attempt
-  minted. A decryption whose authentication tag does not match is retried once with a fresh cipher
-  before it fails with `CryptoMappingException`, so a corrupted, tampered or foreign value keeps its
-  verdict. Each discarded encryption counts in
+  `encrypt` throws the transient (bare) `CryptoOperationException`, so the caller retries and a
+  wrong cipher result is never stored; on postgres and filesystem the retry reuses the key the first
+  attempt minted. A decryption whose authentication tag does not match is retried once with a fresh
+  cipher before it fails with `CryptoMappingException`, so a corrupted, tampered or foreign value
+  keeps its verdict. Each discarded encryption counts in
   `streamrune.crypto.encrypt_self_check_failed` and each retried decryption in
   `streamrune.crypto.decrypt_retried` (tagged `outcome`: `RECOVERED` or `FAILED`), recorded through
   `metrics(StreamRuneMetrics)` on the three engine builders — the integrations pass their metrics
@@ -964,7 +1014,9 @@ license.
   `failedPurgers()` and `queryCacheEvicted()`. An interrupted erasure is completed by
   calling `forget` again. `ForgetSubjectService.reinstate(subjectId, requestedBy)` lifts a tombstone
   and records it as `GDPR_REINSTATE`. `ExportSubjectDataService.export(subjectId, requestedBy)`
-  (Article 15) collects one JSON section per `SubjectDataCollector` into a `SubjectExport`. Both
+  (Article 15) collects one JSON section per `SubjectDataCollector` into a `SubjectExport`; a
+  failing collector ends it with `GdprExportException`, which carries the sections collected before
+  it, the collector's name and the `SubjectId`, and whose message names the subject by its hash. Both
   builders read each collector's or purger's `name()` once and refuse two under one name; a `name()`
   that throws or returns nothing is replaced by the class name with a WARN.
 - A forget purges aggregate snapshots, or the application says it has none. A snapshot keeps every
@@ -1125,7 +1177,11 @@ license.
 
 Spring Boot 4, Quarkus and Micronaut each auto-configure the same picture from a `DataSource` and a
 set of `streamrune.*` properties with the same names on all three (a `Duration` takes the short form
-`30s`/`7d` or ISO-8601 `PT30S`/`PT168H` on each):
+`30s`/`7d` or ISO-8601 `PT30S`/`PT168H` on each; every interval is a `Duration` key without a unit
+suffix — `streamrune.polling-interval`, `streamrune.retry-initial-delay`,
+`streamrune.dead-letter.retry-interval`, `streamrune.outbox.flush-interval`, … — and a bare number is
+not portable: Spring reads it as milliseconds, Quarkus as seconds, and Micronaut refuses to start on
+it, so always write the unit):
 
 - The event store through `PostgresEventStoreFactory`, a `VirtualThreadCommandBus` with
   `PostgresCommandInbox`, `PostgresAuditStore`, `PostgresDeadLetterQueue` + `DeadLetterRetryRunner`,
@@ -1148,7 +1204,7 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
   unknown value fails startup with a message naming the property and the value.
 - Two `SubscriptionLeadership` beans with none marked the default (`@Primary` on Spring and
   Micronaut, `@Alternative` with a `@Priority` on Quarkus) fail startup on all three integrations.
-  Spring and Quarkus name both bean classes (`SubscriptionLeadershipResolution`); Micronaut's
+  Spring and Quarkus name both bean classes; Micronaut's
   container refuses the non-unique bean.
 - The request filters (`ScopedValueFilter`, `StreamRuneRequestFilter`, `StreamRuneContextFilter`)
   answer a request whose correlation id, trace id or user id `RequestContext.fromRequest` refuses —
@@ -1277,9 +1333,10 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
   StreamRune and is not supported; `org.streamrune.runtime.GraalJitGuard`, run by
   `VirtualThreadCommandBus.Builder.build()` and when an integration starts, refuses to start on a JVM
   that runs it — and on a later JDK release with it, as not verified — with an
-  `IllegalStateException` that names the flags. Run GraalVM with
-  `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`, which every JDK 25 HotSpot build we ran
-  accepts; no other set of flags is accepted. JVMs whose JIT is C2 (Temurin, Zulu) and native images
+  `IllegalStateException` that names the flags. The check accepts a JVM only when its JVMCI
+  compiler is off (`UseJVMCICompiler=false`); run GraalVM with
+  `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`, the documented way to turn it off, which
+  every JDK 25 HotSpot build we ran accepts. JVMs whose JIT is C2 (Temurin, Zulu) and native images
   were unaffected in our runs. The check reads the JVM's options through the module
   `jdk.management`: a runtime without it that identifies as GraalVM is refused even with the JVMCI
   compiler off (add the module, or set the opt-out once the compiler is off), and one that does not
@@ -1301,6 +1358,11 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
   "off" (retention windows); a wait treats zero as "do not wait" and rejects negative
   (`streamrune.lock-timeout`); a period with no meaningful "off" rejects both (lease TTL, sweep
   intervals). A positive value below one millisecond is rejected wherever zero is a sentinel.
+- Background relays stop cleanly: `OutboxPoller`, `SagaTimeoutRunner`, `SagaCompensationRetrySweeper`
+  and `DeadLetterRetryRunner` are `AutoCloseable`, and `close()` interrupts the poll thread, waits
+  a bounded time for it, resets the started guard so `start()` may run again, and serves one caller
+  at a time. A poll thread still running after the wait keeps its component started and is logged:
+  `start()` is refused while it runs, and a later `close()` interrupts and joins it again.
 - Connection-pooling proxies: leadership, fencing and correctness hold under any PgBouncer mode;
   LISTEN/NOTIFY needs a session-stable connection — under transaction pooling use
   `SubscriptionConfig.pollingOnly(...)`, allow server-side prepared statements (PgBouncer 1.21+ with
@@ -1335,11 +1397,13 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
   store, for `TRANSACTIONAL_LOCAL` unit tests without Docker), `InMemoryProjectionDeadLetterStore`,
   `InMemorySagaStore`, `InMemorySagaDeadLetterStore`.
 - Fault injection: `ForwardingEventStore`, `ForwardingSagaStore`, `ForwardingSagaDeadLetterStore`,
-  `ForwardingDeadLetterQueue`, `ForwardingOffsetStore`, `ForwardingProjectionDeadLetterStore` and
-  `ForwardingOutboxStore` forward every method of their port to a delegate, the default methods
-  included, and consult a `FaultSchedule`: `failOnce`, `failAt` and `failAlways` throw before the
-  delegate runs, `crashAfter` lets it write and then throws, `throwing(...)` names the failure
-  (`InjectedFaultException` by default), and every call is counted.
+  `ForwardingDeadLetterQueue`, `ForwardingOffsetStore`, `ForwardingProjectionDeadLetterStore`,
+  `ForwardingOutboxStore` and `ForwardingCommandBus` forward every method of their port to a
+  delegate, the default methods included (the bus both `execute` methods, with the same command
+  instance and key, on the calling thread), and consult a `FaultSchedule`: `failOnce`, `failAt` and
+  `failAlways` throw before the delegate runs, `crashAfter` lets it write and then throws,
+  `throwing(...)` names the failure (`InjectedFaultException` by default), and every call is
+  counted.
 - Recording doubles: `RecordingStreamRuneMetrics` records every metrics call under its `MetricNames`
   meter with its tags and amount (`count`, `total`, `lastGauge`, `assertIncremented`);
   `ScriptedSubscriptionLeadership` is a lease the test grants, denies and revokes (`granting()`

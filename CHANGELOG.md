@@ -32,8 +32,8 @@ jars. In brief:
   runs the registered purgers — the aggregate snapshots among them, unless the application declares
   that it keeps none. A field whose key is gone reads `[REDACTED]`, so replays and rebuilds keep
   working. The PostgreSQL, filesystem and AWS KMS engines verify every encryption before they
-  return it, so nothing unreadable is stored, and retry a decryption that fails its authentication
-  tag once. `ExportSubjectDataService` collects a subject's data for an access request.
+  return it, so a wrong cipher result is never stored, and retry a decryption that fails its
+  authentication tag once. `ExportSubjectDataService` collects a subject's data for an access request.
 - **Sagas with subscription leadership.** `SagaRunner` drives a saga from any subscription: every
   command it dispatches is keyed for the command inbox, a failed step opens a compensation episode,
   and the event store's forward fence (on by default) refuses a forward command once that episode
@@ -44,10 +44,11 @@ jars. In brief:
   infrastructure, never one the domain rejected, is parked in the dead-letter queue, and its caller
   receives `CommandDeadLetteredException`, whose `pendingOutcome()` says whether the retry schedule
   replays the entry (`QUEUED_FOR_REPLAY`) or an operator decides (`AWAITING_OPERATOR`); a keyed
-  command that fails again under its key stores no second entry. The retry runner replays on its
-  own only the entries the command inbox can deduplicate; an unkeyed entry, or a keyed one older than
-  the inbox retention window, waits for an operator, who replays it with
-  `DeadLetterRetryRunner.retry(commandId, true)` or discards it.
+  command that fails again under its key stores no second entry, also when two replicas
+  dead-letter it at the same moment, and every caller is answered with the one stored entry. The
+  retry runner replays on its own only the entries the command inbox can deduplicate; an unkeyed
+  entry, or a keyed one older than the inbox retention window, waits for an operator, who replays
+  it with `DeadLetterRetryRunner.retry(commandId, true)` or discards it.
 - **Outbox ordered per aggregate by default.** Outbox entries commit or roll back with the events
   that produced them. Under `STRICT_PER_AGGREGATE`, the default ordering mode, the entries of a stream
   are delivered in commit order with at most one in flight, and a terminally failed entry holds its
@@ -85,7 +86,8 @@ the command bus and its inbox, aggregates, projections, queries, subscriptions, 
 GDPR, security and identity, audit, the framework integrations, observability, operations, the
 test kit — and the guarantees of the shipped code are described in detail in
 [docs/reference/release-1.0.0.md](docs/reference/release-1.0.0.md).
-The parts below list its modules, requirements, known limitations and license.
+The parts below list its modules, its API stability policy, requirements, known limitations and
+license.
 
 ### Modules
 
@@ -104,19 +106,34 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 | `streamrune-core` | `:streamrune-core` | `org.streamrune.core` | Contracts and value types: `EventStore`, `Decider`, `CommandBus`, `Projection`, `ProjectionDeliveryMode`, `QueryBus`, saga, subscription, outbox, audit, GDPR and `CryptoEngine` SPIs, typed ids, `MetricNames`. Depends only on Jackson. |
 | `streamrune-runtime` | `:streamrune-runtime` | `org.streamrune.runtime` | `StreamRune` facade, `VirtualThreadCommandBus`, interceptors, projection runners, subscriptions, `SagaRunner` and its sweepers, outbox poller and replayer, GDPR services, retention sweepers, SSE publisher. |
 | `streamrune-postgres` | `:streamrune-eventstore:streamrune-postgres` | `org.streamrune.postgres` | `PostgresEventStore` and its factory, the Flyway baseline, `SchemaValidator`, `PgAdvisoryLocker`, `LeaseBasedLeadership`, `JdbcProjectionRepository`, the PostgreSQL inbox, outbox, saga, dead-letter, audit and offset stores, LISTEN/NOTIFY subscriptions. |
-| `streamrune-crypto-api` | `:streamrune-crypto:streamrune-crypto-api` | `org.streamrune.crypto` | `CryptoShreddingModule` (Jackson), `CachedCryptoEngine`, `ForgottenSubjectStore`, `CryptoConfigValidator`. |
-| `streamrune-filesystem-crypto` | `:streamrune-crypto:streamrune-filesystem-crypto` | `org.streamrune.filesystem` | `FileSystemCryptoEngine` — AES-256-GCM keys on disk. |
+| `streamrune-crypto-api` | `:streamrune-crypto:streamrune-crypto-api` | `org.streamrune.crypto` | `CryptoShreddingModule` (Jackson), `CachedCryptoEngine`, `ForgottenSubjectStore`. |
+| `streamrune-filesystem-crypto` | `:streamrune-crypto:streamrune-filesystem-crypto` | `org.streamrune.crypto.filesystem` | `FileSystemCryptoEngine` — AES-256-GCM keys on disk. |
 | `streamrune-postgres-crypto` | `:streamrune-crypto:streamrune-postgres-crypto` | `org.streamrune.crypto.postgres` | `PostgresCryptoEngine`, `JdbcForgottenSubjectStore`, `PostgresCryptoForgetSignal`, the crypto Flyway baseline. |
-| `streamrune-vault-crypto` | `:streamrune-crypto:streamrune-vault-crypto` | `org.streamrune.vault` | `VaultCryptoEngine` — HashiCorp Vault transit engine. |
-| `streamrune-aws-kms-crypto` | `:streamrune-crypto:streamrune-aws-kms-crypto` | `org.streamrune.aws.kms.crypto` | `AwsKmsCryptoEngine` — AWS KMS customer managed key with per-subject tombstones. |
+| `streamrune-vault-crypto` | `:streamrune-crypto:streamrune-vault-crypto` | `org.streamrune.crypto.vault` | `VaultCryptoEngine` — HashiCorp Vault transit engine. |
+| `streamrune-aws-kms-crypto` | `:streamrune-crypto:streamrune-aws-kms-crypto` | `org.streamrune.crypto.aws` | `AwsKmsCryptoEngine` — AWS KMS customer managed key with per-subject tombstones. |
 | `streamrune-test` | `:streamrune-test` | `org.streamrune.test` | `InMemoryEventStore`, fixtures (decider, event store, projection, saga, recorded event streams), in-memory doubles of every store and bus, fault-injecting forwarding stores, recording doubles, store contract suites. |
-| `streamrune-integration-api` | `:streamrune-integration:streamrune-integration-api` | `org.streamrune.integration` | Shared integration pieces: `MicrometerStreamRuneMetrics`, `RequestIdentityPolicy`, `AuthenticatedUserResolver`, `SseAuthorizer`, `ProjectionProcessorResolution`, `CommandInboxWiringValidator`, `SagaRetentionValidator`. |
+| `streamrune-integration-api` | `:streamrune-integration:streamrune-integration-api` | `org.streamrune.integration` | Shared integration pieces: `MicrometerStreamRuneMetrics`, `RequestIdentityPolicy`, `AuthenticatedUserResolver`, `SseAuthorizer`, and the startup validators and wiring helpers the three integrations share (`@Internal`). |
 | `streamrune-spring` | `:streamrune-integration:streamrune-spring` | `org.streamrune.spring` | Spring Boot 4 auto-configuration, health indicator, SSE controller, request filter, native-image hints. |
 | `streamrune-spring-boot-starter` | `:streamrune-integration:streamrune-spring-boot-starter` | `org.streamrune.spring.boot.starter` | Dependency aggregator: `streamrune-spring` + `streamrune-postgres` + `streamrune-runtime`. |
 | `streamrune-quarkus` | `:streamrune-integration:streamrune-quarkus` | `org.streamrune.quarkus` | Quarkus (ArC) producers, lifecycle, readiness check, SSE controller, request filter, reflection config; ships `META-INF/beans.xml` and a Jandex index, no extension build step. |
 | `streamrune-micronaut` | `:streamrune-integration:streamrune-micronaut` | `org.streamrune.micronaut` | Micronaut factories, lifecycle, health indicator, SSE controller, request filter, `reflect-config.json`. |
-| `streamrune-kafka-outbox` | `:streamrune-outbox:streamrune-kafka-outbox` | `org.streamrune.kafka` | `KafkaOutboxPublisher`. |
-| `streamrune-rabbitmq-outbox` | `:streamrune-outbox:streamrune-rabbitmq-outbox` | `org.streamrune.rabbitmq` | `RabbitMqOutboxPublisher` (publisher confirms). |
+| `streamrune-kafka-outbox` | `:streamrune-outbox:streamrune-kafka-outbox` | `org.streamrune.outbox.kafka` | `KafkaOutboxPublisher`. |
+| `streamrune-rabbitmq-outbox` | `:streamrune-outbox:streamrune-rabbitmq-outbox` | `org.streamrune.outbox.rabbitmq` | `RabbitMqOutboxPublisher` (publisher confirms). |
+
+### API stability
+
+From `1.0.0` on, StreamRune follows Semantic Versioning: a minor or patch release does not break
+code written against the public API. The public API is the public types and members of the
+published modules, except those annotated `@Internal` (`org.streamrune.core.Internal`), plus the
+configuration keys and their units, the metric names, the health component names and the database
+schema the migrations create. `@Internal` marks what is public only because another StreamRune
+module uses it; it may change in any release and is left out of the generated API documentation.
+The `@Bean`, producer and factory methods of the three integrations are wiring the container
+calls, not API. Interfaces that applications implement (`EventStore`, `CommandBus`,
+`CommandInterceptor`, `SagaStore` and the other ports) may gain `default` methods in a minor
+release. A `CommandBus` or `EventStore` decorator forwards every method, the defaults included, on
+the calling thread (the class javadoc of each says why); `ForwardingCommandBus` and
+`ForwardingEventStore` in `streamrune-test` do. See [API stability](README.md#api-stability).
 
 ### Requirements
 
@@ -124,9 +141,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   25 toolchain).
 - **No Graal JIT on JDK 25.** The Graal JIT (GraalVM's default compiler) is not reliable with
   StreamRune on JDK 25 and is not supported: StreamRune refuses to start on a JDK 25 JVM that runs it,
-  and on a later JDK release with it, as not verified. Run GraalVM with
-  `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`, which every JDK 25 HotSpot build we ran
-  accepts; no other set of flags is accepted. JVMs whose JIT is C2 (Temurin, Zulu) and native images
+  and on a later JDK release with it, as not verified. The check accepts a JVM only when its JVMCI
+  compiler is off (`UseJVMCICompiler=false`); run GraalVM with
+  `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`, the documented way to turn it off, which
+  every JDK 25 HotSpot build we ran accepts. JVMs whose JIT is C2 (Temurin, Zulu) and native images
   were unaffected in our runs. The check is `org.streamrune.runtime.GraalJitGuard`, run when a command
   bus is built and when an integration starts. A runtime without the module `jdk.management` that
   identifies as GraalVM is refused even with the JVMCI compiler off — add the module, or set the
@@ -139,9 +157,13 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   and 18, and enforced at startup. The in-memory stores of `streamrune-test` need no database.
 - **Jackson 2.19.2** (`jackson-databind` 2.19 or newer). `streamrune-core` depends on nothing else.
 - `streamrune-postgres` brings Flyway 13.11.1 (`flyway-core`, `flyway-database-postgresql`), HikariCP
-  6.2.1 (for its dedicated LISTEN and lock pools; an `api` dependency, Maven `compile` scope, since
-  `PgAdvisoryLocker.withDedicatedPool` takes a HikariCP `MetricsTrackerFactory`), the PostgreSQL JDBC
-  driver 42.7.10 and SLF4J 2.0.
+  6.2.1 (an `api` dependency, Maven `compile` scope: the module builds HikariCP pools for its
+  dedicated LISTEN and lock pools, and the convenience
+  `PgAdvisoryLocker.withDedicatedPool(url, user, password, max, MetricsTrackerFactory)` takes a
+  HikariCP type, the only public signature that names one;
+  `PgAdvisoryLocker.withDedicatedPool(DataSource)` takes a lock pool of any library and
+  `PostgresNotificationSubscription.createListenDataSource` returns a `ListenDataSource`), the
+  PostgreSQL JDBC driver 42.7.10 and SLF4J 2.0.
 - Frameworks: Spring Boot 4.1.x (built and tested against 4.1.2, Spring Security 7.1.x), Quarkus
   3.40.x, Micronaut 5.2.x (Micronaut Security 5.4, Validation 5.2, Serde 3.2). Micrometer 1.16 or
   newer: the framework declares 1.16.3, the floor it is built against, and an application runs the
@@ -197,9 +219,12 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `payloadType` breaks entries still pending under the old shape — drain the outbox first.
 - **Sagas**: `SagaRunner` is designed for one subscription per saga type; write undo commands as
   idempotent cancel/void operations; a saga exposed to veto-style interceptors must configure
-  `timeout()`; a drain assumes it is the only recovery actor on its saga; within one timeout
-  population, many failing rows can delay the rest of a batch; the dead-letter `errorMessage` column
-  is outside crypto-shredding — keep personal data out of orchestrator exception messages.
+  `timeout()` — without one, a retry-later refusal that persists holds the saga's subscription
+  until its cause is fixed; a bus decorator hands the bus the saga's command instance or its key,
+  since one that replaces both makes the saga's command neither compared nor fenced; a drain
+  assumes it is the only recovery actor on its saga; within one timeout population, many failing
+  rows can delay the rest of a batch; the dead-letter `errorMessage` column is outside
+  crypto-shredding — keep personal data out of orchestrator exception messages.
 - **Crypto**: `@Encrypted` applies to `String` record components only; no key rotation; postgres and
   filesystem store key bytes unwrapped (no envelope encryption); the filesystem backend has no
   replication and shares a key directory safely only within one kernel's view of the filesystem;
@@ -210,7 +235,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   erasure with `isKeyAvailable`; property-level `@JsonSerialize`/`@JsonDeserialize` on a field of an
   `@Encrypted`-carrying record type is unguarded and leaks plaintext on write; a restore brings
   erased keys back — re-apply the erasures; cross-replica cache eviction depends on the forget
-  signal's LISTEN connection, bounded by the cache TTL.
+  signal's LISTEN connection, bounded by the cache TTL; with `PostgresCryptoEngine` on the
+  application pool, a `TRANSACTIONAL_LOCAL` or `EXTERNAL_EFFECT` projection over `@Encrypted` read
+  models holds two connections while its batch runs, so P such projections catching up at once
+  need at least P+1 connections (2P recommended).
 - **GDPR**: a dead-lettered command's personal data is protected only by its own `@Encrypted`
   components (otherwise plaintext until the dead-letter retention sweeper deletes the row); the query
   cache eviction reaches this process only; `ForgetSubjectService` and `ExportSubjectDataService`
@@ -221,7 +249,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   `command_inbox` and is stored on a dead-letter row.
 - **Query cache**: TTL and event-driven invalidation are caching controls, not security controls;
   eviction is per query type; without a `QueryAuthorizer` a cache hit skips the handler's
-  authorization.
+  authorization. `QueryAuthorizer.authorize(UserId user, Query<?> query)` takes the caller first,
+  as `CommandAuthorizationPolicy` does: a lambda whose body uses its parameters by type does not
+  compile in the wrong order, but one that only null-checks them does, so a lambda written for the
+  preview builds' `(query, user)` order checks the wrong one until its parameters are swapped.
 - **Metrics**: `stream.id` is never a metric tag; `subscriptions.listener.reconnects` cannot signal a
   dead push path — use the health detail.
 - **Integrations**: `@StreamRuneComponent` needs component scan; the `StreamRune` facade is a
