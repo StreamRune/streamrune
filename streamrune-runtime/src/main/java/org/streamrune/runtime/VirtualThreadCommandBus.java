@@ -318,8 +318,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   @Override
   public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
     // The saga a saga dispatch handed this dispatch beside its scoped values, taken first, so a
-    // command dispatched inside this one is not compared with it.
-    SagaDispatchOffer dispatched = SagaDispatchOffer.take();
+    // command dispatched inside this one is not compared with it. Only the saga's own command takes
+    // it: a keyed command a bus decorator dispatches first on this thread leaves it in place.
+    SagaDispatchOffer dispatched = SagaDispatchOffer.take(command, key);
     Objects.requireNonNull(key, "idempotencyKey is required");
     if (commandInbox == null) {
       throw new IllegalStateException(

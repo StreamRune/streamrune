@@ -193,7 +193,7 @@ final class SagaCommandDispatch {
     // Beside the scoped values, the bus is handed the saga in a field of this thread. It compares
     // the two before anything of the command runs (VirtualThreadCommandBus refuses a mismatch) and
     // takes the provenance of the command's events, and the forward fence, from the handed saga.
-    new SagaDispatchOffer(origin, causation, key, forwardFenced).offer();
+    new SagaDispatchOffer(origin, causation, command, key, forwardFenced).offer();
     CommandBus.CommandResult result;
     try {
       result = carrier.call(() -> commandBus.execute(command, key));
