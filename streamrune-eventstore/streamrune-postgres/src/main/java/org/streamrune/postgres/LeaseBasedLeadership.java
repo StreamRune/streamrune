@@ -4,15 +4,15 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongSupplier;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,11 +66,13 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
  * this replica loses PostgreSQL while a peer keeps it — throws before it can observe the steal, so
  * the held entry would otherwise be retained for the entire outage while a standby takes over:
  * {@code current} would stay fail-<em>open</em> indefinitely. To bound this, each held name tracks
- * the instant of its last <em>successful</em> renew (seeded at acquire). Once more than one lease
- * TTL of local time has elapsed since that instant, the DB lease has certainly expired and a
- * standby may have taken over, so {@code current} returns empty (fail-closed) and the heartbeat
- * drops the name — restoring the documented invariant that {@code current} is stale for at most one
- * heartbeat interval past lease expiry.
+ * when its last <em>successful</em> renew happened (seeded at acquire). Once more than one lease
+ * TTL has elapsed since then, the DB lease has certainly expired and a standby may have taken over,
+ * so {@code current} returns empty (fail-closed) and the heartbeat drops the name — restoring the
+ * documented invariant that {@code current} is stale for at most one heartbeat interval past lease
+ * expiry. The elapsed time is measured on the JVM's monotonic clock ({@link System#nanoTime()}),
+ * not the wall clock: a step of the system clock (an NTP correction after a suspend or a live
+ * migration) neither delays the verdict nor brings it forward.
  *
  * <h2>Resign EXPIRES, never DELETEs</h2>
  *
@@ -141,18 +143,19 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
 
   private final DataSource dataSource;
   private final long ttlMillis;
-  private final Clock clock;
+  private final long ttlNanos;
+  private final LongSupplier nanoTime;
   private final String holderId = UUID.randomUUID().toString();
   private final ConcurrentHashMap<String, HeldLease> held = new ConcurrentHashMap<>();
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private final Thread heartbeat;
 
   /**
-   * A locally-held lease: its fencing {@code epoch} plus the instant of the last renew that
-   * observably succeeded (seeded at acquire). The instant drives the fail-closed check — see {@link
-   * #isStale(HeldLease)}.
+   * A locally-held lease: its fencing {@code epoch} plus the monotonic-clock reading ({@code
+   * nanoTime}) of the last renew that observably succeeded (seeded at acquire). The reading drives
+   * the fail-closed check — see {@link #isStale(HeldLease)}.
    */
-  private record HeldLease(long epoch, Instant lastSuccessfulRenew) {}
+  private record HeldLease(long epoch, long lastSuccessfulRenewNanos) {}
 
   /**
    * @param dataSource pooled data source used for every (stateless, single-statement) operation
@@ -163,12 +166,13 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
    *     strictly positive duration of at least one millisecond
    */
   public LeaseBasedLeadership(DataSource dataSource, Duration leaseTtl) {
-    this(dataSource, leaseTtl, Clock.systemUTC());
+    this(dataSource, leaseTtl, System::nanoTime);
   }
 
   /**
    * Test seam: same as {@link #LeaseBasedLeadership(DataSource, Duration)} but with an injectable
-   * clock so the last-successful-renew staleness window can be driven deterministically.
+   * monotonic clock (a {@link System#nanoTime()} stand-in) so the last-successful-renew staleness
+   * window can be driven deterministically.
    *
    * <p>The same truncation class as the sub-millisecond lock timeout in {@code PgAdvisoryLocker},
    * one module over. {@code PT0.0005S} is strictly positive, so the check below passed it, and
@@ -179,7 +183,7 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
    * millisecond floor is the same rule, so it is stated the same way rather than silently rounded
    * up to something the operator did not write.
    */
-  LeaseBasedLeadership(DataSource dataSource, Duration leaseTtl, Clock clock) {
+  LeaseBasedLeadership(DataSource dataSource, Duration leaseTtl, LongSupplier nanoTime) {
     if (dataSource == null) {
       throw new IllegalArgumentException("dataSource must not be null");
     }
@@ -194,7 +198,8 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
     }
     this.dataSource = dataSource;
     this.ttlMillis = leaseTtl.toMillis();
-    this.clock = Objects.requireNonNull(clock, "clock must not be null");
+    this.ttlNanos = TimeUnit.MILLISECONDS.toNanos(ttlMillis);
+    this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime must not be null");
     long intervalMillis = Math.max(1L, ttlMillis / 3);
     this.heartbeat =
         Thread.ofVirtual()
@@ -221,7 +226,7 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
           PostgresTransactions.commitIfManual(conn, "lease acquire", c -> acquire(c, consumerName));
       if (acquired.isPresent()) {
         long epoch = acquired.get();
-        held.put(consumerName, new HeldLease(epoch, clock.instant()));
+        held.put(consumerName, new HeldLease(epoch, nanoTime.getAsLong()));
         return Optional.of(new Lease(epoch));
       }
       // No row: the ON CONFLICT guard (lease_until < now()) did not fire, so a live lease exists.
@@ -232,8 +237,8 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
             PostgresTransactions.commitIfManual(
                 conn, "lease renew", c -> renew(c, consumerName, own.epoch()));
         if (renewed.isPresent()) {
-          // Successful renew refreshes the last-successful-renew instant.
-          held.put(consumerName, new HeldLease(renewed.get(), clock.instant()));
+          // Successful renew refreshes the last-successful-renew reading.
+          held.put(consumerName, new HeldLease(renewed.get(), nanoTime.getAsLong()));
           return Optional.of(new Lease(renewed.get()));
         }
         // Renew matched no row: another holder took over. Drop it and stand by (fail-closed).
@@ -410,8 +415,9 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
             held.remove(consumerName, current);
             LOG.info("lease '{}' lost (renew matched no row); standing down", consumerName);
           } else {
-            // Successful renew refreshes the last-successful-renew instant.
-            held.replace(consumerName, current, new HeldLease(current.epoch(), clock.instant()));
+            // Successful renew refreshes the last-successful-renew reading.
+            held.replace(
+                consumerName, current, new HeldLease(current.epoch(), nanoTime.getAsLong()));
           }
         } catch (SQLException e) {
           LOG.warn("renew('{}') failed; retrying next heartbeat", consumerName, e);
@@ -439,10 +445,15 @@ public final class LeaseBasedLeadership implements SubscriptionLeadership {
   }
 
   /**
-   * True once more than one lease TTL of local time has elapsed since the last successful renew.
+   * True once more than one lease TTL has elapsed on the monotonic clock since the last successful
+   * renew. The difference of two readings is what {@link System#nanoTime()} defines (its origin is
+   * arbitrary, and the subtraction stays right across an overflow of the reading). A reading below
+   * the last renew's — impossible for {@code System.nanoTime} within one JVM — counts as stale too:
+   * a clock that runs backwards cannot vouch for the lease, and the bound fails closed.
    */
   private boolean isStale(HeldLease lease) {
-    return clock.instant().isAfter(lease.lastSuccessfulRenew().plusMillis(ttlMillis));
+    long elapsed = nanoTime.getAsLong() - lease.lastSuccessfulRenewNanos();
+    return elapsed > ttlNanos || elapsed < 0;
   }
 
   private Optional<Long> acquire(Connection conn, String consumerName) throws SQLException {

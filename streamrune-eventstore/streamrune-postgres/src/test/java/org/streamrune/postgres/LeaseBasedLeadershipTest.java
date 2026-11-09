@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.SQLException;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -22,7 +21,6 @@ import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLeadership.Lease;
-import org.streamrune.test.MutableClock;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -59,7 +57,8 @@ class LeaseBasedLeadershipTest {
    */
   private static final Duration HEARTBEAT_TTL = Duration.ofSeconds(3);
 
-  private static final Instant FROZEN = Instant.parse("2026-07-19T00:00:00Z");
+  /** A monotonic clock that never moves: the staleness bound never trips. */
+  private static final java.util.function.LongSupplier FROZEN = () -> 42L;
 
   @BeforeAll
   static void migrateToHead() {
@@ -239,7 +238,7 @@ class LeaseBasedLeadershipTest {
   void renewKeepsSameEpoch_currentStaysLive() throws Exception {
     // Neither clock can take the lease away while the test waits for the heartbeat: the instance's
     // clock is frozen, and the row's expiry is held an hour ahead.
-    var a = new LeaseBasedLeadership(dataSource, HEARTBEAT_TTL, MutableClock.startingAt(FROZEN));
+    var a = new LeaseBasedLeadership(dataSource, HEARTBEAT_TTL, FROZEN);
     managed.add(a);
     assertEquals(1L, a.tryAcquire("p4").orElseThrow().epoch());
     double heldUntil = holdExpiryAnHourAhead("p4");
@@ -255,7 +254,7 @@ class LeaseBasedLeadershipTest {
   void loserFencedOut_currentBecomesEmptyAfterSteal() throws Exception {
     // The clock is frozen, so the staleness bound never trips: an empty current() is attributable
     // only to the heartbeat's renew matching no row.
-    var a = new LeaseBasedLeadership(dataSource, HEARTBEAT_TTL, MutableClock.startingAt(FROZEN));
+    var a = new LeaseBasedLeadership(dataSource, HEARTBEAT_TTL, FROZEN);
     managed.add(a);
     assertEquals(1L, a.tryAcquire("p5").orElseThrow().epoch());
     assertEquals(1L, a.current("p5").orElseThrow().epoch());
@@ -630,12 +629,12 @@ class LeaseBasedLeadershipTest {
     // keep reporting leadership for the whole outage: once more than one TTL has elapsed since the
     // last successful renew, the DB lease has expired and a standby may have taken over, so
     // current() must fail closed.
-    var clock = MutableClock.startingAt(Instant.parse("2026-07-19T00:00:00Z"));
+    var nanos = new java.util.concurrent.atomic.AtomicLong(42L);
     var ttl = Duration.ofSeconds(15);
     // failAfter(1): the initial acquire's getConnection succeeds; every subsequent heartbeat renew
     // getConnection throws — modeling a leader partitioned away from PostgreSQL.
     var faulting = new FaultInjectingDataSource(dataSource).failAfter(1);
-    var a = new LeaseBasedLeadership(faulting, ttl, clock);
+    var a = new LeaseBasedLeadership(faulting, ttl, nanos::get);
     managed.add(a);
 
     assertEquals(1L, a.tryAcquire("p-renew-fail").orElseThrow().epoch());
@@ -643,10 +642,64 @@ class LeaseBasedLeadershipTest {
     assertEquals(1L, a.current("p-renew-fail").orElseThrow().epoch());
 
     // Time advances past the TTL with no successful renew (all renews fail).
-    clock.advance(ttl.plusMillis(1));
+    nanos.addAndGet(ttl.toNanos());
+    assertEquals(
+        1L,
+        a.current("p-renew-fail").orElseThrow().epoch(),
+        "exactly one TTL elapsed is not yet past it");
+    nanos.addAndGet(Duration.ofMillis(1).toNanos());
     assertTrue(
         a.current("p-renew-fail").isEmpty(),
         "current() must fail closed once renews have failed for longer than the lease TTL");
+  }
+
+  /**
+   * The staleness bound counts elapsed monotonic time, whatever the clock's origin: {@code
+   * System.nanoTime} may start anywhere, negative included, and its reading may overflow while a
+   * lease is held. The verdict comes after exactly one TTL either way. The instance reads no wall
+   * clock at all, so a forward step of the system clock — which used to stand a healthy leader down
+   * — has nothing to act on.
+   */
+  @Test
+  void theStaleVerdictCountsElapsedMonotonicTime_fromAnyOriginAndAcrossAnOverflow()
+      throws Exception {
+    var ttl = Duration.ofSeconds(15);
+    long[] origins = {Long.MIN_VALUE, -1_000L, 0L, Long.MAX_VALUE - ttl.toNanos() / 2};
+    for (int i = 0; i < origins.length; i++) {
+      var nanos = new java.util.concurrent.atomic.AtomicLong(origins[i]);
+      // Every renew after the acquire fails, so only the acquire's reading counts.
+      var faulting = new FaultInjectingDataSource(dataSource).failAfter(1);
+      var a = new LeaseBasedLeadership(faulting, ttl, nanos::get);
+      managed.add(a);
+      String name = "p-origin-" + i;
+      assertEquals(1L, a.tryAcquire(name).orElseThrow().epoch());
+
+      nanos.addAndGet(ttl.toNanos());
+      assertTrue(a.current(name).isPresent(), "origin " + origins[i] + ": one TTL is not past it");
+      nanos.addAndGet(1);
+      assertTrue(a.current(name).isEmpty(), "origin " + origins[i] + ": past one TTL is stale");
+    }
+  }
+
+  /**
+   * A backward step does not delay the verdict. Under the wall clock a step back by the size of a
+   * suspend kept a deposed leader's {@code current()} present for that much longer; the monotonic
+   * clock does not step back, and a reading below the last renew's — which no {@code
+   * System.nanoTime} gives — makes the bound fail closed at once instead of waiting it out.
+   */
+  @Test
+  void aBackwardStepDoesNotDelayTheStaleVerdict() throws Exception {
+    var nanos = new java.util.concurrent.atomic.AtomicLong(0L);
+    var faulting = new FaultInjectingDataSource(dataSource).failAfter(1);
+    var a = new LeaseBasedLeadership(faulting, Duration.ofSeconds(15), nanos::get);
+    managed.add(a);
+    assertEquals(1L, a.tryAcquire("p-backward").orElseThrow().epoch());
+
+    nanos.addAndGet(-Duration.ofHours(1).toNanos());
+
+    assertTrue(
+        a.current("p-backward").isEmpty(),
+        "a clock that ran backwards cannot vouch for the lease: fail closed now, not an hour on");
   }
 
   @Test
@@ -661,7 +714,7 @@ class LeaseBasedLeadershipTest {
     //
     // The clock is FROZEN so the staleness prune can never drop the entry: continued
     // getConnection attempts and DB renews are attributable only to heartbeat survival.
-    var clock = MutableClock.startingAt(FROZEN);
+    var clock = FROZEN;
     var faulting =
         new FaultInjectingDataSource(dataSource)
             .failNthUnchecked(2, () -> new IllegalStateException("wrapped DataSource torn down"));
@@ -697,7 +750,7 @@ class LeaseBasedLeadershipTest {
     // (tryAcquire refuses from now on — otherwise runners would keep re-acquiring leases the dead
     // heartbeat can never renew and flap at TTL cadence), clear `held` so current() reports
     // standby immediately, and best-effort EXPIRE the DB leases so standbys take over promptly.
-    var clock = MutableClock.startingAt(Instant.parse("2026-07-19T00:00:00Z")); // frozen: the
+    var clock = FROZEN; // frozen: the
     // staleness bound never trips, so an EMPTY current() is attributable only to the stand-down.
     var faulting =
         new FaultInjectingDataSource(dataSource)
