@@ -15,11 +15,10 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * @param snapshotEveryNEvents number of events between automatic snapshots
  * @param retryMaxAttempts maximum retry attempts on optimistic lock failure
- * @param retryInitialDelayMs initial delay in milliseconds before first retry
+ * @param retryInitialDelay delay before the first retry
  * @param retryBackoffMultiplier multiplier applied to delay between successive retries
- * @param pollingIntervalMs catch-up polling interval in milliseconds for auto-configured projection
- *     subscriptions
- * @param pollingJitterMs jitter added to polling interval in milliseconds
+ * @param pollingInterval catch-up polling interval of the auto-configured projection subscriptions
+ * @param pollingJitter random jitter added to the polling interval
  * @param lockTimeout lock acquisition timeout
  * @param stripeCount number of stripes for striped locker
  * @param maxInFlightAsyncCommands admission-control budget for {@code executeAsync} — commands
@@ -48,10 +47,10 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record StreamRuneProperties(
     @DefaultValue("100") int snapshotEveryNEvents,
     @DefaultValue("3") int retryMaxAttempts,
-    @DefaultValue("50") long retryInitialDelayMs,
+    @DefaultValue("50ms") Duration retryInitialDelay,
     @DefaultValue("2.0") double retryBackoffMultiplier,
-    @DefaultValue("5000") long pollingIntervalMs,
-    @DefaultValue("1000") long pollingJitterMs,
+    @DefaultValue("5s") Duration pollingInterval,
+    @DefaultValue("1s") Duration pollingJitter,
     @DefaultValue("5s") Duration lockTimeout,
     @DefaultValue("1024") int stripeCount,
     @DefaultValue("10000") int maxInFlightAsyncCommands,
@@ -114,7 +113,7 @@ public record StreamRuneProperties(
   /**
    * @param enabled whether outbox polling is enabled (opt-in)
    * @param batchSize max events per poll cycle
-   * @param flushIntervalMs polling interval in milliseconds
+   * @param flushInterval interval between two polls of the relay
    * @param retentionMaxAge how long to keep delivered outbox entries before the retention sweeper
    *     prunes them; zero or negative disables pruning
    * @param skippedRetentionMaxAge how long to keep SKIPPED outbox entries — the audit of an
@@ -125,20 +124,20 @@ public record StreamRuneProperties(
    * @param retryMaxAttempts delivery attempts a per-entry rejection may accrue before the entry is
    *     marked terminal {@code FAILED}. Broker-wide transport failures are non-counting and never
    *     terminal-fail regardless of this. Default 10.
-   * @param retryInitialDelayMs initial retry backoff in milliseconds; grows by {@link
-   *     #retryMultiplier} per attempt, capped at 60s. Default 1000.
-   * @param retryMultiplier exponential backoff multiplier applied to {@link #retryInitialDelayMs}
-   *     each attempt. Default 2.0.
+   * @param retryInitialDelay initial retry backoff; grows by {@link #retryBackoffMultiplier} per
+   *     attempt, capped at 60s. Default 1s.
+   * @param retryBackoffMultiplier exponential backoff multiplier applied to {@link
+   *     #retryInitialDelay} each attempt. Default 2.0.
    */
   public record Outbox(
       @DefaultValue("false") boolean enabled,
       @DefaultValue("100") int batchSize,
-      @DefaultValue("5000") long flushIntervalMs,
+      @DefaultValue("5s") Duration flushInterval,
       @DefaultValue("7d") Duration retentionMaxAge,
       @DefaultValue("30d") Duration skippedRetentionMaxAge,
       @DefaultValue("10") int retryMaxAttempts,
-      @DefaultValue("1000") long retryInitialDelayMs,
-      @DefaultValue("2.0") double retryMultiplier) {}
+      @DefaultValue("1s") Duration retryInitialDelay,
+      @DefaultValue("2.0") double retryBackoffMultiplier) {}
 
   /**
    * @param singleActiveConsumer single-active-consumer (subscription leadership) configuration
@@ -191,7 +190,7 @@ public record StreamRuneProperties(
    *     DeadLetterQueue} bean, entries can still be retried on demand, and the retention sweeper
    *     keeps pruning
    * @param maxRetries max retry attempts before permanent failure
-   * @param retryIntervalMs interval between retry attempts in milliseconds
+   * @param retryInterval interval between retry attempts
    * @param retentionMaxAge how long to keep command dead-letter-queue entries (which hold command
    *     payloads, encrypted where {@code @Encrypted} fields apply) before the retention sweeper
    *     prunes them; zero or negative disables pruning. Independent of {@code enabled}. Must not
@@ -206,7 +205,7 @@ public record StreamRuneProperties(
   public record DeadLetter(
       @DefaultValue("true") boolean enabled,
       @DefaultValue("5") int maxRetries,
-      @DefaultValue("60000") long retryIntervalMs,
+      @DefaultValue("1m") Duration retryInterval,
       @DefaultValue("7d") Duration retentionMaxAge,
       @DefaultValue("operator-only") String unkeyedReplay) {
 

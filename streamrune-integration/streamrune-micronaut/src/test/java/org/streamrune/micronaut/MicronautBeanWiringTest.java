@@ -116,16 +116,16 @@ class MicronautBeanWiringTest {
             Map.of(
                 "streamrune.saga.enabled", "false",
                 "streamrune.outbox.batch-size", "42",
-                "streamrune.outbox.flush-interval-ms", "1234",
+                "streamrune.outbox.flush-interval", "1234ms",
                 "streamrune.dead-letter.enabled", "false",
-                "streamrune.dead-letter.retry-interval-ms", "9876",
+                "streamrune.dead-letter.retry-interval", "PT9.876S",
                 "streamrune.metrics.enabled", "false"))) {
       var props = ctx.getBean(StreamRuneMicronautProperties.class);
       assertFalse(props.sagaEnabled());
       assertEquals(42, props.outboxBatchSize());
-      assertEquals(1234L, props.outboxFlushIntervalMs());
+      assertEquals(Duration.ofMillis(1234), props.outboxFlushInterval());
       assertFalse(props.deadLetterEnabled());
-      assertEquals(9876L, props.deadLetterRetryIntervalMs());
+      assertEquals(Duration.ofMillis(9876), props.deadLetterRetryInterval());
       assertFalse(props.metricsEnabled());
       assertFalse(props.outboxEnabled(), "unset keys must keep defaults");
       assertEquals(5, props.deadLetterMaxRetries(), "unset keys must keep defaults");

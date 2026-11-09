@@ -131,7 +131,7 @@ class OutboxAutoConfigIT {
           .withBean(OutboxPublisher.class, () -> (OutboxPublisher) entry -> {})
           .withPropertyValues(
               "streamrune.outbox.enabled=true",
-              "streamrune.outbox.flush-interval-ms=3600000",
+              "streamrune.outbox.flush-interval=1h",
               "streamrune.outbox.skipped-retention-max-age=45d")
           .run(
               ctx -> {

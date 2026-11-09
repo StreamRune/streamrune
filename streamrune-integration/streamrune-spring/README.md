@@ -58,10 +58,10 @@ the ones most applications set:
 streamrune:
   snapshot-every-n-events: 100
   retry-max-attempts: 3
-  retry-initial-delay-ms: 50
+  retry-initial-delay: 50ms
   retry-backoff-multiplier: 2.0
-  polling-interval-ms: 5000
-  polling-jitter-ms: 1000
+  polling-interval: 5s
+  polling-jitter: 1s
   lock-timeout: 5s
   stripe-count: 1024
   event-store:

@@ -192,9 +192,8 @@ final class ReferenceApplication implements Application {
     var policy =
         new DeadLetterRetryPolicy(
             Integer.parseInt(properties.getOrDefault("streamrune.dead-letter.max-retries", "5")),
-            Duration.ofMillis(
-                Long.parseLong(
-                    properties.getOrDefault("streamrune.dead-letter.retry-interval-ms", "60000"))),
+            Duration.parse(
+                properties.getOrDefault("streamrune.dead-letter.retry-interval", "PT60S")),
             2.0,
             false,
             DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY);

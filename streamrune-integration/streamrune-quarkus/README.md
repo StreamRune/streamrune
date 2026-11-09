@@ -48,7 +48,7 @@ start its own line — text after a value is part of the value.
 # Commands, locking and retries
 streamrune.snapshot-every-n-events=100
 streamrune.retry-max-attempts=3
-streamrune.retry-initial-delay-ms=50
+streamrune.retry-initial-delay=PT0.05S
 streamrune.retry-backoff-multiplier=2.0
 streamrune.lock-timeout=PT5S
 streamrune.stripe-count=1024
@@ -67,8 +67,8 @@ streamrune.event-store.schema.auto-initialize=true
 # bound on every event-store statement (per transaction or statement, never on the
 # Agroal session); PT0S sets none
 streamrune.event-store.statement-timeout=PT30S
-streamrune.polling-interval-ms=5000
-streamrune.polling-jitter-ms=1000
+streamrune.polling-interval=PT5S
+streamrune.polling-jitter=PT1S
 streamrune.projections.auto-discovery.enabled=true
 # streamrune.projections.<name>.enabled=true
 # streamrune.projections.<name>.error-strategy=
@@ -92,17 +92,17 @@ streamrune.saga.dead-letter-retention-max-age=PT168H
 streamrune.inbox.retention-max-age=PT168H
 streamrune.dead-letter.enabled=true
 streamrune.dead-letter.max-retries=5
-streamrune.dead-letter.retry-interval-ms=60000
+streamrune.dead-letter.retry-interval=PT60S
 streamrune.dead-letter.retention-max-age=PT168H
 streamrune.dead-letter.unkeyed-replay=operator-only
 
 # Transactional outbox
 streamrune.outbox.enabled=false
 streamrune.outbox.batch-size=100
-streamrune.outbox.flush-interval-ms=5000
+streamrune.outbox.flush-interval=PT5S
 streamrune.outbox.retry-max-attempts=10
-streamrune.outbox.retry-initial-delay-ms=1000
-streamrune.outbox.retry-multiplier=2.0
+streamrune.outbox.retry-initial-delay=PT1S
+streamrune.outbox.retry-backoff-multiplier=2.0
 streamrune.outbox.retention-max-age=PT168H
 streamrune.outbox.skipped-retention-max-age=PT720H
 

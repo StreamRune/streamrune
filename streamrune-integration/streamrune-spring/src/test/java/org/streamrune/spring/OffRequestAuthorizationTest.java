@@ -136,7 +136,7 @@ class OffRequestAuthorizationTest {
     "streamrune.retry-max-attempts=1",
     "streamrune.dead-letter.max-retries=2",
     // The runner is driven explicitly via retry(commandId); no background polling.
-    "streamrune.dead-letter.retry-interval-ms=3600000",
+    "streamrune.dead-letter.retry-interval=1h",
     "streamrune.subscription.single-active-consumer.enabled=false",
   };
 

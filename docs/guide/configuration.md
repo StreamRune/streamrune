@@ -13,7 +13,8 @@ A default is written in one form in this guide and in every other table with a `
 
 - a duration as the shortest exact one of `Nd`, `Nh`, `Nm`, `Ns` and `Nms`: `7d`, `1m`, `30s`,
   `500ms`. All three integrations accept that form as it is, and ISO-8601 (`PT168H` for `7d`,
-  `PT60S` for `1m`) as well;
+  `PT60S` for `1m`, `PT0.05S` for `50ms`) as well. A bare number is not portable — Spring reads
+  `5000` as milliseconds, Quarkus as seconds — so always write the unit;
 - a boolean or a number as its value: `true`, `100`, `2.0`; a text as it is: `operator-only`;
 - `—` where the property has no default.
 
@@ -27,7 +28,7 @@ integration does not bind.
 |---|---|---|
 | `streamrune.snapshot-every-n-events` | `100` | Events between two snapshots of an aggregate under the default snapshot policy. |
 | `streamrune.retry-max-attempts` | `3` | Attempts of a command whose append met an optimistic-lock conflict. |
-| `streamrune.retry-initial-delay-ms` | `50` | Delay before the first retry, in milliseconds. |
+| `streamrune.retry-initial-delay` | `50ms` | Delay before the first retry. |
 | `streamrune.retry-backoff-multiplier` | `2.0` | Factor by which the retry delay grows with each attempt. |
 | `streamrune.lock-timeout` | `5s` | How long a command waits for its aggregate's lock; `0` tries once, a negative value fails the start. |
 | `streamrune.stripe-count` | `1024` | Stripes of the in-process aggregate locker. |
@@ -44,8 +45,8 @@ integration does not bind.
 |---|---|---|
 | `streamrune.event-store.schema.auto-initialize` | `true` | Whether the framework's Flyway migrations run at startup. |
 | `streamrune.event-store.statement-timeout` | `30s` | Bound on every statement of the event store; `0` sets none of its own. |
-| `streamrune.polling-interval-ms` | `5000` | Catch-up polling interval of the auto-configured projection subscriptions, in milliseconds. |
-| `streamrune.polling-jitter-ms` | `1000` | Random jitter added to that interval, in milliseconds. |
+| `streamrune.polling-interval` | `5s` | Catch-up polling interval of the auto-configured projection subscriptions. |
+| `streamrune.polling-jitter` | `1s` | Random jitter added to that interval. |
 | `streamrune.projections.auto-discovery.enabled` | `true` | Whether the integration builds and starts the runners of the `@ProjectionConfig` projections. |
 | `streamrune.projections.<name>.enabled` | `true` | Whether the projection of that name is discovered. |
 | `streamrune.projections.<name>.error-strategy` | — | The error strategy of that projection; unset, the one its `@ProjectionConfig` names. |
@@ -74,7 +75,7 @@ integration does not bind.
 | `streamrune.inbox.retention-max-age` | `7d` | How long processed command-inbox rows are kept; `0` or negative keeps them. |
 | `streamrune.dead-letter.enabled` | `true` | Whether the retry runner replays dead-lettered commands automatically. |
 | `streamrune.dead-letter.max-retries` | `5` | Replays of an entry before it is exhausted. |
-| `streamrune.dead-letter.retry-interval-ms` | `60000` | Interval between two replays, in milliseconds. |
+| `streamrune.dead-letter.retry-interval` | `1m` | Interval between two replays. |
 | `streamrune.dead-letter.retention-max-age` | `7d` | How long dead-letter entries are kept; at most the inbox window when a command inbox exists. |
 | `streamrune.dead-letter.unkeyed-replay` | `operator-only` | Whether entries of commands without an idempotency key replay automatically (`automatic`) or wait for an operator. |
 
@@ -84,10 +85,10 @@ integration does not bind.
 |---|---|---|
 | `streamrune.outbox.enabled` | `false` | Whether the outbox relay runs. |
 | `streamrune.outbox.batch-size` | `100` | Entries the relay claims per poll. |
-| `streamrune.outbox.flush-interval-ms` | `5000` | Interval between two polls of the relay, in milliseconds. |
+| `streamrune.outbox.flush-interval` | `5s` | Interval between two polls of the relay. |
 | `streamrune.outbox.retry-max-attempts` | `10` | Delivery attempts a rejected entry may accrue before it is `FAILED`. |
-| `streamrune.outbox.retry-initial-delay-ms` | `1000` | First retry delay, in milliseconds; it grows by the multiplier, up to 60s. |
-| `streamrune.outbox.retry-multiplier` | `2.0` | Factor by which the retry delay grows with each attempt. |
+| `streamrune.outbox.retry-initial-delay` | `1s` | First retry delay; it grows by the multiplier, up to 60s. |
+| `streamrune.outbox.retry-backoff-multiplier` | `2.0` | Factor by which the retry delay grows with each attempt. |
 | `streamrune.outbox.retention-max-age` | `7d` | How long delivered entries are kept; `0` or negative keeps them. |
 | `streamrune.outbox.skipped-retention-max-age` | `30d` | How long skipped entries are kept; `0` or negative keeps them. |
 
