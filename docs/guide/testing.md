@@ -821,6 +821,34 @@ assertEquals(2, faults.calls("append"));
 name fails where it is written. A flow that writes in more than one step has a crash point after
 each write; `crashAfter` stops it there.
 
+### Command bus decorators with ForwardingCommandBus
+
+`ForwardingCommandBus` does the same for the command bus: both `execute` methods and the two wiring
+probes, `supportsIdempotentExecution()` and `sagaFenceStorageIdentity()`, reach the wrapped bus on
+the calling thread, and each call consults the `FaultSchedule` (`"execute"` names both `execute`
+methods). A saga runner accepts it wherever it accepts the wrapped bus. Subclass it to observe or
+fail a command, and hand `super` the command and the key you received:
+
+```java
+class CountingBus extends ForwardingCommandBus {
+  final AtomicInteger keyed = new AtomicInteger();
+
+  CountingBus(CommandBus delegate) {
+    super(delegate);
+  }
+
+  @Override
+  public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
+    keyed.incrementAndGet();
+    return super.execute(command, key);
+  }
+}
+```
+
+A decorator of your own that implements `CommandBus` directly forwards the same four methods: one
+that leaves the probes to their defaults reports a bus without an inbox and without a saga fence,
+and `SagaRunner.Builder.build()` refuses it.
+
 ---
 
 ## Recording doubles
@@ -894,6 +922,7 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `InMemoryOutboxStore` | An `OutboxStore` with the claim, lease and ordering rules of `PostgresOutboxStore`, its retry times taken from the `Clock` it is given. |
 | `ForwardingOutboxStore` | An `OutboxStore` that forwards every call to a delegate and injects the faults of a `FaultSchedule`; or override one method to make that call fail, block or record. |
 | `ForwardingEventStore`, `ForwardingSagaStore`, `ForwardingSagaDeadLetterStore`, `ForwardingDeadLetterQueue`, `ForwardingOffsetStore`, `ForwardingProjectionDeadLetterStore` | The same for the other store ports: every method forwarded, the default methods included, each call consulting the `FaultSchedule`. |
+| `ForwardingCommandBus` | A `CommandBus` that forwards both `execute` methods and the wiring probes `supportsIdempotentExecution()` and `sagaFenceStorageIdentity()` to a delegate on the calling thread, each call consulting the `FaultSchedule`; the base class of a bus decorator. |
 | `FaultSchedule` | The faults a forwarding store injects — `failOnce`, `failAt`, `failAlways`, `crashAfter`, `throwing` — and the count of every call. |
 | `InjectedFaultException` | What a `FaultSchedule` throws unless it names another failure. |
 | `RecordingStreamRuneMetrics` | A `StreamRuneMetrics` that records every call under its `MetricNames` meter and tags; `assertIncremented`, `count`, `total`, `lastGauge`. |

@@ -6,7 +6,29 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
-/** Dispatches commands to the appropriate {@link Decider} for processing. */
+/**
+ * Dispatches commands to the appropriate {@link Decider} for processing.
+ *
+ * <h2>Decorators</h2>
+ *
+ * <p>A bus that wraps another one (to count, trace, rate-limit or fail commands in a test) forwards
+ * to the wrapped bus every method of this interface, the {@code default} methods included:
+ *
+ * <ul>
+ *   <li>both {@code execute} methods, with the command instance and the idempotency key it received
+ *       and on the calling thread, so the scoped values a saga's dispatch binds stay visible to the
+ *       wrapped bus;
+ *   <li>{@link #supportsIdempotentExecution()} and {@link #sagaFenceStorageIdentity()}, the two
+ *       wiring probes. A decorator that leaves them to their defaults reports a bus without a
+ *       command inbox and without a saga fence, whatever it wraps: {@code SagaRunner} and {@code
+ *       SagaTimeoutRunner} refuse it at {@code build()}, and the dead-letter retry runner does not
+ *       replay through it with the entry's key.
+ * </ul>
+ *
+ * <p>{@code ForwardingCommandBus} in {@code streamrune-test} forwards all of them and is a base
+ * class for such a decorator. A new method added to this interface comes with a {@code default}; a
+ * decorator forwards it as well once it wants the wrapped bus's answer.
+ */
 public interface CommandBus {
 
   /**
@@ -68,7 +90,8 @@ public interface CommandBus {
    * unkeyed double-execute.
    *
    * <p>Defaults to {@code false}. Implementations that support keyed execution must override this
-   * to report {@code true} once (and only once) their idempotency inbox is configured.
+   * to report {@code true} once (and only once) their idempotency inbox is configured. A decorator
+   * forwards it to the bus it wraps (see the class javadoc).
    */
   default boolean supportsIdempotentExecution() {
     return false;
@@ -80,7 +103,10 @@ public interface CommandBus {
    * store's {@link org.streamrune.core.saga.SagaStore#storageIdentity()} to learn whether the
    * commands it dispatches are fenced against its own saga rows. Cheap, no I/O.
    *
-   * <p>Defaults to {@code null}.
+   * <p>The value is an identity token: it is compared with {@code equals} and never inspected.
+   *
+   * <p>Defaults to {@code null}. A decorator forwards it to the bus it wraps (see the class
+   * javadoc).
    */
   default Object sagaFenceStorageIdentity() {
     return null;

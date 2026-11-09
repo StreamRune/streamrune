@@ -1061,11 +1061,7 @@ public final class SagaTimeoutRunner<S extends SagaState> {
       // Timeout compensation dispatches through the keyed execute(command, key) with no unkeyed
       // fallback, so a bus without a CommandInbox fails every compensation. Detectable here — fail
       // fast rather than silently at runtime.
-      if (!commandBus.supportsIdempotentExecution()) {
-        throw new IllegalStateException(
-            "saga command dispatch requires idempotent execution — configure a CommandInbox on the"
-                + " CommandBus (VirtualThreadCommandBus.builder().commandInbox(...))");
-      }
+      SagaRunner.Builder.requireIdempotentDispatch(commandBus);
       if (batchSize < 1) {
         throw new IllegalArgumentException("batchSize must be positive, was " + batchSize);
       }

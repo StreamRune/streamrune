@@ -18,7 +18,8 @@ import java.util.stream.Collectors;
  * calls. Every {@code Forwarding*} store of the kit takes one ({@link ForwardingEventStore}, {@link
  * ForwardingSagaStore}, {@link ForwardingSagaDeadLetterStore}, {@link ForwardingDeadLetterQueue},
  * {@link ForwardingOffsetStore}, {@link ForwardingProjectionDeadLetterStore}, {@link
- * ForwardingOutboxStore}) and consults it on every call, before and after the delegate runs:
+ * ForwardingOutboxStore}), and so does {@link ForwardingCommandBus}; each consults it on every
+ * call, before and after the delegate runs:
  *
  * <pre>{@code
  * var faults = FaultSchedule.none().crashAfter("saveOffset");

@@ -1501,16 +1501,31 @@ public final class SagaRunner<S extends SagaState> {
       // dispatch fails the same way and is classified TRANSIENT there — the saga wedges
       // COMPENSATING until the sweeper's give-up FAULTs it. The misconfiguration is fully
       // detectable here, so fail fast rather than silently at runtime.
-      if (!commandBus.supportsIdempotentExecution()) {
-        throw new IllegalStateException(
-            "saga command dispatch requires idempotent execution — configure a CommandInbox on the"
-                + " CommandBus (VirtualThreadCommandBus.builder().commandInbox(...))");
-      }
+      requireIdempotentDispatch(commandBus);
       if (!Boolean.FALSE.equals(forwardFence)) {
         requireAFencingBus(SagaType.fromClass(orchestrator.stateType()).value());
       }
       Objects.requireNonNull(sagaDeadLetterStore, "sagaDeadLetterStore is required");
       return new SagaRunner<>(this);
+    }
+
+    /**
+     * Refuses a bus whose {@link CommandBus#supportsIdempotentExecution()} is {@code false}: every
+     * saga command goes through the keyed {@code execute(command, key)}. {@link SagaTimeoutRunner}
+     * makes the same check. The message names the bus's class and the decorator case, where the
+     * inbox is configured on the wrapped bus and the decorator leaves the probe to its default.
+     */
+    static void requireIdempotentDispatch(CommandBus commandBus) {
+      if (!commandBus.supportsIdempotentExecution()) {
+        throw new IllegalStateException(
+            "saga command dispatch requires idempotent execution, and "
+                + commandBus.getClass().getName()
+                + " reports none (CommandBus.supportsIdempotentExecution() is false). Configure a"
+                + " CommandInbox on the CommandBus (VirtualThreadCommandBus.builder()"
+                + ".commandInbox(...)). A decorator in front of such a bus forwards"
+                + " supportsIdempotentExecution() and sagaFenceStorageIdentity() to it, as"
+                + " ForwardingCommandBus of streamrune-test does.");
+      }
     }
 
     /**
@@ -1531,7 +1546,9 @@ public final class SagaRunner<S extends SagaState> {
                 + " compensation that another process claimed, and nothing undoes it. Build the"
                 + " bus over an event store that fences (PostgresEventStore; in tests"
                 + " InMemoryEventStore.withSagaStore(theSagaStore)), or switch the fence off for"
-                + " this runner with SagaRunner.Builder.forwardFence(false).");
+                + " this runner with SagaRunner.Builder.forwardFence(false). A decorator in front"
+                + " of a bus that fences forwards sagaFenceStorageIdentity() to it, as"
+                + " ForwardingCommandBus of streamrune-test does.");
       }
       if (!fence.equals(sagaStore.storageIdentity())) {
         throw new IllegalStateException(
