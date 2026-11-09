@@ -1308,28 +1308,10 @@ class SagaTimeoutRunnerTest {
     var entered = new CountDownLatch(1);
     SagaStore blockingStore = mock(SagaStore.class);
     var release = new CountDownLatch(1);
-    // Parks until interrupted, then ignores every further interrupt until the test releases it: a
-    // poll stuck where an interrupt does not reach it.
     when(blockingStore.findTimedOut(any(), any(), anyInt()))
         .thenAnswer(
-            invocation -> {
-              pollThread.set(Thread.currentThread());
-              entered.countDown();
-              boolean interrupted = false;
-              while (true) {
-                try {
-                  if (release.await(10, TimeUnit.SECONDS)) {
-                    break;
-                  }
-                } catch (InterruptedException _) {
-                  interrupted = true;
-                }
-              }
-              if (interrupted) {
-                Thread.currentThread().interrupt();
-              }
-              return List.of();
-            });
+            RestartRaceTestSupport.parkIgnoringInterruptsUntilReleased(
+                pollThread, entered, release, List.of()));
     CommandBus mockBus = mock(CommandBus.class);
     when(mockBus.supportsIdempotentExecution()).thenReturn(true);
     var runner =

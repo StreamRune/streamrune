@@ -1167,8 +1167,9 @@ public final class OutboxPoller implements AutoCloseable {
    * <p>The poll thread is interrupted, which cuts an idle sleep or a publish waiting on the
    * transport short. While the thread is storing a batch's outcome the interrupt is held back until
    * the outcome is stored (so this call can wait for those store writes), and the thread stops
-   * right after. Waits up to 30s for the thread to end; a thread still running after that is left
-   * alone and the relay stays not restartable (logged).
+   * right after. Waits up to 30s for the thread to end; a thread still running after that stays the
+   * relay's poll thread, the relay stays started and not restartable (logged), and a later close()
+   * interrupts and joins it again, resetting the guard once it has stopped.
    */
   @Override
   public void close() {
@@ -1196,6 +1197,10 @@ public final class OutboxPoller implements AutoCloseable {
       }
     }
     if (stuck) {
+      // Keep the stuck thread as the poll thread: isAlive() keeps reporting it, and a repeated
+      // close() interrupts and joins it again instead of finding no thread and resetting the guard
+      // while it still runs.
+      pollThread = running;
       LOG.warn(
           "OutboxPoller poll thread did not stop within {}ms; leaving the runner not-restartable so"
               + " a restart cannot spawn a duplicate relay. Investigate the stuck poll.",

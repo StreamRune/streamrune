@@ -2,6 +2,7 @@ package org.streamrune.runtime;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.mockito.stubbing.Answer;
 
@@ -55,6 +56,37 @@ final class RestartRaceTestSupport {
           // No second interrupt is expected in these single-close tests.
         }
         // Restore the interrupt so the runner's poll loop exits promptly once this answer returns.
+        Thread.currentThread().interrupt();
+      }
+      return returnValue;
+    };
+  }
+
+  /**
+   * A collaborator answer that records the poll thread, signals {@code entered}, then ignores every
+   * interrupt until the test counts {@code release} down, and returns {@code returnValue} with the
+   * interrupt restored: a poll stuck where an interrupt does not reach it, which outlives any join
+   * bound until it is released.
+   */
+  static Answer<Object> parkIgnoringInterruptsUntilReleased(
+      AtomicReference<Thread> pollThread,
+      CountDownLatch entered,
+      CountDownLatch release,
+      Object returnValue) {
+    return invocation -> {
+      pollThread.set(Thread.currentThread());
+      entered.countDown();
+      boolean interrupted = false;
+      while (true) {
+        try {
+          if (release.await(10, TimeUnit.SECONDS)) {
+            break;
+          }
+        } catch (InterruptedException _) {
+          interrupted = true;
+        }
+      }
+      if (interrupted) {
         Thread.currentThread().interrupt();
       }
       return returnValue;
