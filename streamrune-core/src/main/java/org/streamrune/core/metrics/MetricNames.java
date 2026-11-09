@@ -285,8 +285,8 @@ public final class MetricNames {
    * with an independent cipher, or because the check itself failed. The engine verifies every
    * encryption before it returns it; on a failure it returns nothing and throws the transient
    * {@code CryptoOperationException}, so the caller retries and the value is encrypted again. A
-   * healthy JVM never fails the check: any nonzero value points at a fault of the JVM or the
-   * hardware, alongside a {@code WARN} log per occurrence.
+   * correct encryption never fails the check: any nonzero value is a wrong cipher result, whatever
+   * its cause — alert on it and report it — alongside a {@code WARN} log per occurrence.
    */
   public static final String CRYPTO_ENCRYPT_SELF_CHECK_FAILED =
       "streamrune.crypto.encrypt_self_check_failed";
@@ -294,7 +294,7 @@ public final class MetricNames {
   /**
    * A crypto engine retried a decryption whose authentication tag did not match, once, with a fresh
    * cipher, tagged by {@link #TAG_OUTCOME}: {@code RECOVERED} when the retry read the value (a
-   * transient fault failed the first attempt; a healthy JVM never produces one, so alert on any
+   * transient fault failed the first attempt; normal operation never produces one, so alert on any
    * nonzero value), {@code FAILED} when it failed too (the value is corrupted, tampered or written
    * under another key, and stays the deterministic {@code CryptoMappingException}). Logged at
    * {@code WARN} per occurrence with its outcome.

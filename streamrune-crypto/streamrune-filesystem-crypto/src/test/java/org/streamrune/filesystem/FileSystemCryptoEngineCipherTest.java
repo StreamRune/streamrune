@@ -35,9 +35,9 @@ import org.streamrune.core.types.SubjectId;
 
 /**
  * The engine verifies each encryption before it returns it and retries a failed decryption once
- * with a fresh cipher, so a wrong cipher result is caught before the value is returned and a
- * transient fault of the JVM or the hardware cannot wedge a reader. The faults are injected through
- * the package-private cipher factory.
+ * with a fresh cipher, so a wrong cipher result is caught before the value is returned and a a
+ * one-off wrong cipher result, whatever its cause, cannot wedge a reader. The faults are injected
+ * through the package-private cipher factory.
  */
 class FileSystemCryptoEngineCipherTest {
 
