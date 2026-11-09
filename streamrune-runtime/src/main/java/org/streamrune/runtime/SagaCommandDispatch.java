@@ -431,7 +431,8 @@ final class SagaCommandDispatch {
    *             again; a saga binds its correlation id and its origin afresh on every attempt, from
    *             the saga id. The step executor logs it at {@code ERROR} instead of the retry-later
    *             {@code WARN}. A refusal that persists holds the subscription, which reports every
-   *             failed delivery, until the saga's deadline claims it.
+   *             failed delivery, until the saga's deadline claims it — or, for a saga that declares
+   *             no timeout, until the cause is fixed.
    *       </ul>
    *   <li>Anything else ⇒ <b>not</b> retry-later. Never divert a failure that could not be
    *       <em>proven</em> retriable onto an unbounded batch retry.

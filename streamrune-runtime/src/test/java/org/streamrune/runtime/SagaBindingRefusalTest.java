@@ -73,11 +73,12 @@ import org.streamrune.test.MutableClock;
  *
  * <p>The refusal itself never compensates. A forward command refused this way leaves the saga as it
  * was and propagates, so the subscription delivers the event again: no compensation episode is
- * claimed, the order is not cancelled; a refusal that persists ends as the saga's timeout. A
- * compensation command refused this way keeps the episode {@code COMPENSATING} as an attempted
- * re-drive: the undo is never abandoned as {@code FAILED}, the next re-drive completes it, and a
- * refusal that persists is faulted for an operator once the compensation retry sweeper's give-up
- * horizon has passed. Either way it is logged at {@code ERROR}.
+ * claimed, the order is not cancelled; a refusal that persists ends as the saga's timeout, or, for
+ * a saga that declares none, holds the saga subscription until the cause is fixed. A compensation
+ * command refused this way keeps the episode {@code COMPENSATING} as an attempted re-drive: the
+ * undo is never abandoned as {@code FAILED}, the next re-drive completes it, and a refusal that
+ * persists is faulted for an operator once the compensation retry sweeper's give-up horizon has
+ * passed. Either way it is logged at {@code ERROR}.
  *
  * <p><b>Crash points of the refused forward step, and why every rerun converges.</b> The step
  * writes in this order: the genesis-pending row (start event only), forward command 0, ..., forward
