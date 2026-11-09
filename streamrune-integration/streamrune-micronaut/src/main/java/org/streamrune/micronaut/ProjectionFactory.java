@@ -48,7 +48,7 @@ import org.streamrune.runtime.SubscriptionHealthContributor;
  *
  * <p>Every registration carries the {@link ProjectionDeliveryMode} its {@code
  * ProjectionConfig.deliveryMode()} declares. Each runner's {@link AtomicBatchProcessor} is chosen
- * by {@link ProjectionProcessorResolution#select} from what its registrations declare and from
+ * by {@code ProjectionProcessorResolution.select} from what its registrations declare and from
  * whether the leadership bean needs its epoch honoured — never from the presence of a {@code
  * DataSource} or of a processor bean: a runner of {@code AT_LEAST_ONCE_IDEMPOTENT} registrations
  * without leadership runs on {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()}. An INLINE

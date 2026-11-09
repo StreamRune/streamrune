@@ -104,7 +104,7 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
   /**
    * The {@code application_name} of the dedicated LISTEN session, appended after the application's
    * own name when it has one, so that {@code pg_stat_activity} tells the LISTEN session from the
-   * application's. See {@link #listenApplicationName(String, String)}.
+   * application's. See {@code listenApplicationName}.
    */
   static final String LISTEN_APPLICATION_NAME = "streamrune-crypto-forget-listen";
 

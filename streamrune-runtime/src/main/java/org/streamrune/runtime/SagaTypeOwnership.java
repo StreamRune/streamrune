@@ -37,7 +37,7 @@ import org.streamrune.core.saga.SagaStore;
  * configured for one database, and a wrapper that does not forward the identity of the store it
  * wraps, are two stores to this check although their runners share rows.
  *
- * <p>Lives in {@code org.streamrune.runtime} for the same reason {@link SagaStateCryptoValidation}
+ * <p>Lives in {@code org.streamrune.runtime} for the same reason {@code SagaStateCryptoValidation}
  * does: it reads {@link SagaRunner}'s package-private state.
  */
 public final class SagaTypeOwnership {

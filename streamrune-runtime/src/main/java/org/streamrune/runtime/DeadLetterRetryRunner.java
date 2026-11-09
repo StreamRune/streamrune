@@ -1415,7 +1415,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   /**
    * The fail-closed rule for a record component or field the scan could not read: an
    * {@code @Encrypted} component, or a member whose declared type reaches an {@code @Encrypted}
-   * field ({@link CryptoConfigValidator#referencesEncrypted}), may hold {@code [REDACTED]}, so the
+   * field ({@code CryptoConfigValidator.referencesEncrypted}), may hold {@code [REDACTED]}, so the
    * scan fails closed with {@link UnverifiableRedactionException} rather than guessing "not
    * redacted". Any other unreadable member can never hold the marker and the scan skips it; normal
    * execution surfaces whatever made it unreadable. A reachability walk that itself fails (a
@@ -1446,7 +1446,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   /**
    * Whether {@code type} is a JDK/platform class (loaded by the bootstrap loader, or in a {@code
    * java.}, {@code javax.}, {@code jakarta.}, {@code jdk.}, {@code sun.} or {@code com.sun.}
-   * package) — the same boundary {@link CryptoConfigValidator#referencesEncrypted} stops at. Such a
+   * package) — the same boundary {@code CryptoConfigValidator.referencesEncrypted} stops at. Such a
    * class never declares a field holding a record Jackson built from the payload, other than the
    * containers {@link #containsRedactedValue} opens itself.
    */
@@ -1905,7 +1905,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      * GraalVM native image answers only for a sealed type registered for reflection; for any other
      * it reports the type sealed with NO permitted subclasses. Registering the root alone would
      * leave every concrete command of the hierarchy unresolvable at replay time, silently, so such
-     * a root — at any nested level — is refused instead (see {@link SealedHierarchy}).
+     * a root — at any nested level — is refused instead (see {@code SealedHierarchy}).
      *
      * @throws IllegalArgumentException if {@code commandClass} is null
      * @throws IllegalStateException if {@code commandClass}, or a sealed level below it, is sealed

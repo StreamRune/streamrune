@@ -128,7 +128,7 @@ public abstract class IntegrationWiringContract {
   /**
    * With the outbox enabled, an outbox store, and neither an {@code OutboxPublisher} nor an
    * application's {@code OutboxPoller}, nothing would relay the entries the event store writes: the
-   * start is refused with the message of {@link OutboxWiringMessages#noPublisher()}.
+   * start is refused with the message of {@code OutboxWiringMessages.noPublisher}.
    */
   @Test
   public void outboxEnabledWithoutRelayRefusesStart() {

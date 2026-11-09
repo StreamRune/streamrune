@@ -300,7 +300,7 @@ public final class SagaRunner<S extends SagaState> {
 
   /**
    * Whether the application named {@link Builder#forwardFence(boolean)} itself. When it did, its
-   * value stands and {@link SagaForwardFenceDefault#applyDefault} leaves this runner alone.
+   * value stands and {@code SagaForwardFenceDefault.applyDefault} leaves this runner alone.
    */
   private final boolean forwardFenceConfigured;
 
@@ -360,7 +360,7 @@ public final class SagaRunner<S extends SagaState> {
 
   /**
    * Supplies {@code enabled} as this runner's fence unless the application named one on the
-   * builder. Package-private; driven by {@link SagaForwardFenceDefault#applyDefault} from the
+   * builder. Package-private; driven by {@code SagaForwardFenceDefault.applyDefault} from the
    * integrations' startup hook.
    *
    * @return {@code true} when this runner took the default
@@ -383,7 +383,7 @@ public final class SagaRunner<S extends SagaState> {
 
   /**
    * Supplies {@code window} as the event-path key-age bound unless the application already named
-   * one on the builder. Package-private; driven by {@link SagaEventPathRetention#applyDefault} from
+   * one on the builder. Package-private; driven by {@code SagaEventPathRetention.applyDefault} from
    * the three auto-configurations.
    *
    * @return {@code true} when this runner took the default

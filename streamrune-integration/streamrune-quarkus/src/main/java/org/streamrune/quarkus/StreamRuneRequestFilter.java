@@ -95,7 +95,7 @@ import org.streamrune.integration.RequestIdentityPolicy;
  * produced event's immutable, plaintext {@code event_stream.metadata}. To prevent a caller from
  * smuggling arbitrary PII permanently into the event log, only the keys configured via {@code
  * streamrune.metadata.baggage-allowlist} are copied into the request context; with none configured
- * no baggage entry is ({@link BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty). Non-allowlisted
+ * no baggage entry is ({@code BaggageAllowlist.DEFAULT_ALLOWED_KEYS} is empty). Non-allowlisted
  * keys are dropped here, before they ever reach {@code RequestContext} or {@code EventMetadata};
  * {@code role} is the role rule's alone (above).
  *

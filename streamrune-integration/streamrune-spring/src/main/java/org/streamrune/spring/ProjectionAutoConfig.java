@@ -49,7 +49,7 @@ import org.streamrune.runtime.ScheduledProjectionRunner;
  *
  * <p>Every registration carries the {@link ProjectionDeliveryMode} its {@code
  * ProjectionConfig.deliveryMode()} declares. Each runner's {@link AtomicBatchProcessor} is chosen
- * by {@link ProjectionProcessorResolution#select} from what its registrations declare and from
+ * by {@code ProjectionProcessorResolution.select} from what its registrations declare and from
  * whether the leadership bean needs its epoch honoured — never from the presence of a {@code
  * DataSource} or of a processor bean: a runner of {@code AT_LEAST_ONCE_IDEMPOTENT} registrations
  * without leadership runs on {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()}. An INLINE
@@ -70,11 +70,11 @@ public class ProjectionAutoConfig {
    * match, so a non-canonical truthy spelling ({@code on}, {@code yes}, {@code 1}) did not match
    * {@code havingValue} and therefore silently DISABLED this whole auto-config — the opposite of
    * the operator's intent, and inconsistent with Quarkus ({@code ProjectionProducer}, already
-   * routed through {@link org.streamrune.integration.RelaxedBoolean}) and Micronaut, whose
-   * {@code @Requires(notEquals = "false")} kept those same spellings ENABLED. Routes the property
-   * through the same {@link org.streamrune.integration.RelaxedBoolean} parser every other
-   * StreamRune boolean knob uses, so all three runtimes agree on every spelling. Absent (or blank)
-   * defaults to enabled, mirroring the old {@code matchIfMissing = true}.
+   * routed through {@code RelaxedBoolean}) and Micronaut, whose {@code @Requires(notEquals =
+   * "false")} kept those same spellings ENABLED. Routes the property through the same {@code
+   * RelaxedBoolean} parser every other StreamRune boolean knob uses, so all three runtimes agree on
+   * every spelling. Absent (or blank) defaults to enabled, mirroring the old {@code matchIfMissing
+   * = true}.
    */
   static final class AutoDiscoveryEnabledCondition implements Condition {
     @Override

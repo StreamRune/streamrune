@@ -158,7 +158,7 @@ public class StreamRuneAutoConfiguration {
      * org.streamrune.core.StreamRuneContext} via ScopedValue. Registered into the servlet filter
      * chain by {@link #scopedValueFilterRegistration(ScopedValueFilter)}. The filter's OTel baggage
      * allowlist is {@code streamrune.metadata.baggage-allowlist}; the framework adds no key of its
-     * own ({@link org.streamrune.core.BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty).
+     * own ({@code BaggageAllowlist.DEFAULT_ALLOWED_KEYS} is empty).
      */
     @Bean
     @ConditionalOnMissingBean
@@ -507,9 +507,9 @@ public class StreamRuneAutoConfiguration {
    * plaintext PII in the DLQ.
    *
    * <p><b>Fail-fast on {@code @Encrypted} command fields:</b> command types are validated at wiring
-   * time via {@link org.streamrune.crypto.CryptoConfigValidator}; if a registered command carries
-   * an {@code @Encrypted} field but no {@link CryptoEngine} bean is configured, startup fails
-   * instead of silently dead-lettering that PII as plaintext.
+   * time via {@code CryptoConfigValidator}; if a registered command carries an {@code @Encrypted}
+   * field but no {@link CryptoEngine} bean is configured, startup fails instead of silently
+   * dead-lettering that PII as plaintext.
    *
    * <p><b>Snapshot policy:</b> the default is {@code
    * SnapshotPolicy.everyNEvents(streamrune.snapshot-every-n-events)} at snapshot schema version 1.
@@ -1201,8 +1201,8 @@ public class StreamRuneAutoConfiguration {
    * end-to-end if the event store knows about it. Supplying a {@code CommandInbox} that is not a
    * {@link PostgresCommandInbox} therefore also requires supplying your own {@code
    * EventStoreFactory}/{@code EventStore} whose {@code appendWithKey} claims the key atomically;
-   * {@link org.streamrune.integration.CommandInboxWiringValidator} fails startup on the mismatched
-   * half-override rather than letting every keyed execution break at runtime.
+   * {@code CommandInboxWiringValidator} fails startup on the mismatched half-override rather than
+   * letting every keyed execution break at runtime.
    */
   @Bean
   @ConditionalOnMissingBean(CommandInbox.class)
@@ -1938,7 +1938,7 @@ public class StreamRuneAutoConfiguration {
   }
 
   /**
-   * Registers an {@link org.streamrune.core.upcasting.UpcasterChain} when at least one {@link
+   * Registers an {@code UpcasterChain} when at least one {@link
    * org.streamrune.core.upcasting.EventUpcaster} bean is available.
    */
   @Bean("upcasterChain")
