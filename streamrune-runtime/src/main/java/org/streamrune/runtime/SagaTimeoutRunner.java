@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandBus;
@@ -245,6 +246,9 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
   private volatile boolean running;
   private volatile Thread pollThread;
 
+  /** Serializes {@link #close()}. */
+  private final ReentrantLock closeLock = new ReentrantLock();
+
   private SagaTimeoutRunner(
       SagaDecider<S> decider,
       SagaStore sagaStore,
@@ -339,6 +343,20 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    */
   @Override
   public void close() {
+    closeLock.lock();
+    try {
+      closeSerially();
+    } finally {
+      closeLock.unlock();
+    }
+  }
+
+  /**
+   * The body of {@link #close()}, run by one caller at a time: a close() that starts while another
+   * waits on a stuck poll thread waits for that verdict, so it cannot find no thread and reset the
+   * started guard underneath it.
+   */
+  private void closeSerially() {
     if (started.get() && lease.isGated() && lease.isLeadingHere()) {
       LOG.warn(
           "The timeout runner of saga type {} stops while this process leads that saga type: no"
@@ -348,7 +366,6 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
     }
     running = false;
     Thread t = pollThread;
-    pollThread = null;
     boolean stuck = false;
     if (t != null) {
       t.interrupt();
@@ -368,10 +385,9 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       }
     }
     if (stuck) {
-      // Keep the stuck thread as the poll thread: isAlive() keeps reporting it, and a repeated
-      // close() interrupts and joins it again instead of finding no thread and resetting the guard
-      // while it still runs.
-      pollThread = t;
+      // The stuck thread stays the poll thread: isAlive() keeps reporting it, and a later close()
+      // interrupts and joins it again instead of finding no thread and resetting the guard while
+      // it still runs.
       LOG.warn(
           "SagaTimeoutRunner poll thread did not stop within {}ms; leaving the runner"
               + " not-restartable so a restart cannot spawn a duplicate poller. Investigate the"
@@ -379,6 +395,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
           stopJoinTimeoutMs);
     } else {
       // Reset so start() can be called again after close().
+      pollThread = null;
       started.set(false);
     }
   }

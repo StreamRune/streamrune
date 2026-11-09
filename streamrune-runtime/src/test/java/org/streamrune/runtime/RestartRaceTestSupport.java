@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -91,5 +92,35 @@ final class RestartRaceTestSupport {
       }
       return returnValue;
     };
+  }
+
+  /**
+   * Calls {@code close()} on two threads at once and waits for both: two shutdown paths, such as a
+   * container's destroy callback and a lifecycle hook, closing one component together.
+   */
+  static void closeConcurrently(AutoCloseable component) throws Exception {
+    var go = new CountDownLatch(1);
+    var failures = new java.util.concurrent.ConcurrentLinkedQueue<Throwable>();
+    List<Thread> closers = new java.util.ArrayList<>();
+    for (int i = 0; i < 2; i++) {
+      closers.add(
+          Thread.ofPlatform()
+              .start(
+                  () -> {
+                    try {
+                      go.await();
+                      component.close();
+                    } catch (Throwable e) {
+                      failures.add(e);
+                    }
+                  }));
+    }
+    go.countDown();
+    for (Thread closer : closers) {
+      closer.join(30_000);
+    }
+    if (!failures.isEmpty()) {
+      throw new AssertionError("a concurrent close() failed", failures.peek());
+    }
   }
 }

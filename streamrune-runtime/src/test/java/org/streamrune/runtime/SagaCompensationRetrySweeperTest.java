@@ -1415,6 +1415,46 @@ class SagaCompensationRetrySweeperTest {
     assertThat(sweeper.isAlive()).isFalse();
   }
 
+  @Test
+  void twoConcurrentClosesDuringATimedOutJoin_keepsTheSweeperNotRestartableUntilTheThreadStops()
+      throws Exception {
+    var pollThread = new AtomicReference<Thread>();
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    SagaStore blockingStore = mock(SagaStore.class);
+    when(blockingStore.findCompensating(any(), any(), anyInt()))
+        .thenAnswer(
+            RestartRaceTestSupport.parkIgnoringInterruptsUntilReleased(
+                pollThread, entered, release, List.of()));
+    var sweeper =
+        SagaCompensationRetrySweeper.<FakeSagaState>builder()
+            .sagaRunner(runner)
+            .sagaStore(blockingStore)
+            .clock(clock)
+            .retryInterval(Duration.ofSeconds(1))
+            .giveUpAfter(Duration.ofHours(1))
+            .build();
+    sweeper.closeJoinTimeoutMs(300);
+    sweeper.start();
+    assertThat(entered.await(5, TimeUnit.SECONDS))
+        .as("sweep thread should have entered findCompensating")
+        .isTrue();
+
+    RestartRaceTestSupport.closeConcurrently(sweeper); // both joins time out
+
+    assertThat(pollThread.get().isAlive()).as("the sweep thread is still running").isTrue();
+    assertThat(sweeper.isStarted()).as("still not restartable while it runs").isTrue();
+    assertThat(sweeper.isAlive()).as("the stuck thread is still reported").isTrue();
+    assertThatThrownBy(sweeper::start).isInstanceOf(IllegalStateException.class);
+
+    release.countDown();
+    pollThread.get().join(5_000);
+    sweeper.close(); // the thread has stopped: the guard is reset
+
+    assertThat(sweeper.isStarted()).as("restartable once the stale thread has stopped").isFalse();
+    assertThat(sweeper.isAlive()).isFalse();
+  }
+
   // close() must JOIN the sweep thread before resetting the started guard, so a stale
   // finally { running = false } cannot clobber a subsequent start()'s running = true (which would
   // silently kill the restarted sweeper).

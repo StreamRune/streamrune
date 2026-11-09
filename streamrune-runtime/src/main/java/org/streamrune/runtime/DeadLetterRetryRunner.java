@@ -19,6 +19,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.event.Level;
@@ -270,6 +271,10 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   private final AtomicBoolean nothingAutomaticWarned = new AtomicBoolean(false);
   private volatile boolean running;
   private volatile Thread pollThread;
+
+  /** Serializes {@link #close()}. */
+  private final ReentrantLock closeLock = new ReentrantLock();
+
   // Set false the first time countPending() throws UnsupportedOperationException (a store that does
   // not support counting), so the depth gauge degrades gracefully without retrying every cycle.
   private volatile boolean backlogSamplingSupported = true;
@@ -374,16 +379,24 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     pollThread = Thread.ofVirtual().name("streamrune-dlq-retry").start(this::runPollLoop);
   }
 
-  /** Shrinks the join bound of {@link #close()}; for the tests of this package. */
-  void closeJoinTimeoutMs(long millis) {
-    this.closeJoinTimeoutMs = millis;
-  }
-
   @Override
   public void close() {
+    closeLock.lock();
+    try {
+      closeSerially();
+    } finally {
+      closeLock.unlock();
+    }
+  }
+
+  /**
+   * The body of {@link #close()}, run by one caller at a time: a close() that starts while another
+   * waits on a stuck poll thread waits for that verdict, so it cannot find no thread and reset the
+   * started guard underneath it.
+   */
+  private void closeSerially() {
     running = false;
     Thread t = pollThread;
-    pollThread = null;
     boolean stuck = false;
     if (t != null) {
       t.interrupt();
@@ -421,9 +434,9 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
           resignFailure);
     }
     if (stuck) {
-      // Keep the stuck thread as the poll thread: a repeated close() interrupts and joins it
-      // again instead of finding no thread and resetting the guard while it still runs.
-      pollThread = t;
+      // The stuck thread stays the poll thread: isAlive() keeps reporting it, and a later close()
+      // interrupts and joins it again instead of finding no thread and resetting the guard while
+      // it still runs.
       LOG.warn(
           "DeadLetterRetryRunner poll thread did not stop within {}ms; leaving the runner"
               + " not-restartable so a restart cannot duplicate or silently kill it. Investigate the"
@@ -432,8 +445,14 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     } else {
       // Reset the started guard so start() can be called again on the same instance after
       // close() — matches the restartable lifecycle contract (actuator restart, context refresh).
+      pollThread = null;
       started.set(false);
     }
+  }
+
+  /** Shrinks the join bound of {@link #close()}; for the tests of this package. */
+  void closeJoinTimeoutMs(long millis) {
+    this.closeJoinTimeoutMs = millis;
   }
 
   /** Returns whether the polling thread is currently active. */

@@ -94,4 +94,41 @@ class DeadLetterRetryRunnerRestartRaceTest {
 
     assertFalse(runner.isStarted(), "restartable once the stale thread has stopped");
   }
+
+  @Test
+  void twoConcurrentClosesDuringATimedOutJoin_keepsTheRunnerNotRestartableUntilTheThreadStops()
+      throws Exception {
+    var pollThread = new AtomicReference<Thread>();
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    DeadLetterQueue blockingDlq = mock(DeadLetterQueue.class);
+    when(blockingDlq.readRetryable(anyInt(), anyInt(), anyBoolean(), any()))
+        .thenAnswer(
+            RestartRaceTestSupport.parkIgnoringInterruptsUntilReleased(
+                pollThread, entered, release, List.of()));
+    CommandBus bus = mock(CommandBus.class);
+    when(bus.supportsIdempotentExecution()).thenReturn(true);
+    var runner =
+        DeadLetterRetryRunner.builder()
+            .deadLetterQueue(blockingDlq)
+            .commandBus(bus)
+            .objectMapper(new ObjectMapper())
+            .pollInterval(Duration.ofSeconds(1))
+            .build();
+    runner.closeJoinTimeoutMs(300);
+    runner.start();
+    assertTrue(entered.await(5, TimeUnit.SECONDS), "poll thread should have entered readRetryable");
+
+    RestartRaceTestSupport.closeConcurrently(runner); // both joins time out
+
+    assertTrue(pollThread.get().isAlive(), "the poll thread is still running");
+    assertTrue(runner.isStarted(), "still not restartable while the stale thread runs");
+    assertThrows(IllegalStateException.class, runner::start);
+
+    release.countDown();
+    pollThread.get().join(5_000);
+    runner.close(); // the thread has stopped: the guard is reset
+
+    assertFalse(runner.isStarted(), "restartable once the stale thread has stopped");
+  }
 }

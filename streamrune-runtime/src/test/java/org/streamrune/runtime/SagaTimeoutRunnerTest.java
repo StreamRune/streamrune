@@ -1344,6 +1344,48 @@ class SagaTimeoutRunnerTest {
     assertFalse(runner.isAlive());
   }
 
+  @Test
+  void twoConcurrentClosesDuringATimedOutJoin_keepsTheRunnerNotRestartableUntilTheThreadStops()
+      throws Exception {
+    var pollThread = new AtomicReference<Thread>();
+    var entered = new CountDownLatch(1);
+    SagaStore blockingStore = mock(SagaStore.class);
+    var release = new CountDownLatch(1);
+    when(blockingStore.findTimedOut(any(), any(), anyInt()))
+        .thenAnswer(
+            RestartRaceTestSupport.parkIgnoringInterruptsUntilReleased(
+                pollThread, entered, release, List.of()));
+    CommandBus mockBus = mock(CommandBus.class);
+    when(mockBus.supportsIdempotentExecution()).thenReturn(true);
+    var runner =
+        SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
+            .decider(new TimeoutDecider())
+            .sagaStore(blockingStore)
+            .commandBus(mockBus)
+            .sagaType(SagaType.fromClass(OrderState.class))
+            .pollInterval(Duration.ofSeconds(1))
+            .build();
+    runner.stopJoinTimeoutMs(300);
+    runner.start();
+    assertTrue(entered.await(5, TimeUnit.SECONDS), "poll thread should have entered findTimedOut");
+
+    RestartRaceTestSupport.closeConcurrently(runner); // both joins time out
+
+    assertTrue(pollThread.get().isAlive(), "the poll thread is still lingering");
+    assertTrue(runner.isStarted(), "still not restartable while the stale thread runs");
+    assertTrue(runner.isAlive(), "the lingering thread is still reported");
+    assertThrows(IllegalStateException.class, runner::start);
+
+    release.countDown();
+    runner.stopJoinTimeoutMs(5_000);
+    runner.close(); // joins the thread once it stops
+
+    assertFalse(pollThread.get().isAlive());
+    assertFalse(runner.isStarted(), "restartable once the stale thread has stopped");
+    assertFalse(runner.isAlive());
+  }
+
   // ── A vetoed timeout compensation is a rejection, not a silent success ────────────
 
   /** A bus whose keyed execute RETURNS a VETOED result (a veto interceptor's before() == false). */
