@@ -120,6 +120,10 @@ StreamRune module uses it: the runtime, the PostgreSQL store or one of the integ
 covered by this policy and may change or disappear in any release. The generated API documentation
 leaves it out. Application code does not call, implement or bind it.
 
+The `@Bean`, producer and factory methods of the Spring, Quarkus and Micronaut integrations are
+wiring that the container calls, not API: an application replaces a bean with one of its own, and
+does not call these methods.
+
 Interfaces that applications implement (an `EventStore`, a `CommandBus` decorator, a
 `CommandInterceptor`, a `SagaStore` and the other ports) may gain new `default` methods in a minor
 release. A class that implements such an interface keeps compiling; a decorator forwards a new

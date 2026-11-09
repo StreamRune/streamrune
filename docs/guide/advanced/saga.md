@@ -39,7 +39,7 @@ A correlation id is tracing data. A client sets it with `X-Correlation-Id` in ev
 
 If a listener of yours reacts to one of the saga's events by dispatching a command for the same flow (a process manager), dispatch it inside `StreamRuneContext.continuing(event).run(...)`: the events of that command carry the saga's origin one hop further, and the saga receives them without a line of routing — see [Reacting to a saga's events from a listener](#reacting-to-a-sagas-events-from-a-listener). A command executed on the same thread inside a saga's dispatch — from a command interceptor, for instance — inherits the saga's origin too.
 
-The origin is the framework's statement only as long as application code never builds it from request data: `EventMetadata`, `SagaOrigin` and `StreamRuneContext.DispatchCause` have public constructors, and `EventStore.append` stores the metadata it is handed. Never bind request input to one of them, and never append an event whose metadata came from a request.
+The origin is the framework's statement only as long as application code never builds it from request data: `EventMetadata` and `SagaOrigin` have public constructors, `StreamRuneContext.DispatchCause` has one too (it is `@Internal`: application code gets a cause only from `StreamRuneContext.continuing(event)`), and `EventStore.append` stores the metadata it is handed. Never bind request input to one of them, and never append an event whose metadata came from a request.
 
 ```mermaid
 sequenceDiagram
