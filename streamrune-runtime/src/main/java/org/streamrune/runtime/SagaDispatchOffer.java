@@ -26,7 +26,9 @@ import org.streamrune.core.types.IdempotencyKey;
  * is dispatched as any command under the saga's bindings is: its events carry the bound saga
  * provenance and it is not fenced, since the forward marker names the saga's key, not its own. The
  * saga's command still takes the offer, is compared with it and is fenced against it, also when a
- * decorator hands it to the bus under another key.
+ * decorator hands it to the bus under another key. A decorator that hands the bus another command
+ * object under another key makes the saga's command neither compared nor fenced, as a bus of
+ * another kind does: a decorator forwards either the command instance or its key.
  *
  * @param origin the saga the dispatch is made for
  * @param causationId the causation id of the dispatch's cause: the event that caused it, or {@code

@@ -72,7 +72,9 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
  * documented invariant that {@code current} is stale for at most one heartbeat interval past lease
  * expiry. The elapsed time is measured on the JVM's monotonic clock ({@link System#nanoTime()}),
  * not the wall clock: a step of the system clock (an NTP correction after a suspend or a live
- * migration) neither delays the verdict nor brings it forward.
+ * migration) neither delays the verdict nor brings it forward. Time the host spends suspended is
+ * not counted either, so after a resume the verdict comes one TTL after the resume unless the
+ * heartbeat's renew prunes the lease first.
  *
  * <h2>Resign EXPIRES, never DELETEs</h2>
  *

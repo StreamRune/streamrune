@@ -63,7 +63,7 @@ import org.streamrune.core.types.UserId;
  * duplicate replay AND the client's at-least-once redelivery against the same command inbox row
  * (events produced exactly once). Commands that ran unkeyed store null and are replayed under the
  * synthetic key. {@link #findByIdempotencyKey(IdempotencyKey)} reads the entries stored under a key
- * through the partial index on the column.
+ * through the unique partial index whose leading column it is.
  *
  * <p><b>One entry per command under a key.</b> That index is unique over the key, the command type
  * and the stream, and {@link #publish} inserts with {@code ON CONFLICT DO NOTHING} on it: a keyed
