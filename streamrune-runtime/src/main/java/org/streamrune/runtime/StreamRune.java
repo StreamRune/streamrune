@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.streamrune.core.AggregateLocker;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
+import org.streamrune.core.CommandInbox;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.Decider;
@@ -38,8 +39,14 @@ import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.upcasting.EventUpcaster;
 
 /**
- * Top-level facade for the StreamRune CQRS/ES framework. Provides a fluent builder API for
- * registering deciders and configuring the runtime.
+ * A bootstrap convenience: one builder that creates a {@link VirtualThreadCommandBus} over an event
+ * store, registers deciders and projections, and runs the projections. The facade is itself the
+ * {@link CommandBus}.
+ *
+ * <p>Its builder passes the common options through to {@link VirtualThreadCommandBus.Builder}. The
+ * complete option set of the command bus is that builder's, which the Spring, Quarkus and Micronaut
+ * integrations use; an application that needs an option the facade lacks builds the bus and its
+ * runners directly.
  */
 public final class StreamRune implements CommandBus, AutoCloseable {
 
@@ -487,11 +494,6 @@ public final class StreamRune implements CommandBus, AutoCloseable {
       return this;
     }
 
-    /** Alias for eventStore() for fluent API consistency. */
-    public Builder withEventStore(EventStore eventStore) {
-      return eventStore(eventStore);
-    }
-
     /**
      * Sets a custom event store factory. The factory receives no settings from this builder; if you
      * configure {@link #cryptoEngine(CryptoEngine)}, {@link #upcasters(List)} or register
@@ -616,6 +618,24 @@ public final class StreamRune implements CommandBus, AutoCloseable {
       return this;
     }
 
+    /**
+     * The {@link CommandInbox} the command bus executes keyed commands with ({@link
+     * VirtualThreadCommandBus.Builder#commandInbox}): {@link StreamRune#execute(Command,
+     * IdempotencyKey)} records each key in it and answers a repeated key with the recorded result.
+     * A saga runner and the dead-letter retry runner need it, and {@link
+     * StreamRune#supportsIdempotentExecution()} reports {@code true} only with it. Optional;
+     * without it a keyed call is refused. The event store must store the inbox rows in the
+     * transaction of the append (for PostgreSQL, a {@code PostgresCommandInbox} over the store's
+     * {@code DataSource}).
+     *
+     * @param commandInbox the inbox; {@code null} removes it
+     * @return this builder
+     */
+    public Builder commandInbox(CommandInbox commandInbox) {
+      busBuilder.commandInbox(commandInbox);
+      return this;
+    }
+
     /** Sets the lock timeout for aggregate locking. Defaults to 5 seconds. */
     public Builder lockTimeout(Duration lockTimeout) {
       busBuilder.lockTimeout(lockTimeout);
@@ -647,15 +667,6 @@ public final class StreamRune implements CommandBus, AutoCloseable {
         Decider<C, ?, ?> decider) {
       busBuilder.register(aggregateType, commandType, idExtractor, decider);
       return this;
-    }
-
-    /** Alias for register() for clearer intent. */
-    public <C extends Command> Builder registerDecider(
-        AggregateType aggregateType,
-        Class<C> commandType,
-        Function<C, AggregateId> idExtractor,
-        Decider<C, ?, ?> decider) {
-      return register(aggregateType, commandType, idExtractor, decider);
     }
 
     // ==================== Projection Configuration ====================

@@ -2539,19 +2539,6 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
-     * Registers a decider for a command type under an aggregate type, with an aggregate ID
-     * extractor. Alias for register() for clearer intent.
-     */
-    public <C extends Command, S extends AggregateState, E extends DomainEvent>
-        Builder registerDecider(
-            AggregateType aggregateType,
-            Class<C> commandType,
-            Function<C, AggregateId> idExtractor,
-            Decider<C, S, E> decider) {
-      return register(aggregateType, commandType, idExtractor, decider);
-    }
-
-    /**
      * Refuses a registered command type that requires authorization while no {@link
      * AnnotationAuthorizationInterceptor} is among the interceptors — the check {@link #build()}
      * runs. {@link StreamRune.Builder} runs it before it creates the event store, so a refused
