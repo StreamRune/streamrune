@@ -417,8 +417,7 @@ public final class PgNotificationListener implements AutoCloseable {
    */
   private DataSource resolveListenSource() {
     if (dataSource instanceof HikariDataSource) {
-      HikariDataSource dedicated =
-          PostgresNotificationSubscription.createListenDataSource(dataSource);
+      HikariDataSource dedicated = PostgresNotificationSubscription.createListenPool(dataSource);
       dedicatedListenDataSource = dedicated;
       return dedicated;
     }
