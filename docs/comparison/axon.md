@@ -19,7 +19,7 @@
 | Axon Server (event bus + store) | `PostgresEventStore` | Axon Server is a separate JVM process; StreamRune writes directly to PostgreSQL |
 | `@Saga` / `SagaEventHandler` | `SagaRunner` + `SagaOrchestrator` interface | Both support long-running process coordination |
 | `SnapshotTriggerDefinition` | `SnapshotPolicy.everyNEvents(n)` | Axon has multiple trigger strategies; StreamRune currently supports count-based only |
-| Event Upcasters | `EventUpcaster` / `UpcasterChain` | Both support schema evolution; StreamRune's upcasters are plain Java functions |
+| Event Upcasters | `EventUpcaster` | Both support schema evolution; StreamRune's upcasters are plain Java functions |
 
 ## Key Differences
 

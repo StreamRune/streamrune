@@ -22,10 +22,10 @@ class StreamRuneQuarkusPropertiesTest {
     var p = TestProperties.defaults();
     assertEquals(100, p.snapshotEveryNEvents());
     assertEquals(3, p.retryMaxAttempts());
-    assertEquals(50L, p.retryInitialDelayMs());
+    assertEquals(Duration.ofMillis(50), p.retryInitialDelay());
     assertEquals(2.0, p.retryBackoffMultiplier());
-    assertEquals(5000L, p.pollingIntervalMs());
-    assertEquals(1000L, p.pollingJitterMs());
+    assertEquals(Duration.ofSeconds(5), p.pollingInterval());
+    assertEquals(Duration.ofSeconds(1), p.pollingJitter());
     assertEquals(Duration.ofSeconds(5), p.lockTimeout());
     assertEquals(1024, p.stripeCount());
     assertEquals(5, p.circuitBreakerFailureThreshold());
@@ -37,13 +37,15 @@ class StreamRuneQuarkusPropertiesTest {
     assertEquals(Duration.ofDays(7), p.saga().deadLetterRetentionMaxAge());
     assertFalse(p.outbox().enabled());
     assertEquals(100, p.outbox().batchSize());
-    assertEquals(5000L, p.outbox().flushIntervalMs());
+    assertEquals(Duration.ofSeconds(5), p.outbox().flushInterval());
+    assertEquals(Duration.ofSeconds(1), p.outbox().retryInitialDelay());
+    assertEquals(2.0, p.outbox().retryBackoffMultiplier());
     assertEquals(Duration.ofDays(7), p.outbox().retentionMaxAge());
     assertEquals(Duration.ofDays(7), p.inbox().retentionMaxAge());
     assertTrue(p.eventStore().schema().autoInitialize());
     assertTrue(p.deadLetter().enabled());
     assertEquals(5, p.deadLetter().maxRetries());
-    assertEquals(60000L, p.deadLetter().retryIntervalMs());
+    assertEquals(Duration.ofMinutes(1), p.deadLetter().retryInterval());
     // The inbox window: a keyed entry must not outlive the inbox row that deduplicates its replay.
     assertEquals(Duration.ofDays(7), p.deadLetter().retentionMaxAge());
     assertEquals("operator-only", p.deadLetter().unkeyedReplay());
@@ -203,7 +205,7 @@ class StreamRuneQuarkusPropertiesTest {
             Map.of(
                 "streamrune.snapshot-every-n-events", "50",
                 "streamrune.retry-max-attempts", "5",
-                "streamrune.retry-initial-delay-ms", "10",
+                "streamrune.retry-initial-delay", "PT0.01S",
                 "streamrune.retry-backoff-multiplier", "1.5",
                 "streamrune.lock-timeout", "PT1S",
                 "streamrune.stripe-count", "16",
@@ -213,7 +215,7 @@ class StreamRuneQuarkusPropertiesTest {
                 "streamrune.metrics.prefix", "custom"));
     assertEquals(50, p.snapshotEveryNEvents());
     assertEquals(5, p.retryMaxAttempts());
-    assertEquals(10L, p.retryInitialDelayMs());
+    assertEquals(Duration.ofMillis(10), p.retryInitialDelay());
     assertEquals(1.5, p.retryBackoffMultiplier());
     assertEquals(Duration.ofSeconds(1), p.lockTimeout());
     assertEquals(16, p.stripeCount());
@@ -233,18 +235,69 @@ class StreamRuneQuarkusPropertiesTest {
                 "streamrune.saga.enabled", "false",
                 "streamrune.outbox.enabled", "true",
                 "streamrune.outbox.batch-size", "42",
-                "streamrune.outbox.flush-interval-ms", "1234",
+                "streamrune.outbox.flush-interval", "PT1.234S",
                 "streamrune.dead-letter.enabled", "false",
-                "streamrune.dead-letter.retry-interval-ms", "9876",
+                "streamrune.dead-letter.retry-interval", "PT9.876S",
                 "streamrune.metrics.enabled", "false"));
     assertFalse(p.saga().enabled());
     assertTrue(p.outbox().enabled());
     assertEquals(42, p.outbox().batchSize());
-    assertEquals(1234L, p.outbox().flushIntervalMs());
+    assertEquals(Duration.ofMillis(1234), p.outbox().flushInterval());
     assertFalse(p.deadLetter().enabled());
-    assertEquals(9876L, p.deadLetter().retryIntervalMs());
+    assertEquals(Duration.ofMillis(9876), p.deadLetter().retryInterval());
     assertFalse(p.metrics().enabled());
     assertEquals(5, p.deadLetter().maxRetries(), "unset keys must keep defaults");
+  }
+
+  /**
+   * The six interval keys are durations: in a Quarkus application each binds from the short form
+   * the configuration reference writes ({@code 5s}) and from ISO-8601 ({@code PT5S}) alike;
+   * SmallRye Config without Quarkus' converter reads the ISO-8601 form.
+   */
+  @Test
+  void theIntervalKeysBindTheShortFormAndIso8601() {
+    String[] keys = {
+      "streamrune.retry-initial-delay",
+      "streamrune.polling-interval",
+      "streamrune.polling-jitter",
+      "streamrune.dead-letter.retry-interval",
+      "streamrune.outbox.flush-interval",
+      "streamrune.outbox.retry-initial-delay"
+    };
+    for (String value : new String[] {"5s", "PT5S"}) {
+      Map<String, String> source = new TreeMap<>();
+      for (String key : keys) {
+        source.put(key, value);
+      }
+      var p =
+          new SmallRyeConfigBuilder()
+              .withMapping(StreamRuneQuarkusProperties.class)
+              .withConverter(Duration.class, 100, new DurationConverter())
+              .withSources(new PropertiesConfigSource(source, "quarkus-application", 1000))
+              .build()
+              .getConfigMapping(StreamRuneQuarkusProperties.class);
+      assertIntervalsAreFiveSeconds(p, value);
+    }
+    Map<String, String> iso = new TreeMap<>();
+    for (String key : keys) {
+      iso.put(key, "PT5S");
+    }
+    assertIntervalsAreFiveSeconds(TestProperties.of(iso), "PT5S without Quarkus' converter");
+    assertEquals(
+        2.5,
+        TestProperties.of(Map.of("streamrune.outbox.retry-backoff-multiplier", "2.5"))
+            .outbox()
+            .retryBackoffMultiplier());
+  }
+
+  private static void assertIntervalsAreFiveSeconds(StreamRuneQuarkusProperties p, String value) {
+    Duration five = Duration.ofSeconds(5);
+    assertEquals(five, p.retryInitialDelay(), value);
+    assertEquals(five, p.pollingInterval(), value);
+    assertEquals(five, p.pollingJitter(), value);
+    assertEquals(five, p.deadLetter().retryInterval(), value);
+    assertEquals(five, p.outbox().flushInterval(), value);
+    assertEquals(five, p.outbox().retryInitialDelay(), value);
   }
 
   @Test

@@ -193,8 +193,66 @@ class DeadLetterOneEntryPerKeyTest {
   }
 
   /**
-   * Of several entries under the key, the one the schedule still replays answers the re-send: two
-   * sends that failed at the same instant can each have stored one.
+   * Two replicas whose sends under one key fail at the same moment both find nothing under the key
+   * before they store their entry. The queue keeps one entry per command under a key, so one of the
+   * two inserts stores nothing; the bus reads the key's entries back after it publishes and answers
+   * that caller with the entry that is stored. One entry, and both callers name it.
+   */
+  @Test
+  void twoSendsUnderOneKeyThatFailAtTheSameMoment_storeOneEntry_andBothNameIt() throws Exception {
+    var bothLookedUp = new java.util.concurrent.CyclicBarrier(2);
+    var lookedUp = ThreadLocal.withInitial(() -> false);
+    var queue =
+        new ForwardingDeadLetterQueue(deadLetters) {
+          @Override
+          public List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey key) {
+            List<DeadLetterEntry> found = super.findByIdempotencyKey(key);
+            if (!lookedUp.get()) {
+              lookedUp.set(true);
+              try {
+                // Neither send inserts before both have looked the key up and found nothing.
+                bothLookedUp.await(10, java.util.concurrent.TimeUnit.SECONDS);
+              } catch (Exception e) {
+                throw new IllegalStateException(e);
+              }
+            }
+            return found;
+          }
+        };
+    var key = IdempotencyKey.of("op-same-moment");
+    // Two replicas: each its own bus, store and inbox, one dead letter queue.
+    var replicaA = bus(queue).build();
+    var otherInbox = new InMemoryCommandInbox();
+    var replicaB =
+        VirtualThreadCommandBus.builder()
+            .eventStore(
+                new ForwardingEventStore(
+                    new InMemoryEventStore().withCommandInbox(otherInbox), outage))
+            .commandInbox(otherInbox)
+            .deadLetterQueue(queue)
+            .objectMapper(new ObjectMapper())
+            .register(
+                COUNTER, CounterCommand.class, c -> AggregateId.of(c.id()), new CounterDecider())
+            .build();
+
+    try (var threads = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+      var a = threads.submit(() -> deadLettered(() -> replicaA.execute(new Adjust("c-9", 5), key)));
+      var b = threads.submit(() -> deadLettered(() -> replicaB.execute(new Adjust("c-9", 5), key)));
+      CommandDeadLetteredException first = a.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      CommandDeadLetteredException second = b.get(30, java.util.concurrent.TimeUnit.SECONDS);
+
+      assertThat(deadLetters.all()).singleElement();
+      CommandId entry = deadLetters.all().getFirst().commandId();
+      assertThat(first.commandId()).isEqualTo(entry);
+      assertThat(second.commandId()).isEqualTo(entry);
+      assertThat(List.of(first.pendingOutcome(), second.pendingOutcome()))
+          .containsOnly(PendingOutcome.QUEUED_FOR_REPLAY);
+    }
+  }
+
+  /**
+   * Of several entries of the command under the key — a queue that does not keep one per command
+   * under a key — the one the schedule still replays answers the re-send.
    */
   @Test
   void ofSeveralEntriesUnderTheKey_theOneStillReplayedAnswers() {
@@ -205,19 +263,42 @@ class DeadLetterOneEntryPerKeyTest {
             2.0,
             false,
             DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY);
-    var bus = bus(deadLetters).deadLetterRetryPolicy(policy).build();
-    var key = IdempotencyKey.of("op-raced");
     var exhausted = CommandId.of("raced-exhausted");
     var pending = CommandId.of("raced-pending");
-    publishEntry(exhausted, new Adjust("c-9", 5), key);
-    publishEntry(pending, new Adjust("c-9", 5), key);
-    deadLetters.updateAttempts(exhausted, 1, Instant.now());
+    var key = IdempotencyKey.of("op-raced");
+    var held =
+        new java.util.concurrent.CopyOnWriteArrayList<DeadLetterQueue.DeadLetterEntry>(
+            List.of(
+                entry(exhausted, new Adjust("c-9b", 5), key, 1),
+                entry(pending, new Adjust("c-9b", 5), key, 0)));
+    var severalPerCommand =
+        new DeadLetterQueue() {
+          @Override
+          public void publish(DeadLetterPublishRequest request) {
+            throw new AssertionError("nothing is stored: the queue holds the command already");
+          }
 
-    var answered = deadLettered(() -> bus.execute(new Adjust("c-9", 5), key));
+          @Override
+          public List<DeadLetterEntry> read(int limit) {
+            return List.copyOf(held);
+          }
+
+          @Override
+          public List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey k) {
+            return held.stream().filter(e -> k.equals(e.idempotencyKey())).toList();
+          }
+
+          @Override
+          public void discard(CommandId commandId) {
+            held.removeIf(e -> e.commandId().equals(commandId));
+          }
+        };
+    var bus = bus(severalPerCommand).deadLetterRetryPolicy(policy).build();
+
+    var answered = deadLettered(() -> bus.execute(new Adjust("c-9b", 5), key));
 
     assertThat(answered.commandId()).isEqualTo(pending);
     assertThat(answered.pendingOutcome()).isEqualTo(PendingOutcome.QUEUED_FOR_REPLAY);
-    assertThat(deadLetters.all()).hasSize(2);
   }
 
   /**
@@ -230,35 +311,97 @@ class DeadLetterOneEntryPerKeyTest {
     var queue = new ForwardingDeadLetterQueue(deadLetters, faults);
     var bus = bus(queue).build();
     var key = IdempotencyKey.of("op-lookup-down");
-    deadLettered(() -> bus.execute(new Adjust("c-10", 5), key));
     faults.failOnce("findByIdempotencyKey");
 
-    var second = deadLettered(() -> bus.execute(new Adjust("c-10", 5), key));
+    var first = deadLettered(() -> bus.execute(new Adjust("c-10", 5), key));
 
-    assertThat(deadLetters.all()).hasSize(2);
-    assertThat(second.commandId()).isNotEqualTo(deadLetters.all().getFirst().commandId());
+    assertThat(deadLetters.all()).singleElement();
+    assertThat(first.commandId()).isEqualTo(deadLetters.all().getFirst().commandId());
+    assertThat(first.pendingOutcome()).isEqualTo(PendingOutcome.QUEUED_FOR_REPLAY);
+    assertThat(first.getSuppressed()).isEmpty();
+  }
+
+  /**
+   * A lookup that fails while the queue holds the command already: the bus asks the queue to store
+   * an entry, the queue keeps its one entry per command under the key and stores nothing, and the
+   * read after the publish names the stored entry.
+   */
+  @Test
+  void aFailedLookup_againstAHeldCommand_isAnsweredWithTheStoredEntry() {
+    var faults = FaultSchedule.none();
+    var queue = new ForwardingDeadLetterQueue(deadLetters, faults);
+    var bus = bus(queue).build();
+    var key = IdempotencyKey.of("op-lookup-down-again");
+    var first = deadLettered(() -> bus.execute(new Adjust("c-10b", 5), key));
+    faults.failOnce("findByIdempotencyKey");
+
+    var second = deadLettered(() -> bus.execute(new Adjust("c-10b", 5), key));
+
+    assertThat(deadLetters.all()).singleElement();
+    assertThat(second.commandId()).isEqualTo(first.commandId());
     assertThat(second.pendingOutcome()).isEqualTo(PendingOutcome.QUEUED_FOR_REPLAY);
     assertThat(second.getSuppressed()).isEmpty();
+  }
+
+  /**
+   * The read after the publish failing costs nothing either: the publish counts as stored, as it
+   * did before the bus read the key's entries back.
+   */
+  @Test
+  void aFailedReadAfterThePublish_answersWithThisSendsEntry() {
+    var queue =
+        new ForwardingDeadLetterQueue(deadLetters) {
+          private int lookups;
+
+          @Override
+          public List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey key) {
+            if (++lookups == 2) {
+              throw new EventStoreException("connection reset by peer");
+            }
+            return super.findByIdempotencyKey(key);
+          }
+        };
+    var bus = bus(queue).build();
+
+    var first = deadLettered(() -> bus.execute(new Adjust("c-10c", 5), IdempotencyKey.of("op-r")));
+
+    assertThat(deadLetters.all()).singleElement();
+    assertThat(first.commandId()).isEqualTo(deadLetters.all().getFirst().commandId());
+    assertThat(first.getSuppressed()).isEmpty();
   }
 
   /** A queue that does not look entries up by key stores an entry for every failed send. */
   @Test
   void aQueueWithoutTheLookup_storesAnEntryForEveryFailure() {
+    var stored = new java.util.concurrent.CopyOnWriteArrayList<CommandId>();
     var queue =
-        new ForwardingDeadLetterQueue(deadLetters) {
+        new DeadLetterQueue() {
           @Override
-          public List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey key) {
-            throw new UnsupportedOperationException("no lookup by key");
+          public void publish(DeadLetterPublishRequest request) {
+            stored.add(request.commandId());
+          }
+
+          @Override
+          public List<DeadLetterEntry> read(int limit) {
+            return List.of();
+          }
+
+          @Override
+          public void discard(CommandId commandId) {
+            stored.remove(commandId);
           }
         };
     var bus = bus(queue).build();
     var key = IdempotencyKey.of("op-no-lookup");
 
-    deadLettered(() -> bus.execute(new Adjust("c-11", 5), key));
-    deadLettered(() -> bus.execute(new Adjust("c-11", 5), key));
-    deadLettered(() -> bus.execute(new Adjust("c-11", 5), key));
+    var answers =
+        List.of(
+            deadLettered(() -> bus.execute(new Adjust("c-11", 5), key)),
+            deadLettered(() -> bus.execute(new Adjust("c-11", 5), key)),
+            deadLettered(() -> bus.execute(new Adjust("c-11", 5), key)));
 
-    assertThat(deadLetters.all()).hasSize(3);
+    assertThat(stored).hasSize(3);
+    assertThat(answers).extracting(CommandDeadLetteredException::commandId).isEqualTo(stored);
   }
 
   /**
@@ -438,21 +581,24 @@ class DeadLetterOneEntryPerKeyTest {
     return (CommandDeadLetteredException) thrown;
   }
 
-  private void publishEntry(CommandId id, Adjust command, IdempotencyKey key) {
-    deadLetters.publish(
-        new DeadLetterQueue.DeadLetterPublishRequest(
-            "{\"id\":\"" + command.id() + "\",\"delta\":" + command.delta() + "}",
-            Adjust.class.getName(),
-            id,
-            StreamId.of(COUNTER, AggregateId.of(command.id())),
-            EventStoreException.class.getName(),
-            "connection reset by peer",
-            1,
-            Instant.now(),
-            null,
-            null,
-            null,
-            key));
+  private static DeadLetterQueue.DeadLetterEntry entry(
+      CommandId id, Adjust command, IdempotencyKey key, int dlqAttempts) {
+    return new DeadLetterQueue.DeadLetterEntry(
+        id,
+        Adjust.class.getName(),
+        "{\"id\":\"" + command.id() + "\",\"delta\":" + command.delta() + "}",
+        StreamId.of(COUNTER, AggregateId.of(command.id())),
+        EventStoreException.class.getName(),
+        "connection reset by peer",
+        1,
+        Instant.now(),
+        Instant.now(),
+        dlqAttempts,
+        null,
+        null,
+        null,
+        null,
+        key);
   }
 
   /** The commands of one counter aggregate. */

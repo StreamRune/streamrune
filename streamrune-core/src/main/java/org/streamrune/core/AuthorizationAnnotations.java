@@ -22,7 +22,10 @@ import java.util.Set;
  *
  * record DeleteOrderCommand(String orderId) implements AdminCommand {}
  * }</pre>
+ *
+ * @hidden
  */
+@Internal
 public final class AuthorizationAnnotations {
 
   private AuthorizationAnnotations() {}

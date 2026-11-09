@@ -1,4 +1,4 @@
-open module org.streamrune.aws.kms.crypto {
+open module org.streamrune.crypto.aws {
   requires transitive org.streamrune.core;
   requires transitive software.amazon.awssdk.services.kms;
   // The ForgottenSubjectStore SPI (and its in-memory default) live in the shared crypto-api
@@ -7,5 +7,5 @@ open module org.streamrune.aws.kms.crypto {
   requires transitive org.streamrune.crypto;
   requires org.slf4j;
 
-  exports org.streamrune.aws;
+  exports org.streamrune.crypto.aws;
 }

@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.SubscriptionName;
 
 class SubscriptionLeaseTest {
 
@@ -22,7 +23,8 @@ class SubscriptionLeaseTest {
   void anUngatedLeaseLeadsEverywhereAndCallsNothing() {
     for (SubscriptionLease lease :
         new SubscriptionLease[] {
-          SubscriptionLease.ungated(), SubscriptionLease.of(SubscriptionLeadership.NOOP, "x")
+          SubscriptionLease.ungated(),
+          SubscriptionLease.of(SubscriptionLeadership.NOOP, SubscriptionName.of("x"))
         }) {
       assertThat(lease.isGated()).isFalse();
       assertThat(lease.isLeadingHere()).isTrue();
@@ -31,21 +33,19 @@ class SubscriptionLeaseTest {
           .isInstanceOf(IllegalStateException.class)
           .hasMessageContaining("ungated");
     }
-    assertThat(SubscriptionLease.of(SubscriptionLeadership.NOOP, "x").name()).isEqualTo("x");
+    assertThat(SubscriptionLease.of(SubscriptionLeadership.NOOP, SubscriptionName.of("x")).name())
+        .isEqualTo(SubscriptionName.of("x"));
   }
 
   @Test
-  void aLeaseNeedsALeadershipAndANonBlankName() {
-    assertThatThrownBy(() -> SubscriptionLease.of(null, NAME))
+  void aLeaseNeedsALeadershipAndAName() {
+    assertThatThrownBy(() -> SubscriptionLease.of(null, SubscriptionName.of(NAME)))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("leadership is required");
     assertThatThrownBy(() -> SubscriptionLease.of(leadership, null))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("name is required");
-    assertThatThrownBy(() -> SubscriptionLease.of(leadership, " "))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("name must not be blank");
-    assertThatThrownBy(() -> SubscriptionLease.of(leadership, NAME, null))
+    assertThatThrownBy(() -> SubscriptionLease.of(leadership, SubscriptionName.of(NAME), null))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("nanoTime is required");
   }
@@ -53,7 +53,7 @@ class SubscriptionLeaseTest {
   @Test
   void aGatedLeaseWithoutAnAnchorDoesNotLeadHere() {
     leadership.grant(NAME);
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME));
 
     assertThat(lease.isGated()).isTrue();
     assertThat(lease.isLeadingHere()).isFalse();
@@ -65,7 +65,7 @@ class SubscriptionLeaseTest {
   @Test
   void anAnchorThatLeads_makesTheLeaseLeadHere() {
     leadership.grant(NAME);
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME));
 
     SubscriptionLease.Anchor anchor = lease.anchor();
 
@@ -79,7 +79,7 @@ class SubscriptionLeaseTest {
 
   @Test
   void oneAnchorAtATime() {
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME));
     SubscriptionLease.Anchor first = lease.anchor();
 
     assertThatThrownBy(lease::anchor)
@@ -97,7 +97,7 @@ class SubscriptionLeaseTest {
   @Test
   void followersNeverAcquireOrResign() {
     leadership.grant(NAME);
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME));
     SubscriptionLease.Anchor anchor = lease.anchor();
     anchor.lead(Duration.ofHours(1));
 
@@ -113,7 +113,7 @@ class SubscriptionLeaseTest {
   @Test
   void leadAsksTheLeadershipOncePerInterval() {
     AtomicLong now = new AtomicLong(1_000_000_000L);
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME, now::get);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME), now::get);
     SubscriptionLease.Anchor anchor = lease.anchor();
 
     assertThat(anchor.lead(Duration.ofSeconds(5))).isFalse();
@@ -133,7 +133,8 @@ class SubscriptionLeaseTest {
   @Test
   void leadIsALocalReadWhileTheLeaseIsHeld() {
     leadership.grant(NAME);
-    SubscriptionLease.Anchor anchor = SubscriptionLease.of(leadership, NAME).anchor();
+    SubscriptionLease.Anchor anchor =
+        SubscriptionLease.of(leadership, SubscriptionName.of(NAME)).anchor();
 
     for (int i = 0; i < 10; i++) {
       assertThat(anchor.lead(Duration.ZERO)).isTrue();
@@ -149,7 +150,7 @@ class SubscriptionLeaseTest {
   @Test
   void closeResignsOnce_andIsIdempotent() {
     leadership.grant(NAME);
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME));
     SubscriptionLease.Anchor anchor = lease.anchor();
     assertThat(anchor.lead(Duration.ZERO)).isTrue();
 
@@ -168,7 +169,7 @@ class SubscriptionLeaseTest {
   @Test
   void closeDuringAnAcquire_givesTheGrantBack() throws Exception {
     leadership.grant(NAME);
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME));
     SubscriptionLease.Anchor anchor = lease.anchor();
     CountDownLatch entered = new CountDownLatch(1);
     CountDownLatch release = new CountDownLatch(1);
@@ -182,13 +183,13 @@ class SubscriptionLeaseTest {
 
     assertThat(led.get(20, TimeUnit.SECONDS)).isFalse();
     assertThat(leadership.resigns(NAME)).isEqualTo(2);
-    assertThat(leadership.current(NAME)).isEmpty();
+    assertThat(leadership.current(SubscriptionName.of(NAME))).isEmpty();
   }
 
   @Test
   void aGrantThatArrivesAfterANewerAnchorOpened_isLeftToTheNewerAnchor() throws Exception {
     leadership.grant(NAME);
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME));
     SubscriptionLease.Anchor first = lease.anchor();
     CountDownLatch entered = new CountDownLatch(1);
     CountDownLatch release = new CountDownLatch(1);
@@ -211,7 +212,8 @@ class SubscriptionLeaseTest {
   @Test
   void stillLeadsFollowsTheLeadership() {
     leadership.grant(NAME);
-    SubscriptionLease.Anchor anchor = SubscriptionLease.of(leadership, NAME).anchor();
+    SubscriptionLease.Anchor anchor =
+        SubscriptionLease.of(leadership, SubscriptionName.of(NAME)).anchor();
     assertThat(anchor.lead(Duration.ZERO)).isTrue();
 
     leadership.revoke(NAME);

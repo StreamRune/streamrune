@@ -11,7 +11,6 @@ import io.micronaut.context.env.Environment;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -48,7 +47,7 @@ import org.streamrune.runtime.SubscriptionHealthContributor;
  *
  * <p>Every registration carries the {@link ProjectionDeliveryMode} its {@code
  * ProjectionConfig.deliveryMode()} declares. Each runner's {@link AtomicBatchProcessor} is chosen
- * by {@link ProjectionProcessorResolution#select} from what its registrations declare and from
+ * by {@code ProjectionProcessorResolution.select} from what its registrations declare and from
  * whether the leadership bean needs its epoch honoured — never from the presence of a {@code
  * DataSource} or of a processor bean: a runner of {@code AT_LEAST_ONCE_IDEMPOTENT} registrations
  * without leadership runs on {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()}. An INLINE
@@ -159,16 +158,13 @@ public class ProjectionFactory {
       throw new IllegalStateException("No enabled CONTINUOUS projections found");
     }
 
-    // streamrune.polling-interval-ms / polling-jitter-ms drive the catch-up polling cadence of each
+    // streamrune.polling-interval / polling-jitter drive the catch-up polling cadence of each
     // projection's event subscription. listenNotifyEnabled=true only takes effect if a
     // HybridEventSubscription is wired via a subscription factory; the default
     // MultiProjectionRunner path builds a PollingEventSubscription, which has no LISTEN/NOTIFY
     // push, so the flag is dormant there. Same wiring as the Spring and Quarkus integrations.
     var subscriptionConfig =
-        new SubscriptionConfig(
-            true,
-            Duration.ofMillis(properties.pollingIntervalMs()),
-            Duration.ofMillis(properties.pollingJitterMs()));
+        new SubscriptionConfig(true, properties.pollingInterval(), properties.pollingJitter());
 
     var builder =
         MultiProjectionRunner.builder()
@@ -217,7 +213,8 @@ public class ProjectionFactory {
     }
 
     for (var e : entries) {
-      builder.register(e.name(), e.projection(), e.errorStrategy(), e.deliveryMode());
+      builder.register(
+          ProjectionName.of(e.name()), e.projection(), e.errorStrategy(), e.deliveryMode());
     }
 
     return builder.build();
@@ -314,7 +311,8 @@ public class ProjectionFactory {
       if (cron == null || cron.isBlank()) {
         throw new IllegalStateException(ProjectionDiscoveryMessages.cronRequired(e.name()));
       }
-      builder.register(e.name(), e.projection(), cron, e.errorStrategy(), e.deliveryMode());
+      builder.register(
+          ProjectionName.of(e.name()), e.projection(), cron, e.errorStrategy(), e.deliveryMode());
     }
 
     return builder.build();
@@ -361,7 +359,7 @@ public class ProjectionFactory {
       if (metrics != null) {
         metrics.recordProjectionDeliveryMode(ProjectionName.of(e.name()), e.deliveryMode());
       }
-      builder.register(e.name(), e.projection());
+      builder.register(ProjectionName.of(e.name()), e.projection());
     }
 
     return builder.build();

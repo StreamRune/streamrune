@@ -17,7 +17,7 @@ final class LeadershipInstances {
    * The resolvable leadership bean, or {@code null} when there is none.
    *
    * @throws IllegalStateException with two or more leadership beans and none the default; the
-   *     message names their bean classes (see {@link SubscriptionLeadershipResolution#ambiguous})
+   *     message names their bean classes (see {@code SubscriptionLeadershipResolution.ambiguous})
    */
   static SubscriptionLeadership resolve(Instance<SubscriptionLeadership> instance) {
     if (instance.isUnsatisfied()) {

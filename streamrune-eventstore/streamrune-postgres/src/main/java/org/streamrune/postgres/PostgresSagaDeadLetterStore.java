@@ -441,7 +441,7 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
       ps.setString(1, entry.sagaId().value());
       ps.setString(2, entry.sagaType().value());
       ps.setLong(3, entry.eventOffset().value());
-      ps.setString(4, entry.eventType().name());
+      ps.setString(4, entry.eventType().value());
       ps.setString(5, entry.errorType());
       ps.setString(6, entry.errorMessage());
       ps.setTimestamp(7, Timestamp.from(entry.faultedAt()));
@@ -487,7 +487,7 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
       long offsetVal = entry.eventOffset().value();
       ps.setString(1, typeVal);
       ps.setLong(2, offsetVal);
-      ps.setString(3, entry.eventType().name());
+      ps.setString(3, entry.eventType().value());
       ps.setString(4, entry.errorType());
       ps.setString(5, entry.errorMessage());
       ps.setTimestamp(6, Timestamp.from(entry.faultedAt()));

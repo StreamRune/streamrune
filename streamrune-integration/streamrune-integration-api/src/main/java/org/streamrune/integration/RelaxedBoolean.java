@@ -2,6 +2,7 @@ package org.streamrune.integration;
 
 import java.util.Locale;
 import java.util.Set;
+import org.streamrune.core.Internal;
 
 /**
  * Canonical, framework-agnostic parser for the {@code streamrune.*} boolean knobs that must be read
@@ -29,7 +30,10 @@ import java.util.Set;
  *       than silently disabling a projection, mirroring how an invalid {@code error-strategy} is
  *       rejected)
  * </ul>
+ *
+ * @hidden
  */
+@Internal
 public final class RelaxedBoolean {
 
   private static final Set<String> TRUE_VALUES = Set.of("true", "on", "yes", "y", "t", "1");

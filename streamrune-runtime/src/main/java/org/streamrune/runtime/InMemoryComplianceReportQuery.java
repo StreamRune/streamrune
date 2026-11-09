@@ -6,13 +6,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import org.streamrune.core.Internal;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditOutcome;
 import org.streamrune.core.audit.ComplianceReport;
 import org.streamrune.core.audit.ComplianceReportQuery;
 import org.streamrune.core.types.UserId;
 
-/** In-memory implementation of {@link ComplianceReportQuery} for testing. */
+/**
+ * In-memory implementation of {@link ComplianceReportQuery} for testing.
+ *
+ * @hidden
+ */
+@Internal
 public final class InMemoryComplianceReportQuery implements ComplianceReportQuery {
 
   private final List<AuditEntry> entries;

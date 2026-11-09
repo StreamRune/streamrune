@@ -95,8 +95,8 @@ class QuarkusOutboxMetricsWiringTest {
                 Map.of(
                     "streamrune.outbox.enabled", "true",
                     "streamrune.outbox.retry-max-attempts", "7",
-                    "streamrune.outbox.retry-initial-delay-ms", "250",
-                    "streamrune.outbox.retry-multiplier", "3.0")),
+                    "streamrune.outbox.retry-initial-delay", "PT0.25S",
+                    "streamrune.outbox.retry-backoff-multiplier", "3.0")),
             unsatisfied(),
             unsatisfied());
     RetryPolicy rp = retryPolicyOf(poller);

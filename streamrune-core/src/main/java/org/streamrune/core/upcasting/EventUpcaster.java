@@ -6,10 +6,11 @@ import org.streamrune.core.types.EventType;
 /**
  * Transforms events from older schema versions to the current version.
  *
- * <p>Exactly one upcaster owns ALL version steps for its event type: {@link UpcasterChain} rejects
- * a second upcaster for the same type, and dispatches each single-version step (e.g., V1 to V2,
- * then V2 to V3) to the same upcaster — typically a {@code switch} on {@code fromVersion}.
- * Migration steps for one event type cannot be split across multiple upcaster classes.
+ * <p>Exactly one upcaster owns ALL version steps for its event type: the event store's upcaster
+ * chain rejects a second upcaster for the same type, and dispatches each single-version step (e.g.,
+ * V1 to V2, then V2 to V3) to the same upcaster — typically a {@code switch} on {@code
+ * fromVersion}. Migration steps for one event type cannot be split across multiple upcaster
+ * classes.
  *
  * <p>Event types without a registered upcaster are treated as schema version 1 (see {@link
  * UpcasterChain#currentVersion}); their data passes through unchanged.
@@ -25,8 +26,8 @@ public interface EventUpcaster {
   /**
    * Transforms event data from {@code fromVersion} to {@code fromVersion + 1}.
    *
-   * <p>{@link UpcasterChain} always passes a mutable map: implementations may mutate {@code
-   * eventData} in place and return it, or return a new map.
+   * <p>The upcaster chain always passes a mutable map: implementations may mutate {@code eventData}
+   * in place and return it, or return a new map.
    *
    * <p>A step can receive data that already has the shape it produces. The stored schema version is
    * the {@link #currentVersion()} in effect for the writing store when the event was appended

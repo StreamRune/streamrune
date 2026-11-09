@@ -2,6 +2,7 @@ package org.streamrune.runtime.gdpr;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.Map;
+import java.util.Objects;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SubjectId;
 
@@ -23,28 +24,29 @@ public final class GdprExportException extends RuntimeException {
 
   private static final long serialVersionUID = 1L;
 
+  // The raw value, not the SubjectId record: the record is not Serializable and an exception is.
   private final String subjectId;
   private final String failedCollectorName;
   private final transient Map<String, JsonNode> partialSections;
 
   public GdprExportException(
-      String subjectId,
+      SubjectId subjectId,
       String failedCollectorName,
       Map<String, JsonNode> partialSections,
       Throwable cause) {
     super(
         "GDPR export failed for subject-hash="
-            + SubjectId.of(subjectId).redacted()
+            + Objects.requireNonNull(subjectId, "subjectId").redacted()
             + " at collector="
             + LogSanitizer.sanitizeForLog(failedCollectorName),
         cause);
-    this.subjectId = subjectId;
+    this.subjectId = subjectId.value();
     this.failedCollectorName = failedCollectorName;
     this.partialSections = partialSections == null ? Map.of() : Map.copyOf(partialSections);
   }
 
-  public String subjectId() {
-    return subjectId;
+  public SubjectId subjectId() {
+    return SubjectId.of(subjectId);
   }
 
   public String failedCollectorName() {

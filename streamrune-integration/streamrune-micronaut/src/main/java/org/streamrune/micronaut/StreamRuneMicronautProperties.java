@@ -23,10 +23,10 @@ public record StreamRuneMicronautProperties(
         @io.micronaut.context.annotation.Property(name = "streamrune.snapshot-every-n-events")
         int snapshotEveryNEvents,
     @Bindable(defaultValue = "3") int retryMaxAttempts,
-    @Bindable(defaultValue = "50") long retryInitialDelayMs,
+    @Bindable(defaultValue = "50ms") Duration retryInitialDelay,
     @Bindable(defaultValue = "2.0") double retryBackoffMultiplier,
-    @Bindable(defaultValue = "5000") long pollingIntervalMs,
-    @Bindable(defaultValue = "1000") long pollingJitterMs,
+    @Bindable(defaultValue = "5s") Duration pollingInterval,
+    @Bindable(defaultValue = "1s") Duration pollingJitter,
     @Bindable(defaultValue = "5s") Duration lockTimeout,
     @Bindable(defaultValue = "1024") int stripeCount,
     // Admission-control budget for executeAsync — commands admitted and
@@ -59,18 +59,18 @@ public record StreamRuneMicronautProperties(
     @Bindable(defaultValue = "100")
         @io.micronaut.context.annotation.Property(name = "streamrune.outbox.batch-size")
         int outboxBatchSize,
-    @Bindable(defaultValue = "5000")
-        @io.micronaut.context.annotation.Property(name = "streamrune.outbox.flush-interval-ms")
-        long outboxFlushIntervalMs,
+    @Bindable(defaultValue = "5s")
+        @io.micronaut.context.annotation.Property(name = "streamrune.outbox.flush-interval")
+        Duration outboxFlushInterval,
     @Bindable(defaultValue = "true")
         @io.micronaut.context.annotation.Property(name = "streamrune.dead-letter.enabled")
         boolean deadLetterEnabled,
     @Bindable(defaultValue = "5")
         @io.micronaut.context.annotation.Property(name = "streamrune.dead-letter.max-retries")
         int deadLetterMaxRetries,
-    @Bindable(defaultValue = "60000")
-        @io.micronaut.context.annotation.Property(name = "streamrune.dead-letter.retry-interval-ms")
-        long deadLetterRetryIntervalMs,
+    @Bindable(defaultValue = "1m")
+        @io.micronaut.context.annotation.Property(name = "streamrune.dead-letter.retry-interval")
+        Duration deadLetterRetryInterval,
     // dead-letter.retention-max-age: matches Spring's streamrune.dead-letter.retention-max-age.
     // Must not exceed streamrune.inbox.retention-max-age when a command inbox is declared (the
     // config validator refuses the boot): a keyed entry that outlives its key's inbox row would
@@ -137,13 +137,14 @@ public record StreamRuneMicronautProperties(
     @Bindable(defaultValue = "10")
         @io.micronaut.context.annotation.Property(name = "streamrune.outbox.retry-max-attempts")
         int outboxRetryMaxAttempts,
-    // Initial retry backoff (ms); grows by the multiplier per attempt, capped at 60s.
-    @Bindable(defaultValue = "1000")
-        @io.micronaut.context.annotation.Property(name = "streamrune.outbox.retry-initial-delay-ms")
-        long outboxRetryInitialDelayMs,
+    // Initial retry backoff; grows by the multiplier per attempt, capped at 60s.
+    @Bindable(defaultValue = "1s")
+        @io.micronaut.context.annotation.Property(name = "streamrune.outbox.retry-initial-delay")
+        Duration outboxRetryInitialDelay,
     @Bindable(defaultValue = "2.0")
-        @io.micronaut.context.annotation.Property(name = "streamrune.outbox.retry-multiplier")
-        double outboxRetryMultiplier,
+        @io.micronaut.context.annotation.Property(
+            name = "streamrune.outbox.retry-backoff-multiplier")
+        double outboxRetryBackoffMultiplier,
     // subscription.single-active-consumer.lease-ttl: matches Spring/Quarkus. How long a granted
     // lease stays live before another replica may take it over — the failover bound; the
     // LeaseBasedLeadership renew heartbeat runs at leaseTtl/3. Not @Nullable: Micronaut binds a
@@ -230,10 +231,10 @@ public record StreamRuneMicronautProperties(
     return new StreamRuneMicronautProperties(
         100,
         3,
-        50,
+        Duration.ofMillis(50),
         2.0,
-        5000,
-        1000,
+        Duration.ofSeconds(5),
+        Duration.ofSeconds(1),
         Duration.ofSeconds(5),
         1024,
         10_000,
@@ -246,10 +247,10 @@ public record StreamRuneMicronautProperties(
         Duration.ofDays(7),
         false,
         100,
-        5000L,
+        Duration.ofSeconds(5),
         true,
         5,
-        60000L,
+        Duration.ofMinutes(1),
         // dead-letter.retention-max-age: the inbox window, which it must not exceed
         Duration.ofDays(7),
         true,
@@ -263,9 +264,9 @@ public record StreamRuneMicronautProperties(
         // outbox.skipped-retention-max-age (the SKIPPED audit window; FAILED is never pruned)
         Duration.ofDays(30),
         "true",
-        // Outbox retry knobs: maxAttempts, initialDelayMs, multiplier.
+        // Outbox retry knobs: maxAttempts, initialDelay, backoffMultiplier.
         10,
-        1000L,
+        Duration.ofSeconds(1),
         2.0,
         // subscription.single-active-consumer.lease-ttl
         Duration.ofSeconds(15),

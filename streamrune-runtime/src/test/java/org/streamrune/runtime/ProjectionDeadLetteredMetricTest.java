@@ -108,7 +108,12 @@ class ProjectionDeadLetteredMetricTest {
             .fetchSize(10)
             .deadLetterStore(dlq)
             .metrics(metrics)
-            .register("p", p, "* * * * * *", ProjectionErrorStrategy.DLQ, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("p"),
+                p,
+                "* * * * * *",
+                ProjectionErrorStrategy.DLQ,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
     try {

@@ -10,7 +10,7 @@ import org.springframework.lang.Nullable;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
-import org.streamrune.filesystem.FileSystemCryptoEngine;
+import org.streamrune.crypto.filesystem.FileSystemCryptoEngine;
 
 @Configuration
 @ConditionalOnClass(CryptoEngine.class)

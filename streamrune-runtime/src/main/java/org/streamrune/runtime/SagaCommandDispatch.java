@@ -193,7 +193,7 @@ final class SagaCommandDispatch {
     // Beside the scoped values, the bus is handed the saga in a field of this thread. It compares
     // the two before anything of the command runs (VirtualThreadCommandBus refuses a mismatch) and
     // takes the provenance of the command's events, and the forward fence, from the handed saga.
-    new SagaDispatchOffer(origin, causation, key, forwardFenced).offer();
+    new SagaDispatchOffer(origin, causation, command, key, forwardFenced).offer();
     CommandBus.CommandResult result;
     try {
       result = carrier.call(() -> commandBus.execute(command, key));
@@ -431,7 +431,8 @@ final class SagaCommandDispatch {
    *             again; a saga binds its correlation id and its origin afresh on every attempt, from
    *             the saga id. The step executor logs it at {@code ERROR} instead of the retry-later
    *             {@code WARN}. A refusal that persists holds the subscription, which reports every
-   *             failed delivery, until the saga's deadline claims it.
+   *             failed delivery, until the saga's deadline claims it — or, for a saga that declares
+   *             no timeout, until the cause is fixed.
    *       </ul>
    *   <li>Anything else ⇒ <b>not</b> retry-later. Never divert a failure that could not be
    *       <em>proven</em> retriable onto an unbounded batch retry.

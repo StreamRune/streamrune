@@ -311,7 +311,9 @@ class StreamRuneBuilderTest {
             .eventStore(new InMemoryEventStore())
             .projectionRunnerFactory((eventStore, subscriptionConfig) -> runner)
             .registerProjection(
-                "TestProjection", (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+                ProjectionName.of("TestProjection"),
+                (Projection) batch -> {},
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     streamRune.startProjections();
@@ -327,7 +329,9 @@ class StreamRuneBuilderTest {
     var ex =
         assertThrows(
             IllegalArgumentException.class,
-            () -> builder.registerProjection("orders", (Projection) batch -> {}, null));
+            () ->
+                builder.registerProjection(
+                    ProjectionName.of("orders"), (Projection) batch -> {}, null));
     assertEquals("deliveryMode is required for projection 'orders'", ex.getMessage());
   }
 
@@ -355,9 +359,12 @@ class StreamRuneBuilderTest {
         StreamRune.builder()
             .eventStore(new InMemoryEventStore())
             .projectionRunnerFactory((eventStore, subscriptionConfig) -> recording)
-            .registerProjection("at-least-once", atLeastOnce, AT_LEAST_ONCE_IDEMPOTENT)
             .registerProjection(
-                "transactional", transactional, ProjectionDeliveryMode.TRANSACTIONAL_LOCAL)
+                ProjectionName.of("at-least-once"), atLeastOnce, AT_LEAST_ONCE_IDEMPOTENT)
+            .registerProjection(
+                ProjectionName.of("transactional"),
+                transactional,
+                ProjectionDeliveryMode.TRANSACTIONAL_LOCAL)
             .build();
     try {
       streamRune.startProjections();
@@ -537,7 +544,9 @@ class StreamRuneBuilderTest {
             .eventStore(store)
             .projectionRunner(runner)
             .registerProjection(
-                "TestProjection", (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+                ProjectionName.of("TestProjection"),
+                (Projection) batch -> {},
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     streamRune.startProjections();
@@ -556,7 +565,8 @@ class StreamRuneBuilderTest {
     var builder =
         StreamRune.builder()
             .eventStore(store)
-            .registerProjection("noop", (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT);
+            .registerProjection(
+                ProjectionName.of("noop"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT);
 
     var ex = assertThrows(IllegalStateException.class, builder::build);
     assertTrue(ex.getMessage().contains("registerProjection"), ex.getMessage());
@@ -597,8 +607,10 @@ class StreamRuneBuilderTest {
         StreamRune.builder()
             .eventStore(new InMemoryEventStore())
             .projectionRunner(blockingRunner)
-            .registerProjection("proj1", (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
-            .registerProjection("proj2", (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .registerProjection(
+                ProjectionName.of("proj1"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .registerProjection(
+                ProjectionName.of("proj2"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     // Drive startProjections() from its own thread too: a regression to the old synchronous loop
@@ -677,8 +689,10 @@ class StreamRuneBuilderTest {
                     public void reset(ProjectionName name) {}
                   };
                 })
-            .registerProjection("proj1", (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
-            .registerProjection("proj2", (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .registerProjection(
+                ProjectionName.of("proj1"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .registerProjection(
+                ProjectionName.of("proj2"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     try {
@@ -731,9 +745,13 @@ class StreamRuneBuilderTest {
                         .build())
             .subscriptionConfig(fastConfig)
             .registerProjection(
-                "proj1", (Projection) proj1Batches::addAll, AT_LEAST_ONCE_IDEMPOTENT)
+                ProjectionName.of("proj1"),
+                (Projection) proj1Batches::addAll,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .registerProjection(
-                "proj2", (Projection) proj2Batches::addAll, AT_LEAST_ONCE_IDEMPOTENT)
+                ProjectionName.of("proj2"),
+                (Projection) proj2Batches::addAll,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     try {
@@ -785,7 +803,10 @@ class StreamRuneBuilderTest {
                         .build())
             .subscriptionConfig(
                 new SubscriptionConfig(false, Duration.ofMillis(20), Duration.ofMillis(5)))
-            .registerProjection("held_stop", (Projection) batches::addAll, AT_LEAST_ONCE_IDEMPOTENT)
+            .registerProjection(
+                ProjectionName.of("held_stop"),
+                (Projection) batches::addAll,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     var streamId = org.streamrune.core.types.StreamId.of(TYPE, AggregateId.of("held-stop-stream"));
     eventStore.append(
@@ -832,7 +853,8 @@ class StreamRuneBuilderTest {
         StreamRune.builder()
             .eventStore(new InMemoryEventStore())
             .projectionRunner(runner)
-            .registerProjection("p", (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .registerProjection(
+                ProjectionName.of("p"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     streamRune.startProjections();
@@ -881,7 +903,8 @@ class StreamRuneBuilderTest {
         StreamRune.builder()
             .eventStoreFactory(factory)
             .projectionRunner(new RecordingCloseableProjectionRunner(order))
-            .registerProjection("p", (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .registerProjection(
+                ProjectionName.of("p"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     streamRune.startProjections();
 

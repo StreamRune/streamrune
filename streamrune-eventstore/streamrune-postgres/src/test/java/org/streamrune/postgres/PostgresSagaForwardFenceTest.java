@@ -51,7 +51,7 @@ class PostgresSagaForwardFenceTest extends SagaForwardFenceContract {
               OutboxEntry.pending(
                   OutboxEntryId.of(envelope.metadata().eventId().value()),
                   "{}",
-                  envelope.eventType().name(),
+                  envelope.eventType().value(),
                   envelope.streamId()));
 
   private PostgresEventStore events;

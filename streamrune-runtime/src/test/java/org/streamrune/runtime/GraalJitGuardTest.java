@@ -126,22 +126,25 @@ class GraalJitGuardTest {
         .hasMessageContaining("not reliable with StreamRune")
         .hasMessageContaining("Start the JVM with " + JVMCI_OFF)
         .hasMessageContaining(GraalJitGuard.ALLOW_PROPERTY + "=true")
-        .hasMessageNotContaining("DisableIntrinsic");
+        .hasMessageNotContaining("UnlockDiagnosticVMOptions");
   }
 
+  /**
+   * Only the JVMCI compiler switched off is accepted: other compiler options leave the Graal JIT on
+   * and the JVM refused, whatever they are.
+   */
   @Test
-  void theGraalJitWithIntrinsicsDisabled_isRefused_whichEverIntrinsicsTheyAre() {
-    for (String disabled :
+  void theGraalJitWithOtherCompilerOptionsSet_isRefused_whateverTheyAre() {
+    for (Map<String, String> options :
         List.of(
-            "_scopedValueCache,_setScopedValueCache",
-            "_hashCode,_setScopedValueCache,_scopedValueCache",
-            "_scopedValueCache\n_setScopedValueCache",
-            "_hashCode")) {
-      assertThatThrownBy(() -> check(graalJit(Map.of("DisableIntrinsic", disabled)), false))
-          .as(disabled)
+            Map.of("TieredStopAtLevel", "1"),
+            Map.of("UseJVMCINativeLibrary", "false"),
+            Map.of("UnlockDiagnosticVMOptions", "true"))) {
+      assertThatThrownBy(() -> check(graalJit(options), false))
+          .as(options.toString())
           .isInstanceOf(IllegalStateException.class)
           .hasMessageContaining(JVMCI_OFF)
-          .hasMessageNotContaining("DisableIntrinsic");
+          .hasMessageNotContaining("UnlockDiagnosticVMOptions");
     }
   }
 
@@ -194,7 +197,7 @@ class GraalJitGuardTest {
                 assertThat(line)
                     .contains(GraalJitGuard.ALLOW_PROPERTY + "=true")
                     .contains(JVMCI_OFF)
-                    .doesNotContain("DisableIntrinsic"));
+                    .doesNotContain("UnlockDiagnosticVMOptions"));
   }
 
   @Test
@@ -212,7 +215,7 @@ class GraalJitGuardTest {
         .hasMessageContaining("jdk.management")
         .hasMessageContaining(JVMCI_OFF)
         .hasMessageContaining(GraalJitGuard.ALLOW_PROPERTY + "=true")
-        .hasMessageNotContaining("DisableIntrinsic");
+        .hasMessageNotContaining("UnlockDiagnosticVMOptions");
   }
 
   @Test
@@ -247,7 +250,7 @@ class GraalJitGuardTest {
                   assertThat(line)
                       .contains("could not read")
                       .contains(JVMCI_OFF)
-                      .doesNotContain("DisableIntrinsic"));
+                      .doesNotContain("UnlockDiagnosticVMOptions"));
     }
   }
 
@@ -268,7 +271,7 @@ class GraalJitGuardTest {
                     .contains("jdk.management")
                     .contains(GraalJitGuard.ALLOW_PROPERTY + "=true")
                     .contains(JVMCI_OFF)
-                    .doesNotContain("DisableIntrinsic"));
+                    .doesNotContain("UnlockDiagnosticVMOptions"));
     assertThat(lines(Level.WARN)).isEmpty();
   }
 

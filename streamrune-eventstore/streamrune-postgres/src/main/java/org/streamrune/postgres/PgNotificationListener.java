@@ -17,12 +17,14 @@ import org.streamrune.core.StreamRuneMetrics;
  *
  * <p>When the supplied {@link DataSource} is a {@link HikariDataSource}, the listener does
  * <b>not</b> park one of its pooled connections forever — that would permanently consume a pool
- * slot. Instead it creates its own dedicated single-connection data source (via {@link
- * PostgresNotificationSubscription#createListenDataSource}) and closes it on {@link #close()}. Any
- * other data source is used directly: a plain one opens a physical connection for the listener,
- * while any other pool — Agroal, or a proxy that wraps a HikariCP pool — lends the listener one of
- * its connections for as long as it runs. Size such a pool with one extra connection per listener,
- * or hand the listener the {@link HikariDataSource} itself.
+ * slot. Instead it creates its own dedicated single-connection pool, configured as {@link
+ * PostgresNotificationSubscription#createListenDataSource} configures one, and closes it on {@link
+ * #close()}. A {@link ListenDataSource} is already such a pool: the listener listens on it and
+ * closes it on {@link #close()}, started or not. Any other data source is used directly and left
+ * open: a plain one opens a physical connection for the listener, while any other pool — Agroal, or
+ * a proxy that wraps a HikariCP pool — lends the listener one of its connections for as long as it
+ * runs. Size such a pool with one extra connection per listener, or hand the listener the {@link
+ * HikariDataSource} itself.
  *
  * <p>On connection loss the listener reconnects with capped exponential backoff, logging each
  * attempt at WARN and emitting a reconnect metric. By default it <b>never</b> permanently gives up
@@ -109,7 +111,13 @@ public final class PgNotificationListener implements AutoCloseable {
   private final AtomicReference<State> state = new AtomicReference<>(State.NEW);
   private volatile Thread listenerThread;
   private volatile Connection connection;
-  private volatile HikariDataSource dedicatedListenDataSource;
+
+  /**
+   * The LISTEN data source this listener owns and closes: the pool it built over a {@link
+   * HikariDataSource}, or the {@link ListenDataSource} it was handed; {@code null} otherwise.
+   */
+  private volatile AutoCloseable dedicatedListenDataSource;
+
   private final Object connectionLock = new Object();
 
   /** {@code true} while the listen thread holds a connection on which LISTEN is registered. */
@@ -198,6 +206,9 @@ public final class PgNotificationListener implements AutoCloseable {
           "reconnectGrace must not be negative, got: " + reconnectGraceMs);
     }
     this.dataSource = dataSource;
+    if (dataSource instanceof ListenDataSource handed) {
+      this.dedicatedListenDataSource = handed;
+    }
     this.onNotification = onNotification;
     this.channel = channel;
     this.maxReconnectAttempts = maxReconnectAttempts;
@@ -270,10 +281,7 @@ public final class PgNotificationListener implements AutoCloseable {
         connection = null;
       }
     }
-    HikariDataSource dedicated = dedicatedListenDataSource;
-    if (dedicated != null && !dedicated.isClosed()) {
-      dedicated.close();
-    }
+    closeDedicatedListenDataSource();
     Thread t = listenerThread;
     listenerThread = null;
     if (t != null) {
@@ -311,10 +319,24 @@ public final class PgNotificationListener implements AutoCloseable {
       // behind it, and releases the dedicated pool. This also covers the race where close() ran
       // before the dedicated data source was assigned.
       state.set(State.CLOSED);
-      HikariDataSource dedicated = dedicatedListenDataSource;
-      if (dedicated != null && !dedicated.isClosed()) {
-        dedicated.close();
-      }
+      closeDedicatedListenDataSource();
+    }
+  }
+
+  /**
+   * Closes the LISTEN data source this listener owns, if any. Both kinds are idempotent to close
+   * ({@code HikariDataSource.close()} and {@link ListenDataSource#close()}), so the close of {@link
+   * #close()} and the one at the exit of the listen thread may both run.
+   */
+  private void closeDedicatedListenDataSource() {
+    AutoCloseable dedicated = dedicatedListenDataSource;
+    if (dedicated == null) {
+      return;
+    }
+    try {
+      dedicated.close();
+    } catch (Exception e) {
+      log.warn("Could not close the dedicated LISTEN data source", e);
     }
   }
 
@@ -413,12 +435,12 @@ public final class PgNotificationListener implements AutoCloseable {
   /**
    * Returns the data source to draw the LISTEN connection from. A {@link HikariDataSource} gets a
    * dedicated single-connection pool so the long-lived LISTEN connection never occupies a shared
-   * pool slot; any other data source is used directly (see the class documentation).
+   * pool slot; a {@link ListenDataSource} is one already and any other data source is used directly
+   * (see the class documentation).
    */
   private DataSource resolveListenSource() {
-    if (dataSource instanceof HikariDataSource) {
-      HikariDataSource dedicated =
-          PostgresNotificationSubscription.createListenDataSource(dataSource);
+    if (dataSource instanceof HikariDataSource && !(dataSource instanceof ListenDataSource)) {
+      HikariDataSource dedicated = PostgresNotificationSubscription.createListenPool(dataSource);
       dedicatedListenDataSource = dedicated;
       return dedicated;
     }

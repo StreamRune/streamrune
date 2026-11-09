@@ -19,7 +19,7 @@ import org.streamrune.core.types.UserId;
  * A {@link CommandInterceptor} that enforces {@link RequireRole} and {@link RequirePermission}
  * annotations on command classes.
  *
- * <p>Annotations are looked up via {@link AuthorizationAnnotations}, so they are honored whether
+ * <p>Annotations are looked up across the command's type hierarchy, so they are honored whether
  * declared on the command class itself or anywhere in its hierarchy — including the documented
  * pattern of annotating a sealed command interface shared by several command records. Lookups are
  * memoized per command class.
@@ -58,8 +58,8 @@ import org.streamrune.core.types.UserId;
  *       against it. This is the {@code executeAsync} path — the command bus already re-binds the
  *       whole request context onto the async thread, so the captured answer rides along and
  *       off-request execution decides exactly as the request thread did.
- *   <li><b>DLQ-replay system principal</b> — {@link VirtualThreadCommandBus#DLQ_REPLAY} is bound,
- *       {@code honorDlqReplaySystemPrincipal} is on, and {@link
+ *   <li><b>DLQ-replay system principal</b> — the command is a dead-letter replay that the retry
+ *       runner dispatches, {@code honorDlqReplaySystemPrincipal} is on, and {@link
  *       UserRoleResolver#requiresRequestContext()} says the resolver provably cannot answer on this
  *       thread: allow, RECORDED. See the safety argument below.
  *   <li><b>Otherwise</b> — {@code resolver.resolve(userId)} and enforce: the ordinary check. A

@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
@@ -44,6 +45,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
@@ -249,17 +251,17 @@ class SagaCompensationRetrySweeperTest {
     }
 
     @Override
-    public Optional<Lease> tryAcquire(String consumerName) {
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
       return leader ? LEASE : Optional.empty();
     }
 
     @Override
-    public Optional<Lease> current(String consumerName) {
+    public Optional<Lease> current(SubscriptionName consumerName) {
       return leader ? LEASE : Optional.empty();
     }
 
     @Override
-    public void resign(String consumerName) {
+    public void resign(SubscriptionName consumerName) {
       resigns++;
     }
 
@@ -431,17 +433,17 @@ class SagaCompensationRetrySweeperTest {
     var leadership =
         new SubscriptionLeadership() {
           @Override
-          public Optional<Lease> tryAcquire(String consumerName) {
+          public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return Optional.of(new Lease(1L));
           }
 
           @Override
-          public Optional<Lease> current(String consumerName) {
+          public Optional<Lease> current(SubscriptionName consumerName) {
             return Optional.of(new Lease(1L));
           }
 
           @Override
-          public void resign(String consumerName) {
+          public void resign(SubscriptionName consumerName) {
             throw new IllegalStateException("wrapped DataSource torn down");
           }
 
@@ -1373,6 +1375,87 @@ class SagaCompensationRetrySweeperTest {
     assertThat(metrics.faulted.get()).isZero();
   }
 
+  @Test
+  void aSecondCloseAfterATimedOutJoin_keepsTheSweeperNotRestartableUntilTheThreadStops()
+      throws Exception {
+    var pollThread = new AtomicReference<Thread>();
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    SagaStore blockingStore = mock(SagaStore.class);
+    when(blockingStore.findCompensating(any(), any(), anyInt()))
+        .thenAnswer(
+            RestartRaceTestSupport.parkIgnoringInterruptsUntilReleased(
+                pollThread, entered, release, List.of()));
+    var sweeper =
+        SagaCompensationRetrySweeper.<FakeSagaState>builder()
+            .sagaRunner(runner)
+            .sagaStore(blockingStore)
+            .clock(clock)
+            .retryInterval(Duration.ofSeconds(1))
+            .giveUpAfter(Duration.ofHours(1))
+            .build();
+    sweeper.closeJoinTimeoutMs(20);
+    sweeper.start();
+    assertThat(entered.await(5, TimeUnit.SECONDS))
+        .as("sweep thread should have entered findCompensating")
+        .isTrue();
+
+    sweeper.close(); // the join times out
+    sweeper.close(); // a second close finds the same stuck thread, not none
+
+    assertThat(pollThread.get().isAlive()).as("the sweep thread is still running").isTrue();
+    assertThat(sweeper.isStarted()).as("still not restartable while it runs").isTrue();
+    assertThat(sweeper.isAlive()).as("the stuck thread is still reported").isTrue();
+    assertThatThrownBy(sweeper::start).isInstanceOf(IllegalStateException.class);
+
+    release.countDown();
+    pollThread.get().join(5_000);
+    sweeper.close(); // the thread has stopped: the guard is reset
+
+    assertThat(sweeper.isStarted()).as("restartable once the stale thread has stopped").isFalse();
+    assertThat(sweeper.isAlive()).isFalse();
+  }
+
+  @Test
+  void twoConcurrentClosesDuringATimedOutJoin_keepsTheSweeperNotRestartableUntilTheThreadStops()
+      throws Exception {
+    var pollThread = new AtomicReference<Thread>();
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    SagaStore blockingStore = mock(SagaStore.class);
+    when(blockingStore.findCompensating(any(), any(), anyInt()))
+        .thenAnswer(
+            RestartRaceTestSupport.parkIgnoringInterruptsUntilReleased(
+                pollThread, entered, release, List.of()));
+    var sweeper =
+        SagaCompensationRetrySweeper.<FakeSagaState>builder()
+            .sagaRunner(runner)
+            .sagaStore(blockingStore)
+            .clock(clock)
+            .retryInterval(Duration.ofSeconds(1))
+            .giveUpAfter(Duration.ofHours(1))
+            .build();
+    sweeper.closeJoinTimeoutMs(300);
+    sweeper.start();
+    assertThat(entered.await(5, TimeUnit.SECONDS))
+        .as("sweep thread should have entered findCompensating")
+        .isTrue();
+
+    RestartRaceTestSupport.closeConcurrently(sweeper); // both joins time out
+
+    assertThat(pollThread.get().isAlive()).as("the sweep thread is still running").isTrue();
+    assertThat(sweeper.isStarted()).as("still not restartable while it runs").isTrue();
+    assertThat(sweeper.isAlive()).as("the stuck thread is still reported").isTrue();
+    assertThatThrownBy(sweeper::start).isInstanceOf(IllegalStateException.class);
+
+    release.countDown();
+    pollThread.get().join(5_000);
+    sweeper.close(); // the thread has stopped: the guard is reset
+
+    assertThat(sweeper.isStarted()).as("restartable once the stale thread has stopped").isFalse();
+    assertThat(sweeper.isAlive()).isFalse();
+  }
+
   // close() must JOIN the sweep thread before resetting the started guard, so a stale
   // finally { running = false } cannot clobber a subsequent start()'s running = true (which would
   // silently kill the restarted sweeper).
@@ -1459,7 +1542,7 @@ class SagaCompensationRetrySweeperTest {
     verifyNoInteractions(leadership);
 
     // Control: the default (re-drive enabled) sweeper DOES take the lease on the same cycle.
-    when(leadership.tryAcquire(org.mockito.ArgumentMatchers.anyString()))
+    when(leadership.tryAcquire(org.mockito.ArgumentMatchers.any(SubscriptionName.class)))
         .thenReturn(java.util.Optional.empty());
     var reDriving =
         SagaCompensationRetrySweeper.<FakeSagaState>builder()
@@ -1473,7 +1556,7 @@ class SagaCompensationRetrySweeperTest {
             .build();
     assertThat(reDriving.isCompensationRetryEnabled()).isTrue();
     reDriving.sweepOnce();
-    verify(leadership).tryAcquire(org.mockito.ArgumentMatchers.anyString());
+    verify(leadership).tryAcquire(org.mockito.ArgumentMatchers.any(SubscriptionName.class));
   }
 
   @Test

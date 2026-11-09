@@ -875,9 +875,10 @@ subprojects {
         // package roots — streamrune-crypto-api would become org.streamrune.crypto.api (its
         // module-info says org.streamrune.crypto), streamrune-postgres-crypto would become
         // org.streamrune.postgres.crypto (its package is org.streamrune.crypto.postgres, and the
-        // derived name reads as a sub-namespace of the unrelated streamrune-postgres module), and
-        // streamrune-integration-api / *-outbox / *-crypto would all gain a trailing segment their
-        // packages do not have. Worse, a derived name is exactly what wrong-outcome (b) is about:
+        // derived name reads as a sub-namespace of the unrelated streamrune-postgres module),
+        // streamrune-integration-api would gain a trailing segment its package does not have, and
+        // the *-outbox / *-crypto backends would get their segments in reverse order
+        // (org.streamrune.kafka.outbox for the package org.streamrune.outbox.kafka). Worse, a derived name is exactly what wrong-outcome (b) is about:
         // it changes when the artifactId changes. This map is the module name as a deliberate,
         // reviewable API decision, in one place, decoupled from the artifact id. Each entry is the
         // module's real root package.
@@ -895,11 +896,11 @@ subprojects {
             ":streamrune-integration:streamrune-micronaut" to "org.streamrune.micronaut",
             ":streamrune-integration:streamrune-spring-boot-starter"
                 to "org.streamrune.spring.boot.starter",
-            ":streamrune-crypto:streamrune-filesystem-crypto" to "org.streamrune.filesystem",
+            ":streamrune-crypto:streamrune-filesystem-crypto" to "org.streamrune.crypto.filesystem",
             ":streamrune-crypto:streamrune-postgres-crypto" to "org.streamrune.crypto.postgres",
-            ":streamrune-crypto:streamrune-vault-crypto" to "org.streamrune.vault",
-            ":streamrune-outbox:streamrune-kafka-outbox" to "org.streamrune.kafka",
-            ":streamrune-outbox:streamrune-rabbitmq-outbox" to "org.streamrune.rabbitmq")
+            ":streamrune-crypto:streamrune-vault-crypto" to "org.streamrune.crypto.vault",
+            ":streamrune-outbox:streamrune-kafka-outbox" to "org.streamrune.outbox.kafka",
+            ":streamrune-outbox:streamrune-rabbitmq-outbox" to "org.streamrune.outbox.rabbitmq")
 
         val hasModuleInfo = file("src/main/java/module-info.java").exists()
         val automaticModuleName = automaticModuleNames[project.path]

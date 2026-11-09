@@ -8,7 +8,23 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
-/** Persistence abstraction for append-only event streams with optional snapshots. */
+/**
+ * Persistence abstraction for append-only event streams with optional snapshots.
+ *
+ * <h2>Decorators</h2>
+ *
+ * <p>A store that wraps another one (to observe, meter or fail its calls) forwards to the wrapped
+ * store every method of this interface, the {@code default} methods included. The defaults of
+ * {@code load(StreamId, int)}, {@code saveSnapshot}, {@code lastGlobalOffset()} and the two {@code
+ * appendWithKey} methods do not reach the wrapped store's own implementation, and the default of
+ * {@link #sagaFenceStorageIdentity()}, a wiring probe, reports a store that cannot fence a saga's
+ * forward command: a command bus built over such a decorator is refused by a {@code SagaRunner}
+ * whose forward fence is on. A decorator calls the wrapped store on the calling thread.
+ *
+ * <p>{@code ForwardingEventStore} in {@code streamrune-test} forwards all of them and is a base
+ * class for such a decorator. A new method added to this interface comes with a {@code default}; a
+ * decorator forwards it as well once it wants the wrapped store's answer.
+ */
 public interface EventStore {
 
   /**
@@ -396,7 +412,10 @@ public interface EventStore {
    * {@link org.streamrune.core.saga.SagaStore#storageIdentity()}: equal values mean the store reads
    * the rows that saga store writes. {@code null} when the store cannot fence. Cheap, no I/O.
    *
-   * <p>Defaults to {@code null}.
+   * <p>The value is an identity token: it is compared with {@code equals} and never inspected.
+   *
+   * <p>Defaults to {@code null}. A decorator forwards it to the store it wraps (see the class
+   * javadoc).
    */
   default Object sagaFenceStorageIdentity() {
     return null;

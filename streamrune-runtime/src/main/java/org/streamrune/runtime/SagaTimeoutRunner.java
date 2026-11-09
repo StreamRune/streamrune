@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandBus;
@@ -81,7 +82,7 @@ import org.streamrune.core.types.SagaType;
  * SubscriptionLease#isLeadingHere()}): one replica claims a saga type's deadlines — the one that
  * delivers its events, where its steps run under the step lock. A poll that does not lead reads and
  * writes nothing and forgets the claims it was deferring. The runner never acquires or resigns the
- * lease; {@link #start()} and {@link #stop()} leave it alone. In a process where no subscription
+ * lease; {@link #start()} and {@link #close()} leave it alone. In a process where no subscription
  * ever anchored the lease the runner claims nothing: it logs one INFO within the anchor grace after
  * its start and one WARN past it, and {@link #leaseUnanchored()} turns its health {@code DEGRADED}.
  * A runner built with {@link Builder#stepLock}, or from a runner without a lease, polls wherever it
@@ -148,15 +149,20 @@ import org.streamrune.core.types.SagaType;
  *
  * @param <S> the saga state type
  */
-public final class SagaTimeoutRunner<S extends SagaState> {
+public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseable {
 
   private static final Logger LOG = LoggerFactory.getLogger(SagaTimeoutRunner.class);
 
   /**
-   * Upper bound {@link #stop()} waits to join the poll thread before proceeding. The interrupted
+   * Upper bound {@link #close()} waits to join the poll thread before proceeding. The interrupted
    * thread exits promptly in practice; this only caps a pathologically stuck poll.
    */
   private static final long STOP_JOIN_TIMEOUT_MS = 30_000L;
+
+  /**
+   * The join bound {@link #close()} uses; {@link #STOP_JOIN_TIMEOUT_MS} unless a test shrinks it.
+   */
+  private volatile long stopJoinTimeoutMs = STOP_JOIN_TIMEOUT_MS;
 
   /** Longest wait between retries of a failing poll, unless the poll interval itself is longer. */
   private static final Duration MAX_FAILURE_BACKOFF = Duration.ofSeconds(60);
@@ -240,6 +246,9 @@ public final class SagaTimeoutRunner<S extends SagaState> {
   private volatile boolean running;
   private volatile Thread pollThread;
 
+  /** Serializes {@link #close()}. */
+  private final ReentrantLock closeLock = new ReentrantLock();
+
   private SagaTimeoutRunner(
       SagaDecider<S> decider,
       SagaStore sagaStore,
@@ -300,7 +309,7 @@ public final class SagaTimeoutRunner<S extends SagaState> {
 
   /**
    * Starts polling on a virtual thread. Not idempotent — call exactly once, or after a preceding
-   * {@link #stop()}. A second call without an intervening stop would spawn a concurrent loop
+   * {@link #close()}. A second call without an intervening close would spawn a concurrent loop
    * polling the same saga store.
    *
    * @throws IllegalStateException if already started
@@ -308,7 +317,7 @@ public final class SagaTimeoutRunner<S extends SagaState> {
   public void start() {
     if (!started.compareAndSet(false, true)) {
       throw new IllegalStateException(
-          "SagaTimeoutRunner already started — call start() exactly once, or stop() first");
+          "SagaTimeoutRunner already started — call start() exactly once, or close() first");
     }
     running = true;
     follower.started();
@@ -321,12 +330,33 @@ public final class SagaTimeoutRunner<S extends SagaState> {
   /**
    * Stops polling. Interrupts the poll thread and resets the started guard so {@link #start()} can
    * be called again on the same instance — matches the restartable lifecycle contract (actuator
-   * restart, context refresh).
+   * restart, context refresh) of the other background components. Idempotent: closing a runner that
+   * is not started does nothing. A DI container's destroy callback, a try-with-resources block or a
+   * lifecycle that closes its {@link AutoCloseable} components stops it like them.
+   *
+   * <p>A poll thread that does not stop within the join bound keeps the runner started and alive,
+   * so {@link #start()} is refused; a later {@code close()} interrupts and joins that thread again
+   * and resets the guard once it has stopped.
    *
    * <p>A started runner that follows a lease this process holds logs a WARN: while its subscription
    * keeps the lease, no replica claims the deadlines of the saga type.
    */
-  public void stop() {
+  @Override
+  public void close() {
+    closeLock.lock();
+    try {
+      closeSerially();
+    } finally {
+      closeLock.unlock();
+    }
+  }
+
+  /**
+   * The body of {@link #close()}, run by one caller at a time: a close() that starts while another
+   * waits on a stuck poll thread waits for that verdict, so it cannot find no thread and reset the
+   * started guard underneath it.
+   */
+  private void closeSerially() {
     if (started.get() && lease.isGated() && lease.isLeadingHere()) {
       LOG.warn(
           "The timeout runner of saga type {} stops while this process leads that saga type: no"
@@ -336,16 +366,15 @@ public final class SagaTimeoutRunner<S extends SagaState> {
     }
     running = false;
     Thread t = pollThread;
-    pollThread = null;
     boolean stuck = false;
     if (t != null) {
       t.interrupt();
       // Join the poll thread before resetting `started`, so a stale poll thread cannot
       // still be running when a subsequent start() spawns a new one (a leaked duplicate poller).
-      // Self-join guard: a thread cannot join itself (stop() invoked from within the poll thread).
+      // Self-join guard: a thread cannot join itself (close() invoked from within the poll thread).
       if (t != Thread.currentThread()) {
         try {
-          t.join(STOP_JOIN_TIMEOUT_MS);
+          t.join(stopJoinTimeoutMs);
         } catch (InterruptedException _) {
           Thread.currentThread().interrupt();
         }
@@ -356,19 +385,28 @@ public final class SagaTimeoutRunner<S extends SagaState> {
       }
     }
     if (stuck) {
+      // The stuck thread stays the poll thread: isAlive() keeps reporting it, and a later close()
+      // interrupts and joins it again instead of finding no thread and resetting the guard while
+      // it still runs.
       LOG.warn(
           "SagaTimeoutRunner poll thread did not stop within {}ms; leaving the runner"
               + " not-restartable so a restart cannot spawn a duplicate poller. Investigate the"
               + " stuck poll.",
-          STOP_JOIN_TIMEOUT_MS);
+          stopJoinTimeoutMs);
     } else {
-      // Reset so start() can be called again after stop().
+      // Reset so start() can be called again after close().
+      pollThread = null;
       started.set(false);
     }
   }
 
+  /** Shrinks the join bound of {@link #close()}; for the tests of this package. */
+  void stopJoinTimeoutMs(long millis) {
+    this.stopJoinTimeoutMs = millis;
+  }
+
   /**
-   * Whether {@link #start()} has been called and {@link #stop()} has not. Combined with {@link
+   * Whether {@link #start()} has been called and {@link #close()} has not. Combined with {@link
    * #isAlive()} this distinguishes a runner that was never started (or was cleanly stopped) from
    * one whose poll thread <em>died</em> — {@code isStarted() && !isAlive()} is the dead-driver
    * signal the saga health check reports DOWN. Mirrors the outbox/DLQ relay liveness surface.
@@ -622,7 +660,7 @@ public final class SagaTimeoutRunner<S extends SagaState> {
     try {
       claimHold = stepLock.tryEnterClaim(sagaType, sagaId, wait);
     } catch (SagaStepLockException interrupted) {
-      // stop() interrupts the poll thread; its interrupt status is set and the loop ends on it.
+      // close() interrupts the poll thread; its interrupt status is set and the loop ends on it.
       LOG.debug(
           "The timeout claim of saga {} was interrupted while it waited for a step in flight",
           LogSanitizer.sanitizeForLog(sagaId.value()));
@@ -1061,11 +1099,7 @@ public final class SagaTimeoutRunner<S extends SagaState> {
       // Timeout compensation dispatches through the keyed execute(command, key) with no unkeyed
       // fallback, so a bus without a CommandInbox fails every compensation. Detectable here — fail
       // fast rather than silently at runtime.
-      if (!commandBus.supportsIdempotentExecution()) {
-        throw new IllegalStateException(
-            "saga command dispatch requires idempotent execution — configure a CommandInbox on the"
-                + " CommandBus (VirtualThreadCommandBus.builder().commandInbox(...))");
-      }
+      SagaRunner.Builder.requireIdempotentDispatch(commandBus);
       if (batchSize < 1) {
         throw new IllegalArgumentException("batchSize must be positive, was " + batchSize);
       }

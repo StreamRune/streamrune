@@ -218,7 +218,7 @@ class VirtualThreadCommandBusTest {
     assertEquals(1, events.size());
     assertInstanceOf(CounterEvent.Incremented.class, events.getFirst().event());
     assertEquals(1, events.getFirst().version().value());
-    assertEquals("Incremented", events.getFirst().eventType().name());
+    assertEquals("Incremented", events.getFirst().eventType().value());
     assertEquals("counter:counter-1", events.getFirst().streamId().value());
   }
 
@@ -272,32 +272,6 @@ class VirtualThreadCommandBusTest {
             .build();
 
     runWithContext(() -> streamRune.execute(new CounterCommand.Inc("counter-1")));
-
-    var events = store.eventsFor("counter:counter-1");
-    assertEquals(1, events.size());
-    assertInstanceOf(CounterEvent.Incremented.class, events.getFirst().event());
-  }
-
-  // === Tests for builder convenience methods ===
-
-  @Test
-  void registerDeciderIsAlias() {
-    var store = new InMemoryEventStore();
-    var bus =
-        VirtualThreadCommandBus.builder()
-            .eventStore(store)
-            .locker(new LocalStripedLocker(16))
-            .registerDecider(
-                COUNTER,
-                CounterCommand.class,
-                cmd ->
-                    switch (cmd) {
-                      case CounterCommand.Inc c -> AggregateId.of(c.counterId());
-                    },
-                new CounterDecider())
-            .build();
-
-    runWithContext(() -> bus.execute(new CounterCommand.Inc("counter-1")));
 
     var events = store.eventsFor("counter:counter-1");
     assertEquals(1, events.size());

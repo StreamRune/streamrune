@@ -98,7 +98,7 @@ public class StreamRuneHealthIndicator implements HealthIndicator {
         details.put("errorCount", sub.errorCount());
         details.put("status", sub.status().name());
         details.put("role", sub.role().name());
-        builder.withDetail("subscription." + sub.name(), details);
+        builder.withDetail("subscription." + sub.name().value(), details);
       }
     }
 

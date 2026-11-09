@@ -157,7 +157,8 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
     `ForwardingSagaDeadLetterStore`, `ForwardingDeadLetterQueue`, `ForwardingOffsetStore`,
     `ForwardingProjectionDeadLetterStore` and `ForwardingOutboxStore` forward every method of
     their port to a delegate and consult a `FaultSchedule` (`failOnce`, `failAt`, `failAlways`,
-    `crashAfter`; `InjectedFaultException`);
+    `crashAfter`; `InjectedFaultException`); `ForwardingCommandBus` does the same for the command
+    bus and is the base class of a bus decorator;
   - recording doubles: `RecordingStreamRuneMetrics` (every metrics call under its `MetricNames`
     meter) and `ScriptedSubscriptionLeadership` (a lease the test grants, denies and revokes);
   - `EventPayloadAssertions` for payload round trips and `SagaEnvelopes` for the envelopes of a

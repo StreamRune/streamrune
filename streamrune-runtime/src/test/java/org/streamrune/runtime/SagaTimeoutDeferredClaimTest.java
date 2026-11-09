@@ -299,7 +299,7 @@ class SagaTimeoutDeferredClaimTest {
 
         assertThat(health.overallStatus()).isEqualTo(Status.UP);
       } finally {
-        timeouts.stop();
+        timeouts.close();
       }
     }
   }

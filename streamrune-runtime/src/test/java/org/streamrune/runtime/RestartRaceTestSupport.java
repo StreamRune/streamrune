@@ -1,7 +1,9 @@
 package org.streamrune.runtime;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.mockito.stubbing.Answer;
 
@@ -59,5 +61,66 @@ final class RestartRaceTestSupport {
       }
       return returnValue;
     };
+  }
+
+  /**
+   * A collaborator answer that records the poll thread, signals {@code entered}, then ignores every
+   * interrupt until the test counts {@code release} down, and returns {@code returnValue} with the
+   * interrupt restored: a poll stuck where an interrupt does not reach it, which outlives any join
+   * bound until it is released.
+   */
+  static Answer<Object> parkIgnoringInterruptsUntilReleased(
+      AtomicReference<Thread> pollThread,
+      CountDownLatch entered,
+      CountDownLatch release,
+      Object returnValue) {
+    return invocation -> {
+      pollThread.set(Thread.currentThread());
+      entered.countDown();
+      boolean interrupted = false;
+      while (true) {
+        try {
+          if (release.await(10, TimeUnit.SECONDS)) {
+            break;
+          }
+        } catch (InterruptedException _) {
+          interrupted = true;
+        }
+      }
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
+      return returnValue;
+    };
+  }
+
+  /**
+   * Calls {@code close()} on two threads at once and waits for both: two shutdown paths, such as a
+   * container's destroy callback and a lifecycle hook, closing one component together.
+   */
+  static void closeConcurrently(AutoCloseable component) throws Exception {
+    var go = new CountDownLatch(1);
+    var failures = new java.util.concurrent.ConcurrentLinkedQueue<Throwable>();
+    List<Thread> closers = new java.util.ArrayList<>();
+    for (int i = 0; i < 2; i++) {
+      closers.add(
+          Thread.ofPlatform()
+              .start(
+                  () -> {
+                    try {
+                      go.await();
+                      component.close();
+                    } catch (Throwable e) {
+                      failures.add(e);
+                    }
+                  }));
+    }
+    go.countDown();
+    for (Thread closer : closers) {
+      closer.join(30_000);
+    }
+    if (!failures.isEmpty()) {
+      throw new AssertionError("a concurrent close() failed", failures.peek());
+    }
   }
 }

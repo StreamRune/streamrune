@@ -35,6 +35,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.SagaForwardFenceDispatchTest.MarkerCapturingBus;
+import org.streamrune.test.ForwardingCommandBus;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
@@ -179,7 +180,72 @@ class SagaForwardFenceBuilderTest {
                 + " process claimed, and nothing undoes it. Build the bus over an event store that"
                 + " fences (PostgresEventStore; in tests InMemoryEventStore.withSagaStore("
                 + "theSagaStore)), or switch the fence off for this runner with"
-                + " SagaRunner.Builder.forwardFence(false).");
+                + " SagaRunner.Builder.forwardFence(false). A decorator in front of a bus that"
+                + " fences forwards sagaFenceStorageIdentity() to it, as ForwardingCommandBus of"
+                + " streamrune-test does.");
+  }
+
+  /** Forwards both execute methods and leaves the two wiring probes to their defaults. */
+  static final class ProbeHidingDecorator implements org.streamrune.core.CommandBus {
+    private final org.streamrune.core.CommandBus delegate;
+
+    ProbeHidingDecorator(org.streamrune.core.CommandBus delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override
+    public <C extends Command> CommandResult execute(C command) {
+      return delegate.execute(command);
+    }
+
+    @Override
+    public <C extends Command> CommandResult execute(
+        C command, org.streamrune.core.types.IdempotencyKey key) {
+      return delegate.execute(command, key);
+    }
+  }
+
+  @Test
+  void aDecoratorThatHidesTheInboxProbe_isRefusedNamingItAndTheDecoratorDuty() {
+    var builder = runner(rows, new ProbeHidingDecorator(busFencingAgainst(rows)));
+
+    assertThatThrownBy(builder::build)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(
+            "saga command dispatch requires idempotent execution, and "
+                + ProbeHidingDecorator.class.getName()
+                + " reports none (CommandBus.supportsIdempotentExecution() is false). Configure a"
+                + " CommandInbox on the CommandBus (VirtualThreadCommandBus.builder()"
+                + ".commandInbox(...)). A decorator in front of such a bus forwards"
+                + " supportsIdempotentExecution() and sagaFenceStorageIdentity() to it, as"
+                + " ForwardingCommandBus of streamrune-test does.");
+  }
+
+  @Test
+  void aTimeoutRunnerRefusesTheSameDecorator_withTheSameMessage() {
+    var decorator = new ProbeHidingDecorator(busFencingAgainst(rows));
+    var builder =
+        SagaTimeoutRunner.<State>builder()
+            .decider(new OrderSaga())
+            .sagaType(org.streamrune.core.types.SagaType.fromClass(State.class))
+            .sagaStore(rows)
+            .commandBus(decorator)
+            .stepLock(new SagaStepLock());
+
+    assertThatThrownBy(builder::build)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageStartingWith(
+            "saga command dispatch requires idempotent execution, and "
+                + ProbeHidingDecorator.class.getName())
+        .hasMessageContaining("ForwardingCommandBus");
+  }
+
+  @Test
+  void aForwardingCommandBus_isAcceptedWhereverItsDelegateIs() {
+    SagaRunner<State> runner =
+        runner(rows, new ForwardingCommandBus(busFencingAgainst(rows))).build();
+
+    assertThat(SagaForwardFenceDefault.effectiveOf(runner)).isTrue();
   }
 
   @Test

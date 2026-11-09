@@ -204,7 +204,7 @@ class ListenConnectionSilentPeerTest {
                     .reconnectGrace(1_000));
     sub.start();
     try {
-      health.register("silent-peer-hybrid", sub);
+      health.register(SubscriptionName.of("silent-peer-hybrid"), sub);
       await(() -> sub.notificationListener().isListening(), "the listener never connected");
       assertEquals(PushPathStatus.LIVE, sub.pushPathStatus());
 

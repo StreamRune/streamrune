@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.streamrune.core.Internal;
 import org.streamrune.core.types.EventType;
 
 /**
@@ -12,7 +13,10 @@ import org.streamrune.core.types.EventType;
  * <p>For example, if an event is stored as V1 and the current version is V3, the chain will apply
  * transformations V1 to V2 then V2 to V3 sequentially. If no upcaster is registered for a given
  * event type, the data is returned unchanged.
+ *
+ * @hidden
  */
+@Internal
 public final class UpcasterChain {
 
   private final Map<EventType, EventUpcaster> upcasters;

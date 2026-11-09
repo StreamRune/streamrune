@@ -1,6 +1,5 @@
 package org.streamrune.spring;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -49,7 +48,7 @@ import org.streamrune.runtime.ScheduledProjectionRunner;
  *
  * <p>Every registration carries the {@link ProjectionDeliveryMode} its {@code
  * ProjectionConfig.deliveryMode()} declares. Each runner's {@link AtomicBatchProcessor} is chosen
- * by {@link ProjectionProcessorResolution#select} from what its registrations declare and from
+ * by {@code ProjectionProcessorResolution.select} from what its registrations declare and from
  * whether the leadership bean needs its epoch honoured — never from the presence of a {@code
  * DataSource} or of a processor bean: a runner of {@code AT_LEAST_ONCE_IDEMPOTENT} registrations
  * without leadership runs on {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()}. An INLINE
@@ -70,11 +69,11 @@ public class ProjectionAutoConfig {
    * match, so a non-canonical truthy spelling ({@code on}, {@code yes}, {@code 1}) did not match
    * {@code havingValue} and therefore silently DISABLED this whole auto-config — the opposite of
    * the operator's intent, and inconsistent with Quarkus ({@code ProjectionProducer}, already
-   * routed through {@link org.streamrune.integration.RelaxedBoolean}) and Micronaut, whose
-   * {@code @Requires(notEquals = "false")} kept those same spellings ENABLED. Routes the property
-   * through the same {@link org.streamrune.integration.RelaxedBoolean} parser every other
-   * StreamRune boolean knob uses, so all three runtimes agree on every spelling. Absent (or blank)
-   * defaults to enabled, mirroring the old {@code matchIfMissing = true}.
+   * routed through {@code RelaxedBoolean}) and Micronaut, whose {@code @Requires(notEquals =
+   * "false")} kept those same spellings ENABLED. Routes the property through the same {@code
+   * RelaxedBoolean} parser every other StreamRune boolean knob uses, so all three runtimes agree on
+   * every spelling. Absent (or blank) defaults to enabled, mirroring the old {@code matchIfMissing
+   * = true}.
    */
   static final class AutoDiscoveryEnabledCondition implements Condition {
     @Override
@@ -108,16 +107,13 @@ public class ProjectionAutoConfig {
     if (entries.isEmpty()) {
       return null;
     }
-    // streamrune.polling-interval-ms / polling-jitter-ms drive the catch-up polling cadence of each
+    // streamrune.polling-interval / polling-jitter drive the catch-up polling cadence of each
     // projection's event subscription. listenNotifyEnabled=true only takes effect if a
     // HybridEventSubscription is wired via a subscription factory; the default
     // MultiProjectionRunner path builds a PollingEventSubscription, which has no LISTEN/NOTIFY
     // push, so the flag is dormant there.
     var subscriptionConfig =
-        new SubscriptionConfig(
-            true,
-            Duration.ofMillis(properties.pollingIntervalMs()),
-            Duration.ofMillis(properties.pollingJitterMs()));
+        new SubscriptionConfig(true, properties.pollingInterval(), properties.pollingJitter());
     var builder =
         MultiProjectionRunner.builder()
             .eventStore(eventStore)
@@ -157,7 +153,8 @@ public class ProjectionAutoConfig {
       requireNoDlqStrategy(entries);
     }
     for (var e : entries) {
-      builder.register(e.name(), e.projection(), e.errorStrategy(), e.deliveryMode());
+      builder.register(
+          ProjectionName.of(e.name()), e.projection(), e.errorStrategy(), e.deliveryMode());
     }
     return builder.build();
   }
@@ -234,7 +231,12 @@ public class ProjectionAutoConfig {
       if (e.cron() == null || e.cron().isBlank()) {
         throw new IllegalStateException(ProjectionDiscoveryMessages.cronRequired(e.name()));
       }
-      builder.register(e.name(), e.projection(), e.cron(), e.errorStrategy(), e.deliveryMode());
+      builder.register(
+          ProjectionName.of(e.name()),
+          e.projection(),
+          e.cron(),
+          e.errorStrategy(),
+          e.deliveryMode());
     }
     return builder.build();
   }
@@ -259,12 +261,13 @@ public class ProjectionAutoConfig {
   }
 
   /**
-   * Runs innermost in the command interceptor chain (see the {@code ORDER_*} constants on {@link
-   * StreamRuneAutoConfiguration}): {@code after()} executes in reverse order, so inline projections
-   * are applied first once events are committed.
+   * Runs innermost in the command interceptor chain (see the {@code ORDER_*} constants of {@link
+   * org.streamrune.runtime.CommandInterceptorOrdering}): {@code after()} executes in reverse order,
+   * so inline projections are applied first once events are committed.
    */
   @Bean
-  @org.springframework.core.annotation.Order(StreamRuneAutoConfiguration.ORDER_INLINE_PROJECTION)
+  @org.springframework.core.annotation.Order(
+      org.streamrune.runtime.CommandInterceptorOrdering.ORDER_INLINE_PROJECTION)
   @ConditionalOnMissingBean
   public InlineProjectionInterceptor streamRuneInlineProjectionInterceptor(
       ApplicationContext ctx, Environment env, ObjectProvider<StreamRuneMetrics> metricsProvider) {
@@ -281,7 +284,7 @@ public class ProjectionAutoConfig {
       log.info(ProjectionProcessorResolution.INLINE_INFO, LogSanitizer.sanitizeForLog(e.name()));
       metricsProvider.ifAvailable(
           m -> m.recordProjectionDeliveryMode(ProjectionName.of(e.name()), e.deliveryMode()));
-      builder.register(e.name(), e.projection());
+      builder.register(ProjectionName.of(e.name()), e.projection());
     }
     return builder.build();
   }

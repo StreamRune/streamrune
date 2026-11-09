@@ -227,7 +227,7 @@ public final class CryptoShreddingModule extends SimpleModule {
    * String.valueOf}) but decryption always produces a String, making every subsequent read of that
    * event type fail. A dangling subjectId reference would otherwise only surface on first use.
    *
-   * <p>Package-private (not {@code private}) so {@link CryptoConfigValidator} can reuse this exact
+   * <p>Package-private (not {@code private}) so {@code CryptoConfigValidator} can reuse this exact
    * scan for its startup-time "no CryptoEngine configured" check instead of duplicating the
    * reflection over {@link RecordComponent}s.
    */

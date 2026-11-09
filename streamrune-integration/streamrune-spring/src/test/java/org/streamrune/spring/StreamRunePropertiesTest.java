@@ -30,10 +30,10 @@ class StreamRunePropertiesTest {
     var p = defaults();
     assertEquals(100, p.snapshotEveryNEvents());
     assertEquals(3, p.retryMaxAttempts());
-    assertEquals(50L, p.retryInitialDelayMs());
+    assertEquals(Duration.ofMillis(50), p.retryInitialDelay());
     assertEquals(2.0, p.retryBackoffMultiplier());
-    assertEquals(5000L, p.pollingIntervalMs());
-    assertEquals(1000L, p.pollingJitterMs());
+    assertEquals(Duration.ofSeconds(5), p.pollingInterval());
+    assertEquals(Duration.ofSeconds(1), p.pollingJitter());
     assertEquals(Duration.ofSeconds(5), p.lockTimeout());
     assertEquals(1024, p.stripeCount());
     assertEquals(5, p.circuitBreakerFailureThreshold());
@@ -49,24 +49,55 @@ class StreamRunePropertiesTest {
             Map.of(
                 "streamrune.snapshot-every-n-events", "10",
                 "streamrune.retry-max-attempts", "1",
-                "streamrune.retry-initial-delay-ms", "1",
+                "streamrune.retry-initial-delay", "1ms",
                 "streamrune.retry-backoff-multiplier", "1.0",
-                "streamrune.polling-interval-ms", "100",
-                "streamrune.polling-jitter-ms", "10",
+                "streamrune.polling-interval", "100ms",
+                "streamrune.polling-jitter", "10ms",
                 "streamrune.lock-timeout", "500ms",
                 "streamrune.stripe-count", "8",
                 "streamrune.circuit-breaker-failure-threshold", "3",
                 "streamrune.circuit-breaker-cooldown", "10s"));
     assertEquals(10, p.snapshotEveryNEvents());
     assertEquals(1, p.retryMaxAttempts());
-    assertEquals(1L, p.retryInitialDelayMs());
+    assertEquals(Duration.ofMillis(1), p.retryInitialDelay());
     assertEquals(1.0, p.retryBackoffMultiplier());
-    assertEquals(100L, p.pollingIntervalMs());
-    assertEquals(10L, p.pollingJitterMs());
+    assertEquals(Duration.ofMillis(100), p.pollingInterval());
+    assertEquals(Duration.ofMillis(10), p.pollingJitter());
     assertEquals(Duration.ofMillis(500), p.lockTimeout());
     assertEquals(8, p.stripeCount());
     assertEquals(3, p.circuitBreakerFailureThreshold());
     assertEquals(Duration.ofSeconds(10), p.circuitBreakerCooldown());
+  }
+
+  /**
+   * The six interval keys are durations: each binds from the short form the configuration reference
+   * writes ({@code 5s}) and from ISO-8601 ({@code PT5S}) alike.
+   */
+  @Test
+  void theIntervalKeysBindTheShortFormAndIso8601() {
+    for (String value : new String[] {"5s", "PT5S"}) {
+      var p =
+          bind(
+              Map.of(
+                  "streamrune.retry-initial-delay", value,
+                  "streamrune.polling-interval", value,
+                  "streamrune.polling-jitter", value,
+                  "streamrune.dead-letter.retry-interval", value,
+                  "streamrune.outbox.flush-interval", value,
+                  "streamrune.outbox.retry-initial-delay", value));
+      Duration five = Duration.ofSeconds(5);
+      assertEquals(five, p.retryInitialDelay(), value);
+      assertEquals(five, p.pollingInterval(), value);
+      assertEquals(five, p.pollingJitter(), value);
+      assertEquals(five, p.deadLetter().retryInterval(), value);
+      assertEquals(five, p.outbox().flushInterval(), value);
+      assertEquals(five, p.outbox().retryInitialDelay(), value);
+    }
+    assertEquals(
+        2.5,
+        bind(Map.of("streamrune.outbox.retry-backoff-multiplier", "2.5"))
+            .outbox()
+            .retryBackoffMultiplier());
   }
 
   @Test
@@ -140,7 +171,9 @@ class StreamRunePropertiesTest {
     var props = defaults();
     assertThat(props.outbox().enabled()).isFalse();
     assertThat(props.outbox().batchSize()).isEqualTo(100);
-    assertThat(props.outbox().flushIntervalMs()).isEqualTo(5000L);
+    assertThat(props.outbox().flushInterval()).isEqualTo(Duration.ofSeconds(5));
+    assertThat(props.outbox().retryInitialDelay()).isEqualTo(Duration.ofSeconds(1));
+    assertThat(props.outbox().retryBackoffMultiplier()).isEqualTo(2.0);
     assertThat(props.outbox().retentionMaxAge()).isEqualTo(Duration.ofDays(7));
   }
 
@@ -212,7 +245,7 @@ class StreamRunePropertiesTest {
     var props = defaults();
     assertThat(props.deadLetter().enabled()).isTrue();
     assertThat(props.deadLetter().maxRetries()).isEqualTo(5);
-    assertThat(props.deadLetter().retryIntervalMs()).isEqualTo(60000L);
+    assertThat(props.deadLetter().retryInterval()).isEqualTo(Duration.ofMinutes(1));
   }
 
   @Test

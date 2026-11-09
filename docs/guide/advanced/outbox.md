@@ -134,7 +134,7 @@ Receiver-side: check `X-Outbox-Entry-Id` header for idempotency deduplication.
 
 Two shipped publishers deliver to a broker instead of an HTTP endpoint. Both `implements OutboxPublisher`, are constructed via `builder()`, and do **not** own their producer/channel — you create and close it.
 
-**Kafka** (`org.streamrune.kafka.KafkaOutboxPublisher`, module `streamrune-outbox/streamrune-kafka-outbox`) sends each entry synchronously (`producer.send(record).get()`) so the poller can retry on failure:
+**Kafka** (`org.streamrune.outbox.kafka.KafkaOutboxPublisher`, module `streamrune-outbox/streamrune-kafka-outbox`) sends each entry synchronously (`producer.send(record).get()`) so the poller can retry on failure:
 
 ```java
 OutboxPublisher publisher = KafkaOutboxPublisher.builder()
@@ -159,7 +159,7 @@ The Kafka message key is the entry's `streamId` in its text form, `<type>:<id>` 
 
 Note that `sendTimeout` bounds only the `get()`. `send()` runs first and blocks on its own for up to `max.block.ms` (**60s** default) while waiting for topic metadata or accumulator space, so one `publish` call can occupy the relay thread for `max.block.ms + sendTimeout`. That pre-send block is also why the Kafka [in-flight horizon](#the-lease-must-exceed-the-publishers-in-flight-horizon-enforced-at-wiring) is `max.block.ms + delivery.timeout.ms`, not `delivery.timeout.ms` alone.
 
-**RabbitMQ** (`org.streamrune.rabbitmq.RabbitMqOutboxPublisher`, module `streamrune-outbox/streamrune-rabbitmq-outbox`) publishes with broker confirms. The channel is put into confirm mode at build time, so **`build()` throws `IOException`** and the channel must be owned exclusively by this publisher. It must also **stay in confirm mode, with the listeners `build()` registers, for its whole lifetime**:
+**RabbitMQ** (`org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher`, module `streamrune-outbox/streamrune-rabbitmq-outbox`) publishes with broker confirms. The channel is put into confirm mode at build time, so **`build()` throws `IOException`** and the channel must be owned exclusively by this publisher. It must also **stay in confirm mode, with the listeners `build()` registers, for its whole lifetime**:
 
 ```java
 // build() enables publisher confirms via channel.confirmSelect() -> throws IOException
@@ -251,8 +251,8 @@ Because an in-flight failure **holds the claim**, a sustained post-hand-off outa
 | Property | Default | Notes |
 |---|---|---|
 | `streamrune.outbox.retry-max-attempts` | `10` | Per-entry attempts before terminal `FAILED` |
-| `streamrune.outbox.retry-initial-delay-ms` | `1000` | Initial backoff (ms); grows by the multiplier, capped at 60s — for a transport outage it is also the first (fast) retry before the cadence escalates |
-| `streamrune.outbox.retry-multiplier` | `2.0` | Exponential backoff multiplier |
+| `streamrune.outbox.retry-initial-delay` | `1s` | Initial backoff; grows by the multiplier, capped at 60s — for a transport outage it is also the first (fast) retry before the cadence escalates |
+| `streamrune.outbox.retry-backoff-multiplier` | `2.0` | Exponential backoff multiplier |
 
 ### Sizing the claim lease
 

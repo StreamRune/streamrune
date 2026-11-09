@@ -34,6 +34,7 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.test.InMemoryEventStore;
@@ -201,7 +202,7 @@ class CommandInterceptorReentrancyTest {
             .interceptors(
                 new AuditCommandInterceptor(store),
                 InlineProjectionInterceptor.builder()
-                    .register("process-manager", processManager)
+                    .register(ProjectionName.of("process-manager"), processManager)
                     .build())
             .register(
                 AGG, OuterCommand.class, cmd -> AggregateId.of(cmd.id()), new OneEventDecider<>())
@@ -348,7 +349,7 @@ class CommandInterceptorReentrancyTest {
             .locker(nonReentrant)
             .interceptors(
                 InlineProjectionInterceptor.builder()
-                    .register("process-manager", processManager)
+                    .register(ProjectionName.of("process-manager"), processManager)
                     .build())
             .register(
                 AGG, OuterCommand.class, cmd -> AggregateId.of(cmd.id()), new OneEventDecider<>())
@@ -390,7 +391,7 @@ class CommandInterceptorReentrancyTest {
             .locker(locker)
             .interceptors(
                 InlineProjectionInterceptor.builder()
-                    .register("process-manager", processManager)
+                    .register(ProjectionName.of("process-manager"), processManager)
                     .build())
             .register(
                 OUTER, OuterCommand.class, cmd -> AggregateId.of(cmd.id()), new OneEventDecider<>())
@@ -435,7 +436,7 @@ class CommandInterceptorReentrancyTest {
             .locker(nonReentrant)
             .interceptors(
                 InlineProjectionInterceptor.builder()
-                    .register("process-manager", processManager)
+                    .register(ProjectionName.of("process-manager"), processManager)
                     .build())
             .register(
                 AGG, OuterCommand.class, cmd -> AggregateId.of(cmd.id()), new OneEventDecider<>())

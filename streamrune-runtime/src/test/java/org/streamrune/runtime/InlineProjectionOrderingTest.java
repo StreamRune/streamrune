@@ -22,6 +22,7 @@ import org.streamrune.core.projection.Projection;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
@@ -97,7 +98,10 @@ class InlineProjectionOrderingTest {
           }
         };
 
-    var inline = InlineProjectionInterceptor.builder().register("probe", projection).build();
+    var inline =
+        InlineProjectionInterceptor.builder()
+            .register(ProjectionName.of("probe"), projection)
+            .build();
     var store = new InMemoryEventStore();
     var aggregateId = AggregateId.of("same");
 
@@ -171,7 +175,10 @@ class InlineProjectionOrderingTest {
   void idempotentReplay_doesNotReapplyInlineProjection() {
     var calls = new AtomicInteger();
     Projection projection = batch -> calls.incrementAndGet();
-    var inline = InlineProjectionInterceptor.builder().register("probe", projection).build();
+    var inline =
+        InlineProjectionInterceptor.builder()
+            .register(ProjectionName.of("probe"), projection)
+            .build();
     var inbox = new InMemoryCommandInbox();
     var store = new InMemoryEventStore().withCommandInbox(inbox);
     var aggregateId = AggregateId.of("replay-agg");

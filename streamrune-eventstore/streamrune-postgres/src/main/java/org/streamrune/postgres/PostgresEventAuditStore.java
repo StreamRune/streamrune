@@ -68,7 +68,7 @@ public final class PostgresEventAuditStore implements EventAuditStore {
     try (PreparedStatement ps = conn.prepareStatement(INSERT)) {
       for (EventAuditEntry entry : entries) {
         ps.setString(1, entry.eventId().value());
-        ps.setString(2, entry.eventType().name());
+        ps.setString(2, entry.eventType().value());
         PostgresStreamKeys.bind(ps, 3, entry.streamId());
         ps.setLong(5, entry.version().value());
         ps.setString(6, entry.commandId().value());

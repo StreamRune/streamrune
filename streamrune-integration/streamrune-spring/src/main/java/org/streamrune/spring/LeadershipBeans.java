@@ -19,7 +19,7 @@ final class LeadershipBeans {
    * there is none.
    *
    * @throws IllegalStateException with two or more leadership beans and none {@code @Primary}; the
-   *     message names their classes (see {@link SubscriptionLeadershipResolution#ambiguous})
+   *     message names their classes (see {@code SubscriptionLeadershipResolution.ambiguous})
    */
   static SubscriptionLeadership resolve(ObjectProvider<SubscriptionLeadership> provider) {
     SubscriptionLeadership unique = provider.getIfUnique();

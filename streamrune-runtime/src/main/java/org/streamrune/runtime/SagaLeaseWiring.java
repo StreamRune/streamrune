@@ -3,12 +3,16 @@ package org.streamrune.runtime;
 import java.util.Collection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.Internal;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 
 /**
  * Startup checks of how saga runners are wired to the application's {@link SubscriptionLeadership}.
  * The integrations call it where they already look at every runner.
+ *
+ * @hidden
  */
+@Internal
 public final class SagaLeaseWiring {
 
   private static final Logger LOG = LoggerFactory.getLogger(SagaLeaseWiring.class);

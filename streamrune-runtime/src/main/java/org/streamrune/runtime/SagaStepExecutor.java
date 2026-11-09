@@ -920,7 +920,8 @@ final class SagaStepExecutor<S extends SagaState> {
    * framework or of the wiring around the bus, to be reported with the bus's refusal line, which
    * names the bindings it read. A refusal that persists holds the subscription — its poll loop
    * reports every failed delivery and its health records it — until the saga's deadline lets the
-   * timeout runner claim it.
+   * timeout runner claim it; it ends as the saga's timeout, or, for a saga that declares none
+   * ({@code SagaDecider.timeout()} empty), holds the saga subscription until the cause is fixed.
    */
   private RuntimeException forwardBindingRefused(
       SagaId sagaId, int index, SagaCommand sagaCommand, Exception failure) {

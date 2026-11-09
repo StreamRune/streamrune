@@ -165,8 +165,13 @@ CREATE TABLE dead_letter_queue (
 );
 
 CREATE INDEX idx_dlq_published_at ON dead_letter_queue (published_at DESC);
--- Serves the command bus's lookup of the entries stored under a key before it stores another.
-CREATE INDEX idx_dlq_idempotency_key ON dead_letter_queue (idempotency_key)
+-- One entry per command under a key. A command is its type and its stream, what the command inbox
+-- matches a key's row against. PostgresDeadLetterQueue inserts with ON CONFLICT DO NOTHING on this
+-- index, so two replicas that dead-letter the same keyed command at once store one row; it also
+-- serves the command bus's lookup of the entries stored under a key.
+CREATE UNIQUE INDEX idx_dlq_idempotency_key
+    ON dead_letter_queue (idempotency_key, command_type, aggregate_type, aggregate_id)
+    NULLS NOT DISTINCT
     WHERE idempotency_key IS NOT NULL;
 
 

@@ -23,10 +23,13 @@ dependencies {
     implementation(libs.jackson.databind)
     implementation(libs.jackson.datatype.jsr310)
     implementation(libs.postgresql)
-    // api, not implementation: a PUBLIC method takes a HikariCP type —
-    // PgAdvisoryLocker.withDedicatedPool(..., MetricsTrackerFactory) — so a consumer calling it
-    // needs HikariCP resolvable on ITS OWN compile classpath, which an `implementation` dependency
-    // (Maven `runtime` scope) does not give it.
+    // api, not implementation, by decision: HikariCP is the pool this module builds (the LISTEN
+    // pool, the HikariCP convenience of PgAdvisoryLocker.withDedicatedPool), and one public method
+    // takes a HikariCP type — withDedicatedPool(..., MetricsTrackerFactory), kept so an application
+    // gets the lock pool's metrics in one call — so a consumer calling it needs HikariCP resolvable
+    // on ITS OWN compile classpath, which an `implementation` dependency (Maven `runtime` scope)
+    // does not give it. No other public signature names a HikariCP type: withDedicatedPool(DataSource)
+    // takes a pool of any library and createListenDataSource returns ListenDataSource.
     api(libs.hikaricp)
     // GraalVM native-image compatibility: HikariConfig.setMetricRegistry / setHealthCheckRegistry
     // do `instanceof` checks against optional Dropwizard-metrics (codahale) and Micrometer types.

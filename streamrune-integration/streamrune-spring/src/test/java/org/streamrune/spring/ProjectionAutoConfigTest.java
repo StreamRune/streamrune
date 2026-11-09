@@ -80,8 +80,8 @@ class ProjectionAutoConfigTest {
         .withUserConfiguration(ContinuousBean.class)
         .withPropertyValues(
             "streamrune.projections.auto-discovery.enabled=true",
-            "streamrune.polling-interval-ms=123",
-            "streamrune.polling-jitter-ms=45")
+            "streamrune.polling-interval=123ms",
+            "streamrune.polling-jitter=PT0.045S")
         .run(
             ctx -> {
               var mpr = ctx.getBean(MultiProjectionRunner.class);
@@ -853,7 +853,8 @@ class ProjectionAutoConfigTest {
           .eventStore(es)
           .offsetStore(os)
           .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
-          .register("user-cont", cont, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+          .register(
+              ProjectionName.of("user-cont"), cont, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
           .build();
     }
   }

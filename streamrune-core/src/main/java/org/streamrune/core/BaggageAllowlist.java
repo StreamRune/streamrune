@@ -37,7 +37,10 @@ import java.util.Set;
  * framework's {@code streamrune.metadata.baggage-allowlist} property (the list of permitted keys).
  * Listing {@code role} there has no effect: the request filters' role rule replaces whatever the
  * baggage carried under it.
+ *
+ * @hidden
  */
+@Internal
 public final class BaggageAllowlist {
 
   /**

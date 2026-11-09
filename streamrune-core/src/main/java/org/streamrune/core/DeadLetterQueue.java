@@ -24,7 +24,8 @@ import org.streamrune.core.types.UserId;
  * Instant)} address entries by it. An entry also records the idempotency key its command ran under,
  * and {@link #findByIdempotencyKey(IdempotencyKey)} finds the entries stored under a key: a command
  * bus that meets an entry for a keyed command's key stores no second one when the command fails
- * again under that key.
+ * again under that key. A queue that looks entries up by key also holds at most one entry per
+ * command under a key — see {@link #publish}.
  *
  * <p><b>Optional capabilities.</b> The methods that back an optional feature — scheduled DLQ retry
  * ({@link #updateAttempts}, {@link #readRetryable}), the depth gauge ({@link #countPending}),
@@ -117,6 +118,15 @@ public interface DeadLetterQueue {
    * #updateAttempts(CommandId, int, Instant)} instead of publishing it a second time; when a keyed
    * command fails again under a key the queue holds an entry of the same command for ({@link
    * #findByIdempotencyKey}), the command bus publishes nothing.
+   *
+   * <p><b>One entry per command under a key.</b> A queue that overrides {@link
+   * #findByIdempotencyKey} stores nothing for a keyed request when it already holds an entry of the
+   * same command — the same {@code commandType} and {@code streamId} — under the same key, and it
+   * decides so atomically: of two such requests published at the same moment (two replicas that
+   * dead-letter the same keyed send) one is stored. The publish that stored nothing returns
+   * normally; its caller reads the entry that holds the command with {@link #findByIdempotencyKey},
+   * as the command bus does after every keyed publish. The PostgreSQL implementation enforces it
+   * with a unique index.
    *
    * @param request the dead letter publish request containing all failure details
    */
@@ -236,8 +246,9 @@ public interface DeadLetterQueue {
    * holds an entry of the same command (its type and its stream) under the key, the command failed
    * again after a send under that key was dead-lettered, so the bus stores nothing and answers the
    * caller with that entry. The client that re-sends under its key during an outage therefore adds
-   * no entry per re-send. Two sends that fail at the same instant can still store one entry each;
-   * the command inbox deduplicates their replays.
+   * no entry per re-send. Two sends that fail at the same instant store one entry too: the queue
+   * keeps one entry per command under a key ({@link #publish}), and the bus reads the entry back
+   * after it publishes, so both callers are answered with the entry that is stored.
    *
    * <p>The default implementation throws {@link UnsupportedOperationException}: the lookup is an
    * optional capability. Without it the bus stores an entry for every failed send, as it does for

@@ -10,7 +10,7 @@ import org.springframework.lang.Nullable;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.crypto.postgres.JdbcForgottenSubjectStore;
-import org.streamrune.vault.VaultCryptoEngine;
+import org.streamrune.crypto.vault.VaultCryptoEngine;
 
 @Configuration
 @ConditionalOnClass(CryptoEngine.class)

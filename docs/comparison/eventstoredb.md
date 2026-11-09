@@ -103,7 +103,7 @@ client.subscribeToAll(
 **StreamRune:**
 ```java
 var subscription = PollingEventSubscription.builder()
-    .subscriptionName("order-projection")
+    .subscriptionName(SubscriptionName.of("order-projection"))
     .eventStore(eventStore)
     .offsetStore(offsetStore)
     .listener(batch -> batch.forEach(this::handleEnvelope))

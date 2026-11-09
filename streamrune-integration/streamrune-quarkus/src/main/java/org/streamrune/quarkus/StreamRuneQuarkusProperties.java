@@ -31,24 +31,24 @@ public interface StreamRuneQuarkusProperties {
   @WithDefault("3")
   int retryMaxAttempts();
 
-  /** Initial delay in milliseconds before the first command retry. */
-  @WithDefault("50")
-  long retryInitialDelayMs();
+  /** Delay before the first command retry. */
+  @WithDefault("PT0.05S")
+  Duration retryInitialDelay();
 
   /** Multiplier applied to the retry delay after each failed attempt. */
   @WithDefault("2.0")
   double retryBackoffMultiplier();
 
   /**
-   * Catch-up polling interval in milliseconds for the event subscriptions of auto-discovered
-   * CONTINUOUS projections.
+   * Catch-up polling interval for the event subscriptions of auto-discovered CONTINUOUS
+   * projections.
    */
-  @WithDefault("5000")
-  long pollingIntervalMs();
+  @WithDefault("PT5S")
+  Duration pollingInterval();
 
-  /** Random jitter added to the polling interval, in milliseconds. */
-  @WithDefault("1000")
-  long pollingJitterMs();
+  /** Random jitter added to the polling interval. */
+  @WithDefault("PT1S")
+  Duration pollingJitter();
 
   /** Maximum time to wait for an aggregate lock. */
   @WithDefault("PT5S")
@@ -245,9 +245,9 @@ public interface StreamRuneQuarkusProperties {
     @WithDefault("100")
     int batchSize();
 
-    /** Outbox poll interval, in milliseconds. */
-    @WithDefault("5000")
-    long flushIntervalMs();
+    /** Interval between two polls of the outbox relay. */
+    @WithDefault("PT5S")
+    Duration flushInterval();
 
     /**
      * How long to keep delivered outbox entries before the {@link
@@ -276,15 +276,15 @@ public interface StreamRuneQuarkusProperties {
     int retryMaxAttempts();
 
     /**
-     * Initial retry backoff in milliseconds; grows by {@link #retryMultiplier} per attempt, capped
-     * at 60s. Default 1000.
+     * Initial retry backoff; grows by {@link #retryBackoffMultiplier} per attempt, capped at 60s.
+     * Default 1s.
      */
-    @WithDefault("1000")
-    long retryInitialDelayMs();
+    @WithDefault("PT1S")
+    Duration retryInitialDelay();
 
-    /** Exponential backoff multiplier applied to {@link #retryInitialDelayMs} each attempt. */
+    /** Exponential backoff multiplier applied to {@link #retryInitialDelay} each attempt. */
     @WithDefault("2.0")
-    double retryMultiplier();
+    double retryBackoffMultiplier();
   }
 
   /** Command-inbox section, {@code streamrune.inbox.*}. */
@@ -316,9 +316,9 @@ public interface StreamRuneQuarkusProperties {
     @WithDefault("5")
     int maxRetries();
 
-    /** Interval between dead-letter retry polls, in milliseconds. */
-    @WithDefault("60000")
-    long retryIntervalMs();
+    /** Interval between dead-letter retry polls. */
+    @WithDefault("PT60S")
+    Duration retryInterval();
 
     /**
      * How long to keep command dead-letter-queue entries (which hold command payloads, encrypted

@@ -15,7 +15,9 @@ class ProjectionRegistrationTest {
 
   @Test
   void threeArgForm_defaultsToHalt() {
-    var reg = new ProjectionRegistration("orders", P, ProjectionDeliveryMode.TRANSACTIONAL_LOCAL);
+    var reg =
+        new ProjectionRegistration(
+            ProjectionName.of("orders"), P, ProjectionDeliveryMode.TRANSACTIONAL_LOCAL);
     assertThat(reg.name()).isEqualTo(ProjectionName.of("orders"));
     assertThat(reg.errorStrategy()).isEqualTo(ProjectionErrorStrategy.HALT);
     assertThat(reg.deliveryMode()).isEqualTo(ProjectionDeliveryMode.TRANSACTIONAL_LOCAL);
@@ -25,7 +27,7 @@ class ProjectionRegistrationTest {
   void fourArgForm_carriesStrategyAndMode() {
     var reg =
         new ProjectionRegistration(
-            "orders",
+            ProjectionName.of("orders"),
             P,
             ProjectionErrorStrategy.DLQ,
             ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT);
@@ -35,7 +37,10 @@ class ProjectionRegistrationTest {
 
   @Test
   void nullModeIsRefused_byBothRecords() {
-    assertThatThrownBy(() -> new ProjectionRegistration("orders", P, (ProjectionDeliveryMode) null))
+    assertThatThrownBy(
+            () ->
+                new ProjectionRegistration(
+                    ProjectionName.of("orders"), P, (ProjectionDeliveryMode) null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("deliveryMode is required");
     assertThatThrownBy(

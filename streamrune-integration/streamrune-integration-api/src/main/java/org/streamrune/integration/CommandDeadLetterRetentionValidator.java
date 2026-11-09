@@ -1,6 +1,7 @@
 package org.streamrune.integration;
 
 import java.time.Duration;
+import org.streamrune.core.Internal;
 
 /**
  * Refuses a configuration in which a command dead-letter entry can outlive the command-inbox row
@@ -25,7 +26,10 @@ import java.time.Duration;
  * inbox can never be outlived (always valid); a never-pruned dead-letter queue outlives any finite
  * inbox window (refused). Mirrors {@link SagaRetentionValidator#validateDeadLetterRetention} for
  * the saga dead-letter store.
+ *
+ * @hidden
  */
+@Internal
 public final class CommandDeadLetterRetentionValidator {
 
   private CommandDeadLetterRetentionValidator() {}

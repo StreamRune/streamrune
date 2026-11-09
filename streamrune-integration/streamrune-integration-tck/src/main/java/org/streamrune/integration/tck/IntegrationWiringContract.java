@@ -128,7 +128,7 @@ public abstract class IntegrationWiringContract {
   /**
    * With the outbox enabled, an outbox store, and neither an {@code OutboxPublisher} nor an
    * application's {@code OutboxPoller}, nothing would relay the entries the event store writes: the
-   * start is refused with the message of {@link OutboxWiringMessages#noPublisher()}.
+   * start is refused with the message of {@code OutboxWiringMessages.noPublisher}.
    */
   @Test
   public void outboxEnabledWithoutRelayRefusesStart() {
@@ -435,7 +435,7 @@ public abstract class IntegrationWiringContract {
   @Test
   public void shutdownStopsRunnersBeforeTheEventStoreCloses() throws InterruptedException {
     Map<String, String> polling =
-        Map.of("streamrune.polling-interval-ms", "20", "streamrune.polling-jitter-ms", "0");
+        Map.of("streamrune.polling-interval", "PT0.02S", "streamrune.polling-jitter", "PT0S");
     assertRunnersStopBeforeTheDatabaseCloses(polling);
     Map<String, String> withoutLease = new LinkedHashMap<>(polling);
     withoutLease.put("streamrune.subscription.single-active-consumer.enabled", "false");

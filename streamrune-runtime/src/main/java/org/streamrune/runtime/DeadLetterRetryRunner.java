@@ -19,6 +19,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.event.Level;
@@ -39,6 +40,7 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.crypto.CryptoConfigValidator;
 import org.streamrune.crypto.CryptoShreddingModule;
 
@@ -175,6 +177,11 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   private static final long CLOSE_JOIN_TIMEOUT_MS = 30_000L;
 
   /**
+   * The join bound {@link #close()} uses; {@link #CLOSE_JOIN_TIMEOUT_MS} unless a test shrinks it.
+   */
+  private volatile long closeJoinTimeoutMs = CLOSE_JOIN_TIMEOUT_MS;
+
+  /**
    * How many times {@code batchSize} the poll over-fetches retry-eligible rows so a page of
    * not-yet-due entries at the head cannot starve due entries behind them. The store returns rows
    * least-recently-active first (most-likely-due first), so due entries concentrate at the front of
@@ -186,7 +193,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
    * The single-active-consumer name this runner coordinates on. There is exactly one dead-letter
    * retry consumer per deployment, so the name is a fixed constant rather than configurable.
    */
-  static final String CONSUMER_NAME = "dead-letter-retry";
+  static final SubscriptionName CONSUMER_NAME = SubscriptionName.of("dead-letter-retry");
 
   /** What one replay of a dead-letter entry did. */
   public enum RetryOutcome {
@@ -265,6 +272,10 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   private final AtomicBoolean nothingAutomaticWarned = new AtomicBoolean(false);
   private volatile boolean running;
   private volatile Thread pollThread;
+
+  /** Serializes {@link #close()}. */
+  private final ReentrantLock closeLock = new ReentrantLock();
+
   // Set false the first time countPending() throws UnsupportedOperationException (a store that does
   // not support counting), so the depth gauge degrades gracefully without retrying every cycle.
   private volatile boolean backlogSamplingSupported = true;
@@ -371,9 +382,22 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
 
   @Override
   public void close() {
+    closeLock.lock();
+    try {
+      closeSerially();
+    } finally {
+      closeLock.unlock();
+    }
+  }
+
+  /**
+   * The body of {@link #close()}, run by one caller at a time: a close() that starts while another
+   * waits on a stuck poll thread waits for that verdict, so it cannot find no thread and reset the
+   * started guard underneath it.
+   */
+  private void closeSerially() {
     running = false;
     Thread t = pollThread;
-    pollThread = null;
     boolean stuck = false;
     if (t != null) {
       t.interrupt();
@@ -384,7 +408,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       // poll callback).
       if (t != Thread.currentThread()) {
         try {
-          t.join(CLOSE_JOIN_TIMEOUT_MS);
+          t.join(closeJoinTimeoutMs);
         } catch (InterruptedException _) {
           Thread.currentThread().interrupt();
         }
@@ -411,16 +435,25 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
           resignFailure);
     }
     if (stuck) {
+      // The stuck thread stays the poll thread: isAlive() keeps reporting it, and a later close()
+      // interrupts and joins it again instead of finding no thread and resetting the guard while
+      // it still runs.
       LOG.warn(
           "DeadLetterRetryRunner poll thread did not stop within {}ms; leaving the runner"
               + " not-restartable so a restart cannot duplicate or silently kill it. Investigate the"
               + " stuck poll.",
-          CLOSE_JOIN_TIMEOUT_MS);
+          closeJoinTimeoutMs);
     } else {
       // Reset the started guard so start() can be called again on the same instance after
       // close() — matches the restartable lifecycle contract (actuator restart, context refresh).
+      pollThread = null;
       started.set(false);
     }
+  }
+
+  /** Shrinks the join bound of {@link #close()}; for the tests of this package. */
+  void closeJoinTimeoutMs(long millis) {
+    this.closeJoinTimeoutMs = millis;
   }
 
   /** Returns whether the polling thread is currently active. */
@@ -1120,7 +1153,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
                     + " reads that version succeeds.",
                 LogSanitizer.sanitizeForLog(entry.commandId().value()),
                 entry.commandType(),
-                LogSanitizer.sanitizeForLog(behind.eventType().name()),
+                LogSanitizer.sanitizeForLog(behind.eventType().value()),
                 behind.readerVersion(),
                 behind.storedVersion());
         // The replay's time, with the attempt count as it was: the entry leaves the head of the
@@ -1415,7 +1448,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   /**
    * The fail-closed rule for a record component or field the scan could not read: an
    * {@code @Encrypted} component, or a member whose declared type reaches an {@code @Encrypted}
-   * field ({@link CryptoConfigValidator#referencesEncrypted}), may hold {@code [REDACTED]}, so the
+   * field ({@code CryptoConfigValidator.referencesEncrypted}), may hold {@code [REDACTED]}, so the
    * scan fails closed with {@link UnverifiableRedactionException} rather than guessing "not
    * redacted". Any other unreadable member can never hold the marker and the scan skips it; normal
    * execution surfaces whatever made it unreadable. A reachability walk that itself fails (a
@@ -1446,7 +1479,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   /**
    * Whether {@code type} is a JDK/platform class (loaded by the bootstrap loader, or in a {@code
    * java.}, {@code javax.}, {@code jakarta.}, {@code jdk.}, {@code sun.} or {@code com.sun.}
-   * package) — the same boundary {@link CryptoConfigValidator#referencesEncrypted} stops at. Such a
+   * package) — the same boundary {@code CryptoConfigValidator.referencesEncrypted} stops at. Such a
    * class never declares a field holding a record Jackson built from the payload, other than the
    * containers {@link #containsRedactedValue} opens itself.
    */
@@ -1758,7 +1791,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     void add(String commandType, EventSchemaAheadException behind) {
       replays++;
       schemas.add(
-          LogSanitizer.sanitizeForLog(behind.eventType().name())
+          LogSanitizer.sanitizeForLog(behind.eventType().value())
               + " stored at schema version "
               + behind.storedVersion()
               + ", read up to "
@@ -1905,7 +1938,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      * GraalVM native image answers only for a sealed type registered for reflection; for any other
      * it reports the type sealed with NO permitted subclasses. Registering the root alone would
      * leave every concrete command of the hierarchy unresolvable at replay time, silently, so such
-     * a root — at any nested level — is refused instead (see {@link SealedHierarchy}).
+     * a root — at any nested level — is refused instead (see {@code SealedHierarchy}).
      *
      * @throws IllegalArgumentException if {@code commandClass} is null
      * @throws IllegalStateException if {@code commandClass}, or a sealed level below it, is sealed

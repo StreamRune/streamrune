@@ -36,6 +36,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
@@ -706,7 +707,7 @@ class ContinuousProjectionRunnerTest {
         (name, listener, readPoisonBound) -> {
           factoryCalled.incrementAndGet();
           return PollingEventSubscription.builder()
-              .subscriptionName(name.value())
+              .subscriptionName(SubscriptionName.of(name.value()))
               .eventStore(eventStore)
               .offsetStore(offsetStore)
               .listener(listener)
@@ -754,7 +755,7 @@ class ContinuousProjectionRunnerTest {
     ContinuousProjectionRunner.SubscriptionFactory factory =
         (name, listener, readPoisonBound) ->
             PollingEventSubscription.builder()
-                .subscriptionName(name.value())
+                .subscriptionName(SubscriptionName.of(name.value()))
                 .eventStore(eventStore)
                 .offsetStore(offsetStore)
                 .listener(listener) // the runner's WRAPPED listener — the error strategy applies
@@ -1028,17 +1029,17 @@ class ContinuousProjectionRunnerTest {
           final java.util.Optional<Lease> held = java.util.Optional.of(new Lease(1L));
 
           @Override
-          public java.util.Optional<Lease> tryAcquire(String consumerName) {
+          public java.util.Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public java.util.Optional<Lease> current(String consumerName) {
+          public java.util.Optional<Lease> current(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -1140,17 +1141,17 @@ class ContinuousProjectionRunnerTest {
           final java.util.Optional<Lease> held = java.util.Optional.of(new Lease(1L));
 
           @Override
-          public java.util.Optional<Lease> tryAcquire(String consumerName) {
+          public java.util.Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public java.util.Optional<Lease> current(String consumerName) {
+          public java.util.Optional<Lease> current(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -1252,17 +1253,17 @@ class ContinuousProjectionRunnerTest {
           final java.util.Optional<Lease> held = java.util.Optional.of(new Lease(7L));
 
           @Override
-          public java.util.Optional<Lease> tryAcquire(String consumerName) {
+          public java.util.Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public java.util.Optional<Lease> current(String consumerName) {
+          public java.util.Optional<Lease> current(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -1344,17 +1345,17 @@ class ContinuousProjectionRunnerTest {
           final java.util.Optional<Lease> held = java.util.Optional.of(new Lease(9L));
 
           @Override
-          public java.util.Optional<Lease> tryAcquire(String consumerName) {
+          public java.util.Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public java.util.Optional<Lease> current(String consumerName) {
+          public java.util.Optional<Lease> current(SubscriptionName consumerName) {
             return held;
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -3050,7 +3051,7 @@ class ContinuousProjectionRunnerTest {
     // The health entry exists even though the gauge could not be registered — the whole point of
     // the standby view is that a frozen projection is never invisible to /health.
     assertTrue(
-        health.health().stream().anyMatch(h -> h.name().equals(name.value())),
+        health.health().stream().anyMatch(h -> h.name().value().equals(name.value())),
         "the health entry must be published even when the lag gauge cannot be registered");
 
     // close() must not block on a latch that was never counted down.
@@ -3068,7 +3069,7 @@ class ContinuousProjectionRunnerTest {
     assertNull(thrown.get(), "run() must not die on a metrics-registry failure: " + thrown.get());
     assertEquals(ProjectionState.STOPPED, runner.state());
     assertTrue(
-        health.health().stream().noneMatch(h -> h.name().equals(name.value())),
+        health.health().stream().noneMatch(h -> h.name().value().equals(name.value())),
         "a clean stop still unregisters, so the finally bookkeeping ran");
   }
 
@@ -3166,7 +3167,7 @@ class ContinuousProjectionRunnerTest {
 
   private static int errorCountOf(SubscriptionHealthContributor health, ProjectionName name) {
     return health.health().stream()
-        .filter(h -> h.name().equals(name.value()))
+        .filter(h -> h.name().value().equals(name.value()))
         .findFirst()
         .map(SubscriptionHealth::errorCount)
         .orElse(-1);
@@ -3175,7 +3176,7 @@ class ContinuousProjectionRunnerTest {
   private static SubscriptionHealth.Status statusOf(
       SubscriptionHealthContributor health, ProjectionName name) {
     return health.health().stream()
-        .filter(h -> h.name().equals(name.value()))
+        .filter(h -> h.name().value().equals(name.value()))
         .findFirst()
         .map(SubscriptionHealth::status)
         .orElse(null);

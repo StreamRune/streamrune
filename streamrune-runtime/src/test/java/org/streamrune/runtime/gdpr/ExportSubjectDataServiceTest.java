@@ -126,7 +126,7 @@ class ExportSubjectDataServiceTest {
             GdprExportException.class,
             () -> service.export(SubjectId.of("user-1"), UserId.of("admin")));
 
-    assertEquals("user-1", ex.subjectId());
+    assertEquals(SubjectId.of("user-1"), ex.subjectId());
     assertEquals("crm", ex.failedCollectorName());
     assertEquals(1, ex.partialSections().size());
     assertTrue(ex.partialSections().containsKey("profile"));
@@ -154,7 +154,7 @@ class ExportSubjectDataServiceTest {
         ex.getMessage().contains(SubjectId.of(pii).redacted()),
         "exception message must carry the redacted subject hash: " + ex.getMessage());
     // The raw id stays available via the accessor for callers that legitimately need it.
-    assertEquals(pii, ex.subjectId());
+    assertEquals(SubjectId.of(pii), ex.subjectId());
   }
 
   @Test

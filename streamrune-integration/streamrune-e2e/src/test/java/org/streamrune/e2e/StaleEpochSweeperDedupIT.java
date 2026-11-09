@@ -369,7 +369,7 @@ class StaleEpochSweeperDedupIT extends E2ETestBase {
     assertThat(
             count(
                 "SELECT COUNT(*) FROM event_stream WHERE event_type = ?",
-                EventType.fromClass(OrderCancelled.class).name()))
+                EventType.fromClass(OrderCancelled.class).value()))
         .as("exactly one OrderCancelled appended by the leader")
         .isEqualTo(1L);
 
@@ -400,7 +400,7 @@ class StaleEpochSweeperDedupIT extends E2ETestBase {
     assertThat(
             count(
                 "SELECT COUNT(*) FROM event_stream WHERE event_type = ?",
-                EventType.fromClass(OrderCancelled.class).name()))
+                EventType.fromClass(OrderCancelled.class).value()))
         .as("no second OrderCancelled — the compensating event stays appended exactly once")
         .isEqualTo(1L);
     assertThat(

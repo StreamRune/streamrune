@@ -136,10 +136,13 @@ What a caller does with it, and how an HTTP endpoint answers it:
   reason that says the change is queued for replay (for example
   `{"reason": "QUEUED_FOR_REPLAY", "commandId": "…"}`), and a client keeps the key it sent until it
   receives a `2xx` or a `4xx`. Prefer waiting: a `Retry-After` of at least the retry runner's
-  interval (`streamrune.dead-letter.retry-interval-ms`, 60 s, on the integrations) keeps a client
+  interval (`streamrune.dead-letter.retry-interval`, 1m, on the integrations) keeps a client
   from re-sending into the same outage. A re-send under the same key that fails again stores no
   second entry: the queue holds one of the command — its type and its stream — under the key
   (`DeadLetterQueue.findByIdempotencyKey`), and the bus answers with that entry and its outcome.
+  Two sends that fail at the same moment on two replicas store one entry as well: the queue keeps
+  one entry per command under a key (`PostgresDeadLetterQueue` through a unique index), and both
+  callers are answered with the entry that is stored.
 - **A keyed command whose entry the schedule does not replay awaits an operator**
   (`AWAITING_OPERATOR`). When the entry's replays have exhausted their attempts, or its command was
   first received longer ago than the command-inbox window ([Stale keyed entries](#stale-keyed-entries)),
@@ -671,7 +674,7 @@ Defaults are written as the [configuration reference](../configuration.md#how-de
 | Property | Spring | Quarkus | Micronaut | Default |
 |---|---|---|---|---|
 | Max retry attempts | `streamrune.retry-max-attempts` | `streamrune.retry-max-attempts` | `streamrune.retry-max-attempts` | 3 |
-| Initial delay (ms, plain `long`) | `streamrune.retry-initial-delay-ms` | `streamrune.retry-initial-delay-ms` | `streamrune.retry-initial-delay-ms` | 50 |
+| Initial delay (`Duration`) | `streamrune.retry-initial-delay` | `streamrune.retry-initial-delay` | `streamrune.retry-initial-delay` | 50ms |
 | Backoff multiplier | `streamrune.retry-backoff-multiplier` | `streamrune.retry-backoff-multiplier` | `streamrune.retry-backoff-multiplier` | 2.0 |
 | CB failure threshold | `streamrune.circuit-breaker-failure-threshold` | `streamrune.circuit-breaker-failure-threshold` | `streamrune.circuit-breaker-failure-threshold` | 5 |
 | CB cooldown (`Duration`) | `streamrune.circuit-breaker-cooldown` | `streamrune.circuit-breaker-cooldown` | `streamrune.circuit-breaker-cooldown` | 30s |
@@ -684,7 +687,7 @@ Spring example:
 
 ```properties
 streamrune.retry-max-attempts=5
-streamrune.retry-initial-delay-ms=100
+streamrune.retry-initial-delay=100ms
 streamrune.retry-backoff-multiplier=1.5
 streamrune.circuit-breaker-failure-threshold=3
 streamrune.circuit-breaker-cooldown=10s

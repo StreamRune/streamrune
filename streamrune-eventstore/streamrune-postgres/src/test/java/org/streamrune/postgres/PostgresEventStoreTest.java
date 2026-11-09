@@ -159,7 +159,7 @@ class PostgresEventStoreTest {
     EventEnvelope loaded = history.events().getFirst();
     assertEquals(TestStreams.stream("stream-1"), loaded.streamId());
     assertEquals(1, loaded.version().value());
-    assertEquals("TestEvent", loaded.eventType().name());
+    assertEquals("TestEvent", loaded.eventType().value());
     assertInstanceOf(TestEvent.class, loaded.event());
     assertEquals("hello", ((TestEvent) loaded.event()).value());
   }

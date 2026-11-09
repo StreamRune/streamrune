@@ -10,7 +10,10 @@ import org.streamrune.core.types.AggregateType;
  * other) declare the same {@link AggregateType}, and one decider instance belongs to one aggregate
  * type. Several unrelated command roots may share a type — that is how an application states that
  * they are one aggregate.
+ *
+ * @hidden
  */
+@Internal
 public final class DeciderRegistrations {
 
   /**

@@ -17,6 +17,7 @@ import org.streamrune.core.projection.Projection;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.test.InMemoryOffsetStore;
 
 /**
@@ -39,17 +40,17 @@ class ProjectionFencingGuardTest {
     }
 
     @Override
-    public Optional<Lease> tryAcquire(String consumerName) {
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
       return Optional.of(new Lease(epoch));
     }
 
     @Override
-    public Optional<Lease> current(String consumerName) {
+    public Optional<Lease> current(SubscriptionName consumerName) {
       return Optional.of(new Lease(epoch));
     }
 
     @Override
-    public void resign(String consumerName) {}
+    public void resign(SubscriptionName consumerName) {}
 
     @Override
     public void close() {}
@@ -195,7 +196,7 @@ class ProjectionFencingGuardTest {
                     .eventStore(eventStore())
                     .offsetStore(new InMemoryOffsetStore())
                     .leadership(new EpochLeadership(5L))
-                    .register("orders", noop(), AT_LEAST_ONCE_IDEMPOTENT)
+                    .register(ProjectionName.of("orders"), noop(), AT_LEAST_ONCE_IDEMPOTENT)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("cannot honour the leadership fencing epoch")
@@ -212,7 +213,11 @@ class ProjectionFencingGuardTest {
                     .eventStore(eventStore())
                     .offsetStore(new InMemoryOffsetStore())
                     .leadership(new EpochLeadership(5L))
-                    .register("orders", noop(), "0 0 * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+                    .register(
+                        ProjectionName.of("orders"),
+                        noop(),
+                        "0 0 * * * *",
+                        AT_LEAST_ONCE_IDEMPOTENT)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("cannot honour the leadership fencing epoch")
@@ -236,14 +241,15 @@ class ProjectionFencingGuardTest {
                   .eventStore(eventStore())
                   .offsetStore(new InMemoryOffsetStore())
                   .leadership(SubscriptionLeadership.NOOP)
-                  .register("orders", noop(), AT_LEAST_ONCE_IDEMPOTENT)
+                  .register(ProjectionName.of("orders"), noop(), AT_LEAST_ONCE_IDEMPOTENT)
                   .build()
                   .close();
               ScheduledProjectionRunner.builder()
                   .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
                   .eventStore(eventStore())
                   .offsetStore(new InMemoryOffsetStore())
-                  .register("orders", noop(), "0 0 * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+                  .register(
+                      ProjectionName.of("orders"), noop(), "0 0 * * * *", AT_LEAST_ONCE_IDEMPOTENT)
                   .build();
             })
         .doesNotThrowAnyException();
@@ -266,7 +272,7 @@ class ProjectionFencingGuardTest {
                   .atomicProcessor(new FencingProcessor())
                   // noop() is a plain lambda, registered AT_LEAST_ONCE_IDEMPOTENT: this test is
                   // about the LEADERSHIP/fencing pairing, not the delivery mode.
-                  .register("orders", noop(), AT_LEAST_ONCE_IDEMPOTENT)
+                  .register(ProjectionName.of("orders"), noop(), AT_LEAST_ONCE_IDEMPOTENT)
                   .build()
                   .close();
               ScheduledProjectionRunner.builder()
@@ -274,7 +280,8 @@ class ProjectionFencingGuardTest {
                   .offsetStore(new InMemoryOffsetStore())
                   .leadership(new EpochLeadership(5L))
                   .atomicProcessor(new FencingProcessor())
-                  .register("orders", noop(), "0 0 * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+                  .register(
+                      ProjectionName.of("orders"), noop(), "0 0 * * * *", AT_LEAST_ONCE_IDEMPOTENT)
                   .build();
             })
         .doesNotThrowAnyException();

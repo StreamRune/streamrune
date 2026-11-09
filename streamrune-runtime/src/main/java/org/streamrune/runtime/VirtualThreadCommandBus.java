@@ -47,6 +47,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.Internal;
 import org.streamrune.core.LockException;
 import org.streamrune.core.NoDeciderException;
 import org.streamrune.core.OptimisticLockException;
@@ -90,8 +91,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * execute(...)}: while bound, a failing execution is NOT published to the DLQ again — the retry
    * infrastructure already tracks attempts on the original entry, and republishing would create a
    * new entry on every retry cycle (unbounded entry multiplication).
+   *
+   * <p>Bound by the runtime only; application code does not bind it.
+   *
+   * @hidden
    */
-  public static final ScopedValue<Boolean> DLQ_REPLAY = ScopedValue.newInstance();
+  @Internal public static final ScopedValue<Boolean> DLQ_REPLAY = ScopedValue.newInstance();
 
   /**
    * Default {@link Builder#dlqEligible(Predicate)}: excludes permanent rejections — {@link
@@ -161,7 +166,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   private final UnaryOperator<Runnable> asyncTaskWrapper;
   private final Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
 
-  /** Whether this bus was built with the opt-out of {@link GraalJitGuard}. */
+  /** Whether this bus was built with the opt-out of {@code GraalJitGuard}. */
   private final boolean allowGraalJit;
 
   private final Clock clock;
@@ -292,7 +297,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
-   * Whether this bus was built with the opt-out of {@link GraalJitGuard} ({@link
+   * Whether this bus was built with the opt-out of {@code GraalJitGuard} ({@link
    * Builder#allowGraalJit(boolean)}, or the system property {@value GraalJitGuard#ALLOW_PROPERTY}).
    *
    * @return {@code true} when a JVM the guard refuses would start with an {@code ERROR} line
@@ -307,7 +312,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * <p>The event store's {@link EventStore#sagaFenceStorageIdentity()}: this bus hands every keyed
    * append the saga to fence it against ({@code fenceOrigin}) — for a command a saga handed it, the
    * handed saga when the command is a fenced forward command; for any other command, the forward
-   * marker bound for its key ({@link StreamRuneContext#sagaForwardOf}) — and the event store fences
+   * marker bound for its key ({@code StreamRuneContext.sagaForwardOf}) — and the event store fences
    * it.
    */
   @Override
@@ -318,8 +323,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   @Override
   public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
     // The saga a saga dispatch handed this dispatch beside its scoped values, taken first, so a
-    // command dispatched inside this one is not compared with it.
-    SagaDispatchOffer dispatched = SagaDispatchOffer.take();
+    // command dispatched inside this one is not compared with it. Only the saga's own command takes
+    // it: a keyed command a bus decorator dispatches first on this thread leaves it in place.
+    SagaDispatchOffer dispatched = SagaDispatchOffer.take(command, key);
     Objects.requireNonNull(key, "idempotencyKey is required");
     if (commandInbox == null) {
       throw new IllegalStateException(
@@ -814,8 +820,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * runnable throws before running the command, the future fails with that throwable.
    *
    * <p>Caller context that does not cross {@code Thread.start()} is captured at submission: {@link
-   * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED} and
-   * {@link StreamRuneContext#CAUSE} are re-bound on the new thread, and the configured {@link
+   * StreamRuneContext#CURRENT}, {@code DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED} and {@link
+   * StreamRuneContext#CAUSE} are re-bound on the new thread, and the configured {@link
    * Builder#asyncTaskWrapper(UnaryOperator) asyncTaskWrapper} can capture other thread-bound state
    * such as the current OpenTelemetry context. When {@code CURRENT} is not bound at submission, the
    * {@link Builder#unboundRequestContext(Supplier) unbound-request-context source} is asked on the
@@ -915,7 +921,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   /**
    * Builds the runnable that {@link #executeAsync} runs on its new virtual thread. Runs on the
    * submitting thread so caller context can be captured before it is lost: ScopedValues ({@link
-   * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED}, {@link
+   * StreamRuneContext#CURRENT}, {@code DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED}, {@link
    * StreamRuneContext#CAUSE}) don't inherit across {@code Thread.start()} and are re-bound via a
    * carrier, and the configured {@link Builder#asyncTaskWrapper(java.util.function.UnaryOperator)
    * asyncTaskWrapper} is applied here so it can capture thread-bound caller state such as the
@@ -1522,13 +1528,20 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * again: nothing is stored, and the caller is answered with that entry and its outcome ({@link
    * #outcomeOf}). A client that re-sends under its key during an outage therefore leaves one entry,
    * not one per re-send. The lookup is a read before the insert and adds no crash point: a crash
-   * before the insert leaves what a failed send leaves without it. Two sends that fail at the same
-   * instant can each store an entry; the inbox deduplicates their replays. A lookup that fails
-   * costs the command nothing: the bus stores the entry as without it.
+   * before the insert leaves what a failed send leaves without it. A lookup that fails costs the
+   * command nothing: the bus stores the entry as without it.
+   *
+   * <p><b>Two sends at the same moment.</b> Two replicas whose sends under one key fail together
+   * both find nothing before they insert. The queue keeps one entry per command under a key ({@link
+   * DeadLetterQueue#publish}), so one of the two inserts stores nothing; after a keyed publish the
+   * bus reads the entries under the key again, and when the one that holds the command is not its
+   * own it answers its caller with that entry, exactly as a re-send after the first is answered.
+   * The read after the insert is a read too and adds no crash point: a crash between the insert and
+   * the read leaves the row the insert stored, or none when it lost to the other send.
    *
    * @return the entry that holds the command — the one this call stored, or the one the queue held
    *     under the key already — or {@code null} when none does: no queue is configured, the
-   *     execution replays an entry ({@link #DLQ_REPLAY}), a saga dispatched the command, a dispatch
+   *     execution replays an entry ({@code DLQ_REPLAY}), a saga dispatched the command, a dispatch
    *     cause is bound, or the publish failed (its exception is attached to {@code exception} as
    *     suppressed)
    */
@@ -1655,6 +1668,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
               // the original key would NOT dedup against it at the inbox — running the handler
               // twice and duplicating the committed domain events (the double-execution defect).
               key));
+      if (key != null) {
+        DeadLetterRecord other = entryStoredInsteadOf(key, command, commandId, streamId);
+        if (other != null) {
+          return other;
+        }
+      }
       recordMetric(
           () -> metrics.recordDeadLetterPublished(command.getClass().getSimpleName()),
           "recordDeadLetterPublished");
@@ -1687,8 +1706,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   /**
    * The entry the queue holds of {@code command} under {@code key} — same command type, same stream
    * — or {@code null} when it holds none, the queue does not look entries up by key, or the lookup
-   * failed. Of several such entries (sends that failed at the same instant) one the retry schedule
-   * still replays answers, since the command is then queued for replay.
+   * failed.
    */
   private DeadLetterRecord entryStoredUnder(
       IdempotencyKey key, Command command, CommandId commandId, StreamId streamId) {
@@ -1714,20 +1732,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           LogSanitizer.sanitizeFreeText(lookupFailure.getMessage()));
       return null;
     }
-    String commandType = command.getClass().getName();
-    DeadLetterQueue.DeadLetterEntry match = null;
-    for (DeadLetterQueue.DeadLetterEntry entry : underKey) {
-      if (!commandType.equals(entry.commandType()) || !streamId.equals(entry.streamId())) {
-        continue;
-      }
-      if (outcomeOf(entry) == CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY) {
-        match = entry;
-        break;
-      }
-      if (match == null) {
-        match = entry;
-      }
-    }
+    DeadLetterQueue.DeadLetterEntry match = entryOf(underKey, command, streamId);
     if (match == null) {
       return null;
     }
@@ -1735,6 +1740,80 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     LOG.info(
         "Not storing a second dead-letter entry for command {} ({}): entry {} holds it under its"
             + " idempotency key and is {}",
+        LogSanitizer.sanitizeForLog(commandId.value()),
+        command.getClass().getSimpleName(),
+        LogSanitizer.sanitizeForLog(match.commandId().value()),
+        outcome == CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY
+            ? "queued for replay"
+            : "awaiting an operator");
+    return new DeadLetterRecord(match.commandId(), outcome);
+  }
+
+  /**
+   * Of the entries under a key, the one that holds {@code command} — same command type, same stream
+   * — or {@code null} when none does. Of several (a queue that does not keep one entry per command
+   * under a key) one the retry schedule still replays is chosen, since the command is then queued
+   * for replay.
+   */
+  private DeadLetterQueue.DeadLetterEntry entryOf(
+      List<DeadLetterQueue.DeadLetterEntry> underKey, Command command, StreamId streamId) {
+    String commandType = command.getClass().getName();
+    DeadLetterQueue.DeadLetterEntry match = null;
+    for (DeadLetterQueue.DeadLetterEntry entry : underKey) {
+      if (!commandType.equals(entry.commandType()) || !streamId.equals(entry.streamId())) {
+        continue;
+      }
+      if (outcomeOf(entry) == CommandDeadLetteredException.PendingOutcome.QUEUED_FOR_REPLAY) {
+        return entry;
+      }
+      if (match == null) {
+        match = entry;
+      }
+    }
+    return match;
+  }
+
+  /**
+   * After a keyed publish: the entry that holds {@code command} under {@code key} when it is not
+   * the one this publish asked to store ({@code commandId}) — another send of the command stored
+   * its entry at the same moment, and the queue, which keeps one entry per command under a key,
+   * stored nothing for this one — or {@code null} when this publish's entry is the one, the queue
+   * does not look entries up by key, or the read failed (the publish then counts as stored, as it
+   * does without the read).
+   */
+  private DeadLetterRecord entryStoredInsteadOf(
+      IdempotencyKey key, Command command, CommandId commandId, StreamId streamId) {
+    if (!deadLetterLookupSupported) {
+      return null;
+    }
+    List<DeadLetterQueue.DeadLetterEntry> underKey;
+    try {
+      underKey = deadLetterQueue.findByIdempotencyKey(key);
+    } catch (RuntimeException readFailure) {
+      LOG.warn(
+          "Could not read back the dead-letter entries under the key of command {} ({}) after"
+              + " storing its entry: {}",
+          LogSanitizer.sanitizeForLog(commandId.value()),
+          command.getClass().getSimpleName(),
+          LogSanitizer.sanitizeFreeText(readFailure.getMessage()));
+      return null;
+    }
+    String commandType = command.getClass().getName();
+    for (DeadLetterQueue.DeadLetterEntry entry : underKey) {
+      if (entry.commandId().equals(commandId)
+          && commandType.equals(entry.commandType())
+          && streamId.equals(entry.streamId())) {
+        return null;
+      }
+    }
+    DeadLetterQueue.DeadLetterEntry match = entryOf(underKey, command, streamId);
+    if (match == null) {
+      return null;
+    }
+    CommandDeadLetteredException.PendingOutcome outcome = outcomeOf(match);
+    LOG.info(
+        "Not storing a second dead-letter entry for command {} ({}): another send under its"
+            + " idempotency key stored entry {} at the same moment, which is {}",
         LogSanitizer.sanitizeForLog(commandId.value()),
         command.getClass().getSimpleName(),
         LogSanitizer.sanitizeForLog(match.commandId().value()),
@@ -1883,7 +1962,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   /**
    * The saga to fence a keyed append against. For a dispatch a saga handed its saga to, the handed
    * saga when its command is a fenced forward command, and none otherwise. For any other dispatch,
-   * the forward marker bound for {@code key} ({@link StreamRuneContext#sagaForwardOf}), so a keyed
+   * the forward marker bound for {@code key} ({@code StreamRuneContext.sagaForwardOf}), so a keyed
    * command nested inside a saga's forward command is not fenced.
    */
   static SagaOrigin fenceOrigin(SagaDispatchOffer dispatched, IdempotencyKey key) {
@@ -2392,7 +2471,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
-     * Whether {@link #build()} builds the bus on a JVM that {@link GraalJitGuard} refuses: one that
+     * Whether {@link #build()} builds the bus on a JVM that {@code GraalJitGuard} refuses: one that
      * runs the Graal JIT, which is not reliable with StreamRune, or a GraalVM runtime whose options
      * the guard cannot read. {@code true} builds it with one {@code ERROR} line per JVM, at the
      * application's own risk. Not set, the system property {@value GraalJitGuard#ALLOW_PROPERTY}
@@ -2460,19 +2539,6 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
-     * Registers a decider for a command type under an aggregate type, with an aggregate ID
-     * extractor. Alias for register() for clearer intent.
-     */
-    public <C extends Command, S extends AggregateState, E extends DomainEvent>
-        Builder registerDecider(
-            AggregateType aggregateType,
-            Class<C> commandType,
-            Function<C, AggregateId> idExtractor,
-            Decider<C, S, E> decider) {
-      return register(aggregateType, commandType, idExtractor, decider);
-    }
-
-    /**
      * Refuses a registered command type that requires authorization while no {@link
      * AnnotationAuthorizationInterceptor} is among the interceptors — the check {@link #build()}
      * runs. {@link StreamRune.Builder} runs it before it creates the event store, so a refused
@@ -2493,12 +2559,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * by this bus: the build is refused unless an {@link AnnotationAuthorizationInterceptor} is
      * among the {@link #interceptors}. The rule is checked against what this builder was given, so
      * a bus built by hand is held to it exactly like one a framework integration assembles; see
-     * {@link AuthorizationConfigurationValidator}. The interceptor counts only as a member of the
+     * {@code AuthorizationConfigurationValidator}. The interceptor counts only as a member of the
      * chain itself: wrapped in {@link CommandInterceptor#compose} or a decorator it is not seen.
      *
-     * <p>It first runs {@link GraalJitGuard} on the running JVM.
+     * <p>It first runs {@code GraalJitGuard} on the running JVM.
      *
-     * @throws IllegalStateException if the JVM is one {@link GraalJitGuard} refuses and {@link
+     * @throws IllegalStateException if the JVM is one {@code GraalJitGuard} refuses and {@link
      *     #allowGraalJit(boolean)} does not allow it, if no event store was set, or if a registered
      *     command type requires authorization and no {@link AnnotationAuthorizationInterceptor} is
      *     among the interceptors — the annotations would be ignored and the command would run

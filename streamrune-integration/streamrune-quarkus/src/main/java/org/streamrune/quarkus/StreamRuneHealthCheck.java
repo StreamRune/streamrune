@@ -124,11 +124,11 @@ public class StreamRuneHealthCheck implements HealthCheck {
         builder.up();
       }
       for (var sub : subscriptions) {
-        builder.withData("subscription." + sub.name() + ".state", sub.state().name());
-        builder.withData("subscription." + sub.name() + ".lag", sub.lag());
-        builder.withData("subscription." + sub.name() + ".errorCount", sub.errorCount());
-        builder.withData("subscription." + sub.name() + ".status", sub.status().name());
-        builder.withData("subscription." + sub.name() + ".role", sub.role().name());
+        builder.withData("subscription." + sub.name().value() + ".state", sub.state().name());
+        builder.withData("subscription." + sub.name().value() + ".lag", sub.lag());
+        builder.withData("subscription." + sub.name().value() + ".errorCount", sub.errorCount());
+        builder.withData("subscription." + sub.name().value() + ".status", sub.status().name());
+        builder.withData("subscription." + sub.name().value() + ".role", sub.role().name());
       }
     } else {
       builder.up();

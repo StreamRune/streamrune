@@ -251,6 +251,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
+import org.streamrune.core.types.ProjectionName;
 import org.streamrune.postgres.PostgresOffsetStore;
 import org.streamrune.runtime.ContinuousProjectionRunner;
 
@@ -268,7 +269,7 @@ var offsetStore = new PostgresOffsetStore(dataSource);   // tracks each projecti
 StreamRune streamRune = StreamRune.builder()
     .eventStore(eventStore)
     .register(ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
-    .registerProjection("order_summary", orderSummary, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+    .registerProjection(ProjectionName.of("order_summary"), orderSummary, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
     .projectionRunnerFactory((store, subscriptionConfig) ->
         ContinuousProjectionRunner.builder()
             .eventStore(store)
@@ -433,7 +434,7 @@ Each engine implements the `CryptoEngine` interface from `streamrune-core`.
 ```java
 import java.nio.file.Path;
 import org.streamrune.core.crypto.CryptoEngine;
-import org.streamrune.filesystem.FileSystemCryptoEngine;  // or other engine
+import org.streamrune.crypto.filesystem.FileSystemCryptoEngine;  // or other engine
 import org.streamrune.postgres.PostgresEventStoreFactory;
 
 CryptoEngine crypto = FileSystemCryptoEngine.builder()

@@ -3,10 +3,13 @@
 StreamRune exposes its public API in three layers: **core contracts** (interfaces and records in
 `streamrune-core` that you implement or receive), **value types** (typed wrappers that appear as
 parameters and return values), and **extension points** (interfaces you optionally implement for
-snapshotting, schema migration, interception, and subscriptions). The runtime entry-point is the
-`StreamRune` facade in `streamrune-runtime`, which wires everything together through a fluent
-builder. Persistence is provided by `streamrune-postgres` (`PostgresEventStore` /
-`PostgresEventStoreFactory`).
+snapshotting, schema migration, interception, and subscriptions). The `StreamRune` facade in
+`streamrune-runtime` is a bootstrap convenience that wires a command bus, an event store and
+projections through one builder; the complete option set of the command bus is
+`VirtualThreadCommandBus.Builder`, which the integrations use. Persistence is provided by `streamrune-postgres` (`PostgresEventStore` /
+`PostgresEventStoreFactory`). Types and members marked `@Internal` are public only because another
+StreamRune module uses them and are not part of the public API; see
+[API stability](../../README.md#api-stability).
 
 ## Section 1: Overview
 
@@ -688,20 +691,23 @@ already does, and a second publisher would write every frame twice.
 
 ## Section 5: Configuration — StreamRune.builder()
 
-The `StreamRune.Builder` is the entry point for wiring the entire framework. Call
-`StreamRune.builder()`, configure all components, then call `build()` to obtain a ready-to-use
-`StreamRune` instance.
+`StreamRune.Builder` is a bootstrap convenience: call `StreamRune.builder()`, configure the
+components, then call `build()` to obtain a ready-to-use `StreamRune` instance, which is itself the
+`CommandBus`. It passes the common options through to a `VirtualThreadCommandBus.Builder`. The
+complete option set of the command bus is that builder's (`maxInFlightAsyncCommands`,
+`dlqEligible`, `deadLetterRetryPolicy`, `inboxRetentionMaxAge`, `allowGraalJit` and the others),
+and it is the builder the Spring, Quarkus and Micronaut integrations and the e-commerce demo use;
+an application that needs one of those options builds the bus and its runners directly.
 
 | Method | Description | Default |
 |---|---|---|
 | `eventStore(EventStore)` | Sets the event store directly. Mutually exclusive with `eventStoreFactory`. | — (required unless `eventStoreFactory` is set) |
-| `withEventStore(EventStore)` | Alias for `eventStore()`. | — |
 | `eventStoreFactory(EventStoreFactory)` | Sets a factory to lazily create the event store (e.g., `PostgresEventStoreFactory`). | — |
 | `eventStoreFactoryProvider(ConfiguredEventStoreFactoryProvider)` | Sets a provider that receives the builder's accumulated settings (type registry, crypto engine, upcasters) and returns the `EventStoreFactory`. `close()` closes the factory it returned when it is `AutoCloseable`. | — |
 | `registerEventType(String name, Class<?> eventClass)` | Registers an event class for JSON deserialization by name. | — |
 | `registerStateType(String name, Class<?> stateClass)` | Registers a snapshot state class for deserialization by name. | — |
 | `register(AggregateType, Class<C>, Function<C,AggregateId>, Decider<C,?,?>)` | Registers a decider for a command type under the aggregate type it belongs to, with a **typed** `AggregateId` extractor function (not a raw `String`). The call refuses (`IllegalArgumentException`) a second registration for the same command type, a command type that overlaps an already-registered one (one is assignable to the other) under a different aggregate type, and a decider instance already registered under a different aggregate type. Several unrelated command roots may share one aggregate type. | — (required per command type) |
-| `registerDecider(AggregateType, Class<C>, Function<C,AggregateId>, Decider<C,?,?>)` | Alias for `register()`. | — |
+| `commandInbox(CommandInbox)` | The inbox the command bus executes keyed commands with: `execute(command, key)` records each key and answers a repeated key with the recorded result. A saga runner and the dead-letter retry runner need it; `supportsIdempotentExecution()` reports `true` only with it. The event store stores the inbox rows in the transaction of the append (for PostgreSQL, a `PostgresCommandInbox` over the store's `DataSource`). | none (a keyed call is refused) |
 | `locker(AggregateLocker)` | Overrides the default striped in-process locker (`AggregateLocker.acquireLock(StreamId, Duration)` locks one typed stream). | `LocalStripedLocker` with 1024 stripes |
 | `lockTimeout(Duration)` | Maximum wait time to acquire an aggregate lock; `null` is rejected at the builder. | `Duration.ofSeconds(5)` |
 | `stripeCount(int)` | Stripe count for the default `LocalStripedLocker`. | `1024` |
@@ -716,7 +722,7 @@ The `StreamRune.Builder` is the entry point for wiring the entire framework. Cal
 | `objectMapper(ObjectMapper)` | The Jackson `ObjectMapper` that writes a command as JSON when the bus dead-letters it. Required when `deadLetterQueue` is set. The retry runner rebuilds the command from that JSON on replay, so a command type must round-trip through Jackson (records do by default; see [Dead-letter queue](../guide/advanced/retry-and-resilience.md#dead-letter-queue)). `DeadLetterRetryRunner.createObjectMapper(cryptoEngine)` builds a mapper for both sides. | none (the framework integrations supply one) |
 | `deadLetterQueue(DeadLetterQueue)` | Persists commands that fail after all retries. Once a command's entry is stored, `execute` throws `CommandDeadLetteredException` (`commandId()`, `streamId()`, `idempotencyKey()`, `pendingOutcome()`, the failure as its cause): the outcome is pending, not final (see [A dead-lettered command's caller is told so](../guide/advanced/retry-and-resilience.md#a-dead-lettered-commands-caller-is-told-so)). | none |
 | `metrics(StreamRuneMetrics)` | Metrics collector (e.g., `MicrometerStreamRuneMetrics`). | `StreamRuneMetrics.NOOP` |
-| `registerProjection(String name, Projection, ProjectionDeliveryMode)` | Registers a projection to run via `startProjections()` under its declared delivery mode — `TRANSACTIONAL_LOCAL`, `AT_LEAST_ONCE_IDEMPOTENT` or `EXTERNAL_EFFECT`; required, there is no default (see [Delivery modes](../guide/concepts.md#delivery-modes--what-a-projection-promises)). The runner checks the mode against its `AtomicBatchProcessor` before it reads an event. | none |
+| `registerProjection(ProjectionName name, Projection, ProjectionDeliveryMode)` | Registers a projection to run via `startProjections()` under its declared delivery mode — `TRANSACTIONAL_LOCAL`, `AT_LEAST_ONCE_IDEMPOTENT` or `EXTERNAL_EFFECT`; required, there is no default (see [Delivery modes](../guide/concepts.md#delivery-modes--what-a-projection-promises)). The runner checks the mode against its `AtomicBatchProcessor` before it reads an event. | none |
 | `projectionRunner(ProjectionRunner)` | Sets the projection runner implementation. | none |
 | `subscriptionConfig(SubscriptionConfig)` | Sets polling interval and jitter for live subscriptions. | `SubscriptionConfig.DEFAULT` |
 | `build()` | Builds the `StreamRune` instance. Throws `IllegalStateException` if neither `eventStore` nor `eventStoreFactory` is configured, or if a registered command type declares `@RequireRole`/`@RequirePermission` and no `AnnotationAuthorizationInterceptor` is among the interceptors (see [Authorization](../guide/advanced/authorization.md#annotation-based-authorization)). | — |

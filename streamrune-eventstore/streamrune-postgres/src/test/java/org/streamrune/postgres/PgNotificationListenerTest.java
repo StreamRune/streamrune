@@ -123,6 +123,51 @@ class PgNotificationListenerTest {
     assertThrows(IllegalArgumentException.class, builder::build);
   }
 
+  @Test
+  void aHandedListenDataSourceIsClosedWithTheListener_startedOrNot() {
+    var neverStarted = new ClosableListenDataSource();
+    new PgNotificationListener(neverStarted, () -> {}).close();
+    assertEquals(1, neverStarted.closes.get(), "closed although the listener never started");
+
+    var started = new ClosableListenDataSource();
+    var listener =
+        PgNotificationListener.builder().dataSource(started).onNotification(() -> {}).build();
+    listener.start();
+    listener.close();
+    assertTrue(started.closes.get() >= 1, "closed with the started listener");
+  }
+
+  @Test
+  void aPlainDataSourceIsLeftOpen() {
+    var plain = new ClosableMockDataSource();
+    new PgNotificationListener(plain, () -> {}).close();
+    assertEquals(0, plain.closes.get());
+  }
+
+  /** A listen data source whose connections fail, counting its closes. */
+  private static final class ClosableListenDataSource extends MockDataSource
+      implements ListenDataSource {
+    final java.util.concurrent.atomic.AtomicInteger closes =
+        new java.util.concurrent.atomic.AtomicInteger();
+
+    @Override
+    public void close() {
+      closes.incrementAndGet();
+    }
+  }
+
+  /** A closable data source that is not a listen data source. */
+  private static final class ClosableMockDataSource extends MockDataSource
+      implements AutoCloseable {
+    final java.util.concurrent.atomic.AtomicInteger closes =
+        new java.util.concurrent.atomic.AtomicInteger();
+
+    @Override
+    public void close() {
+      closes.incrementAndGet();
+    }
+  }
+
   /** Simple mock DataSource for testing. */
   private static class MockDataSource implements DataSource {
     @Override

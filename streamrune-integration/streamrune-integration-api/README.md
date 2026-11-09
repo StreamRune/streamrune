@@ -1,6 +1,6 @@
 # StreamRune Integration API
 
-Shared integration implementations used by all framework integrations: the Micrometer-backed `StreamRuneMetrics`, the `SseAuthorizer` SPI, `AuthenticatedUserResolver`/`RequestIdentityPolicy`/`RequestEdgeAuthority` for request-edge identity (`RequestIdentityPolicy` is the one rule — authenticated principal, trusted gateway or anonymous — by which an integration derives a request's user), the `RelaxedBoolean` parser for `streamrune.*` boolean knobs, and the startup validators the auto-configurations share (`CommandInboxWiringValidator`, `SagaRetentionValidator`).
+Shared integration implementations used by all framework integrations: the Micrometer-backed `StreamRuneMetrics`, the `SseAuthorizer` SPI, `AuthenticatedUserResolver`/`RequestIdentityPolicy`/`RequestEdgeAuthority` for request-edge identity (`RequestIdentityPolicy` is the one rule — authenticated principal, trusted gateway or anonymous — by which an integration derives a request's user), the `RelaxedBoolean` parser for `streamrune.*` boolean knobs, and the startup validators the auto-configurations share (`CommandInboxWiringValidator`, `SagaRetentionValidator`). The parser, the validators and the other wiring helpers the three integrations share are marked `@Internal`: they are not part of the public API (see [API stability](../../README.md#api-stability)).
 
 ## Overview
 

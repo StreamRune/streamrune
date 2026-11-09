@@ -95,23 +95,16 @@ tasks.named("check") {
 
 // Runs GraalJitGuardLiveTest, and only that class, on a test JVM with the flags
 // -PgraalJitGuardTestFlags names, so that the guard meets the JVM as an application meets it:
-// `none` (the default), `intrinsics` (-XX:+UnlockDiagnosticVMOptions
-// -XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache, which the guard refuses on the Graal
-// JIT) or `c2` (-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, which it accepts). Every
+// `none` (the default, which the guard refuses on the Graal JIT) or `c2`
+// (-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler, which it accepts). Every
 // other test JVM of a GraalVM build runs with the JVMCI compiler off (the root build). Not part of
 // `check`: the GraalVM workflow (graalvm-jit.yml) runs it on GraalVM with each, and
 // -PexpectGraalJitGuard says what the guard must answer.
 val graalJitGuardTestFlags =
     when (val flags = (findProperty("graalJitGuardTestFlags") as String?) ?: "none") {
         "none" -> emptyList()
-        "intrinsics" ->
-            listOf(
-                "-XX:+UnlockDiagnosticVMOptions",
-                "-XX:DisableIntrinsic=_scopedValueCache,_setScopedValueCache")
         "c2" -> listOf("-XX:+UnlockExperimentalVMOptions", "-XX:-UseJVMCICompiler")
-        else ->
-            throw GradleException(
-                "-PgraalJitGuardTestFlags must be none, intrinsics or c2, not '$flags'")
+        else -> throw GradleException("-PgraalJitGuardTestFlags must be none or c2, not '$flags'")
     }
 tasks.register<Test>("graalJitGuardTest") {
     description =

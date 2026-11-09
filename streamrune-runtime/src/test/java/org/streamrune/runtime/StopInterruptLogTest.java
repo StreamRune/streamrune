@@ -24,6 +24,7 @@ import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.test.ForwardingEventStore;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
@@ -98,7 +99,7 @@ class StopInterruptLogTest {
     store.armed.set(true);
     var subscription =
         PollingEventSubscription.builder()
-            .subscriptionName("orders")
+            .subscriptionName(SubscriptionName.of("orders"))
             .eventStore(store)
             .offsetStore(new InMemoryOffsetStore())
             .listener(events -> {})
@@ -125,7 +126,7 @@ class StopInterruptLogTest {
     store.armed.set(true);
     var subscription =
         PollingEventSubscription.builder()
-            .subscriptionName("orders")
+            .subscriptionName(SubscriptionName.of("orders"))
             .eventStore(store)
             .offsetStore(new InMemoryOffsetStore())
             .listener(events -> {})

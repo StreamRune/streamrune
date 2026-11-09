@@ -20,7 +20,7 @@ class HealthTrackingEventListenerTest {
     listener.onEvents(List.of());
 
     verify(delegate).onEvents(List.of());
-    verify(contributor).recordSuccess("orders");
+    verify(contributor).recordSuccess(SubscriptionName.of("orders"));
     verify(contributor, never()).recordError(any());
   }
 
@@ -34,7 +34,7 @@ class HealthTrackingEventListenerTest {
 
     assertThrows(RuntimeException.class, () -> listener.onEvents(List.of()));
 
-    verify(contributor).recordError("orders");
+    verify(contributor).recordError(SubscriptionName.of("orders"));
     verify(contributor, never()).recordSuccess(any());
   }
 

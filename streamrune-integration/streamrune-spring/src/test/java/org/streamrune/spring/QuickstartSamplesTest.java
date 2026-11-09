@@ -35,9 +35,10 @@ import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.crypto.CachedCryptoEngine;
-import org.streamrune.filesystem.FileSystemCryptoEngine;
+import org.streamrune.crypto.filesystem.FileSystemCryptoEngine;
 import org.streamrune.postgres.PostgresEventStoreFactory;
 import org.streamrune.postgres.PostgresOffsetStore;
 import org.streamrune.runtime.ContinuousProjectionRunner;
@@ -204,7 +205,9 @@ class QuickstartSamplesTest {
         .register(
             ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
         .registerProjection(
-            "order_summary", orderSummary, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+            ProjectionName.of("order_summary"),
+            orderSummary,
+            ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
         .projectionRunnerFactory(
             (store, subscriptionConfig) ->
                 ContinuousProjectionRunner.builder()
@@ -236,7 +239,9 @@ class QuickstartSamplesTest {
             .register(
                 ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
             .registerProjection(
-                "order_summary", orderSummary, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT);
+                ProjectionName.of("order_summary"),
+                orderSummary,
+                ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT);
 
     assertThatThrownBy(builder::build)
         .isInstanceOf(IllegalStateException.class)

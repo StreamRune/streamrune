@@ -17,6 +17,7 @@ import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.postgres.LeaseBasedLeadership;
 import org.streamrune.postgres.PostgresOffsetStore;
 import org.streamrune.runtime.PollingEventSubscription;
@@ -90,7 +91,7 @@ abstract class SagaLeadershipNodes extends SagaForwardFenceNodes {
       offsets = new CountingOffsetStore(new PostgresOffsetStore(node.source));
       subscription =
           PollingEventSubscription.builder()
-              .subscriptionName(SUBSCRIPTION)
+              .subscriptionName(SubscriptionName.of(SUBSCRIPTION))
               .eventStore(node.eventStore)
               .offsetStore(offsets)
               .config(SubscriptionConfig.pollingOnly(POLLING))
@@ -133,7 +134,7 @@ abstract class SagaLeadershipNodes extends SagaForwardFenceNodes {
         return;
       }
       subscription.close();
-      node.timeoutRunner.stop();
+      node.timeoutRunner.close();
       sweeper.close();
       leadership.close();
       node.close();

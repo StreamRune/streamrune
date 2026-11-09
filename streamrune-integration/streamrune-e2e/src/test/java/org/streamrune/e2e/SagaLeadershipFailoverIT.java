@@ -66,7 +66,7 @@ class SagaLeadershipFailoverIT extends SagaLeadershipNodes {
         .atMost(Duration.ofSeconds(20))
         .until(() -> orders.stream().allMatch(o -> isRow(o, SagaStatus.RUNNING)));
 
-    String lease = a.node.runner.lease().name();
+    String lease = a.node.runner.lease().name().value();
     java.sql.Timestamp heldUntil = leaseUntil(lease);
     long t0 = System.nanoTime();
     // The stop runs beside the watch: the handover is measured from the stop's start to the

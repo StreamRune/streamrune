@@ -53,7 +53,8 @@ class MicronautOutboxMetricsWiringTest {
     // non-default values (7 / 250ms / 3.0) so this fails if the knobs are dropped and the poller
     // falls back to the built-in default ladder.
     OutboxPoller poller =
-        module.outboxPoller(store, publisher, propsWithRetry(7, 250L, 3.0), null, null);
+        module.outboxPoller(
+            store, publisher, propsWithRetry(7, Duration.ofMillis(250), 3.0), null, null);
     RetryPolicy rp = retryPolicyOf(poller);
     assertEquals(7, rp.maxAttempts());
     assertEquals(Duration.ofMillis(250), rp.initialDelay());
@@ -78,10 +79,10 @@ class MicronautOutboxMetricsWiringTest {
     return new StreamRuneMicronautProperties(
         100,
         3,
-        50,
+        Duration.ofMillis(50),
         2.0,
-        5000,
-        1000,
+        Duration.ofSeconds(5),
+        Duration.ofSeconds(1),
         Duration.ofSeconds(5),
         1024,
         10_000,
@@ -93,10 +94,10 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofDays(7),
         false,
         100,
-        5000L,
+        Duration.ofSeconds(5),
         true,
         5,
-        60000L,
+        Duration.ofMinutes(1),
         Duration.ofDays(30),
         true,
         "streamrune",
@@ -109,7 +110,7 @@ class MicronautOutboxMetricsWiringTest {
         skipped,
         "true",
         10,
-        1000L,
+        Duration.ofSeconds(1),
         2.0,
         Duration.ofSeconds(15),
         Duration.ofMinutes(5),
@@ -153,14 +154,14 @@ class MicronautOutboxMetricsWiringTest {
    * Defaults for every field except the three outbox retry knobs (mirrors {@code withDefaults}).
    */
   private static StreamRuneMicronautProperties propsWithRetry(
-      int maxAttempts, long initialDelayMs, double multiplier) {
+      int maxAttempts, Duration initialDelay, double multiplier) {
     return new StreamRuneMicronautProperties(
         100,
         3,
-        50,
+        Duration.ofMillis(50),
         2.0,
-        5000,
-        1000,
+        Duration.ofSeconds(5),
+        Duration.ofSeconds(1),
         Duration.ofSeconds(5),
         1024,
         10_000,
@@ -172,10 +173,10 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofDays(30),
         false,
         100,
-        5000L,
+        Duration.ofSeconds(5),
         true,
         5,
-        60000L,
+        Duration.ofMinutes(1),
         Duration.ofDays(30),
         true,
         "streamrune",
@@ -188,7 +189,7 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofDays(30),
         "true",
         maxAttempts,
-        initialDelayMs,
+        initialDelay,
         multiplier,
         Duration.ofSeconds(15),
         Duration.ofMinutes(5),

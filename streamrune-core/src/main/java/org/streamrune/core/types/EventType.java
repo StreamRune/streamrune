@@ -10,14 +10,14 @@ import com.fasterxml.jackson.annotation.JsonValue;
  * and reducing the risk of typos and invalid type references. Serializes as a plain JSON string,
  * like the identifier value types.
  *
- * @param name the event type name (typically simple class name or fully-qualified name)
+ * @param value the event type name (typically simple class name or fully-qualified name)
  */
-public record EventType(@JsonValue String name) {
+public record EventType(@JsonValue String value) {
 
   /** Creates a new EventType with the given name. */
   @JsonCreator
   public EventType {
-    if (name == null || name.isBlank()) {
+    if (value == null || value.isBlank()) {
       throw new IllegalArgumentException("EventType name must not be blank");
     }
   }
@@ -46,6 +46,6 @@ public record EventType(@JsonValue String name) {
 
   @Override
   public String toString() {
-    return name;
+    return value;
   }
 }

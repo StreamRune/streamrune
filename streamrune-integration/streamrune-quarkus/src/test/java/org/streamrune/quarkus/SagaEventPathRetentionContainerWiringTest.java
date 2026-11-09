@@ -34,6 +34,7 @@ import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
 import org.streamrune.runtime.SagaLeaseWiring;
@@ -248,17 +249,17 @@ class SagaEventPathRetentionContainerWiringTest {
     public SubscriptionLeadership leadership() {
       return new SubscriptionLeadership() {
         @Override
-        public Optional<Lease> tryAcquire(String consumerName) {
+        public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
           return Optional.empty();
         }
 
         @Override
-        public Optional<Lease> current(String consumerName) {
+        public Optional<Lease> current(SubscriptionName consumerName) {
           return Optional.empty();
         }
 
         @Override
-        public void resign(String consumerName) {}
+        public void resign(SubscriptionName consumerName) {}
 
         @Override
         public void close() {}
@@ -520,17 +521,17 @@ class SagaEventPathRetentionContainerWiringTest {
   @Singleton
   public static class LeadershipA implements SubscriptionLeadership {
     @Override
-    public Optional<Lease> tryAcquire(String consumerName) {
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
       return Optional.empty();
     }
 
     @Override
-    public Optional<Lease> current(String consumerName) {
+    public Optional<Lease> current(SubscriptionName consumerName) {
       return Optional.empty();
     }
 
     @Override
-    public void resign(String consumerName) {}
+    public void resign(SubscriptionName consumerName) {}
 
     @Override
     public void close() {}

@@ -12,6 +12,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.RetryPolicy;
@@ -183,6 +184,10 @@ public final class OutboxPoller implements AutoCloseable {
   private final String claimedBy;
   // The running poll thread and the interrupt deferral it shares with close(); null when stopped.
   private volatile PollThread pollThread;
+
+  /** Serializes {@link #close()}. */
+  private final ReentrantLock closeLock = new ReentrantLock();
+
   private final AtomicBoolean started = new AtomicBoolean(false);
   // Set false the first time countByStatus throws UnsupportedOperationException (a custom store
   // that does not support counting), so the backlog gauge degrades gracefully without retrying
@@ -1167,13 +1172,27 @@ public final class OutboxPoller implements AutoCloseable {
    * <p>The poll thread is interrupted, which cuts an idle sleep or a publish waiting on the
    * transport short. While the thread is storing a batch's outcome the interrupt is held back until
    * the outcome is stored (so this call can wait for those store writes), and the thread stops
-   * right after. Waits up to 30s for the thread to end; a thread still running after that is left
-   * alone and the relay stays not restartable (logged).
+   * right after. Waits up to 30s for the thread to end; a thread still running after that stays the
+   * relay's poll thread, the relay stays started and not restartable (logged), and a later close()
+   * interrupts and joins it again, resetting the guard once it has stopped.
    */
   @Override
   public void close() {
+    closeLock.lock();
+    try {
+      closeSerially();
+    } finally {
+      closeLock.unlock();
+    }
+  }
+
+  /**
+   * The body of {@link #close()}, run by one caller at a time: a close() that starts while another
+   * waits on a stuck poll thread waits for that verdict, so it cannot find no thread and reset the
+   * started guard underneath it.
+   */
+  private void closeSerially() {
     PollThread running = pollThread;
-    pollThread = null;
     boolean stuck = false;
     if (running != null) {
       Thread t = running.thread();
@@ -1196,11 +1215,15 @@ public final class OutboxPoller implements AutoCloseable {
       }
     }
     if (stuck) {
+      // The stuck thread stays the poll thread: isAlive() keeps reporting it, and a later close()
+      // interrupts and joins it again instead of finding no thread and resetting the guard while
+      // it still runs.
       LOG.warn(
           "OutboxPoller poll thread did not stop within {}ms; leaving the runner not-restartable so"
               + " a restart cannot spawn a duplicate relay. Investigate the stuck poll.",
           closeJoinTimeoutMs);
     } else {
+      pollThread = null;
       started.set(false);
     }
   }

@@ -6,7 +6,7 @@ Command bus, projection runners, and aggregate locking for StreamRune.
 
 StreamRune Runtime provides the runtime layer for a StreamRune application: a command bus built on Java virtual threads, projection runners for building read models, and distributed aggregate locking.
 
-The main entry point is `StreamRune`, a fluent builder facade that wires together an `EventStore`, registered deciders, projections, and cross-cutting concerns.
+`StreamRune` is a bootstrap convenience: a fluent builder facade that wires together an `EventStore`, registered deciders, projections, and cross-cutting concerns, and is itself the `CommandBus`. Its builder passes the common options through to `VirtualThreadCommandBus.Builder`, whose complete option set the Spring, Quarkus and Micronaut integrations use; build the bus and its runners directly for an option the facade does not offer.
 
 ```mermaid
 graph LR
@@ -31,7 +31,7 @@ var streamRune = StreamRune.builder()
             .upcasters(settings.upcasters()))
     .cryptoEngine(cryptoEngine)
     .registerEventType("OrderPlaced", OrderPlaced.class)
-    .registerDecider(AggregateType.of("order"), PlaceOrderCommand.class,
+    .register(AggregateType.of("order"), PlaceOrderCommand.class,
         c -> AggregateId.of(c.orderId()), new OrderDecider())
     .metrics(micrometerMetrics)
     .build();
@@ -64,14 +64,15 @@ CommandBus.CommandResult result = streamRune.execute(new PlaceOrderCommand(order
 |---|---|
 | `eventStore(EventStore)` | A pre-built event store (not closed by `close()`) |
 | `eventStoreFactoryProvider(settings -> factory)` | Builds the event store factory from the collected settings; the facade calls `create()`, and closes the factory on `close()` when it is `AutoCloseable` |
-| `registerDecider(AggregateType, Class, Function, Decider)` | Register a decider for a command type under the aggregate type its streams carry (`order` → streams `order:<id>`); refuses a duplicate command type, overlapping command roots under different types, and one decider instance under two types |
+| `register(AggregateType, Class, Function, Decider)` | Register a decider for a command type under the aggregate type its streams carry (`order` → streams `order:<id>`); refuses a duplicate command type, overlapping command roots under different types, and one decider instance under two types |
+| `commandInbox(CommandInbox)` | The inbox keyed commands (`execute(command, key)`) are recorded in; a saga runner and the dead-letter retry runner need it |
 | `cryptoEngine(CryptoEngine)` | Encryption engine for event payloads (factory forms only) |
 | `upcasters(List<EventUpcaster>)` | Schema migration chain (factory forms only) |
 | `locker(AggregateLocker)` | Aggregate locking (default: `LocalStripedLocker`) |
 | `retryPolicy(RetryPolicy)` | Retry policy for optimistic lock conflicts |
 | `snapshotPolicy(SnapshotPolicy)` | Snapshot frequency |
 | `metrics(StreamRuneMetrics)` | Metrics collector (use `MicrometerStreamRuneMetrics` from `streamrune-integration-api`) |
-| `registerProjection(String, Projection, ProjectionDeliveryMode)` | Register a projection to run under its declared delivery mode (required, no default); requires `projectionRunnerFactory(...)` or `projectionRunner(...)`, otherwise `build()` throws |
+| `registerProjection(ProjectionName, Projection, ProjectionDeliveryMode)` | Register a projection to run under its declared delivery mode (required, no default); requires `projectionRunnerFactory(...)` or `projectionRunner(...)`, otherwise `build()` throws |
 | `projectionRunnerFactory((store, config) -> runner)` | Creates one projection runner per registered projection |
 | `deadLetterQueue(DeadLetterQueue)` | Queue for failed commands after retries exhausted (requires `objectMapper(...)`) |
 

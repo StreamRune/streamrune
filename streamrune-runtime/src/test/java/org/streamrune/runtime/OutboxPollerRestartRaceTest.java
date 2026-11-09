@@ -84,4 +84,85 @@ class OutboxPollerRestartRaceTest {
     assertTrue(poller.isStarted(), "a join-timeout close() must leave the runner not-restartable");
     assertThrows(IllegalStateException.class, poller::start);
   }
+
+  @Test
+  void aSecondCloseAfterATimedOutJoin_keepsTheRelayNotRestartableUntilTheThreadStops()
+      throws Exception {
+    var pollThread = new AtomicReference<Thread>();
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    OutboxStore blockingStore = mock(OutboxStore.class);
+    when(blockingStore.claimedBy()).thenReturn("test-relay");
+    when(blockingStore.orderingMode()).thenReturn(OutboxOrderingMode.AVAILABILITY_FIRST);
+    when(blockingStore.claimLease()).thenReturn(Duration.ofMinutes(4));
+    when(blockingStore.loadPending(anyInt()))
+        .thenAnswer(
+            RestartRaceTestSupport.parkIgnoringInterruptsUntilReleased(
+                pollThread, entered, release, List.of()));
+    var poller =
+        OutboxPoller.builder()
+            .outboxStore(blockingStore)
+            .publisher(mock(OutboxPublisher.class))
+            .pollInterval(Duration.ofSeconds(1))
+            .closeJoinTimeoutMs(20)
+            .build();
+    poller.start();
+    assertTrue(entered.await(5, TimeUnit.SECONDS), "poll thread should have entered loadPending");
+
+    poller.close(); // the join times out
+    poller.close(); // a second close finds the same stuck thread, not none
+
+    assertTrue(pollThread.get().isAlive(), "the poll thread is still running");
+    assertTrue(poller.isStarted(), "still not restartable while the stale thread runs");
+    assertTrue(poller.isAlive(), "the stuck thread is still reported");
+    assertThrows(IllegalStateException.class, poller::start);
+
+    release.countDown();
+    pollThread.get().join(5_000);
+    poller.close(); // the thread has stopped: the guard is reset
+
+    assertFalse(pollThread.get().isAlive());
+    assertFalse(poller.isStarted(), "restartable once the stale thread has stopped");
+    assertFalse(poller.isAlive());
+  }
+
+  @Test
+  void twoConcurrentClosesDuringATimedOutJoin_keepsTheRelayNotRestartableUntilTheThreadStops()
+      throws Exception {
+    var pollThread = new AtomicReference<Thread>();
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    OutboxStore blockingStore = mock(OutboxStore.class);
+    when(blockingStore.claimedBy()).thenReturn("test-relay");
+    when(blockingStore.orderingMode()).thenReturn(OutboxOrderingMode.AVAILABILITY_FIRST);
+    when(blockingStore.claimLease()).thenReturn(Duration.ofMinutes(4));
+    when(blockingStore.loadPending(anyInt()))
+        .thenAnswer(
+            RestartRaceTestSupport.parkIgnoringInterruptsUntilReleased(
+                pollThread, entered, release, List.of()));
+    var poller =
+        OutboxPoller.builder()
+            .outboxStore(blockingStore)
+            .publisher(mock(OutboxPublisher.class))
+            .pollInterval(Duration.ofSeconds(1))
+            .closeJoinTimeoutMs(300)
+            .build();
+    poller.start();
+    assertTrue(entered.await(5, TimeUnit.SECONDS), "poll thread should have entered loadPending");
+
+    RestartRaceTestSupport.closeConcurrently(poller); // both joins time out
+
+    assertTrue(pollThread.get().isAlive(), "the poll thread is still running");
+    assertTrue(poller.isStarted(), "still not restartable while the stale thread runs");
+    assertTrue(poller.isAlive(), "the stuck thread is still reported");
+    assertThrows(IllegalStateException.class, poller::start);
+
+    release.countDown();
+    pollThread.get().join(5_000);
+    poller.close(); // the thread has stopped: the guard is reset
+
+    assertFalse(pollThread.get().isAlive());
+    assertFalse(poller.isStarted(), "restartable once the stale thread has stopped");
+    assertFalse(poller.isAlive());
+  }
 }

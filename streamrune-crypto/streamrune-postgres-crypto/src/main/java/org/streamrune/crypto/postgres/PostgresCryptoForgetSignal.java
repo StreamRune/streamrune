@@ -19,6 +19,7 @@ import org.postgresql.PGConnection;
 import org.postgresql.PGNotification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.Internal;
 import org.streamrune.crypto.CryptoForgetSignal;
 
 /**
@@ -103,7 +104,7 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
   /**
    * The {@code application_name} of the dedicated LISTEN session, appended after the application's
    * own name when it has one, so that {@code pg_stat_activity} tells the LISTEN session from the
-   * application's. See {@link #listenApplicationName(String, String)}.
+   * application's. See {@code listenApplicationName}.
    */
   static final String LISTEN_APPLICATION_NAME = "streamrune-crypto-forget-listen";
 
@@ -522,7 +523,9 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
    *     {@code null}; used when the URL has none
    * @return the name of the LISTEN session
    * @see #withApplicationName(String, String)
+   * @hidden
    */
+  @Internal
   public static String listenApplicationName(String jdbcUrl, String configuredApplicationName) {
     String base = urlApplicationName(jdbcUrl);
     if (base == null || base.isBlank()) {
@@ -566,7 +569,9 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
    * @param applicationName the application name to set
    * @return the URL carrying that application name
    * @throws IllegalArgumentException if either argument is null
+   * @hidden
    */
+  @Internal
   public static String withApplicationName(String jdbcUrl, String applicationName) {
     if (jdbcUrl == null || applicationName == null) {
       throw new IllegalArgumentException("jdbcUrl and applicationName must not be null");

@@ -582,12 +582,11 @@ public class StreamRuneMicronautModule {
    * Creates a default VirtualThreadCommandBus when the application does not define its own.
    *
    * <p><b>Fail-fast on {@code @Encrypted} command fields:</b> command types are validated at wiring
-   * time via {@link org.streamrune.crypto.CryptoConfigValidator}; if a registered command carries
-   * an {@code @Encrypted} field but no {@link CryptoEngine} bean is configured, startup fails
-   * instead of silently dead-lettering that PII as plaintext. Micronaut injects all {@link
-   * CryptoEngine} beans as a {@link List}; an empty list means no engine, more than one triggers
-   * the same ambiguity guard used by {@link #postgresEventStoreFactory}/{@link #sagaStore}/{@link
-   * #deadLetterRetryRunner}.
+   * time via {@code CryptoConfigValidator}; if a registered command carries an {@code @Encrypted}
+   * field but no {@link CryptoEngine} bean is configured, startup fails instead of silently
+   * dead-lettering that PII as plaintext. Micronaut injects all {@link CryptoEngine} beans as a
+   * {@link List}; an empty list means no engine, more than one triggers the same ambiguity guard
+   * used by {@link #postgresEventStoreFactory}/{@link #sagaStore}/{@link #deadLetterRetryRunner}.
    *
    * <p><b>Dead-letter queue &amp; metrics (parity with Spring):</b> when an optional {@link
    * org.streamrune.core.DeadLetterQueue} bean is present it is wired into the bus so commands that
@@ -635,7 +634,7 @@ public class StreamRuneMicronautModule {
    *     to it through a crypto-aware mapper
    * @param metrics optional metrics collector; when present, command-bus meters are recorded
    * @param allowGraalJit the value of {@value org.streamrune.runtime.GraalJitGuard#ALLOW_PROPERTY}:
-   *     {@code true} builds the bus on a JVM {@link org.streamrune.runtime.GraalJitGuard} refuses
+   *     {@code true} builds the bus on a JVM {@code GraalJitGuard} refuses
    * @return a new {@link VirtualThreadCommandBus}
    * @throws IllegalStateException if multiple CryptoEngine beans exist, if a registered command
    *     type has an {@code @Encrypted} field with no CryptoEngine configured, or if {@link
@@ -678,7 +677,7 @@ public class StreamRuneMicronautModule {
     var retryPolicy =
         new RetryPolicy(
             properties.retryMaxAttempts(),
-            java.time.Duration.ofMillis(properties.retryInitialDelayMs()),
+            properties.retryInitialDelay(),
             properties.retryBackoffMultiplier());
 
     // Micronaut injects the interceptor List in an unspecified order. Sort it into the
@@ -745,7 +744,7 @@ public class StreamRuneMicronautModule {
       StreamRuneMicronautProperties properties) {
     return new org.streamrune.core.DeadLetterRetryPolicy(
         properties.deadLetterMaxRetries(),
-        java.time.Duration.ofMillis(properties.deadLetterRetryIntervalMs()),
+        properties.deadLetterRetryInterval(),
         2.0,
         false,
         org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(
@@ -1372,7 +1371,7 @@ public class StreamRuneMicronautModule {
             // The window the inbox retention sweeper prunes with: a keyed entry older than it is
             // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
             .inboxRetentionMaxAge(properties.inboxRetentionMaxAge())
-            .pollInterval(java.time.Duration.ofMillis(properties.deadLetterRetryIntervalMs()))
+            .pollInterval(properties.deadLetterRetryInterval())
             // Metrics bean (MicrometerStreamRuneMetrics when present) so retry-exhaustion emits
             // streamrune.dlq.exhausted + a terminal ERROR log under the default policy; NOOP when
             // absent (behavior unchanged).
@@ -1456,13 +1455,13 @@ public class StreamRuneMicronautModule {
             .outboxStore(store)
             .publisher(publisher)
             .batchSize(properties.outboxBatchSize())
-            .pollInterval(java.time.Duration.ofMillis(properties.outboxFlushIntervalMs()))
+            .pollInterval(properties.outboxFlushInterval())
             // Expose the retry ladder; transport failures are non-counting regardless.
             .retryPolicy(
                 new org.streamrune.core.RetryPolicy(
                     properties.outboxRetryMaxAttempts(),
-                    java.time.Duration.ofMillis(properties.outboxRetryInitialDelayMs()),
-                    properties.outboxRetryMultiplier()))
+                    properties.outboxRetryInitialDelay(),
+                    properties.outboxRetryBackoffMultiplier()))
             .metrics(metrics != null ? metrics : org.streamrune.core.StreamRuneMetrics.NOOP)
             .build();
     // Register for relay liveness health so /health degrades if the relay thread dies.
@@ -1752,11 +1751,11 @@ public class StreamRuneMicronautModule {
   }
 
   /**
-   * Creates an {@link org.streamrune.core.upcasting.UpcasterChain} when at least one {@link
+   * Creates an {@code UpcasterChain} when at least one {@link
    * org.streamrune.core.upcasting.EventUpcaster} bean is available.
    *
    * @param upcasters all registered event upcasters
-   * @return a new {@link org.streamrune.core.upcasting.UpcasterChain}
+   * @return a new {@code UpcasterChain}
    */
   @Singleton
   @Secondary

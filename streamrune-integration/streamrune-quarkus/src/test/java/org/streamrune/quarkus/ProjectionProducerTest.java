@@ -1404,8 +1404,8 @@ class ProjectionProducerTest {
             noHealth(),
             TestProperties.of(
                 Map.of(
-                    "streamrune.polling-interval-ms", "123",
-                    "streamrune.polling-jitter-ms", "45")),
+                    "streamrune.polling-interval", "PT0.123S",
+                    "streamrune.polling-jitter", "PT0.045S")),
             defaultConfig());
 
     var field = MultiProjectionRunner.class.getDeclaredField("subscriptionConfig");

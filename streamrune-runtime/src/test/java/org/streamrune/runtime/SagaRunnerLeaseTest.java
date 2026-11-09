@@ -18,6 +18,7 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.runtime.SagaStepLockFixture.Opened;
 import org.streamrune.runtime.SagaStepLockFixture.State;
 import org.streamrune.test.InMemoryCommandInbox;
@@ -28,7 +29,8 @@ import org.streamrune.test.InMemorySagaStore;
 
 class SagaRunnerLeaseTest {
 
-  private static final String LEASE_NAME = "saga:" + SagaStepLockFixture.TYPE.value();
+  private static final SubscriptionName LEASE_NAME =
+      SubscriptionName.of("saga:" + SagaStepLockFixture.TYPE.value());
 
   private final Logger runnerLog = (Logger) LoggerFactory.getLogger(SagaRunner.class);
   private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -94,7 +96,7 @@ class SagaRunnerLeaseTest {
             line ->
                 assertThat(line)
                     .contains("delivers without the anchor of its lease")
-                    .contains(LEASE_NAME));
+                    .contains(LEASE_NAME.value()));
   }
 
   @Test
@@ -109,11 +111,11 @@ class SagaRunnerLeaseTest {
   @Test
   void aGatedRunnerDeliveringThroughItsSubscription_doesNotWarn() {
     RecordingLeadership leadership = new RecordingLeadership();
-    leadership.grant(LEASE_NAME);
+    leadership.grant(LEASE_NAME.value());
     try (var process = new SagaStepLockFixture(leadership, Duration.ofHours(1))) {
       PollingEventSubscription subscription =
           PollingEventSubscription.builder()
-              .subscriptionName("orders-saga")
+              .subscriptionName(SubscriptionName.of("orders-saga"))
               .eventStore(process.eventStore)
               .offsetStore(new InMemoryOffsetStore())
               .config(SubscriptionConfig.pollingOnly(Duration.ofMillis(20)))

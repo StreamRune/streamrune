@@ -102,7 +102,7 @@ class SpringQueryCacheAutoConfigTest {
     final AtomicInteger calls = new AtomicInteger();
 
     @Override
-    public void authorize(Query<?> query, org.streamrune.core.types.UserId user) {
+    public void authorize(org.streamrune.core.types.UserId user, Query<?> query) {
       calls.incrementAndGet();
     }
   }

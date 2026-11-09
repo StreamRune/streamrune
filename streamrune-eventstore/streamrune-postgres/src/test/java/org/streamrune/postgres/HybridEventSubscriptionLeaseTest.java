@@ -34,6 +34,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SubscriptionLease;
@@ -87,7 +88,7 @@ class HybridEventSubscriptionLeaseTest {
     OffsetStore offsetStore = mock(OffsetStore.class);
     var sub =
         HybridEventSubscription.builder()
-            .subscriptionName(NAME)
+            .subscriptionName(SubscriptionName.of(NAME))
             .dataSource(mock(DataSource.class))
             .eventStore(eventStore)
             .offsetStore(offsetStore)
@@ -131,10 +132,10 @@ class HybridEventSubscriptionLeaseTest {
             .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(rows))
             .leadership(leadership)
             .build();
-    leadership.grant(runner.lease().name());
+    leadership.grant(runner.lease().name().value());
     var sub =
         HybridEventSubscription.builder()
-            .subscriptionName(NAME)
+            .subscriptionName(SubscriptionName.of(NAME))
             .dataSource(mock(DataSource.class))
             .eventStore(eventStore)
             .offsetStore(new InMemoryOffsetStore())
@@ -167,8 +168,8 @@ class HybridEventSubscriptionLeaseTest {
     assertThatThrownBy(
             () ->
                 HybridEventSubscription.builder()
-                    .subscriptionName(NAME)
-                    .lease(SubscriptionLease.of(leadership, NAME))
+                    .subscriptionName(SubscriptionName.of(NAME))
+                    .lease(SubscriptionLease.of(leadership, SubscriptionName.of(NAME)))
                     .leadership(leadership)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
@@ -184,7 +185,7 @@ class HybridEventSubscriptionLeaseTest {
     assertThatThrownBy(
             () ->
                 HybridEventSubscription.builder()
-                    .subscriptionName(NAME)
+                    .subscriptionName(SubscriptionName.of(NAME))
                     .sagaRunner(runner)
                     .listener(events -> {})
                     .build())
@@ -194,7 +195,7 @@ class HybridEventSubscriptionLeaseTest {
     assertThatThrownBy(
             () ->
                 HybridEventSubscription.builder()
-                    .subscriptionName(NAME)
+                    .subscriptionName(SubscriptionName.of(NAME))
                     .sagaRunner(runner)
                     .lease(SubscriptionLease.ungated())
                     .build())
@@ -204,7 +205,7 @@ class HybridEventSubscriptionLeaseTest {
     assertThatThrownBy(
             () ->
                 HybridEventSubscription.builder()
-                    .subscriptionName(NAME)
+                    .subscriptionName(SubscriptionName.of(NAME))
                     .sagaRunner(runner)
                     .leadership(leadership)
                     .build())

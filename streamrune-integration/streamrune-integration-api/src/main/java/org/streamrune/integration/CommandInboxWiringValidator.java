@@ -1,6 +1,7 @@
 package org.streamrune.integration;
 
 import org.streamrune.core.CommandInbox;
+import org.streamrune.core.Internal;
 
 /**
  * Validates the composition invariant shared by all three auto-configurations: <b>if the command
@@ -44,7 +45,10 @@ import org.streamrune.core.CommandInbox;
  * <p>Comparison is by implementation CLASS, not identity: the Quarkus default inbox producer is
  * dependent-scoped, so the bus and the store legitimately hold two equivalent instances of the same
  * stateless {@code PostgresCommandInbox}.
+ *
+ * @hidden
  */
+@Internal
 public final class CommandInboxWiringValidator {
 
   private CommandInboxWiringValidator() {}
