@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.StreamRuneMetrics;
@@ -128,6 +129,11 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
    */
   private static final long CLOSE_JOIN_TIMEOUT_MS = 30_000L;
 
+  /**
+   * The join bound {@link #close()} uses; {@link #CLOSE_JOIN_TIMEOUT_MS} unless a test shrinks it.
+   */
+  private volatile long closeJoinTimeoutMs = CLOSE_JOIN_TIMEOUT_MS;
+
   private final SagaRunner<S> sagaRunner;
   private final SagaStore sagaStore;
   private final SagaType sagaType;
@@ -158,6 +164,10 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
   private final ResilientPollLoop pollLoop;
   private final AtomicBoolean started = new AtomicBoolean(false);
   private volatile Thread thread;
+
+  /** Serializes {@link #close()}. */
+  private final ReentrantLock closeLock = new ReentrantLock();
+
   private volatile boolean running;
 
   // One-shot latch PER METRIC CALL SITE for a persistently throwing metrics sink, same
@@ -302,6 +312,20 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
    */
   @Override
   public void close() {
+    closeLock.lock();
+    try {
+      closeSerially();
+    } finally {
+      closeLock.unlock();
+    }
+  }
+
+  /**
+   * The body of {@link #close()}, run by one caller at a time: a close() that starts while another
+   * waits on a stuck sweep thread waits for that verdict, so it cannot find no thread and reset the
+   * started guard underneath it.
+   */
+  private void closeSerially() {
     // INFO, not WARN: the integration closes the sweeper in an order, relative to the
     // application's saga subscription, that the application does not control, so on a normal
     // shutdown it usually closes while the subscription still anchors the lease.
@@ -317,7 +341,6 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     }
     running = false;
     Thread t = thread;
-    thread = null;
     boolean stuck = false;
     if (t != null) {
       t.interrupt();
@@ -327,7 +350,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
       // itself (close() invoked from within the sweep thread).
       if (t != Thread.currentThread()) {
         try {
-          t.join(CLOSE_JOIN_TIMEOUT_MS);
+          t.join(closeJoinTimeoutMs);
         } catch (InterruptedException _) {
           Thread.currentThread().interrupt();
         }
@@ -364,14 +387,23 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     // drive before the give-up horizon is honored.
     previouslyReDriven = java.util.Set.of();
     if (stuck) {
+      // The stuck thread stays the sweep thread: isAlive() keeps reporting it, and a later close()
+      // interrupts and joins it again instead of finding no thread and resetting the guard while
+      // it still runs.
       LOG.warn(
           "SagaCompensationRetrySweeper thread did not stop within {}ms; leaving the sweeper"
               + " not-restartable so a restart cannot duplicate or silently kill it. Investigate"
               + " the stuck sweep.",
-          CLOSE_JOIN_TIMEOUT_MS);
+          closeJoinTimeoutMs);
     } else {
+      thread = null;
       started.set(false);
     }
+  }
+
+  /** Shrinks the join bound of {@link #close()}; for the tests of this package. */
+  void closeJoinTimeoutMs(long millis) {
+    this.closeJoinTimeoutMs = millis;
   }
 
   /** Whether the sweep thread is currently active. */

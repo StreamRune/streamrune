@@ -45,7 +45,7 @@ import org.streamrune.runtime.SagaTypeOwnership;
  *
  * <p><b>Leadership.</b> With a real {@link SubscriptionLeadership} bean (not the always-leading
  * {@code NOOP}), the same hook logs one WARN per {@link SagaRunner} that carries no lease: its saga
- * type is delivered on every replica ({@link SagaLeaseWiring#warnUngatedUnderLeadership}). The
+ * type is delivered on every replica ({@code SagaLeaseWiring.warnUngatedUnderLeadership}). The
  * runner is reported, not refused.
  *
  * <p>Runs after all singletons are instantiated so every {@link SagaRunner} bean is visible, and

@@ -178,8 +178,7 @@ class PostgresNotificationSubscriptionTest {
    */
   @Test
   void serverSideNotifyTriggersDelivery() throws Exception {
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     var offsetStore = new InMemoryOffsetStore();
     var sub =
@@ -246,8 +245,7 @@ class PostgresNotificationSubscriptionTest {
    */
   @Test
   void notifyNewEventsInProcessShortcutTriggersDelivery() throws Exception {
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     var offsetStore = new InMemoryOffsetStore();
     var sub =
@@ -290,8 +288,7 @@ class PostgresNotificationSubscriptionTest {
     StreamId s = TestStreams.stream("cart-catchup-1");
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     var offsetStore = new InMemoryOffsetStore();
     var sub =
@@ -333,8 +330,7 @@ class PostgresNotificationSubscriptionTest {
     // burst can only be delivered by the single server NOTIFY draining to the head.
     var slowPoll = new SubscriptionConfig(true, Duration.ofSeconds(60), Duration.ZERO);
 
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     var offsetStore = new InMemoryOffsetStore();
     var sub =
@@ -407,8 +403,7 @@ class PostgresNotificationSubscriptionTest {
     // Warm-up seeded BEFORE start: the catch-up poll delivers it (barrier that catch-up completed).
     memStore.append(1, TestStreams.stream("fallback-warmup"));
 
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     var offsetStore = new InMemoryOffsetStore();
     var sub =
@@ -451,13 +446,40 @@ class PostgresNotificationSubscriptionTest {
   @Test
   void createListenDataSourceCopiesHikariCredentials() {
     try (HikariDataSource listen =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource)) {
+        PostgresNotificationSubscription.createListenPool(eventDataSource)) {
       assertEquals(eventDataSource.getJdbcUrl(), listen.getJdbcUrl());
       assertEquals(eventDataSource.getUsername(), listen.getUsername());
       assertEquals(1, listen.getMaximumPoolSize());
       assertEquals(1, listen.getMinimumIdle());
       assertEquals("streamrune-listen", listen.getPoolName());
     }
+  }
+
+  /**
+   * The public factory returns a {@link ListenDataSource}: a DataSource whose type names no pool
+   * library, over the same pool, which hands out connections, unwraps to that pool and closes it.
+   */
+  @Test
+  void createListenDataSourceReturnsAListenDataSourceOverTheListenPool() throws Exception {
+    ListenDataSource listen =
+        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource pool;
+    try (listen) {
+      assertTrue(listen.isWrapperFor(HikariDataSource.class));
+      assertTrue(listen.isWrapperFor(ListenDataSource.class));
+      assertFalse(listen.isWrapperFor(java.sql.Driver.class));
+      pool = listen.unwrap(HikariDataSource.class);
+      assertSame(listen, listen.unwrap(ListenDataSource.class));
+      assertEquals("streamrune-listen", pool.getPoolName());
+      assertEquals(1, pool.getMaximumPoolSize());
+      assertEquals(eventDataSource.getJdbcUrl(), pool.getJdbcUrl());
+      try (var conn = listen.getConnection();
+          var rs = conn.createStatement().executeQuery("SELECT 1")) {
+        assertTrue(rs.next());
+      }
+    }
+    assertTrue(pool.isClosed(), "closing the ListenDataSource closes its pool");
+    listen.close(); // idempotent
   }
 
   @Test
@@ -471,8 +493,7 @@ class PostgresNotificationSubscriptionTest {
       main.setUsername(PG.getUsername());
       main.setPassword(PG.getPassword());
       main.addDataSourceProperty("ApplicationName", "orders-app");
-      try (HikariDataSource listen =
-          PostgresNotificationSubscription.createListenDataSource(main)) {
+      try (HikariDataSource listen = PostgresNotificationSubscription.createListenPool(main)) {
         assertEquals("true", listen.getDataSourceProperties().getProperty("tcpKeepAlive"));
         assertEquals("orders-app", listen.getDataSourceProperties().getProperty("ApplicationName"));
       }
@@ -484,8 +505,7 @@ class PostgresNotificationSubscriptionTest {
     try (var main = new HikariDataSource()) {
       main.setJdbcUrl(PG.getJdbcUrl());
       main.addDataSourceProperty("tcpKeepAlive", "false");
-      try (HikariDataSource listen =
-          PostgresNotificationSubscription.createListenDataSource(main)) {
+      try (HikariDataSource listen = PostgresNotificationSubscription.createListenPool(main)) {
         assertEquals("false", listen.getDataSourceProperties().getProperty("tcpKeepAlive"));
       }
     }
@@ -503,7 +523,7 @@ class PostgresNotificationSubscriptionTest {
       main.addDataSourceProperty("databaseName", PG.getDatabaseName());
       main.setUsername(PG.getUsername());
       main.setPassword(PG.getPassword());
-      try (HikariDataSource listen = PostgresNotificationSubscription.createListenDataSource(main);
+      try (HikariDataSource listen = PostgresNotificationSubscription.createListenPool(main);
           var conn = listen.getConnection();
           var stmt = conn.createStatement()) {
         assertFalse(stmt.execute("LISTEN streamrune_events"), "LISTEN returns no result set");
@@ -523,7 +543,7 @@ class PostgresNotificationSubscriptionTest {
     pg.setUser(PG.getUsername());
     pg.setPassword(PG.getPassword());
 
-    try (HikariDataSource listen = PostgresNotificationSubscription.createListenDataSource(pg);
+    try (HikariDataSource listen = PostgresNotificationSubscription.createListenPool(pg);
         var conn = listen.getConnection();
         var rs = conn.createStatement().executeQuery("SELECT 1")) {
       // getUrl() spells out every driver property after the database name.
@@ -713,8 +733,7 @@ class PostgresNotificationSubscriptionTest {
     // A custom DataSource that exposes getJdbcUrl() via reflection (no getUsername/getPassword)
     // exercises the reflection fallback path for credential extraction.
     var custom = new JdbcUrlOnlyDataSource(PG.getJdbcUrl(), PG.getUsername(), PG.getPassword());
-    try (HikariDataSource listen =
-        PostgresNotificationSubscription.createListenDataSource(custom)) {
+    try (HikariDataSource listen = PostgresNotificationSubscription.createListenPool(custom)) {
       assertNotNull(listen);
       assertEquals(1, listen.getMaximumPoolSize());
       assertEquals(PG.getJdbcUrl(), listen.getJdbcUrl());
@@ -723,8 +742,7 @@ class PostgresNotificationSubscriptionTest {
 
   @Test
   void startTwiceThrows() {
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var sub =
         PostgresNotificationSubscription.builder(SubscriptionName.of("dup"))
             .listenDataSource(listenDs)
@@ -746,8 +764,7 @@ class PostgresNotificationSubscriptionTest {
 
   @Test
   void isRunningReturnsFalseBeforeStart() {
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     try (listenDs) {
       var sub =
           PostgresNotificationSubscription.builder(SubscriptionName.of("pre-start"))
@@ -764,8 +781,7 @@ class PostgresNotificationSubscriptionTest {
 
   @Test
   void closeIsIdempotent() {
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var sub =
         PostgresNotificationSubscription.builder(SubscriptionName.of("idempotent-close"))
             .listenDataSource(listenDs)
@@ -818,8 +834,7 @@ class PostgresNotificationSubscriptionTest {
     var release = new java.util.concurrent.atomic.AtomicBoolean();
     var sub =
         PostgresNotificationSubscription.builder(SubscriptionName.of("close-held"))
-            .listenDataSource(
-                PostgresNotificationSubscription.createListenDataSource(eventDataSource))
+            .listenDataSource(PostgresNotificationSubscription.createListenPool(eventDataSource))
             .eventStore(store)
             .offsetStore(offsetStore)
             .listener(
@@ -853,8 +868,7 @@ class PostgresNotificationSubscriptionTest {
     // Exercises the catch (Exception) branch in pollAndDeliver().
     // We use a subclass that overrides readGlobalStream to throw.
     // NOTE: This test is marked flaky due to virtual thread scheduling uncertainty.
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var readCalled = new java.util.concurrent.atomic.AtomicBoolean(false);
     org.streamrune.core.EventStore errorStore =
         new org.streamrune.core.EventStore() {
@@ -936,8 +950,7 @@ class PostgresNotificationSubscriptionTest {
    */
   @Test
   void stopsTerminallyAfterBoundedDeterministicReadPoison() throws Exception {
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var reads = new java.util.concurrent.atomic.AtomicInteger();
     org.streamrune.core.EventStore poisonStore =
         new org.streamrune.core.EventStore() {
@@ -1017,8 +1030,7 @@ class PostgresNotificationSubscriptionTest {
    */
   @Test
   void transientReadFailureNeverTripsTheReadPoisonBound() throws Exception {
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var reads = new java.util.concurrent.atomic.AtomicInteger();
     org.streamrune.core.EventStore flakyStore =
         new org.streamrune.core.EventStore() {
@@ -1088,8 +1100,7 @@ class PostgresNotificationSubscriptionTest {
 
   @Test
   void buildRejectsInvalidArgs() {
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     try (listenDs) {
       // Null subscription name (a blank one is refused by SubscriptionName itself)
       assertThrows(
@@ -1203,8 +1214,7 @@ class PostgresNotificationSubscriptionTest {
    */
   @Test
   void closeJoinsTheListenThreadAndIsTerminal() throws Exception {
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var listenThread = new java.util.concurrent.atomic.AtomicReference<Thread>();
     var entered = new java.util.concurrent.CountDownLatch(1);
     var release = new java.util.concurrent.CountDownLatch(1);
@@ -1439,8 +1449,7 @@ class PostgresNotificationSubscriptionTest {
     // true. isRunning() then lied forever: the owning ContinuousProjectionRunner's
     // !subscription.isRunning() halt check never fired, the read model silently froze and health
     // stayed UP. Sibling PollingEventSubscription.runPollLoop guards exactly this.
-    HikariDataSource listenDs =
-        PostgresNotificationSubscription.createListenDataSource(eventDataSource);
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
     var appender = attachSubscriptionLogAppender();
     var sub =
         PostgresNotificationSubscription.builder(SubscriptionName.of("error-sub"))

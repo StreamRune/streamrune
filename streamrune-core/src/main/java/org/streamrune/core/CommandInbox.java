@@ -86,7 +86,9 @@ public interface CommandInbox {
      * @param presentedStreamId the typed stream the presenting command targets; the same id value
      *     under another aggregate type is another stream
      * @throws IllegalArgumentException if either discriminator differs from the recorded one
+     * @hidden
      */
+    @Internal
     public void requireBoundTo(String presentedCommandType, StreamId presentedStreamId) {
       if (commandType.equals(presentedCommandType) && streamId.equals(presentedStreamId)) {
         return;

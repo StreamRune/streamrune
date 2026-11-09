@@ -56,7 +56,7 @@ import org.streamrune.core.types.StreamId;
  * the bus throws the failure unchanged when there is none: a failure its {@code dlqEligible}
  * predicate refuses, which by default is a business rejection; a bus without a dead letter queue; a
  * failed publish, whose exception is attached to the failure as suppressed; the replay of an entry,
- * under {@link VirtualThreadCommandBus#DLQ_REPLAY}; a command a saga dispatches, and one dispatched
+ * which the dead-letter retry runner dispatches; a command a saga dispatches, and one dispatched
  * with a dispatch cause bound, which their callers retry and the bus does not dead-letter. The
  * future of {@link VirtualThreadCommandBus#executeAsync} fails with the failure itself, although
  * its entry is stored: an asynchronous command runs without an idempotency key, so the entry waits

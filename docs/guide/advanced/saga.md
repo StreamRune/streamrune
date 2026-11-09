@@ -39,7 +39,7 @@ A correlation id is tracing data. A client sets it with `X-Correlation-Id` in ev
 
 If a listener of yours reacts to one of the saga's events by dispatching a command for the same flow (a process manager), dispatch it inside `StreamRuneContext.continuing(event).run(...)`: the events of that command carry the saga's origin one hop further, and the saga receives them without a line of routing — see [Reacting to a saga's events from a listener](#reacting-to-a-sagas-events-from-a-listener). A command executed on the same thread inside a saga's dispatch — from a command interceptor, for instance — inherits the saga's origin too.
 
-The origin is the framework's statement only as long as application code never builds it from request data: `EventMetadata`, `SagaOrigin` and `StreamRuneContext.DispatchCause` have public constructors, and `EventStore.append` stores the metadata it is handed. Never bind request input to one of them, and never append an event whose metadata came from a request.
+The origin is the framework's statement only as long as application code never builds it from request data: `EventMetadata` and `SagaOrigin` have public constructors, `StreamRuneContext.DispatchCause` has one too (it is `@Internal`: application code gets a cause only from `StreamRuneContext.continuing(event)`), and `EventStore.append` stores the metadata it is handed. Never bind request input to one of them, and never append an event whose metadata came from a request.
 
 ```mermaid
 sequenceDiagram
@@ -431,6 +431,7 @@ SagaTimeoutRunner<OrderSaga.State> timeouts = SagaTimeoutRunner.<OrderSaga.State
     .sagaRunner(runner)   // the claim at a deadline waits for this runner's step in flight
     .build();
 timeouts.start();
+// on shutdown: timeouts.close() — the runner is AutoCloseable, like the other background components
 ```
 
 **With the forward fence on (the default), no forward command of a step is stored after a compensation claimed under that step.** A saga's deadline can pass while a delivery is dispatching that saga's forward commands — an event arrives at the deadline, or a retry-later outage ends in the attempt that straddles it. A claim made at that moment compensates from the state the row holds, which does not include that step — a start event's genesis-pending row included. Two mechanisms keep the step's commands on the right side of that compensation. In one process the step lock below makes the claim wait for the step, so the compensation includes it. On any number of processes the forward fence (described after the lock) refuses every forward command the step dispatches once the claim is written: the step stores nothing more and resumes the episode.

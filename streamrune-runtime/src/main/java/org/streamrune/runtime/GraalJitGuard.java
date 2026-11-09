@@ -8,6 +8,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.Internal;
 
 /**
  * Refuses to start StreamRune on a JVM that runs the Graal JIT.
@@ -36,7 +37,10 @@ import org.slf4j.LoggerFactory;
  * configuration key of the integrations, a system property of a runtime built by hand, or {@link
  * VirtualThreadCommandBus.Builder#allowGraalJit(boolean)}) starts a refused JVM anyway, at the
  * application's own risk, with one {@code ERROR} line.
+ *
+ * @hidden
  */
+@Internal
 public final class GraalJitGuard {
 
   /**

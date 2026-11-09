@@ -1,5 +1,6 @@
 package org.streamrune.runtime;
 
+import org.streamrune.core.Internal;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
@@ -15,7 +16,9 @@ import org.streamrune.core.types.ProjectionName;
  *     EXTERNAL_EFFECT} are handed the processor's transaction-scoped repository and are checked
  *     against it at {@code build()}; {@code AT_LEAST_ONCE_IDEMPOTENT} is handed {@code null} under
  *     every processor. Required; no registration path supplies a default.
+ * @hidden
  */
+@Internal
 public record ProjectionRegistration(
     ProjectionName name,
     Projection projection,

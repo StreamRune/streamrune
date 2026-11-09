@@ -24,11 +24,12 @@ import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 
 /**
  * Proves the auto-registered command interceptor chain is deterministic: every framework
- * interceptor carries an explicit {@code @Order} (the {@code ORDER_*} constants on {@link
- * StreamRuneAutoConfiguration}), so {@code before()} runs OpenTelemetry → Audit → Authorization →
- * AnnotationAuthorization → BeanValidation → CircuitBreaker → InlineProjection, and {@code
- * after()}/{@code onError()} run in reverse. Without explicit ordering, e.g. the circuit breaker
- * could count validation rejections as failures, or audit could miss rejected commands.
+ * interceptor carries an explicit {@code @Order} (the {@code ORDER_*} constants of {@link
+ * org.streamrune.runtime.CommandInterceptorOrdering}), so {@code before()} runs OpenTelemetry →
+ * Audit → Authorization → AnnotationAuthorization → BeanValidation → CircuitBreaker →
+ * InlineProjection, and {@code after()}/{@code onError()} run in reverse. Without explicit
+ * ordering, e.g. the circuit breaker could count validation rejections as failures, or audit could
+ * miss rejected commands.
  */
 class CommandInterceptorOrderingTest {
 

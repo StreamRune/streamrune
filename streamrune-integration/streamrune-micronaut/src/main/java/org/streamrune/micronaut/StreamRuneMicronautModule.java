@@ -582,12 +582,11 @@ public class StreamRuneMicronautModule {
    * Creates a default VirtualThreadCommandBus when the application does not define its own.
    *
    * <p><b>Fail-fast on {@code @Encrypted} command fields:</b> command types are validated at wiring
-   * time via {@link org.streamrune.crypto.CryptoConfigValidator}; if a registered command carries
-   * an {@code @Encrypted} field but no {@link CryptoEngine} bean is configured, startup fails
-   * instead of silently dead-lettering that PII as plaintext. Micronaut injects all {@link
-   * CryptoEngine} beans as a {@link List}; an empty list means no engine, more than one triggers
-   * the same ambiguity guard used by {@link #postgresEventStoreFactory}/{@link #sagaStore}/{@link
-   * #deadLetterRetryRunner}.
+   * time via {@code CryptoConfigValidator}; if a registered command carries an {@code @Encrypted}
+   * field but no {@link CryptoEngine} bean is configured, startup fails instead of silently
+   * dead-lettering that PII as plaintext. Micronaut injects all {@link CryptoEngine} beans as a
+   * {@link List}; an empty list means no engine, more than one triggers the same ambiguity guard
+   * used by {@link #postgresEventStoreFactory}/{@link #sagaStore}/{@link #deadLetterRetryRunner}.
    *
    * <p><b>Dead-letter queue &amp; metrics (parity with Spring):</b> when an optional {@link
    * org.streamrune.core.DeadLetterQueue} bean is present it is wired into the bus so commands that
@@ -635,7 +634,7 @@ public class StreamRuneMicronautModule {
    *     to it through a crypto-aware mapper
    * @param metrics optional metrics collector; when present, command-bus meters are recorded
    * @param allowGraalJit the value of {@value org.streamrune.runtime.GraalJitGuard#ALLOW_PROPERTY}:
-   *     {@code true} builds the bus on a JVM {@link org.streamrune.runtime.GraalJitGuard} refuses
+   *     {@code true} builds the bus on a JVM {@code GraalJitGuard} refuses
    * @return a new {@link VirtualThreadCommandBus}
    * @throws IllegalStateException if multiple CryptoEngine beans exist, if a registered command
    *     type has an {@code @Encrypted} field with no CryptoEngine configured, or if {@link
@@ -1752,11 +1751,11 @@ public class StreamRuneMicronautModule {
   }
 
   /**
-   * Creates an {@link org.streamrune.core.upcasting.UpcasterChain} when at least one {@link
+   * Creates an {@code UpcasterChain} when at least one {@link
    * org.streamrune.core.upcasting.EventUpcaster} bean is available.
    *
    * @param upcasters all registered event upcasters
-   * @return a new {@link org.streamrune.core.upcasting.UpcasterChain}
+   * @return a new {@code UpcasterChain}
    */
   @Singleton
   @Secondary

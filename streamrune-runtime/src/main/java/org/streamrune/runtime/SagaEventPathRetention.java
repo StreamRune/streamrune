@@ -2,6 +2,7 @@ package org.streamrune.runtime;
 
 import java.time.Duration;
 import java.util.Collection;
+import org.streamrune.core.Internal;
 
 /**
  * Supplies {@code streamrune.inbox.retention-max-age} to the <b>event path's</b> key-age guard on
@@ -18,7 +19,7 @@ import java.util.Collection;
  * that does not reach the default wiring is not a fix, so the auto-configurations now push the
  * property in here.
  *
- * <p><b>The application still wins.</b> {@link #applyDefault} only touches a runner whose builder
+ * <p><b>The application still wins.</b> {@code applyDefault} only touches a runner whose builder
  * never named {@link SagaRunner.Builder#inboxRetentionMaxAge(Duration)}, so an explicit value —
  * including a deliberate zero/negative "leave this guard off" — is never overwritten.
  *
@@ -27,9 +28,9 @@ import java.util.Collection;
  * retention window). A delivery that raced the startup hook therefore takes the OLD decision, never
  * a wrong new one, and every subsequent delivery sees the configured window.
  *
- * <p>Lives in {@code org.streamrune.runtime} for the same reason {@link SagaStateCryptoValidation}
- * does: it needs {@link SagaRunner}'s package-private state, and the three integration modules call
- * a small public entry point.
+ * <p>{@code applyDefault} is {@link Internal}: the three integration modules call it, and it needs
+ * {@link SagaRunner}'s package-private state. {@link #effectiveWindowOf} is a public read-side
+ * probe: a test or a diagnostic asks it which window a runner enforces after startup.
  */
 public final class SagaEventPathRetention {
 
@@ -43,7 +44,9 @@ public final class SagaEventPathRetention {
    * @param inboxRetentionMaxAge the configured {@code streamrune.inbox.retention-max-age}; {@code
    *     null}, zero or negative means the inbox sweeper is disabled and the guard stays inert
    * @return how many runners took the default (for the caller's startup log)
+   * @hidden
    */
+  @Internal
   public static int applyDefault(
       Collection<? extends SagaRunner<?>> sagaRunners, Duration inboxRetentionMaxAge) {
     if (sagaRunners == null || sagaRunners.isEmpty()) {
@@ -59,11 +62,12 @@ public final class SagaEventPathRetention {
   }
 
   /**
-   * The window {@code runner}'s event path will actually enforce, or {@code null} when the key-age
-   * guard is inert on it. Zero/negative inputs are normalized to {@code null} here, exactly as the
-   * three out-of-band re-drivers normalize theirs.
+   * The window {@code sagaRunner}'s event path will actually enforce, or {@code null} when the
+   * key-age guard is inert on it. Zero/negative inputs are normalized to {@code null} here, exactly
+   * as the three out-of-band re-drivers normalize theirs.
    *
    * @param sagaRunner the runner to inspect (required)
+   * @return the enforced window, or {@code null} when the guard is inert
    */
   public static Duration effectiveWindowOf(SagaRunner<?> sagaRunner) {
     return sagaRunner.inboxRetentionMaxAge();

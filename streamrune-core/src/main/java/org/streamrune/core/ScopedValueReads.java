@@ -11,7 +11,10 @@ import java.util.Objects;
  * architecture test of the build holds it to, so every read has one implementation. Application
  * code reads the request context through {@link StreamRuneContext#capture()} and {@link
  * StreamRuneContext#cause()}, which read here too.
+ *
+ * @hidden
  */
+@Internal
 public final class ScopedValueReads {
 
   /** The answer of a read of a value that is not bound; never bound itself. */

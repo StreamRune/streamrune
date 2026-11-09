@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.LongSupplier;
 import org.streamrune.core.AggregateHistory;
+import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxStore;
@@ -287,6 +288,13 @@ final class ForwardingDecoratorChecks {
     if (type == EventStore.IdempotentAppendResult.class) {
       return new EventStore.IdempotentAppendResult(List.of(), new Version(n), variant == 0);
     }
+    if (type == CommandBus.CommandResult.class) {
+      return new CommandBus.CommandResult(
+          List.of(),
+          StreamId.of(AggregateType.of("type" + n), AggregateId.of("id-" + n)),
+          new Version(n),
+          List.of(GlobalOffset.of(n)));
+    }
     if (type == OutboxStore.BlockageSample.class) {
       return new OutboxStore.BlockageSample(n, Instant.ofEpochSecond(n), n + 1L);
     }
@@ -310,6 +318,7 @@ final class ForwardingDecoratorChecks {
     for (Class<?> type :
         List.of(
             AggregateHistory.class,
+            CommandBus.CommandResult.class,
             EventStore.AppendResult.class,
             EventStore.IdempotentAppendResult.class,
             OutboxStore.BlockageSample.class,

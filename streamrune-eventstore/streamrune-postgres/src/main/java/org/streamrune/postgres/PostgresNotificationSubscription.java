@@ -820,9 +820,9 @@ public final class PostgresNotificationSubscription implements EventSubscription
   }
 
   /**
-   * Creates a dedicated single-connection HikariDataSource for LISTEN. This is separate from the
-   * main connection pool because LISTEN requires a long-lived, dedicated connection. The pool makes
-   * no connection of its own on construction: the listen loop that borrows from it owns the first
+   * Creates a dedicated single-connection DataSource for LISTEN. This is separate from the main
+   * connection pool because LISTEN requires a long-lived, dedicated connection. The pool makes no
+   * connection of its own on construction: the listen loop that borrows from it owns the first
    * connect and every reconnect, so a server that is unreachable at that moment is a retried
    * failure there, not a failed construction here.
    *
@@ -841,13 +841,22 @@ public final class PostgresNotificationSubscription implements EventSubscription
    * method refuses them: build the LISTEN DataSource yourself and pass it to {@link
    * Builder#listenDataSource(DataSource)}.
    *
-   * <p>The returned DataSource should be closed when the subscription is closed.
+   * <p>A subscription built with the returned DataSource closes it with itself. The pool behind it
+   * is HikariCP's; {@code unwrap(HikariDataSource.class)} reaches it.
    *
    * @param dataSource the original DataSource (the source of the JDBC URL)
-   * @return a dedicated HikariDataSource with maxPoolSize=1 for LISTEN
+   * @return a dedicated pool of one connection for LISTEN
    * @throws IllegalArgumentException if no JDBC URL can be read off {@code dataSource}
    */
-  public static HikariDataSource createListenDataSource(DataSource dataSource) {
+  public static ListenDataSource createListenDataSource(DataSource dataSource) {
+    return new PooledListenDataSource(createListenPool(dataSource));
+  }
+
+  /**
+   * The HikariCP pool behind {@link #createListenDataSource(DataSource)}; {@link
+   * PgNotificationListener} closes it itself, and the tests of this package read its settings.
+   */
+  static HikariDataSource createListenPool(DataSource dataSource) {
     String jdbcUrl;
     String dataSourceClassName = null;
     String username = null;

@@ -9,6 +9,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.sql.DataSource;
 import org.streamrune.core.AggregateLocker;
 import org.streamrune.core.LockException;
@@ -38,12 +39,14 @@ import org.streamrune.core.types.StreamId;
  * its connection from the <em>same</em> pool the event store uses, then at ~half the pool size in
  * concurrent commands the pool deadlocks: each command holds a lock connection and all block
  * waiting for a second connection that no one can release (a hold-and-wait herd stall that surfaces
- * as connection-timeout failures under load). Prefer {@link #withDedicatedPool(String, String,
- * String, int)}, which backs the locker with its own small pool so lock connections never compete
- * with the event store's load/append connections — the event-store pool then needs to cover only
- * concurrent load/append (size ≈ concurrent commands), not 2× that. If you instead pass the shared
- * event-store {@link DataSource} to {@link #PgAdvisoryLocker(DataSource)}, size that pool for at
- * least 2× the expected concurrent command throughput.
+ * as connection-timeout failures under load). Prefer a dedicated pool — {@link
+ * #withDedicatedPool(DataSource)} for a pool of any library the application builds, or the HikariCP
+ * convenience {@link #withDedicatedPool(String, String, String, int)} — which backs the locker with
+ * its own small pool so lock connections never compete with the event store's load/append
+ * connections — the event-store pool then needs to cover only concurrent load/append (size ≈
+ * concurrent commands), not 2× that. If you instead pass the shared event-store {@link DataSource}
+ * to {@link #PgAdvisoryLocker(DataSource)}, size that pool for at least 2× the expected concurrent
+ * command throughput.
  *
  * <p><b>A nested dispatch on a DIFFERENT aggregate needs one more lock connection.</b> {@code
  * VirtualThreadCommandBus} is reentrant on the SAME thread for the SAME aggregate — a follow-up
@@ -77,19 +80,42 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
   private final DataSource dataSource;
 
   /**
-   * The pool this locker owns and must close, or {@code null} when the {@link DataSource} was
-   * supplied by the caller (who owns its lifecycle). Only set by {@link #withDedicatedPool}.
+   * The pool this locker owns and closes, or {@code null} when the {@link DataSource} was supplied
+   * by the caller (who owns its lifecycle) or is not {@link AutoCloseable}. Only set by {@link
+   * #withDedicatedPool}.
    */
-  private final HikariDataSource ownedPool;
+  private final AutoCloseable ownedPool;
+
+  private final AtomicBoolean closed = new AtomicBoolean();
 
   public PgAdvisoryLocker(DataSource dataSource) {
     this(dataSource, null);
   }
 
-  private PgAdvisoryLocker(DataSource dataSource, HikariDataSource ownedPool) {
+  private PgAdvisoryLocker(DataSource dataSource, AutoCloseable ownedPool) {
     if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
     this.dataSource = dataSource;
     this.ownedPool = ownedPool;
+  }
+
+  /**
+   * Creates a locker backed by a connection pool the application built for it alone, of any pool
+   * library: the locker needs only connections. The pool is dedicated to the locker, separate from
+   * the event store's pool, for the reason the class javadoc gives; size it for the expected
+   * maximum number of concurrent in-flight commands, and let it fail a borrow after a bounded wait
+   * rather than queue forever.
+   *
+   * <p>The returned locker <em>owns</em> the pool: {@link #close()} closes it when it is {@link
+   * AutoCloseable}. Hand it the application's own pool and that pool is closed with the locker; use
+   * {@link #PgAdvisoryLocker(DataSource)} for a pool the locker must not close.
+   *
+   * @param pool the dedicated pool, on the database the event store uses (required)
+   * @return a locker backed by {@code pool}
+   * @throws IllegalArgumentException if {@code pool} is null
+   */
+  public static PgAdvisoryLocker withDedicatedPool(DataSource pool) {
+    if (pool == null) throw new IllegalArgumentException("pool is required");
+    return new PgAdvisoryLocker(pool, pool instanceof AutoCloseable closeable ? closeable : null);
   }
 
   /**
@@ -102,6 +128,9 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    * <p>The returned locker <em>owns</em> the pool and must be {@link #close() closed} to release
    * it. The pool reports to no metrics tracker; {@link #withDedicatedPool(String, String, String,
    * int, MetricsTrackerFactory)} takes one.
+   *
+   * <p>This overload and the next build a HikariCP pool, the pool library this module depends on,
+   * as a convenience; {@link #withDedicatedPool(DataSource)} takes a pool built with any library.
    *
    * <p><b>Idle connections.</b> While no command holds a lock the pool keeps two connections open
    * ({@code maxPoolSize} when that is smaller), and it opens the others when commands hold locks at
@@ -177,20 +206,30 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
 
   /** The minimum idle connections of the pool this locker owns; for the tests of this package. */
   int dedicatedPoolMinimumIdle() {
-    if (ownedPool == null) {
-      throw new IllegalStateException("this locker owns no pool");
+    if (!(ownedPool instanceof HikariDataSource pool)) {
+      throw new IllegalStateException("this locker owns no HikariCP pool");
     }
-    return ownedPool.getMinimumIdle();
+    return pool.getMinimumIdle();
   }
 
   /**
    * Closes the dedicated pool this locker owns, if any. A no-op for a locker built from a
-   * caller-supplied {@link DataSource} (the caller owns that pool's lifecycle). Idempotent.
+   * caller-supplied {@link DataSource} (the caller owns that pool's lifecycle). Idempotent: the
+   * pool is closed once.
+   *
+   * @throws IllegalStateException if closing the owned pool throws a checked exception (its cause)
    */
   @Override
   public void close() {
-    if (ownedPool != null && !ownedPool.isClosed()) {
+    if (ownedPool == null || !closed.compareAndSet(false, true)) {
+      return;
+    }
+    try {
       ownedPool.close();
+    } catch (RuntimeException e) {
+      throw e;
+    } catch (Exception e) {
+      throw new IllegalStateException("could not close the dedicated lock pool", e);
     }
   }
 

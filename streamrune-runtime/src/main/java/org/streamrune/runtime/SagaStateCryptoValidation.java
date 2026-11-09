@@ -3,6 +3,7 @@ package org.streamrune.runtime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import org.streamrune.core.Internal;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CryptoConfigValidator;
 
@@ -24,7 +25,10 @@ import org.streamrune.crypto.CryptoConfigValidator;
  * #validate(Collection, CryptoEngine)} at startup from their registered {@code SagaRunner} beans,
  * next to the existing command/event/state validations, giving {@code @Encrypted} saga fields the
  * same fail-closed treatment.
+ *
+ * @hidden
  */
+@Internal
 public final class SagaStateCryptoValidation {
 
   private SagaStateCryptoValidation() {}

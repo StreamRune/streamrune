@@ -717,7 +717,7 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
             .pollInterval(Duration.ofMillis(10))
             .until(() -> done.getAsBoolean() || bus.hasDied());
       } finally {
-        timeouts.stop();
+        timeouts.close();
       }
     }
 

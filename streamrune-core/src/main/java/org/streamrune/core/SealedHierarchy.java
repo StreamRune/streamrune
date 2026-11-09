@@ -38,7 +38,10 @@ import java.util.List;
  * MissingReflectionRegistrationError} from {@code getPermittedSubclasses()} instead; that error is
  * left to propagate. A type that is not sealed (a record, a final or non-sealed class, a non-sealed
  * interface, an array, a primitive) has no permitted subclasses to walk.
+ *
+ * @hidden
  */
+@Internal
 public final class SealedHierarchy {
 
   private SealedHierarchy() {}

@@ -13,8 +13,8 @@ import java.lang.annotation.Target;
  * reaches the Decider. When combined with {@link RequireRole}, both must be satisfied (AND).
  *
  * <p>May be placed on the command class itself or on any interface or superclass in its hierarchy
- * (e.g. a sealed command interface shared by several command records). Lookup is performed via
- * {@link AuthorizationAnnotations}; the declaration nearest to the command class wins.
+ * (e.g. a sealed command interface shared by several command records). The authorization
+ * interceptors look it up across that hierarchy; the declaration nearest to the command class wins.
  *
  * <p>Example:
  *

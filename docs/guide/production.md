@@ -866,8 +866,11 @@ connection of the locker's own pool for the whole command. To observe that pool,
 `withDedicatedPool(jdbcUrl, username, password, maxPoolSize, metricsTrackerFactory)`:
 `new MicrometerMetricsTrackerFactory(registry)` gives `hikaricp.connections.*` tagged with the pool's
 name, `streamrune-advisory-lock`; without one, the lock pool's saturation shows only as failed lock
-acquisitions (a `LockException` after the pool's 10-second connection timeout). The integration's
-default steps aside for an application's bean:
+acquisitions (a `LockException` after the pool's 10-second connection timeout). These two build a
+HikariCP pool as a convenience; `PgAdvisoryLocker.withDedicatedPool(pool)` takes a `DataSource` the
+application built for the locker alone, with any pool library (on Quarkus, an Agroal pool), and
+closes it with the locker when it is `AutoCloseable` — size it as below and give it a bounded
+borrow timeout. The integration's default steps aside for an application's bean:
 
 ```java
 // Spring: the auto-configured locker is @ConditionalOnMissingBean(AggregateLocker.class).

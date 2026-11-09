@@ -1,5 +1,6 @@
 package org.streamrune.core.saga;
 
+import org.streamrune.core.Internal;
 import org.streamrune.core.types.LogSanitizer;
 
 /**
@@ -58,7 +59,12 @@ public final class SagaUnstampedCompensationEpisodeException extends IllegalStat
     this.sagaId = sagaId;
   }
 
-  /** For a loaded row: names both halves of the stamp as the row carries them. */
+  /**
+   * For a loaded row: names both halves of the stamp as the row carries them.
+   *
+   * @hidden
+   */
+  @Internal
   public static SagaUnstampedCompensationEpisodeException ofRow(SagaId sagaId, LoadedSaga<?> row) {
     return new SagaUnstampedCompensationEpisodeException(
         sagaId,
@@ -71,7 +77,10 @@ public final class SagaUnstampedCompensationEpisodeException extends IllegalStat
   /**
    * For a {@link SagaStore.CompensatingSaga} the sweeper enumerated without a claim instant (the
    * enumeration surfaces only {@code episode_claimed_at}).
+   *
+   * @hidden
    */
+  @Internal
   public static SagaUnstampedCompensationEpisodeException ofEnumeration(SagaId sagaId) {
     return new SagaUnstampedCompensationEpisodeException(
         sagaId, "episode_claimed_at=null, as surfaced by SagaStore.findCompensating");

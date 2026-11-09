@@ -47,6 +47,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.Internal;
 import org.streamrune.core.LockException;
 import org.streamrune.core.NoDeciderException;
 import org.streamrune.core.OptimisticLockException;
@@ -90,8 +91,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * execute(...)}: while bound, a failing execution is NOT published to the DLQ again — the retry
    * infrastructure already tracks attempts on the original entry, and republishing would create a
    * new entry on every retry cycle (unbounded entry multiplication).
+   *
+   * <p>Bound by the runtime only; application code does not bind it.
+   *
+   * @hidden
    */
-  public static final ScopedValue<Boolean> DLQ_REPLAY = ScopedValue.newInstance();
+  @Internal public static final ScopedValue<Boolean> DLQ_REPLAY = ScopedValue.newInstance();
 
   /**
    * Default {@link Builder#dlqEligible(Predicate)}: excludes permanent rejections — {@link
@@ -161,7 +166,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   private final UnaryOperator<Runnable> asyncTaskWrapper;
   private final Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
 
-  /** Whether this bus was built with the opt-out of {@link GraalJitGuard}. */
+  /** Whether this bus was built with the opt-out of {@code GraalJitGuard}. */
   private final boolean allowGraalJit;
 
   private final Clock clock;
@@ -292,7 +297,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
-   * Whether this bus was built with the opt-out of {@link GraalJitGuard} ({@link
+   * Whether this bus was built with the opt-out of {@code GraalJitGuard} ({@link
    * Builder#allowGraalJit(boolean)}, or the system property {@value GraalJitGuard#ALLOW_PROPERTY}).
    *
    * @return {@code true} when a JVM the guard refuses would start with an {@code ERROR} line
@@ -307,7 +312,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * <p>The event store's {@link EventStore#sagaFenceStorageIdentity()}: this bus hands every keyed
    * append the saga to fence it against ({@code fenceOrigin}) — for a command a saga handed it, the
    * handed saga when the command is a fenced forward command; for any other command, the forward
-   * marker bound for its key ({@link StreamRuneContext#sagaForwardOf}) — and the event store fences
+   * marker bound for its key ({@code StreamRuneContext.sagaForwardOf}) — and the event store fences
    * it.
    */
   @Override
@@ -815,8 +820,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * runnable throws before running the command, the future fails with that throwable.
    *
    * <p>Caller context that does not cross {@code Thread.start()} is captured at submission: {@link
-   * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED} and
-   * {@link StreamRuneContext#CAUSE} are re-bound on the new thread, and the configured {@link
+   * StreamRuneContext#CURRENT}, {@code DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED} and {@link
+   * StreamRuneContext#CAUSE} are re-bound on the new thread, and the configured {@link
    * Builder#asyncTaskWrapper(UnaryOperator) asyncTaskWrapper} can capture other thread-bound state
    * such as the current OpenTelemetry context. When {@code CURRENT} is not bound at submission, the
    * {@link Builder#unboundRequestContext(Supplier) unbound-request-context source} is asked on the
@@ -916,7 +921,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   /**
    * Builds the runnable that {@link #executeAsync} runs on its new virtual thread. Runs on the
    * submitting thread so caller context can be captured before it is lost: ScopedValues ({@link
-   * StreamRuneContext#CURRENT}, {@link #DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED}, {@link
+   * StreamRuneContext#CURRENT}, {@code DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED}, {@link
    * StreamRuneContext#CAUSE}) don't inherit across {@code Thread.start()} and are re-bound via a
    * carrier, and the configured {@link Builder#asyncTaskWrapper(java.util.function.UnaryOperator)
    * asyncTaskWrapper} is applied here so it can capture thread-bound caller state such as the
@@ -1536,7 +1541,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    *
    * @return the entry that holds the command — the one this call stored, or the one the queue held
    *     under the key already — or {@code null} when none does: no queue is configured, the
-   *     execution replays an entry ({@link #DLQ_REPLAY}), a saga dispatched the command, a dispatch
+   *     execution replays an entry ({@code DLQ_REPLAY}), a saga dispatched the command, a dispatch
    *     cause is bound, or the publish failed (its exception is attached to {@code exception} as
    *     suppressed)
    */
@@ -1957,7 +1962,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   /**
    * The saga to fence a keyed append against. For a dispatch a saga handed its saga to, the handed
    * saga when its command is a fenced forward command, and none otherwise. For any other dispatch,
-   * the forward marker bound for {@code key} ({@link StreamRuneContext#sagaForwardOf}), so a keyed
+   * the forward marker bound for {@code key} ({@code StreamRuneContext.sagaForwardOf}), so a keyed
    * command nested inside a saga's forward command is not fenced.
    */
   static SagaOrigin fenceOrigin(SagaDispatchOffer dispatched, IdempotencyKey key) {
@@ -2466,7 +2471,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
-     * Whether {@link #build()} builds the bus on a JVM that {@link GraalJitGuard} refuses: one that
+     * Whether {@link #build()} builds the bus on a JVM that {@code GraalJitGuard} refuses: one that
      * runs the Graal JIT, which is not reliable with StreamRune, or a GraalVM runtime whose options
      * the guard cannot read. {@code true} builds it with one {@code ERROR} line per JVM, at the
      * application's own risk. Not set, the system property {@value GraalJitGuard#ALLOW_PROPERTY}
@@ -2534,19 +2539,6 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
-     * Registers a decider for a command type under an aggregate type, with an aggregate ID
-     * extractor. Alias for register() for clearer intent.
-     */
-    public <C extends Command, S extends AggregateState, E extends DomainEvent>
-        Builder registerDecider(
-            AggregateType aggregateType,
-            Class<C> commandType,
-            Function<C, AggregateId> idExtractor,
-            Decider<C, S, E> decider) {
-      return register(aggregateType, commandType, idExtractor, decider);
-    }
-
-    /**
      * Refuses a registered command type that requires authorization while no {@link
      * AnnotationAuthorizationInterceptor} is among the interceptors — the check {@link #build()}
      * runs. {@link StreamRune.Builder} runs it before it creates the event store, so a refused
@@ -2567,12 +2559,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * by this bus: the build is refused unless an {@link AnnotationAuthorizationInterceptor} is
      * among the {@link #interceptors}. The rule is checked against what this builder was given, so
      * a bus built by hand is held to it exactly like one a framework integration assembles; see
-     * {@link AuthorizationConfigurationValidator}. The interceptor counts only as a member of the
+     * {@code AuthorizationConfigurationValidator}. The interceptor counts only as a member of the
      * chain itself: wrapped in {@link CommandInterceptor#compose} or a decorator it is not seen.
      *
-     * <p>It first runs {@link GraalJitGuard} on the running JVM.
+     * <p>It first runs {@code GraalJitGuard} on the running JVM.
      *
-     * @throws IllegalStateException if the JVM is one {@link GraalJitGuard} refuses and {@link
+     * @throws IllegalStateException if the JVM is one {@code GraalJitGuard} refuses and {@link
      *     #allowGraalJit(boolean)} does not allow it, if no event store was set, or if a registered
      *     command type requires authorization and no {@link AnnotationAuthorizationInterceptor} is
      *     among the interceptors — the annotations would be ignored and the command would run

@@ -102,7 +102,7 @@ class SagaTimeoutRunnerFollowerTest {
         assertThat(statusOf(relay, "saga-timeout:" + SagaStepLockFixture.TYPE.value()))
             .isEqualTo(Status.DEGRADED);
       } finally {
-        p.timeoutRunner.stop();
+        p.timeoutRunner.close();
       }
     }
   }
@@ -126,7 +126,7 @@ class SagaTimeoutRunnerFollowerTest {
         assertThat(lines(Level.INFO)).isEmpty();
         assertThat(lines(Level.WARN)).isEmpty();
       } finally {
-        p.timeoutRunner.stop();
+        p.timeoutRunner.close();
         anchor.close();
       }
     }
@@ -185,7 +185,7 @@ class SagaTimeoutRunnerFollowerTest {
   void startAndStopNeitherAcquireNorResign() {
     try (var p = new SagaStepLockFixture(leadership, Duration.ofHours(1))) {
       p.timeoutRunner.start();
-      p.timeoutRunner.stop();
+      p.timeoutRunner.close();
 
       assertThat(leadership.tryAcquires(LEASE)).isZero();
       assertThat(leadership.resigns(LEASE)).isZero();
@@ -245,7 +245,7 @@ class SagaTimeoutRunnerFollowerTest {
       assertThat(anchor.lead(Duration.ZERO)).isTrue();
       p.timeoutRunner.start();
 
-      p.timeoutRunner.stop();
+      p.timeoutRunner.close();
 
       assertThat(stopLines(Level.WARN))
           .singleElement()
@@ -266,7 +266,7 @@ class SagaTimeoutRunnerFollowerTest {
       assertThat(anchor.lead(Duration.ZERO)).isFalse();
       p.timeoutRunner.start();
 
-      p.timeoutRunner.stop();
+      p.timeoutRunner.close();
 
       assertThat(stopLines(Level.WARN)).isEmpty();
       anchor.close();
@@ -280,7 +280,7 @@ class SagaTimeoutRunnerFollowerTest {
       SubscriptionLease.Anchor anchor = p.runner.lease().anchor();
       assertThat(anchor.lead(Duration.ZERO)).isTrue();
 
-      p.timeoutRunner.stop();
+      p.timeoutRunner.close();
 
       assertThat(stopLines(Level.WARN)).isEmpty();
       anchor.close();

@@ -853,8 +853,8 @@ public class StreamRuneProducers {
    * end-to-end if the event store knows about it. Supplying a {@code CommandInbox} that is not a
    * {@link PostgresCommandInbox} therefore also requires supplying your own {@code
    * EventStoreFactory}/{@code EventStore} whose {@code appendWithKey} claims the key atomically;
-   * {@link org.streamrune.integration.CommandInboxWiringValidator} fails startup on the mismatched
-   * half-override rather than letting every keyed execution break at runtime.
+   * {@code CommandInboxWiringValidator} fails startup on the mismatched half-override rather than
+   * letting every keyed execution break at runtime.
    */
   @Produces
   @DefaultBean
@@ -1100,9 +1100,9 @@ public class StreamRuneProducers {
    * a {@code BeanManager} lookup (see {@link CommandInterceptorBeans}).
    *
    * <p><b>Fail-fast on {@code @Encrypted} command fields:</b> command types are validated at wiring
-   * time via {@link org.streamrune.crypto.CryptoConfigValidator}; if a registered command carries
-   * an {@code @Encrypted} field but no {@link CryptoEngine} bean is configured, startup fails
-   * instead of silently dead-lettering that PII as plaintext.
+   * time via {@code CryptoConfigValidator}; if a registered command carries an {@code @Encrypted}
+   * field but no {@link CryptoEngine} bean is configured, startup fails instead of silently
+   * dead-lettering that PII as plaintext.
    *
    * <p><b>Dead-letter queue &amp; metrics (parity with Spring):</b> when an optional {@link
    * org.streamrune.core.DeadLetterQueue} bean is present it is wired into the bus so commands that
@@ -1697,9 +1697,9 @@ public class StreamRuneProducers {
   }
 
   /**
-   * Produces an {@link org.streamrune.core.upcasting.UpcasterChain} aggregating all registered
-   * {@link org.streamrune.core.upcasting.EventUpcaster} beans. Dependent-scoped optional bean:
-   * returns {@code null} when no upcasters are registered.
+   * Produces an {@code UpcasterChain} aggregating all registered {@link
+   * org.streamrune.core.upcasting.EventUpcaster} beans. Dependent-scoped optional bean: returns
+   * {@code null} when no upcasters are registered.
    */
   @Produces
   @DefaultBean

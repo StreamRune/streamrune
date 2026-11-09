@@ -62,10 +62,9 @@ public interface SnapshotMigration {
    * The concrete class {@link #migrate} is expected to return, or {@code null} (the default) if
    * this step declares none.
    *
-   * <p>When declared, {@link SnapshotMigrationChain#migrate} verifies the step's return value is an
-   * instance of this class and fails fast — the same "programming error in this step, not a chain
-   * configuration gap" treatment as a step returning {@code null} — if it is not. Undeclared, no
-   * check runs.
+   * <p>When declared, the migration chain verifies the step's return value is an instance of this
+   * class and fails fast — the same "programming error in this step, not a chain configuration gap"
+   * treatment as a step returning {@code null} — if it is not. Undeclared, no check runs.
    *
    * <p>This exists to close a specific silent-corruption path: a step that returns its INPUT
    * unchanged (or any other wrong-shaped object) instead of the upgraded state passes {@link

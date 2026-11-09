@@ -35,9 +35,9 @@ public class NoDeciderException extends IllegalArgumentException {
     sb.append("No decider registered for command interface ")
         .append(commandType.getSimpleName())
         .append(".\n");
-    sb.append("Did you forget to call: .registerDecider(")
+    sb.append("Did you forget to call: .register(aggregateType, ")
         .append(commandType.getSimpleName())
-        .append(".class, decider) ?\n");
+        .append(".class, idExtractor, decider) ?\n");
     if (!available.isEmpty()) {
       sb.append("Available commands: ");
       sb.append(
@@ -46,7 +46,7 @@ public class NoDeciderException extends IllegalArgumentException {
       sb.append("Available commands: []");
     }
     sb.append(
-        "\nHint: Make sure your command is a sealed interface or class registered in StreamRune builder.");
+        "\nHint: Make sure your command is a sealed interface or class registered with the command bus builder.");
     return sb.toString();
   }
 }

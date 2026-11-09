@@ -143,7 +143,7 @@ public class ScopedValueFilter implements Filter {
 
   /**
    * Creates a filter that allowlists the {@code extraAllowedBaggageKeys} baggage keys (the
-   * framework's own {@link BaggageAllowlist#DEFAULT_ALLOWED_KEYS} is empty). Its identity policy is
+   * framework's own {@code BaggageAllowlist.DEFAULT_ALLOWED_KEYS} is empty). Its identity policy is
    * {@link RequestIdentityPolicy.Mode#ANONYMOUS} — every request runs without a user or a role, and
    * the {@code X-User-Id} and {@code X-User-Role} headers are ignored — and no {@link
    * UserRoleResolver} is wired, so no authority is captured at the request edge. The

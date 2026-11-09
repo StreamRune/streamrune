@@ -20,6 +20,7 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
 
 class StreamRuneFacadeTest {
@@ -109,30 +110,6 @@ class StreamRuneFacadeTest {
   }
 
   @Test
-  void withEventStoreIsAlias() {
-    var store = new InMemoryEventStore();
-    var streamRune =
-        StreamRune.builder()
-            .withEventStore(store)
-            .locker(new LocalStripedLocker(16))
-            .register(
-                TYPE,
-                Cmd.class,
-                c ->
-                    switch (c) {
-                      case Cmd.Inc i -> AggregateId.of(i.id());
-                    },
-                new Dec())
-            .build();
-    try {
-      withCtx(() -> streamRune.execute(new Cmd.Inc("counter-1")));
-      assertEquals(1, store.load(StreamId.of(TYPE, AggregateId.of("counter-1"))).events().size());
-    } finally {
-      streamRune.close();
-    }
-  }
-
-  @Test
   void doubleCloseIsIdempotent() {
     // StreamRune.close() delegates to VirtualThreadCommandBus.close(), which is idempotent
     // per the AutoCloseable convention: a repeated close() waits for any remaining in-flight
@@ -192,13 +169,15 @@ class StreamRuneFacadeTest {
   }
 
   @Test
-  void registerDeciderIsAlias() {
-    var store = new InMemoryEventStore();
+  void commandInbox_reachesTheBus_soAKeyedCommandRunsOnceAndItsRepeatIsAReplay() {
+    var inbox = new InMemoryCommandInbox();
+    var store = new InMemoryEventStore().withCommandInbox(inbox);
     try (var streamRune =
         StreamRune.builder()
             .eventStore(store)
+            .commandInbox(inbox)
             .locker(new LocalStripedLocker(16))
-            .registerDecider(
+            .register(
                 TYPE,
                 Cmd.class,
                 c ->
@@ -207,8 +186,15 @@ class StreamRuneFacadeTest {
                     },
                 new Dec())
             .build()) {
-      withCtx(() -> streamRune.execute(new Cmd.Inc("counter-2")));
-      assertEquals(1, store.load(StreamId.of(TYPE, AggregateId.of("counter-2"))).events().size());
+      assertTrue(streamRune.supportsIdempotentExecution());
+      withCtx(
+          () -> {
+            var first = streamRune.execute(new Cmd.Inc("counter-3"), IdempotencyKey.of("k-3"));
+            var repeat = streamRune.execute(new Cmd.Inc("counter-3"), IdempotencyKey.of("k-3"));
+            assertFalse(first.shortCircuited());
+            assertTrue(repeat.idempotentReplay());
+          });
+      assertEquals(1, store.load(StreamId.of(TYPE, AggregateId.of("counter-3"))).events().size());
     }
   }
 }

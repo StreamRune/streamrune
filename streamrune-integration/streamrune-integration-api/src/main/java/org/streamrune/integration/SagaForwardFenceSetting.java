@@ -17,7 +17,7 @@ import java.util.Locale;
  * <p>The three integrations bind the property as a {@code String} and parse it here, so all three
  * read the same spellings. YAML 1.1 reads an unquoted {@code on}/{@code off} as a boolean, and the
  * Spring and Micronaut binders then hand over the text {@code true}/{@code false}; those, and the
- * other boolean spellings {@link RelaxedBoolean} accepts, mean {@link #ON}/{@link #OFF}.
+ * other boolean spellings {@code RelaxedBoolean} accepts, mean {@link #ON}/{@link #OFF}.
  */
 public enum SagaForwardFenceSetting {
   AUTO,

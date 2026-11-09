@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import org.streamrune.core.Internal;
 import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.audit.EventAuditQuery;
 import org.streamrune.core.audit.EventAuditStore;
@@ -29,7 +30,10 @@ import org.streamrune.core.types.UserId;
  * <p>All {@code find*} methods return results sorted by {@link EventAuditEntry#occurredAt()}
  * ascending. {@link #traceFullCausationChain(EventId)} uses iterative breadth-first search (BFS)
  * starting from the root event, following causation links downstream.
+ *
+ * @hidden
  */
+@Internal
 public final class InMemoryEventAuditStore implements EventAuditStore, EventAuditQuery {
 
   private final List<EventAuditEntry> entries = new CopyOnWriteArrayList<>();
