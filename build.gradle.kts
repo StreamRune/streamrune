@@ -895,11 +895,11 @@ subprojects {
             ":streamrune-integration:streamrune-micronaut" to "org.streamrune.micronaut",
             ":streamrune-integration:streamrune-spring-boot-starter"
                 to "org.streamrune.spring.boot.starter",
-            ":streamrune-crypto:streamrune-filesystem-crypto" to "org.streamrune.filesystem",
+            ":streamrune-crypto:streamrune-filesystem-crypto" to "org.streamrune.crypto.filesystem",
             ":streamrune-crypto:streamrune-postgres-crypto" to "org.streamrune.crypto.postgres",
-            ":streamrune-crypto:streamrune-vault-crypto" to "org.streamrune.vault",
-            ":streamrune-outbox:streamrune-kafka-outbox" to "org.streamrune.kafka",
-            ":streamrune-outbox:streamrune-rabbitmq-outbox" to "org.streamrune.rabbitmq")
+            ":streamrune-crypto:streamrune-vault-crypto" to "org.streamrune.crypto.vault",
+            ":streamrune-outbox:streamrune-kafka-outbox" to "org.streamrune.outbox.kafka",
+            ":streamrune-outbox:streamrune-rabbitmq-outbox" to "org.streamrune.outbox.rabbitmq")
 
         val hasModuleInfo = file("src/main/java/module-info.java").exists()
         val automaticModuleName = automaticModuleNames[project.path]

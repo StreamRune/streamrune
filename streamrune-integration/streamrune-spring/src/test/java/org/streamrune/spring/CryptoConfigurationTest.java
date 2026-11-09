@@ -10,9 +10,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.context.annotation.UserConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.streamrune.aws.AwsKmsCryptoEngine;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
+import org.streamrune.crypto.aws.AwsKmsCryptoEngine;
 
 /** Tests for crypto engine auto-configuration beans. */
 class CryptoConfigurationTest {
@@ -313,7 +313,7 @@ class CryptoConfigurationTest {
     assertFalse(
         engine instanceof org.streamrune.crypto.CachedCryptoEngine,
         "cache.enabled=false must NOT wrap in CachedCryptoEngine (no PII cached in heap)");
-    assertInstanceOf(org.streamrune.filesystem.FileSystemCryptoEngine.class, engine);
+    assertInstanceOf(org.streamrune.crypto.filesystem.FileSystemCryptoEngine.class, engine);
   }
 
   @Test
@@ -378,7 +378,7 @@ class CryptoConfigurationTest {
             ctx -> {
               assertThat(ctx).hasNotFailed();
               assertThat(ctx.getBean(CryptoEngine.class))
-                  .isInstanceOf(org.streamrune.filesystem.FileSystemCryptoEngine.class)
+                  .isInstanceOf(org.streamrune.crypto.filesystem.FileSystemCryptoEngine.class)
                   .isNotInstanceOf(org.streamrune.crypto.CachedCryptoEngine.class);
             });
     // Leaving run(...) closes the context; a throwing destroy method would surface here.
@@ -522,7 +522,7 @@ class CryptoConfigurationTest {
     // Mirrors the production crypto configs: inferred destroy method, may return a bare engine.
     @org.springframework.context.annotation.Bean
     CryptoEngine cryptoEngine() {
-      return org.streamrune.filesystem.FileSystemCryptoEngine.builder()
+      return org.streamrune.crypto.filesystem.FileSystemCryptoEngine.builder()
           .keyDirectory(java.nio.file.Path.of("/var/lib/streamrune/keys"))
           .build();
     }
