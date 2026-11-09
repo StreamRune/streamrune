@@ -823,7 +823,8 @@ license.
   inbox window disables pruning and makes every guard inert.
 - Retention: `SagaDeadLetterRetentionSweeper` prunes entries after
   `streamrune.saga.dead-letter-retention-max-age` (default 7 days), never a recovery handle.
-  `SagaRetentionValidator` refuses startup when that window exceeds the inbox window.
+  The integrations refuse startup when that window exceeds the inbox window (`SagaRetentionValidator`,
+  `@Internal`).
 - Lost saga-row write, run again in place: a delivery or a replay feed whose write of the saga row
   loses its compare-and-swap to another writer — a twin delivery, a deadline claim, another process —
   reads the row that won and routes the event on it again, up to three attempts in all, holding the
@@ -1234,7 +1235,9 @@ it, so always write the unit):
 - Startup validators, all fail-closed: `StreamRuneConfigValidator` (durations), `CommandInboxWiringValidator`,
   `SagaRetentionValidator`, `SagaStateCryptoValidator`, `StreamRuneAuthorizationValidator`,
   `StreamRuneRequestIdentityValidator`, the `@Encrypted`-without-engine check, and the JVM check
-  (`GraalJitGuard`, see Operations; `streamrune.jvm.allow-graal-jit`). A startup banner
+  (`GraalJitGuard`, see Operations; `streamrune.jvm.allow-graal-jit`). The two validators the
+  integrations share, `CommandInboxWiringValidator` and `SagaRetentionValidator`, and `GraalJitGuard` are
+  `@Internal`: the names a refused startup prints, not API. A startup banner
   (`streamrune.startup-log`) reports the active configuration.
 - Health: Spring Boot Actuator `streamRune` (`StreamRuneHealthIndicator`), Quarkus `@Readiness`
   `streamrune` (`StreamRuneHealthCheck`, always listed in `/q/health/ready`), Micronaut `streamrune`
@@ -1330,11 +1333,11 @@ it, so always write the unit):
 ## Operations
 
 - Supported JVMs: JDK 25 without the Graal JIT. On JDK 25 the Graal JIT is not reliable with
-  StreamRune and is not supported; `org.streamrune.runtime.GraalJitGuard`, run by
+  StreamRune and is not supported; the check (`org.streamrune.runtime.GraalJitGuard`, `@Internal`), run by
   `VirtualThreadCommandBus.Builder.build()` and when an integration starts, refuses to start on a JVM
   that runs it — and on a later JDK release with it, as not verified — with an
-  `IllegalStateException` that names the flags. The check accepts a JVM only when its JVMCI
-  compiler is off (`UseJVMCICompiler=false`); run GraalVM with
+  `IllegalStateException` that names the flags. The check accepts a JVM only when it reads its JVMCI
+  compiler as off (`UseJVMCICompiler=false`) or finds none; run GraalVM with
   `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`, the documented way to turn it off, which
   every JDK 25 HotSpot build we ran accepts. JVMs whose JIT is C2 (Temurin, Zulu) and native images
   were unaffected in our runs. The check reads the JVM's options through the module

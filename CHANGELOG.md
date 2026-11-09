@@ -112,7 +112,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 | `streamrune-vault-crypto` | `:streamrune-crypto:streamrune-vault-crypto` | `org.streamrune.crypto.vault` | `VaultCryptoEngine` — HashiCorp Vault transit engine. |
 | `streamrune-aws-kms-crypto` | `:streamrune-crypto:streamrune-aws-kms-crypto` | `org.streamrune.crypto.aws` | `AwsKmsCryptoEngine` — AWS KMS customer managed key with per-subject tombstones. |
 | `streamrune-test` | `:streamrune-test` | `org.streamrune.test` | `InMemoryEventStore`, fixtures (decider, event store, projection, saga, recorded event streams), in-memory doubles of every store and bus, fault-injecting forwarding stores, recording doubles, store contract suites. |
-| `streamrune-integration-api` | `:streamrune-integration:streamrune-integration-api` | `org.streamrune.integration` | Shared integration pieces: `MicrometerStreamRuneMetrics`, `RequestIdentityPolicy`, `AuthenticatedUserResolver`, `SseAuthorizer`, and the startup validators and wiring helpers the three integrations share (`@Internal`). |
+| `streamrune-integration-api` | `:streamrune-integration:streamrune-integration-api` | `org.streamrune.integration` | Shared integration pieces: `MicrometerStreamRuneMetrics`, `RequestIdentityPolicy`, `RequestEdgeAuthority`, `AuthenticatedUserResolver`, `SseAuthorizer`, the readers of the shared property values (`SingleActiveConsumerSetting`, `SagaForwardFenceSetting`, …), and the startup validators and wiring helpers the three integrations share, which are `@Internal`. |
 | `streamrune-spring` | `:streamrune-integration:streamrune-spring` | `org.streamrune.spring` | Spring Boot 4 auto-configuration, health indicator, SSE controller, request filter, native-image hints. |
 | `streamrune-spring-boot-starter` | `:streamrune-integration:streamrune-spring-boot-starter` | `org.streamrune.spring.boot.starter` | Dependency aggregator: `streamrune-spring` + `streamrune-postgres` + `streamrune-runtime`. |
 | `streamrune-quarkus` | `:streamrune-integration:streamrune-quarkus` | `org.streamrune.quarkus` | Quarkus (ArC) producers, lifecycle, readiness check, SSE controller, request filter, reflection config; ships `META-INF/beans.xml` and a Jandex index, no extension build step. |
@@ -141,12 +141,12 @@ the calling thread (the class javadoc of each says why); `ForwardingCommandBus` 
   25 toolchain).
 - **No Graal JIT on JDK 25.** The Graal JIT (GraalVM's default compiler) is not reliable with
   StreamRune on JDK 25 and is not supported: StreamRune refuses to start on a JDK 25 JVM that runs it,
-  and on a later JDK release with it, as not verified. The check accepts a JVM only when its JVMCI
-  compiler is off (`UseJVMCICompiler=false`); run GraalVM with
+  and on a later JDK release with it, as not verified. The check accepts a JVM only when it reads its
+  JVMCI compiler as off (`UseJVMCICompiler=false`) or finds none; run GraalVM with
   `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`, the documented way to turn it off, which
   every JDK 25 HotSpot build we ran accepts. JVMs whose JIT is C2 (Temurin, Zulu) and native images
-  were unaffected in our runs. The check is `org.streamrune.runtime.GraalJitGuard`, run when a command
-  bus is built and when an integration starts. A runtime without the module `jdk.management` that
+  were unaffected in our runs. The check (`org.streamrune.runtime.GraalJitGuard`, an `@Internal` class
+  that applications do not call) runs when a command bus is built and when an integration starts. A runtime without the module `jdk.management` that
   identifies as GraalVM is refused even with the JVMCI compiler off — add the module, or set the
   opt-out below once the compiler is off — and one that does not identify as GraalVM starts with a
   `WARN` line. `streamrune.jvm.allow-graal-jit=true` (default `false`; for a runtime built by hand the
