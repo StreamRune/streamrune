@@ -28,6 +28,7 @@ import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
@@ -102,12 +103,12 @@ class ProjectionRunnerLeadershipTest {
     }
 
     @Override
-    public Optional<Lease> tryAcquire(String consumerName) {
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
       return canAcquire.get() ? LEASE : Optional.empty();
     }
 
     @Override
-    public Optional<Lease> current(String consumerName) {
+    public Optional<Lease> current(SubscriptionName consumerName) {
       return isLeaderNow() ? LEASE : Optional.empty();
     }
 
@@ -121,8 +122,8 @@ class ProjectionRunnerLeadershipTest {
     }
 
     @Override
-    public void resign(String consumerName) {
-      resigned.add(consumerName);
+    public void resign(SubscriptionName consumerName) {
+      resigned.add(consumerName.value());
       RuntimeException failure = resignFailure;
       if (failure != null) {
         throw failure;
@@ -381,7 +382,8 @@ class ProjectionRunnerLeadershipTest {
             .batchSize(10)
             .leadership(leadership)
             .atomicProcessor(TestFencingProcessor.fencingClaimOnly())
-            .register("sched-standby", p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("sched-standby"), p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     scheduledRunner.start();
 
@@ -463,7 +465,7 @@ class ProjectionRunnerLeadershipTest {
             .maxTransientRetries(1)
             .drainRetryBackoff(Duration.ofMillis(2), Duration.ofMillis(10))
             .register(
-                "sched-resign-halt",
+                ProjectionName.of("sched-resign-halt"),
                 poison,
                 "* * * * * *",
                 org.streamrune.core.projection.ProjectionErrorStrategy.HALT,
@@ -475,7 +477,7 @@ class ProjectionRunnerLeadershipTest {
     Awaitility.await()
         .atMost(Duration.ofSeconds(5))
         .until(() -> leadership.resigned.contains(name.value()));
-    assertThat(scheduledRunner.status().get("sched-resign-halt").state())
+    assertThat(scheduledRunner.status().get(ProjectionName.of("sched-resign-halt")).state())
         .isEqualTo(ScheduledProjectionState.ERROR);
   }
 
@@ -511,7 +513,11 @@ class ProjectionRunnerLeadershipTest {
             .batchSize(1)
             .leadership(leadership)
             .atomicProcessor(TestFencingProcessor.fencingClaimOnly())
-            .register("sched-mid-drain-lost", p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("sched-mid-drain-lost"),
+                p,
+                "* * * * * *",
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     scheduledRunner.start();
 
@@ -578,7 +584,7 @@ class ProjectionRunnerLeadershipTest {
             .maxTransientRetries(3)
             .drainRetryBackoff(Duration.ofMillis(1), Duration.ofMillis(5))
             .register(
-                "sched-dlq-budget",
+                ProjectionName.of("sched-dlq-budget"),
                 p,
                 "* * * * * *",
                 org.streamrune.core.projection.ProjectionErrorStrategy.DLQ,
@@ -670,7 +676,7 @@ class ProjectionRunnerLeadershipTest {
             .maxTransientRetries(3)
             .drainRetryBackoff(Duration.ofMillis(1), Duration.ofMillis(5))
             .register(
-                "sched-dlq-budget-redrain",
+                ProjectionName.of("sched-dlq-budget-redrain"),
                 p,
                 "* * * * * *",
                 org.streamrune.core.projection.ProjectionErrorStrategy.DLQ,
@@ -771,7 +777,7 @@ class ProjectionRunnerLeadershipTest {
             .maxTransientRetries(3)
             .drainRetryBackoff(Duration.ofMillis(1), Duration.ofMillis(5))
             .register(
-                "sched-dlq-read-outage",
+                ProjectionName.of("sched-dlq-read-outage"),
                 p,
                 "* * * * * *",
                 org.streamrune.core.projection.ProjectionErrorStrategy.DLQ,
@@ -806,7 +812,7 @@ class ProjectionRunnerLeadershipTest {
             .offsetStore(offsets)
             .fetchSize(10)
             .batchSize(10)
-            .register("sched-noop", p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("sched-noop"), p, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     scheduledRunner.start();
 
@@ -989,13 +995,17 @@ class ProjectionRunnerLeadershipTest {
             .batchSize(10)
             .leadership(leadership)
             .atomicProcessor(TestFencingProcessor.fencingClaimOnly())
-            .register("sched-resign-throw", b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("sched-resign-throw"),
+                b -> {},
+                "* * * * * *",
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     scheduledRunner.start();
     scheduledRunner.stop();
 
     assertThat(leadership.resigned).contains("sched-resign-throw"); // resign WAS attempted
-    assertThat(scheduledRunner.status().get("sched-resign-throw").state())
+    assertThat(scheduledRunner.status().get(ProjectionName.of("sched-resign-throw")).state())
         .as("a throwing resign must not skip the STOPPED transition")
         .isEqualTo(ScheduledProjectionState.STOPPED);
   }
@@ -1101,23 +1111,16 @@ class ProjectionRunnerLeadershipTest {
             .batchSize(10)
             .leadership(leadership)
             .atomicProcessor(regressingStampProcessor(57L))
-            .register(
-                name.value(),
-                (Projection) processed::addAll,
-                "* * * * * *",
-                AT_LEAST_ONCE_IDEMPOTENT)
+            .register(name, (Projection) processed::addAll, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     scheduledRunner.start();
 
     Awaitility.await()
         .atMost(Duration.ofSeconds(5))
-        .until(
-            () ->
-                scheduledRunner.status().get(name.value()).state()
-                    == ScheduledProjectionState.ERROR);
+        .until(() -> scheduledRunner.status().get(name).state() == ScheduledProjectionState.ERROR);
     assertThat(processed).isEmpty();
     assertThat(offsets.getLastOffset(name)).isEqualTo(GlobalOffset.initial());
-    assertThat(scheduledRunner.status().get(name.value()).lastError())
+    assertThat(scheduledRunner.status().get(name).lastError())
         .contains("epoch 1")
         .contains("epoch 57");
   }
@@ -1238,11 +1241,7 @@ class ProjectionRunnerLeadershipTest {
             .batchSize(10)
             .leadership(supersededAfterAcquire())
             .atomicProcessor(countingRegressingStampProcessor(57L, attempts))
-            .register(
-                name.value(),
-                (Projection) processed::addAll,
-                "* * * * * *",
-                AT_LEAST_ONCE_IDEMPOTENT)
+            .register(name, (Projection) processed::addAll, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     scheduledRunner.start();
 
@@ -1251,12 +1250,12 @@ class ProjectionRunnerLeadershipTest {
         .until(
             () ->
                 attempts.get() >= 2
-                    || scheduledRunner.status().get(name.value()).state()
+                    || scheduledRunner.status().get(name).state()
                         == ScheduledProjectionState.ERROR);
-    assertThat(scheduledRunner.status().get(name.value()).state())
+    assertThat(scheduledRunner.status().get(name).state())
         .as("a superseded tick must sleep, not terminate the registration")
         .isNotEqualTo(ScheduledProjectionState.ERROR);
-    assertThat(scheduledRunner.status().get(name.value()).lastError()).isNull();
+    assertThat(scheduledRunner.status().get(name).lastError()).isNull();
     assertThat(processed).isEmpty();
   }
 
@@ -1270,17 +1269,17 @@ class ProjectionRunnerLeadershipTest {
     SubscriptionLeadership blind =
         new SubscriptionLeadership() {
           @Override
-          public Optional<SubscriptionLeadership.Lease> tryAcquire(String consumerName) {
+          public Optional<SubscriptionLeadership.Lease> tryAcquire(SubscriptionName consumerName) {
             return Optional.of(new SubscriptionLeadership.Lease(1L));
           }
 
           @Override
-          public Optional<SubscriptionLeadership.Lease> current(String consumerName) {
+          public Optional<SubscriptionLeadership.Lease> current(SubscriptionName consumerName) {
             throw new IllegalStateException("lease backend unreachable");
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -1314,17 +1313,17 @@ class ProjectionRunnerLeadershipTest {
     SubscriptionLeadership blind =
         new SubscriptionLeadership() {
           @Override
-          public Optional<SubscriptionLeadership.Lease> tryAcquire(String consumerName) {
+          public Optional<SubscriptionLeadership.Lease> tryAcquire(SubscriptionName consumerName) {
             return Optional.of(new SubscriptionLeadership.Lease(1L));
           }
 
           @Override
-          public Optional<SubscriptionLeadership.Lease> current(String consumerName) {
+          public Optional<SubscriptionLeadership.Lease> current(SubscriptionName consumerName) {
             throw new IllegalStateException("lease backend unreachable");
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -1338,17 +1337,14 @@ class ProjectionRunnerLeadershipTest {
             .batchSize(10)
             .leadership(blind)
             .atomicProcessor(regressingStampProcessor(57L))
-            .register(name.value(), (Projection) b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(name, (Projection) b -> {}, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     scheduledRunner.start();
 
     Awaitility.await()
         .atMost(Duration.ofSeconds(5))
-        .until(
-            () ->
-                scheduledRunner.status().get(name.value()).state()
-                    == ScheduledProjectionState.ERROR);
-    assertThat(scheduledRunner.status().get(name.value()).lastError()).contains("epoch 57");
+        .until(() -> scheduledRunner.status().get(name).state() == ScheduledProjectionState.ERROR);
+    assertThat(scheduledRunner.status().get(name).lastError()).contains("epoch 57");
   }
 
   // ==================== Runner composed with a VARYING epoch ====================
@@ -1384,7 +1380,7 @@ class ProjectionRunnerLeadershipTest {
     }
 
     @Override
-    public Optional<Lease> tryAcquire(String consumerName) {
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
       if (!available.get()) {
         return Optional.empty();
       }
@@ -1397,12 +1393,12 @@ class ProjectionRunnerLeadershipTest {
     }
 
     @Override
-    public Optional<Lease> current(String consumerName) {
+    public Optional<Lease> current(SubscriptionName consumerName) {
       return Optional.ofNullable(held.get());
     }
 
     @Override
-    public void resign(String consumerName) {
+    public void resign(SubscriptionName consumerName) {
       held.set(null);
     }
 
@@ -1518,11 +1514,7 @@ class ProjectionRunnerLeadershipTest {
             .batchSize(10)
             .leadership(leadership)
             .atomicProcessor(processor)
-            .register(
-                name.value(),
-                (Projection) processed::addAll,
-                "* * * * * *",
-                AT_LEAST_ONCE_IDEMPOTENT)
+            .register(name, (Projection) processed::addAll, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     scheduledRunner.start();
 

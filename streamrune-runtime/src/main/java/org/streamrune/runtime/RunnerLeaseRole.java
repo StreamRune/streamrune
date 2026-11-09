@@ -2,6 +2,8 @@ package org.streamrune.runtime;
 
 import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * The role a projection runner plays under its leadership, as its health entry reports it: the
@@ -18,10 +20,21 @@ final class RunnerLeaseRole {
    * {@code name}, {@link LeaseRole#STANDBY} otherwise. A local read of the leadership: no
    * statement.
    */
-  static LeaseRole of(SubscriptionLeadership leadership, String name) {
+  static LeaseRole of(SubscriptionLeadership leadership, ProjectionName name) {
     if (leadership == SubscriptionLeadership.NOOP) {
       return LeaseRole.UNGATED;
     }
-    return leadership.current(name).isPresent() ? LeaseRole.LEADING : LeaseRole.STANDBY;
+    return leadership.current(consumerName(name)).isPresent()
+        ? LeaseRole.LEADING
+        : LeaseRole.STANDBY;
+  }
+
+  /**
+   * The consumer name a projection runner uses for {@code projection} — the name of its lease, its
+   * health entry and its live subscription: the projection's own name, in the consumer namespace
+   * the leadership keys its leases by.
+   */
+  static SubscriptionName consumerName(ProjectionName projection) {
+    return SubscriptionName.of(projection.value());
   }
 }

@@ -407,7 +407,7 @@ class SagaForwardSchemaAheadTest {
       return store
           .readStream(StreamId.of(type, AggregateId.of(id)), Version.initial(), 100)
           .stream()
-          .map(e -> e.eventType().name())
+          .map(e -> e.eventType().value())
           .toList();
     }
 

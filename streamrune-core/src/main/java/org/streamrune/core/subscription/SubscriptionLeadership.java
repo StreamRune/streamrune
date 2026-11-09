@@ -1,6 +1,7 @@
 package org.streamrune.core.subscription;
 
 import java.util.Optional;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * Single-active-consumer coordination for named subscriptions/projections. An instance that holds a
@@ -19,6 +20,11 @@ import java.util.Optional;
  * correct for single-instance deployments and in-memory tests, where there is no second replica to
  * fence against. The PostgreSQL implementation coordinates across replicas and issues real
  * monotonic epochs.
+ *
+ * <p>A consumer name is a {@link SubscriptionName}: a subscription passes its own name, a
+ * projection runner its projection's name, and the framework's own background consumers reserved
+ * names of their own ({@code saga:<type>}, {@code saga-compensation-retry:<type>}, {@code
+ * dead-letter-retry}). All of them share one namespace of lease names.
  *
  * <p>Implementations are thread-safe: runners on different threads call these methods for different
  * (or the same) consumer names concurrently. {@link #close()} resigns all held names.
@@ -48,13 +54,13 @@ public interface SubscriptionLeadership extends AutoCloseable {
    * @return the held lease (with its fencing epoch), or empty if another replica currently holds a
    *     live lease for this name (or this attempt transiently failed and was skipped)
    */
-  Optional<Lease> tryAcquire(String consumerName);
+  Optional<Lease> tryAcquire(SubscriptionName consumerName);
 
   /**
    * Returns the lease this instance currently holds for {@code consumerName}, or empty if it never
    * acquired one, resigned it, or was fenced out. Does not attempt acquisition.
    */
-  Optional<Lease> current(String consumerName);
+  Optional<Lease> current(SubscriptionName consumerName);
 
   /**
    * Releases the lease for {@code consumerName} if held (idempotent).
@@ -65,7 +71,7 @@ public interface SubscriptionLeadership extends AutoCloseable {
    * failure (the lease then expires naturally at its TTL) rather than propagate it; only a
    * genuinely unrecoverable {@link Error} should escape.
    */
-  void resign(String consumerName);
+  void resign(SubscriptionName consumerName);
 
   /**
    * Resigns all held names and releases any resources. Redeclared to narrow {@link AutoCloseable}'s
@@ -85,17 +91,17 @@ public interface SubscriptionLeadership extends AutoCloseable {
         private static final Optional<Lease> EPOCH_ZERO = Optional.of(new Lease(0L));
 
         @Override
-        public Optional<Lease> tryAcquire(String consumerName) {
+        public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
           return EPOCH_ZERO;
         }
 
         @Override
-        public Optional<Lease> current(String consumerName) {
+        public Optional<Lease> current(SubscriptionName consumerName) {
           return EPOCH_ZERO;
         }
 
         @Override
-        public void resign(String consumerName) {}
+        public void resign(SubscriptionName consumerName) {}
 
         @Override
         public void close() {}

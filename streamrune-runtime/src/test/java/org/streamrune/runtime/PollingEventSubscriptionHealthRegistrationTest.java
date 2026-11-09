@@ -14,6 +14,7 @@ import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
 
@@ -84,7 +85,10 @@ class PollingEventSubscriptionHealthRegistrationTest {
     leadership.grant("gated");
     PollingEventSubscription leading =
         subscription(
-            b -> b.subscriptionName("gated").leadership(leadership).healthContributor(contributor));
+            b ->
+                b.subscriptionName(SubscriptionName.of("gated"))
+                    .leadership(leadership)
+                    .healthContributor(contributor));
     leading.start();
     await()
         .atMost(5, TimeUnit.SECONDS)
@@ -95,7 +99,7 @@ class PollingEventSubscriptionHealthRegistrationTest {
     PollingEventSubscription standby =
         subscription(
             b ->
-                b.subscriptionName("standing-by")
+                b.subscriptionName(SubscriptionName.of("standing-by"))
                     .leadership(leadership)
                     .healthContributor(contributor));
     standby.start();
@@ -107,7 +111,7 @@ class PollingEventSubscriptionHealthRegistrationTest {
   }
 
   private Optional<SubscriptionHealth> entry(String name) {
-    return contributor.health().stream().filter(h -> h.name().equals(name)).findFirst();
+    return contributor.health().stream().filter(h -> h.name().value().equals(name)).findFirst();
   }
 
   private PollingEventSubscription subscription(
@@ -115,7 +119,7 @@ class PollingEventSubscriptionHealthRegistrationTest {
     PollingEventSubscription subscription =
         more.apply(
                 PollingEventSubscription.builder()
-                    .subscriptionName(NAME)
+                    .subscriptionName(SubscriptionName.of(NAME))
                     .eventStore(eventStore)
                     .offsetStore(offsetStore)
                     .listener(events -> {})

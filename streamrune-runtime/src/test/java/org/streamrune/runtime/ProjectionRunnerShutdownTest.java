@@ -86,17 +86,17 @@ class ProjectionRunnerShutdownTest {
     final List<Boolean> interruptedAtResign = new CopyOnWriteArrayList<>();
 
     @Override
-    public Optional<Lease> tryAcquire(String consumerName) {
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
       return Optional.of(new Lease(0L));
     }
 
     @Override
-    public Optional<Lease> current(String consumerName) {
+    public Optional<Lease> current(SubscriptionName consumerName) {
       return Optional.of(new Lease(0L));
     }
 
     @Override
-    public void resign(String consumerName) {
+    public void resign(SubscriptionName consumerName) {
       interruptedAtResign.add(Thread.currentThread().isInterrupted());
     }
 
@@ -272,7 +272,7 @@ class ProjectionRunnerShutdownTest {
             .eventStore(storeWithOneEvent())
             .offsetStore(offsets)
             .leadership(leadership)
-            .register(NAME.value(), projection, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
+            .register(NAME, projection, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -299,7 +299,7 @@ class ProjectionRunnerShutdownTest {
             .offsetStore(offsets)
             .subscriptionConfig(FAST)
             .leadership(leadership)
-            .register(NAME.value(), projection, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(NAME, projection, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
 
@@ -342,7 +342,7 @@ class ProjectionRunnerShutdownTest {
     var projection = new HeldProjection();
     var subscription =
         StreamEventSubscription.builder()
-            .subscriptionName(NAME.value())
+            .subscriptionName(SubscriptionName.of(NAME.value()))
             .streamId(StreamId.of(TYPE, AggregateId.of("thing-1")))
             .eventStore(storeWithOneEvent())
             .offsetStore(offsets)

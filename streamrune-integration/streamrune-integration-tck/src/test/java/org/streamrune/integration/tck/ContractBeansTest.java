@@ -30,6 +30,7 @@ import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.UserId;
 import org.streamrune.integration.tck.ContractBeans.CommandInboxBean;
 import org.streamrune.integration.tck.ContractBeans.ContractCommand;
@@ -115,9 +116,9 @@ class ContractBeansTest {
   void theLeadershipsGrantNoLease() {
     for (SubscriptionLeadership leadership :
         List.of(new FirstLeadership(), new SecondLeadership())) {
-      assertEquals(Optional.empty(), leadership.tryAcquire("c"));
-      assertEquals(Optional.empty(), leadership.current("c"));
-      leadership.resign("c");
+      assertEquals(Optional.empty(), leadership.tryAcquire(SubscriptionName.of("c")));
+      assertEquals(Optional.empty(), leadership.current(SubscriptionName.of("c")));
+      leadership.resign(SubscriptionName.of("c"));
       leadership.close();
       assertNotSame(SubscriptionLeadership.NOOP, leadership);
     }

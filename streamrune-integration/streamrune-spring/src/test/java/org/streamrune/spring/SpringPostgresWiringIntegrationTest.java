@@ -31,6 +31,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubjectId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 import org.streamrune.postgres.PostgresEventStoreFactory;
@@ -177,8 +178,8 @@ class SpringPostgresWiringIntegrationTest {
               var leaderA =
                   ctxA.getBean(org.streamrune.core.subscription.SubscriptionLeadership.class);
               assertThat(leaderA).isInstanceOf(org.streamrune.postgres.LeaseBasedLeadership.class);
-              assertThat(leaderA.tryAcquire(consumer)).isPresent();
-              assertThat(leaderA.current(consumer)).isPresent();
+              assertThat(leaderA.tryAcquire(SubscriptionName.of(consumer))).isPresent();
+              assertThat(leaderA.current(SubscriptionName.of(consumer))).isPresent();
 
               // A second independent context (own auto-wired leadership bean, own holder id) must
               // be
@@ -194,14 +195,15 @@ class SpringPostgresWiringIntegrationTest {
                         var leaderB =
                             ctxB.getBean(
                                 org.streamrune.core.subscription.SubscriptionLeadership.class);
-                        assertThat(leaderB.tryAcquire(consumer)).isEmpty(); // standby
-                        assertThat(leaderB.current(consumer)).isEmpty();
+                        assertThat(leaderB.tryAcquire(SubscriptionName.of(consumer)))
+                            .isEmpty(); // standby
+                        assertThat(leaderB.current(SubscriptionName.of(consumer))).isEmpty();
 
                         // After A resigns (its lease expires), B can win the name — automatic
                         // failover, with a strictly greater fencing epoch than A held.
-                        leaderA.resign(consumer);
-                        assertThat(leaderB.tryAcquire(consumer)).isPresent();
-                        leaderB.resign(consumer);
+                        leaderA.resign(SubscriptionName.of(consumer));
+                        assertThat(leaderB.tryAcquire(SubscriptionName.of(consumer))).isPresent();
+                        leaderB.resign(SubscriptionName.of(consumer));
                       });
             });
   }

@@ -1,6 +1,7 @@
 package org.streamrune.core.subscription;
 
 import java.util.Objects;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * Health status of a single subscription, including lifecycle state, lag, and error count.
@@ -14,7 +15,7 @@ import java.util.Objects;
  *     reports none)
  */
 public record SubscriptionHealth(
-    String name,
+    SubscriptionName name,
     SubscriptionLifecycleState state,
     long lag,
     int errorCount,

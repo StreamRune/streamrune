@@ -10,6 +10,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.integration.ProjectionProcessorResolution.Registration;
 
 class ProjectionProcessorResolutionTest {
@@ -23,17 +24,17 @@ class ProjectionProcessorResolutionTest {
    */
   private static final class RealLeadership implements SubscriptionLeadership {
     @Override
-    public java.util.Optional<Lease> tryAcquire(String consumerName) {
+    public java.util.Optional<Lease> tryAcquire(SubscriptionName consumerName) {
       return java.util.Optional.of(new Lease(1L));
     }
 
     @Override
-    public java.util.Optional<Lease> current(String consumerName) {
+    public java.util.Optional<Lease> current(SubscriptionName consumerName) {
       return java.util.Optional.of(new Lease(1L));
     }
 
     @Override
-    public void resign(String consumerName) {}
+    public void resign(SubscriptionName consumerName) {}
 
     @Override
     public void close() {}

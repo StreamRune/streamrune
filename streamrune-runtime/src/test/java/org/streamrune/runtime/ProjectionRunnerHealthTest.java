@@ -343,17 +343,17 @@ class ProjectionRunnerHealthTest {
   private static SubscriptionLeadership neverLeader() {
     return new SubscriptionLeadership() {
       @Override
-      public Optional<Lease> tryAcquire(String consumerName) {
+      public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
         return Optional.empty();
       }
 
       @Override
-      public Optional<Lease> current(String consumerName) {
+      public Optional<Lease> current(SubscriptionName consumerName) {
         return Optional.empty();
       }
 
       @Override
-      public void resign(String consumerName) {}
+      public void resign(SubscriptionName consumerName) {}
 
       @Override
       public void close() {}
@@ -366,17 +366,17 @@ class ProjectionRunnerHealthTest {
         new java.util.concurrent.atomic.AtomicBoolean(false);
 
     @Override
-    public Optional<Lease> tryAcquire(String consumerName) {
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
       return revoked.get() ? Optional.empty() : Optional.of(new Lease(1L));
     }
 
     @Override
-    public Optional<Lease> current(String consumerName) {
+    public Optional<Lease> current(SubscriptionName consumerName) {
       return revoked.get() ? Optional.empty() : Optional.of(new Lease(1L));
     }
 
     @Override
-    public void resign(String consumerName) {}
+    public void resign(SubscriptionName consumerName) {}
 
     @Override
     public void close() {}
@@ -384,7 +384,7 @@ class ProjectionRunnerHealthTest {
 
   private static Optional<SubscriptionHealth> entryFor(
       SubscriptionHealthContributor contributor, String name) {
-    return contributor.health().stream().filter(h -> h.name().equals(name)).findFirst();
+    return contributor.health().stream().filter(h -> h.name().value().equals(name)).findFirst();
   }
 
   /**
@@ -733,7 +733,7 @@ class ProjectionRunnerHealthTest {
             .maxTransientRetries(1)
             .drainRetryBackoff(Duration.ofMillis(2), Duration.ofMillis(10))
             .register(
-                "sched-halt",
+                ProjectionName.of("sched-halt"),
                 poison,
                 "* * * * * *",
                 ProjectionErrorStrategy.HALT,
@@ -815,7 +815,7 @@ class ProjectionRunnerHealthTest {
             .healthContributor(contributor)
             // Fire every second so the first tick lands within the test window.
             .register(
-                "sched",
+                ProjectionName.of("sched"),
                 poison,
                 "* * * * * *",
                 ProjectionErrorStrategy.SKIP,

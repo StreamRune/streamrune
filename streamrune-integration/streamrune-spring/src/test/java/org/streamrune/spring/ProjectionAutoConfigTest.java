@@ -853,7 +853,8 @@ class ProjectionAutoConfigTest {
           .eventStore(es)
           .offsetStore(os)
           .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
-          .register("user-cont", cont, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+          .register(
+              ProjectionName.of("user-cont"), cont, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
           .build();
     }
   }

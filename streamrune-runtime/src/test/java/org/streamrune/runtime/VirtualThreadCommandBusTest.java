@@ -218,7 +218,7 @@ class VirtualThreadCommandBusTest {
     assertEquals(1, events.size());
     assertInstanceOf(CounterEvent.Incremented.class, events.getFirst().event());
     assertEquals(1, events.getFirst().version().value());
-    assertEquals("Incremented", events.getFirst().eventType().name());
+    assertEquals("Incremented", events.getFirst().eventType().value());
     assertEquals("counter:counter-1", events.getFirst().streamId().value());
   }
 

@@ -120,7 +120,7 @@ class PollingEventSubscriptionHealthErrorsTest {
     appendOne();
     PollingEventSubscription subscription = subscription(failingListener(), false);
     subscription.start();
-    contributor.register(NAME, subscription);
+    contributor.register(SubscriptionName.of(NAME), subscription);
 
     poll(subscription);
 
@@ -157,12 +157,12 @@ class PollingEventSubscriptionHealthErrorsTest {
     appendOne();
     PollingEventSubscription subscription =
         PollingEventSubscription.builder()
-            .subscriptionName(NAME)
+            .subscriptionName(SubscriptionName.of(NAME))
             .eventStore(eventStore)
             .offsetStore(offsetStore)
             .listener(failingListener())
             .config(SubscriptionConfig.pollingOnly(Duration.ofHours(1)))
-            .lease(SubscriptionLease.of(leadership, lease, clock::get))
+            .lease(SubscriptionLease.of(leadership, SubscriptionName.of(lease), clock::get))
             .healthContributor(contributor)
             .build();
     subscriptions.add(subscription);
@@ -220,13 +220,13 @@ class PollingEventSubscriptionHealthErrorsTest {
   }
 
   private Optional<SubscriptionHealth> entry() {
-    return contributor.health().stream().filter(h -> h.name().equals(NAME)).findFirst();
+    return contributor.health().stream().filter(h -> h.name().value().equals(NAME)).findFirst();
   }
 
   private PollingEventSubscription subscription(EventListener listener, boolean withContributor) {
     PollingEventSubscription.Builder builder =
         PollingEventSubscription.builder()
-            .subscriptionName(NAME)
+            .subscriptionName(SubscriptionName.of(NAME))
             .eventStore(eventStore)
             .offsetStore(offsetStore)
             .listener(listener)

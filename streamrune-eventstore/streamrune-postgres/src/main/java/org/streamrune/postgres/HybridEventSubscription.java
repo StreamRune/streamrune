@@ -246,7 +246,7 @@ public final class HybridEventSubscription
     this.healthContributor = healthContributor;
     this.pollingSubscription =
         PollingEventSubscription.builder()
-            .subscriptionName(subscriptionName.value())
+            .subscriptionName(subscriptionName)
             .eventStore(eventStore)
             .offsetStore(offsetStore)
             // The inner subscription has no contributor of its own (this one registers itself), so
@@ -328,13 +328,13 @@ public final class HybridEventSubscription
     // already started registers nothing (that would reset its errors) and rolls back nothing.
     boolean registers = healthContributor != null && state() == SubscriptionLifecycleState.CREATED;
     if (registers) {
-      healthContributor.register(subscriptionName.value(), this);
+      healthContributor.register(subscriptionName, this);
     }
     try {
       pollingSubscription.start();
     } catch (Exception e) {
       if (registers) {
-        healthContributor.unregister(subscriptionName.value());
+        healthContributor.unregister(subscriptionName);
       }
       if (notificationListener != null) {
         notificationListener.close(); // roll back listener if subscription start fails
@@ -447,7 +447,7 @@ public final class HybridEventSubscription
       }
     } finally {
       if (healthContributor != null) {
-        healthContributor.unregister(subscriptionName.value());
+        healthContributor.unregister(subscriptionName);
       }
     }
   }
@@ -477,8 +477,8 @@ public final class HybridEventSubscription
      * {@link OffsetStore} — reuse the same name across restarts to resume from the last
      * checkpointed position. Changing the name re-delivers the full event history.
      */
-    public Builder subscriptionName(String name) {
-      this.subscriptionName = SubscriptionName.of(name);
+    public Builder subscriptionName(SubscriptionName name) {
+      this.subscriptionName = name;
       return this;
     }
 
@@ -598,7 +598,7 @@ public final class HybridEventSubscription
      * sagaRunner}. A leased subscription's standby attempts are spaced by the polling interval of
      * {@link #config} even when notifications wake it: keep that fallback interval short.
      *
-     * @throws IllegalStateException if {@code subscriptionName} was not set or is blank
+     * @throws IllegalStateException if {@code subscriptionName} was not set
      * @throws IllegalArgumentException when two of the settings name one thing: {@code sagaRunner}
      *     with {@code listener}, {@code lease} or {@code leadership}; {@code lease} with {@code
      *     leadership}
@@ -662,7 +662,7 @@ public final class HybridEventSubscription
         return lease;
       }
       if (leadership != null && subscriptionName != null) {
-        return SubscriptionLease.of(leadership, subscriptionName.value());
+        return SubscriptionLease.of(leadership, subscriptionName);
       }
       return SubscriptionLease.ungated();
     }

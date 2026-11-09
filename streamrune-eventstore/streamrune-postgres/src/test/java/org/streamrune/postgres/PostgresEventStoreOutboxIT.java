@@ -57,7 +57,7 @@ class PostgresEventStoreOutboxIT {
   /** Maps only {@link MappedEvent}; returns empty for everything else. */
   static final OutboxEventMapper TEST_MAPPER =
       envelope -> {
-        if ("MappedEvent".equals(envelope.eventType().name())) {
+        if ("MappedEvent".equals(envelope.eventType().value())) {
           return List.of(
               OutboxEntry.pending(
                   OutboxEntryId.of(envelope.metadata().eventId().value()),
@@ -79,7 +79,7 @@ class PostgresEventStoreOutboxIT {
         new EventTypeRegistry() {
           @Override
           public Class<?> resolveEventType(EventType eventType) {
-            return switch (eventType.name()) {
+            return switch (eventType.value()) {
               case "MappedEvent" -> MappedEvent.class;
               case "SkippedEvent" -> SkippedEvent.class;
               default -> throw new IllegalArgumentException("Unknown event type: " + eventType);

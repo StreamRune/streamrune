@@ -69,7 +69,7 @@ class CachingQueryBusAuthorizationTest {
     var handlerCalls = new AtomicInteger();
     var allowed = new java.util.concurrent.atomic.AtomicBoolean(true);
     QueryAuthorizer authorizer =
-        (query, user) -> {
+        (user, query) -> {
           if (!allowed.get()) {
             throw new AuthorizationException("revoked");
           }
@@ -104,7 +104,7 @@ class CachingQueryBusAuthorizationTest {
     var handlerCalls = new AtomicInteger();
     var allowed = new java.util.concurrent.atomic.AtomicBoolean(false);
     QueryAuthorizer authorizer =
-        (query, user) -> {
+        (user, query) -> {
           if (!allowed.get()) {
             throw new AuthorizationException("not yet allowed");
           }
@@ -132,7 +132,7 @@ class CachingQueryBusAuthorizationTest {
     var handlerCalls = new AtomicInteger();
     var allowed = new java.util.concurrent.atomic.AtomicBoolean(true);
     QueryAuthorizer authorizer =
-        (query, user) -> {
+        (user, query) -> {
           if (!allowed.get()) {
             throw new AuthorizationException("revoked");
           }
@@ -170,7 +170,7 @@ class CachingQueryBusAuthorizationTest {
     owners.put("doc-2", "alice");
 
     QueryAuthorizer ownershipAuthorizer =
-        (query, user) -> {
+        (user, query) -> {
           if (query instanceof GetDocument q) {
             String owner = owners.get(q.docId());
             if (owner == null || user == null || !owner.equals(user.value())) {
@@ -216,7 +216,7 @@ class CachingQueryBusAuthorizationTest {
     acl.put("bob", new java.util.concurrent.CopyOnWriteArraySet<>(Set.of("r-1")));
 
     QueryAuthorizer aclAuthorizer =
-        (query, user) -> {
+        (user, query) -> {
           if (query instanceof CacheableSecretQuery q) {
             Set<String> granted = user != null ? acl.get(user.value()) : null;
             if (granted == null || !granted.contains(q.resourceId())) {
@@ -252,7 +252,7 @@ class CachingQueryBusAuthorizationTest {
   @Test
   void authorizer_consultedOnBothMissAndHit() {
     var authorizeCalls = new AtomicInteger();
-    QueryAuthorizer countingAuthorizer = (query, user) -> authorizeCalls.incrementAndGet();
+    QueryAuthorizer countingAuthorizer = (user, query) -> authorizeCalls.incrementAndGet();
     var handlerCalls = new AtomicInteger();
     QueryBus bus =
         CachingQueryBus.builder()
@@ -276,7 +276,7 @@ class CachingQueryBusAuthorizationTest {
   void authorizer_alsoConsultedForGlobalScopeQueries() {
     var allowed = new java.util.concurrent.atomic.AtomicBoolean(true);
     QueryAuthorizer authorizer =
-        (query, user) -> {
+        (user, query) -> {
           if (!allowed.get()) {
             throw new AuthorizationException("globally denied");
           }
@@ -310,7 +310,7 @@ class CachingQueryBusAuthorizationTest {
     // The authorizer exists to close a gap CACHING creates; a non-@Cacheable query already
     // reaches the delegate on every call, so it is out of scope for this authorizer.
     var authorizeCalls = new AtomicInteger();
-    QueryAuthorizer countingAuthorizer = (query, user) -> authorizeCalls.incrementAndGet();
+    QueryAuthorizer countingAuthorizer = (user, query) -> authorizeCalls.incrementAndGet();
     var handlerCalls = new AtomicInteger();
     QueryBus bus =
         CachingQueryBus.builder()
@@ -332,7 +332,7 @@ class CachingQueryBusAuthorizationTest {
     var authorizeCalls = new AtomicInteger();
     var sawNullUser = new java.util.concurrent.atomic.AtomicBoolean(false);
     QueryAuthorizer authorizer =
-        (query, user) -> {
+        (user, query) -> {
           authorizeCalls.incrementAndGet();
           if (user == null) {
             sawNullUser.set(true);

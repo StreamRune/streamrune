@@ -184,7 +184,7 @@ class SimpleEventTypeRegistryTest {
         new EventTypeRegistry() {
           @Override
           public Class<?> resolveEventType(EventType eventType) {
-            throw new UnknownEventTypeException("event type", eventType.name(), List.of());
+            throw new UnknownEventTypeException("event type", eventType.value(), List.of());
           }
 
           @Override

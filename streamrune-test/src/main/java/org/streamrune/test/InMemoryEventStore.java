@@ -653,7 +653,7 @@ public final class InMemoryEventStore implements EventStore {
         // dedicated retry-later type, mirroring PostgresEventStore.
         throw new EventSchemaAheadException(
             "Event type "
-                + LogSanitizer.sanitizeForLog(eventType.name())
+                + LogSanitizer.sanitizeForLog(eventType.value())
                 + " for stream "
                 + LogSanitizer.sanitizeForLog(stored.streamId().value())
                 + " is stored at schema_version "

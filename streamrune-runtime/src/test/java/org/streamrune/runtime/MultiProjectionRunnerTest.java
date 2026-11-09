@@ -90,8 +90,14 @@ class MultiProjectionRunnerTest {
             .eventStore(eventStore)
             .offsetStore(offsetStore)
             .subscriptionConfig(fastConfig())
-            .register("Proj1", events -> processed1.addAll(events), AT_LEAST_ONCE_IDEMPOTENT)
-            .register("Proj2", events -> processed2.addAll(events), AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("Proj1"),
+                events -> processed1.addAll(events),
+                AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("Proj2"),
+                events -> processed2.addAll(events),
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     runner.start();
@@ -115,8 +121,8 @@ class MultiProjectionRunnerTest {
             .eventStore(eventStore)
             .offsetStore(offsetStore)
             .subscriptionConfig(fastConfig())
-            .register("A", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
-            .register("B", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("A"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("B"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     runner.start();
@@ -124,8 +130,8 @@ class MultiProjectionRunnerTest {
 
     var status = runner.status();
     assertEquals(2, status.size());
-    assertNotNull(status.get("A"));
-    assertNotNull(status.get("B"));
+    assertNotNull(status.get(ProjectionName.of("A")));
+    assertNotNull(status.get(ProjectionName.of("B")));
 
     runner.stop();
   }
@@ -138,7 +144,7 @@ class MultiProjectionRunnerTest {
             .eventStore(eventStore)
             .offsetStore(offsetStore)
             .subscriptionConfig(fastConfig())
-            .register("StopTest", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("StopTest"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     runner.start();
@@ -146,7 +152,7 @@ class MultiProjectionRunnerTest {
     runner.stop();
 
     var status = runner.status();
-    var state = status.get("StopTest").state();
+    var state = status.get(ProjectionName.of("StopTest")).state();
     assertTrue(state == ProjectionState.STOPPED || state == ProjectionState.ERROR);
   }
 
@@ -159,8 +165,8 @@ class MultiProjectionRunnerTest {
                 .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
                 .eventStore(eventStore)
                 .offsetStore(offsetStore)
-                .register("Dup", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
-                .register("Dup", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+                .register(ProjectionName.of("Dup"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+                .register(ProjectionName.of("Dup"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
                 .build());
   }
 
@@ -181,8 +187,9 @@ class MultiProjectionRunnerTest {
                     .eventStore(eventStore)
                     .offsetStore(offsetStore)
                     .atomicProcessor(processor)
-                    .register("orders", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
-                    .register("order-summary", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+                    .register(ProjectionName.of("orders"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+                    .register(
+                        ProjectionName.of("order-summary"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
                     .build());
     assertTrue(ex.getMessage().contains("order-summary"), ex.getMessage());
     assertEquals(
@@ -201,7 +208,10 @@ class MultiProjectionRunnerTest {
                 .eventStore(eventStore)
                 .offsetStore(offsetStore)
                 .register(
-                    "DLQ", events -> {}, ProjectionErrorStrategy.DLQ, AT_LEAST_ONCE_IDEMPOTENT)
+                    ProjectionName.of("DLQ"),
+                    events -> {},
+                    ProjectionErrorStrategy.DLQ,
+                    AT_LEAST_ONCE_IDEMPOTENT)
                 .build());
   }
 
@@ -246,7 +256,7 @@ class MultiProjectionRunnerTest {
                     .eventStore(eventStore)
                     .offsetStore(repository)
                     .atomicProcessor(repository)
-                    .register("non-write-through", lambda, TRANSACTIONAL_LOCAL)
+                    .register(ProjectionName.of("non-write-through"), lambda, TRANSACTIONAL_LOCAL)
                     .build());
     assertTrue(ex.getMessage().contains("MultiProjectionRunner"), ex.getMessage());
     assertTrue(ex.getMessage().contains("'non-write-through'"), ex.getMessage());
@@ -259,7 +269,7 @@ class MultiProjectionRunnerTest {
             .eventStore(eventStore)
             .offsetStore(repository)
             .atomicProcessor(repository)
-            .register("non-write-through", lambda, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("non-write-through"), lambda, AT_LEAST_ONCE_IDEMPOTENT)
             .build()) {
       assertNotNull(runner);
     }
@@ -274,7 +284,7 @@ class MultiProjectionRunnerTest {
                 MultiProjectionRunner.builder()
                     .eventStore(eventStore)
                     .offsetStore(offsetStore)
-                    .register("orders", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+                    .register(ProjectionName.of("orders"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
                     .build());
     assertEquals(
         "atomicProcessor is required: pass the JdbcProjectionRepository your TRANSACTIONAL_LOCAL"
@@ -298,7 +308,7 @@ class MultiProjectionRunnerTest {
             .subscriptionConfig(
                 new SubscriptionConfig(false, Duration.ofMillis(50), Duration.ofMillis(10)))
             .atomicProcessor(transactionalProcessor())
-            .register("at-least-once", nonWriteThrough, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("at-least-once"), nonWriteThrough, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     runner.start();
@@ -351,11 +361,11 @@ class MultiProjectionRunnerTest {
             .subscriptionConfig(fastConfig())
             .atomicProcessor(transactionalProcessor())
             .register(
-                "at-least-once",
+                ProjectionName.of("at-least-once"),
                 atLeastOnceLambda,
                 ProjectionErrorStrategy.HALT,
                 AT_LEAST_ONCE_IDEMPOTENT)
-            .register("write-through", writeThrough, TRANSACTIONAL_LOCAL)
+            .register(ProjectionName.of("write-through"), writeThrough, TRANSACTIONAL_LOCAL)
             .build();
 
     runner.start();
@@ -385,11 +395,12 @@ class MultiProjectionRunnerTest {
                     .offsetStore(offsetStore)
                     .atomicProcessor(transactionalProcessor())
                     .register(
-                        "at-least-once",
+                        ProjectionName.of("at-least-once"),
                         atLeastOnce,
                         ProjectionErrorStrategy.HALT,
                         AT_LEAST_ONCE_IDEMPOTENT)
-                    .register("transactional", transactional, TRANSACTIONAL_LOCAL)
+                    .register(
+                        ProjectionName.of("transactional"), transactional, TRANSACTIONAL_LOCAL)
                     .build());
     assertTrue(ex.getMessage().contains("'transactional'"), ex.getMessage());
     assertFalse(ex.getMessage().contains("'at-least-once'"), ex.getMessage());
@@ -415,7 +426,7 @@ class MultiProjectionRunnerTest {
             .eventStore(eventStore)
             .offsetStore(offsetStore)
             .subscriptionConfig(fastConfig())
-            .register("Once", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("Once"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     runner.start();
@@ -432,7 +443,7 @@ class MultiProjectionRunnerTest {
   private static void awaitLive(MultiProjectionRunner runner, String name) {
     org.awaitility.Awaitility.await()
         .atMost(Duration.ofSeconds(5))
-        .until(() -> runner.status().get(name).state() == ProjectionState.LIVE);
+        .until(() -> runner.status().get(ProjectionName.of(name)).state() == ProjectionState.LIVE);
   }
 
   @Test
@@ -456,7 +467,11 @@ class MultiProjectionRunnerTest {
             .offsetStore(offsetStore)
             .subscriptionConfig(fastConfig())
             .deadLetterStore(dlqStore)
-            .register("FailProj", alwaysFail, ProjectionErrorStrategy.DLQ, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("FailProj"),
+                alwaysFail,
+                ProjectionErrorStrategy.DLQ,
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     runner.start();
@@ -467,7 +482,8 @@ class MultiProjectionRunnerTest {
         .until(() -> !dlqStore.read(ProjectionName.of("FailProj"), 10).isEmpty());
 
     assertEquals(1, dlqStore.read(ProjectionName.of("FailProj"), 10).size());
-    assertNotEquals(ProjectionState.ERROR, runner.status().get("FailProj").state());
+    assertNotEquals(
+        ProjectionState.ERROR, runner.status().get(ProjectionName.of("FailProj")).state());
 
     runner.stop();
   }
@@ -484,7 +500,10 @@ class MultiProjectionRunnerTest {
             .eventStore(eventStore)
             .offsetStore(offsetStore)
             .subscriptionConfig(fastConfig())
-            .register("Restartable", events -> processed.addAll(events), AT_LEAST_ONCE_IDEMPOTENT)
+            .register(
+                ProjectionName.of("Restartable"),
+                events -> processed.addAll(events),
+                AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     runner.start();
@@ -531,7 +550,7 @@ class MultiProjectionRunnerTest {
             .offsetStore(offsetStore)
             .subscriptionConfig(fastConfig())
             .stopTimeout(Duration.ofMillis(100))
-            .register("Stuck", stuck, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("Stuck"), stuck, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     runner.start();
@@ -560,7 +579,7 @@ class MultiProjectionRunnerTest {
                 .eventStore(eventStore)
                 .offsetStore(offsetStore)
                 .stopTimeout(Duration.ZERO)
-                .register("T", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+                .register(ProjectionName.of("T"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
                 .build());
   }
 
@@ -578,7 +597,7 @@ class MultiProjectionRunnerTest {
                 .eventStore(eventStore)
                 .offsetStore(offsetStore)
                 .stopTimeout(Duration.ofNanos(500_000)) // 0.5ms -> toMillis() == 0
-                .register("T", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+                .register(ProjectionName.of("T"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
                 .build());
   }
 
@@ -598,7 +617,7 @@ class MultiProjectionRunnerTest {
             .eventStore(eventStore)
             .offsetStore(offsetStore)
             .subscriptionConfig(fastConfig())
-            .register("Closeable", events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .register(ProjectionName.of("Closeable"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
 
     runner.start();
@@ -607,7 +626,7 @@ class MultiProjectionRunnerTest {
 
     // close() must do what stop() does: the projection is no longer running, and the started flag
     // is released so the runner can start again. A no-op close() fails both checks.
-    var state = runner.status().get("Closeable").state();
+    var state = runner.status().get(ProjectionName.of("Closeable")).state();
     assertTrue(
         state == ProjectionState.STOPPED || state == ProjectionState.ERROR,
         "close() must stop the projection, got " + state);

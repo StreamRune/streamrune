@@ -209,15 +209,14 @@ public final class MultiProjectionRunner implements AutoCloseable {
    *
    * @return map of projection name to status
    */
-  public Map<String, ProjectionStatus> status() {
-    var result = new LinkedHashMap<String, ProjectionStatus>();
+  public Map<ProjectionName, ProjectionStatus> status() {
+    var result = new LinkedHashMap<ProjectionName, ProjectionStatus>();
     for (var reg : registrations) {
       var runner = runners.get(reg.name());
       ProjectionState state = runner != null ? runner.state() : ProjectionState.PENDING;
       String lastError = runner != null ? runner.lastError() : null;
       var lastOffset = offsetStore.getLastOffset(reg.name());
-      result.put(
-          reg.name().value(), new ProjectionStatus(reg.name(), state, lastOffset, lastError));
+      result.put(reg.name(), new ProjectionStatus(reg.name(), state, lastOffset, lastError));
     }
     return result;
   }
@@ -362,14 +361,15 @@ public final class MultiProjectionRunner implements AutoCloseable {
     }
 
     /** Registers a projection with the default HALT error strategy and its delivery mode. */
-    public Builder register(String name, Projection projection, ProjectionDeliveryMode mode) {
+    public Builder register(
+        ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
       registrations.add(new ProjectionRegistration(name, projection, mode));
       return this;
     }
 
     /** Registers a projection with an explicit error strategy and its delivery mode. */
     public Builder register(
-        String name,
+        ProjectionName name,
         Projection projection,
         ProjectionErrorStrategy strategy,
         ProjectionDeliveryMode mode) {

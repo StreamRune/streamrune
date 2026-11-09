@@ -22,6 +22,7 @@ import org.streamrune.core.subscription.SubscriptionLifecycleState;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 
 /**
@@ -109,7 +110,7 @@ class PollingEventSubscriptionReadPoisonBoundTest {
 
   private static PollingEventSubscription subscription(EventStore store, int bound) {
     return PollingEventSubscription.builder()
-        .subscriptionName("poison-bound-sub")
+        .subscriptionName(SubscriptionName.of("poison-bound-sub"))
         .eventStore(store)
         .offsetStore(new InMemoryOffsetStore())
         .listener(events -> {})

@@ -16,6 +16,7 @@ import org.streamrune.core.saga.SagaUnstampedCompensationEpisodeException;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * Durable, automatic recovery driver for stuck {@code COMPENSATING} sagas. Runs on a virtual
@@ -138,7 +139,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
   private final SagaStore sagaStore;
   private final SagaType sagaType;
   private final String sagaTypeName;
-  private final String consumerName;
+  private final SubscriptionName consumerName;
   private final SubscriptionLeadership leadership;
   private final Duration retryInterval;
   private final Duration giveUpAfter;
@@ -218,7 +219,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     // The health component and metric tag key is the saga type itself, never the simple class
     // name — two saga-state classes may share a simple name across packages.
     this.sagaTypeName = sagaType.value();
-    this.consumerName = CONSUMER_NAME_PREFIX + sagaType.value();
+    this.consumerName = SubscriptionName.of(CONSUMER_NAME_PREFIX + sagaType.value());
     this.leadership = b.leadership != null ? b.leadership : SubscriptionLeadership.NOOP;
     SubscriptionLease runnerLease = b.sagaRunner.lease();
     this.follower =

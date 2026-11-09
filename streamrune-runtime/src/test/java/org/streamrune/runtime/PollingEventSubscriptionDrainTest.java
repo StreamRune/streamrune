@@ -27,6 +27,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 
 /**
@@ -179,7 +180,7 @@ class PollingEventSubscriptionDrainTest {
     var offsetStore = new InMemoryOffsetStore();
     var sub =
         PollingEventSubscription.builder()
-            .subscriptionName("drain-sub")
+            .subscriptionName(SubscriptionName.of("drain-sub"))
             .eventStore(store)
             .offsetStore(offsetStore)
             .listener(received::addAll)
@@ -218,7 +219,7 @@ class PollingEventSubscriptionDrainTest {
     var offsetStore = new InMemoryOffsetStore();
     var sub =
         PollingEventSubscription.builder()
-            .subscriptionName("drain-hole")
+            .subscriptionName(SubscriptionName.of("drain-hole"))
             .eventStore(store)
             .offsetStore(offsetStore)
             .listener(received::addAll)
@@ -247,7 +248,7 @@ class PollingEventSubscriptionDrainTest {
     var subRef = new PollingEventSubscription[1];
     var sub =
         PollingEventSubscription.builder()
-            .subscriptionName("drain-closed")
+            .subscriptionName(SubscriptionName.of("drain-closed"))
             .eventStore(store)
             .offsetStore(offsetStore)
             .listener(
@@ -278,7 +279,7 @@ class PollingEventSubscriptionDrainTest {
     var received = new CopyOnWriteArrayList<Long>();
     var sub =
         PollingEventSubscription.builder()
-            .subscriptionName("notify-during-drain")
+            .subscriptionName(SubscriptionName.of("notify-during-drain"))
             .eventStore(store)
             .offsetStore(new InMemoryOffsetStore())
             .listener(events -> events.forEach(e -> received.add(e.globalOffset().value())))
@@ -317,7 +318,7 @@ class PollingEventSubscriptionDrainTest {
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     var sub =
         PollingEventSubscription.builder()
-            .subscriptionName("notify-idle")
+            .subscriptionName(SubscriptionName.of("notify-idle"))
             .eventStore(store)
             .offsetStore(new InMemoryOffsetStore())
             .listener(received::addAll)

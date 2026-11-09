@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * A {@link SubscriptionLeadership} a test drives by hand. A name the test granted is handed out by
@@ -69,7 +70,8 @@ class RecordingLeadership implements SubscriptionLeadership {
   }
 
   @Override
-  public Optional<Lease> tryAcquire(String consumerName) {
+  public Optional<Lease> tryAcquire(SubscriptionName consumer) {
+    String consumerName = consumer.value();
     increment(tryAcquires, consumerName);
     Block blocked = block.getAndSet(null);
     if (blocked != null) {
@@ -91,13 +93,15 @@ class RecordingLeadership implements SubscriptionLeadership {
   }
 
   @Override
-  public Optional<Lease> current(String consumerName) {
+  public Optional<Lease> current(SubscriptionName consumer) {
+    String consumerName = consumer.value();
     increment(currents, consumerName);
     return held.contains(consumerName) ? Optional.of(LEASE) : Optional.empty();
   }
 
   @Override
-  public void resign(String consumerName) {
+  public void resign(SubscriptionName consumer) {
+    String consumerName = consumer.value();
     increment(resigns, consumerName);
     if (Thread.currentThread().isInterrupted()) {
       resignsOnAnInterruptedThread.incrementAndGet();

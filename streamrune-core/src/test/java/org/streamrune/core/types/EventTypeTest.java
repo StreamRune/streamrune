@@ -8,13 +8,13 @@ import org.junit.jupiter.api.Test;
 class EventTypeTest {
 
   @Test
-  void constructsWithName() {
-    assertEquals("OrderPlaced", new EventType("OrderPlaced").name());
+  void constructsWithValue() {
+    assertEquals("OrderPlaced", new EventType("OrderPlaced").value());
   }
 
   @Test
   void fromClassUsesSimpleName() {
-    assertEquals("EventTypeTest", EventType.fromClass(EventTypeTest.class).name());
+    assertEquals("EventTypeTest", EventType.fromClass(EventTypeTest.class).value());
   }
 
   @Test

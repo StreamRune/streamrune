@@ -64,7 +64,7 @@ abstract class E2ETestBase {
       new EventTypeRegistry() {
         @Override
         public Class<?> resolveEventType(EventType eventType) {
-          if (CountEvent.TYPE.equals(eventType.name())) {
+          if (CountEvent.TYPE.equals(eventType.value())) {
             return CountEvent.class;
           }
           throw new IllegalArgumentException("Unknown event type: " + eventType);

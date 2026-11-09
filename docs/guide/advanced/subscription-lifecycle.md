@@ -65,7 +65,7 @@ if (failures > 0) {
 
 ```java
 PollingEventSubscription sub = PollingEventSubscription.builder()
-    .subscriptionName("order-projection")
+    .subscriptionName(SubscriptionName.of("order-projection"))
     .eventStore(eventStore)
     .offsetStore(offsetStore)
     .listener(events -> process(events))
@@ -89,7 +89,7 @@ sub.close(); // RUNNING → STOPPED
 SubscriptionConfig config = SubscriptionConfig.pollingOnly(Duration.ofSeconds(2));
 
 PollingEventSubscription sub = PollingEventSubscription.builder()
-    .subscriptionName("inventory-saga-subscription")
+    .subscriptionName(SubscriptionName.of("inventory-saga-subscription"))
     .eventStore(eventStore)
     .offsetStore(offsetStore)
     .listener(runner.asEventListener())

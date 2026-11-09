@@ -72,7 +72,7 @@ CommandBus.CommandResult result = streamRune.execute(new PlaceOrderCommand(order
 | `retryPolicy(RetryPolicy)` | Retry policy for optimistic lock conflicts |
 | `snapshotPolicy(SnapshotPolicy)` | Snapshot frequency |
 | `metrics(StreamRuneMetrics)` | Metrics collector (use `MicrometerStreamRuneMetrics` from `streamrune-integration-api`) |
-| `registerProjection(String, Projection, ProjectionDeliveryMode)` | Register a projection to run under its declared delivery mode (required, no default); requires `projectionRunnerFactory(...)` or `projectionRunner(...)`, otherwise `build()` throws |
+| `registerProjection(ProjectionName, Projection, ProjectionDeliveryMode)` | Register a projection to run under its declared delivery mode (required, no default); requires `projectionRunnerFactory(...)` or `projectionRunner(...)`, otherwise `build()` throws |
 | `projectionRunnerFactory((store, config) -> runner)` | Creates one projection runner per registered projection |
 | `deadLetterQueue(DeadLetterQueue)` | Queue for failed commands after retries exhausted (requires `objectMapper(...)`) |
 

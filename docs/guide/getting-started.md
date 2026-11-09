@@ -410,6 +410,7 @@ Register the projection, wire the runner, then start projections after `build()`
 ```java
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
+import org.streamrune.core.types.ProjectionName;
 import org.streamrune.runtime.ContinuousProjectionRunner;
 import org.streamrune.test.InMemoryOffsetStore;
 
@@ -419,7 +420,7 @@ var offsetStore = new InMemoryOffsetStore();
 var streamRune = StreamRune.builder()
     .eventStore(eventStore)
     .register(ORDER, OrderCommand.class, orderId, new OrderDecider())
-    .registerProjection("order_registry", registry, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+    .registerProjection(ProjectionName.of("order_registry"), registry, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
     // Required: build() refuses a registered projection that has no runner.
     .projectionRunnerFactory((store, config) ->
         ContinuousProjectionRunner.builder()

@@ -26,17 +26,9 @@ public record ProjectionRegistration(
     ProjectionDeliveryMode deliveryMode) {
 
   /** Creates a registration with the default HALT error strategy. */
-  public ProjectionRegistration(String name, Projection projection, ProjectionDeliveryMode mode) {
-    this(ProjectionName.of(name), projection, ProjectionErrorStrategy.HALT, mode);
-  }
-
-  /** Creates a registration with an explicit error strategy. */
   public ProjectionRegistration(
-      String name,
-      Projection projection,
-      ProjectionErrorStrategy errorStrategy,
-      ProjectionDeliveryMode mode) {
-    this(ProjectionName.of(name), projection, errorStrategy, mode);
+      ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
+    this(name, projection, ProjectionErrorStrategy.HALT, mode);
   }
 
   public ProjectionRegistration {

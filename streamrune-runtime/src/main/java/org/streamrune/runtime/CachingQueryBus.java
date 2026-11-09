@@ -114,7 +114,7 @@ public final class CachingQueryBus implements QueryBus {
     // delegate, so any authorization the handler performs internally never runs for it. Absent
     // (the default), behavior is unchanged.
     if (authorizer != null) {
-      authorizer.authorize(query, Authorization.currentUserId());
+      authorizer.authorize(Authorization.currentUserId(), query);
     }
     if (isUnidentifiedUserScope(ann)) {
       // Fail closed. Nothing may be served from, or written to, a partition we cannot

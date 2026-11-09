@@ -29,6 +29,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.EventStoreFixture;
 import org.streamrune.test.InMemoryEventStore;
@@ -238,16 +239,19 @@ class ProjectionCommitRejectionEscalationTest {
             .offsetStore(runnerOffsets)
             .atomicProcessor(processor)
             .healthContributor(health)
-            .register("orders", projection, "* * * * * *", TRANSACTIONAL_LOCAL)
+            .register(ProjectionName.of("orders"), projection, "* * * * * *", TRANSACTIONAL_LOCAL)
             .build();
 
     runner.start();
     try {
       Awaitility.await()
           .atMost(Duration.ofSeconds(20))
-          .until(() -> runner.status().get("orders").state() == ScheduledProjectionState.ERROR);
+          .until(
+              () ->
+                  runner.status().get(ProjectionName.of("orders")).state()
+                      == ScheduledProjectionState.ERROR);
 
-      assertThat(runner.status().get("orders").lastError())
+      assertThat(runner.status().get(ProjectionName.of("orders")).lastError())
           .contains("rejected two commits in a row")
           .contains("stayed at 0")
           .contains("not over the same DataSource")
@@ -335,17 +339,17 @@ class ProjectionCommitRejectionEscalationTest {
       private final Optional<Lease> held = Optional.of(new Lease(epoch));
 
       @Override
-      public Optional<Lease> tryAcquire(String consumerName) {
+      public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
         return held;
       }
 
       @Override
-      public Optional<Lease> current(String consumerName) {
+      public Optional<Lease> current(SubscriptionName consumerName) {
         return held;
       }
 
       @Override
-      public void resign(String consumerName) {}
+      public void resign(SubscriptionName consumerName) {}
 
       @Override
       public void close() {}

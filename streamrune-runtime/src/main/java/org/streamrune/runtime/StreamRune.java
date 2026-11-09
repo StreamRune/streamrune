@@ -677,12 +677,17 @@ public final class StreamRune implements CommandBus, AutoCloseable {
      * run()}.
      */
     public Builder registerProjection(
-        String name, Projection projection, ProjectionDeliveryMode mode) {
+        ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
+      if (name == null) {
+        throw new IllegalArgumentException("name is required");
+      }
       if (mode == null) {
         throw new IllegalArgumentException(
-            "deliveryMode is required for projection '" + LogSanitizer.sanitizeForLog(name) + "'");
+            "deliveryMode is required for projection '"
+                + LogSanitizer.sanitizeForLog(name.value())
+                + "'");
       }
-      projections.add(new ProjectionRegistration(ProjectionName.of(name), projection, mode));
+      projections.add(new ProjectionRegistration(name, projection, mode));
       return this;
     }
 

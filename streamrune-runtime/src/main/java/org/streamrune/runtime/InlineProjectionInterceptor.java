@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.types.LogSanitizer;
+import org.streamrune.core.types.ProjectionName;
 
 /**
  * {@link CommandInterceptor} that runs registered projections inline after {@code
@@ -106,7 +107,7 @@ public final class InlineProjectionInterceptor implements CommandInterceptor {
     }
   }
 
-  private record Registration(String name, Projection projection) {}
+  private record Registration(ProjectionName name, Projection projection) {}
 
   public static final class Builder {
     private final List<Registration> registrations = new ArrayList<>();
@@ -114,12 +115,14 @@ public final class InlineProjectionInterceptor implements CommandInterceptor {
 
     public Builder register(Projection projection) {
       Objects.requireNonNull(projection, "projection");
-      registrations.add(new Registration("inline-" + anonCounter.incrementAndGet(), projection));
+      registrations.add(
+          new Registration(
+              ProjectionName.of("inline-" + anonCounter.incrementAndGet()), projection));
       return this;
     }
 
-    public Builder register(String name, Projection projection) {
-      if (name == null || name.isBlank()) {
+    public Builder register(ProjectionName name, Projection projection) {
+      if (name == null) {
         throw new IllegalArgumentException("name is required");
       }
       Objects.requireNonNull(projection, "projection");

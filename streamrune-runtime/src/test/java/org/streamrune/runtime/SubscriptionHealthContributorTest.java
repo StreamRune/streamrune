@@ -14,6 +14,7 @@ import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SubscriptionName;
 
 class SubscriptionHealthContributorTest {
 
@@ -59,7 +60,7 @@ class SubscriptionHealthContributorTest {
     var c = new SubscriptionHealthContributor(eventStore, offsetStore, 100, orderProbingMetrics);
     holder[0] = c;
 
-    c.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    c.register(SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
 
     assertEquals(
         0,
@@ -72,15 +73,16 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void replaceLifecycle_preservesErrorCountAcrossTheSwap() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    contributor.recordError("orders");
-    contributor.recordError("orders");
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.recordError(SubscriptionName.of("orders"));
+    contributor.recordError(SubscriptionName.of("orders"));
     stubGlobalHead(10);
     stubLastOffset("orders", 10);
     assertEquals(2, errorCountOf("orders"), "two errors accrued on the standby view");
 
     var liveSubscription = mockSubscription(SubscriptionLifecycleState.RUNNING);
-    contributor.replaceLifecycle("orders", liveSubscription);
+    contributor.replaceLifecycle(SubscriptionName.of("orders"), liveSubscription);
 
     assertEquals(
         2,
@@ -94,7 +96,8 @@ class SubscriptionHealthContributorTest {
   void replaceLifecycle_fallsBackToFreshRegister_whenNoExistingEntry() {
     stubGlobalHead(10);
     stubLastOffset("orders", 10);
-    contributor.replaceLifecycle("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.replaceLifecycle(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
 
     assertEquals(1, contributor.health().size());
     assertEquals(
@@ -110,12 +113,13 @@ class SubscriptionHealthContributorTest {
     // asserts the claim itself, correctly.
     stubGlobalHead(10);
     stubLastOffset("orders", 10);
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    contributor.markTerminalError("orders");
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.markTerminalError(SubscriptionName.of("orders"));
     assertEquals(SubscriptionHealth.Status.DOWN, contributor.overallStatus());
 
     var freshLifecycleView = mockSubscription(SubscriptionLifecycleState.RUNNING);
-    contributor.replaceLifecycle("orders", freshLifecycleView);
+    contributor.replaceLifecycle(SubscriptionName.of("orders"), freshLifecycleView);
 
     assertEquals(
         SubscriptionHealth.Status.DOWN,
@@ -147,7 +151,8 @@ class SubscriptionHealthContributorTest {
         };
     var throwingContributor =
         new SubscriptionHealthContributor(eventStore, offsetStore, 100, throwingSink);
-    throwingContributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    throwingContributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
 
     var logger =
         (ch.qos.logback.classic.Logger)
@@ -178,7 +183,7 @@ class SubscriptionHealthContributorTest {
 
   private int errorCountOf(String name) {
     return contributor.health().stream()
-        .filter(h -> h.name().equals(name))
+        .filter(h -> h.name().value().equals(name))
         .findFirst()
         .map(SubscriptionHealth::errorCount)
         .orElse(-1);
@@ -194,7 +199,8 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void healthReturnsUpWhenRunningLowLagNoErrors() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(50);
     stubLastOffset("orders", 45);
 
@@ -202,7 +208,7 @@ class SubscriptionHealthContributorTest {
 
     assertEquals(1, healths.size());
     var h = healths.getFirst();
-    assertEquals("orders", h.name());
+    assertEquals(SubscriptionName.of("orders"), h.name());
     assertEquals(SubscriptionLifecycleState.RUNNING, h.state());
     assertEquals(5, h.lag());
     assertEquals(0, h.errorCount());
@@ -211,7 +217,8 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void healthReturnsDownWhenStopped() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.STOPPED));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.STOPPED));
     stubGlobalHead(50);
     stubLastOffset("orders", 50);
 
@@ -221,7 +228,8 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void lagPastTheThreshold_readsDegraded_notDown() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(200);
     stubLastOffset("orders", 50);
 
@@ -235,7 +243,8 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void lagAtTheThreshold_readsDegraded() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(200);
     stubLastOffset("orders", 100);
 
@@ -246,7 +255,8 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void lagJustBelowTheThreshold_readsUp() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(200);
     stubLastOffset("orders", 101);
 
@@ -267,7 +277,7 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void aLeaseRoleAwareRegistrationReportsItsRole() {
-    contributor.register("saga", roleAwareSubscription(LeaseRole.STANDBY));
+    contributor.register(SubscriptionName.of("saga"), roleAwareSubscription(LeaseRole.STANDBY));
     stubGlobalHead(50);
     stubLastOffset("saga", 50);
 
@@ -276,7 +286,8 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void anotherRegistrationReportsNotReported() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(50);
     stubLastOffset("orders", 50);
 
@@ -288,7 +299,7 @@ class SubscriptionHealthContributorTest {
     stubGlobalHead(50);
     stubLastOffset("orders", 10);
 
-    contributor.markTerminalError("orders");
+    contributor.markTerminalError(SubscriptionName.of("orders"));
 
     var h = contributor.health().getFirst();
     assertEquals(SubscriptionHealth.Status.DOWN, h.status());
@@ -297,7 +308,7 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void aStandbyKeepsTheStatusRules() {
-    contributor.register("saga", roleAwareSubscription(LeaseRole.STANDBY));
+    contributor.register(SubscriptionName.of("saga"), roleAwareSubscription(LeaseRole.STANDBY));
     stubGlobalHead(200);
 
     stubLastOffset("saga", 101);
@@ -316,9 +327,10 @@ class SubscriptionHealthContributorTest {
     var broken = mock(RoleAwareSubscription.class);
     when(broken.state()).thenReturn(SubscriptionLifecycleState.RUNNING);
     when(broken.leaseRole()).thenThrow(new IllegalStateException("probe is broken"));
-    contributor.register("broken", broken);
-    contributor.register("saga", roleAwareSubscription(LeaseRole.LEADING));
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(SubscriptionName.of("broken"), broken);
+    contributor.register(SubscriptionName.of("saga"), roleAwareSubscription(LeaseRole.LEADING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(50);
     stubLastOffset("broken", 50);
     stubLastOffset("saga", 50);
@@ -326,7 +338,7 @@ class SubscriptionHealthContributorTest {
 
     for (int scrape = 0; scrape < 2; scrape++) {
       var byName = new java.util.HashMap<String, SubscriptionHealth>();
-      contributor.health().forEach(h -> byName.put(h.name(), h));
+      contributor.health().forEach(h -> byName.put(h.name().value(), h));
 
       assertEquals(LeaseRole.NOT_REPORTED, byName.get("broken").role());
       assertEquals(SubscriptionHealth.Status.UP, byName.get("broken").status());
@@ -341,15 +353,20 @@ class SubscriptionHealthContributorTest {
     // projection (or a reset one) replaying a large store reads the whole history as lag until the
     // single leader catches up — if that were DOWN, a readiness probe would take every replica out
     // of service for the length of the replay.
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    contributor.register("payments", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("payments"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(5_000_000);
     stubLastOffset("orders", 0);
     stubLastOffset("payments", 5_000_000);
 
     assertEquals(SubscriptionHealth.Status.DEGRADED, contributor.overallStatus());
     var orders =
-        contributor.health().stream().filter(h -> h.name().equals("orders")).findFirst().get();
+        contributor.health().stream()
+            .filter(h -> h.name().value().equals("orders"))
+            .findFirst()
+            .get();
     assertEquals(5_000_000, orders.lag(), "the lag itself stays visible in the health detail");
   }
 
@@ -378,14 +395,19 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void onlyAStoppedOrTerminallyHaltedSubscriptionIsDown() {
-    contributor.register("stopped", mockSubscription(SubscriptionLifecycleState.STOPPED));
-    contributor.register("halted", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    contributor.markTerminalError("halted");
-    contributor.register("lagging", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    contributor.register("failing", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    contributor.register("paused", mockSubscription(SubscriptionLifecycleState.PAUSED));
+    contributor.register(
+        SubscriptionName.of("stopped"), mockSubscription(SubscriptionLifecycleState.STOPPED));
+    contributor.register(
+        SubscriptionName.of("halted"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.markTerminalError(SubscriptionName.of("halted"));
+    contributor.register(
+        SubscriptionName.of("lagging"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("failing"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("paused"), mockSubscription(SubscriptionLifecycleState.PAUSED));
     for (int i = 0; i < 20; i++) {
-      contributor.recordError("failing");
+      contributor.recordError(SubscriptionName.of("failing"));
     }
     stubGlobalHead(10_000);
     stubLastOffset("stopped", 10_000);
@@ -398,7 +420,7 @@ class SubscriptionHealthContributorTest {
         contributor.health().stream()
             .collect(
                 java.util.stream.Collectors.toMap(
-                    SubscriptionHealth::name, SubscriptionHealth::status));
+                    h -> h.name().value(), SubscriptionHealth::status));
     assertEquals(SubscriptionHealth.Status.DOWN, byName.get("stopped"));
     assertEquals(SubscriptionHealth.Status.DOWN, byName.get("halted"));
     assertEquals(SubscriptionHealth.Status.DEGRADED, byName.get("lagging"));
@@ -426,12 +448,18 @@ class SubscriptionHealthContributorTest {
 
   private static SubscriptionHealth health(String name, SubscriptionHealth.Status status) {
     return new SubscriptionHealth(
-        name, SubscriptionLifecycleState.RUNNING, 0, 0, status, LeaseRole.NOT_REPORTED);
+        SubscriptionName.of(name),
+        SubscriptionLifecycleState.RUNNING,
+        0,
+        0,
+        status,
+        LeaseRole.NOT_REPORTED);
   }
 
   @Test
   void healthReturnsDegradedWhenPaused() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.PAUSED));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.PAUSED));
     stubGlobalHead(50);
     stubLastOffset("orders", 50);
 
@@ -441,11 +469,12 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void healthReturnsDegradedWhenErrorsBelowThreshold() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(50);
     stubLastOffset("orders", 50);
-    contributor.recordError("orders");
-    contributor.recordError("orders");
+    contributor.recordError(SubscriptionName.of("orders"));
+    contributor.recordError(SubscriptionName.of("orders"));
 
     var h = contributor.health().getFirst();
     assertEquals(2, h.errorCount());
@@ -457,11 +486,12 @@ class SubscriptionHealthContributorTest {
     // A subscription that keeps failing is still running and retrying (a dead-lettering or
     // skipping projection is even still advancing): DEGRADED. Only a stopped or terminally halted
     // subscription is DOWN.
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(50);
     stubLastOffset("orders", 50);
     for (int i = 0; i < 50; i++) {
-      contributor.recordError("orders");
+      contributor.recordError(SubscriptionName.of("orders"));
     }
 
     var h = contributor.health().getFirst();
@@ -472,12 +502,13 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void errorCountResetsOnSuccess() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(50);
     stubLastOffset("orders", 50);
-    contributor.recordError("orders");
-    contributor.recordError("orders");
-    contributor.recordSuccess("orders");
+    contributor.recordError(SubscriptionName.of("orders"));
+    contributor.recordError(SubscriptionName.of("orders"));
+    contributor.recordSuccess(SubscriptionName.of("orders"));
 
     var h = contributor.health().getFirst();
     assertEquals(0, h.errorCount());
@@ -486,8 +517,10 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void overallStatusDownIfAnySubscriptionDown() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    contributor.register("payments", mockSubscription(SubscriptionLifecycleState.STOPPED));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("payments"), mockSubscription(SubscriptionLifecycleState.STOPPED));
     stubGlobalHead(50);
     stubLastOffset("orders", 50);
     stubLastOffset("payments", 50);
@@ -497,8 +530,10 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void overallStatusDegradedIfAnyDegraded() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    contributor.register("payments", mockSubscription(SubscriptionLifecycleState.PAUSED));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("payments"), mockSubscription(SubscriptionLifecycleState.PAUSED));
     stubGlobalHead(50);
     stubLastOffset("orders", 50);
     stubLastOffset("payments", 50);
@@ -513,21 +548,23 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void unregisterRemovesSubscription() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    contributor.unregister("orders");
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.unregister(SubscriptionName.of("orders"));
 
     assertTrue(contributor.health().isEmpty());
   }
 
   @Test
   void markTerminalErrorForcesDownAndSurvivesRepeatedChecks() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(50);
     stubLastOffset("orders", 50);
     // Healthy before the halt: RUNNING, no lag, no errors.
     assertEquals(SubscriptionHealth.Status.UP, contributor.overallStatus());
 
-    contributor.markTerminalError("orders");
+    contributor.markTerminalError(SubscriptionName.of("orders"));
 
     // The projection is definitively halted: DOWN regardless of its (still low) lag/error count,
     // and it STAYS registered so overallStatus keeps reporting DOWN across repeated checks.
@@ -543,12 +580,12 @@ class SubscriptionHealthContributorTest {
     stubGlobalHead(50);
     stubLastOffset("orders", 10);
 
-    contributor.markTerminalError("orders");
+    contributor.markTerminalError(SubscriptionName.of("orders"));
 
     var healths = contributor.health();
     assertEquals(1, healths.size());
     var h = healths.getFirst();
-    assertEquals("orders", h.name());
+    assertEquals(SubscriptionName.of("orders"), h.name());
     assertEquals(SubscriptionLifecycleState.STOPPED, h.state());
     assertEquals(SubscriptionHealth.Status.DOWN, h.status());
     assertEquals(SubscriptionHealth.Status.DOWN, contributor.overallStatus());
@@ -556,20 +593,23 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void reRegisterClearsTerminalError() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    contributor.markTerminalError("orders");
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.markTerminalError(SubscriptionName.of("orders"));
     stubGlobalHead(50);
     stubLastOffset("orders", 50);
     assertEquals(SubscriptionHealth.Status.DOWN, contributor.overallStatus());
 
     // A restart/reset re-registers the projection → a fresh, healthy entry clears the marking.
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     assertEquals(SubscriptionHealth.Status.UP, contributor.overallStatus());
   }
 
   @Test
   void lagWithNoEventsInStore() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(0);
     stubLastOffset("orders", 0);
 
@@ -580,7 +620,8 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void lagWithNoOffsetYet() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(50);
     when(offsetStore.getLastOffset(ProjectionName.of("orders"))).thenReturn(GlobalOffset.initial());
 
@@ -590,7 +631,8 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void recordErrorOnUnknownSubscriptionIsNoOp() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(10);
     // Every name reads as caught up, so a phantom entry would show up in health() below instead of
     // failing inside its lag computation.
@@ -599,25 +641,26 @@ class SubscriptionHealthContributorTest {
 
     // As many errors as the threshold (3): a phantom entry created on demand would report DOWN.
     for (int i = 0; i < 3; i++) {
-      contributor.recordError("nonexistent");
+      contributor.recordError(SubscriptionName.of("nonexistent"));
     }
     assertEquals(
         List.of("orders"),
-        contributor.health().stream().map(SubscriptionHealth::name).toList(),
+        contributor.health().stream().map(h -> h.name().value()).toList(),
         "recordError on an unknown name must not create an entry for it");
     assertEquals(SubscriptionHealth.Status.UP, contributor.overallStatus());
 
-    contributor.recordSuccess("nonexistent");
+    contributor.recordSuccess(SubscriptionName.of("nonexistent"));
     assertEquals(
         List.of("orders"),
-        contributor.health().stream().map(SubscriptionHealth::name).toList(),
+        contributor.health().stream().map(h -> h.name().value()).toList(),
         "recordSuccess on an unknown name must not create an entry for it");
     assertEquals(0, errorCountOf("orders"), "the registered subscription is untouched");
   }
 
   @Test
   void lagIsZeroWhenStoreDoesNotSupportLastGlobalOffset() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     when(eventStore.lastGlobalOffset())
         .thenThrow(new UnsupportedOperationException("not supported"));
     stubLastOffset("orders", 5);
@@ -631,8 +674,10 @@ class SubscriptionHealthContributorTest {
   void recordsLagPerSubscriptionWhenMetricsSupplied() {
     var metrics = new RecordingStreamRuneMetrics();
     var withMetrics = new SubscriptionHealthContributor(eventStore, offsetStore, 100, metrics);
-    withMetrics.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
-    withMetrics.register("payments", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    withMetrics.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+    withMetrics.register(
+        SubscriptionName.of("payments"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(200);
     stubLastOffset("orders", 170);
     stubLastOffset("payments", 195);
@@ -662,7 +707,7 @@ class SubscriptionHealthContributorTest {
           }
         };
     var c = new SubscriptionHealthContributor(eventStore, offsetStore, 100, throwing);
-    c.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    c.register(SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
 
     var healths =
         assertDoesNotThrow(c::health, "a throwing metrics backend must not fail the whole scrape");
@@ -676,7 +721,8 @@ class SubscriptionHealthContributorTest {
   void recordedLagReflectsLatestValueOnRepeatedHealthChecks() {
     var metrics = new RecordingStreamRuneMetrics();
     var withMetrics = new SubscriptionHealthContributor(eventStore, offsetStore, 100, metrics);
-    withMetrics.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    withMetrics.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(200);
     stubLastOffset("orders", 170);
     withMetrics.health();
@@ -696,7 +742,8 @@ class SubscriptionHealthContributorTest {
     // scrape) recomputes lag live — with no health() call at all.
     var metrics = new RecordingStreamRuneMetrics();
     var withMetrics = new SubscriptionHealthContributor(eventStore, offsetStore, 100, metrics);
-    withMetrics.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    withMetrics.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(200);
     stubLastOffset("orders", 170);
 
@@ -716,12 +763,13 @@ class SubscriptionHealthContributorTest {
     // A store that structurally cannot report its head has no lag to report: 0 is the honest
     // answer, and this is a permanent capability gap, not a failure. (a transient READ
     // FAILURE is a different case — see lagGaugeHoldsItsLastKnownValueWhenTheStoreReadFails.)
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     when(eventStore.lastGlobalOffset())
         .thenThrow(new UnsupportedOperationException("store cannot report its head"));
     stubLastOffset("orders", 5);
 
-    assertEquals(0, contributor.currentLag("orders"));
+    assertEquals(0, contributor.currentLag(SubscriptionName.of("orders")));
   }
 
   /**
@@ -736,7 +784,8 @@ class SubscriptionHealthContributorTest {
   void lagGaugeHoldsItsLastKnownValueWhenTheStoreReadFails() {
     var metrics = new RecordingStreamRuneMetrics();
     var withMetrics = new SubscriptionHealthContributor(eventStore, offsetStore, 100, metrics);
-    withMetrics.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    withMetrics.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(200);
     stubLastOffset("orders", 150);
 
@@ -760,7 +809,8 @@ class SubscriptionHealthContributorTest {
   void lagGaugeRecoversAfterAFailedOffsetStoreRead() {
     var metrics = new RecordingStreamRuneMetrics();
     var withMetrics = new SubscriptionHealthContributor(eventStore, offsetStore, 100, metrics);
-    withMetrics.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    withMetrics.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(200);
     stubLastOffset("orders", 190);
     assertEquals(10, metrics.sampleLagGauge("orders"));
@@ -794,7 +844,7 @@ class SubscriptionHealthContributorTest {
   @Test
   void aDeadPushPathDegradesAnOtherwiseHealthySubscription() {
     contributor.register(
-        "orders",
+        SubscriptionName.of("orders"),
         pushAware(SubscriptionLifecycleState.RUNNING, PushHealthAware.PushPathStatus.DEAD));
     stubGlobalHead(10);
     stubLastOffset("orders", 10);
@@ -808,7 +858,7 @@ class SubscriptionHealthContributorTest {
   @Test
   void aLivePushPathLeavesTheSubscriptionUp() {
     contributor.register(
-        "orders",
+        SubscriptionName.of("orders"),
         pushAware(SubscriptionLifecycleState.RUNNING, PushHealthAware.PushPathStatus.LIVE));
     stubGlobalHead(10);
     stubLastOffset("orders", 10);
@@ -821,7 +871,7 @@ class SubscriptionHealthContributorTest {
     // A pollingOnly deployment has no push path to lose; reporting it degraded forever would train
     // operators to ignore the signal.
     contributor.register(
-        "orders",
+        SubscriptionName.of("orders"),
         pushAware(
             SubscriptionLifecycleState.RUNNING, PushHealthAware.PushPathStatus.NOT_CONFIGURED));
     stubGlobalHead(10);
@@ -835,7 +885,7 @@ class SubscriptionHealthContributorTest {
     // A stopped subscription's listener is legitimately down too — the lifecycle state is the
     // stronger, more urgent signal and must survive.
     contributor.register(
-        "orders",
+        SubscriptionName.of("orders"),
         pushAware(SubscriptionLifecycleState.STOPPED, PushHealthAware.PushPathStatus.DEAD));
     stubGlobalHead(10);
     stubLastOffset("orders", 10);
@@ -848,7 +898,7 @@ class SubscriptionHealthContributorTest {
     var sub = mock(PushAwareLifecycle.class);
     when(sub.state()).thenReturn(SubscriptionLifecycleState.RUNNING);
     when(sub.pushPathStatus()).thenThrow(new IllegalStateException("probe blew up"));
-    contributor.register("orders", sub);
+    contributor.register(SubscriptionName.of("orders"), sub);
     stubGlobalHead(10);
     stubLastOffset("orders", 10);
 
@@ -860,7 +910,8 @@ class SubscriptionHealthContributorTest {
 
   @Test
   void aSubscriptionWithoutThePushCapabilityIsUnaffected() {
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(10);
     stubLastOffset("orders", 10);
 
@@ -870,7 +921,8 @@ class SubscriptionHealthContributorTest {
   @Test
   void defaultContributorRecordsNoLagMetric() {
     // Behaviour unchanged when no StreamRuneMetrics is supplied (NOOP default).
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
     stubGlobalHead(50);
     stubLastOffset("orders", 45);
 
@@ -887,7 +939,8 @@ class SubscriptionHealthContributorTest {
     // 0 and report UP, hiding the one condition a consistent database can never produce.
     stubGlobalHead(800);
     stubLastOffset("orders", 1000);
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
 
     var logger =
         (ch.qos.logback.classic.Logger)
@@ -900,7 +953,7 @@ class SubscriptionHealthContributorTest {
     try {
       first = contributor.health();
       contributor.health();
-      contributor.currentLag("orders");
+      contributor.currentLag(SubscriptionName.of("orders"));
     } finally {
       logger.detachAppender(appender);
       appender.stop();
@@ -956,7 +1009,8 @@ class SubscriptionHealthContributorTest {
               head.set(20); // the concurrent batch commits while the health sample is taken
               return GlobalOffset.of(20);
             });
-    contributor.register("orders", mockSubscription(SubscriptionLifecycleState.RUNNING));
+    contributor.register(
+        SubscriptionName.of("orders"), mockSubscription(SubscriptionLifecycleState.RUNNING));
 
     var h = contributor.health().getFirst();
 

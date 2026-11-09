@@ -29,6 +29,7 @@ import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 
 /**
@@ -82,7 +83,7 @@ class StreamEventSubscriptionLifecycleTest {
 
     var builder =
         StreamEventSubscription.builder()
-            .subscriptionName("conc1-sub")
+            .subscriptionName(SubscriptionName.of("conc1-sub"))
             .streamId(TARGET)
             .eventStore(eventStore)
             .offsetStore(offsetStore)
@@ -166,7 +167,7 @@ class StreamEventSubscriptionLifecycleTest {
     var subRef = new StreamEventSubscription[1];
     subRef[0] =
         StreamEventSubscription.builder()
-            .subscriptionName("self-close-sub")
+            .subscriptionName(SubscriptionName.of("self-close-sub"))
             .streamId(TARGET)
             .eventStore(eventStore)
             .offsetStore(offsetStore)

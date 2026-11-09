@@ -56,7 +56,7 @@ import org.streamrune.core.AuthorizationException;
 import org.streamrune.core.QueryAuthorizer;
 import org.streamrune.runtime.CachingQueryBus;
 
-QueryAuthorizer ordersAuthorizer = (query, user) -> {
+QueryAuthorizer ordersAuthorizer = (user, query) -> {
   if (query instanceof GetOrder q && !orderAccessControl.canRead(user, q.orderId())) {
     throw new AuthorizationException("Caller may not read order " + q.orderId());
   }

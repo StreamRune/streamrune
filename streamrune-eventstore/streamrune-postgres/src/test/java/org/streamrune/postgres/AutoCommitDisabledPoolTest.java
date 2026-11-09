@@ -54,6 +54,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.SubjectId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
@@ -435,7 +436,7 @@ class AutoCommitDisabledPoolTest {
   void leadership_acquireRenewAndResignAreDurable() throws Exception {
     Duration ttl = Duration.ofMillis(1500);
     try (var leadership = new LeaseBasedLeadership(pool, ttl)) {
-      assertTrue(leadership.tryAcquire("consumer-a").isPresent());
+      assertTrue(leadership.tryAcquire(SubscriptionName.of("consumer-a")).isPresent());
       assertEquals(
           1, count("SELECT epoch FROM subscription_leases WHERE consumer_name = ?", "consumer-a"));
 
@@ -448,7 +449,7 @@ class AutoCommitDisabledPoolTest {
               "SELECT (lease_until > now())::text FROM subscription_leases WHERE consumer_name = ?",
               "consumer-a"));
 
-      leadership.resign("consumer-a");
+      leadership.resign(SubscriptionName.of("consumer-a"));
       assertEquals(
           "true",
           scalar(

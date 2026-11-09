@@ -17,6 +17,7 @@ import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.runtime.BackgroundRelayHealthContributor;
 import org.streamrune.runtime.SubscriptionHealthContributor;
 
@@ -237,7 +238,7 @@ class StreamRuneHealthCheckTest {
     SubscriptionHealthContributor contributor = mock(SubscriptionHealthContributor.class);
     var sub =
         new org.streamrune.core.subscription.SubscriptionHealth(
-            "orders",
+            SubscriptionName.of("orders"),
             org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
             5L,
             0,
@@ -271,7 +272,7 @@ class StreamRuneHealthCheckTest {
     SubscriptionHealthContributor contributor = mock(SubscriptionHealthContributor.class);
     var leading =
         new org.streamrune.core.subscription.SubscriptionHealth(
-            "orders-saga",
+            SubscriptionName.of("orders-saga"),
             org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
             5L,
             0,
@@ -279,7 +280,7 @@ class StreamRuneHealthCheckTest {
             org.streamrune.core.subscription.LeaseRole.LEADING);
     var notReported =
         new org.streamrune.core.subscription.SubscriptionHealth(
-            "orders",
+            SubscriptionName.of("orders"),
             org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
             5L,
             0,
@@ -310,7 +311,7 @@ class StreamRuneHealthCheckTest {
     SubscriptionHealthContributor contributor = mock(SubscriptionHealthContributor.class);
     var sub =
         new org.streamrune.core.subscription.SubscriptionHealth(
-            "orders",
+            SubscriptionName.of("orders"),
             org.streamrune.core.subscription.SubscriptionLifecycleState.STOPPED,
             0L,
             0,
@@ -339,7 +340,7 @@ class StreamRuneHealthCheckTest {
     SubscriptionHealthContributor contributor = mock(SubscriptionHealthContributor.class);
     var down =
         new org.streamrune.core.subscription.SubscriptionHealth(
-            "orders",
+            SubscriptionName.of("orders"),
             org.streamrune.core.subscription.SubscriptionLifecycleState.STOPPED,
             0L,
             0,
@@ -436,7 +437,7 @@ class StreamRuneHealthCheckTest {
     SubscriptionLifecycle orders = mock(SubscriptionLifecycle.class);
     when(orders.state()).thenReturn(SubscriptionLifecycleState.RUNNING);
     var contributor = new SubscriptionHealthContributor(eventStore, offsetStore);
-    contributor.register("orders", orders);
+    contributor.register(SubscriptionName.of("orders"), orders);
     out[0] = contributor;
     Instance<SubscriptionHealthContributor> instance = mock(Instance.class);
     when(instance.isUnsatisfied()).thenReturn(false);
@@ -469,7 +470,7 @@ class StreamRuneHealthCheckTest {
   void aTerminallyHaltedSubscriptionTurnsTheReadinessCheckDown() throws SQLException {
     var holder = new SubscriptionHealthContributor[1];
     var instance = contributorWithOrdersAt(holder, 10, 10);
-    holder[0].markTerminalError("orders");
+    holder[0].markTerminalError(SubscriptionName.of("orders"));
 
     HealthCheckResponse response =
         new StreamRuneHealthCheck(

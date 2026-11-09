@@ -219,7 +219,7 @@ class PostgresNotificationSubscriptionLeaseTest {
     assertThat(leadership.resigns(NAME)).isEqualTo(1);
     InOrder order = inOrder(offsets, leadership);
     order.verify(offsets).saveOffset(eq(ProjectionName.of(NAME)), eq(GlobalOffset.of(1)));
-    order.verify(leadership).resign(NAME);
+    order.verify(leadership).resign(SubscriptionName.of(NAME));
   }
 
   @Test
@@ -255,7 +255,7 @@ class PostgresNotificationSubscriptionLeaseTest {
     assertThat(self[0].isRunning()).isFalse();
     InOrder order = inOrder(offsets, leadership);
     order.verify(offsets).saveOffset(eq(ProjectionName.of(NAME)), eq(GlobalOffset.of(1)));
-    order.verify(leadership).resign(NAME);
+    order.verify(leadership).resign(SubscriptionName.of(NAME));
     assertThat(leadership.resigns(NAME)).isEqualTo(1);
   }
 
@@ -286,7 +286,7 @@ class PostgresNotificationSubscriptionLeaseTest {
 
   @Test
   void aSecondSubscriptionOfTheSameLeaseIsRefusedAtStart() {
-    SubscriptionLease lease = SubscriptionLease.of(leadership, NAME);
+    SubscriptionLease lease = SubscriptionLease.of(leadership, SubscriptionName.of(NAME));
     var first = track(builder(FAST, 10, received::addAll).lease(lease).build());
     var second = track(builder(FAST, 10, received::addAll).lease(lease).build());
     first.start();
@@ -378,7 +378,9 @@ class PostgresNotificationSubscriptionLeaseTest {
   private PostgresNotificationSubscription leased(
       SubscriptionConfig config, int fetchSize, EventListener listener) {
     return track(
-        builder(config, fetchSize, listener).lease(SubscriptionLease.of(leadership, NAME)).build());
+        builder(config, fetchSize, listener)
+            .lease(SubscriptionLease.of(leadership, SubscriptionName.of(NAME)))
+            .build());
   }
 
   private PostgresNotificationSubscription track(PostgresNotificationSubscription sub) {

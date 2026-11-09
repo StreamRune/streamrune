@@ -1610,7 +1610,7 @@ public final class PostgresEventStore implements EventStore {
       requireNoNulCharacter(metadataJson, "event metadata", shownStream);
       rows.add(
           new EventRow(
-              version, envelope.eventType().name(), payloadJson, metadataJson, schemaVersion));
+              version, envelope.eventType().value(), payloadJson, metadataJson, schemaVersion));
     }
     return rows;
   }
@@ -2272,7 +2272,7 @@ public final class PostgresEventStore implements EventStore {
         // the circuit breaker, never quarantined by a projection) — see EventSchemaAheadException.
         throw new EventSchemaAheadException(
             schemaAheadMessage(
-                LogSanitizer.sanitizeForLog(eventType.name()),
+                LogSanitizer.sanitizeForLog(eventType.value()),
                 row.streamText(),
                 schemaVersion,
                 currentVersion),

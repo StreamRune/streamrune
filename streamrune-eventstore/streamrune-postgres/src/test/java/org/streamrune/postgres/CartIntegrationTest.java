@@ -158,7 +158,7 @@ class CartIntegrationTest {
         new EventTypeRegistry() {
           @Override
           public Class<?> resolveEventType(EventType eventType) {
-            return switch (eventType.name()) {
+            return switch (eventType.value()) {
               case "ItemAdded" -> CartEvent.ItemAdded.class;
               case "ItemRemoved" -> CartEvent.ItemRemoved.class;
               case "CheckedOut" -> CartEvent.CheckedOut.class;

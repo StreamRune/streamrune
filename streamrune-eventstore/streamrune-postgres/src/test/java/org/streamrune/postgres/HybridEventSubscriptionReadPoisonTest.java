@@ -23,6 +23,7 @@ import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.ReadPoisonAware;
 
@@ -50,7 +51,7 @@ class HybridEventSubscriptionReadPoisonTest {
 
     var hybrid =
         HybridEventSubscription.builder()
-            .subscriptionName("hybrid-read-poison")
+            .subscriptionName(SubscriptionName.of("hybrid-read-poison"))
             .dataSource(ds)
             .eventStore(poisonStore)
             .offsetStore(offsetStore)

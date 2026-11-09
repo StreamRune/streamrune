@@ -309,7 +309,7 @@ public final class PollingEventSubscription
     // Registered before the poll thread starts: its first page may fail at once, and a failure
     // recorded for a name that is not registered yet is dropped.
     if (healthContributor != null) {
-      healthContributor.register(subscriptionName.value(), this);
+      healthContributor.register(subscriptionName, this);
     }
     startPollThread(anchor);
   }
@@ -422,7 +422,7 @@ public final class PollingEventSubscription
       closeAndAwaitThread();
     } finally {
       if (healthContributor != null) {
-        healthContributor.unregister(subscriptionName.value());
+        healthContributor.unregister(subscriptionName);
       }
     }
   }
@@ -823,9 +823,9 @@ public final class PollingEventSubscription
     private SubscriptionHealthContributor healthContributor;
     private Clock clock;
 
-    /** Sets the unique subscription name (required). Accepts String for convenience. */
-    public Builder subscriptionName(String name) {
-      this.subscriptionName = SubscriptionName.of(name);
+    /** Sets the unique subscription name (required). */
+    public Builder subscriptionName(SubscriptionName name) {
+      this.subscriptionName = name;
       return this;
     }
 
@@ -1015,7 +1015,7 @@ public final class PollingEventSubscription
         return lease;
       }
       if (leadership != null && subscriptionName != null) {
-        return SubscriptionLease.of(leadership, subscriptionName.value());
+        return SubscriptionLease.of(leadership, subscriptionName);
       }
       return SubscriptionLease.ungated();
     }

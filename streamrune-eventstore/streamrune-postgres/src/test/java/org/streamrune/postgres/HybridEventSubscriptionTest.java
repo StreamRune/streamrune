@@ -147,7 +147,7 @@ class HybridEventSubscriptionTest {
   void builderCreatesSubscription() {
     var subscription =
         HybridEventSubscription.builder()
-            .subscriptionName("test-sub")
+            .subscriptionName(SubscriptionName.of("test-sub"))
             .dataSource(mockDataSource())
             .eventStore(mockEventStore())
             .offsetStore(mockOffsetStore())
@@ -163,7 +163,7 @@ class HybridEventSubscriptionTest {
   void builderUsesDefaultConfig() {
     var subscription =
         HybridEventSubscription.builder()
-            .subscriptionName("test-sub")
+            .subscriptionName(SubscriptionName.of("test-sub"))
             .dataSource(mockDataSource())
             .eventStore(mockEventStore())
             .offsetStore(mockOffsetStore())
@@ -192,7 +192,7 @@ class HybridEventSubscriptionTest {
     var exception =
         assertThrows(
             IllegalArgumentException.class,
-            () -> HybridEventSubscription.builder().subscriptionName("   "));
+            () -> HybridEventSubscription.builder().subscriptionName(SubscriptionName.of("   ")));
     assertTrue(exception.getMessage().contains("subscriptionName"));
   }
 
@@ -200,7 +200,7 @@ class HybridEventSubscriptionTest {
   void builderThrowsOnMissingDataSource() {
     var builder =
         HybridEventSubscription.builder()
-            .subscriptionName("test-sub")
+            .subscriptionName(SubscriptionName.of("test-sub"))
             .eventStore(mockEventStore())
             .offsetStore(mockOffsetStore())
             .listener(mockListener());
@@ -212,7 +212,7 @@ class HybridEventSubscriptionTest {
   void builderThrowsOnMissingEventStore() {
     var builder =
         HybridEventSubscription.builder()
-            .subscriptionName("test-sub")
+            .subscriptionName(SubscriptionName.of("test-sub"))
             .dataSource(mockDataSource())
             .offsetStore(mockOffsetStore())
             .listener(mockListener());
@@ -224,7 +224,7 @@ class HybridEventSubscriptionTest {
   void builderThrowsOnMissingOffsetStore() {
     var builder =
         HybridEventSubscription.builder()
-            .subscriptionName("test-sub")
+            .subscriptionName(SubscriptionName.of("test-sub"))
             .dataSource(mockDataSource())
             .eventStore(mockEventStore())
             .listener(mockListener());
@@ -236,7 +236,7 @@ class HybridEventSubscriptionTest {
   void builderThrowsOnMissingListener() {
     var builder =
         HybridEventSubscription.builder()
-            .subscriptionName("test-sub")
+            .subscriptionName(SubscriptionName.of("test-sub"))
             .dataSource(mockDataSource())
             .eventStore(mockEventStore())
             .offsetStore(mockOffsetStore());
@@ -249,7 +249,7 @@ class HybridEventSubscriptionTest {
     var offsetStore = new RecordingOffsetStore();
     var subscription =
         HybridEventSubscription.builder()
-            .subscriptionName("orders-projection")
+            .subscriptionName(SubscriptionName.of("orders-projection"))
             .dataSource(mockDataSource())
             .eventStore(new EmptyEventStore())
             .offsetStore(offsetStore)

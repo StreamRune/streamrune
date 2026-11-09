@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * An anchor writes one INFO line per change of this process's role under the lease — taking it,
@@ -44,7 +45,8 @@ class SubscriptionLeaseTransitionLogTest {
   @Test
   void takingTheLeaseIsOneInfoLine_steadyPollsAddNone() {
     leadership.grant(NAME);
-    SubscriptionLease.Anchor anchor = SubscriptionLease.of(leadership, NAME).anchor();
+    SubscriptionLease.Anchor anchor =
+        SubscriptionLease.of(leadership, SubscriptionName.of(NAME)).anchor();
 
     for (int i = 0; i < 10; i++) {
       assertThat(anchor.lead(INTERVAL)).isTrue();
@@ -58,7 +60,8 @@ class SubscriptionLeaseTransitionLogTest {
 
   @Test
   void aStandbyThatNeverTakesTheLease_logsNothing() {
-    SubscriptionLease.Anchor anchor = SubscriptionLease.of(leadership, NAME).anchor();
+    SubscriptionLease.Anchor anchor =
+        SubscriptionLease.of(leadership, SubscriptionName.of(NAME)).anchor();
 
     for (int i = 0; i < 10; i++) {
       assertThat(anchor.lead(Duration.ZERO)).isFalse();
@@ -71,7 +74,8 @@ class SubscriptionLeaseTransitionLogTest {
   @Test
   void aCheckThatFindsTheLeaseGone_logsOnce_whichEverCheckFindsIt() {
     leadership.grant(NAME);
-    SubscriptionLease.Anchor anchor = SubscriptionLease.of(leadership, NAME).anchor();
+    SubscriptionLease.Anchor anchor =
+        SubscriptionLease.of(leadership, SubscriptionName.of(NAME)).anchor();
     assertThat(anchor.lead(INTERVAL)).isTrue();
     appender.list.clear();
 
@@ -88,7 +92,8 @@ class SubscriptionLeaseTransitionLogTest {
   @Test
   void aLeaseFoundGoneByLead_logsOnce() {
     leadership.grant(NAME);
-    SubscriptionLease.Anchor anchor = SubscriptionLease.of(leadership, NAME).anchor();
+    SubscriptionLease.Anchor anchor =
+        SubscriptionLease.of(leadership, SubscriptionName.of(NAME)).anchor();
     assertThat(anchor.lead(INTERVAL)).isTrue();
     appender.list.clear();
 
@@ -105,7 +110,8 @@ class SubscriptionLeaseTransitionLogTest {
   @Test
   void aLeaseTakenAgainAfterALoss_isAnotherLine() {
     leadership.grant(NAME);
-    SubscriptionLease.Anchor anchor = SubscriptionLease.of(leadership, NAME).anchor();
+    SubscriptionLease.Anchor anchor =
+        SubscriptionLease.of(leadership, SubscriptionName.of(NAME)).anchor();
     assertThat(anchor.lead(Duration.ZERO)).isTrue();
     leadership.revoke(NAME);
     assertThat(anchor.stillLeads()).isFalse();
@@ -124,7 +130,8 @@ class SubscriptionLeaseTransitionLogTest {
   @Test
   void closingTheAnchorIsNotALoss() {
     leadership.grant(NAME);
-    SubscriptionLease.Anchor anchor = SubscriptionLease.of(leadership, NAME).anchor();
+    SubscriptionLease.Anchor anchor =
+        SubscriptionLease.of(leadership, SubscriptionName.of(NAME)).anchor();
     assertThat(anchor.lead(INTERVAL)).isTrue();
     appender.list.clear();
 

@@ -373,7 +373,7 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
     assertThat(
             count(
                 "SELECT COUNT(*) FROM event_stream WHERE event_type = ?",
-                EventType.fromClass(OrderCancelled.class).name()))
+                EventType.fromClass(OrderCancelled.class).value()))
         .as("compensation executed exactly once — OrderCancelled appended once")
         .isEqualTo(1L);
 

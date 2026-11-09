@@ -3,6 +3,7 @@ package org.streamrune.core.subscription;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.types.SubscriptionName;
 
 class SubscriptionHealthTest {
 
@@ -10,13 +11,13 @@ class SubscriptionHealthTest {
   void construction_validFields() {
     var health =
         new SubscriptionHealth(
-            "orders",
+            SubscriptionName.of("orders"),
             SubscriptionLifecycleState.RUNNING,
             42,
             3,
             SubscriptionHealth.Status.UP,
             LeaseRole.LEADING);
-    assertEquals("orders", health.name());
+    assertEquals(SubscriptionName.of("orders"), health.name());
     assertEquals(SubscriptionLifecycleState.RUNNING, health.state());
     assertEquals(42, health.lag());
     assertEquals(3, health.errorCount());
@@ -37,7 +38,7 @@ class SubscriptionHealthTest {
   void equality() {
     var a =
         new SubscriptionHealth(
-            "x",
+            SubscriptionName.of("x"),
             SubscriptionLifecycleState.RUNNING,
             0,
             0,
@@ -45,7 +46,7 @@ class SubscriptionHealthTest {
             LeaseRole.NOT_REPORTED);
     var b =
         new SubscriptionHealth(
-            "x",
+            SubscriptionName.of("x"),
             SubscriptionLifecycleState.RUNNING,
             0,
             0,
@@ -75,7 +76,12 @@ class SubscriptionHealthTest {
         NullPointerException.class,
         () ->
             new SubscriptionHealth(
-                "x", null, 0, 0, SubscriptionHealth.Status.UP, LeaseRole.NOT_REPORTED));
+                SubscriptionName.of("x"),
+                null,
+                0,
+                0,
+                SubscriptionHealth.Status.UP,
+                LeaseRole.NOT_REPORTED));
   }
 
   @Test
@@ -84,7 +90,12 @@ class SubscriptionHealthTest {
         NullPointerException.class,
         () ->
             new SubscriptionHealth(
-                "x", SubscriptionLifecycleState.RUNNING, 0, 0, null, LeaseRole.NOT_REPORTED));
+                SubscriptionName.of("x"),
+                SubscriptionLifecycleState.RUNNING,
+                0,
+                0,
+                null,
+                LeaseRole.NOT_REPORTED));
   }
 
   @Test
@@ -93,7 +104,7 @@ class SubscriptionHealthTest {
         IllegalArgumentException.class,
         () ->
             new SubscriptionHealth(
-                "x",
+                SubscriptionName.of("x"),
                 SubscriptionLifecycleState.RUNNING,
                 -1,
                 0,
@@ -107,7 +118,7 @@ class SubscriptionHealthTest {
         IllegalArgumentException.class,
         () ->
             new SubscriptionHealth(
-                "x",
+                SubscriptionName.of("x"),
                 SubscriptionLifecycleState.RUNNING,
                 0,
                 -1,
@@ -122,7 +133,7 @@ class SubscriptionHealthTest {
             NullPointerException.class,
             () ->
                 new SubscriptionHealth(
-                    "x",
+                    SubscriptionName.of("x"),
                     SubscriptionLifecycleState.RUNNING,
                     0,
                     0,

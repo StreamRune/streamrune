@@ -44,6 +44,7 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
@@ -2860,22 +2861,22 @@ class DeadLetterRetryRunnerTest {
         private static final Optional<Lease> LEASE = Optional.of(new Lease(1L));
 
         @Override
-        public Optional<Lease> tryAcquire(String consumerName) {
-          return FakeSingleActiveLeadership.this.tryBecomeLeader(this, consumerName)
+        public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
+          return FakeSingleActiveLeadership.this.tryBecomeLeader(this, consumerName.value())
               ? LEASE
               : Optional.empty();
         }
 
         @Override
-        public Optional<Lease> current(String consumerName) {
-          return FakeSingleActiveLeadership.this.isLeader(this, consumerName)
+        public Optional<Lease> current(SubscriptionName consumerName) {
+          return FakeSingleActiveLeadership.this.isLeader(this, consumerName.value())
               ? LEASE
               : Optional.empty();
         }
 
         @Override
-        public void resign(String consumerName) {
-          FakeSingleActiveLeadership.this.resign(this, consumerName);
+        public void resign(SubscriptionName consumerName) {
+          FakeSingleActiveLeadership.this.resign(this, consumerName.value());
         }
 
         @Override
@@ -3005,7 +3006,7 @@ class DeadLetterRetryRunnerTest {
 
     // Publish a second entry, resign the leader, then let the standby poll: it must now win.
     publishTestEntry("cmd-2");
-    leaderView.resign(DLQ_CONSUMER_NAME);
+    leaderView.resign(SubscriptionName.of(DLQ_CONSUMER_NAME));
     standbyRunner.processBatch();
 
     assertTrue(dlq.all().isEmpty(), "the standby must drain cmd-2 after taking over leadership");
@@ -3087,12 +3088,12 @@ class DeadLetterRetryRunnerTest {
     var leadership =
         new SubscriptionLeadership() {
           @Override
-          public java.util.Optional<Lease> tryAcquire(String consumerName) {
+          public java.util.Optional<Lease> tryAcquire(SubscriptionName consumerName) {
             return java.util.Optional.of(new Lease(1L));
           }
 
           @Override
-          public java.util.Optional<Lease> current(String consumerName) {
+          public java.util.Optional<Lease> current(SubscriptionName consumerName) {
             // Leader for the first per-entry check (entry 1), fenced out by the second (entry 2) —
             // simulates the lease expiring mid-batch and a fresh leader taking over.
             return currentCalls.getAndIncrement() == 0
@@ -3101,7 +3102,7 @@ class DeadLetterRetryRunnerTest {
           }
 
           @Override
-          public void resign(String consumerName) {}
+          public void resign(SubscriptionName consumerName) {}
 
           @Override
           public void close() {}
@@ -3172,7 +3173,7 @@ class DeadLetterRetryRunnerTest {
 
     runner.close();
 
-    verify(leadership).resign(DLQ_CONSUMER_NAME);
+    verify(leadership).resign(SubscriptionName.of(DLQ_CONSUMER_NAME));
   }
 
   @Test
@@ -3185,7 +3186,7 @@ class DeadLetterRetryRunnerTest {
     var leadership = mock(SubscriptionLeadership.class);
     doThrow(new IllegalStateException("wrapped DataSource torn down"))
         .when(leadership)
-        .resign(DLQ_CONSUMER_NAME);
+        .resign(SubscriptionName.of(DLQ_CONSUMER_NAME));
     var runner = runnerWithLeadership(dlq, leadership);
     runner.start();
 
@@ -3206,8 +3207,8 @@ class DeadLetterRetryRunnerTest {
     var leaderView = coordinator.viewFor("leader");
     var standbyView = coordinator.viewFor("standby");
     // Make "leader" hold the lock so "standby" is a genuine non-leader.
-    assertTrue(leaderView.tryAcquire(DLQ_CONSUMER_NAME).isPresent());
-    assertTrue(standbyView.tryAcquire(DLQ_CONSUMER_NAME).isEmpty());
+    assertTrue(leaderView.tryAcquire(SubscriptionName.of(DLQ_CONSUMER_NAME)).isPresent());
+    assertTrue(standbyView.tryAcquire(SubscriptionName.of(DLQ_CONSUMER_NAME)).isEmpty());
 
     publishTestEntry("cmd-1");
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);

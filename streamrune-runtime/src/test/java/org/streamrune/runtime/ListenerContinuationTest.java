@@ -381,7 +381,7 @@ class ListenerContinuationTest {
     InMemoryOffsetStore offsets = new InMemoryOffsetStore();
     PollingEventSubscription subscription =
         PollingEventSubscription.builder()
-            .subscriptionName(SUBSCRIPTION)
+            .subscriptionName(SubscriptionName.of(SUBSCRIPTION))
             .eventStore(harness.eventStore)
             .offsetStore(offsets)
             .listener(listener)
@@ -802,7 +802,7 @@ class ListenerContinuationTest {
 
       try (PollingEventSubscription subscription =
           PollingEventSubscription.builder()
-              .subscriptionName(SUBSCRIPTION)
+              .subscriptionName(SubscriptionName.of(SUBSCRIPTION))
               .eventStore(harness.eventStore)
               .offsetStore(offsets)
               .listener(
@@ -810,7 +810,7 @@ class ListenerContinuationTest {
                       listener, health, SubscriptionName.of(SUBSCRIPTION)))
               .config(new SubscriptionConfig(false, Duration.ofMillis(10), Duration.ZERO))
               .build()) {
-        health.register(SUBSCRIPTION, subscription);
+        health.register(SubscriptionName.of(SUBSCRIPTION), subscription);
         subscription.start();
 
         Awaitility.await()
@@ -826,7 +826,7 @@ class ListenerContinuationTest {
             .singleElement()
             .satisfies(
                 entry -> {
-                  assertThat(entry.name()).isEqualTo(SUBSCRIPTION);
+                  assertThat(entry.name().value()).isEqualTo(SUBSCRIPTION);
                   assertThat(entry.status()).isEqualTo(SubscriptionHealth.Status.DEGRADED);
                   assertThat(entry.errorCount()).isGreaterThanOrEqualTo(3);
                 });
@@ -962,7 +962,7 @@ class ListenerContinuationTest {
       var seen = new CopyOnWriteArrayList<Boolean>();
       try (PollingEventSubscription subscription =
           PollingEventSubscription.builder()
-              .subscriptionName(SUBSCRIPTION)
+              .subscriptionName(SubscriptionName.of(SUBSCRIPTION))
               .eventStore(h.eventStore)
               .offsetStore(new InMemoryOffsetStore())
               .listener(continuingTheReply(h, seen))

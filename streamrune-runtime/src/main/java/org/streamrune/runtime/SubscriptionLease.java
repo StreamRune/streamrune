@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.SubscriptionName;
 
 /**
  * A named lease over a {@link SubscriptionLeadership}, shared by the components of one process that
@@ -38,10 +39,11 @@ public final class SubscriptionLease {
   private static final Logger log = LoggerFactory.getLogger(SubscriptionLease.class);
 
   private static final SubscriptionLease UNGATED =
-      new SubscriptionLease(SubscriptionLeadership.NOOP, "ungated", System::nanoTime);
+      new SubscriptionLease(
+          SubscriptionLeadership.NOOP, SubscriptionName.of("ungated"), System::nanoTime);
 
   private final SubscriptionLeadership leadership;
-  private final String name;
+  private final SubscriptionName name;
   private final boolean gated;
   private final LongSupplier nanoTime;
   // Guards openAnchor, everAnchored and each anchor's closed flag; never held across a call to the
@@ -50,7 +52,8 @@ public final class SubscriptionLease {
   private volatile Anchor openAnchor;
   private volatile boolean everAnchored;
 
-  private SubscriptionLease(SubscriptionLeadership leadership, String name, LongSupplier nanoTime) {
+  private SubscriptionLease(
+      SubscriptionLeadership leadership, SubscriptionName name, LongSupplier nanoTime) {
     this.leadership = leadership;
     this.name = name;
     this.gated = leadership != SubscriptionLeadership.NOOP;
@@ -61,21 +64,18 @@ public final class SubscriptionLease {
    * A lease named {@code name} over {@code leadership}; ungated when {@code leadership} is {@code
    * NOOP}.
    */
-  public static SubscriptionLease of(SubscriptionLeadership leadership, String name) {
+  public static SubscriptionLease of(SubscriptionLeadership leadership, SubscriptionName name) {
     return of(leadership, name, System::nanoTime);
   }
 
   /**
-   * As {@link #of(SubscriptionLeadership, String)}, with the clock of the attempt throttle; for
-   * tests.
+   * As {@link #of(SubscriptionLeadership, SubscriptionName)}, with the clock of the attempt
+   * throttle; for tests.
    */
   static SubscriptionLease of(
-      SubscriptionLeadership leadership, String name, LongSupplier nanoTime) {
+      SubscriptionLeadership leadership, SubscriptionName name, LongSupplier nanoTime) {
     Objects.requireNonNull(leadership, "leadership is required");
     Objects.requireNonNull(name, "name is required");
-    if (name.isBlank()) {
-      throw new IllegalArgumentException("name must not be blank");
-    }
     return new SubscriptionLease(
         leadership, name, Objects.requireNonNull(nanoTime, "nanoTime is required"));
   }
@@ -86,7 +86,7 @@ public final class SubscriptionLease {
   }
 
   /** The consumer name the lease is held under. */
-  public String name() {
+  public SubscriptionName name() {
     return name;
   }
 

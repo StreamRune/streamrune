@@ -42,6 +42,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
@@ -418,17 +419,17 @@ class SagaEventPathRetentionWiringTest {
   private static SubscriptionLeadership aLeadership() {
     return new SubscriptionLeadership() {
       @Override
-      public Optional<Lease> tryAcquire(String consumerName) {
+      public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
         return Optional.empty();
       }
 
       @Override
-      public Optional<Lease> current(String consumerName) {
+      public Optional<Lease> current(SubscriptionName consumerName) {
         return Optional.empty();
       }
 
       @Override
-      public void resign(String consumerName) {}
+      public void resign(SubscriptionName consumerName) {}
 
       @Override
       public void close() {}

@@ -65,7 +65,8 @@ public final class SubscriptionHealthContributor {
       org.slf4j.LoggerFactory.getLogger(SubscriptionHealthContributor.class);
 
   // Names whose lease-role probe threw and was logged; guards the WARN to once per episode.
-  private final java.util.Set<String> roleProbeFailedWarned = ConcurrentHashMap.newKeySet();
+  private final java.util.Set<SubscriptionName> roleProbeFailedWarned =
+      ConcurrentHashMap.newKeySet();
 
   /** The default {@link #lagThreshold()}: 1000 events. */
   public static final long DEFAULT_LAG_THRESHOLD = 1000;
@@ -75,7 +76,7 @@ public final class SubscriptionHealthContributor {
   private final long lagThreshold;
   private final StreamRuneMetrics metrics;
 
-  private final ConcurrentHashMap<String, SubscriptionEntry> subscriptions =
+  private final ConcurrentHashMap<SubscriptionName, SubscriptionEntry> subscriptions =
       new ConcurrentHashMap<>();
 
   /**
@@ -85,7 +86,8 @@ public final class SubscriptionHealthContributor {
    * BEFORE publishing the map entry, so the supplier can legitimately fire while no entry exists
    * yet.
    */
-  private final ConcurrentHashMap<String, AtomicLong> lastKnownLag = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<SubscriptionName, AtomicLong> lastKnownLag =
+      new ConcurrentHashMap<>();
 
   /** A contributor with the {@link #DEFAULT_LAG_THRESHOLD} and no metrics. */
   public SubscriptionHealthContributor(EventStore eventStore, OffsetStore offsetStore) {
@@ -139,7 +141,7 @@ public final class SubscriptionHealthContributor {
     return lagThreshold;
   }
 
-  public void register(String name, SubscriptionLifecycle subscription) {
+  public void register(SubscriptionName name, SubscriptionLifecycle subscription) {
     // A fresh registration starts with no held lag, so a restarted/reset projection
     // never inherits the previous incarnation's last known value. Cleared before the gauge is
     // registered, since registration may sample the supplier immediately.
@@ -173,7 +175,7 @@ public final class SubscriptionHealthContributor {
     // registerSubscriptionLagGauge is not the only metrics call of the projection stack that needs
     // this guard: computeHealth()'s recordSubscriptionLag below is guarded the same way.
     try {
-      metrics.registerSubscriptionLagGauge(SubscriptionName.of(name), () -> currentLag(name));
+      metrics.registerSubscriptionLagGauge(name, () -> currentLag(name));
     } catch (RuntimeException e) {
       log.warn(
           "Metrics registerSubscriptionLagGauge failed for subscription '{}' — the subscription is"
@@ -210,12 +212,12 @@ public final class SubscriptionHealthContributor {
    * count intact across the swap so the DEGRADED verdict earned during catch-up survives into LIVE
    * until a genuinely clean batch resets it via {@link #recordSuccess}.
    *
-   * <p>Falls back to {@link #register(String, SubscriptionLifecycle)} — a fresh episode — only when
-   * no entry is currently registered for {@code name} (nothing to preserve). A <b>terminally
-   * errored</b> existing entry is NOT a fresh-register case — swapping in a fresh entry silently
-   * cleared {@code terminalError} back to {@code false}, i.e. DOWN silently became UP, exactly the
-   * "silently resurrect" outcome this javadoc has always said must not happen. A terminal entry now
-   * takes the SAME swap-only path as any other existing entry: only the {@link
+   * <p>Falls back to {@link #register(SubscriptionName, SubscriptionLifecycle)} — a fresh episode —
+   * only when no entry is currently registered for {@code name} (nothing to preserve). A
+   * <b>terminally errored</b> existing entry is NOT a fresh-register case — swapping in a fresh
+   * entry silently cleared {@code terminalError} back to {@code false}, i.e. DOWN silently became
+   * UP, exactly the "silently resurrect" outcome this javadoc has always said must not happen. A
+   * terminal entry now takes the SAME swap-only path as any other existing entry: only the {@link
    * SubscriptionLifecycle} reference changes, and {@code errorCount}/{@code terminalError}/{@code
    * pushPathDeadWarned} — including a {@code true} {@code terminalError} — carry over unchanged,
    * because those are the SAME {@link java.util.concurrent.atomic.AtomicBoolean}/{@link
@@ -223,7 +225,7 @@ public final class SubscriptionHealthContributor {
    * call this after {@link #markTerminalError} in practice, but the method stays total and correct
    * either way.
    */
-  public void replaceLifecycle(String name, SubscriptionLifecycle subscription) {
+  public void replaceLifecycle(SubscriptionName name, SubscriptionLifecycle subscription) {
     SubscriptionEntry existing = subscriptions.get(name);
     if (existing == null) {
       register(name, subscription);
@@ -263,9 +265,9 @@ public final class SubscriptionHealthContributor {
    *
    * <p>An {@link UnsupportedOperationException} from the store is not a failure but a permanent
    * capability gap (the store cannot report its head at all): that path returns 0 without a WARN,
-   * see {@link #computeLag(String)}.
+   * see {@link #computeLag(SubscriptionName)}.
    */
-  public long currentLag(String name) {
+  public long currentLag(SubscriptionName name) {
     AtomicLong lastKnown = lastKnownLag.computeIfAbsent(name, k -> new AtomicLong(0));
     try {
       long lag = computeLag(name).lag();
@@ -283,7 +285,7 @@ public final class SubscriptionHealthContributor {
     }
   }
 
-  public void unregister(String name) {
+  public void unregister(SubscriptionName name) {
     subscriptions.remove(name);
     roleProbeFailedWarned.remove(name);
     lastKnownLag.remove(name);
@@ -292,7 +294,7 @@ public final class SubscriptionHealthContributor {
   /**
    * Marks the subscription {@code name} as terminally halted: its health is forced to {@link
    * SubscriptionHealth.Status#DOWN} and STAYS DOWN, surviving the runner thread's exit. Unlike
-   * {@link #unregister(String)}, the subscription remains in the health view so {@link
+   * {@link #unregister(SubscriptionName)}, the subscription remains in the health view so {@link
    * #overallStatus()} keeps reporting DOWN while the read model is permanently frozen.
    *
    * <p>Called by a projection runner on a <em>permanent ERROR exit</em> (e.g. the default HALT
@@ -305,7 +307,7 @@ public final class SubscriptionHealthContributor {
    * before its live subscription was registered), a synthetic terminal-DOWN entry is created so the
    * halt is still visible in the health endpoint.
    */
-  public void markTerminalError(String name) {
+  public void markTerminalError(SubscriptionName name) {
     subscriptions.compute(
         name,
         (k, existing) -> {
@@ -323,14 +325,14 @@ public final class SubscriptionHealthContributor {
         });
   }
 
-  public void recordError(String name) {
+  public void recordError(SubscriptionName name) {
     var entry = subscriptions.get(name);
     if (entry != null) {
       entry.errorCount().incrementAndGet();
     }
   }
 
-  public void recordSuccess(String name) {
+  public void recordSuccess(SubscriptionName name) {
     var entry = subscriptions.get(name);
     if (entry != null) {
       entry.errorCount().set(0);
@@ -370,7 +372,7 @@ public final class SubscriptionHealthContributor {
     return SubscriptionHealth.Status.UP;
   }
 
-  private SubscriptionHealth computeHealth(String name, SubscriptionEntry entry) {
+  private SubscriptionHealth computeHealth(SubscriptionName name, SubscriptionEntry entry) {
     LeaseRole role = roleOf(name, entry.subscription());
     // A standby delivers no page, so no delivered page can end the run of errors it had when it
     // lost its lease: the run ended with the lease. It reports none, and the count starts afresh
@@ -394,7 +396,7 @@ public final class SubscriptionHealthContributor {
     // quiet while it keeps failing, and re-arm the moment a call succeeds again so a flapping sink
     // is visible as repeated warnings rather than either one lost line or an unbounded flood.
     try {
-      metrics.recordSubscriptionLag(SubscriptionName.of(name), lag);
+      metrics.recordSubscriptionLag(name, lag);
       entry.lagMetricFailedWarned().set(false);
     } catch (RuntimeException e) {
       if (entry.lagMetricFailedWarned().compareAndSet(false, true)) {
@@ -421,7 +423,7 @@ public final class SubscriptionHealthContributor {
    * one whose probe throws — a custom {@link LeaseRoleAware} must not take the whole health scrape
    * down. A throwing probe logs one WARN per episode (it re-arms when the probe answers again).
    */
-  private LeaseRole roleOf(String name, SubscriptionLifecycle subscription) {
+  private LeaseRole roleOf(SubscriptionName name, SubscriptionLifecycle subscription) {
     if (!(subscription instanceof LeaseRoleAware aware)) {
       return LeaseRole.NOT_REPORTED;
     }
@@ -461,7 +463,7 @@ public final class SubscriptionHealthContributor {
    * repeated warnings rather than one lost line.
    */
   private SubscriptionHealth.Status applyPushPathHealth(
-      String name,
+      SubscriptionName name,
       SubscriptionEntry entry,
       SubscriptionLifecycleState state,
       SubscriptionHealth.Status status) {
@@ -506,14 +508,14 @@ public final class SubscriptionHealthContributor {
     static final LagSample UNKNOWN = new LagSample(0, false);
   }
 
-  private LagSample computeLag(String name) {
+  private LagSample computeLag(SubscriptionName name) {
     // The checkpoint is read BEFORE the head. The head only grows and a checkpoint never passes
     // the head it was read against, so in this order a checkpoint above the head cannot come from
     // a batch committing between the two reads (read the other way round, an old head and a newer
     // checkpoint can pair up). It means the database is inconsistent: the event table was
     // restored to an earlier point than the checkpoint, or rows were deleted, and the events later
     // appended at the offsets in between are never delivered to this subscription.
-    GlobalOffset checkpoint = offsetStore.getLastOffset(ProjectionName.of(name));
+    GlobalOffset checkpoint = offsetStore.getLastOffset(ProjectionName.of(name.value()));
     // EventStore.lastGlobalOffset() reports the head of the global stream. The previous
     // implementation read readGlobalStream(Long.MAX_VALUE - 1, 1), which returns events with an
     // offset STRICTLY GREATER than the argument — always empty against a real store, so the

@@ -17,6 +17,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.UserRoleResolver;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.projection.Projection;
+import org.streamrune.core.types.ProjectionName;
 
 /**
  * Pins the canonical, security-relevant interceptor order enforced by {@link
@@ -42,7 +43,7 @@ class CommandInterceptorOrderingTest {
       new CircuitBreakerCommandInterceptor(5, Duration.ofSeconds(1));
   private static final InlineProjectionInterceptor INLINE_PROJECTION =
       InlineProjectionInterceptor.builder()
-          .register("p", (Projection) (List<EventEnvelope> batch) -> {})
+          .register(ProjectionName.of("p"), (Projection) (List<EventEnvelope> batch) -> {})
           .build();
 
   @Test

@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLeadership.Lease;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -165,13 +166,14 @@ class LeaseBasedLeadershipTest {
       throws InterruptedException {
     long deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
     while (System.nanoTime() < deadline) {
-      if (l.current(name).isEmpty()) {
+      if (l.current(SubscriptionName.of(name)).isEmpty()) {
         return;
       }
       Thread.sleep(10);
     }
     assertTrue(
-        l.current(name).isEmpty(), () -> "lease for " + name + " was not dropped within timeout");
+        l.current(SubscriptionName.of(name)).isEmpty(),
+        () -> "lease for " + name + " was not dropped within timeout");
   }
 
   private void awaitTrue(java.util.concurrent.Callable<Boolean> condition, String message)
@@ -206,30 +208,32 @@ class LeaseBasedLeadershipTest {
   @Test
   void acquireOnAbsentLease_returnsEpochOne() {
     var a = leadership(Duration.ofSeconds(30));
-    Optional<Lease> lease = a.tryAcquire("p1");
+    Optional<Lease> lease = a.tryAcquire(SubscriptionName.of("p1"));
     assertTrue(lease.isPresent());
     assertEquals(1L, lease.get().epoch());
-    assertEquals(1L, a.current("p1").orElseThrow().epoch());
+    assertEquals(1L, a.current(SubscriptionName.of("p1")).orElseThrow().epoch());
   }
 
   @Test
   void secondHolderGetsEmptyWhileLeaseLive() {
     var a = leadership(Duration.ofSeconds(30));
     var b = leadership(Duration.ofSeconds(30));
-    assertEquals(1L, a.tryAcquire("p2").orElseThrow().epoch());
-    assertTrue(b.tryAcquire("p2").isEmpty(), "second holder must not steal a live lease");
-    assertEquals(1L, a.current("p2").orElseThrow().epoch());
-    assertTrue(b.current("p2").isEmpty());
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p2")).orElseThrow().epoch());
+    assertTrue(
+        b.tryAcquire(SubscriptionName.of("p2")).isEmpty(),
+        "second holder must not steal a live lease");
+    assertEquals(1L, a.current(SubscriptionName.of("p2")).orElseThrow().epoch());
+    assertTrue(b.current(SubscriptionName.of("p2")).isEmpty());
   }
 
   @Test
   void expiredLeaseTakenOverWithEpochBump() throws Exception {
     var a = leadership(Duration.ofSeconds(30));
-    assertEquals(1L, a.tryAcquire("p3").orElseThrow().epoch());
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p3")).orElseThrow().epoch());
     a.close(); // resign EXPIRES the lease (lease_until = now()) and stops A's heartbeat
     Thread.sleep(10); // let now() advance past the expiry stamp
     var b = leadership(Duration.ofSeconds(30));
-    Optional<Lease> takeover = b.tryAcquire("p3");
+    Optional<Lease> takeover = b.tryAcquire(SubscriptionName.of("p3"));
     assertTrue(takeover.isPresent(), "B must take over the expired lease");
     assertEquals(2L, takeover.get().epoch(), "takeover of an expired lease bumps the epoch");
   }
@@ -240,13 +244,16 @@ class LeaseBasedLeadershipTest {
     // clock is frozen, and the row's expiry is held an hour ahead.
     var a = new LeaseBasedLeadership(dataSource, HEARTBEAT_TTL, FROZEN);
     managed.add(a);
-    assertEquals(1L, a.tryAcquire("p4").orElseThrow().epoch());
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p4")).orElseThrow().epoch());
     double heldUntil = holdExpiryAnHourAhead("p4");
 
     awaitTrue(
         () -> dbLeaseUntilEpochSeconds("p4") < heldUntil,
         "the heartbeat must renew the held lease at the database");
-    assertEquals(1L, a.current("p4").orElseThrow().epoch(), "renew must not drop the lease");
+    assertEquals(
+        1L,
+        a.current(SubscriptionName.of("p4")).orElseThrow().epoch(),
+        "renew must not drop the lease");
     assertEquals(1L, dbEpoch("p4"), "renew must not bump the epoch");
   }
 
@@ -256,8 +263,8 @@ class LeaseBasedLeadershipTest {
     // only to the heartbeat's renew matching no row.
     var a = new LeaseBasedLeadership(dataSource, HEARTBEAT_TTL, FROZEN);
     managed.add(a);
-    assertEquals(1L, a.tryAcquire("p5").orElseThrow().epoch());
-    assertEquals(1L, a.current("p5").orElseThrow().epoch());
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p5")).orElseThrow().epoch());
+    assertEquals(1L, a.current(SubscriptionName.of("p5")).orElseThrow().epoch());
     // A live heartbeat keeps A's lease renewed, so a natural expiry-and-takeover races A's own
     // renew. Instead simulate the takeover atomically (exactly what a second acquirer writes:
     // new holder_id + bumped epoch). A's next heartbeat renew can no longer match its WHERE clause.
@@ -268,11 +275,11 @@ class LeaseBasedLeadershipTest {
   @Test
   void resignThenReacquireBumpsEpochNotResetToOne() throws Exception {
     var a = leadership(Duration.ofSeconds(30));
-    assertEquals(1L, a.tryAcquire("p6").orElseThrow().epoch());
-    a.resign("p6"); // must EXPIRE, never DELETE
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p6")).orElseThrow().epoch());
+    a.resign(SubscriptionName.of("p6")); // must EXPIRE, never DELETE
     assertEquals(1L, dbRowCount("p6"), "resign must not delete the row (epoch monotonicity)");
     Thread.sleep(10);
-    Optional<Lease> reacquired = a.tryAcquire("p6");
+    Optional<Lease> reacquired = a.tryAcquire(SubscriptionName.of("p6"));
     assertTrue(reacquired.isPresent());
     assertEquals(
         2L,
@@ -283,9 +290,9 @@ class LeaseBasedLeadershipTest {
   @Test
   void reAcquireWhileHoldingLiveLeaseReturnsSameEpoch() {
     var a = leadership(Duration.ofSeconds(30));
-    assertEquals(1L, a.tryAcquire("p7").orElseThrow().epoch());
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p7")).orElseThrow().epoch());
     // Own lease is live → ACQUIRE returns no row → the renew fallback confirms we still hold it.
-    Optional<Lease> again = a.tryAcquire("p7");
+    Optional<Lease> again = a.tryAcquire(SubscriptionName.of("p7"));
     assertTrue(again.isPresent(), "re-acquire of a live lease we hold must succeed via renew");
     assertEquals(1L, again.get().epoch());
   }
@@ -293,25 +300,29 @@ class LeaseBasedLeadershipTest {
   @Test
   void reacquireAfterStolenLeaseReturnsEmptyAndDrops() throws Exception {
     var a = leadership(Duration.ofSeconds(30)); // interval 10s: heartbeat will not fire in-test
-    assertEquals(1L, a.tryAcquire("p8").orElseThrow().epoch());
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p8")).orElseThrow().epoch());
     simulateSteal("p8"); // another replica now holds a live lease at epoch 2
     // ACQUIRE finds a live lease (no row); renew fallback (holder=A, epoch=1) fails → drop → empty.
     assertTrue(
-        a.tryAcquire("p8").isEmpty(), "must not re-acquire a lease stolen by another holder");
-    assertTrue(a.current("p8").isEmpty(), "the failed renew must drop the name from held");
+        a.tryAcquire(SubscriptionName.of("p8")).isEmpty(),
+        "must not re-acquire a lease stolen by another holder");
+    assertTrue(
+        a.current(SubscriptionName.of("p8")).isEmpty(),
+        "the failed renew must drop the name from held");
   }
 
   @Test
   void currentIsEmptyForNeverAcquired() {
     var a = leadership(Duration.ofSeconds(30));
-    assertTrue(a.current("never-touched").isEmpty());
+    assertTrue(a.current(SubscriptionName.of("never-touched")).isEmpty());
   }
 
   @Test
   void tryAcquireAfterCloseReturnsEmpty() {
     var a = leadership(Duration.ofSeconds(30));
     a.close();
-    assertTrue(a.tryAcquire("p9").isEmpty(), "a closed instance must not acquire");
+    assertTrue(
+        a.tryAcquire(SubscriptionName.of("p9")).isEmpty(), "a closed instance must not acquire");
   }
 
   @Test
@@ -320,8 +331,10 @@ class LeaseBasedLeadershipTest {
         new FaultInjectingDataSource(dataSource).failAfter(0); // every getConnection throws
     var a = new LeaseBasedLeadership(faulting, Duration.ofSeconds(1));
     managed.add(a);
-    assertTrue(a.tryAcquire("p10").isEmpty(), "SQLException on acquire must fail closed (standby)");
-    assertTrue(a.current("p10").isEmpty());
+    assertTrue(
+        a.tryAcquire(SubscriptionName.of("p10")).isEmpty(),
+        "SQLException on acquire must fail closed (standby)");
+    assertTrue(a.current(SubscriptionName.of("p10")).isEmpty());
   }
 
   /**
@@ -345,7 +358,7 @@ class LeaseBasedLeadershipTest {
           new Thread(
               () -> {
                 Thread.currentThread().interrupt();
-                acquired.set(a.tryAcquire("p-interrupted"));
+                acquired.set(a.tryAcquire(SubscriptionName.of("p-interrupted")));
                 stillInterrupted.set(Thread.currentThread().isInterrupted());
               });
       caller.start();
@@ -356,7 +369,7 @@ class LeaseBasedLeadershipTest {
 
     assertTrue(acquired.get().isEmpty(), "an interrupted caller does not acquire");
     assertTrue(stillInterrupted.get(), "the acquire leaves the caller's interrupt for the caller");
-    assertTrue(a.current("p-interrupted").isEmpty());
+    assertTrue(a.current(SubscriptionName.of("p-interrupted")).isEmpty());
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement();
         var rs =
@@ -394,7 +407,9 @@ class LeaseBasedLeadershipTest {
     var warnings = captureLeadershipLog();
     var acquired = new AtomicReference<Optional<Lease>>();
     try {
-      Thread.ofVirtual().start(() -> acquired.set(a.tryAcquire("p-interrupted-inflight"))).join();
+      Thread.ofVirtual()
+          .start(() -> acquired.set(a.tryAcquire(SubscriptionName.of("p-interrupted-inflight"))))
+          .join();
     } finally {
       warnings.close();
     }
@@ -450,26 +465,33 @@ class LeaseBasedLeadershipTest {
     var faulting = new FaultInjectingDataSource(dataSource).failNth(2);
     var a = new LeaseBasedLeadership(faulting, Duration.ofSeconds(30)); // heartbeat idle in-test
     managed.add(a);
-    assertEquals(1L, a.tryAcquire("p-blip").orElseThrow().epoch()); // attempt 1: healthy leader
+    assertEquals(
+        1L,
+        a.tryAcquire(SubscriptionName.of("p-blip"))
+            .orElseThrow()
+            .epoch()); // attempt 1: healthy leader
 
     assertTrue(
-        a.tryAcquire("p-blip").isEmpty(), // attempt 2: the blip — THIS call fails closed
+        a.tryAcquire(SubscriptionName.of("p-blip"))
+            .isEmpty(), // attempt 2: the blip — THIS call fails closed
         "the failing tryAcquire itself returns empty (its tick is skipped)");
 
     assertEquals(
         1L,
-        a.current("p-blip").orElseThrow().epoch(),
+        a.current(SubscriptionName.of("p-blip")).orElseThrow().epoch(),
         "a transient acquire failure must not revoke leadership the DB still attests");
     // The heartbeat's next renew still matches our live row — the lease was never stranded.
     try (var conn = dataSource.getConnection()) {
       assertTrue(
-          a.renew(conn, "p-blip", 1L).isPresent(),
+          a.renew(conn, SubscriptionName.of("p-blip"), 1L).isPresent(),
           "the next heartbeat renew must still match the kept lease's row");
     }
     // And the next tick resumes leadership at the SAME epoch — no leaderless TTL, no epoch bump.
     assertEquals(
         1L,
-        a.tryAcquire("p-blip").orElseThrow().epoch(), // attempt 3: healthy again
+        a.tryAcquire(SubscriptionName.of("p-blip"))
+            .orElseThrow()
+            .epoch(), // attempt 3: healthy again
         "the next tick must resume the held lease without an epoch bump");
     assertEquals(1L, dbEpoch("p-blip"), "no takeover/no bump happened at the DB either");
   }
@@ -483,14 +505,17 @@ class LeaseBasedLeadershipTest {
     var faulting = new FaultInjectingDataSource(dataSource).failNth(2);
     var a = new LeaseBasedLeadership(faulting, Duration.ofSeconds(30));
     managed.add(a);
-    assertEquals(1L, a.tryAcquire("p-blip-lost").orElseThrow().epoch()); // attempt 1
-    assertTrue(a.tryAcquire("p-blip-lost").isEmpty()); // attempt 2: blip — entry kept
+    assertEquals(
+        1L, a.tryAcquire(SubscriptionName.of("p-blip-lost")).orElseThrow().epoch()); // attempt 1
+    assertTrue(
+        a.tryAcquire(SubscriptionName.of("p-blip-lost")).isEmpty()); // attempt 2: blip — entry kept
     simulateSteal("p-blip-lost"); // meanwhile another replica takes over (epoch 2, other holder)
     assertTrue(
-        a.tryAcquire("p-blip-lost").isEmpty(), // attempt 3: renew-confirm matches no row
+        a.tryAcquire(SubscriptionName.of("p-blip-lost"))
+            .isEmpty(), // attempt 3: renew-confirm matches no row
         "a genuinely lost lease must not be re-acquired");
     assertTrue(
-        a.current("p-blip-lost").isEmpty(),
+        a.current(SubscriptionName.of("p-blip-lost")).isEmpty(),
         "the failed renew-confirm must prune the kept entry (no zombie leadership)");
   }
 
@@ -511,18 +536,25 @@ class LeaseBasedLeadershipTest {
             .failNthUnchecked(2, () -> new IllegalStateException("wrapped DataSource misroute"));
     var a = new LeaseBasedLeadership(faulting, Duration.ofSeconds(30)); // heartbeat idle in-test
     managed.add(a);
-    assertEquals(1L, a.tryAcquire("p-rte").orElseThrow().epoch()); // attempt 1: healthy leader
+    assertEquals(
+        1L,
+        a.tryAcquire(SubscriptionName.of("p-rte"))
+            .orElseThrow()
+            .epoch()); // attempt 1: healthy leader
 
-    Optional<Lease> blipped = assertDoesNotThrow(() -> a.tryAcquire("p-rte")); // attempt 2: blip
+    Optional<Lease> blipped =
+        assertDoesNotThrow(() -> a.tryAcquire(SubscriptionName.of("p-rte"))); // attempt 2: blip
     assertTrue(blipped.isEmpty(), "an unchecked acquire failure must skip the tick, never throw");
 
     assertEquals(
         1L,
-        a.current("p-rte").orElseThrow().epoch(),
+        a.current(SubscriptionName.of("p-rte")).orElseThrow().epoch(),
         "the held live lease must be kept across the unchecked blip");
     assertEquals(
         1L,
-        a.tryAcquire("p-rte").orElseThrow().epoch(), // attempt 3: healthy again
+        a.tryAcquire(SubscriptionName.of("p-rte"))
+            .orElseThrow()
+            .epoch(), // attempt 3: healthy again
         "the next tick must resume the held lease without an epoch bump");
     assertEquals(1L, dbEpoch("p-rte"), "no takeover/no bump happened at the DB either");
   }
@@ -537,12 +569,13 @@ class LeaseBasedLeadershipTest {
             .failNthUnchecked(1, () -> new IllegalStateException("wrapped DataSource torn down"));
     var a = new LeaseBasedLeadership(faulting, Duration.ofSeconds(30));
     managed.add(a);
-    Optional<Lease> blipped = assertDoesNotThrow(() -> a.tryAcquire("p-rte-first"));
+    Optional<Lease> blipped =
+        assertDoesNotThrow(() -> a.tryAcquire(SubscriptionName.of("p-rte-first")));
     assertTrue(blipped.isEmpty(), "the failing tick is skipped (standby), never a throw");
-    assertTrue(a.current("p-rte-first").isEmpty());
+    assertTrue(a.current(SubscriptionName.of("p-rte-first")).isEmpty());
     assertEquals(
         1L,
-        a.tryAcquire("p-rte-first").orElseThrow().epoch(),
+        a.tryAcquire(SubscriptionName.of("p-rte-first")).orElseThrow().epoch(),
         "the next tick must acquire normally once the blip clears");
   }
 
@@ -559,7 +592,7 @@ class LeaseBasedLeadershipTest {
             .failNthUnchecked(1, () -> new AssertionError("fatal acquire-path error"));
     var a = new LeaseBasedLeadership(faulting, Duration.ofSeconds(30));
     managed.add(a);
-    assertThrows(AssertionError.class, () -> a.tryAcquire("p-acquire-error"));
+    assertThrows(AssertionError.class, () -> a.tryAcquire(SubscriptionName.of("p-acquire-error")));
   }
 
   @Test
@@ -579,13 +612,17 @@ class LeaseBasedLeadershipTest {
             .failNthUnchecked(2, () -> new IllegalStateException("wrapped DataSource torn down"));
     var a = new LeaseBasedLeadership(faulting, Duration.ofSeconds(30));
     managed.add(a);
-    assertEquals(1L, a.tryAcquire("p-resign-rte").orElseThrow().epoch()); // attempt 1
+    assertEquals(
+        1L, a.tryAcquire(SubscriptionName.of("p-resign-rte")).orElseThrow().epoch()); // attempt 1
 
     assertDoesNotThrow(
-        () -> a.resign("p-resign-rte"), // attempt 2: getConnection throws IllegalStateException
+        () ->
+            a.resign(
+                SubscriptionName.of(
+                    "p-resign-rte")), // attempt 2: getConnection throws IllegalStateException
         "resign must honor its no-throw contract for unchecked failures too");
     assertTrue(
-        a.current("p-resign-rte").isEmpty(),
+        a.current(SubscriptionName.of("p-resign-rte")).isEmpty(),
         "the held entry is dropped locally even when the DB expire could not be written");
   }
 
@@ -598,28 +635,29 @@ class LeaseBasedLeadershipTest {
             .failNthUnchecked(2, () -> new IllegalStateException("wrapped DataSource torn down"));
     var a = new LeaseBasedLeadership(faulting, Duration.ofSeconds(30));
     managed.add(a);
-    assertEquals(1L, a.tryAcquire("p-close-rte").orElseThrow().epoch()); // attempt 1
+    assertEquals(
+        1L, a.tryAcquire(SubscriptionName.of("p-close-rte")).orElseThrow().epoch()); // attempt 1
     assertDoesNotThrow(a::close, "close() must survive an unchecked resign failure");
-    assertTrue(a.current("p-close-rte").isEmpty());
+    assertTrue(a.current(SubscriptionName.of("p-close-rte")).isEmpty());
   }
 
   @Test
   void resignIsIdempotentAndSafeWhenNotHeld() {
     var a = leadership(Duration.ofSeconds(30));
-    a.resign("never-held"); // no throw when nothing is held
-    a.tryAcquire("p11");
-    a.resign("p11");
-    a.resign("p11"); // idempotent
-    assertTrue(a.current("p11").isEmpty());
+    a.resign(SubscriptionName.of("never-held")); // no throw when nothing is held
+    a.tryAcquire(SubscriptionName.of("p11"));
+    a.resign(SubscriptionName.of("p11"));
+    a.resign(SubscriptionName.of("p11")); // idempotent
+    assertTrue(a.current(SubscriptionName.of("p11")).isEmpty());
   }
 
   @Test
   void closeIsIdempotent() {
     var a = leadership(Duration.ofSeconds(30));
-    a.tryAcquire("p12");
+    a.tryAcquire(SubscriptionName.of("p12"));
     a.close();
     a.close(); // second close is a no-op, never throws
-    assertTrue(a.current("p12").isEmpty());
+    assertTrue(a.current(SubscriptionName.of("p12")).isEmpty());
   }
 
   @Test
@@ -637,19 +675,19 @@ class LeaseBasedLeadershipTest {
     var a = new LeaseBasedLeadership(faulting, ttl, nanos::get);
     managed.add(a);
 
-    assertEquals(1L, a.tryAcquire("p-renew-fail").orElseThrow().epoch());
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p-renew-fail")).orElseThrow().epoch());
     // Immediately after acquire: fresh, still leader.
-    assertEquals(1L, a.current("p-renew-fail").orElseThrow().epoch());
+    assertEquals(1L, a.current(SubscriptionName.of("p-renew-fail")).orElseThrow().epoch());
 
     // Time advances past the TTL with no successful renew (all renews fail).
     nanos.addAndGet(ttl.toNanos());
     assertEquals(
         1L,
-        a.current("p-renew-fail").orElseThrow().epoch(),
+        a.current(SubscriptionName.of("p-renew-fail")).orElseThrow().epoch(),
         "exactly one TTL elapsed is not yet past it");
     nanos.addAndGet(Duration.ofMillis(1).toNanos());
     assertTrue(
-        a.current("p-renew-fail").isEmpty(),
+        a.current(SubscriptionName.of("p-renew-fail")).isEmpty(),
         "current() must fail closed once renews have failed for longer than the lease TTL");
   }
 
@@ -672,12 +710,16 @@ class LeaseBasedLeadershipTest {
       var a = new LeaseBasedLeadership(faulting, ttl, nanos::get);
       managed.add(a);
       String name = "p-origin-" + i;
-      assertEquals(1L, a.tryAcquire(name).orElseThrow().epoch());
+      assertEquals(1L, a.tryAcquire(SubscriptionName.of(name)).orElseThrow().epoch());
 
       nanos.addAndGet(ttl.toNanos());
-      assertTrue(a.current(name).isPresent(), "origin " + origins[i] + ": one TTL is not past it");
+      assertTrue(
+          a.current(SubscriptionName.of(name)).isPresent(),
+          "origin " + origins[i] + ": one TTL is not past it");
       nanos.addAndGet(1);
-      assertTrue(a.current(name).isEmpty(), "origin " + origins[i] + ": past one TTL is stale");
+      assertTrue(
+          a.current(SubscriptionName.of(name)).isEmpty(),
+          "origin " + origins[i] + ": past one TTL is stale");
     }
   }
 
@@ -693,12 +735,12 @@ class LeaseBasedLeadershipTest {
     var faulting = new FaultInjectingDataSource(dataSource).failAfter(1);
     var a = new LeaseBasedLeadership(faulting, Duration.ofSeconds(15), nanos::get);
     managed.add(a);
-    assertEquals(1L, a.tryAcquire("p-backward").orElseThrow().epoch());
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p-backward")).orElseThrow().epoch());
 
     nanos.addAndGet(-Duration.ofHours(1).toNanos());
 
     assertTrue(
-        a.current("p-backward").isEmpty(),
+        a.current(SubscriptionName.of("p-backward")).isEmpty(),
         "a clock that ran backwards cannot vouch for the lease: fail closed now, not an hour on");
   }
 
@@ -721,7 +763,11 @@ class LeaseBasedLeadershipTest {
     var a = new LeaseBasedLeadership(faulting, HEARTBEAT_TTL, clock); // a heartbeat cycle a second
     managed.add(a);
 
-    assertEquals(1L, a.tryAcquire("p-hb-rte").orElseThrow().epoch()); // getConnection attempt 1
+    assertEquals(
+        1L,
+        a.tryAcquire(SubscriptionName.of("p-hb-rte"))
+            .orElseThrow()
+            .epoch()); // getConnection attempt 1
     // The failed cycle leaves the lease unrenewed for two heartbeat intervals, two thirds of its
     // TTL. With the expiry held an hour ahead, the cycle after the failure finds a live row
     // whenever it runs.
@@ -738,7 +784,7 @@ class LeaseBasedLeadershipTest {
         "surviving heartbeat cycles must keep renewing the lease at the database");
     assertEquals(
         1L,
-        a.current("p-hb-rte").orElseThrow().epoch(),
+        a.current(SubscriptionName.of("p-hb-rte")).orElseThrow().epoch(),
         "leadership must hold steadily across the cycle failure — no flap, no epoch bump");
   }
 
@@ -757,24 +803,24 @@ class LeaseBasedLeadershipTest {
             .failNthUnchecked(2, () -> new AssertionError("unrecoverable heartbeat error"));
     var a = new LeaseBasedLeadership(faulting, Duration.ofMillis(300), clock);
     managed.add(a);
-    assertEquals(1L, a.tryAcquire("p-hb-err").orElseThrow().epoch());
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p-hb-err")).orElseThrow().epoch());
 
     // The Error on heartbeat cycle 1 must stand the replica down, not leave it claiming (frozen
     // clock: forever-unstale) leadership over a lease nobody renews.
     awaitCurrentEmpty(a, "p-hb-err", 10_000);
     assertTrue(
-        a.tryAcquire("p-hb-err").isEmpty(),
+        a.tryAcquire(SubscriptionName.of("p-hb-err")).isEmpty(),
         "a terminally stood-down instance must never hand out leases again");
 
     // The lease is genuinely released (stand-down EXPIREs it): a healthy replica takes over with
     // the fencing-epoch bump instead of the name staying stranded.
     var b = leadership(Duration.ofSeconds(30));
     awaitTrue(
-        () -> b.tryAcquire("p-hb-err").isPresent(),
+        () -> b.tryAcquire(SubscriptionName.of("p-hb-err")).isPresent(),
         "a standby must be able to take over the stood-down lease");
     assertEquals(
         2L,
-        b.tryAcquire("p-hb-err").orElseThrow().epoch(),
+        b.tryAcquire(SubscriptionName.of("p-hb-err")).orElseThrow().epoch(),
         "takeover of the stood-down lease bumps the fencing epoch");
   }
 
@@ -786,14 +832,14 @@ class LeaseBasedLeadershipTest {
     // renew extend only a still-live lease, so a renew racing/following a resign matches no row and
     // the lease stays resigned — a standby can take over immediately instead of waiting a full TTL.
     var a = leadership(Duration.ofSeconds(30)); // long ttl: heartbeat will not fire during the test
-    assertEquals(1L, a.tryAcquire("p-resign-race").orElseThrow().epoch());
+    assertEquals(1L, a.tryAcquire(SubscriptionName.of("p-resign-race")).orElseThrow().epoch());
 
-    a.resign("p-resign-race"); // EXPIRES lease_until = now()
+    a.resign(SubscriptionName.of("p-resign-race")); // EXPIRES lease_until = now()
 
     // The in-flight renew the heartbeat would have issued (same holder + epoch) must not resurrect.
     try (var conn = dataSource.getConnection()) {
       assertTrue(
-          a.renew(conn, "p-resign-race", 1L).isEmpty(),
+          a.renew(conn, SubscriptionName.of("p-resign-race"), 1L).isEmpty(),
           "a renew must not resurrect a resigned (expired) lease");
     }
 
@@ -802,7 +848,7 @@ class LeaseBasedLeadershipTest {
     var b = leadership(Duration.ofSeconds(30));
     assertEquals(
         2L,
-        b.tryAcquire("p-resign-race").orElseThrow().epoch(),
+        b.tryAcquire(SubscriptionName.of("p-resign-race")).orElseThrow().epoch(),
         "the resigned lease must be free for takeover, not resurrected by a racing renew");
   }
 
@@ -814,7 +860,8 @@ class LeaseBasedLeadershipTest {
     // transaction time is older than the expiry, so a comparison against it would still see a
     // live lease and extend the resigned lease for a full TTL.
     var a = leadership(Duration.ofSeconds(30)); // long ttl: heartbeat will not fire during the test
-    assertEquals(1L, a.tryAcquire("p-renew-behind-expire").orElseThrow().epoch());
+    assertEquals(
+        1L, a.tryAcquire(SubscriptionName.of("p-renew-behind-expire")).orElseThrow().epoch());
 
     try (var renewConn = dataSource.getConnection();
         var expireConn = dataSource.getConnection()) {
@@ -839,7 +886,7 @@ class LeaseBasedLeadershipTest {
           java.util.concurrent.CompletableFuture.supplyAsync(
               () -> {
                 try {
-                  return a.renew(renewConn, "p-renew-behind-expire", 1L);
+                  return a.renew(renewConn, SubscriptionName.of("p-renew-behind-expire"), 1L);
                 } catch (java.sql.SQLException e) {
                   throw new IllegalStateException(e);
                 }
@@ -856,7 +903,7 @@ class LeaseBasedLeadershipTest {
     var b = leadership(Duration.ofSeconds(30));
     assertEquals(
         2L,
-        b.tryAcquire("p-renew-behind-expire").orElseThrow().epoch(),
+        b.tryAcquire(SubscriptionName.of("p-renew-behind-expire")).orElseThrow().epoch(),
         "the resigned lease must be free for takeover at once");
   }
 

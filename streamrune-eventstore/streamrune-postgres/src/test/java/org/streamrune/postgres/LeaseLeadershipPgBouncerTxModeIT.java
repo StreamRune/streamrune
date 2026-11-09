@@ -15,6 +15,7 @@ import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.subscription.SubscriptionLeadership.Lease;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
@@ -157,8 +158,8 @@ class LeaseLeadershipPgBouncerTxModeIT {
     var replicaA = new LeaseBasedLeadership(pooled, Duration.ofSeconds(30));
     var replicaB = new LeaseBasedLeadership(pooled, Duration.ofSeconds(30));
     try {
-      Optional<Lease> a = replicaA.tryAcquire(consumer);
-      Optional<Lease> b = replicaB.tryAcquire(consumer);
+      Optional<Lease> a = replicaA.tryAcquire(SubscriptionName.of(consumer));
+      Optional<Lease> b = replicaB.tryAcquire(SubscriptionName.of(consumer));
 
       // EXACTLY ONE leads — the split-brain closer, proven through the transaction pooler.
       assertTrue(
@@ -180,9 +181,9 @@ class LeaseLeadershipPgBouncerTxModeIT {
       // winner and let the standby take over the (now expired) lease at epoch 2, which it then
       // stamps onto the checkpoint by committing. A subsequent commit at epoch 1 (the superseded
       // original winner) is then a real, non-zero fence.
-      winner.resign(consumer);
+      winner.resign(SubscriptionName.of(consumer));
       Thread.sleep(50); // let the DB clock advance past the resign's lease_until = now() stamp
-      Optional<Lease> takeover = standby.tryAcquire(consumer);
+      Optional<Lease> takeover = standby.tryAcquire(SubscriptionName.of(consumer));
       assertTrue(
           takeover.isPresent(), "the standby must take over the resigned lease through the pooler");
       long leaderEpoch = takeover.orElseThrow().epoch();
