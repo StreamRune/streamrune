@@ -158,6 +158,11 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    */
   private static final long STOP_JOIN_TIMEOUT_MS = 30_000L;
 
+  /**
+   * The join bound {@link #close()} uses; {@link #STOP_JOIN_TIMEOUT_MS} unless a test shrinks it.
+   */
+  private volatile long stopJoinTimeoutMs = STOP_JOIN_TIMEOUT_MS;
+
   /** Longest wait between retries of a failing poll, unless the poll interval itself is longer. */
   private static final Duration MAX_FAILURE_BACKOFF = Duration.ofSeconds(60);
 
@@ -325,6 +330,10 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    * is not started does nothing. A DI container's destroy callback, a try-with-resources block or a
    * lifecycle that closes its {@link AutoCloseable} components stops it like them.
    *
+   * <p>A poll thread that does not stop within the join bound keeps the runner started and alive,
+   * so {@link #start()} is refused; a later {@code close()} interrupts and joins that thread again
+   * and resets the guard once it has stopped.
+   *
    * <p>A started runner that follows a lease this process holds logs a WARN: while its subscription
    * keeps the lease, no replica claims the deadlines of the saga type.
    */
@@ -348,7 +357,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       // Self-join guard: a thread cannot join itself (close() invoked from within the poll thread).
       if (t != Thread.currentThread()) {
         try {
-          t.join(STOP_JOIN_TIMEOUT_MS);
+          t.join(stopJoinTimeoutMs);
         } catch (InterruptedException _) {
           Thread.currentThread().interrupt();
         }
@@ -359,15 +368,24 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       }
     }
     if (stuck) {
+      // Keep the stuck thread as the poll thread: isAlive() keeps reporting it, and a repeated
+      // close() interrupts and joins it again instead of finding no thread and resetting the guard
+      // while it still runs.
+      pollThread = t;
       LOG.warn(
           "SagaTimeoutRunner poll thread did not stop within {}ms; leaving the runner"
               + " not-restartable so a restart cannot spawn a duplicate poller. Investigate the"
               + " stuck poll.",
-          STOP_JOIN_TIMEOUT_MS);
+          stopJoinTimeoutMs);
     } else {
       // Reset so start() can be called again after close().
       started.set(false);
     }
+  }
+
+  /** Shrinks the join bound of {@link #close()}; for the tests of this package. */
+  void stopJoinTimeoutMs(long millis) {
+    this.stopJoinTimeoutMs = millis;
   }
 
   /**
