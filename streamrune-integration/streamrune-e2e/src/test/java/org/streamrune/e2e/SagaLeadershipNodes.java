@@ -133,7 +133,7 @@ abstract class SagaLeadershipNodes extends SagaForwardFenceNodes {
         return;
       }
       subscription.close();
-      node.timeoutRunner.stop();
+      node.timeoutRunner.close();
       sweeper.close();
       leadership.close();
       node.close();

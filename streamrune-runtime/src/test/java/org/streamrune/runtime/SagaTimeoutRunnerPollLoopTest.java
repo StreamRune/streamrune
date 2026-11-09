@@ -90,7 +90,7 @@ class SagaTimeoutRunnerPollLoopTest {
       assertTrue(runner.isAlive(), "a failing poll must not kill the poll thread");
       assertTrue(runner.consecutiveFailures() >= 2, "the failures are counted for health");
     } finally {
-      runner.stop();
+      runner.close();
     }
   }
 
@@ -110,7 +110,7 @@ class SagaTimeoutRunnerPollLoopTest {
     try {
       Thread.sleep(1_000);
     } finally {
-      runner.stop();
+      runner.close();
     }
 
     // Backoff 50, 100, 200, 400, 800 ms (jittered down to half): at most ~8 attempts in a second.
@@ -138,7 +138,7 @@ class SagaTimeoutRunnerPollLoopTest {
       awaitTrue(() -> calls.get() >= 4 && runner.consecutiveFailures() == 0, "recovery");
       assertTrue(runner.isAlive());
     } finally {
-      runner.stop();
+      runner.close();
     }
   }
 
@@ -159,11 +159,11 @@ class SagaTimeoutRunnerPollLoopTest {
     awaitTrue(() -> attempts.get() >= 1 && runner.consecutiveFailures() >= 1, "first failure");
 
     long startNanos = System.nanoTime();
-    runner.stop();
+    runner.close();
     long stopMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
 
-    assertTrue(stopMs < 5_000, "stop() must interrupt the backoff sleep, took " + stopMs + " ms");
-    assertFalse(runner.isStarted(), "stop() resets the started guard");
+    assertTrue(stopMs < 5_000, "close() must interrupt the backoff sleep, took " + stopMs + " ms");
+    assertFalse(runner.isStarted(), "close() resets the started guard");
     assertFalse(runner.isAlive());
   }
 
@@ -179,7 +179,7 @@ class SagaTimeoutRunnerPollLoopTest {
       awaitTrue(() -> !runner.isAlive(), "the poll thread to die");
       assertTrue(runner.isStarted(), "started && !alive is the dead-driver signal");
     } finally {
-      runner.stop();
+      runner.close();
     }
   }
 
@@ -199,7 +199,7 @@ class SagaTimeoutRunnerPollLoopTest {
 
     runner.start();
     awaitTrue(() -> calls.get() >= 4 && runner.consecutiveFailures() == 0, "recovery");
-    runner.stop();
+    runner.close();
 
     assertEquals(0, runner.consecutiveFailures());
   }

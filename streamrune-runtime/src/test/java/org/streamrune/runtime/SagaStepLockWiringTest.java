@@ -264,7 +264,7 @@ class SagaStepLockWiringTest {
 
   private static void startAndStop(SagaTimeoutRunner<?> runner) {
     runner.start();
-    runner.stop();
+    runner.close();
   }
 
   /** The timeout runner's WARN lines written while {@code body} runs. */

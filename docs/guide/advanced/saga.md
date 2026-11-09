@@ -431,6 +431,7 @@ SagaTimeoutRunner<OrderSaga.State> timeouts = SagaTimeoutRunner.<OrderSaga.State
     .sagaRunner(runner)   // the claim at a deadline waits for this runner's step in flight
     .build();
 timeouts.start();
+// on shutdown: timeouts.close() — the runner is AutoCloseable, like the other background components
 ```
 
 **With the forward fence on (the default), no forward command of a step is stored after a compensation claimed under that step.** A saga's deadline can pass while a delivery is dispatching that saga's forward commands — an event arrives at the deadline, or a retry-later outage ends in the attempt that straddles it. A claim made at that moment compensates from the state the row holds, which does not include that step — a start event's genesis-pending row included. Two mechanisms keep the step's commands on the right side of that compensation. In one process the step lock below makes the claim wait for the step, so the compensation includes it. On any number of processes the forward fence (described after the lock) refuses every forward command the step dispatches once the claim is written: the step stores nothing more and resumes the episode.

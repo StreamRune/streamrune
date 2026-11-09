@@ -768,8 +768,40 @@ class SagaTimeoutRunnerTest {
     assertTrue(runner.isStarted(), "started");
     assertTrue(runner.isAlive(), "poll thread alive after start");
 
-    runner.stop();
-    assertFalse(runner.isStarted(), "stop() resets the started guard");
+    runner.close();
+    assertFalse(runner.isStarted(), "close() resets the started guard");
+  }
+
+  @Test
+  void isAutoCloseable_andCloseIsIdempotent_startedOrNot() throws Exception {
+    AutoCloseable neverStarted =
+        SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
+            .decider(new TimeoutDecider())
+            .sagaStore(new InMemorySagaStore())
+            .commandBus(new CapturingCommandBus())
+            .sagaType(SagaType.fromClass(OrderState.class))
+            .build();
+    assertDoesNotThrow(neverStarted::close, "closing a runner never started does nothing");
+
+    SagaTimeoutRunner<OrderState> runner;
+    try (var closed =
+        SagaTimeoutRunner.<OrderState>builder()
+            .stepLock(new SagaStepLock())
+            .decider(new TimeoutDecider())
+            .sagaStore(new InMemorySagaStore())
+            .commandBus(new CapturingCommandBus())
+            .sagaType(SagaType.fromClass(OrderState.class))
+            .pollInterval(Duration.ofMillis(50))
+            .build()) {
+      runner = closed;
+      runner.start();
+      assertTrue(runner.isAlive());
+    }
+    assertFalse(runner.isStarted(), "try-with-resources closed it");
+    assertFalse(runner.isAlive());
+    assertDoesNotThrow(runner::close, "a second close does nothing");
+    assertFalse(runner.isStarted());
   }
 
   @Test
@@ -1000,11 +1032,11 @@ class SagaTimeoutRunnerTest {
 
     runner.start();
     Thread.sleep(100);
-    runner.stop();
+    runner.close();
     // Should stop without hanging and leave the runner restartable. isStarted() is the proof the
-    // poll thread died: stop() resets the started guard only when the join did not time out.
-    assertFalse(runner.isAlive(), "stop() releases the poll-thread handle");
-    assertFalse(runner.isStarted(), "stop() resets the started guard");
+    // poll thread died: close() resets the started guard only when the join did not time out.
+    assertFalse(runner.isAlive(), "close() releases the poll-thread handle");
+    assertFalse(runner.isStarted(), "close() resets the started guard");
   }
 
   @Test
@@ -1114,17 +1146,17 @@ class SagaTimeoutRunnerTest {
       Thread.sleep(10);
     }
     assertTrue(pollCount.get() > 0, "runner must have polled at least once");
-    runner.stop();
+    runner.close();
 
     // After stop, a second start() must not throw and must poll again
     int countBeforeRestart = pollCount.get();
-    assertDoesNotThrow(runner::start, "start() after stop() must not throw");
+    assertDoesNotThrow(runner::start, "start() after close() must not throw");
     deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
     while (pollCount.get() <= countBeforeRestart && System.nanoTime() < deadline) {
       Thread.sleep(10);
     }
     assertTrue(pollCount.get() > countBeforeRestart, "restarted runner must poll again");
-    runner.stop();
+    runner.close();
   }
 
   @Test
@@ -1233,11 +1265,12 @@ class SagaTimeoutRunnerTest {
         IllegalStateException.class,
         runner::start,
         "double start without stop must throw IllegalStateException");
-    runner.stop();
+    runner.close();
   }
 
-  // stop() must JOIN the poll thread before resetting the started guard, so a
-  // stop()->start() restart cannot leave the old poll thread running concurrently with the new one.
+  // close() must JOIN the poll thread before resetting the started guard, so a
+  // close()->start() restart cannot leave the old poll thread running concurrently with the new
+  // one.
   @Test
   void stopJoinsPollThreadSoRestartDoesNotLeakADuplicatePoller() throws Exception {
     var pollThread = new AtomicReference<Thread>();
@@ -1260,11 +1293,11 @@ class SagaTimeoutRunnerTest {
     runner.start();
     assertTrue(entered.await(5, TimeUnit.SECONDS), "poll thread should have entered findTimedOut");
 
-    runner.stop();
+    runner.close();
 
     assertFalse(
         pollThread.get().isAlive(),
-        "stop() must join the poll thread before returning so a restart cannot leak a duplicate"
+        "close() must join the poll thread before returning so a restart cannot leak a duplicate"
             + " poller");
   }
 
