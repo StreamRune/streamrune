@@ -6,7 +6,8 @@ name: Benchmarks
 #   benchmark  Builds the benchmark jars, then runs the `jmh` tasks of the three modules with
 #              benchmarks, one after another (jmhModules in the root build.gradle.kts):
 #              streamrune-runtime (command bus, in-memory event store, decider, outbox mapping,
-#              projection runner), streamrune-postgres (PostgresEventStore append, load and load
+#              projection runner, event deserialization and upcasting without a database),
+#              streamrune-postgres (PostgresEventStore append, load and load
 #              through an upcaster chain, against the PostgreSQL 18 service below) and
 #              streamrune-filesystem-crypto (crypto-shredding serialization on the AES-GCM engine).
 #              -PbenchCi gives every benchmark one mode and unit, average time per operation in
@@ -20,7 +21,11 @@ name: Benchmarks
 #
 # Where the results go. Only a run on main records: a run started by hand on another branch is
 # compared with the history and commented on, and its commit on gh-pages is not pushed. The first
-# run on main creates the gh-pages branch, empty, before the action writes to it. Once GitHub Pages
+# run on main creates the gh-pages branch, empty, before the action writes to it. Each data point
+# and each alert belongs to the commit the run benchmarked (github.sha), not to the tip of main when
+# the run records. A run whose commit is already the last one in the history (a night without a
+# push to main, or a second run on the same commit) records nothing and comments nothing: the
+# history gets one point per commit, and an unchanged main does not repeat its alert every night. Once GitHub Pages
 # serves gh-pages, the chart is at https://streamrune.github.io/streamrune/dev/bench/: one chart per
 # benchmark (and parameter set), one point per recorded run, the commit of each point on hover.
 # Every value is a time per operation, so lower is better throughout.
@@ -34,9 +39,9 @@ name: Benchmarks
 # `./gradlew :streamrune-runtime:jmh -PjmhIncludes=ProjectionRunnerBenchmark`; src/jmh/README.md
 # of each module describes its benchmarks.
 #
-# 01:30 UTC keeps the runner clear of the Broker E2E Tests at 03:00. The concurrency group lets one
-# run at a time: a second run waits, never shares the machine with the first and never races it on
-# gh-pages.
+# 01:30 UTC keeps the runner clear of the Broker E2E Tests at 03:00. The concurrency group runs one
+# run of this workflow at a time, so two runs never write gh-pages at once: a second run waits for
+# the first, and at most one run waits; a third run queued behind it cancels the waiting one.
 
 on:
   schedule:
@@ -72,7 +77,10 @@ jobs:
           --health-timeout 5s
           --health-retries 12
     steps:
+      # The benchmarks never push, so the checkout keeps no token in the repository's git config.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
@@ -131,8 +139,11 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write # push gh-pages, comment on the commit when a benchmark is over the threshold
+    env:
+      BENCHMARK_NAME: StreamRune JMH
     steps:
-      # The action switches this checkout to gh-pages, commits the new data point and pushes it.
+      # The action switches this checkout to gh-pages, commits the new data point and pushes it; the
+      # checkout keeps the token, which the first run's push of gh-pages below needs as well.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Fetch the results
@@ -142,8 +153,10 @@ jobs:
           path: ${{ runner.temp }}/jmh-results
 
       # The action fetches gh-pages before it writes and fails without it. On main the first run
-      # creates it, as one empty commit; another branch records nothing until main has.
-      - name: Find or create the gh-pages branch
+      # creates it, as one empty commit; another branch records nothing until main has. When the
+      # last data point of the history is this run's commit, nothing is recorded either. A history
+      # without dev/bench/data.js (the first run) has no last point.
+      - name: Decide whether to record
         id: pages
         env:
           ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
@@ -152,35 +165,53 @@ jobs:
           git ls-remote --exit-code --heads origin gh-pages > /dev/null
           status=$?
           set -e
-          if [ "$status" -eq 0 ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          elif [ "$status" -ne 2 ]; then
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
             echo "::error::Could not list the branches of origin (git ls-remote exited with $status)."
             exit "$status"
-          elif [ "$ON_MAIN" = true ]; then
+          fi
+          if [ "$status" -eq 2 ]; then
+            if [ "$ON_MAIN" != true ]; then
+              echo "::notice::gh-pages does not exist yet; a run on main creates it. Nothing is recorded."
+              echo "record=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             tree=$(git hash-object -t tree /dev/null)
             commit=$(git -c user.name='github-actions[bot]' \
               -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
               commit-tree "$tree" -m 'Benchmark history')
             git push origin "$commit:refs/heads/gh-pages"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "record=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags origin gh-pages
+          last=""
+          if data=$(git show FETCH_HEAD:dev/bench/data.js 2> /dev/null); then
+            last=$(printf '%s' "${data#window.BENCHMARK_DATA = }" \
+              | jq -r --arg name "$BENCHMARK_NAME" '.entries[$name][-1].commit.id // empty' \
+              2> /dev/null) || last=""
+          fi
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "::notice::The history already ends with $GITHUB_SHA. Nothing is recorded."
+            echo "record=false" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::gh-pages does not exist yet; a run on main creates it. Nothing is recorded."
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "record=true" >> "$GITHUB_OUTPUT"
           fi
 
       # tool: jmh reads the JSON of `-rf json` and treats every value as smaller-is-better, which
       # is what the average times of -PbenchCi are.
       - name: Record the results and compare them with the previous run
-        if: steps.pages.outputs.exists == 'true'
+        if: steps.pages.outputs.record == 'true'
         uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
         with:
-          name: StreamRune JMH
+          name: ${{ env.BENCHMARK_NAME }}
           tool: jmh
           output-file-path: ${{ runner.temp }}/jmh-results/jmh-results.json
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Schedule and dispatch events carry no head commit: without ref the action would take
+          # the commit github.ref points to when this job runs, not the one benchmarked.
+          ref: ${{ github.sha }}
           auto-push: ${{ github.ref == 'refs/heads/main' }}
           alert-threshold: '130%'
           comment-on-alert: true
