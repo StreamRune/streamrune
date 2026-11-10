@@ -1137,8 +1137,10 @@ Capacity implications an operator **must** plan for:
   repository is a capacity figure: `PostgresPerformanceTest`
   (`streamrune-eventstore/streamrune-postgres`) drives concurrent appends and commands against a
   Testcontainers PostgreSQL and prints the rate it observed on whatever machine ran it, asserting only
-  a floor; the JMH suite (`streamrune-runtime/src/jmh`, `./gradlew :streamrune-runtime:jmh`) runs
-  against `InMemoryEventStore` and is explicitly not a proxy for `PostgresEventStore`. Load-test
+  a floor; the JMH benchmarks time single operations on one thread — the in-memory ones of
+  `streamrune-runtime/src/jmh` are no proxy for `PostgresEventStore` at all, and the
+  `PostgresEventStore` ones (`streamrune-eventstore/streamrune-postgres/src/jmh`) measure the latency
+  of one append or load, not the throughput of the append lane under contention. Load-test
   against your own PostgreSQL, payload sizes, encryption, outbox and projection load — the checklist
   under [Async command admission control](#async-command-admission-control)
   lists what to record.
