@@ -584,7 +584,7 @@ class StreamRuneBuilderTest {
         new ProjectionRunner() {
           @Override
           public void run(ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
-            if (name.value().equals("proj1")) {
+            if ("proj1".equals(name.value())) {
               started1.countDown();
             } else {
               started2.countDown();
@@ -682,7 +682,7 @@ class StreamRuneBuilderTest {
                     @Override
                     public void run(
                         ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
-                      (name.value().equals("proj1") ? latch1 : latch2).countDown();
+                      ("proj1".equals(name.value()) ? latch1 : latch2).countDown();
                     }
 
                     @Override

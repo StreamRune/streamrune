@@ -30,7 +30,9 @@ public final class PostgresEventAuditStore implements EventAuditStore {
   private final DataSource dataSource;
 
   public PostgresEventAuditStore(DataSource dataSource) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     this.dataSource = dataSource;
   }
 
@@ -43,7 +45,9 @@ public final class PostgresEventAuditStore implements EventAuditStore {
   @Override
   public void saveAll(List<EventAuditEntry> entries) {
     Objects.requireNonNull(entries, "entries is required");
-    if (entries.isEmpty()) return;
+    if (entries.isEmpty()) {
+      return;
+    }
 
     try (Connection conn = dataSource.getConnection()) {
       PostgresTransactions.commitIfManual(

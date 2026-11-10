@@ -100,7 +100,7 @@ class ArchitectureTest {
   private static boolean targetsTheMetadataConstructorWithAnOrigin(JavaAccess<?> access) {
     return access.getTarget() instanceof AccessTarget.CodeUnitAccessTarget target
         && target.getOwner().isEquivalentTo(EventMetadata.class)
-        && target.getName().equals("<init>")
+        && "<init>".equals(target.getName())
         && target.getRawParameterTypes().stream()
             .map(JavaClass::getName)
             .toList()

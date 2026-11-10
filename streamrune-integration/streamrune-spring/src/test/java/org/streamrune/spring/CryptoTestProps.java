@@ -13,7 +13,7 @@ final class CryptoTestProps {
   private Duration cacheExpireAfterWrite = Duration.ofMinutes(5);
   private Duration cacheExpireAfterAccess;
   private String keyDirectory = "/var/lib/streamrune/keys";
-  private String tableName = "encryption_keys";
+  private final String tableName = "encryption_keys";
   private String vaultAddress = "http://localhost:8200";
   private String vaultToken;
   private String vaultEngineMount = "transit";

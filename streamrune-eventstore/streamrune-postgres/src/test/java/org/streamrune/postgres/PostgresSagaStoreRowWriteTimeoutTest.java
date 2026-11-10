@@ -475,7 +475,7 @@ class PostgresSagaStoreRowWriteTimeoutTest {
             new Class<?>[] {DataSource.class},
             (proxy, method, args) -> {
               Object result = invoke(delegate, method, args);
-              return method.getName().equals("getConnection")
+              return "getConnection".equals(method.getName())
                   ? recordingConnection((Connection) result, executed)
                   : result;
             });
@@ -488,11 +488,11 @@ class PostgresSagaStoreRowWriteTimeoutTest {
             new Class<?>[] {Connection.class},
             (proxy, method, args) -> {
               Object result = invoke(connection, method, args);
-              if (method.getName().equals("prepareStatement")) {
+              if ("prepareStatement".equals(method.getName())) {
                 return recordingStatement(
                     (Statement) result, PreparedStatement.class, (String) args[0], executed);
               }
-              if (method.getName().equals("createStatement")) {
+              if ("createStatement".equals(method.getName())) {
                 return recordingStatement((Statement) result, Statement.class, null, executed);
               }
               return result;

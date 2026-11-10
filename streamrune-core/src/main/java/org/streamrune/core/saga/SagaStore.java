@@ -604,8 +604,12 @@ public interface SagaStore {
    *     before the default's {@link UnsupportedOperationException})
    */
   default long countByStatus(SagaType sagaType, SagaStatus status) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
-    if (status == null) throw new IllegalArgumentException("status must not be null");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
+    if (status == null) {
+      throw new IllegalArgumentException("status must not be null");
+    }
     throw new UnsupportedOperationException(
         "countByStatus is not implemented by this SagaStore; the saga backlog gauge "
             + "(streamrune.saga.compensating) is unavailable.");
@@ -646,8 +650,12 @@ public interface SagaStore {
    */
   default List<CompensatingSaga> findCompensating(
       SagaType sagaType, Instant updatedBefore, int limit) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
-    if (updatedBefore == null) throw new IllegalArgumentException("updatedBefore must not be null");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
+    if (updatedBefore == null) {
+      throw new IllegalArgumentException("updatedBefore must not be null");
+    }
     throw new UnsupportedOperationException(
         "findCompensating is not implemented by this SagaStore; the compensation-retry sweeper "
             + " cannot automatically re-drive stuck COMPENSATING sagas. Implement it, or "
@@ -676,8 +684,12 @@ public interface SagaStore {
    */
   record CompensatingSaga(SagaId sagaId, Instant updatedAt, Instant episodeClaimedAt) {
     public CompensatingSaga {
-      if (sagaId == null) throw new IllegalArgumentException("sagaId is required");
-      if (updatedAt == null) throw new IllegalArgumentException("updatedAt is required");
+      if (sagaId == null) {
+        throw new IllegalArgumentException("sagaId is required");
+      }
+      if (updatedAt == null) {
+        throw new IllegalArgumentException("updatedAt is required");
+      }
       // episodeClaimedAt is intentionally nullable — see the @param doc.
     }
   }

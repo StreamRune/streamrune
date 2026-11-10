@@ -126,7 +126,7 @@ class SagaRunnerTest {
 
   static class CapturingCommandBus implements CommandBus {
     final List<Object> dispatched = new ArrayList<>();
-    private RuntimeException failWith = null;
+    private RuntimeException failWith;
 
     @Override
     public boolean supportsIdempotentExecution() {
@@ -171,7 +171,7 @@ class SagaRunnerTest {
       return true;
     }
 
-    private RuntimeException failWith = null;
+    private RuntimeException failWith;
 
     void failNext(RuntimeException e) {
       this.failWith = e;
@@ -494,7 +494,7 @@ class SagaRunnerTest {
     // Set up a second failure for the compensation command
     var failingBus =
         new CommandBus() {
-          int callCount = 0;
+          int callCount;
 
           @Override
           public boolean supportsIdempotentExecution() {
@@ -573,8 +573,8 @@ class SagaRunnerTest {
    * exception.
    */
   static class NullReturningRouterSaga extends OrderFulfillmentSaga {
-    volatile boolean extractReturnsNull = false;
-    volatile boolean hookReturnsNull = false;
+    volatile boolean extractReturnsNull;
+    volatile boolean hookReturnsNull;
 
     @Override
     public SagaId extractSagaId(EventEnvelope event) {

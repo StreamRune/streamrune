@@ -284,7 +284,7 @@ class SagaCompensationUnderForwardStepSignalTest {
     /** The simple names of the stored forward and compensation events, in global order. */
     List<String> storedOrder() {
       return eventStore.readGlobalStream(GlobalOffset.initial(), 1_000).stream()
-          .map(e -> e.event())
+          .map(EventEnvelope::event)
           .filter(
               e ->
                   e instanceof Reserved

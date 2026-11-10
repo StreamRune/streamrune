@@ -288,7 +288,7 @@ class StreamRuneAutoConfigurationTest {
               var relayHealth =
                   ctx.getBean(org.streamrune.runtime.BackgroundRelayHealthContributor.class);
               assertThat(relayHealth.components())
-                  .filteredOn(component -> component.name().equals("crypto-forget-listen"))
+                  .filteredOn(component -> "crypto-forget-listen".equals(component.name()))
                   .singleElement()
                   .satisfies(
                       channel ->
@@ -298,7 +298,7 @@ class StreamRuneAutoConfigurationTest {
                                       .DEGRADED));
               signal.listening = true;
               assertThat(relayHealth.components())
-                  .filteredOn(component -> component.name().equals("crypto-forget-listen"))
+                  .filteredOn(component -> "crypto-forget-listen".equals(component.name()))
                   .singleElement()
                   .satisfies(
                       channel ->
@@ -317,7 +317,7 @@ class StreamRuneAutoConfigurationTest {
             assertThat(
                     ctx.getBean(org.streamrune.runtime.BackgroundRelayHealthContributor.class)
                         .components())
-                .noneMatch(component -> component.name().equals("crypto-forget-listen")));
+                .noneMatch(component -> "crypto-forget-listen".equals(component.name())));
     contextRunner
         .withBean(
             org.streamrune.core.crypto.CryptoEngine.class,
@@ -327,7 +327,7 @@ class StreamRuneAutoConfigurationTest {
                 assertThat(
                         ctx.getBean(org.streamrune.runtime.BackgroundRelayHealthContributor.class)
                             .components())
-                    .noneMatch(component -> component.name().equals("crypto-forget-listen")));
+                    .noneMatch(component -> "crypto-forget-listen".equals(component.name())));
   }
 
   /** The feed's polling thread is watched like the framework's other pollers. */
@@ -340,7 +340,7 @@ class StreamRuneAutoConfigurationTest {
               var relayHealth =
                   ctx.getBean(org.streamrune.runtime.BackgroundRelayHealthContributor.class);
               assertThat(relayHealth.components())
-                  .filteredOn(component -> component.name().equals("sse-event-feed"))
+                  .filteredOn(component -> "sse-event-feed".equals(component.name()))
                   .singleElement()
                   .satisfies(
                       feed -> {

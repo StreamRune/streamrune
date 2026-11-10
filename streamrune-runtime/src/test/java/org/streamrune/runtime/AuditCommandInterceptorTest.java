@@ -79,7 +79,7 @@ class AuditCommandInterceptorTest {
             argThat(
                 entry ->
                     entry.commandId().equals(CMD_ID)
-                        && entry.commandType().equals("PlaceOrder")
+                        && "PlaceOrder".equals(entry.commandType())
                         && TYPE.equals(entry.aggregateType())
                         && entry.aggregateId().equals(AggregateId.of("order-1"))
                         && entry.userId() == null

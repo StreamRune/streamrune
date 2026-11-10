@@ -137,10 +137,10 @@ class ConfigurationDocLintTest {
     int start = lines.indexOf("## Configuration");
     assertTrue(start >= 0, "the README's ## Configuration section must be found");
     int fence = start;
-    while (!lines.get(fence).strip().equals("```properties")) {
+    while (!"```properties".equals(lines.get(fence).strip())) {
       fence++;
     }
-    for (int i = fence + 1; !lines.get(i).strip().equals("```"); i++) {
+    for (int i = fence + 1; !"```".equals(lines.get(i).strip()); i++) {
       String line = lines.get(i).strip();
       if (!line.isEmpty() && !line.startsWith("#")) {
         listing.put(line.substring(0, line.indexOf('=')), line.substring(line.indexOf('=') + 1));

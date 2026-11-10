@@ -879,7 +879,7 @@ class SagaConcurrencyRaceTest {
   static final class CrashOnceThenRecordCompensationBus implements CommandBus {
     final List<Command> compensationsDispatched = new java.util.ArrayList<>();
     final List<IdempotencyKey> compensationKeys = new java.util.ArrayList<>();
-    private boolean crashed = false;
+    private boolean crashed;
 
     @Override
     public boolean supportsIdempotentExecution() {

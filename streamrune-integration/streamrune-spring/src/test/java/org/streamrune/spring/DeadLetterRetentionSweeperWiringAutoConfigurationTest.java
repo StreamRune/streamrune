@@ -71,8 +71,8 @@ class DeadLetterRetentionSweeperWiringAutoConfigurationTest {
               assertThat(ctx.getBean(DeadLetterRetentionSweeper.class).isStarted()).isTrue();
               assertThat(ctx.getBean(BackgroundRelayHealthContributor.class).components())
                   .as("and its liveness must still be reported through the relay health")
-                  .anyMatch(c -> c.name().equals("dead-letter-retention-sweeper"))
-                  .noneMatch(c -> c.name().equals("dead-letter-retry"));
+                  .anyMatch(c -> "dead-letter-retention-sweeper".equals(c.name()))
+                  .noneMatch(c -> "dead-letter-retry".equals(c.name()));
             });
   }
 

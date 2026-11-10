@@ -63,7 +63,7 @@ import org.streamrune.core.types.SubscriptionName;
  * — called once per projection registration at start, by the executing runner or, for an INLINE
  * registration, by the integration.
  */
-public class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
+public final class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
 
   /** Default meter name prefix. */
   public static final String DEFAULT_PREFIX = "streamrune";

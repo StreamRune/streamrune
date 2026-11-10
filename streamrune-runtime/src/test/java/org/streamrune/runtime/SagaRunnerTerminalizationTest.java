@@ -137,10 +137,10 @@ class SagaRunnerTerminalizationTest {
     }
 
     /** If set, throw on the next execute() call for this command type; clear after first throw. */
-    Class<?> failCommandType = null;
+    Class<?> failCommandType;
 
     /** All future calls to execute will always throw (for testing total failure). */
-    boolean alwaysFail = false;
+    boolean alwaysFail;
 
     void failNextOfType(Class<?> type) {
       this.failCommandType = type;

@@ -137,10 +137,10 @@ class SagaFaultedWindowSkipTest {
   }
 
   static final class CountingMetrics implements StreamRuneMetrics {
-    int quarantined = 0;
-    int skippedWhileFaulted = 0;
-    int faulted = 0;
-    int eventHeld = 0;
+    int quarantined;
+    int skippedWhileFaulted;
+    int faulted;
+    int eventHeld;
     final List<String> skippedTags = new ArrayList<>();
     final List<String> holdReasons = new ArrayList<>();
 

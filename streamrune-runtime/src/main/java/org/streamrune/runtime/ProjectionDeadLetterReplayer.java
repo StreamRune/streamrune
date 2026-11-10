@@ -116,8 +116,12 @@ public final class ProjectionDeadLetterReplayer {
       EventStore eventStore,
       ProjectionDeadLetterStore deadLetterStore,
       AtomicBatchProcessor processor) {
-    if (eventStore == null) throw new IllegalArgumentException("eventStore is required");
-    if (deadLetterStore == null) throw new IllegalArgumentException("deadLetterStore is required");
+    if (eventStore == null) {
+      throw new IllegalArgumentException("eventStore is required");
+    }
+    if (deadLetterStore == null) {
+      throw new IllegalArgumentException("deadLetterStore is required");
+    }
     if (processor == null) {
       throw new IllegalArgumentException(
           "processor is required: pass the AtomicBatchProcessor the projection's runner commits"
@@ -236,8 +240,12 @@ public final class ProjectionDeadLetterReplayer {
     if (projectionName == null) {
       throw new IllegalArgumentException("projectionName is required");
     }
-    if (projection == null) throw new IllegalArgumentException("projection is required");
-    if (maxEntries <= 0) throw new IllegalArgumentException("maxEntries must be positive");
+    if (projection == null) {
+      throw new IllegalArgumentException("projection is required");
+    }
+    if (maxEntries <= 0) {
+      throw new IllegalArgumentException("maxEntries must be positive");
+    }
   }
 
   /**

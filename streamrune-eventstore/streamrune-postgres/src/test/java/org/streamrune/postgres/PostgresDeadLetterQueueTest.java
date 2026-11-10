@@ -1063,7 +1063,7 @@ class PostgresDeadLetterQueueTest {
               "Err",
               "msg",
               1,
-              row[2].equals("old") ? old : now,
+              "old".equals(row[2]) ? old : now,
               null,
               null,
               null,

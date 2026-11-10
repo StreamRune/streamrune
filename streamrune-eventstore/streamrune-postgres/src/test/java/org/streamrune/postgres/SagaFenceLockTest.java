@@ -80,7 +80,7 @@ class SagaFenceLockTest {
         Pattern.compile("pg_(?:try_)?advisory_(?:xact_)?lock(?:_shared)?\\s*\\([^(),]*,");
     List<String> others = new ArrayList<>();
     for (Path file : mainSources()) {
-      if (file.getFileName().toString().equals("SagaFenceLock.java")) {
+      if ("SagaFenceLock.java".equals(file.getFileName().toString())) {
         continue;
       }
       if (twoKeyLock.matcher(read(file)).find()) {

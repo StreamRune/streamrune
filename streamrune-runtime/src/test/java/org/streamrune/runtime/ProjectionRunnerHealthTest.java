@@ -606,7 +606,7 @@ class ProjectionRunnerHealthTest {
     eventStore.append(poison, List.of(envelope(poison, 1, "poison")), Version.initial());
     Projection proj =
         events -> {
-          if (((TestEvent) events.getFirst().event()).payload().equals("poison")) {
+          if ("poison".equals(((TestEvent) events.getFirst().event()).payload())) {
             throw new RuntimeException("permanent poison"); // DLQ'd during catch-up
           }
         };

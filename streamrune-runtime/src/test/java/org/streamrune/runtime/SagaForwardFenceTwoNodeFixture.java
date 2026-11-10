@@ -265,7 +265,7 @@ final class SagaForwardFenceTwoNodeFixture implements AutoCloseable {
   /** The stored forward and compensation events of one order, in global order. */
   List<String> storedOrder(String orderId) {
     return eventStore.readGlobalStream(GlobalOffset.initial(), 100_000).stream()
-        .map(e -> e.event())
+        .map(EventEnvelope::event)
         .filter(e -> orderId.equals(SagaStepLockFixture.orderOf(e)))
         .map(e -> e.getClass().getSimpleName())
         .toList();

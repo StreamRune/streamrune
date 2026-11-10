@@ -91,7 +91,9 @@ public final class OutboxFailedReplayer {
    * @return the number of entries actually reset from {@code FAILED} to {@code PENDING}
    */
   public int replayFailed(int maxEntries) {
-    if (maxEntries < 1) throw new IllegalArgumentException("maxEntries must be >= 1");
+    if (maxEntries < 1) {
+      throw new IllegalArgumentException("maxEntries must be >= 1");
+    }
     List<OutboxEntry> failed = store.findByStatus(OutboxStatus.FAILED, maxEntries);
     int reset = 0;
     for (OutboxEntry entry : failed) {
@@ -175,7 +177,9 @@ public final class OutboxFailedReplayer {
    * @return the number of rows that became {@code SKIPPED}
    */
   public int skipFailed(int maxEntries, String skippedBy, String reason) {
-    if (maxEntries < 1) throw new IllegalArgumentException("maxEntries must be >= 1");
+    if (maxEntries < 1) {
+      throw new IllegalArgumentException("maxEntries must be >= 1");
+    }
     String by = requireSanitized(skippedBy, "skippedBy", MAX_SKIPPED_BY_LENGTH);
     String why = requireSanitized(reason, "reason", MAX_REASON_LENGTH);
     List<OutboxEntry> failed = store.findByStatus(OutboxStatus.FAILED, maxEntries);

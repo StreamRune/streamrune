@@ -67,9 +67,15 @@ class RabbitMqOutboxPublisherIntegrationTest {
 
   @AfterAll
   static void cleanup() throws Exception {
-    if (publishChannel != null) publishChannel.close();
-    if (consumeChannel != null) consumeChannel.close();
-    if (connection != null) connection.close();
+    if (publishChannel != null) {
+      publishChannel.close();
+    }
+    if (consumeChannel != null) {
+      consumeChannel.close();
+    }
+    if (connection != null) {
+      connection.close();
+    }
   }
 
   @Test
@@ -410,7 +416,7 @@ class RabbitMqOutboxPublisherIntegrationTest {
             new Class<?>[] {Channel.class},
             (proxy, method, args) -> {
               Channel target = current.get();
-              if (!method.getName().equals("isOpen") && !target.isOpen()) {
+              if (!"isOpen".equals(method.getName()) && !target.isOpen()) {
                 target = connection.createChannel();
                 current.set(target);
               }

@@ -493,7 +493,7 @@ class ContinuousProjectionRunnerTest {
                 () -> runner.run(ProjectionName.of("live"), projection, AT_LEAST_ONCE_IDEMPOTENT));
 
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-    while (projection.processed.size() < 1 && System.nanoTime() < deadline) {
+    while (projection.processed.isEmpty() && System.nanoTime() < deadline) {
       Thread.sleep(20);
     }
     assertEquals(1, projection.processed.size());
@@ -1754,7 +1754,7 @@ class ContinuousProjectionRunnerTest {
     var calls = new AtomicInteger(0);
     Projection failsOnMiddleChunk =
         events -> {
-          if (((TestEvent) events.getFirst().event()).payload().equals("fail")) {
+          if ("fail".equals(((TestEvent) events.getFirst().event()).payload())) {
             calls.incrementAndGet();
             throw new RuntimeException("poison chunk"); // POISON
           }
@@ -1920,7 +1920,7 @@ class ContinuousProjectionRunnerTest {
     Projection proj =
         events -> {
           for (var e : events) {
-            if (((TestEvent) e.event()).payload().equals("fail")) {
+            if ("fail".equals(((TestEvent) e.event()).payload())) {
               throw new RuntimeException("poison batch");
             }
           }
@@ -1965,7 +1965,7 @@ class ContinuousProjectionRunnerTest {
     Projection proj =
         events -> {
           for (var e : events) {
-            if (((TestEvent) e.event()).payload().equals("fail")) {
+            if ("fail".equals(((TestEvent) e.event()).payload())) {
               throw new RuntimeException("poison live batch");
             }
           }
@@ -3203,7 +3203,7 @@ class ContinuousProjectionRunnerTest {
   /** Fails only on the payload {@code "poison"}; every other batch is applied cleanly. */
   private static Projection poisonPayloadOnly() {
     return events -> {
-      if (((TestEvent) events.getFirst().event()).payload().equals("poison")) {
+      if ("poison".equals(((TestEvent) events.getFirst().event()).payload())) {
         throw new RuntimeException("permanent poison"); // POISON under DLQ; a failure under SKIP
       }
     };
@@ -3332,10 +3332,10 @@ class ContinuousProjectionRunnerTest {
     Projection projection =
         events -> {
           String payload = ((TestEvent) events.getFirst().event()).payload();
-          if (payload.equals("poison")) {
+          if ("poison".equals(payload)) {
             throw new RuntimeException("permanent poison"); // POISON → dead-lettered
           }
-          if (payload.equals("block")) {
+          if ("block".equals(payload)) {
             try {
               // finish() always releases it; the bound only keeps a broken test from hanging, so
               // it sits far above every wait a test makes while the runner is held here.

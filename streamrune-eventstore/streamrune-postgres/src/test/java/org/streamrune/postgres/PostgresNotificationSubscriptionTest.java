@@ -100,7 +100,9 @@ class PostgresNotificationSubscriptionTest {
 
   @AfterAll
   static void closePool() {
-    if (eventDataSource != null) eventDataSource.close();
+    if (eventDataSource != null) {
+      eventDataSource.close();
+    }
   }
 
   @BeforeEach

@@ -277,7 +277,7 @@ class OutboxPublisherDefaultBatchTest {
             OutboxEntryId.of("d"));
     OutboxPublisher publisher =
         entry -> {
-          if (entry.id().value().equals("b") || entry.id().value().equals("d")) {
+          if ("b".equals(entry.id().value()) || "d".equals(entry.id().value())) {
             throw new RuntimeException("odd ones out");
           }
         };

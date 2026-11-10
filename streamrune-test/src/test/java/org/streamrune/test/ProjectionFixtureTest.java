@@ -212,7 +212,7 @@ class ProjectionFixtureTest {
   void offsetDeduplicatingProjectionProcessesEveryEvent() {
     class OffsetDeduplicatingProjection implements Projection {
       final List<EventEnvelope> processed = new ArrayList<>();
-      long lastSeenOffset = 0;
+      long lastSeenOffset;
 
       @Override
       public void process(List<EventEnvelope> batch) {

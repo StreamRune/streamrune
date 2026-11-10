@@ -276,7 +276,7 @@ public final class InMemoryEventStore implements EventStore {
    */
   public InMemoryEventStore withUpcasters(List<EventUpcaster> upcasters) {
     this.upcasterChain =
-        (upcasters == null || upcasters.isEmpty()) ? null : new UpcasterChain(upcasters);
+        upcasters == null || upcasters.isEmpty() ? null : new UpcasterChain(upcasters);
     return this;
   }
 

@@ -74,7 +74,9 @@ public final class PostgresEventAuditQuery implements EventAuditQuery {
   private final DataSource dataSource;
 
   public PostgresEventAuditQuery(DataSource dataSource) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     this.dataSource = dataSource;
   }
 

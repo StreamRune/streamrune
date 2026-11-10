@@ -220,7 +220,7 @@ class PollingEventSubscriptionHealthErrorsTest {
   }
 
   private Optional<SubscriptionHealth> entry() {
-    return contributor.health().stream().filter(h -> h.name().value().equals(NAME)).findFirst();
+    return contributor.health().stream().filter(h -> NAME.equals(h.name().value())).findFirst();
   }
 
   private PollingEventSubscription subscription(EventListener listener, boolean withContributor) {

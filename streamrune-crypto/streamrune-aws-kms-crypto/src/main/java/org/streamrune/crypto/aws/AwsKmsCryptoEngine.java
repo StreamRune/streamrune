@@ -820,7 +820,7 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
     private String kmsKeyId;
     // No silent in-memory default — build() fails closed unless a store is supplied, so KMS
     // erasure can never be silently non-durable (which would resurrect erased PII on restart).
-    private ForgottenSubjectStore forgottenSubjects = null;
+    private ForgottenSubjectStore forgottenSubjects;
     private int dataKeyCacheMaximumSize = DEFAULT_DATA_KEY_CACHE_MAXIMUM_SIZE;
     private Duration dataKeyCacheExpireAfterWrite = DEFAULT_DATA_KEY_CACHE_EXPIRE_AFTER_WRITE;
     private long maxEncryptionsPerDataKey = MAX_ENCRYPTIONS_PER_DATA_KEY;

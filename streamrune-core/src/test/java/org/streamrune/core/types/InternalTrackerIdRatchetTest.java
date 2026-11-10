@@ -830,7 +830,7 @@ class InternalTrackerIdRatchetTest {
     assertTrue(markdown > 20, "expected the guides and READMEs, found " + markdown);
     assertTrue(build > 5, "expected the Gradle build files, found " + build);
     assertTrue(
-        files.stream().anyMatch(p -> relative(p).equals("CHANGELOG.md")),
+        files.stream().anyMatch(p -> "CHANGELOG.md".equals(relative(p))),
         "CHANGELOG.md must be scanned");
     assertTrue(
         files.stream().anyMatch(p -> relative(p).contains("/src/test/java/")),
@@ -866,7 +866,7 @@ class InternalTrackerIdRatchetTest {
     Set<String> names = new TreeSet<>();
     for (String line : build.subList(start + 1, build.size())) {
       String code = line.strip();
-      if (code.equals("}")) {
+      if ("}".equals(code)) {
         break;
       }
       Matcher include = included.matcher(code);

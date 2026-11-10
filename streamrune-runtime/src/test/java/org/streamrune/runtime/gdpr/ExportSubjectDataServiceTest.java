@@ -72,8 +72,12 @@ class ExportSubjectDataServiceTest {
 
       @Override
       public JsonNode collect(SubjectId subjectId) {
-        if (t instanceof RuntimeException re) throw re;
-        if (t instanceof Error err) throw err;
+        if (t instanceof RuntimeException re) {
+          throw re;
+        }
+        if (t instanceof Error err) {
+          throw err;
+        }
         throw new RuntimeException(t);
       }
     };

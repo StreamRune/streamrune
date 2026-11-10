@@ -86,7 +86,7 @@ class SagaCompensationRetrySweeperTest {
    * poison-during-sweep path.
    */
   static final class FakeOrchestrator implements SagaOrchestrator<FakeSagaState> {
-    volatile boolean throwOnCompensate = false;
+    volatile boolean throwOnCompensate;
 
     @Override
     public Class<FakeSagaState> stateType() {
@@ -244,7 +244,7 @@ class SagaCompensationRetrySweeperTest {
   static final class ToggleLeadership implements SubscriptionLeadership {
     private static final Optional<Lease> LEASE = Optional.of(new Lease(1L));
     volatile boolean leader;
-    volatile int resigns = 0;
+    volatile int resigns;
 
     ToggleLeadership(boolean leader) {
       this.leader = leader;
@@ -1112,7 +1112,7 @@ class SagaCompensationRetrySweeperTest {
             SagaStore.class.getClassLoader(),
             new Class<?>[] {SagaStore.class},
             (proxy, method, args) -> {
-              if (outage.get() && method.getName().equals("findCompensating")) {
+              if (outage.get() && "findCompensating".equals(method.getName())) {
                 throw new IllegalStateException("store unreachable");
               }
               try {

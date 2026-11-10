@@ -904,8 +904,8 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
     private int batchSize = 50;
     private Clock clock = Clock.systemUTC();
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
-    private Duration maxCompensatingDwell = null;
-    private Duration inboxRetentionMaxAge = null;
+    private Duration maxCompensatingDwell;
+    private Duration inboxRetentionMaxAge;
     private SagaRunner<?> sagaRunner;
     private SagaStepLock stepLock;
     private Duration claimWait = DEFAULT_CLAIM_WAIT;

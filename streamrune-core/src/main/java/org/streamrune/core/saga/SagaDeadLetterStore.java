@@ -165,7 +165,9 @@ public interface SagaDeadLetterStore {
    */
   default Optional<SagaDeadLetterEntry> findNullSagaEntry(
       SagaType sagaType, GlobalOffset eventOffset) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
     return findAll(Integer.MAX_VALUE).stream()
         .filter(e -> e.sagaId() == null && e.eventOffset().equals(eventOffset))
         .filter(e -> sagaType.equals(e.sagaType()))
@@ -209,7 +211,9 @@ public interface SagaDeadLetterStore {
    */
   default List<SagaDeadLetterEntry> findNullSagaEntriesByResolvedTarget(
       SagaType sagaType, SagaId targetSagaId) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
     throw new UnsupportedOperationException(
         "findNullSagaEntriesByResolvedTarget is not implemented by this SagaDeadLetterStore; the"
             + " replayAll drain needs it to fold a saga's earlier NULL-SAGA entries (events whose"

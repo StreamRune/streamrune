@@ -364,7 +364,7 @@ class SubscriptionHealthContributorTest {
     assertEquals(SubscriptionHealth.Status.DEGRADED, contributor.overallStatus());
     var orders =
         contributor.health().stream()
-            .filter(h -> h.name().value().equals("orders"))
+            .filter(h -> "orders".equals(h.name().value()))
             .findFirst()
             .get();
     assertEquals(5_000_000, orders.lag(), "the lag itself stays visible in the health detail");

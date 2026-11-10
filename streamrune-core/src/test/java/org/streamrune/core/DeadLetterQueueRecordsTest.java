@@ -509,7 +509,7 @@ class DeadLetterQueueRecordsTest {
             DeadLetterQueue.DeadLetterEntry.class)) {
       assertTrue(
           Arrays.stream(type.getRecordComponents())
-              .noneMatch(c -> c.getName().equals("aggregateId")),
+              .noneMatch(c -> "aggregateId".equals(c.getName())),
           type.getSimpleName() + " stores the id once, inside streamId");
     }
   }

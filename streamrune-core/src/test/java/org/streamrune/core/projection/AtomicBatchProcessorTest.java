@@ -167,10 +167,10 @@ class AtomicBatchProcessorTest {
             AtomicBatchProcessorTest.class.getClassLoader(),
             new Class<?>[] {ProjectionRepository.class, AtomicBatchProcessor.class},
             (proxy, method, args) -> {
-              if (method.getName().equals("writeTargetIdentity")) {
+              if ("writeTargetIdentity".equals(method.getName())) {
                 return identity;
               }
-              if (method.getName().equals("writesTo")) {
+              if ("writesTo".equals(method.getName())) {
                 // A JDK proxy cannot run the interface default itself; forward to the default via
                 // InvocationHandler.invokeDefault, exactly as a bean proxy forwards to its target.
                 return InvocationHandler.invokeDefault(proxy, method, args);

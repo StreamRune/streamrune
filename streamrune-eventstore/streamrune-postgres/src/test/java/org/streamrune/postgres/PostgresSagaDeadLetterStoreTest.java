@@ -1533,7 +1533,7 @@ class PostgresSagaDeadLetterStoreTest {
                     PostgresSagaDeadLetterStoreTest.class.getClassLoader(),
                     new Class<?>[] {DataSource.class},
                     (proxy, method, args) -> {
-                      if (method.getName().equals("getConnection")) {
+                      if ("getConnection".equals(method.getName())) {
                         throw new java.sql.SQLException("connection refused");
                       }
                       throw new UnsupportedOperationException(method.getName());

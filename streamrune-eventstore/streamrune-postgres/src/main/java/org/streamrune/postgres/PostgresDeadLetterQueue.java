@@ -163,7 +163,9 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
    * @throws IllegalArgumentException if {@code dataSource} is {@code null}
    */
   public PostgresDeadLetterQueue(DataSource dataSource) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     this.dataSource = dataSource;
   }
 
@@ -335,7 +337,9 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
 
   @Override
   public int deleteOlderThan(Instant cutoff) {
-    if (cutoff == null) throw new IllegalArgumentException("cutoff is required");
+    if (cutoff == null) {
+      throw new IllegalArgumentException("cutoff is required");
+    }
     int total = 0;
     int batch;
     do {

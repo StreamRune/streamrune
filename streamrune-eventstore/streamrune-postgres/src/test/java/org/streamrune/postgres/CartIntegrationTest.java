@@ -62,25 +62,34 @@ class CartIntegrationTest {
   sealed interface CartCommand extends org.streamrune.core.Command {
     record AddItem(String cartId, String sku, int qty) implements CartCommand {
       public AddItem {
-        if (qty <= 0) throw new IllegalArgumentException("Qty must be > 0");
-        if (cartId == null || cartId.isBlank())
+        if (qty <= 0) {
+          throw new IllegalArgumentException("Qty must be > 0");
+        }
+        if (cartId == null || cartId.isBlank()) {
           throw new IllegalArgumentException("Invalid cart ID");
-        if (sku == null || sku.isBlank()) throw new IllegalArgumentException("Invalid SKU");
+        }
+        if (sku == null || sku.isBlank()) {
+          throw new IllegalArgumentException("Invalid SKU");
+        }
       }
     }
 
     record RemoveItem(String cartId, String sku) implements CartCommand {
       public RemoveItem {
-        if (cartId == null || cartId.isBlank())
+        if (cartId == null || cartId.isBlank()) {
           throw new IllegalArgumentException("Invalid cart ID");
-        if (sku == null || sku.isBlank()) throw new IllegalArgumentException("Invalid SKU");
+        }
+        if (sku == null || sku.isBlank()) {
+          throw new IllegalArgumentException("Invalid SKU");
+        }
       }
     }
 
     record Checkout(String cartId) implements CartCommand {
       public Checkout {
-        if (cartId == null || cartId.isBlank())
+        if (cartId == null || cartId.isBlank()) {
           throw new IllegalArgumentException("Invalid cart ID");
+        }
       }
     }
   }
@@ -110,15 +119,21 @@ class CartIntegrationTest {
     public List<CartEvent> decide(CartCommand cmd, CartState state) {
       return switch (cmd) {
         case CartCommand.AddItem c -> {
-          if (state.isClosed()) throw new DomainException("Cart is closed");
+          if (state.isClosed()) {
+            throw new DomainException("Cart is closed");
+          }
           yield List.of(new CartEvent.ItemAdded(c.sku(), c.qty()));
         }
         case CartCommand.RemoveItem c -> {
-          if (state.isClosed()) throw new DomainException("Cart is closed");
+          if (state.isClosed()) {
+            throw new DomainException("Cart is closed");
+          }
           yield List.of(new CartEvent.ItemRemoved(c.sku()));
         }
         case CartCommand.Checkout _ -> {
-          if (state.isClosed()) throw new DomainException("Cart is already closed");
+          if (state.isClosed()) {
+            throw new DomainException("Cart is already closed");
+          }
           yield List.of(new CartEvent.CheckedOut());
         }
       };

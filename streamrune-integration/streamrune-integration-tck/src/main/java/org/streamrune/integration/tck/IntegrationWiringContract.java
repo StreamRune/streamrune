@@ -484,9 +484,14 @@ public abstract class IntegrationWiringContract {
     try (Application application = start(null, Map.of(), Set.of())) {
       assertStarted(application);
       Map<String, String> bound = new TreeMap<>(configurationDefaults(application));
-      assertEquals("7d", bound.get("streamrune.dead-letter.retention-max-age"), () -> "" + bound);
-      assertEquals("7d", bound.get("streamrune.inbox.retention-max-age"), () -> "" + bound);
-      assertEquals("5m", bound.get("streamrune.crypto.cache.expire-after-write"), () -> "" + bound);
+      assertEquals(
+          "7d", bound.get("streamrune.dead-letter.retention-max-age"), () -> String.valueOf(bound));
+      assertEquals(
+          "7d", bound.get("streamrune.inbox.retention-max-age"), () -> String.valueOf(bound));
+      assertEquals(
+          "5m",
+          bound.get("streamrune.crypto.cache.expire-after-write"),
+          () -> String.valueOf(bound));
 
       Map<String, String> stated = configurationReference();
       List<String> problems = new ArrayList<>();
@@ -630,8 +635,8 @@ public abstract class IntegrationWiringContract {
     for (String line : guide("docs/guide/configuration.md").split("\n", -1)) {
       List<String> cells = cells(line);
       if (cells.size() >= 2
-          && cells.getFirst().equals("Property")
-          && cells.get(1).equals("Default")) {
+          && "Property".equals(cells.getFirst())
+          && "Default".equals(cells.get(1))) {
         inTable = true;
       } else if (inTable && cells.size() >= 2) {
         String key = cells.getFirst().replace("`", "");

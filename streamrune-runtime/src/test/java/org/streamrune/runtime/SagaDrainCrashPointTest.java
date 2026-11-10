@@ -136,7 +136,7 @@ class SagaDrainCrashPointTest {
     assertThat(h.bus.count("undo-1"))
         .as("its original key was pruned: the forced resume re-executed it (acknowledged)")
         .isEqualTo(2);
-    assertThat(h.bus.count("undo-2")).isEqualTo(crashAfter.equals("undo-2") ? 1 : 0);
+    assertThat(h.bus.count("undo-2")).isEqualTo("undo-2".equals(crashAfter) ? 1 : 0);
     var crashed = h.row();
     assertThat(crashed.status()).isEqualTo(SagaStatus.FAULTED);
     assertThat(crashed.preFaultStatus()).isEqualTo(SagaStatus.COMPENSATING);
@@ -211,7 +211,7 @@ class SagaDrainCrashPointTest {
     int undo1 = stale ? 2 : 1; // stale: its original key was pruned — the acknowledged re-run
     assertThat(h.bus.count("undo-1")).isEqualTo(undo1);
     assertThat(h.bus.count("undo-2")).isEqualTo(1);
-    assertThat(h.bus.count("undo-3")).isEqualTo(crashAfter.equals("undo-3") ? 1 : 0);
+    assertThat(h.bus.count("undo-3")).isEqualTo("undo-3".equals(crashAfter) ? 1 : 0);
     var crashed = h.row();
     assertThat(crashed.status()).isEqualTo(SagaStatus.FAULTED);
     assertThat(crashed.preFaultStatus()).isEqualTo(SagaStatus.COMPENSATING);

@@ -516,7 +516,7 @@ class MultiProjectionRunnerTest {
     try {
       awaitSize(processed, 2);
       assertTrue(
-          processed.stream().anyMatch(e -> ((TestEvent) e.event()).payload().equals("second")),
+          processed.stream().anyMatch(e -> "second".equals(((TestEvent) e.event()).payload())),
           "restarted runner must process events appended after stop");
     } finally {
       runner.stop();

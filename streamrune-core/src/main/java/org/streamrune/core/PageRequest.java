@@ -10,9 +10,15 @@ import java.util.Objects;
 public record PageRequest(int page, int size, Sort sort) {
 
   public PageRequest {
-    if (page < 0) throw new IllegalArgumentException("page must be >= 0");
-    if (size < 1) throw new IllegalArgumentException("size must be >= 1");
-    if (size > 1000) throw new IllegalArgumentException("size must be <= 1000");
+    if (page < 0) {
+      throw new IllegalArgumentException("page must be >= 0");
+    }
+    if (size < 1) {
+      throw new IllegalArgumentException("size must be >= 1");
+    }
+    if (size > 1000) {
+      throw new IllegalArgumentException("size must be <= 1000");
+    }
     Objects.requireNonNull(sort, "sort");
   }
 

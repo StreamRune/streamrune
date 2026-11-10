@@ -100,7 +100,7 @@ class SagaTimeoutRunnerTerminalizationTest {
   static class RecordingCommandBus implements CommandBus {
     final List<Command> executed = new ArrayList<>();
     final List<IdempotencyKey> keys = new ArrayList<>();
-    boolean alwaysFail = false;
+    boolean alwaysFail;
 
     @Override
     public boolean supportsIdempotentExecution() {

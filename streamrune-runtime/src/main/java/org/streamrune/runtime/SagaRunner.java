@@ -1488,13 +1488,19 @@ public final class SagaRunner<S extends SagaState> {
         orchestrator =
             new SagaDeciderAdapter<>(decider, startPredicate, idExtractor, eventDataRouter);
       }
-      if (orchestrator == null) throw new IllegalStateException("orchestrator is required");
+      if (orchestrator == null) {
+        throw new IllegalStateException("orchestrator is required");
+      }
       // Refuse a state class whose fully-qualified name the saga_type column cannot
       // hold at wiring, not on the first delivered event (where every batch would fail again).
       // The SagaDeadLetterReplayer takes a built runner, so it inherits this check.
       SagaType.fromClass(orchestrator.stateType());
-      if (sagaStore == null) throw new IllegalStateException("sagaStore is required");
-      if (commandBus == null) throw new IllegalStateException("commandBus is required");
+      if (sagaStore == null) {
+        throw new IllegalStateException("sagaStore is required");
+      }
+      if (commandBus == null) {
+        throw new IllegalStateException("commandBus is required");
+      }
       // Every saga command dispatch (forward AND compensation) goes through the keyed
       // execute(command, key) with no unkeyed fallback (SagaCommandDispatch.dispatch). A
       // bus without a CommandInbox throws IllegalStateException on the first dispatch: the forward

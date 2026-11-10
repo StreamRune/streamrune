@@ -77,13 +77,13 @@ class SagaRunnerNullContractTest {
    */
   static class NullContractSaga implements SagaOrchestrator<OrderState> {
 
-    volatile boolean initialStateReturnsNull = false;
-    volatile boolean evolveReturnsNull = false;
-    volatile boolean evolveReturnsNullStatus = false;
-    volatile boolean handleReturnsNull = false;
-    volatile boolean handleReturnsNullElement = false;
-    volatile boolean compensateReturnsNull = false;
-    volatile boolean compensateReturnsNullElement = false;
+    volatile boolean initialStateReturnsNull;
+    volatile boolean evolveReturnsNull;
+    volatile boolean evolveReturnsNullStatus;
+    volatile boolean handleReturnsNull;
+    volatile boolean handleReturnsNullElement;
+    volatile boolean compensateReturnsNull;
+    volatile boolean compensateReturnsNullElement;
 
     @Override
     public Class<OrderState> stateType() {
@@ -160,7 +160,7 @@ class SagaRunnerNullContractTest {
 
   static class CapturingCommandBus implements CommandBus {
     final List<Object> dispatched = new ArrayList<>();
-    private RuntimeException failWith = null;
+    private RuntimeException failWith;
 
     @Override
     public boolean supportsIdempotentExecution() {

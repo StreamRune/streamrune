@@ -344,7 +344,7 @@ class SagaProvenanceWriterRatchetTest {
       if (source.contains(CAUSATION_BAGGAGE_CONSTANT)) {
         violations.add(relative + ": names " + CAUSATION_BAGGAGE_CONSTANT);
       }
-      if (source.contains(CAUSATION_BAGGAGE_KEY) && !relative.equals(BUS_CONTRACT)) {
+      if (source.contains(CAUSATION_BAGGAGE_KEY) && !BUS_CONTRACT.equals(relative)) {
         violations.add(relative + ": names the baggage key " + CAUSATION_BAGGAGE_KEY);
       }
     }

@@ -108,7 +108,7 @@ class ProjectionDeliveryModeProcessKillIT extends E2ETestBase {
         .isEqualTo(appliedAfterCrash);
     assertThat(offsets.getLastOffset(name))
         .as("durable checkpoint right after the crash")
-        .isEqualTo(crashPoint.equals("AFTER_COMMIT") ? top : GlobalOffset.initial());
+        .isEqualTo("AFTER_COMMIT".equals(crashPoint) ? top : GlobalOffset.initial());
 
     // Rerun, in-process, same mode, no crash point.
     var m = ProjectionDeliveryMode.valueOf(mode);

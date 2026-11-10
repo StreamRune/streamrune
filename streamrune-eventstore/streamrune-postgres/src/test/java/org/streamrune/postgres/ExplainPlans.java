@@ -33,27 +33,35 @@ final class ExplainPlans {
 
   /** Depth-first search for an Index Scan / Index Only Scan on {@code indexName}. */
   static JsonNode findIndexScan(JsonNode node, String indexName) {
-    if (node == null) return null;
+    if (node == null) {
+      return null;
+    }
     String type = node.path("Node Type").asText("");
-    if ((type.equals("Index Scan") || type.equals("Index Only Scan"))
+    if (("Index Scan".equals(type) || "Index Only Scan".equals(type))
         && indexName.equals(node.path("Index Name").asText(""))) {
       return node;
     }
     for (JsonNode child : node.path("Plans")) {
       JsonNode found = findIndexScan(child, indexName);
-      if (found != null) return found;
+      if (found != null) {
+        return found;
+      }
     }
     return null;
   }
 
   /** True when any node of the plan, depth first over {@code Plans}, has {@code nodeType}. */
   static boolean containsNodeType(JsonNode node, String nodeType) {
-    if (node == null) return false;
+    if (node == null) {
+      return false;
+    }
     if (nodeType.equals(node.path("Node Type").asText(""))) {
       return true;
     }
     for (JsonNode child : node.path("Plans")) {
-      if (containsNodeType(child, nodeType)) return true;
+      if (containsNodeType(child, nodeType)) {
+        return true;
+      }
     }
     return false;
   }

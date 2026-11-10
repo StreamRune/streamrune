@@ -956,10 +956,10 @@ class OutboxPollerTest {
     var deliveredIds = deliveredAllCollections.getFirst();
     assertEquals(2, deliveredIds.size(), "markDeliveredAll must include both ids");
     assertTrue(
-        deliveredIds.stream().anyMatch(id -> id.value().equals("batch1")),
+        deliveredIds.stream().anyMatch(id -> "batch1".equals(id.value())),
         "batch1 must be in the delivered-all collection");
     assertTrue(
-        deliveredIds.stream().anyMatch(id -> id.value().equals("batch2")),
+        deliveredIds.stream().anyMatch(id -> "batch2".equals(id.value())),
         "batch2 must be in the delivered-all collection");
   }
 
@@ -1044,7 +1044,7 @@ class OutboxPollerTest {
             var confirmed = new java.util.LinkedHashSet<OutboxEntryId>();
             var failed = new java.util.LinkedHashMap<OutboxEntryId, Exception>();
             for (OutboxEntry e : entries) {
-              if (e.id().value().equals("ok")) {
+              if ("ok".equals(e.id().value())) {
                 confirmed.add(e.id());
               } else {
                 failed.put(e.id(), new RuntimeException("broker nack"));
@@ -1057,9 +1057,9 @@ class OutboxPollerTest {
     pollerWithDefaults(partialPublisher).processBatch();
 
     var all = store.all();
-    var okEntry = all.stream().filter(e -> e.id().value().equals("ok")).findFirst().orElseThrow();
+    var okEntry = all.stream().filter(e -> "ok".equals(e.id().value())).findFirst().orElseThrow();
     var failEntry =
-        all.stream().filter(e -> e.id().value().equals("fail")).findFirst().orElseThrow();
+        all.stream().filter(e -> "fail".equals(e.id().value())).findFirst().orElseThrow();
 
     assertEquals(OutboxStatus.DELIVERED, okEntry.status(), "'ok' entry must be DELIVERED");
     assertEquals(OutboxStatus.PENDING, failEntry.status(), "'fail' entry must remain PENDING");
@@ -1113,7 +1113,7 @@ class OutboxPollerTest {
             + total
             + ")");
     assertTrue(
-        publishedIds.size() >= 1, "at least the first entry is attempted before the deadline");
+        !publishedIds.isEmpty(), "at least the first entry is attempted before the deadline");
 
     long delivered = store.all().stream().filter(e -> e.status() == OutboxStatus.DELIVERED).count();
     long stillClaimed =
@@ -1997,7 +1997,7 @@ class OutboxPollerTest {
     assertEquals(
         OutboxStatus.DELIVERED,
         store.all().stream()
-            .filter(e -> e.id().value().equals("recover-a"))
+            .filter(e -> "recover-a".equals(e.id().value()))
             .findFirst()
             .orElseThrow()
             .status(),
@@ -2044,7 +2044,7 @@ class OutboxPollerTest {
     }
     var inflight =
         store.all().stream()
-            .filter(e -> e.id().value().equals("inflight-a"))
+            .filter(e -> "inflight-a".equals(e.id().value()))
             .findFirst()
             .orElseThrow();
     assertEquals(
@@ -2094,7 +2094,7 @@ class OutboxPollerTest {
 
     var entry =
         store.all().stream()
-            .filter(e -> e.id().value().equals("mixed-1"))
+            .filter(e -> "mixed-1".equals(e.id().value()))
             .findFirst()
             .orElseThrow();
     assertEquals(1, entry.attempts(), "the first ENTRY rejection burns ladder attempt 1");
@@ -2191,7 +2191,7 @@ class OutboxPollerTest {
     // Pin: the per-entry escalation is relay-local, never bought by counting attempts.
     var poison =
         store.all().stream()
-            .filter(e -> e.id().value().equals("poison-1"))
+            .filter(e -> "poison-1".equals(e.id().value()))
             .findFirst()
             .orElseThrow();
     assertEquals(OutboxStatus.PENDING, poison.status(), "TRANSPORT never terminal-FAILs");
@@ -2773,7 +2773,7 @@ class OutboxPollerTest {
   /** Records recordOutboxDeliveryFailed() calls; all other methods are no-ops. */
   private static final class DeliveryFailedMetrics
       implements org.streamrune.core.StreamRuneMetrics {
-    int deliveryFailed = 0;
+    int deliveryFailed;
 
     @Override
     public void recordOutboxDeliveryFailed() {
@@ -2851,7 +2851,7 @@ class OutboxPollerTest {
   private static final class CrashBeforeDeliveredStore
       implements org.streamrune.core.outbox.OutboxStore {
     private final org.streamrune.core.outbox.OutboxStore inner;
-    private boolean crashed = false;
+    private boolean crashed;
 
     CrashBeforeDeliveredStore(org.streamrune.core.outbox.OutboxStore inner) {
       this.inner = inner;
@@ -3004,12 +3004,12 @@ class OutboxPollerTest {
 
   /** Recording {@link org.streamrune.core.StreamRuneMetrics} double for the observability tests. */
   static final class RecordingMetrics implements org.streamrune.core.StreamRuneMetrics {
-    int deliveryFailed = 0;
-    int inFlightHorizonViolations = 0;
+    int deliveryFailed;
+    int inFlightHorizonViolations;
     long lastBacklog = -1;
     long lastInFlight = -1;
     volatile long lastRelayDegradation = -1;
-    volatile int relayDegradationSamples = 0;
+    volatile int relayDegradationSamples;
     volatile long lastBlockedAggregates = -1;
     volatile long lastBlockageAge = -1;
 

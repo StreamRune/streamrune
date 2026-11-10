@@ -409,7 +409,7 @@ class PostgresEventStoreFactoryDataSourceTest {
               Connection.class.getClassLoader(),
               new Class<?>[] {Connection.class},
               (proxy, method, args) -> {
-                if (method.getName().equals("close") && closed.compareAndSet(false, true)) {
+                if ("close".equals(method.getName()) && closed.compareAndSet(false, true)) {
                   open.decrementAndGet();
                 }
                 try {

@@ -102,7 +102,7 @@ class BackgroundRelayHealthContributorTest {
     assertEquals(2, components.size());
     var dlqHealth =
         components.stream()
-            .filter(c -> c.name().equals("dead-letter-retry"))
+            .filter(c -> "dead-letter-retry".equals(c.name()))
             .findFirst()
             .orElseThrow();
     assertEquals(Status.DOWN, dlqHealth.status());

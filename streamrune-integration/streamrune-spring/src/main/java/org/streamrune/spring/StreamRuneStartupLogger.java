@@ -18,7 +18,9 @@ public class StreamRuneStartupLogger implements SmartInitializingSingleton {
   @Override
   public void afterSingletonsInstantiated() {
     String version = getClass().getPackage().getImplementationVersion();
-    if (version == null) version = "dev";
+    if (version == null) {
+      version = "dev";
+    }
 
     String eventStoreType = ctx.containsBean("eventStore") ? "postgres" : "none";
 

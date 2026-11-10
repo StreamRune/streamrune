@@ -71,7 +71,7 @@ class SchemaValidatorTest {
         result.issues().stream().filter(i -> i.severity() == SchemaIssue.Severity.ERROR).toList();
     assertFalse(errors.isEmpty());
     assertTrue(
-        errors.stream().anyMatch(i -> i.table().equals("event_stream")),
+        errors.stream().anyMatch(i -> "event_stream".equals(i.table())),
         "Should report missing event_stream table");
   }
 
@@ -106,19 +106,19 @@ class SchemaValidatorTest {
     assertTrue(
         result.issues().stream()
             .anyMatch(
-                i -> i.table().equals("event_stream") && i.message().contains("schema_version")),
+                i -> "event_stream".equals(i.table()) && i.message().contains("schema_version")),
         "Should report missing schema_version column");
     // A schema that still has stream_id but lacks the stream pair is reported; the extra column is
     // ignored.
     assertTrue(
         result.issues().stream()
             .anyMatch(
-                i -> i.table().equals("event_stream") && i.message().contains("aggregate_type")),
+                i -> "event_stream".equals(i.table()) && i.message().contains("aggregate_type")),
         "a pre-typed-stream schema is reported");
     assertTrue(
         result.issues().stream()
             .anyMatch(
-                i -> i.table().equals("event_stream") && i.message().contains("aggregate_id")),
+                i -> "event_stream".equals(i.table()) && i.message().contains("aggregate_id")),
         "a pre-typed-stream schema is reported");
     assertTrue(
         result.issues().stream().noneMatch(i -> i.message().contains("stream_id")),
@@ -145,7 +145,7 @@ class SchemaValidatorTest {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("<schema>")
+                        && "<schema>".equals(i.table())
                         && i.message().contains("search_path")),
         () -> "Expected fail-closed <schema> error, got: " + result.issues());
   }
@@ -272,7 +272,7 @@ class SchemaValidatorTest {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("dead_letter_queue")),
+                        && "dead_letter_queue".equals(i.table())),
         () -> "Should report missing dead_letter_queue table: " + result.issues());
   }
 
@@ -315,7 +315,7 @@ class SchemaValidatorTest {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("global_offset_sequence")
+                        && "global_offset_sequence".equals(i.table())
                         && i.message().contains("id=1")),
         () -> "Should report the missing id=1 counter row: " + result.issues());
   }
@@ -357,7 +357,7 @@ class SchemaValidatorTest {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("command_inbox")
+                        && "command_inbox".equals(i.table())
                         && i.message().contains("global_offsets")),
         () -> "Should report missing command_inbox.global_offsets column: " + result.issues());
   }
@@ -398,7 +398,7 @@ class SchemaValidatorTest {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("outbox_events")
+                        && "outbox_events".equals(i.table())
                         && i.message().contains("skip_reason")),
         () -> "Should report missing outbox_events.skip_reason column: " + result.issues());
   }
@@ -440,7 +440,7 @@ class SchemaValidatorTest {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("saga_dead_letters")
+                        && "saga_dead_letters".equals(i.table())
                         && i.message().contains("saga_type")),
         () -> "Should report missing saga_dead_letters.saga_type column: " + result.issues());
   }
@@ -485,7 +485,7 @@ class SchemaValidatorTest {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("saga_state")
+                        && "saga_state".equals(i.table())
                         && i.message().contains("episode_cause_event_id")),
         () -> "Should report the missing saga_state.episode_cause_event_id: " + result.issues());
   }

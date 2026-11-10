@@ -125,7 +125,7 @@ class SagaProvenanceArchitectureTest {
                       IdempotencyKey.class,
                       boolean.class)
                   || (unit.getOwner().isEquivalentTo(VirtualThreadCommandBus.class)
-                      && unit.getName().equals("prepareAsyncTask")));
+                      && "prepareAsyncTask".equals(unit.getName())));
 
   private static final DescribedPredicate<JavaAccess<?>> THE_CAUSE_FIELD =
       DescribedPredicate.describe(
@@ -133,7 +133,7 @@ class SagaProvenanceArchitectureTest {
           access ->
               access.getTarget() instanceof AccessTarget.FieldAccessTarget field
                   && field.getOwner().isEquivalentTo(StreamRuneContext.class)
-                  && field.getName().equals("CAUSE"));
+                  && "CAUSE".equals(field.getName()));
 
   @ArchTest
   static final ArchRule onlyItsSixCodeUnitsTouchTheCause =
@@ -251,7 +251,7 @@ class SagaProvenanceArchitectureTest {
           "StreamRuneContext.continuing(EventEnvelope)",
           unit ->
               unit.getOwner().isEquivalentTo(StreamRuneContext.class)
-                  && unit.getName().equals("continuing")
+                  && "continuing".equals(unit.getName())
                   && unit.getRawParameterTypes().stream()
                       .map(JavaClass::getName)
                       .toList()

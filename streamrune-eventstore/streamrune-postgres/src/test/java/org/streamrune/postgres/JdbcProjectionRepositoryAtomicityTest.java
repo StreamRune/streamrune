@@ -1093,7 +1093,7 @@ class JdbcProjectionRepositoryAtomicityTest {
               Connection.class.getClassLoader(),
               new Class<?>[] {Connection.class},
               (proxy, method, args) -> {
-                if (method.getName().equals("close")) {
+                if ("close".equals(method.getName())) {
                   active.decrementAndGet();
                 }
                 try {

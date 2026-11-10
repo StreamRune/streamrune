@@ -201,14 +201,14 @@ class PgNotificationListenerLivenessTest {
 
   private static long probes(Statement stmt) {
     return mockingDetails(stmt).getInvocations().stream()
-        .filter(i -> i.getMethod().getName().equals("execute"))
+        .filter(i -> "execute".equals(i.getMethod().getName()))
         .filter(i -> "SELECT 1".equals(i.getArgument(0)))
         .count();
   }
 
   private static long rollbacks(Connection conn) {
     return mockingDetails(conn).getInvocations().stream()
-        .filter(i -> i.getMethod().getName().equals("rollback"))
+        .filter(i -> "rollback".equals(i.getMethod().getName()))
         .count();
   }
 

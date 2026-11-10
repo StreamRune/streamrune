@@ -17,8 +17,12 @@ class DeciderTest {
   sealed interface Cmd extends Command {
     record Add(String item, int qty) implements Cmd {
       public Add {
-        if (item == null || item.isBlank()) throw new IllegalArgumentException("item is required");
-        if (qty <= 0) throw new IllegalArgumentException("qty must be > 0");
+        if (item == null || item.isBlank()) {
+          throw new IllegalArgumentException("item is required");
+        }
+        if (qty <= 0) {
+          throw new IllegalArgumentException("qty must be > 0");
+        }
       }
     }
 

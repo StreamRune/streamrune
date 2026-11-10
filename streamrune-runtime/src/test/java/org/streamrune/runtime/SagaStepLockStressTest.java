@@ -114,7 +114,7 @@ class SagaStepLockStressTest {
 
       List<DomainEvent> stored =
           p.eventStore.readGlobalStream(GlobalOffset.initial(), 100_000).stream()
-              .map(e -> e.event())
+              .map(EventEnvelope::event)
               .toList();
       for (String order : eventsOfOrder.keySet()) {
         List<String> ofOrder = p.storedOrder(order);

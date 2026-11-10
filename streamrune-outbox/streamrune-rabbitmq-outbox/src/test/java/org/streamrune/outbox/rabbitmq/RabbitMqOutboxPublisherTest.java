@@ -65,7 +65,7 @@ class RabbitMqOutboxPublisherTest {
                 frames.anyMatch(
                     f ->
                         f.getClassName().equals(RabbitMqOutboxPublisher.Builder.class.getName())
-                            && f.getMethodName().equals("build")));
+                            && "build".equals(f.getMethodName())));
   }
 
   /**

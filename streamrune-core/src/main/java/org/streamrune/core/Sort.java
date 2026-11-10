@@ -36,7 +36,9 @@ public record Sort(List<Order> orders) {
 
     public Order {
       Objects.requireNonNull(field, "field");
-      if (field.isBlank()) throw new IllegalArgumentException("field must not be blank");
+      if (field.isBlank()) {
+        throw new IllegalArgumentException("field must not be blank");
+      }
       Objects.requireNonNull(direction, "direction");
     }
   }

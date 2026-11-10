@@ -578,7 +578,9 @@ public class ProjectionFactory {
 
   private static ProjectionErrorStrategy parseStrategy(
       String prop, ProjectionErrorStrategy fallback, String name) {
-    if (prop == null || prop.isBlank()) return fallback;
+    if (prop == null || prop.isBlank()) {
+      return fallback;
+    }
     try {
       return ProjectionErrorStrategy.valueOf(prop.trim().toUpperCase());
     } catch (IllegalArgumentException e) {

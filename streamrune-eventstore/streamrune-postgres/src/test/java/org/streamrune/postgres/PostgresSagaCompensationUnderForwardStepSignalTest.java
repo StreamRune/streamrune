@@ -326,7 +326,7 @@ class PostgresSagaCompensationUnderForwardStepSignalTest {
 
   private static List<String> storedOrder(InMemoryEventStore eventStore) {
     return eventStore.readGlobalStream(GlobalOffset.initial(), 1_000).stream()
-        .map(e -> e.event())
+        .map(EventEnvelope::event)
         .filter(e -> e instanceof Reserved || e instanceof Released || e instanceof Refunded)
         .map(e -> e.getClass().getSimpleName())
         .toList();

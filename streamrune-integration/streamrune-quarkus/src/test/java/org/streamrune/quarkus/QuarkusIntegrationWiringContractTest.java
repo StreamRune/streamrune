@@ -620,7 +620,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
                   case "hashCode" -> System.identityHashCode(proxy);
                   case "toString" -> "no database: " + type.getSimpleName();
                   default -> {
-                    if (returns.isInterface() && returns.getPackageName().equals("java.sql")) {
+                    if (returns.isInterface() && "java.sql".equals(returns.getPackageName())) {
                       yield nothing(returns);
                     }
                     yield zero(returns);

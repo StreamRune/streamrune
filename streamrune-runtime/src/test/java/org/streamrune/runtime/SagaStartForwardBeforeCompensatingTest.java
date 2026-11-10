@@ -81,7 +81,7 @@ class SagaStartForwardBeforeCompensatingTest {
   /** The stored forward and compensation events of the saga, by name, in global order. */
   private static List<String> stored(Harness h) {
     return h.eventStore.readGlobalStream(GlobalOffset.initial(), 1_000).stream()
-        .map(e -> e.event())
+        .map(EventEnvelope::event)
         .filter(
             e ->
                 e instanceof Reserved
@@ -397,7 +397,7 @@ class SagaStartForwardBeforeCompensatingTest {
                                     assertThatThrownBy(() -> h.deliver(opened[0]))
                                         .isInstanceOfAny(ProcessDeath.class, SimulatedCrash.class);
                                     boolean episodeEntered =
-                                        point.getKey().equals("afterTheEventWrite");
+                                        "afterTheEventWrite".equals(point.getKey());
                                     if (episodeEntered) {
                                       assertEpisodeEnteredByTheStartEvent(h.row(), opened[0]);
                                     } else {
@@ -406,7 +406,7 @@ class SagaStartForwardBeforeCompensatingTest {
 
                                     follower.getValue().accept(h);
                                     boolean timedOutBeforeTheLoopEnded =
-                                        follower.getKey().equals("theTimeoutRunner")
+                                        "theTimeoutRunner".equals(follower.getKey())
                                             && !episodeEntered;
                                     if (!timedOutBeforeTheLoopEnded && !episodeEntered) {
                                       assertThat(stored(h))

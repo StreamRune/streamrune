@@ -191,7 +191,9 @@ class SagaCommandDispatchTest {
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
             executed.incrementAndGet();
-            if (((Cmd) command).id().equals("a")) throw new RuntimeException("boom");
+            if ("a".equals(((Cmd) command).id())) {
+              throw new RuntimeException("boom");
+            }
             return null;
           }
         };
@@ -218,7 +220,9 @@ class SagaCommandDispatchTest {
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
             executed.incrementAndGet();
-            if (((Cmd) command).id().equals("a")) throw new IllegalArgumentException("rejected");
+            if ("a".equals(((Cmd) command).id())) {
+              throw new IllegalArgumentException("rejected");
+            }
             return null;
           }
         };
@@ -242,8 +246,12 @@ class SagaCommandDispatchTest {
 
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
-            if (((Cmd) command).id().equals("a")) throw new RuntimeException("transient");
-            if (((Cmd) command).id().equals("b")) throw new IllegalArgumentException("permanent");
+            if ("a".equals(((Cmd) command).id())) {
+              throw new RuntimeException("transient");
+            }
+            if ("b".equals(((Cmd) command).id())) {
+              throw new IllegalArgumentException("permanent");
+            }
             return null;
           }
         };
@@ -418,7 +426,7 @@ class SagaCommandDispatchTest {
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
             executed.incrementAndGet();
-            if (((Cmd) command).id().equals("a")) {
+            if ("a".equals(((Cmd) command).id())) {
               return vetoedResult("MaintenanceModeInterceptor");
             }
             return null;

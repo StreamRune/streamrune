@@ -130,7 +130,7 @@ class OutboxFailedReplayerTest {
 
     // The reset entries had attempts/error cleared.
     var f1 =
-        store.all().stream().filter(e -> e.id().value().equals("f1")).findFirst().orElseThrow();
+        store.all().stream().filter(e -> "f1".equals(e.id().value())).findFirst().orElseThrow();
     assertThat(f1.attempts()).isZero();
     assertThat(f1.lastError()).isNull();
     assertThat(f1.nextRetryAt()).isNull();

@@ -138,7 +138,9 @@ class PostgresOutboxStoreStrictOrderingIT {
                   return null;
                 }));
       }
-      for (var f : futures) f.get(60, TimeUnit.SECONDS);
+      for (var f : futures) {
+        f.get(60, TimeUnit.SECONDS);
+      }
     } finally {
       pool.shutdownNow();
     }
@@ -163,7 +165,9 @@ class PostgresOutboxStoreStrictOrderingIT {
     }
     assertEquals(50, delivered.size(), "every successor delivered after the skip: " + delivered);
     var expected = new ArrayList<String>();
-    for (int i = 1; i <= 50; i++) expected.add("n" + i);
+    for (int i = 1; i <= 50; i++) {
+      expected.add("n" + i);
+    }
     assertEquals(expected, delivered, "strict seq order after the skip");
   }
 
@@ -359,8 +363,10 @@ class PostgresOutboxStoreStrictOrderingIT {
     boolean sortBelowUnique = false;
     for (JsonNode n : path) {
       String type = n.path("Node Type").asText("");
-      if (type.equals("Unique")) belowUnique = true;
-      if (belowUnique && (type.equals("Sort") || type.equals("Incremental Sort"))) {
+      if ("Unique".equals(type)) {
+        belowUnique = true;
+      }
+      if (belowUnique && ("Sort".equals(type) || "Incremental Sort".equals(type))) {
         sortBelowUnique = true;
       }
     }
@@ -370,9 +376,13 @@ class PostgresOutboxStoreStrictOrderingIT {
 
   private static boolean pathTo(JsonNode node, JsonNode target, List<JsonNode> path) {
     path.add(node);
-    if (node == target) return true;
+    if (node == target) {
+      return true;
+    }
     for (JsonNode child : node.path("Plans")) {
-      if (pathTo(child, target, path)) return true;
+      if (pathTo(child, target, path)) {
+        return true;
+      }
     }
     path.removeLast();
     return false;

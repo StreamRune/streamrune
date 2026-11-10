@@ -179,7 +179,9 @@ public final class AnnotationAuthorizationInterceptor implements CommandIntercep
       UserRoleResolver resolver,
       boolean honorSagaSystemPrincipal,
       boolean honorDlqReplaySystemPrincipal) {
-    if (resolver == null) throw new IllegalArgumentException("resolver is required");
+    if (resolver == null) {
+      throw new IllegalArgumentException("resolver is required");
+    }
     this.resolver = resolver;
     this.honorSagaSystemPrincipal = honorSagaSystemPrincipal;
     this.honorDlqReplaySystemPrincipal = honorDlqReplaySystemPrincipal;

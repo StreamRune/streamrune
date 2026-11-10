@@ -15,11 +15,15 @@ public record SubscriptionConfig(
     boolean listenNotifyEnabled, Duration pollingInterval, Duration pollingJitter) {
 
   public SubscriptionConfig {
-    if (pollingInterval == null) throw new IllegalArgumentException("pollingInterval is required");
+    if (pollingInterval == null) {
+      throw new IllegalArgumentException("pollingInterval is required");
+    }
     if (pollingInterval.isZero() || pollingInterval.isNegative()) {
       throw new IllegalArgumentException("pollingInterval must be positive: " + pollingInterval);
     }
-    if (pollingJitter == null) throw new IllegalArgumentException("pollingJitter is required");
+    if (pollingJitter == null) {
+      throw new IllegalArgumentException("pollingJitter is required");
+    }
     if (pollingJitter.isNegative()) {
       throw new IllegalArgumentException("pollingJitter must not be negative: " + pollingJitter);
     }
@@ -36,7 +40,9 @@ public record SubscriptionConfig(
    * @return polling-only configuration
    */
   public static SubscriptionConfig pollingOnly(Duration interval) {
-    if (interval == null) throw new IllegalArgumentException("pollingInterval is required");
+    if (interval == null) {
+      throw new IllegalArgumentException("pollingInterval is required");
+    }
     return new SubscriptionConfig(false, interval, interval.dividedBy(5));
   }
 }

@@ -252,7 +252,7 @@ class SseControllerTest {
         (caller, streamId) -> {
           seenPrincipal.set(caller.userId());
           seenStream.set(streamId);
-          return caller.userId() != null && caller.userId().value().equals("bob");
+          return caller.userId() != null && "bob".equals(caller.userId().value());
         };
     var controller =
         new SseController(publisher, authorizer, RequestIdentityPolicy.of(resolver, false));

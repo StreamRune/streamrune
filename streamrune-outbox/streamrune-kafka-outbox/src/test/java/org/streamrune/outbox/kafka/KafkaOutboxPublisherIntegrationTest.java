@@ -49,7 +49,9 @@ class KafkaOutboxPublisherIntegrationTest {
 
   @AfterAll
   static void cleanup() {
-    if (producer != null) producer.close();
+    if (producer != null) {
+      producer.close();
+    }
   }
 
   private KafkaConsumer<String, String> newConsumer(String topic) {
@@ -70,8 +72,12 @@ class KafkaOutboxPublisherIntegrationTest {
     long deadline = System.currentTimeMillis() + 10_000;
     while (System.currentTimeMillis() < deadline) {
       ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(1));
-      if (records.count() == 1) return records.iterator().next();
-      if (records.count() > 1) fail("Expected 1 record, got " + records.count());
+      if (records.count() == 1) {
+        return records.iterator().next();
+      }
+      if (records.count() > 1) {
+        fail("Expected 1 record, got " + records.count());
+      }
     }
     return fail("No record arrived within timeout");
   }

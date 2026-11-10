@@ -376,7 +376,7 @@ class QuarkusBeanWiringTest {
               .get();
       assertTrue(
           relayHealth.components().stream()
-              .anyMatch(c -> c.name().equals("saga-dead-letter-retention-sweeper")),
+              .anyMatch(c -> "saga-dead-letter-retention-sweeper".equals(c.name())),
           "the produced saga dead-letter retention sweeper must be registered with the relay-health"
               + " contributor so a dead sweep thread reports DOWN");
 
@@ -472,7 +472,7 @@ class QuarkusBeanWiringTest {
               .get();
       assertTrue(
           relayHealth.components().stream()
-              .anyMatch(c -> c.name().equals("dead-letter-retention-sweeper")),
+              .anyMatch(c -> "dead-letter-retention-sweeper".equals(c.name())),
           "and its liveness must still be reported through the relay health");
       assertEquals(
           null,

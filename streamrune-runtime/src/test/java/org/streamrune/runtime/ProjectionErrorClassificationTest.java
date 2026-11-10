@@ -207,7 +207,7 @@ class ProjectionErrorClassificationTest {
     Projection poisonMiddle =
         events -> {
           for (var e : events) {
-            if (((TestEvent) e.event()).payload().equals("fail")) {
+            if ("fail".equals(((TestEvent) e.event()).payload())) {
               throw new RuntimeException("poison chunk"); // POISON
             }
           }

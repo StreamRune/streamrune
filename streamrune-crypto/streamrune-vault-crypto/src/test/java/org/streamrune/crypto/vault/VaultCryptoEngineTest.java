@@ -893,7 +893,7 @@ class VaultCryptoEngineTest {
             argThat(
                 req ->
                     req.uri().toString().contains("/transit/encrypt/")
-                        && req.method().equals("POST")),
+                        && "POST".equals(req.method())),
             any(HttpResponse.BodyHandler.class));
   }
 
@@ -916,7 +916,7 @@ class VaultCryptoEngineTest {
             argThat(
                 req ->
                     req.uri().toString().contains("/transit/decrypt/")
-                        && req.method().equals("POST")),
+                        && "POST".equals(req.method())),
             any(HttpResponse.BodyHandler.class));
   }
 
@@ -932,7 +932,7 @@ class VaultCryptoEngineTest {
         .send(
             argThat(
                 req ->
-                    req.uri().toString().contains("/transit/keys/") && req.method().equals("GET")),
+                    req.uri().toString().contains("/transit/keys/") && "GET".equals(req.method())),
             any(HttpResponse.BodyHandler.class));
   }
 

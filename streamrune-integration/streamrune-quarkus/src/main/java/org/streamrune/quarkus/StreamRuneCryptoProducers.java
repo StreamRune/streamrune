@@ -574,7 +574,7 @@ public class StreamRuneCryptoProducers {
     if (type == null) {
       return false;
     }
-    if (type.getName().equals("io.agroal.api.AgroalDataSource")) {
+    if ("io.agroal.api.AgroalDataSource".equals(type.getName())) {
       return true;
     }
     for (Class<?> implemented : type.getInterfaces()) {
@@ -589,7 +589,9 @@ public class StreamRuneCryptoProducers {
       CryptoEngine delegate,
       StreamRuneQuarkusCryptoProperties.CacheConfig cache,
       CryptoForgetSignal forgetSignal) {
-    if (!cache.enabled()) return delegate;
+    if (!cache.enabled()) {
+      return delegate;
+    }
     var builder =
         CachedCryptoEngine.builder()
             .delegate(delegate)

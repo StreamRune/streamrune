@@ -30,7 +30,9 @@ public final class PostgresAuditStore implements AuditStore {
   private final DataSource dataSource;
 
   public PostgresAuditStore(DataSource dataSource) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     this.dataSource = dataSource;
   }
 

@@ -471,7 +471,7 @@ final class SagaFenceNodes {
               } catch (InvocationTargetException e) {
                 throw e.getCause();
               }
-              if (method.getName().equals("claimCompensating")) {
+              if ("claimCompensating".equals(method.getName())) {
                 Runnable once = afterTheNextClaim.getAndSet(null);
                 if (once != null) {
                   once.run();

@@ -313,7 +313,9 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
       int keyDurabilityMemoCapacity,
       StreamRuneMetrics metrics,
       CipherFactory cipherFactory) {
-    if (keyDirectory == null) throw new IllegalArgumentException("keyDirectory must not be null");
+    if (keyDirectory == null) {
+      throw new IllegalArgumentException("keyDirectory must not be null");
+    }
     this.keyDirectory = keyDirectory;
     this.metrics = metrics;
     this.cipherFactory = cipherFactory;
@@ -362,8 +364,12 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
 
   @Override
   public byte[] encrypt(SubjectId subjectId, byte[] plaintext) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
-    if (plaintext == null) throw new IllegalArgumentException("plaintext must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
+    if (plaintext == null) {
+      throw new IllegalArgumentException("plaintext must not be null");
+    }
     Path keyPath = resolveKeyPath(subjectId.value());
     VersionedKey key = loadOrCreateKey(subjectId, keyPath);
     byte[] iv = new byte[GCM_IV_LENGTH];
@@ -479,8 +485,12 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
 
   @Override
   public byte[] decrypt(SubjectId subjectId, byte[] ciphertext) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
-    if (ciphertext == null) throw new IllegalArgumentException("ciphertext must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
+    if (ciphertext == null) {
+      throw new IllegalArgumentException("ciphertext must not be null");
+    }
     Path keyPath = resolveKeyPath(subjectId.value());
     if (!exists(keyPath)) {
       throw new KeyNotFoundException("Key not found for subject: " + subjectId.redacted());
@@ -598,7 +608,9 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
 
   @Override
   public void deleteKey(SubjectId subjectId) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     Path keyPath = resolveKeyPath(subjectId.value());
     Path tombstonePath = resolveTombstonePath(subjectId.value());
     ReentrantLock lock = subjectLock(subjectId.value());
@@ -704,7 +716,9 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
 
   @Override
   public void reinstate(SubjectId subjectId) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     ReentrantLock lock = subjectLock(subjectId.value());
     lock.lock();
     try {
@@ -743,7 +757,9 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
 
   @Override
   public boolean isKeyAvailable(SubjectId subjectId) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     return exists(resolveKeyPath(subjectId.value()));
   }
 
@@ -1568,13 +1584,17 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
      * 16,384).
      */
     Builder keyDurabilityMemoCapacity(int capacity) {
-      if (capacity < 1) throw new IllegalArgumentException("capacity must be at least 1");
+      if (capacity < 1) {
+        throw new IllegalArgumentException("capacity must be at least 1");
+      }
       this.keyDurabilityMemoCapacity = capacity;
       return this;
     }
 
     public FileSystemCryptoEngine build() {
-      if (keyDirectory == null) throw new IllegalStateException("keyDirectory is required");
+      if (keyDirectory == null) {
+        throw new IllegalStateException("keyDirectory is required");
+      }
       return new FileSystemCryptoEngine(
           keyDirectory, durability, keyDurabilityMemoCapacity, metrics, cipherFactory);
     }

@@ -96,7 +96,7 @@ class OutboxStoreDefaultMethodsTest {
           @Override
           public boolean markDelivered(OutboxEntryId id, String claimedBy) {
             // Only "a" still holds the lease; "b" was stolen — a benign no-op.
-            return id.value().equals("a");
+            return "a".equals(id.value());
           }
 
           @Override

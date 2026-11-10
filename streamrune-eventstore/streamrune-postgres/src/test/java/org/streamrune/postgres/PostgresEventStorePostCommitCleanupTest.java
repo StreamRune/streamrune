@@ -219,7 +219,7 @@ class PostgresEventStorePostCommitCleanupTest {
   static final class PostCommitCleanupFailingDataSource implements DataSource {
     private final DataSource delegate;
     private final CleanupFault fault;
-    private volatile boolean triggered = false;
+    private volatile boolean triggered;
 
     PostCommitCleanupFailingDataSource(DataSource delegate, CleanupFault fault) {
       this.delegate = delegate;
@@ -235,21 +235,21 @@ class PostgresEventStorePostCommitCleanupTest {
       Connection real = delegate.getConnection();
       var handler =
           new InvocationHandler() {
-            private boolean committed = false;
+            private boolean committed;
 
             @Override
             public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
               String name = method.getName();
               if (committed
                   && fault == CleanupFault.SET_AUTOCOMMIT
-                  && name.equals("setAutoCommit")
+                  && "setAutoCommit".equals(name)
                   && args != null
                   && Boolean.TRUE.equals(args[0])) {
                 triggered = true;
                 throw new SQLException(
                     "injected post-commit setAutoCommit failure (connection died)", "08006");
               }
-              if (committed && fault == CleanupFault.CLOSE && name.equals("close")) {
+              if (committed && fault == CleanupFault.CLOSE && "close".equals(name)) {
                 triggered = true;
                 // Close the real connection first so the container connection is not leaked, then
                 // surface the failure the store must swallow.
@@ -267,7 +267,7 @@ class PostgresEventStorePostCommitCleanupTest {
               } catch (java.lang.reflect.InvocationTargetException e) {
                 throw e.getCause();
               }
-              if (name.equals("commit")) {
+              if ("commit".equals(name)) {
                 committed = true;
               }
               return out;
