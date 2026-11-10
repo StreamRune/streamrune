@@ -1,6 +1,10 @@
 package org.streamrune.core;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Map;
 import java.util.Set;
@@ -23,7 +27,7 @@ class BaggageAllowlistTest {
     // `role` is not a default key either. The request context's role is set by the request
     // filters' role rule (the X-User-Role header, behind a trusted gateway only), never by a
     // client's W3C `baggage: role=` entry.
-    assertEquals(Set.of(), BaggageAllowlist.DEFAULT_ALLOWED_KEYS);
+    assertEquals(BaggageAllowlist.DEFAULT_ALLOWED_KEYS, Set.of());
     assertEquals("role", BaggageAllowlist.ROLE_BAGGAGE_KEY);
   }
 

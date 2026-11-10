@@ -1,6 +1,7 @@
 package org.streamrune.postgres;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -297,8 +298,8 @@ class SagaStateWriteRatchetTest {
     for (Path other : mainJavaSources()) {
       if (!other.equals(store)) {
         String otherCode = Source.of(read(other)).code();
-        assertTrue(
-            !otherCode.contains("FenceChangingWrite"),
+        assertFalse(
+            otherCode.contains("FenceChangingWrite"),
             other + " must not use FenceChangingWrite: the saga store's path is the only one");
       }
     }
@@ -310,7 +311,7 @@ class SagaStateWriteRatchetTest {
     String body = code.substring(bodyStart, bodyEnd);
 
     List<Integer> sqlReads = indexesOf(code, ".sql()");
-    assertTrue(!sqlReads.isEmpty(), "fenceChangingWrite reads the statement");
+    assertFalse(sqlReads.isEmpty(), "fenceChangingWrite reads the statement");
     for (int at : sqlReads) {
       assertTrue(
           at > bodyStart && at < bodyEnd,

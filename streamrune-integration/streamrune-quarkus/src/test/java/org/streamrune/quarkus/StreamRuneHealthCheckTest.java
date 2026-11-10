@@ -1,6 +1,7 @@
 package org.streamrune.quarkus;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.*;
 
@@ -71,7 +72,7 @@ class StreamRuneHealthCheckTest {
   }
 
   @Test
-  void shouldReturnDownWhenDataSourceThrowsRuntimeException() throws SQLException {
+  void shouldReturnDownWhenDataSourceThrowsRuntimeException() throws Exception {
     // e.g. an Agroal datasource bean that exists but was never activated by configuration
     DataSource ds = mock(DataSource.class);
     when(ds.getConnection()).thenThrow(new IllegalStateException("Datasource not activated"));
@@ -86,7 +87,7 @@ class StreamRuneHealthCheckTest {
   }
 
   @Test
-  void shouldReturnUpWhenDatabaseIsAvailable() throws SQLException {
+  void shouldReturnUpWhenDatabaseIsAvailable() throws Exception {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
@@ -100,7 +101,7 @@ class StreamRuneHealthCheckTest {
   }
 
   @Test
-  void shouldReturnDownWhenDatabaseFails() throws SQLException {
+  void shouldReturnDownWhenDatabaseFails() throws Exception {
     DataSource ds = mock(DataSource.class);
     when(ds.getConnection()).thenThrow(new SQLException("Timeout"));
 
@@ -114,7 +115,7 @@ class StreamRuneHealthCheckTest {
   }
 
   @Test
-  void shouldReturnDownWhenConnectionIsInvalid() throws SQLException {
+  void shouldReturnDownWhenConnectionIsInvalid() throws Exception {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
@@ -129,7 +130,7 @@ class StreamRuneHealthCheckTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void shouldIncludeEventStoreDetailsWhenEventStorePresent() throws SQLException {
+  void shouldIncludeEventStoreDetailsWhenEventStorePresent() throws Exception {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
@@ -154,7 +155,7 @@ class StreamRuneHealthCheckTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void shouldHandleEmptyEventStream() throws SQLException {
+  void shouldHandleEmptyEventStream() throws Exception {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
@@ -179,7 +180,7 @@ class StreamRuneHealthCheckTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void shouldHandleEventStoreError() throws SQLException {
+  void shouldHandleEventStoreError() throws Exception {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
@@ -204,7 +205,7 @@ class StreamRuneHealthCheckTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void shouldFallBackToZeroWhenLastGlobalOffsetUnsupported() throws SQLException {
+  void shouldFallBackToZeroWhenLastGlobalOffsetUnsupported() throws Exception {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
@@ -229,7 +230,7 @@ class StreamRuneHealthCheckTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void shouldReportSubscriptionHealthUp() throws SQLException {
+  void shouldReportSubscriptionHealthUp() throws Exception {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
@@ -264,7 +265,7 @@ class StreamRuneHealthCheckTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void rendersTheRoleOfEachSubscription() throws SQLException {
+  void rendersTheRoleOfEachSubscription() throws Exception {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
@@ -302,7 +303,7 @@ class StreamRuneHealthCheckTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void shouldReportSubscriptionHealthDown() throws SQLException {
+  void shouldReportSubscriptionHealthDown() throws Exception {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
@@ -334,7 +335,7 @@ class StreamRuneHealthCheckTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void theOverallStatusFollowsTheSubscriptionDetailsItReports() throws SQLException {
+  void theOverallStatusFollowsTheSubscriptionDetailsItReports() throws Exception {
     // The contributor computes health afresh on every call: a subscription that goes DOWN between
     // two calls must not yield an UP check whose own details show a DOWN subscription.
     SubscriptionHealthContributor contributor = mock(SubscriptionHealthContributor.class);
@@ -364,7 +365,7 @@ class StreamRuneHealthCheckTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void theOverallStatusFollowsTheRelayDetailsItReports() throws SQLException {
+  void theOverallStatusFollowsTheRelayDetailsItReports() throws Exception {
     // Same single-snapshot rule for the background relays: a relay thread that dies between two
     // calls must not yield an UP check whose own details show a DOWN relay.
     var contributor =
@@ -447,7 +448,7 @@ class StreamRuneHealthCheckTest {
 
   @Test
   void aSubscriptionFarBehindTheHeadKeepsTheReadinessCheckUp_withItsLagInTheData()
-      throws SQLException {
+      throws Exception {
     // This check is @Readiness. A projection replaying the store from offset 0 (new, or reset for
     // a rebuild) is behind on every replica alike, because lag is measured against the shared
     // checkpoint — a lag-driven DOWN would take every replica out of service at once. Lag is
@@ -467,7 +468,7 @@ class StreamRuneHealthCheckTest {
   }
 
   @Test
-  void aTerminallyHaltedSubscriptionTurnsTheReadinessCheckDown() throws SQLException {
+  void aTerminallyHaltedSubscriptionTurnsTheReadinessCheckDown() throws Exception {
     var holder = new SubscriptionHealthContributor[1];
     var instance = contributorWithOrdersAt(holder, 10, 10);
     holder[0].markTerminalError(SubscriptionName.of("orders"));
@@ -482,7 +483,7 @@ class StreamRuneHealthCheckTest {
   }
 
   @Test
-  void shouldReturnDownWhenBackgroundRelayIsDown() throws SQLException {
+  void shouldReturnDownWhenBackgroundRelayIsDown() throws Exception {
     // A started relay whose poll thread died flips /q/health/ready to DOWN with details.
     var check =
         new StreamRuneHealthCheck(
@@ -498,7 +499,7 @@ class StreamRuneHealthCheckTest {
   }
 
   @Test
-  void shouldStayUpAndReportRelayDetailsWhenBackgroundRelayHealthy() throws SQLException {
+  void shouldStayUpAndReportRelayDetailsWhenBackgroundRelayHealthy() throws Exception {
     var check =
         new StreamRuneHealthCheck(
             dataSource(validDataSource()),

@@ -110,7 +110,7 @@ class RecordingDataSourceTest {
     var log = new PrintWriter(new StringWriter());
     dataSource.setLogWriter(log);
     dataSource.setLoginTimeout(3);
-    assertEquals(null, dataSource.getLogWriter());
+    assertNull(dataSource.getLogWriter());
     assertEquals(0, dataSource.getLoginTimeout());
     assertNotNull(dataSource.getParentLogger());
     assertSame(dataSource, dataSource.unwrap(RecordingDataSource.class));

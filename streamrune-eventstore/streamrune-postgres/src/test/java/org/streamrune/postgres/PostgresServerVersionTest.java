@@ -52,7 +52,7 @@ class PostgresServerVersionTest {
 
   @ParameterizedTest
   @ValueSource(ints = {17, 18, 19, 25})
-  void aSupportedServerIsAccepted(int major) throws SQLException {
+  void aSupportedServerIsAccepted(int major) throws Exception {
     DataSource dataSource = serverReporting(major, major + ".0");
 
     PostgresServerVersion.requireSupported(dataSource);
@@ -63,7 +63,7 @@ class PostgresServerVersionTest {
 
   @ParameterizedTest
   @ValueSource(ints = {9, 10, 12, 14, 15, 16})
-  void anOlderServerIsRefused(int major) throws SQLException {
+  void anOlderServerIsRefused(int major) throws Exception {
     DataSource dataSource = serverReporting(major, major + ".4");
 
     var ex =
@@ -80,7 +80,7 @@ class PostgresServerVersionTest {
   }
 
   @Test
-  void aServerVersionTheServerControlsCannotForgeALogLine() throws SQLException {
+  void aServerVersionTheServerControlsCannotForgeALogLine() throws Exception {
     DataSource dataSource = serverReporting(16, "16.4\r\n2026-01-01 ERROR forged line");
 
     var ex =
@@ -93,7 +93,7 @@ class PostgresServerVersionTest {
   }
 
   @Test
-  void anUnreadableServerVersionIsAStoreFailureNotASilentPass() throws SQLException {
+  void anUnreadableServerVersionIsAStoreFailureNotASilentPass() throws Exception {
     DataSource dataSource = mock(DataSource.class);
     SQLException down = new SQLException("connection refused");
     when(dataSource.getConnection()).thenThrow(down);
@@ -113,7 +113,7 @@ class PostgresServerVersionTest {
   }
 
   @Test
-  void createRefusesAnOldServerBeforeAnyMigrationConnection() throws SQLException {
+  void createRefusesAnOldServerBeforeAnyMigrationConnection() throws Exception {
     DataSource dataSource = serverReporting(16, "16.4");
 
     var ex =
@@ -128,7 +128,7 @@ class PostgresServerVersionTest {
   }
 
   @Test
-  void theSchemaFlagsDoNotSwitchTheRefusalOff() throws SQLException {
+  void theSchemaFlagsDoNotSwitchTheRefusalOff() throws Exception {
     DataSource dataSource = serverReporting(15, "15.8");
 
     assertThrows(
@@ -143,7 +143,7 @@ class PostgresServerVersionTest {
   }
 
   @Test
-  void initializeSchemaRefusesAnOldServerBeforeAnyMigrationConnection() throws SQLException {
+  void initializeSchemaRefusesAnOldServerBeforeAnyMigrationConnection() throws Exception {
     // The plain-Java path the QUICKSTART documents provisions the schema with a bare
     // initializeSchema(), never reaching create(): it must refuse on its own, before Flyway.
     DataSource dataSource = serverReporting(16, "16.4");
@@ -156,7 +156,7 @@ class PostgresServerVersionTest {
   }
 
   @Test
-  void theStaticEventStoreFactoryRefusesAnOldServer() throws SQLException {
+  void theStaticEventStoreFactoryRefusesAnOldServer() throws Exception {
     // The QUICKSTART's plain-Java store: PostgresEventStore.create(dataSource, registry, ...).
     DataSource dataSource = serverReporting(16, "16.4");
 
@@ -168,7 +168,7 @@ class PostgresServerVersionTest {
   }
 
   @Test
-  void theStaticEventStoreFactoryBuildsTheStoreOnASupportedServer() throws SQLException {
+  void theStaticEventStoreFactoryBuildsTheStoreOnASupportedServer() throws Exception {
     DataSource dataSource = serverReporting(17, "17.2");
 
     var store = PostgresEventStore.create(dataSource, registry(), null, java.util.List.of());
@@ -178,7 +178,7 @@ class PostgresServerVersionTest {
   }
 
   @Test
-  void aSupportedServerLetsCreateContinuePastTheCheck() throws SQLException {
+  void aSupportedServerLetsCreateContinuePastTheCheck() throws Exception {
     DataSource dataSource = serverReporting(17, "17.2");
 
     // The mock cannot complete a schema migration, so create() fails further down — what matters

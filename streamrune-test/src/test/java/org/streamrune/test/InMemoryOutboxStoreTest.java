@@ -1,6 +1,11 @@
 package org.streamrune.test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -124,7 +129,7 @@ class InMemoryOutboxStoreTest {
   }
 
   @Test
-  void loadPending_returns_entries_ordered_by_created_at() throws InterruptedException {
+  void loadPending_returns_entries_ordered_by_created_at() throws Exception {
     store.save(OutboxEntry.pending(OutboxEntryId.of("first"), "{}", "Event"));
     Thread.sleep(5); // ensure different createdAt
     store.save(OutboxEntry.pending(OutboxEntryId.of("second"), "{}", "Event"));
@@ -326,7 +331,7 @@ class InMemoryOutboxStoreTest {
     // clears the OutboxPoller.build() guard instead of throwing. The shipped Kafka horizon is now
     // max.block.ms (60s) + delivery.timeout.ms (120s) = 180s, which the previous 3-minute default
     // merely EQUALLED — and the guard demands a STRICT excess.
-    assertEquals(Duration.ofMinutes(4), InMemoryOutboxStore.DEFAULT_CLAIM_LEASE);
+    assertEquals(InMemoryOutboxStore.DEFAULT_CLAIM_LEASE, Duration.ofMinutes(4));
     assertEquals(Duration.ofMinutes(4), new InMemoryOutboxStore().claimLease());
   }
 

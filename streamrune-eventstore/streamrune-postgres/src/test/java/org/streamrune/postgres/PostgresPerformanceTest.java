@@ -1,6 +1,6 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.List;
@@ -72,7 +72,7 @@ class PostgresPerformanceTest {
   }
 
   @Test
-  void commandBusThroughputWithPostgres() throws InterruptedException {
+  void commandBusThroughputWithPostgres() throws Exception {
     int threads = 10;
     int commandsPerThread = 500;
     CountDownLatch startLatch = new CountDownLatch(1);
@@ -118,7 +118,7 @@ class PostgresPerformanceTest {
   }
 
   @Test
-  void eventStoreAppendWithPostgres() throws InterruptedException {
+  void eventStoreAppendWithPostgres() throws Exception {
     int threads = 10;
     int appendsPerThread = 200;
     CountDownLatch startLatch = new CountDownLatch(1);

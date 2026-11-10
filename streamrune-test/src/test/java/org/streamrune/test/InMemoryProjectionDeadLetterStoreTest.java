@@ -1,6 +1,9 @@
 package org.streamrune.test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,7 +53,7 @@ class InMemoryProjectionDeadLetterStoreTest {
   }
 
   @Test
-  void read_returns_oldest_first() throws InterruptedException {
+  void read_returns_oldest_first() throws Exception {
     store.save(entry("OrderProjection", 1, 1));
     Thread.sleep(5);
     store.save(entry("OrderProjection", 2, 2));

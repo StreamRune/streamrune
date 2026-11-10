@@ -1,5 +1,6 @@
 package org.streamrune.core.metrics;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -89,7 +90,7 @@ class MetricNamesDocLintTest {
   }
 
   @Test
-  void everyMeterShapedNameInTheGuidesIsAMeter() throws IOException {
+  void everyMeterShapedNameInTheGuidesIsAMeter() throws Exception {
     Set<String> meters = meters();
     List<String> problems = new ArrayList<>();
     int checked = 0;
@@ -102,7 +103,7 @@ class MetricNamesDocLintTest {
             .map(String::strip)
             .filter(line -> !line.isEmpty() && !line.startsWith("#"))
             .toList();
-    assertTrue(!otherPages.isEmpty(), OTHER_PAGES_LIST + " must list the pages besides the guides");
+    assertFalse(otherPages.isEmpty(), OTHER_PAGES_LIST + " must list the pages besides the guides");
     otherPages.forEach(page -> documents.add(root().resolve(page)));
     for (Path document : documents) {
       List<String> lines = Files.readAllLines(document);

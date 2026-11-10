@@ -1,6 +1,13 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -635,7 +642,7 @@ class OutboxPollerTest {
   }
 
   @Test
-  void processBatch_marks_failed_after_maxAttempts_exhausted() throws InterruptedException {
+  void processBatch_marks_failed_after_maxAttempts_exhausted() throws Exception {
     // The poller passes a Duration backoff and the store DB-stamps next_retry_at from its own clock
     // (here the real-clock InMemory store): a 1ms backoff releases the entry to PENDING with
     // next_retry_at ~1ms out, a short sleep makes it eligible again, and the poller RE-CLAIMS it
@@ -1112,8 +1119,8 @@ class OutboxPollerTest {
             + " of "
             + total
             + ")");
-    assertTrue(
-        !publishedIds.isEmpty(), "at least the first entry is attempted before the deadline");
+    assertFalse(
+        publishedIds.isEmpty(), "at least the first entry is attempted before the deadline");
 
     long delivered = store.all().stream().filter(e -> e.status() == OutboxStatus.DELIVERED).count();
     long stillClaimed =
@@ -3065,7 +3072,7 @@ class OutboxPollerTest {
   }
 
   @Test
-  void processBatch_emits_deliveryFailed_metric_on_terminal_failure() throws InterruptedException {
+  void processBatch_emits_deliveryFailed_metric_on_terminal_failure() throws Exception {
     // The documented alert metric streamrune.outbox.delivery_failed must actually fire when an
     // entry exhausts its retry ladder and reaches terminal FAILED — this is what the auto-configs
     // silently never wired.
@@ -3180,7 +3187,7 @@ class OutboxPollerTest {
   }
 
   @Test
-  void relay_degradation_gauge_rises_under_sustained_store_failure() throws InterruptedException {
+  void relay_degradation_gauge_rises_under_sustained_store_failure() throws Exception {
     // End-to-end: a relay whose store keeps throwing stays alive and retries with backoff;
     // consecutiveFailures() climbs and is surfaced on the degradation gauge (previously log-only).
     var metrics = new RecordingMetrics();

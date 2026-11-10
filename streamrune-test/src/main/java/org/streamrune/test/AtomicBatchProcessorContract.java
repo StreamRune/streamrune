@@ -402,7 +402,7 @@ public abstract class AtomicBatchProcessorContract {
 
   /** A replay does not start while a batch of the same projection is open. */
   @Test
-  public void replayWaitsForAnOpenBatchOfTheSameProjection() throws InterruptedException {
+  public void replayWaitsForAnOpenBatchOfTheSameProjection() throws Exception {
     var name = freshName();
     assertSecondWaitsForFirst(
         updater ->
@@ -414,7 +414,7 @@ public abstract class AtomicBatchProcessorContract {
 
   /** A batch does not start while a replay of the same projection is open. */
   @Test
-  public void batchWaitsForAnOpenReplayOfTheSameProjection() throws InterruptedException {
+  public void batchWaitsForAnOpenReplayOfTheSameProjection() throws Exception {
     var name = freshName();
     assertSecondWaitsForFirst(
         updater -> processor().executeReplay(name, batch(1, 1), updater),
@@ -426,7 +426,7 @@ public abstract class AtomicBatchProcessorContract {
 
   /** A replay of one projection does not wait for an open batch of another. */
   @Test
-  public void replayDoesNotWaitForAnOpenBatchOfAnotherProjection() throws InterruptedException {
+  public void replayDoesNotWaitForAnOpenBatchOfAnotherProjection() throws Exception {
     var open = freshName();
     var other = freshName();
     var firstIsOpen = new CountDownLatch(1);

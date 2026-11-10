@@ -70,8 +70,8 @@ public abstract class SagaStoreContract {
   public void storageIdentity_isStable_andNeverNull() {
     Object identity = store.storageIdentity();
 
-    org.junit.jupiter.api.Assertions.assertNotNull(identity);
-    org.junit.jupiter.api.Assertions.assertEquals(identity, store.storageIdentity());
+    assertNotNull(identity);
+    assertEquals(identity, store.storageIdentity());
   }
 
   @Test

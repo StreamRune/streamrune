@@ -1,6 +1,7 @@
 package org.streamrune.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 
 import java.util.List;
@@ -180,7 +181,7 @@ class CommandInterceptorOrderingTest {
                   .isEqualTo(1);
 
               var bus = ctx.getBean(org.streamrune.runtime.VirtualThreadCommandBus.class);
-              org.junit.jupiter.api.Assertions.assertThrows(
+              assertThrows(
                   org.streamrune.core.AuthorizationException.class,
                   () -> bus.execute(new OrderingProbeCommand("ip-1")));
 

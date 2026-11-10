@@ -1,6 +1,13 @@
 package org.streamrune.quarkus;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 import io.smallrye.mutiny.helpers.test.AssertSubscriber;
@@ -529,8 +536,7 @@ class SseControllerTest {
   }
 
   @Test
-  void keepAliveDisabledByZeroInterval_theOpeningFrameIsTheOnlyComment()
-      throws InterruptedException {
+  void keepAliveDisabledByZeroInterval_theOpeningFrameIsTheOnlyComment() throws Exception {
     // Zero/negative disables the keepalive, leaving the timeout as the sole reaper (the documented
     // knob semantics, shared with Spring and Micronaut). The opening frame is not a keepalive tick:
     // it is written whatever the interval.
@@ -556,7 +562,7 @@ class SseControllerTest {
   }
 
   @Test
-  void keepAliveWritesAreSerializedWithEventDelivery() throws InterruptedException {
+  void keepAliveWritesAreSerializedWithEventDelivery() throws Exception {
     // Both the delivery worker and the keepalive scheduler drive the same Mutiny emitter; Reactive
     // Streams requires serial onNext, so the controller must serialize them. With a tight keepalive
     // and a burst of events, no domain event may be lost and the stream must stay healthy.
@@ -627,8 +633,7 @@ class SseControllerTest {
   }
 
   @Test
-  void slowStreamsKeepAliveTickDoesNotStallTheSharedSchedulerForOtherStreams()
-      throws InterruptedException {
+  void slowStreamsKeepAliveTickDoesNotStallTheSharedSchedulerForOtherStreams() throws Exception {
     // keepAlive is the process's SINGLE
     // shared scheduler thread for every stream's keepalive ticks AND deadline tasks. Before this
     // fix, a keepalive tick took `synchronized (lock)` UNCONDITIONALLY, so if a stream's OWN
@@ -720,8 +725,7 @@ class SseControllerTest {
   }
 
   @Test
-  void slowStreamsDeadlineDoesNotStallTheSharedSchedulerForOtherStreams()
-      throws InterruptedException {
+  void slowStreamsDeadlineDoesNotStallTheSharedSchedulerForOtherStreams() throws Exception {
     // The residual half of the keepalive fix: the keepalive tick was converted to tryLock()
     // on the stated premise that "keepAlive is the process's SINGLE shared scheduler thread for
     // every stream's keepalive ticks AND deadline tasks", so parking it on one stream's send lock
@@ -798,7 +802,7 @@ class SseControllerTest {
   // The Spring sibling renders t.toString(); these pin the same rendered line on Quarkus.
 
   @Test
-  void failedKeepAliveTickWarnNamesTheCause() throws InterruptedException {
+  void failedKeepAliveTickWarnNamesTheCause() throws Exception {
     var publisher = mock(SseEventPublisher.class);
     var controller =
         new SseController(
@@ -830,8 +834,7 @@ class SseControllerTest {
   }
 
   @Test
-  void aFailedOpeningFrameEvictsTheSubscriberLikeAFailedKeepAliveTick()
-      throws InterruptedException {
+  void aFailedOpeningFrameEvictsTheSubscriberLikeAFailedKeepAliveTick() throws Exception {
     // The opening frame is the first write to the client. When it fails the client is already
     // registered with the publisher, so the stream must be torn down the way a failed tick tears
     // it down: failed, removed from the open streams, unsubscribed.
@@ -860,7 +863,7 @@ class SseControllerTest {
   }
 
   @Test
-  void failedTimeoutCompletionWarnNamesTheCause() throws InterruptedException {
+  void failedTimeoutCompletionWarnNamesTheCause() throws Exception {
     var publisher = mock(SseEventPublisher.class);
     var controller =
         new SseController(publisher, ALLOW_ALL, ANONYMOUS, java.time.Duration.ofMillis(100), null);
@@ -880,7 +883,7 @@ class SseControllerTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void failedEvictionWarnNamesTheStreamAndTheCause() throws InterruptedException {
+  void failedEvictionWarnNamesTheStreamAndTheCause() throws Exception {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
     var cause = new IllegalStateException("client gone");

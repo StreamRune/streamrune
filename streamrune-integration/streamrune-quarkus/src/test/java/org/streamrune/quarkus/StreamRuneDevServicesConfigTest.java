@@ -17,7 +17,7 @@ class StreamRuneDevServicesConfigTest {
   }
 
   @Test
-  void devServicesConfigHasStartupEventObserver() throws NoSuchMethodException {
+  void devServicesConfigHasStartupEventObserver() throws Exception {
     var method =
         StreamRuneDevServicesConfig.class.getDeclaredMethod("onStartup", StartupEvent.class);
     assertThat(method).isNotNull();

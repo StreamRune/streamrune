@@ -1,6 +1,7 @@
 package org.streamrune.core.outbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -200,8 +201,7 @@ class OutboxStoreDefaultMethodsTest {
             return false;
           }
         };
-    org.junit.jupiter.api.Assertions.assertThrows(
-        UnsupportedOperationException.class, store::claimLease);
+    assertThrows(UnsupportedOperationException.class, store::claimLease);
   }
 
   @Test
@@ -260,8 +260,7 @@ class OutboxStoreDefaultMethodsTest {
             return false;
           }
         };
-    org.junit.jupiter.api.Assertions.assertThrows(
-        UnsupportedOperationException.class, () -> store.deleteDelivered(Instant.now()));
+    assertThrows(UnsupportedOperationException.class, () -> store.deleteDelivered(Instant.now()));
   }
 
   @Test
@@ -269,24 +268,20 @@ class OutboxStoreDefaultMethodsTest {
     // A store that does not say which ordering it enforces cannot be trusted to enforce it
     // (claimLease precedent). OutboxPoller.build() reads this before the first poll.
     OutboxStore store = minimalStore();
-    var ex =
-        org.junit.jupiter.api.Assertions.assertThrows(
-            UnsupportedOperationException.class, store::orderingMode);
+    var ex = assertThrows(UnsupportedOperationException.class, store::orderingMode);
     assertThat(ex.getMessage()).contains("orderingMode").contains("STRICT_PER_AGGREGATE");
   }
 
   @Test
   void sampleBlockage_default_throwsUnsupported() {
     OutboxStore store = minimalStore();
-    org.junit.jupiter.api.Assertions.assertThrows(
-        UnsupportedOperationException.class, store::sampleBlockage);
+    assertThrows(UnsupportedOperationException.class, store::sampleBlockage);
   }
 
   @Test
   void deleteSkipped_default_throwsUnsupported() {
     OutboxStore store = minimalStore();
-    org.junit.jupiter.api.Assertions.assertThrows(
-        UnsupportedOperationException.class, () -> store.deleteSkipped(Instant.now()));
+    assertThrows(UnsupportedOperationException.class, () -> store.deleteSkipped(Instant.now()));
   }
 
   /** The least an OutboxStore can be: every abstract method, no default overridden. */

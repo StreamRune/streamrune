@@ -1,6 +1,8 @@
 package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -139,15 +141,11 @@ class QuarkusOutboxMetricsWiringTest {
             unsatisfied());
     assertSame(
         metrics, metricsOf(poller), "the poller records into the produced Micrometer adapter");
-    org.junit.jupiter.api.Assertions.assertNotNull(
-        registry.find("streamrune.outbox.blocked_aggregates").gauge());
-    org.junit.jupiter.api.Assertions.assertNotNull(
-        registry.find("streamrune.outbox.blockage_age_seconds").gauge());
-    org.junit.jupiter.api.Assertions.assertNotNull(
-        registry.find("streamrune.outbox.skipped").counter());
-    org.junit.jupiter.api.Assertions.assertNotNull(
-        registry.find("streamrune.outbox.skipped_swept").counter());
-    org.junit.jupiter.api.Assertions.assertNull(
+    assertNotNull(registry.find("streamrune.outbox.blocked_aggregates").gauge());
+    assertNotNull(registry.find("streamrune.outbox.blockage_age_seconds").gauge());
+    assertNotNull(registry.find("streamrune.outbox.skipped").counter());
+    assertNotNull(registry.find("streamrune.outbox.skipped_swept").counter());
+    assertNull(
         registry.find("streamrune.outbox.failed_swept").counter(),
         "the FAILED sweep no longer exists, so neither does its series");
   }

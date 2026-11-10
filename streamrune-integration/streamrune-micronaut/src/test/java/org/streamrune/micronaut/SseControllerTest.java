@@ -706,7 +706,7 @@ class SseControllerTest {
   // The Spring sibling renders t.toString(); these pin the same rendered line on Micronaut.
 
   @Test
-  void failedKeepAliveTickWarnNamesTheCause() throws InterruptedException {
+  void failedKeepAliveTickWarnNamesTheCause() throws Exception {
     var publisher = mock(SseEventPublisher.class);
     var controller =
         new SseController(publisher, ALLOW_ALL, ANONYMOUS, null, java.time.Duration.ofMillis(50));
@@ -731,7 +731,7 @@ class SseControllerTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void failedEvictionWarnNamesTheStreamAndTheCause() throws InterruptedException {
+  void failedEvictionWarnNamesTheStreamAndTheCause() throws Exception {
     var publisher = mock(SseEventPublisher.class);
     var controller = new SseController(publisher, ALLOW_ALL, ANONYMOUS);
     var cause = new IllegalStateException("client gone");
@@ -763,8 +763,7 @@ class SseControllerTest {
   // runs the cancel teardown itself on both paths that can observe the fatal error.
 
   @Test
-  void fatalKeepAliveFailureReleasesThePublisherSubscriptionAndStopsTheTicker()
-      throws InterruptedException {
+  void fatalKeepAliveFailureReleasesThePublisherSubscriptionAndStopsTheTicker() throws Exception {
     var publisher = mock(SseEventPublisher.class);
     var controller =
         new SseController(publisher, ALLOW_ALL, ANONYMOUS, null, java.time.Duration.ofMillis(50));
@@ -784,7 +783,7 @@ class SseControllerTest {
 
   @Test
   void aFatalOpeningFrameFailureReleasesThePublisherSubscriptionLikeAFailedKeepAliveTick()
-      throws InterruptedException {
+      throws Exception {
     // The opening frame is the first write to the client. When it fails the client is already
     // registered with the publisher, so the stream must be torn down the way a failed tick tears
     // it down.
@@ -812,7 +811,7 @@ class SseControllerTest {
   @Test
   @SuppressWarnings("unchecked")
   void fatalDeliveryFailureEvictionReleasesThePublisherSubscriptionAndStopsTheTicker()
-      throws InterruptedException {
+      throws Exception {
     // The delivery-path twin: SseEventPublisher's worker catches the fatal error out of send(),
     // evicts, and fires the disconnect hook — whose sink.error() the poisoned sink swallowed too.
     var publisher = mock(SseEventPublisher.class);

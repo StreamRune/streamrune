@@ -117,7 +117,7 @@ class CachingUserRoleResolverTest {
   }
 
   @Test
-  void concurrentAccessIsSafe() throws InterruptedException {
+  void concurrentAccessIsSafe() throws Exception {
     AtomicInteger callCount = new AtomicInteger();
     UserRoleResolver slowDelegate =
         userId -> {

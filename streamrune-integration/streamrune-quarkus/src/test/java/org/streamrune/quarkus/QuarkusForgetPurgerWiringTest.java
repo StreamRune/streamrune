@@ -220,7 +220,7 @@ class QuarkusForgetPurgerWiringTest {
       var forget = arc.container().instance(ForgetSubjectService.class);
       assertTrue(forget.isAvailable(), "the auto-produced ForgetSubjectService must resolve");
       forget.get().forget(SubjectId.of("subject-42"), null);
-      assertEquals(List.of(SubjectId.of("subject-42")), RecordingPurger.PURGED);
+      assertEquals(RecordingPurger.PURGED, List.of(SubjectId.of("subject-42")));
     }
   }
 

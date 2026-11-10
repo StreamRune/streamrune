@@ -36,7 +36,7 @@ class PostgresTestImageTest {
     // The Gradle test task sets the property from -PpostgresImage before the JVM starts; the
     // constant is class-initialised once, so this is the end-to-end pin of that wiring.
     assertEquals(
-        PostgresTestImage.resolve(System.getProperty(PostgresTestImage.PROPERTY)),
-        PostgresTestImage.NAME);
+        PostgresTestImage.NAME,
+        PostgresTestImage.resolve(System.getProperty(PostgresTestImage.PROPERTY)));
   }
 }

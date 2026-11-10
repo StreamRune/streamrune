@@ -2,6 +2,7 @@ package org.streamrune.core.types;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -599,7 +600,7 @@ class LogSinkPolicyRatchetTest {
 
   @Test
   void theSourceWalkPrunesBuildOutputStaleCheckoutsAndRepositoryMetadata(@TempDir Path root)
-      throws IOException {
+      throws Exception {
     Path kept = writeSource(root, "m/src/main/java/p/Kept.java");
     Path nested = writeSource(root, "outer/inner/src/main/java/p/Nested.java");
     writeSource(root, "m/build/generated/src/main/java/p/Generated.java");
@@ -613,8 +614,7 @@ class LogSinkPolicyRatchetTest {
   }
 
   @Test
-  void theSourceWalkSkipsEntriesThatVanishAfterTheyWereListed(@TempDir Path root)
-      throws IOException {
+  void theSourceWalkSkipsEntriesThatVanishAfterTheyWereListed(@TempDir Path root) throws Exception {
     Path pkg = root.resolve("m/src/main/java/p");
     for (String name : List.of("A", "B", "C", "D")) {
       writeSource(root, "m/src/main/java/p/" + name + ".java");
@@ -669,7 +669,7 @@ class LogSinkPolicyRatchetTest {
 
   @Test
   void theSourceWalkStillScansAnEntryThatWasReplacedRatherThanRemoved(@TempDir Path root)
-      throws IOException {
+      throws Exception {
     // spotlessApply's delete-then-copy: the stat failed, but by the time the failure is handled the
     // file is back. It exists, so it is scanned.
     Path replaced = writeSource(root, "m/src/main/java/p/Replaced.java");
@@ -687,8 +687,7 @@ class LogSinkPolicyRatchetTest {
   }
 
   @Test
-  void theSourceWalkStaysStrictForEverythingButAVanishedEntry(@TempDir Path root)
-      throws IOException {
+  void theSourceWalkStaysStrictForEverythingButAVanishedEntry(@TempDir Path root) throws Exception {
     Path existing = writeSource(root, "m/src/main/java/p/Unreadable.java");
     Path dir = existing.getParent();
     ProductionSourceWalk walk = new ProductionSourceWalk(root);
@@ -705,12 +704,11 @@ class LogSinkPolicyRatchetTest {
     Path missingRoot = root.resolve("gone");
     UncheckedIOException rootGone =
         assertThrows(UncheckedIOException.class, () -> productionSources(missingRoot));
-    assertTrue(rootGone.getCause() instanceof NoSuchFileException, rootGone.toString());
+    assertInstanceOf(NoSuchFileException.class, rootGone.getCause(), rootGone.toString());
   }
 
   @Test
-  void aSourceThatVanishesBeforeItIsReadHasNothingLeftToScan(@TempDir Path root)
-      throws IOException {
+  void aSourceThatVanishesBeforeItIsReadHasNothingLeftToScan(@TempDir Path root) throws Exception {
     Path present = writeSource(root, "m/src/main/java/p/Present.java");
 
     assertEquals(List.of(), readSource(root.resolve("m/src/main/java/p/Gone.java")));

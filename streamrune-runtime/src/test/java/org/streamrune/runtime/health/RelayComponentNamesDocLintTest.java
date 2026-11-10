@@ -1,6 +1,7 @@
 package org.streamrune.runtime.health;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -135,7 +136,7 @@ class RelayComponentNamesDocLintTest {
       }
       rows.add(cells);
     }
-    assertTrue(!rows.isEmpty(), "the table " + header + " has no rows");
+    assertFalse(rows.isEmpty(), "the table " + header + " has no rows");
     return rows;
   }
 

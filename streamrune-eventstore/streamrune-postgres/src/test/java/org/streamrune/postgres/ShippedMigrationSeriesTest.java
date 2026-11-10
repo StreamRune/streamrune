@@ -30,7 +30,7 @@ class ShippedMigrationSeriesTest {
   private static final String EVENT_STORE_SCRIPT = "V001__streamrune_baseline.sql";
 
   @Test
-  void answersFlywaysResourceQueriesFromTheListedScripts() throws IOException {
+  void answersFlywaysResourceQueriesFromTheListedScripts() throws Exception {
     ResourceProvider provider =
         ShippedMigrationSeries.EVENT_STORE.configure(null).getResourceProvider();
 

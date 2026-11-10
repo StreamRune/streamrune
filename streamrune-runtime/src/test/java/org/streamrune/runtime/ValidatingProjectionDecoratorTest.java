@@ -1,6 +1,8 @@
 package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 import jakarta.validation.ConstraintViolation;
@@ -133,14 +135,14 @@ class ValidatingProjectionDecoratorTest {
   void writesThroughRepository_forwardsTrueFromDelegate() {
     when(delegate.writesThroughRepository()).thenReturn(true);
     var decorator = new ValidatingProjectionDecorator(delegate, validator);
-    org.junit.jupiter.api.Assertions.assertTrue(decorator.writesThroughRepository());
+    assertTrue(decorator.writesThroughRepository());
   }
 
   @Test
   void writesThroughRepository_forwardsFalseFromDelegate() {
     when(delegate.writesThroughRepository()).thenReturn(false);
     var decorator = new ValidatingProjectionDecorator(delegate, validator);
-    org.junit.jupiter.api.Assertions.assertFalse(decorator.writesThroughRepository());
+    assertFalse(decorator.writesThroughRepository());
   }
 
   @Test

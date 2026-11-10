@@ -2,6 +2,7 @@ package org.streamrune.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -133,9 +134,7 @@ class SseEventPublisherLogForgingTest {
     assertTrue(evicted.await(5, TimeUnit.SECONDS), "the slow consumer must have been evicted");
     releaseSend.countDown();
 
-    var slowConsumer =
-        org.junit.jupiter.api.Assertions.assertInstanceOf(
-            SseEventPublisher.SlowConsumerException.class, cause.get());
+    var slowConsumer = assertInstanceOf(SseEventPublisher.SlowConsumerException.class, cause.get());
     assertNoForgedLine(slowConsumer.getMessage(), "the SlowConsumerException message");
     assertEquals(
         FORGED,

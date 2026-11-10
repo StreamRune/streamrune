@@ -1,10 +1,15 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -735,7 +740,7 @@ class PostgresEventStoreTest {
   }
 
   @Test
-  void upcastsV1EventToV2OnLoad() throws SQLException {
+  void upcastsV1EventToV2OnLoad() throws Exception {
     // Insert a V1 event directly into the DB (schema_version=1, no "extra" field).
     // global_offset has no default — reserve one from the same counter the production append path
     // uses.
@@ -830,7 +835,7 @@ class PostgresEventStoreTest {
   }
 
   @Test
-  void schemaVersionRecordsTheWritersChainNotThePayloadShape() throws SQLException {
+  void schemaVersionRecordsTheWritersChainNotThePayloadShape() throws Exception {
     // A store with no upcaster for a type stamps schema_version 1 even when the event already has
     // the shape a later upcaster produces: one release adds the field, a later one registers the
     // upcaster. A reader with that upcaster then runs its 1 -> 2 step on a payload that already
@@ -914,7 +919,7 @@ class PostgresEventStoreTest {
   }
 
   @Test
-  void readFailsClosedWhenStoredSchemaVersionExceedsReaderChain() throws SQLException {
+  void readFailsClosedWhenStoredSchemaVersionExceedsReaderChain() throws Exception {
     // A stored schema_version ABOVE the reader's current upcaster version is never
     // legitimate — it proves this store is mis-wired (missing the upcasters the type was written
     // with, so currentVersion reads 2 for a row persisted at 3) or has been downgraded. Reading on
@@ -989,7 +994,7 @@ class PostgresEventStoreTest {
   }
 
   @Test
-  void readFailsClosedWhenStoredSchemaVersionExceedsChainlessReader() throws SQLException {
+  void readFailsClosedWhenStoredSchemaVersionExceedsChainlessReader() throws Exception {
     // The original guard only branched when upcasterChain was
     // non-null. A store built WITHOUT .upcasters(...) — a supported construction — skipped it, so a
     // stored schema_version >= 2 fell through to a plain readValue and silently mis-bound the

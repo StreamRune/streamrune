@@ -66,7 +66,7 @@ class SagaDispatchConcurrencyTest {
 
   @Test
   void aSagaLeaderUnderLoad_storesEveryCommandUnderItsOwnSaga_andCompensatesNoHealthyOrder()
-      throws InterruptedException {
+      throws Exception {
     Duration run = Duration.ofSeconds(Long.getLong("streamrune.test.sagaConcurrencySeconds", 3L));
     var inbox = new InMemoryCommandInbox();
     var sagaStore = new InMemorySagaStore();

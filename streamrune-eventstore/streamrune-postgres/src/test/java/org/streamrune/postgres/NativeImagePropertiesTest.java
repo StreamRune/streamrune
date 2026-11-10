@@ -3,7 +3,6 @@ package org.streamrune.postgres;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Properties;
@@ -22,7 +21,7 @@ class NativeImagePropertiesTest {
       "META-INF/native-image/org.streamrune/streamrune-postgres/native-image.properties";
 
   @Test
-  void enablesTheHttpsUrlProtocolFlywayNeedsToConstructItself() throws IOException {
+  void enablesTheHttpsUrlProtocolFlywayNeedsToConstructItself() throws Exception {
     Properties properties = new Properties();
     try (InputStream in =
         PostgresEventStoreFactory.class

@@ -1,6 +1,12 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -413,7 +419,7 @@ class PostgresOutboxStoreTest {
   }
 
   @Test
-  void loadPending_respects_limit_and_returns_oldest_first() throws InterruptedException {
+  void loadPending_respects_limit_and_returns_oldest_first() throws Exception {
     store.save(OutboxEntry.pending(OutboxEntryId.of("old"), "{}", "Event"));
     Thread.sleep(10);
     store.save(OutboxEntry.pending(OutboxEntryId.of("new"), "{}", "Event"));

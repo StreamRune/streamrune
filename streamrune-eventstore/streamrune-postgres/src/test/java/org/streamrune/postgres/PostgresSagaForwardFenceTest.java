@@ -114,7 +114,7 @@ class PostgresSagaForwardFenceTest extends SagaForwardFenceContract {
   }
 
   @Test
-  void aRefusedCommandWritesNoInboxOutboxOrAuditRow() throws SQLException {
+  void aRefusedCommandWritesNoInboxOutboxOrAuditRow() throws Exception {
     stampedRow(ID);
 
     assertThrows(

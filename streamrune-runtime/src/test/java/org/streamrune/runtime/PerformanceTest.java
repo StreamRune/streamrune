@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.List;
@@ -47,7 +48,7 @@ class PerformanceTest {
   // ===== Throughput Tests =====
 
   @Test
-  void commandBusShouldHandleHighThroughput() throws InterruptedException {
+  void commandBusShouldHandleHighThroughput() throws Exception {
     int threads = 10;
     int commandsPerThread = 1000;
     CountDownLatch startLatch = new CountDownLatch(1);
@@ -98,7 +99,7 @@ class PerformanceTest {
   }
 
   @Test
-  void eventStoreShouldHandleHighAppendThroughput() throws InterruptedException {
+  void eventStoreShouldHandleHighAppendThroughput() throws Exception {
     int threads = 10;
     int appendsPerThread = 1000;
     CountDownLatch startLatch = new CountDownLatch(1);
@@ -228,7 +229,7 @@ class PerformanceTest {
   // ===== Concurrent Load Tests =====
 
   @Test
-  void shouldHandleConcurrentReadsAndWrites() throws InterruptedException {
+  void shouldHandleConcurrentReadsAndWrites() throws Exception {
     int writeCount = 100;
     int readCount = 1000;
     CountDownLatch doneLatch = new CountDownLatch(writeCount + readCount);
