@@ -1,5 +1,7 @@
 package org.streamrune.test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -201,7 +203,7 @@ public final class ProjectionFixture<S> {
 
     /** Asserts the projection received the expected number of events. */
     public ThenStage expectEventCount(int count) {
-      org.junit.jupiter.api.Assertions.assertEquals(count, events.size());
+      assertEquals(count, events.size());
       return this;
     }
 

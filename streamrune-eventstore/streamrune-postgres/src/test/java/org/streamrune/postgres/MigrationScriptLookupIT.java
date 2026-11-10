@@ -24,9 +24,9 @@ import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.postgres.PostgresCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Schema auto-initialization resolves each shipped migration script by its exact name, so it works
@@ -49,8 +49,8 @@ class MigrationScriptLookupIT {
   private static final String CRYPTO_SCRIPT = "db/crypto-migration/V001__crypto_baseline.sql";
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("script_lookup_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("script_lookup_test");
 
   @Test
   void theNativeImageLikeClassLoaderDefeatsFlywaysOwnClassPathScan() throws Exception {

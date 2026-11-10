@@ -67,7 +67,7 @@ import org.streamrune.integration.tck.IntegrationWiringContract;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The integration wiring contract on Quarkus. Each start boots a real Arc container ({@link
@@ -131,7 +131,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   static final List<Class<?>> REST_PROVIDERS = List.of(StreamRuneRequestFilter.class);
 
   /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
-  private static PostgreSQLContainer<?> postgres;
+  private static PostgreSQLContainer postgres;
 
   private static final AtomicInteger DATABASES = new AtomicInteger();
 
@@ -233,7 +233,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
    * converted as a configured value is.
    */
   @Test
-  void aPropertyInjectedByNameWithNeitherAValueNorADefaultFails() throws NoSuchFieldException {
+  void aPropertyInjectedByNameWithNeitherAValueNorADefaultFails() throws Exception {
     SmallRyeConfig empty = configuration(Map.of());
     ConfigProperty withoutDefault = injectedAs("withoutDefault");
     ConfigProperty defaultYes = injectedAs("defaultYes");
@@ -393,7 +393,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   protected DataSource postgresql() {
     synchronized (QuarkusIntegrationWiringContractTest.class) {
       if (postgres == null) {
-        postgres = new PostgreSQLContainer<>(PostgresTestImage.NAME);
+        postgres = new PostgreSQLContainer(PostgresTestImage.NAME);
         postgres.start();
       }
     }
@@ -436,7 +436,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
    * #FRAMEWORK_BEANS} or {@link #REST_PROVIDERS}: a new bean does not stay out of the contract.
    */
   @Test
-  void theContainerHoldsEveryBeanClassOfTheModule() throws ClassNotFoundException {
+  void theContainerHoldsEveryBeanClassOfTheModule() throws Exception {
     Set<String> beanClasses = new TreeSet<>();
     moduleBeanClasses().forEach(c -> beanClasses.add(c.getName()));
     Set<String> covered = new TreeSet<>();
@@ -469,7 +469,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
    * the bean class Arc generates calls it from another classloader.
    */
   @Test
-  void everyBeanClassIsProxyableAndObservableAsWritten() throws ClassNotFoundException {
+  void everyBeanClassIsProxyableAndObservableAsWritten() throws Exception {
     List<String> problems = new ArrayList<>();
     for (Class<?> bean : moduleBeanClasses()) {
       boolean normalScoped =
@@ -620,7 +620,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
                   case "hashCode" -> System.identityHashCode(proxy);
                   case "toString" -> "no database: " + type.getSimpleName();
                   default -> {
-                    if (returns.isInterface() && returns.getPackageName().equals("java.sql")) {
+                    if (returns.isInterface() && "java.sql".equals(returns.getPackageName())) {
                       yield nothing(returns);
                     }
                     yield zero(returns);

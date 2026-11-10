@@ -14,9 +14,9 @@ import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.CryptoShreddingModule;
 import org.streamrune.test.InMemoryCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * {@code @Encrypted} on a projection read model must not be a silent plaintext no-op with the
@@ -33,8 +33,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class JdbcProjectionRepositoryCryptoTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_proj_crypto");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_proj_crypto");
 
   /** A read model carrying one {@code @Encrypted} PII field keyed off {@code customerId}. */
   record CustomerView(String customerId, @Encrypted(subjectId = "customerId") String email) {

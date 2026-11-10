@@ -1,6 +1,11 @@
 package org.streamrune.runtime.gdpr;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -72,8 +77,12 @@ class ExportSubjectDataServiceTest {
 
       @Override
       public JsonNode collect(SubjectId subjectId) {
-        if (t instanceof RuntimeException re) throw re;
-        if (t instanceof Error err) throw err;
+        if (t instanceof RuntimeException re) {
+          throw re;
+        }
+        if (t instanceof Error err) {
+          throw err;
+        }
         throw new RuntimeException(t);
       }
     };
@@ -93,7 +102,7 @@ class ExportSubjectDataServiceTest {
     assertEquals(SubjectId.of("user-1"), export.subjectId());
     assertEquals(2, export.sections().size());
     var keys = new ArrayList<>(export.sections().keySet());
-    assertEquals("profile", keys.get(0));
+    assertEquals("profile", keys.getFirst());
     assertEquals("orders", keys.get(1));
   }
 

@@ -1,6 +1,10 @@
 package org.streamrune.core;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -17,8 +21,12 @@ class DeciderTest {
   sealed interface Cmd extends Command {
     record Add(String item, int qty) implements Cmd {
       public Add {
-        if (item == null || item.isBlank()) throw new IllegalArgumentException("item is required");
-        if (qty <= 0) throw new IllegalArgumentException("qty must be > 0");
+        if (item == null || item.isBlank()) {
+          throw new IllegalArgumentException("item is required");
+        }
+        if (qty <= 0) {
+          throw new IllegalArgumentException("qty must be > 0");
+        }
       }
     }
 

@@ -27,9 +27,9 @@ import org.streamrune.core.types.Version;
 import org.streamrune.crypto.CryptoShreddingModule;
 import org.streamrune.test.InMemoryCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Regression test for Defect 6: after a subject is crypto-shredded (GDPR forget), snapshotting an
@@ -48,8 +48,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresEventStoreCryptoSnapshotTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   /** Aggregate state carrying one {@code @Encrypted} PII field, keyed off {@code customerId}. */
   record CustomerState(String customerId, @Encrypted(subjectId = "customerId") String email)

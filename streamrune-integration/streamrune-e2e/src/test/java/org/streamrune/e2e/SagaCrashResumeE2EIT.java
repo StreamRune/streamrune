@@ -189,9 +189,12 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
       new EventTypeRegistry() {
         @Override
         public Class<?> resolveEventType(EventType eventType) {
-          if (EventType.fromClass(OrderPlaced.class).equals(eventType)) return OrderPlaced.class;
-          if (EventType.fromClass(OrderCancelled.class).equals(eventType))
+          if (EventType.fromClass(OrderPlaced.class).equals(eventType)) {
+            return OrderPlaced.class;
+          }
+          if (EventType.fromClass(OrderCancelled.class).equals(eventType)) {
             return OrderCancelled.class;
+          }
           throw new IllegalArgumentException("Unknown event type: " + eventType);
         }
 
@@ -332,7 +335,7 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
     // → claim-first COMPENSATING → CancelOrder succeeds → COMPENSATED.
     EventId orderPlaced = appendOrderPlaced(orderId);
     subscription.start();
-    try {
+    try (subscription) {
       await()
           .atMost(Duration.ofSeconds(30))
           .untilAsserted(
@@ -340,8 +343,6 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
                   assertThat(sagaStatus(sagaId))
                       .as("the saga reaches a terminal COMPENSATED on the real store")
                       .contains(SagaStatus.COMPENSATED.name()));
-    } finally {
-      subscription.close();
     }
 
     // The compensation command was recorded in the real command inbox under its episode-scoped key

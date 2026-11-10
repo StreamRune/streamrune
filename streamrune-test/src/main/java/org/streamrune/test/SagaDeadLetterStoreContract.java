@@ -75,7 +75,7 @@ public abstract class SagaDeadLetterStoreContract {
             "x.Other",
             "again",
             T0.plusSeconds(60)));
-    SagaDeadLetterEntry e = store.findBySaga(A).get(0);
+    SagaDeadLetterEntry e = store.findBySaga(A).getFirst();
     assertEquals(1, store.findBySaga(A).size());
     assertEquals("x.Other", e.errorType());
     assertEquals(T0.plusSeconds(60), e.faultedAt());
@@ -101,7 +101,7 @@ public abstract class SagaDeadLetterStoreContract {
     store.publish(entry(A, 10L, T0));
     store.establishFirstReplayAnchor(A, TYPE, GlobalOffset.of(10L), T0.plusSeconds(1));
     store.establishFirstReplayAnchor(A, TYPE, GlobalOffset.of(10L), T0.plusSeconds(99));
-    assertEquals(T0.plusSeconds(1), store.findBySaga(A).get(0).firstReplayStartedAt());
+    assertEquals(T0.plusSeconds(1), store.findBySaga(A).getFirst().firstReplayStartedAt());
   }
 
   @Test
@@ -113,8 +113,8 @@ public abstract class SagaDeadLetterStoreContract {
     store.publish(entry(null, 30L, T0.plusSeconds(10))); // refresh keeps the target
     List<SagaDeadLetterEntry> folded = store.findNullSagaEntriesByResolvedTarget(TYPE, A);
     assertEquals(2, folded.size());
-    assertEquals(30L, folded.get(0).eventOffset().value());
-    assertEquals(T0.plusSeconds(10), folded.get(0).faultedAt());
+    assertEquals(30L, folded.getFirst().eventOffset().value());
+    assertEquals(T0.plusSeconds(10), folded.getFirst().faultedAt());
     assertEquals(31L, folded.get(1).eventOffset().value());
   }
 
@@ -189,7 +189,7 @@ public abstract class SagaDeadLetterStoreContract {
         IllegalArgumentException.class,
         () ->
             store.establishFirstReplayAnchor(null, null, GlobalOffset.of(11L), T0.plusSeconds(1)));
-    assertNull(store.findBySaga(A).get(0).firstReplayStartedAt());
+    assertNull(store.findBySaga(A).getFirst().firstReplayStartedAt());
     assertNull(
         store.findNullSagaEntry(TYPE, GlobalOffset.of(11L)).orElseThrow().firstReplayStartedAt());
     assertNull(
@@ -335,7 +335,7 @@ public abstract class SagaDeadLetterStoreContract {
     assertTrue(shield(A), "the owner row is shielded by the publish itself");
     store.publishShielded(entry(A, 10L, T0.plusSeconds(5))); // idempotent refresh
     assertEquals(1, store.findBySaga(A).size());
-    assertEquals(T0, store.findBySaga(A).get(0).firstFaultedAt());
+    assertEquals(T0, store.findBySaga(A).getFirst().firstFaultedAt());
     assertTrue(shield(A));
   }
 

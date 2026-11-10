@@ -50,7 +50,7 @@ class StreamRuneContextVirtualThreadReadTest {
   };
 
   @Test
-  void everyReadNamesTheBindingsOfTheReadingThread() throws InterruptedException {
+  void everyReadNamesTheBindingsOfTheReadingThread() throws Exception {
     assumeTrue(
         GraalJitGuard.assess(GraalJitGuard.Vm.platform()) == GraalJitGuard.Verdict.RELIABLE,
         "StreamRune does not start on this JVM");

@@ -1,5 +1,7 @@
 package org.streamrune.core.saga;
 
+import java.io.Serial;
+
 /**
  * Thrown when saga state cannot be converted to or from its stored form — as opposed to the {@link
  * org.streamrune.core.EventStoreException} a {@link SagaStore} throws when the <em>storage
@@ -48,7 +50,7 @@ package org.streamrune.core.saga;
  */
 public class SagaStateSerializationException extends RuntimeException {
 
-  private static final long serialVersionUID = 1L;
+  @Serial private static final long serialVersionUID = 1L;
 
   private final transient SagaId sagaId;
 

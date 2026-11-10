@@ -122,11 +122,9 @@ class SagaRunnerLeaseTest {
               .sagaRunner(process.runner)
               .build();
       subscription.start();
-      try {
+      try (subscription) {
         process.append(new Opened("1"));
         process.awaitRow("1");
-      } finally {
-        subscription.close();
       }
     }
 

@@ -1,6 +1,15 @@
 package org.streamrune.outbox.rabbitmq;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
@@ -24,9 +33,9 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxPublisher.FailureKind;
-import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.rabbitmq.RabbitMQContainer;
 
 @Testcontainers
 class RabbitMqOutboxPublisherIntegrationTest {
@@ -67,9 +76,15 @@ class RabbitMqOutboxPublisherIntegrationTest {
 
   @AfterAll
   static void cleanup() throws Exception {
-    if (publishChannel != null) publishChannel.close();
-    if (consumeChannel != null) consumeChannel.close();
-    if (connection != null) connection.close();
+    if (publishChannel != null) {
+      publishChannel.close();
+    }
+    if (consumeChannel != null) {
+      consumeChannel.close();
+    }
+    if (connection != null) {
+      connection.close();
+    }
   }
 
   @Test
@@ -410,7 +425,7 @@ class RabbitMqOutboxPublisherIntegrationTest {
             new Class<?>[] {Channel.class},
             (proxy, method, args) -> {
               Channel target = current.get();
-              if (!method.getName().equals("isOpen") && !target.isOpen()) {
+              if (!"isOpen".equals(method.getName()) && !target.isOpen()) {
                 target = connection.createChannel();
                 current.set(target);
               }

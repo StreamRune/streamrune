@@ -215,13 +215,17 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
   }
 
   private static DataSource requireDataSource(DataSource dataSource) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource must not be null");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource must not be null");
+    }
     return dataSource;
   }
 
   @Override
   public void publish(String token) {
-    if (token == null) return;
+    if (token == null) {
+      return;
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement("SELECT pg_notify(?, ?)")) {
       ps.setString(1, CHANNEL);
@@ -243,8 +247,12 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
 
   @Override
   public void subscribe(Consumer<String> onForget, Runnable onListening) {
-    if (onForget == null) throw new IllegalArgumentException("listener must not be null");
-    if (onListening == null) throw new IllegalArgumentException("onListening must not be null");
+    if (onForget == null) {
+      throw new IllegalArgumentException("listener must not be null");
+    }
+    if (onListening == null) {
+      throw new IllegalArgumentException("onListening must not be null");
+    }
     subscribers.add(new Subscriber(onForget, onListening));
     // Start the single LISTEN loop on the first subscription (subsequent subscribers just share
     // it). Opening the dedicated LISTEN pool is best-effort: a DataSource the channel cannot open
@@ -492,8 +500,12 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
             : null;
     HikariConfig config = new HikariConfig();
     config.setJdbcUrl(withApplicationName(jdbcUrl, listenApplicationName(jdbcUrl, configuredName)));
-    if (username != null) config.setUsername(username);
-    if (password != null) config.setPassword(password);
+    if (username != null) {
+      config.setUsername(username);
+    }
+    if (password != null) {
+      config.setPassword(password);
+    }
     config.setMaximumPoolSize(1);
     config.setMinimumIdle(1);
     config.setPoolName("streamrune-crypto-forget-listen");

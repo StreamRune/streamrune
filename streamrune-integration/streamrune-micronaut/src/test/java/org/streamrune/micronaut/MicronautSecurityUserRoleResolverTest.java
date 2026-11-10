@@ -1,6 +1,7 @@
 package org.streamrune.micronaut;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 import io.micronaut.security.authentication.Authentication;

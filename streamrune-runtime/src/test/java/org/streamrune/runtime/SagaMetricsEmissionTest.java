@@ -145,7 +145,7 @@ class SagaMetricsEmissionTest {
    */
   static class FakeOrchestrator implements SagaOrchestrator<FakeState> {
 
-    SagaId handleThrowsFor = null;
+    SagaId handleThrowsFor;
 
     @Override
     public Class<FakeState> stateType() {
@@ -199,8 +199,8 @@ class SagaMetricsEmissionTest {
 
   static class RecordingCommandBus implements CommandBus {
     final List<Command> executed = new ArrayList<>();
-    boolean primaryFails = false;
-    boolean compensationFails = false;
+    boolean primaryFails;
+    boolean compensationFails;
 
     @Override
     public boolean supportsIdempotentExecution() {
@@ -376,7 +376,7 @@ class SagaMetricsEmissionTest {
 
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
-            if (command instanceof DoWork dw && dw.id().equals("A")) {
+            if (command instanceof DoWork dw && "A".equals(dw.id())) {
               throw new RuntimeException("primary command failed");
             }
             return new CommandResult(

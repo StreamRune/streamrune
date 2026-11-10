@@ -51,7 +51,7 @@ import org.streamrune.runtime.SagaRunner;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The integration wiring contract on Micronaut. Each start is an {@code ApplicationContext} with
@@ -205,7 +205,7 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   }
 
   /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
-  private static PostgreSQLContainer<?> postgres;
+  private static PostgreSQLContainer postgres;
 
   private static final AtomicInteger DATABASES = new AtomicInteger();
 
@@ -272,7 +272,7 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   protected DataSource postgresql() {
     synchronized (MicronautIntegrationWiringContractTest.class) {
       if (postgres == null) {
-        postgres = new PostgreSQLContainer<>(PostgresTestImage.NAME);
+        postgres = new PostgreSQLContainer(PostgresTestImage.NAME);
         postgres.start();
       }
     }

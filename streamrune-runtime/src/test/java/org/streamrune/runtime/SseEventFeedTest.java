@@ -209,7 +209,7 @@ class SseEventFeedTest {
           public void publish(EventEnvelope envelope) {
             String note = ((Placed) envelope.event()).note();
             publishCalls.add(note);
-            if (note.equals("refused")) {
+            if ("refused".equals(note)) {
               throw new IllegalStateException("the publisher refuses this event");
             }
             super.publish(envelope);

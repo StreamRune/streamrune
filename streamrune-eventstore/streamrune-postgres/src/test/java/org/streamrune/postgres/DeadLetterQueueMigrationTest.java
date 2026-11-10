@@ -1,6 +1,9 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -9,9 +12,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Pins the shape of {@code dead_letter_queue} as the shipped event-store baseline provisions it —
@@ -21,8 +24,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class DeadLetterQueueMigrationTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("dlq_migration_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("dlq_migration_test");
 
   static PGSimpleDataSource dataSource;
 
@@ -229,7 +232,7 @@ class DeadLetterQueueMigrationTest {
     assertDoesNotThrow(() -> dlq.publish(req));
     var entries = dlq.read(10);
     assertTrue(
-        entries.stream().anyMatch(e -> e.commandType().equals("MigrationProbeCommand")),
+        entries.stream().anyMatch(e -> "MigrationProbeCommand".equals(e.commandType())),
         "published entry should be readable back from the migration-provisioned table");
 
     dlq.discard(org.streamrune.core.types.CommandId.of("mig-probe-0000000000001"));

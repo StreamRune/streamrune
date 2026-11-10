@@ -17,9 +17,9 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Gate test for the lock-free, gap-free global read backed by the gapless commit-ordered counter
@@ -36,8 +36,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresEventStoreGapFreeIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_gapfree");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_gapfree");
 
   static PGSimpleDataSource dataSource;
   static ObjectMapper objectMapper;
@@ -164,7 +164,7 @@ class PostgresEventStoreGapFreeIT {
         break;
       }
       batch.forEach(e -> delivered.add(e.globalOffset().value()));
-      cursor = batch.get(batch.size() - 1).globalOffset().value();
+      cursor = batch.getLast().globalOffset().value();
     }
     assertEquals(
         java.util.List.of(1L, 2L, 4L, 5L),

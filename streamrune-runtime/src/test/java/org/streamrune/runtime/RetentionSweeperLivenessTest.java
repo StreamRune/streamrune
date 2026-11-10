@@ -1,6 +1,8 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -102,7 +104,7 @@ class RetentionSweeperLivenessTest {
   }
 
   @Test
-  void deadLetterRetentionSweeper_exposesLiveness() throws InterruptedException {
+  void deadLetterRetentionSweeper_exposesLiveness() throws Exception {
     var disabledQueue = mock(DeadLetterQueue.class);
     var degradedQueue = mock(DeadLetterQueue.class);
     when(degradedQueue.deleteOlderThan(any())).thenThrow(blip());
@@ -117,7 +119,7 @@ class RetentionSweeperLivenessTest {
   }
 
   @Test
-  void inboxRetentionSweeper_exposesLiveness() throws InterruptedException {
+  void inboxRetentionSweeper_exposesLiveness() throws Exception {
     var disabledInbox = mock(CommandInbox.class);
     var degradedInbox = mock(CommandInbox.class);
     when(degradedInbox.deleteProcessedBefore(any())).thenThrow(blip());
@@ -132,7 +134,7 @@ class RetentionSweeperLivenessTest {
   }
 
   @Test
-  void outboxRetentionSweeper_exposesLiveness() throws InterruptedException {
+  void outboxRetentionSweeper_exposesLiveness() throws Exception {
     var disabledStore = mock(OutboxStore.class);
     var degradedStore = mock(OutboxStore.class);
     when(degradedStore.deleteDelivered(any())).thenThrow(blip());
@@ -149,7 +151,7 @@ class RetentionSweeperLivenessTest {
   }
 
   @Test
-  void sagaDeadLetterRetentionSweeper_exposesLiveness() throws InterruptedException {
+  void sagaDeadLetterRetentionSweeper_exposesLiveness() throws Exception {
     var disabledStore = mock(SagaDeadLetterStore.class);
     var degradedStore = mock(SagaDeadLetterStore.class);
     when(degradedStore.deleteOlderThan(any())).thenThrow(blip());

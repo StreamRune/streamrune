@@ -1,5 +1,7 @@
 package org.streamrune.core.crypto;
 
+import java.io.Serial;
+
 /**
  * A <b>deterministic</b> crypto failure — raised by {@code CryptoShreddingModule} for a mapping it
  * can never perform, and by a {@link CryptoEngine} for a deterministic verdict on the blob it was
@@ -49,7 +51,7 @@ package org.streamrune.core.crypto;
  */
 public class CryptoMappingException extends CryptoOperationException {
 
-  private static final long serialVersionUID = 1L;
+  @Serial private static final long serialVersionUID = 1L;
 
   public CryptoMappingException(String message) {
     super(message);

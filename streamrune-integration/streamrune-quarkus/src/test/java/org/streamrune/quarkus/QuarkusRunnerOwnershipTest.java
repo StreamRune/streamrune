@@ -171,7 +171,7 @@ class QuarkusRunnerOwnershipTest {
   void theFixtureCarriesTheRealProducersAnnotations(String producer) {
     Method real =
         declared(
-            producer.equals("multiProjectionRunner")
+            "multiProjectionRunner".equals(producer)
                 ? ProjectionProducer.class
                 : StreamRuneProducers.class,
             producer);

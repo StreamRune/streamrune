@@ -41,9 +41,9 @@ import org.streamrune.runtime.PollingProjectionRunner;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryProjectionRepository;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The crash test between the read-model write and the checkpoint, for both delivery modes, on
@@ -71,8 +71,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class ProjectionDeliveryModeCrashIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_crash_it");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_crash_it");
 
   static PGSimpleDataSource processorDs; // application_name = crash-it-processor
   static PGSimpleDataSource ownDs; // application_name = crash-it-own (the projection's own writes)
@@ -190,12 +190,11 @@ class ProjectionDeliveryModeCrashIT {
         };
     var runnerLog = attachRunnerLogAppender();
     Thread t = Thread.ofVirtual().start(() -> runner.run(name, both, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(30))
           .until(() -> failingOnce.getLastOffset(name).equals(GlobalOffset.of(2)));
     } finally {
-      runner.close();
       t.join(10_000);
       detachRunnerLogAppender(runnerLog);
     }

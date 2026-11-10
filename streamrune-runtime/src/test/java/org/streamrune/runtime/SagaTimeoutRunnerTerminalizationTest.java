@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -100,7 +101,7 @@ class SagaTimeoutRunnerTerminalizationTest {
   static class RecordingCommandBus implements CommandBus {
     final List<Command> executed = new ArrayList<>();
     final List<IdempotencyKey> keys = new ArrayList<>();
-    boolean alwaysFail = false;
+    boolean alwaysFail;
 
     @Override
     public boolean supportsIdempotentExecution() {
@@ -219,7 +220,7 @@ class SagaTimeoutRunnerTerminalizationTest {
     assertThat(bus.executed)
         .as("Undo command must have been dispatched")
         .hasSize(1)
-        .allMatch(c -> c instanceof Undo);
+        .allMatch(Undo.class::isInstance);
   }
 
   /**
@@ -364,8 +365,7 @@ class SagaTimeoutRunnerTerminalizationTest {
             .build();
 
     // Must not throw
-    org.junit.jupiter.api.Assertions.assertDoesNotThrow(
-        () -> throwingRunner.processTimedOutSaga(sagaId));
+    assertDoesNotThrow(() -> throwingRunner.processTimedOutSaga(sagaId));
 
     // Saga must be FAULTED in the store
     assertThat(
@@ -507,8 +507,7 @@ class SagaTimeoutRunnerTerminalizationTest {
     // Must not throw — stale-version conflict is silently skipped
     assertThat(staleRunner).satisfies(r -> assertThat(r).isNotNull()); // runner built OK
     // processTimedOutSaga must not propagate the OLE
-    org.junit.jupiter.api.Assertions.assertDoesNotThrow(
-        () -> staleRunner.processTimedOutSaga(sagaId));
+    assertDoesNotThrow(() -> staleRunner.processTimedOutSaga(sagaId));
 
     // Store still holds the pre-timeout status (our update did not land)
     var loaded =

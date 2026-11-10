@@ -423,7 +423,7 @@ class ProjectionAutoConfigTest {
   void aCglibProxiedBaseProjection_isRefusedAtStartup_naming_theBeanAndTheRemedy(String mode) {
     runner
         .withUserConfiguration(
-            mode.equals("continuous")
+            "continuous".equals(mode)
                 ? CglibProxiedContinuousConfig.class
                 : CglibProxiedScheduledConfig.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")

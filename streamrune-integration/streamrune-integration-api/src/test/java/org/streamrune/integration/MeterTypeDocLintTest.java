@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.fail;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -141,7 +140,7 @@ class MeterTypeDocLintTest {
 
   private static List<String> read(String relative) {
     try {
-      return Files.readAllLines(root().resolve(relative), StandardCharsets.UTF_8);
+      return Files.readAllLines(root().resolve(relative));
     } catch (IOException e) {
       throw new IllegalStateException("cannot read " + relative, e);
     }

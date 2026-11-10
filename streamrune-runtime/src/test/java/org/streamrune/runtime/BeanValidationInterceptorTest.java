@@ -1,6 +1,8 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import jakarta.validation.Validator;
 import jakarta.validation.ValidatorFactory;
@@ -73,7 +75,7 @@ class BeanValidationInterceptorTest {
 
     var ex = assertThrows(ValidationException.class, () -> interceptor.before(ctx));
     assertEquals(1, ex.errors().size());
-    assertEquals("name", ex.errors().get(0).field());
+    assertEquals("name", ex.errors().getFirst().field());
   }
 
   @Test
@@ -166,7 +168,7 @@ class BeanValidationInterceptorTest {
 
     var ex = assertThrows(ValidationException.class, () -> interceptor.before(ctx));
     assertEquals(1, ex.errors().size());
-    assertEquals("name", ex.errors().get(0).field());
+    assertEquals("name", ex.errors().getFirst().field());
   }
 
   /** The same constraints as {@link GroupedCommand}, without {@code @ValidationGroups}. */
@@ -192,7 +194,7 @@ class BeanValidationInterceptorTest {
 
     var ex = assertThrows(ValidationException.class, () -> interceptor.before(ctx));
     assertEquals(1, ex.errors().size());
-    assertEquals("quantity", ex.errors().get(0).field());
+    assertEquals("quantity", ex.errors().getFirst().field());
   }
 
   // --- Custom validator support ---
@@ -233,9 +235,9 @@ class BeanValidationInterceptorTest {
 
     var ex = assertThrows(ValidationException.class, () -> interceptor.before(ctx));
     assertEquals(1, ex.errors().size());
-    assertEquals("count", ex.errors().get(0).field());
-    assertEquals("Must be even", ex.errors().get(0).message());
-    assertEquals("EvenNumber", ex.errors().get(0).code());
+    assertEquals("count", ex.errors().getFirst().field());
+    assertEquals("Must be even", ex.errors().getFirst().message());
+    assertEquals("EvenNumber", ex.errors().getFirst().code());
   }
 
   // --- Cross-field validation support ---
@@ -280,8 +282,8 @@ class BeanValidationInterceptorTest {
     var ex = assertThrows(ValidationException.class, () -> interceptor.before(ctx));
     assertEquals(1, ex.errors().size());
     // Class-level constraint has empty property path
-    assertEquals("", ex.errors().get(0).field());
-    assertEquals("Start must be before end", ex.errors().get(0).message());
-    assertEquals("StartBeforeEnd", ex.errors().get(0).code());
+    assertEquals("", ex.errors().getFirst().field());
+    assertEquals("Start must be before end", ex.errors().getFirst().message());
+    assertEquals("StartBeforeEnd", ex.errors().getFirst().code());
   }
 }

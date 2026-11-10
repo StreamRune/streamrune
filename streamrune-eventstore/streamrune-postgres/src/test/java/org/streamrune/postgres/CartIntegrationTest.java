@@ -1,6 +1,12 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -38,9 +44,9 @@ import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.StreamRune;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Full integration test exercising the StreamRune builder, CartDecider, PostgreSQL event store, and
@@ -50,8 +56,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class CartIntegrationTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   static PGSimpleDataSource dataSource;
   static ObjectMapper objectMapper;
@@ -62,25 +68,34 @@ class CartIntegrationTest {
   sealed interface CartCommand extends org.streamrune.core.Command {
     record AddItem(String cartId, String sku, int qty) implements CartCommand {
       public AddItem {
-        if (qty <= 0) throw new IllegalArgumentException("Qty must be > 0");
-        if (cartId == null || cartId.isBlank())
+        if (qty <= 0) {
+          throw new IllegalArgumentException("Qty must be > 0");
+        }
+        if (cartId == null || cartId.isBlank()) {
           throw new IllegalArgumentException("Invalid cart ID");
-        if (sku == null || sku.isBlank()) throw new IllegalArgumentException("Invalid SKU");
+        }
+        if (sku == null || sku.isBlank()) {
+          throw new IllegalArgumentException("Invalid SKU");
+        }
       }
     }
 
     record RemoveItem(String cartId, String sku) implements CartCommand {
       public RemoveItem {
-        if (cartId == null || cartId.isBlank())
+        if (cartId == null || cartId.isBlank()) {
           throw new IllegalArgumentException("Invalid cart ID");
-        if (sku == null || sku.isBlank()) throw new IllegalArgumentException("Invalid SKU");
+        }
+        if (sku == null || sku.isBlank()) {
+          throw new IllegalArgumentException("Invalid SKU");
+        }
       }
     }
 
     record Checkout(String cartId) implements CartCommand {
       public Checkout {
-        if (cartId == null || cartId.isBlank())
+        if (cartId == null || cartId.isBlank()) {
           throw new IllegalArgumentException("Invalid cart ID");
+        }
       }
     }
   }
@@ -110,15 +125,21 @@ class CartIntegrationTest {
     public List<CartEvent> decide(CartCommand cmd, CartState state) {
       return switch (cmd) {
         case CartCommand.AddItem c -> {
-          if (state.isClosed()) throw new DomainException("Cart is closed");
+          if (state.isClosed()) {
+            throw new DomainException("Cart is closed");
+          }
           yield List.of(new CartEvent.ItemAdded(c.sku(), c.qty()));
         }
         case CartCommand.RemoveItem c -> {
-          if (state.isClosed()) throw new DomainException("Cart is closed");
+          if (state.isClosed()) {
+            throw new DomainException("Cart is closed");
+          }
           yield List.of(new CartEvent.ItemRemoved(c.sku()));
         }
         case CartCommand.Checkout _ -> {
-          if (state.isClosed()) throw new DomainException("Cart is already closed");
+          if (state.isClosed()) {
+            throw new DomainException("Cart is already closed");
+          }
           yield List.of(new CartEvent.CheckedOut());
         }
       };
@@ -242,12 +263,12 @@ class CartIntegrationTest {
     assertEquals(3, history.events().size());
 
     // Verify event types in order
-    assertInstanceOf(CartEvent.ItemAdded.class, history.events().get(0).event());
+    assertInstanceOf(CartEvent.ItemAdded.class, history.events().getFirst().event());
     assertInstanceOf(CartEvent.ItemAdded.class, history.events().get(1).event());
     assertInstanceOf(CartEvent.CheckedOut.class, history.events().get(2).event());
 
     // Verify event content
-    var firstAdd = (CartEvent.ItemAdded) history.events().get(0).event();
+    var firstAdd = (CartEvent.ItemAdded) history.events().getFirst().event();
     assertEquals("SKU-42", firstAdd.sku());
     assertEquals(3, firstAdd.qty());
 
@@ -256,7 +277,7 @@ class CartIntegrationTest {
     assertEquals(1, secondAdd.qty());
 
     // Verify metadata propagation from ScopedValue context
-    var metadata = history.events().get(0).metadata();
+    var metadata = history.events().getFirst().metadata();
     assertEquals(ctx.correlationId().value(), metadata.correlationId().value());
     assertEquals("test-user", metadata.userId().value());
   }

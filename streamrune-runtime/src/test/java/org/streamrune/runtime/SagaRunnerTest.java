@@ -2,7 +2,13 @@ package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.classfile.ClassFile;
 import java.lang.constant.ClassDesc;
@@ -126,7 +132,7 @@ class SagaRunnerTest {
 
   static class CapturingCommandBus implements CommandBus {
     final List<Object> dispatched = new ArrayList<>();
-    private RuntimeException failWith = null;
+    private RuntimeException failWith;
 
     @Override
     public boolean supportsIdempotentExecution() {
@@ -171,7 +177,7 @@ class SagaRunnerTest {
       return true;
     }
 
-    private RuntimeException failWith = null;
+    private RuntimeException failWith;
 
     void failNext(RuntimeException e) {
       this.failWith = e;
@@ -259,8 +265,8 @@ class SagaRunnerTest {
     runner.asEventListener().onEvents(List.of(event));
 
     assertEquals(1, commandBus.dispatched.size());
-    assertInstanceOf(FulfillOrder.class, commandBus.dispatched.get(0));
-    assertEquals("order-1", ((FulfillOrder) commandBus.dispatched.get(0)).orderId());
+    assertInstanceOf(FulfillOrder.class, commandBus.dispatched.getFirst());
+    assertEquals("order-1", ((FulfillOrder) commandBus.dispatched.getFirst()).orderId());
 
     var loaded =
         sagaStore.load(
@@ -369,8 +375,8 @@ class SagaRunnerTest {
     runner.asEventListener().onEvents(List.of(event));
 
     assertEquals(1, commandBus.dispatched.size());
-    assertInstanceOf(RefundOrder.class, commandBus.dispatched.get(0));
-    assertEquals("order-2", ((RefundOrder) commandBus.dispatched.get(0)).orderId());
+    assertInstanceOf(RefundOrder.class, commandBus.dispatched.getFirst());
+    assertEquals("order-2", ((RefundOrder) commandBus.dispatched.getFirst()).orderId());
   }
 
   @Test
@@ -431,7 +437,7 @@ class SagaRunnerTest {
     // ...but the skipped event is now recorded, so replayAll can re-deliver it after the fix ships.
     var entries = dlq.findBySaga(sagaId);
     assertEquals(1, entries.size(), "the skipped event must leave a dead-letter record");
-    assertEquals(event.globalOffset(), entries.get(0).eventOffset());
+    assertEquals(event.globalOffset(), entries.getFirst().eventOffset());
   }
 
   /**
@@ -472,8 +478,8 @@ class SagaRunnerTest {
     // Compensation was resumed: exactly the compensation command (RefundOrder) was dispatched —
     // never the forward FulfillOrder (no forward evolve/handle on a COMPENSATING saga).
     assertEquals(1, commandBus.dispatched.size());
-    assertInstanceOf(RefundOrder.class, commandBus.dispatched.get(0));
-    assertEquals("order-compensating", ((RefundOrder) commandBus.dispatched.get(0)).orderId());
+    assertInstanceOf(RefundOrder.class, commandBus.dispatched.getFirst());
+    assertEquals("order-compensating", ((RefundOrder) commandBus.dispatched.getFirst()).orderId());
 
     // The episode reached a terminal status at the resumed episode version (v2 -> v3), no re-claim.
     var after =
@@ -494,7 +500,7 @@ class SagaRunnerTest {
     // Set up a second failure for the compensation command
     var failingBus =
         new CommandBus() {
-          int callCount = 0;
+          int callCount;
 
           @Override
           public boolean supportsIdempotentExecution() {
@@ -573,8 +579,8 @@ class SagaRunnerTest {
    * exception.
    */
   static class NullReturningRouterSaga extends OrderFulfillmentSaga {
-    volatile boolean extractReturnsNull = false;
-    volatile boolean hookReturnsNull = false;
+    volatile boolean extractReturnsNull;
+    volatile boolean hookReturnsNull;
 
     @Override
     public SagaId extractSagaId(EventEnvelope event) {
@@ -631,10 +637,10 @@ class SagaRunnerTest {
     // resolved — the same entry class as a throwing extractSagaId).
     var entries = sagaDlq.findAll(10);
     assertEquals(1, entries.size(), "the null-return event must be quarantined");
-    assertNull(entries.get(0).sagaId(), "no saga id was resolvable — a null-saga entry");
-    assertEquals(poisonEvent.globalOffset(), entries.get(0).eventOffset());
+    assertNull(entries.getFirst().sagaId(), "no saga id was resolvable — a null-saga entry");
+    assertEquals(poisonEvent.globalOffset(), entries.getFirst().eventOffset());
     assertTrue(
-        entries.get(0).errorType().contains("NullPointerException"),
+        entries.getFirst().errorType().contains("NullPointerException"),
         "the deterministic contract violation is the recorded cause");
     // No saga row was created or faulted (there is no saga to fault), and the batch continued.
     assertEquals(0, commandBus.dispatched.size());
@@ -673,8 +679,8 @@ class SagaRunnerTest {
 
     var entries = sagaDlq.findAll(10);
     assertEquals(1, entries.size(), "the null-return event must be quarantined");
-    assertNull(entries.get(0).sagaId(), "no saga id was resolvable — a null-saga entry");
-    assertTrue(entries.get(0).errorType().contains("NullPointerException"));
+    assertNull(entries.getFirst().sagaId(), "no saga id was resolvable — a null-saga entry");
+    assertTrue(entries.getFirst().errorType().contains("NullPointerException"));
     assertEquals(0, commandBus.dispatched.size());
   }
 
@@ -1112,7 +1118,7 @@ class SagaRunnerTest {
     correlatingRunner.asEventListener().onEvents(List.of(event));
 
     assertEquals(1, capturingBus.contexts.size());
-    RequestContext ctx = capturingBus.contexts.get(0);
+    RequestContext ctx = capturingBus.contexts.getFirst();
     assertNotNull(ctx, "the saga runner must bind a request context around the command bus");
     // The reserved form of the saga id; the saga id is "saga-" + orderId (see extractSagaId).
     assertEquals("streamrune:saga:saga-order-1", ctx.correlationId().value());
@@ -1145,7 +1151,7 @@ class SagaRunnerTest {
         .run(() -> correlatingRunner.asEventListener().onEvents(List.of(event)));
 
     assertEquals(1, capturingBus.contexts.size());
-    RequestContext ctx = capturingBus.contexts.get(0);
+    RequestContext ctx = capturingBus.contexts.getFirst();
     assertNotNull(ctx);
     // correlation id is overridden to the reserved form of the saga id...
     assertEquals("streamrune:saga:saga-order-7", ctx.correlationId().value());
@@ -1180,7 +1186,7 @@ class SagaRunnerTest {
     assertEquals(2, capturingBus.contexts.size());
     // The compensation command was the one that actually dispatched (primary threw).
     assertEquals(1, capturingBus.dispatched.size());
-    assertInstanceOf(RefundOrder.class, capturingBus.dispatched.get(0));
+    assertInstanceOf(RefundOrder.class, capturingBus.dispatched.getFirst());
     // Both the primary and the compensation ran under the saga-correlated context.
     for (RequestContext ctx : capturingBus.contexts) {
       assertNotNull(ctx, "every dispatch (primary + compensation) must bind a context");

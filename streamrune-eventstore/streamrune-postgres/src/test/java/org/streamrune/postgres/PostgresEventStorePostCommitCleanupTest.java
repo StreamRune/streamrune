@@ -1,6 +1,9 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -33,9 +36,9 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Regression: {@link PostgresEventStore#append} / {@link PostgresEventStore#appendWithKey} commit
@@ -55,8 +58,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresEventStorePostCommitCleanupTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("postcommit_cleanup_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("postcommit_cleanup_test");
 
   static PGSimpleDataSource realDataSource;
   static ObjectMapper objectMapper;
@@ -219,7 +222,7 @@ class PostgresEventStorePostCommitCleanupTest {
   static final class PostCommitCleanupFailingDataSource implements DataSource {
     private final DataSource delegate;
     private final CleanupFault fault;
-    private volatile boolean triggered = false;
+    private volatile boolean triggered;
 
     PostCommitCleanupFailingDataSource(DataSource delegate, CleanupFault fault) {
       this.delegate = delegate;
@@ -235,21 +238,21 @@ class PostgresEventStorePostCommitCleanupTest {
       Connection real = delegate.getConnection();
       var handler =
           new InvocationHandler() {
-            private boolean committed = false;
+            private boolean committed;
 
             @Override
             public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
               String name = method.getName();
               if (committed
                   && fault == CleanupFault.SET_AUTOCOMMIT
-                  && name.equals("setAutoCommit")
+                  && "setAutoCommit".equals(name)
                   && args != null
                   && Boolean.TRUE.equals(args[0])) {
                 triggered = true;
                 throw new SQLException(
                     "injected post-commit setAutoCommit failure (connection died)", "08006");
               }
-              if (committed && fault == CleanupFault.CLOSE && name.equals("close")) {
+              if (committed && fault == CleanupFault.CLOSE && "close".equals(name)) {
                 triggered = true;
                 // Close the real connection first so the container connection is not leaked, then
                 // surface the failure the store must swallow.
@@ -267,7 +270,7 @@ class PostgresEventStorePostCommitCleanupTest {
               } catch (java.lang.reflect.InvocationTargetException e) {
                 throw e.getCause();
               }
-              if (name.equals("commit")) {
+              if ("commit".equals(name)) {
                 committed = true;
               }
               return out;

@@ -1,6 +1,10 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -218,7 +222,7 @@ class PollingEventSubscriptionTest {
   }
 
   @Test
-  void startAndCloseToggleRunningFlag() throws InterruptedException {
+  void startAndCloseToggleRunningFlag() throws Exception {
     var store = new InMemoryEventStore();
     var sub =
         new PollingEventSubscription(
@@ -259,7 +263,7 @@ class PollingEventSubscriptionTest {
   }
 
   @Test
-  void closeWaitsForInFlightBatch() throws InterruptedException {
+  void closeWaitsForInFlightBatch() throws Exception {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("close-wait"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
@@ -340,7 +344,7 @@ class PollingEventSubscriptionTest {
   }
 
   @Test
-  void backgroundPollLoopDeliversEvents() throws InterruptedException {
+  void backgroundPollLoopDeliversEvents() throws Exception {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-bg"));
     store.append(s, List.of(envelope(s, 1), envelope(s, 2)), Version.initial());
@@ -365,7 +369,7 @@ class PollingEventSubscriptionTest {
   }
 
   @Test
-  void backgroundPollLoopSurvivesListenerExceptionAndRecovers() throws InterruptedException {
+  void backgroundPollLoopSurvivesListenerExceptionAndRecovers() throws Exception {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-err"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
@@ -387,7 +391,7 @@ class PollingEventSubscriptionTest {
             10);
 
     sub.start();
-    try {
+    try (sub) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       // Wait for BOTH observable effects of the recovery, not just the first one. The listener
       // appends to `received` from inside the poll cycle, while the loop clears its failure
@@ -401,13 +405,11 @@ class PollingEventSubscriptionTest {
       assertTrue(sub.isRunning(), "transient failures must not stop the subscription");
       assertEquals(1, received.size(), "events must be delivered after the failures pass");
       assertEquals(0, sub.consecutiveFailures(), "failure counter resets after recovery");
-    } finally {
-      sub.close();
     }
   }
 
   @Test
-  void pollThreadDyingOnUncaughtErrorFlipsIsRunningFalse() throws InterruptedException {
+  void pollThreadDyingOnUncaughtErrorFlipsIsRunningFalse() throws Exception {
     // ResilientPollLoop retries only RuntimeException; a java.lang.Error (AssertionError,
     // NoClassDefFoundError/LinkageError, StackOverflowError) escapes it and kills the virtual poll
     // thread. Without a finally on runPollLoop() the lifecycle stays RUNNING, so isRunning() keeps
@@ -440,7 +442,7 @@ class PollingEventSubscriptionTest {
             10);
 
     sub.start();
-    try {
+    try (sub) {
       assertTrue(sub.isRunning(), "subscription must be RUNNING right after start()");
       seenRunning.countDown();
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -451,13 +453,11 @@ class PollingEventSubscriptionTest {
           sub.isRunning(),
           "an uncaught Error that kills the poll thread must flip isRunning() to false so the"
               + " owning runner surfaces a terminal ERROR — not leave it stuck RUNNING");
-    } finally {
-      sub.close();
     }
   }
 
   @Test
-  void consecutiveFailuresReportedWhileListenerKeepsFailing() throws InterruptedException {
+  void consecutiveFailuresReportedWhileListenerKeepsFailing() throws Exception {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-degraded"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
@@ -474,15 +474,13 @@ class PollingEventSubscriptionTest {
             10);
 
     sub.start();
-    try {
+    try (sub) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (sub.consecutiveFailures() < 1 && System.nanoTime() < deadline) {
         Thread.sleep(20);
       }
       assertTrue(sub.isRunning(), "subscription stays RUNNING (degraded) while retrying");
       assertTrue(sub.consecutiveFailures() >= 1, "degraded status must be observable");
-    } finally {
-      sub.close();
     }
   }
 

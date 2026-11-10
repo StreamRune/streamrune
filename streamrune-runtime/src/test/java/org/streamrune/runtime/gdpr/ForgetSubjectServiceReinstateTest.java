@@ -1,6 +1,13 @@
 package org.streamrune.runtime.gdpr;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -274,7 +281,7 @@ class ForgetSubjectServiceReinstateTest {
     assertTrue(
         auditLog.stream()
             .allMatch(e -> e.aggregateId().equals(AggregateId.of(SUBJECT.redacted()))));
-    assertEquals(UserId.of("dpo-1"), auditLog.get(0).userId());
+    assertEquals(UserId.of("dpo-1"), auditLog.getFirst().userId());
     assertEquals(DPO, auditLog.get(1).userId());
   }
 

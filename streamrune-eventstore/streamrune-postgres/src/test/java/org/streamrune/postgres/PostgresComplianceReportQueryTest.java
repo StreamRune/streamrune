@@ -1,6 +1,8 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import org.junit.jupiter.api.BeforeAll;
@@ -16,16 +18,16 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.UserId;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 @Testcontainers
 class PostgresComplianceReportQueryTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME)
           .withDatabaseName("streamrune_compliance_test");
 
   private static PGSimpleDataSource dataSource;

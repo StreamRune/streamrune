@@ -1,6 +1,9 @@
 package org.streamrune.micronaut;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.List;
@@ -58,15 +61,12 @@ class StreamRuneMicronautPropertiesTest {
   void outboxSkippedRetentionMaxAgeCanBeDisabled() {
     // Zero disables the SKIPPED sweep — the sweeper treats <= 0 as "do not delete SKIPPED". FAILED
     // entries are never pruned in either case.
-    var p =
+    try (var p =
         io.micronaut.context.ApplicationContext.run(
-            java.util.Map.of("streamrune.outbox.skipped-retention-max-age", "0s"));
-    try {
+            java.util.Map.of("streamrune.outbox.skipped-retention-max-age", "0s"))) {
       assertEquals(
           Duration.ZERO,
           p.getBean(StreamRuneMicronautProperties.class).outboxSkippedRetentionMaxAge());
-    } finally {
-      p.close();
     }
   }
 
@@ -81,16 +81,13 @@ class StreamRuneMicronautPropertiesTest {
 
   @Test
   void subscriptionSingleActiveConsumerCanBeDisabled() {
-    var p =
+    try (var p =
         io.micronaut.context.ApplicationContext.run(
-            java.util.Map.of("streamrune.subscription.single-active-consumer.enabled", "false"));
-    try {
+            java.util.Map.of("streamrune.subscription.single-active-consumer.enabled", "false"))) {
       assertFalse(
           org.streamrune.integration.SingleActiveConsumerSetting.enabled(
               p.getBean(StreamRuneMicronautProperties.class)
                   .subscriptionSingleActiveConsumerEnabled()));
-    } finally {
-      p.close();
     }
   }
 

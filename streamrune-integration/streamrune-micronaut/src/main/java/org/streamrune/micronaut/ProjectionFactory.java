@@ -578,7 +578,9 @@ public class ProjectionFactory {
 
   private static ProjectionErrorStrategy parseStrategy(
       String prop, ProjectionErrorStrategy fallback, String name) {
-    if (prop == null || prop.isBlank()) return fallback;
+    if (prop == null || prop.isBlank()) {
+      return fallback;
+    }
     try {
       return ProjectionErrorStrategy.valueOf(prop.trim().toUpperCase());
     } catch (IllegalArgumentException e) {
@@ -610,7 +612,7 @@ public class ProjectionFactory {
               + " store. Ensure exactly one ProjectionDeadLetterStore bean is resolvable (remove"
               + " duplicates or qualify one with @Primary).");
     }
-    return dlqs.get(0);
+    return dlqs.getFirst();
   }
 
   /** One runner's registrations, as the processor-resolution rule reads them. */

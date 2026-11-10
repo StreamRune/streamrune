@@ -37,9 +37,9 @@ import org.streamrune.core.crypto.KeyNotFoundException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * A replica that cannot hear forgets — its {@code LISTEN} has not taken effect yet, or its LISTEN
@@ -54,8 +54,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresCryptoForgetListenWindowIntegrationTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   private static final byte[] PLAINTEXT = "alice@example.com".getBytes(StandardCharsets.UTF_8);
 
@@ -524,14 +524,14 @@ class PostgresCryptoForgetListenWindowIntegrationTest {
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
       String name = method.getName();
-      if (name.equals("unwrap") && args[0] == PGConnection.class) {
+      if ("unwrap".equals(name) && args[0] == PGConnection.class) {
         return proxy;
       }
-      if (silenced && name.equals("getNotifications")) {
+      if (silenced && "getNotifications".equals(name)) {
         Thread.sleep(args == null ? 0 : (int) args[0]);
         return new PGNotification[0];
       }
-      if (silenced && name.equals("isValid")) {
+      if (silenced && "isValid".equals(name)) {
         probing.countDown();
         probeFails.await();
         return false;

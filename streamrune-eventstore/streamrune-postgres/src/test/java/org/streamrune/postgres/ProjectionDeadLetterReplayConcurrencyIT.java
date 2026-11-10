@@ -37,9 +37,9 @@ import org.streamrune.runtime.ProjectionDeadLetterReplayer.ReplayResult;
 import org.streamrune.test.EventStoreFixture;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * A dead-letter replay beside a live batch, on PostgreSQL, over a read-modify-write projection
@@ -72,8 +72,8 @@ class ProjectionDeadLetterReplayConcurrencyIT {
   private static final String ROW = "p-1";
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_replay_it");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_replay_it");
 
   static PGSimpleDataSource ds;
   static PGSimpleDataSource observerDs;

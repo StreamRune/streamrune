@@ -132,7 +132,7 @@ public final class SagaRetentionValidator {
       String configured =
           deadLetterUnbounded
               ? (sagaDeadLetterRetentionMaxAge + " (pruning disabled)")
-              : "" + sagaDeadLetterRetentionMaxAge;
+              : String.valueOf(sagaDeadLetterRetentionMaxAge);
       throw new IllegalStateException(
           "StreamRune saga config: streamrune.saga.dead-letter-retention-max-age ("
               + configured

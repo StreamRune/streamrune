@@ -152,7 +152,7 @@ class ForwardingCommandBusTest {
     decorator.execute(command, key);
 
     assertEquals(List.of(command), counted);
-    assertSame(command, received.get(0));
+    assertSame(command, received.getFirst());
     assertSame(key, received.get(1));
     assertSame(Thread.currentThread(), received.get(2), "forwarded on the calling thread");
   }

@@ -1,6 +1,10 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.List;
@@ -41,11 +45,9 @@ class HybridEventSubscriptionLifecycleTest {
     var sub = createSubscription();
 
     sub.start();
-    try {
+    try (sub) {
       assertEquals(SubscriptionLifecycleState.RUNNING, sub.state());
       assertTrue(sub.isRunning());
-    } finally {
-      sub.close();
     }
   }
 
@@ -53,12 +55,10 @@ class HybridEventSubscriptionLifecycleTest {
   void state_isPaused_afterPause() {
     var sub = createSubscription();
     sub.start();
-    try {
+    try (sub) {
       sub.pause();
       assertEquals(SubscriptionLifecycleState.PAUSED, sub.state());
       assertFalse(sub.isRunning());
-    } finally {
-      sub.close();
     }
   }
 
@@ -66,13 +66,11 @@ class HybridEventSubscriptionLifecycleTest {
   void state_isRunning_afterResume() {
     var sub = createSubscription();
     sub.start();
-    try {
+    try (sub) {
       sub.pause();
       sub.resume();
       assertEquals(SubscriptionLifecycleState.RUNNING, sub.state());
       assertTrue(sub.isRunning());
-    } finally {
-      sub.close();
     }
   }
 
@@ -113,11 +111,9 @@ class HybridEventSubscriptionLifecycleTest {
   void resume_throwsIllegalStateException_whenNotPaused() {
     var sub = createSubscription();
     sub.start();
-    try {
+    try (sub) {
       // RUNNING — resume must reject
       assertThrows(IllegalStateException.class, sub::resume);
-    } finally {
-      sub.close();
     }
   }
 
@@ -135,10 +131,8 @@ class HybridEventSubscriptionLifecycleTest {
   void start_throwsIllegalStateException_whenAlreadyRunning() {
     var sub = createSubscription();
     sub.start();
-    try {
+    try (sub) {
       assertThrows(IllegalStateException.class, sub::start);
-    } finally {
-      sub.close();
     }
   }
 
@@ -172,14 +166,12 @@ class HybridEventSubscriptionLifecycleTest {
     // keeps retrying (delivery meanwhile continues via polling).
     var sub = createSubscription();
     sub.start();
-    try {
+    try (sub) {
       assertTrue(sub.pushHealthy(), "listener kept alive by unbounded reconnect while started");
       // Still healthy after a short spell (would have exceeded the old 5-attempt cap by now).
       Thread.sleep(200);
       assertTrue(
           sub.pushHealthy(), "listener must not permanently give up on a failing connection");
-    } finally {
-      sub.close();
     }
   }
 
@@ -213,7 +205,7 @@ class HybridEventSubscriptionLifecycleTest {
             SubscriptionConfig.pollingOnly(Duration.ofMillis(50)),
             100);
     sub.start();
-    try {
+    try (sub) {
       // Give a would-be reconnect loop ample time to try opening LISTEN connections.
       Thread.sleep(300);
       assertEquals(
@@ -222,8 +214,6 @@ class HybridEventSubscriptionLifecycleTest {
           "pollingOnly must open NO LISTEN connection (LISTEN/NOTIFY disabled)");
       assertTrue(sub.isRunning(), "polling delivery must still be running");
       assertFalse(sub.pushHealthy(), "with LISTEN/NOTIFY disabled the push path is not active");
-    } finally {
-      sub.close();
     }
   }
 

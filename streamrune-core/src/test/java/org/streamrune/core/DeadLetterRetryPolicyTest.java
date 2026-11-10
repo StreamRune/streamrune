@@ -1,6 +1,9 @@
 package org.streamrune.core;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
@@ -125,7 +128,8 @@ class DeadLetterRetryPolicyTest {
     var policy =
         new DeadLetterRetryPolicy(
             5, Duration.ofSeconds(1), 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
-    long sum1 = 0, sum3 = 0;
+    long sum1 = 0;
+    long sum3 = 0;
     for (int i = 0; i < 100; i++) {
       sum1 += policy.delayForAttempt(1).toMillis();
       sum3 += policy.delayForAttempt(3).toMillis();

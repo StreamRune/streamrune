@@ -2,7 +2,12 @@ package org.streamrune.postgres;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -35,16 +40,16 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 @Testcontainers
 class PostgresSagaStoreTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   // Jackson-annotated saga state for integration tests
   static class TestSagaState implements SagaState {
@@ -695,8 +700,8 @@ class PostgresSagaStoreTest {
     var result = sagaStore.findCompensating(type, Instant.now().plusSeconds(60), 10);
 
     assertThat(result).hasSize(1);
-    assertThat(result.get(0).sagaId()).isEqualTo(compensating);
-    assertThat(result.get(0).updatedAt()).isNotNull();
+    assertThat(result.getFirst().sagaId()).isEqualTo(compensating);
+    assertThat(result.getFirst().updatedAt()).isNotNull();
   }
 
   @Test
@@ -949,7 +954,7 @@ class PostgresSagaStoreTest {
             PostgresSagaStoreTest.class.getClassLoader(),
             new Class<?>[] {DataSource.class},
             (proxy, method, args) -> {
-              if (method.getName().equals("getConnection")) {
+              if ("getConnection".equals(method.getName())) {
                 throw new SQLException("connection refused");
               }
               throw new UnsupportedOperationException(method.getName());

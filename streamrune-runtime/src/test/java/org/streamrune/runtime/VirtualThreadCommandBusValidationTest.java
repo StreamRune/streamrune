@@ -83,7 +83,7 @@ class VirtualThreadCommandBusValidationTest {
     var invalidCommand = new CreateItem(UUID.randomUUID().toString(), null, 5);
     var ex = assertThrows(ValidationException.class, () -> bus.execute(invalidCommand));
     assertEquals(1, ex.errors().size());
-    assertEquals("name", ex.errors().get(0).field());
+    assertEquals("name", ex.errors().getFirst().field());
 
     bus.close();
   }
@@ -97,7 +97,7 @@ class VirtualThreadCommandBusValidationTest {
     var result = bus.execute(validCommand);
 
     assertEquals(1, result.events().size());
-    assertInstanceOf(ItemCreated.class, result.events().get(0));
+    assertInstanceOf(ItemCreated.class, result.events().getFirst());
 
     bus.close();
   }
@@ -110,7 +110,7 @@ class VirtualThreadCommandBusValidationTest {
     // quantity=-1 violates @Positive — validation should fail before locking
     var invalidCommand = new CreateItem(UUID.randomUUID().toString(), "Widget", -1);
     var ex = assertThrows(ValidationException.class, () -> bus.execute(invalidCommand));
-    assertEquals("quantity", ex.errors().get(0).field());
+    assertEquals("quantity", ex.errors().getFirst().field());
 
     bus.close();
   }

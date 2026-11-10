@@ -1,7 +1,9 @@
 package org.streamrune.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.Map;
@@ -158,7 +160,7 @@ class StreamRunePropertiesTest {
     var bound =
         new Binder(
                 org.springframework.boot.context.properties.source.ConfigurationPropertySources
-                    .from(loaded.get(0)))
+                    .from(loaded.getFirst()))
             .bindOrCreate("streamrune", Bindable.of(StreamRuneProperties.class));
     assertThat(bound.saga().forwardFence()).isEqualTo("true");
     assertThat(

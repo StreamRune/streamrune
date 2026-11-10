@@ -63,7 +63,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldReturnUpWhenDatabaseIsAvailable() throws SQLException {
+  void shouldReturnUpWhenDatabaseIsAvailable() throws Exception {
     DataSource ds = validDataSource();
     stubEmptyEventStream(ds);
 
@@ -74,7 +74,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldReturnDownWhenDatabaseIsUnavailable() throws SQLException {
+  void shouldReturnDownWhenDatabaseIsUnavailable() throws Exception {
     DataSource ds = mock(DataSource.class);
     when(ds.getConnection()).thenThrow(new SQLException("Connection refused"));
 
@@ -86,7 +86,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldReturnDownWhenConnectionIsInvalid() throws SQLException {
+  void shouldReturnDownWhenConnectionIsInvalid() throws Exception {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
@@ -99,7 +99,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldReportLatestGlobalOffsetAndTimestamp() throws SQLException {
+  void shouldReportLatestGlobalOffsetAndTimestamp() throws Exception {
     DataSource ds = validDataSource();
     stubLatestEvent(ds, 42L, OffsetDateTime.of(2026, 4, 23, 10, 0, 0, 0, ZoneOffset.UTC));
 
@@ -113,7 +113,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldReportZeroOffsetWhenEventStreamIsEmpty() throws SQLException {
+  void shouldReportZeroOffsetWhenEventStreamIsEmpty() throws Exception {
     DataSource ds = validDataSource();
     stubEmptyEventStream(ds);
 
@@ -125,7 +125,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldStayUpAndReportErrorWhenHeadProbeFails() throws SQLException {
+  void shouldStayUpAndReportErrorWhenHeadProbeFails() throws Exception {
     DataSource ds = validDataSource();
     when(ds.getConnection().prepareStatement(anyString()))
         .thenThrow(new SQLException("relation \"event_stream\" does not exist"));
@@ -139,7 +139,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldIncludeSubscriptionHealthWhenContributorPresent() throws SQLException {
+  void shouldIncludeSubscriptionHealthWhenContributorPresent() throws Exception {
     DataSource ds = validDataSource();
     stubEmptyEventStream(ds);
 
@@ -164,7 +164,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void rendersTheRoleOfEachSubscription() throws SQLException {
+  void rendersTheRoleOfEachSubscription() throws Exception {
     DataSource ds = validDataSource();
     stubEmptyEventStream(ds);
     var contributor = mock(SubscriptionHealthContributor.class);
@@ -198,7 +198,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldReturnDownWhenSubscriptionIsDown() throws SQLException {
+  void shouldReturnDownWhenSubscriptionIsDown() throws Exception {
     DataSource ds = validDataSource();
     stubEmptyEventStream(ds);
 
@@ -241,7 +241,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void aSubscriptionFarBehindTheHeadKeepsTheCheckUp_withItsLagInTheDetails() throws SQLException {
+  void aSubscriptionFarBehindTheHeadKeepsTheCheckUp_withItsLagInTheDetails() throws Exception {
     // A projection replaying the store from offset 0 (new, or reset for a rebuild) is behind on
     // every replica alike, because lag is measured against the shared checkpoint. The check is the
     // one a readiness probe consults, so lag must not turn it DOWN: it is reported as a DEGRADED
@@ -260,7 +260,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void aTerminallyHaltedSubscriptionTurnsTheCheckDown() throws SQLException {
+  void aTerminallyHaltedSubscriptionTurnsTheCheckDown() throws Exception {
     DataSource ds = validDataSource();
     stubEmptyEventStream(ds);
     var contributor = contributorWithOrdersAt(10, 10);
@@ -275,7 +275,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void theOverallStatusFollowsTheSubscriptionDetailsItReports() throws SQLException {
+  void theOverallStatusFollowsTheSubscriptionDetailsItReports() throws Exception {
     // The contributor computes health afresh on every call; the check reads it once, so it can
     // never be UP while its own details show a DOWN subscription (or the reverse).
     DataSource ds = validDataSource();
@@ -317,7 +317,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldReturnDownWhenBackgroundRelayIsDown() throws SQLException {
+  void shouldReturnDownWhenBackgroundRelayIsDown() throws Exception {
     // A started relay whose poll thread died must flip /health to DOWN and expose
     // details.
     DataSource ds = validDataSource();
@@ -333,7 +333,7 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldStayUpAndReportRelayDetailsWhenBackgroundRelayIsHealthy() throws SQLException {
+  void shouldStayUpAndReportRelayDetailsWhenBackgroundRelayIsHealthy() throws Exception {
     DataSource ds = validDataSource();
     stubEmptyEventStream(ds);
 

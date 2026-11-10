@@ -1,6 +1,12 @@
 package org.streamrune.quarkus;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 import jakarta.enterprise.inject.Instance;
@@ -1041,18 +1047,15 @@ class ProjectionProducerTest {
   @Test
   void tlBaseProjection_overTheProcessorBean_boots() throws Exception {
     var repo = new InMemoryProjectionRepository();
-    var runner =
+    try (var runner =
         multi(
             instanceOf(new TlBaseProjection(repo)),
             mock(EventStore.class),
             repo,
             processorsOf(repo),
-            noLeadership());
-    try {
+            noLeadership())) {
       assertNotNull(runner);
       assertSame(repo, atomicProcessorOf(runner));
-    } finally {
-      runner.close();
     }
   }
 
@@ -1104,19 +1107,16 @@ class ProjectionProducerTest {
             getClass().getClassLoader(),
             new Class<?>[] {ProjectionRepository.class, AtomicBatchProcessor.class},
             (p, m, a) -> m.invoke(repo, a));
-    var runner =
+    try (var runner =
         multi(
             instanceOf(new TlBaseProjection((ProjectionRepository) proxy)),
             mock(EventStore.class),
             repo,
             processorsOf((AtomicBatchProcessor) proxy),
-            noLeadership());
-    try {
+            noLeadership())) {
       assertNotNull(runner);
       assertSame(
           proxy, atomicProcessorOf(runner), "the forwarding proxy is the runner's processor");
-    } finally {
-      runner.close();
     }
   }
 
@@ -1132,7 +1132,7 @@ class ProjectionProducerTest {
             processorsOf(repoA),
             noLeadership());
     runner.start();
-    try {
+    try (runner) {
       // Each registration runs on a thread of its own, and a batch's read-model write lands before
       // its checkpoint: wait for all three outcomes, not only the first one.
       Awaitility.await()
@@ -1152,8 +1152,6 @@ class ProjectionProducerTest {
                     repoA.committedOffset(ProjectionName.of("alo_base")),
                     "the at-least-once projection's checkpoint is in the processor's store");
               });
-    } finally {
-      runner.close();
     }
     assertFalse(
         repoA.hasReadModels(ProjectionName.of("alo_base")),
@@ -1165,20 +1163,17 @@ class ProjectionProducerTest {
 
   @Test
   void aloOnly_noLeadership_selectsTheNonatomicProcessor_evenWhenABeanExists() throws Exception {
-    var runner =
+    try (var runner =
         multi(
             instanceOf(new ContProjection()),
             mock(EventStore.class),
             mock(OffsetStore.class),
             processorsOf(new InMemoryProjectionRepository()),
-            noLeadership());
-    try {
+            noLeadership())) {
       assertSame(
           AtomicBatchProcessor.nonAtomicAtLeastOnce(),
           atomicProcessorOf(runner),
           "the rule selects it; the bean's presence selects nothing");
-    } finally {
-      runner.close();
     }
   }
 
@@ -1206,18 +1201,15 @@ class ProjectionProducerTest {
   @Test
   void aloOnly_realLeadership_withTheBean_bootsAndUsesIt() throws Exception {
     var repo = new InMemoryProjectionRepository();
-    var runner =
+    try (var runner =
         multi(
             instanceOf(new ContProjection()),
             mock(EventStore.class),
             mock(OffsetStore.class),
             processorsOf(repo),
-            realLeadership());
-    try {
+            realLeadership())) {
       // Fencing selects the bean although every registration is at-least-once.
       assertSame(repo, atomicProcessorOf(runner));
-    } finally {
-      runner.close();
     }
   }
 
@@ -1245,17 +1237,14 @@ class ProjectionProducerTest {
    */
   @Test
   void aNullProcessorProduct_countsAsNoBean() throws Exception {
-    var runner =
+    try (var runner =
         multi(
             instanceOf(new ContProjection()),
             mock(EventStore.class),
             mock(OffsetStore.class),
             nullProcessorProduct(),
-            noLeadership());
-    try {
+            noLeadership())) {
       assertSame(AtomicBatchProcessor.nonAtomicAtLeastOnce(), atomicProcessorOf(runner));
-    } finally {
-      runner.close();
     }
     var ex =
         assertThrows(
@@ -1357,28 +1346,22 @@ class ProjectionProducerTest {
     assertTrue(ex.getMessage().contains("'qsched_tl'"), ex.getMessage());
     assertTrue(ex.getMessage().contains("does not write through"), ex.getMessage());
 
-    ScheduledProjectionRunner runner =
-        scheduled(instanceOf(new SchedProjection()), processorsOf(repo));
-    try {
+    try (ScheduledProjectionRunner runner =
+        scheduled(instanceOf(new SchedProjection()), processorsOf(repo))) {
       assertNotNull(runner);
       assertSame(
           AtomicBatchProcessor.nonAtomicAtLeastOnce(),
           atomicProcessorOf(runner),
           "an at-least-once scheduled runner without leadership is not given the bean");
-    } finally {
-      runner.close();
     }
   }
 
   @Test
   void scheduledTlBase_overTheProcessorBean_bootsAndUsesIt() throws Exception {
     var repo = new InMemoryProjectionRepository();
-    ScheduledProjectionRunner runner =
-        scheduled(instanceOf(new SchedTlBaseProjection(repo)), processorsOf(repo));
-    try {
+    try (ScheduledProjectionRunner runner =
+        scheduled(instanceOf(new SchedTlBaseProjection(repo)), processorsOf(repo))) {
       assertSame(repo, atomicProcessorOf(runner));
-    } finally {
-      runner.close();
     }
   }
 

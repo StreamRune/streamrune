@@ -1,6 +1,13 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -77,7 +84,7 @@ class SseEventPublisherTest {
       publisher.publish(envelope);
 
       Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> received.size() == 1);
-      assertSame(envelope, received.get(0));
+      assertSame(envelope, received.getFirst());
     }
   }
 
@@ -90,7 +97,7 @@ class SseEventPublisherTest {
   }
 
   @Test
-  void unsubscribeRemovesSubscriber() throws InterruptedException {
+  void unsubscribeRemovesSubscriber() throws Exception {
     try (var publisher = new SseEventPublisher()) {
       var streamId = StreamId.of(TYPE, AggregateId.of("test-stream"));
       var received = new CopyOnWriteArrayList<EventEnvelope>();
@@ -313,7 +320,7 @@ class SseEventPublisherTest {
   }
 
   @Test
-  void slowSubscriberDoesNotStallFastSubscriber() throws InterruptedException {
+  void slowSubscriberDoesNotStallFastSubscriber() throws Exception {
     try (var publisher = new SseEventPublisher()) {
       var streamId = StreamId.of(TYPE, AggregateId.of("test-stream"));
       var release = new CountDownLatch(1);
@@ -344,7 +351,7 @@ class SseEventPublisherTest {
   }
 
   @Test
-  void publishNeverBlocksOnStuckConsumer() throws InterruptedException {
+  void publishNeverBlocksOnStuckConsumer() throws Exception {
     // Capacity 1: the worker takes one event (and blocks forever in send), the queue then holds
     // one,
     // and every further publish offers to a full queue -> evicts without blocking the publisher.
@@ -391,7 +398,7 @@ class SseEventPublisherTest {
   }
 
   @Test
-  void evictedSlowSubscriberIsReapedAndReceivesNoMoreEvents() throws InterruptedException {
+  void evictedSlowSubscriberIsReapedAndReceivesNoMoreEvents() throws Exception {
     try (var publisher = new SseEventPublisher(1)) {
       var streamId = StreamId.of(TYPE, AggregateId.of("test-stream"));
       var gate = new CountDownLatch(1);
@@ -430,7 +437,7 @@ class SseEventPublisherTest {
   }
 
   @Test
-  void unsubscribeDoesNotFireDisconnectHook() throws InterruptedException {
+  void unsubscribeDoesNotFireDisconnectHook() throws Exception {
     try (var publisher = new SseEventPublisher()) {
       var streamId = StreamId.of(TYPE, AggregateId.of("test-stream"));
       var hookCalls = new AtomicInteger(0);
@@ -445,7 +452,7 @@ class SseEventPublisherTest {
   }
 
   @Test
-  void concurrentSubscribeUnsubscribeDoesNotThrow() throws InterruptedException {
+  void concurrentSubscribeUnsubscribeDoesNotThrow() throws Exception {
     try (var publisher = new SseEventPublisher()) {
       var streamId = StreamId.of(TYPE, AggregateId.of("test-stream"));
       var errors = new AtomicReference<Exception>(null);
@@ -486,7 +493,7 @@ class SseEventPublisherTest {
   }
 
   @Test
-  void subscribeRacingWithUnsubscribeNeverLosesTheNewSubscriber() throws InterruptedException {
+  void subscribeRacingWithUnsubscribeNeverLosesTheNewSubscriber() throws Exception {
     // Regression: subscribe() used computeIfAbsent(...).add(...), where the add ran outside the
     // map's per-key lock. A concurrent unsubscribe() of the last remaining subscriber could
     // remove the mapping in between, leaving the new subscriber on an orphaned list — registered

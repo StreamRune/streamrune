@@ -1,6 +1,10 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 import java.util.List;
@@ -364,7 +368,7 @@ class SubscriptionHealthContributorTest {
     assertEquals(SubscriptionHealth.Status.DEGRADED, contributor.overallStatus());
     var orders =
         contributor.health().stream()
-            .filter(h -> h.name().value().equals("orders"))
+            .filter(h -> "orders".equals(h.name().value()))
             .findFirst()
             .get();
     assertEquals(5_000_000, orders.lag(), "the lag itself stays visible in the health detail");
@@ -713,8 +717,8 @@ class SubscriptionHealthContributorTest {
         assertDoesNotThrow(c::health, "a throwing metrics backend must not fail the whole scrape");
 
     assertEquals(1, healths.size());
-    assertEquals(SubscriptionHealth.Status.UP, healths.get(0).status());
-    assertEquals(5, healths.get(0).lag());
+    assertEquals(SubscriptionHealth.Status.UP, healths.getFirst().status());
+    assertEquals(5, healths.getFirst().lag());
   }
 
   @Test

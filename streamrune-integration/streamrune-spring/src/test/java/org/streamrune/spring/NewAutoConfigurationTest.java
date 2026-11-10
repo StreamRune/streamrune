@@ -174,9 +174,6 @@ class NewAutoConfigurationTest {
               when(upcaster.currentVersion()).thenReturn(2);
               return upcaster;
             })
-        .run(
-            ctx -> {
-              assertThat(ctx).hasBean("upcasterChain");
-            });
+        .run(ctx -> assertThat(ctx).hasBean("upcasterChain"));
   }
 }

@@ -246,7 +246,7 @@ class RecordingStreamRuneMetricsTest {
   /** The tag pairs the single sample or supplied gauge of {@code method} is reported under. */
   private static String[] tagPairsFor(
       RecordingStreamRuneMetrics metrics, String meter, Method method) {
-    if (method.getName().equals("registerSubscriptionLagGauge")) {
+    if ("registerSubscriptionLagGauge".equals(method.getName())) {
       return new String[] {
         MetricNames.TAG_SUBSCRIPTION_NAME,
         ((SubscriptionName) ForwardingDecoratorChecks.sample(SubscriptionName.class, 1, 0)).value()
@@ -294,8 +294,8 @@ class RecordingStreamRuneMetricsTest {
   @Test
   void aNullName_isRecordedAsANullTagValue() {
     var metrics = new RecordingStreamRuneMetrics();
-    metrics.recordProjectionProcessed((ProjectionName) null);
-    metrics.recordSubscriptionEventReceived((SubscriptionName) null);
+    metrics.recordProjectionProcessed(null);
+    metrics.recordSubscriptionEventReceived(null);
     metrics.recordProjectionDeliveryMode(null, null);
 
     assertEquals(

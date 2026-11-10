@@ -1,6 +1,9 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.*;
 
@@ -79,7 +82,7 @@ class AuditCommandInterceptorTest {
             argThat(
                 entry ->
                     entry.commandId().equals(CMD_ID)
-                        && entry.commandType().equals("PlaceOrder")
+                        && "PlaceOrder".equals(entry.commandType())
                         && TYPE.equals(entry.aggregateType())
                         && entry.aggregateId().equals(AggregateId.of("order-1"))
                         && entry.userId() == null

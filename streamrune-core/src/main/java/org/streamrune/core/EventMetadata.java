@@ -51,7 +51,7 @@ public record EventMetadata(
     if (timestamp == null) {
       throw new IllegalArgumentException("timestamp is required");
     }
-    baggage = (baggage == null) ? Map.of() : Map.copyOf(baggage);
+    baggage = baggage == null ? Map.of() : Map.copyOf(baggage);
   }
 
   /** Convenience constructor for metadata of an event no saga dispatch caused. */

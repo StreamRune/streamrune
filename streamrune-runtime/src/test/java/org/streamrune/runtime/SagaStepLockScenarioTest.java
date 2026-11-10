@@ -317,7 +317,7 @@ class SagaStepLockScenarioTest {
       p.reserve.failure = () -> new IllegalArgumentException("out of stock");
       var subscription = new InMemoryEventSubscription(p.eventStore, p.runner.asEventListener());
       subscription.start();
-      try {
+      try (subscription) {
         // The start event is delivered on the appending thread; the rejected command's
         // compensation stores Released and Refunded, which carry the saga's origin and are
         // delivered to the same saga on that same thread.
@@ -326,8 +326,6 @@ class SagaStepLockScenarioTest {
             () -> {
               p.append(new Opened(ORDER));
             });
-      } finally {
-        subscription.close();
       }
 
       assertThat(subscription.deliveryFailureCount()).isZero();

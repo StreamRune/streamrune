@@ -1,6 +1,14 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 
 import java.time.Duration;
@@ -291,7 +299,7 @@ class StreamRuneBuilderTest {
   }
 
   @Test
-  void shouldRunProjectionsWithRunnerFromFactory() throws InterruptedException {
+  void shouldRunProjectionsWithRunnerFromFactory() throws Exception {
     // startProjections() now runs each registration on its own thread, so the assertion
     // below must wait for it rather than checking a flag set by a not-yet-scheduled thread.
     var started = new CountDownLatch(1);
@@ -336,7 +344,7 @@ class StreamRuneBuilderTest {
   }
 
   @Test
-  void startProjectionsPassesEachRegistrationsModeToItsRunner() throws InterruptedException {
+  void startProjectionsPassesEachRegistrationsModeToItsRunner() throws Exception {
     var seenModes = new java.util.concurrent.ConcurrentHashMap<String, ProjectionDeliveryMode>();
     var seenProjections = new java.util.concurrent.ConcurrentHashMap<String, Projection>();
     var both = new CountDownLatch(2);
@@ -355,7 +363,7 @@ class StreamRuneBuilderTest {
           public void reset(ProjectionName projectionName) {}
         };
 
-    var streamRune =
+    try (var streamRune =
         StreamRune.builder()
             .eventStore(new InMemoryEventStore())
             .projectionRunnerFactory((eventStore, subscriptionConfig) -> recording)
@@ -365,16 +373,13 @@ class StreamRuneBuilderTest {
                 ProjectionName.of("transactional"),
                 transactional,
                 ProjectionDeliveryMode.TRANSACTIONAL_LOCAL)
-            .build();
-    try {
+            .build()) {
       streamRune.startProjections();
       assertTrue(both.await(5, TimeUnit.SECONDS), "both registrations must reach their runner");
       assertEquals(AT_LEAST_ONCE_IDEMPOTENT, seenModes.get("at-least-once"));
       assertEquals(ProjectionDeliveryMode.TRANSACTIONAL_LOCAL, seenModes.get("transactional"));
       assertSame(atLeastOnce, seenProjections.get("at-least-once"));
       assertSame(transactional, seenProjections.get("transactional"));
-    } finally {
-      streamRune.close();
     }
   }
 
@@ -522,7 +527,7 @@ class StreamRuneBuilderTest {
   }
 
   @Test
-  void shouldStartAndStopProjections() throws InterruptedException {
+  void shouldStartAndStopProjections() throws Exception {
     var store = new InMemoryEventStore();
     // startProjections() now runs each registration on its own thread, so the assertion
     // below must wait for it rather than checking a flag set by a not-yet-scheduled thread.
@@ -584,7 +589,7 @@ class StreamRuneBuilderTest {
         new ProjectionRunner() {
           @Override
           public void run(ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
-            if (name.value().equals("proj1")) {
+            if ("proj1".equals(name.value())) {
               started1.countDown();
             } else {
               started2.countDown();
@@ -672,7 +677,7 @@ class StreamRuneBuilderTest {
     var latch1 = new CountDownLatch(1);
     var latch2 = new CountDownLatch(1);
 
-    var streamRune =
+    try (var streamRune =
         StreamRune.builder()
             .eventStore(new InMemoryEventStore())
             .projectionRunnerFactory(
@@ -682,7 +687,7 @@ class StreamRuneBuilderTest {
                     @Override
                     public void run(
                         ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
-                      (name.value().equals("proj1") ? latch1 : latch2).countDown();
+                      ("proj1".equals(name.value()) ? latch1 : latch2).countDown();
                     }
 
                     @Override
@@ -693,16 +698,12 @@ class StreamRuneBuilderTest {
                 ProjectionName.of("proj1"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .registerProjection(
                 ProjectionName.of("proj2"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
-            .build();
-
-    try {
+            .build()) {
       streamRune.startProjections();
       assertTrue(latch1.await(5, TimeUnit.SECONDS), "proj1's own runner must have been invoked");
       assertTrue(latch2.await(5, TimeUnit.SECONDS), "proj2's own runner must have been invoked");
       assertEquals(
           2, factoryCalls.get(), "the factory must be invoked once per registerProjection call");
-    } finally {
-      streamRune.close();
     }
   }
 
@@ -730,7 +731,7 @@ class StreamRuneBuilderTest {
         new java.util.concurrent.CopyOnWriteArrayList<org.streamrune.core.EventEnvelope>();
     var fastConfig = new SubscriptionConfig(false, Duration.ofMillis(20), Duration.ofMillis(5));
 
-    var streamRune =
+    try (var streamRune =
         StreamRune.builder()
             .eventStore(eventStore)
             .projectionRunnerFactory(
@@ -752,9 +753,7 @@ class StreamRuneBuilderTest {
                 ProjectionName.of("proj2"),
                 (Projection) proj2Batches::addAll,
                 AT_LEAST_ONCE_IDEMPOTENT)
-            .build();
-
-    try {
+            .build()) {
       streamRune.startProjections();
 
       var streamId = org.streamrune.core.types.StreamId.of(TYPE, AggregateId.of("factory-stream"));
@@ -770,7 +769,6 @@ class StreamRuneBuilderTest {
       assertFalse(proj1Batches.isEmpty(), "proj1's OWN runner must have processed the event");
       assertFalse(proj2Batches.isEmpty(), "proj2's OWN runner must have processed the event");
     } finally {
-      streamRune.close();
       logger.detachAppender(appender);
       appender.stop();
     }
@@ -814,7 +812,7 @@ class StreamRuneBuilderTest {
         List.of(registrationEnvelope(streamId, 1)),
         org.streamrune.core.types.Version.initial());
 
-    try {
+    try (streamRune) {
       streamRune.stopProjections(); // finds the runner idle
       streamRune.startProjections();
 
@@ -823,8 +821,6 @@ class StreamRuneBuilderTest {
         Thread.sleep(20);
       }
       assertFalse(batches.isEmpty(), "the started run must process, not consume a stale stop");
-    } finally {
-      streamRune.close();
     }
   }
 

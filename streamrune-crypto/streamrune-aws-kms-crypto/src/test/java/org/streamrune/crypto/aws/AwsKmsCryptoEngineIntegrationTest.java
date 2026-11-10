@@ -1,6 +1,11 @@
 package org.streamrune.crypto.aws;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -14,9 +19,9 @@ import org.streamrune.core.crypto.KeyNotFoundException;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.InMemoryForgottenSubjectStore;
-import org.testcontainers.containers.localstack.LocalStackContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.localstack.LocalStackContainer;
 import org.testcontainers.utility.DockerImageName;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -35,7 +40,7 @@ class AwsKmsCryptoEngineIntegrationTest {
   @Container
   static final LocalStackContainer LOCALSTACK =
       new LocalStackContainer(DockerImageName.parse("localstack/localstack:4.4"))
-          .withServices(LocalStackContainer.Service.KMS);
+          .withServices("kms");
 
   private static KmsClient kmsClient;
   private static String keyId;
@@ -44,7 +49,7 @@ class AwsKmsCryptoEngineIntegrationTest {
 
   @BeforeAll
   static void init() {
-    URI endpoint = LOCALSTACK.getEndpointOverride(LocalStackContainer.Service.KMS);
+    URI endpoint = LOCALSTACK.getEndpoint();
     kmsClient =
         KmsClient.builder()
             .endpointOverride(endpoint)
@@ -149,7 +154,7 @@ class AwsKmsCryptoEngineIntegrationTest {
     for (int i = 0; i < 3; i++) {
       blobs.add(writer.encrypt(subject, value(5_000 + i)));
     }
-    assertArrayEquals(value(5_000), reader.decrypt(subject, blobs.get(0))); // reader caches too
+    assertArrayEquals(value(5_000), reader.decrypt(subject, blobs.getFirst())); // reader caches too
     byte[] kept = writer.encrypt(bystander, value(10));
 
     writer.deleteKey(subject);

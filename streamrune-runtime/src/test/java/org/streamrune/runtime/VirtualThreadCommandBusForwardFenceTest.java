@@ -173,7 +173,7 @@ class VirtualThreadCommandBusForwardFenceTest {
             });
 
     assertEquals(2, store.forwardOf.size());
-    assertSame(ORIGIN, store.forwardOf.get(0), "the forward command's own append is fenced");
+    assertSame(ORIGIN, store.forwardOf.getFirst(), "the forward command's own append is fenced");
     assertNull(store.forwardOf.get(1), "a command under another key is not");
   }
 

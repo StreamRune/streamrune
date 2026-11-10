@@ -134,7 +134,7 @@ final class PausingDataSource implements DataSource {
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
       String name = method.getName();
-      if (name.equals("prepareStatement") && args != null && args[0] instanceof String sql) {
+      if ("prepareStatement".equals(name) && args != null && args[0] instanceof String sql) {
         Pause pause = armedPause.get();
         if (pause != null
             && sql.startsWith(pause.sqlPrefix)
@@ -143,13 +143,13 @@ final class PausingDataSource implements DataSource {
         }
         transactionSql.append(sql).append('\n');
       }
-      if (name.equals("unwrap") || name.equals("isWrapperFor")) {
+      if ("unwrap".equals(name) || "isWrapperFor".equals(name)) {
         return call(method, args);
       }
-      if (name.equals("rollback") && (args == null || args.length == 0)) {
+      if ("rollback".equals(name) && (args == null || args.length == 0)) {
         transactionSql.setLength(0);
       }
-      if (name.equals("commit")) {
+      if ("commit".equals(name)) {
         Pause commitPause = armedCommitPause.getAndSet(null);
         if (commitPause != null) {
           commitPause.park();

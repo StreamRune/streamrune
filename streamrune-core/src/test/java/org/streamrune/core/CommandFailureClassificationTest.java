@@ -3,6 +3,7 @@ package org.streamrune.core;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -240,11 +241,10 @@ class CommandFailureClassificationTest {
 
   @Test
   void aSchemaAheadRefusalNeedsAStoredVersionAboveTheReaders() {
-    org.junit.jupiter.api.Assertions.assertThrows(
+    assertThrows(
         IllegalArgumentException.class,
         () -> new EventSchemaAheadException("m", new EventType("OrderPlaced"), 2, 2));
-    org.junit.jupiter.api.Assertions.assertThrows(
-        NullPointerException.class, () -> new EventSchemaAheadException("m", null, 2, 1));
+    assertThrows(NullPointerException.class, () -> new EventSchemaAheadException("m", null, 2, 1));
   }
 
   private static EventSchemaAheadException schemaAhead() {

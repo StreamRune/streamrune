@@ -1,6 +1,11 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
@@ -21,9 +26,9 @@ import org.streamrune.core.LockException;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Supplementary coverage tests for {@link PgAdvisoryLocker} retry/timeout paths, {@link
@@ -34,8 +39,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresCoverageSupplementTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_supp_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_supp_test");
 
   static PGSimpleDataSource dataSource;
 
@@ -79,8 +84,7 @@ class PostgresCoverageSupplementTest {
   @Test
   void advisoryLockerAcquiresWithNullTimeoutUsingDefault() throws Exception {
     var locker = new PgAdvisoryLocker(dataSource);
-    try (var ignored =
-        (AutoCloseable) locker.acquireLock(TestStreams.stream("null-timeout"), null)) {
+    try (var ignored = locker.acquireLock(TestStreams.stream("null-timeout"), null)) {
       assertNotNull(ignored);
     }
   }
@@ -111,8 +115,7 @@ class PostgresCoverageSupplementTest {
   @Test
   void advisoryLockerAcquiresWithZeroTimeoutWhenUncontended() throws Exception {
     var locker = new PgAdvisoryLocker(dataSource);
-    try (var ignored =
-        (AutoCloseable) locker.acquireLock(TestStreams.stream("zero-timeout"), Duration.ZERO)) {
+    try (var ignored = locker.acquireLock(TestStreams.stream("zero-timeout"), Duration.ZERO)) {
       assertNotNull(ignored);
     }
   }

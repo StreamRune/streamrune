@@ -49,9 +49,9 @@ import org.streamrune.test.SagaForwardFenceContract;
 import org.streamrune.test.SagaForwardFenceContract.FenceEvent;
 import org.streamrune.test.SagaForwardFenceContract.FenceState;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * How a saga's forward append orders against a write that takes the saga out of its forward phase,
@@ -69,8 +69,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class SagaForwardFenceLockingIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("saga_forward_fence");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("saga_forward_fence");
 
   static PGSimpleDataSource dataSource;
   static EventTypeRegistry typeRegistry;

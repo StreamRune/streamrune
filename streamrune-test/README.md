@@ -135,7 +135,7 @@ assertEquals(1, faults.calls("saveOffset"));
 ## Requirements
 
 - Java 25
-- JUnit 5 (`junit-jupiter-api`, exposed as an `api` dependency)
+- JUnit 6 (`junit-jupiter-api`, exposed as an `api` dependency)
 - Depends on `streamrune-core`, `streamrune-runtime` (for `SagaFixture`) and `streamrune-crypto-api`, plus Jackson
 
 ## Known Limitations

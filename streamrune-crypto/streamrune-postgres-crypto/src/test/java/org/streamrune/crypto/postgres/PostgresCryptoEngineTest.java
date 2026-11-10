@@ -1,6 +1,13 @@
 package org.streamrune.crypto.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
@@ -1274,24 +1281,24 @@ class PostgresCryptoEngineTest {
     InvocationHandler h =
         (proxy, method, args) -> {
           String name = method.getName();
-          if (name.equals("setString") || name.equals("setInt")) {
+          if ("setString".equals(name) || "setInt".equals(name)) {
             params.put((Integer) args[0], args[1]);
             return null;
-          } else if (name.equals("setBytes")) {
+          } else if ("setBytes".equals(name)) {
             // Real drivers copy the bytes to the wire; the engine zeroes its buffer afterwards,
             // so the fake must not keep a reference to the caller's array.
             params.put((Integer) args[0], ((byte[]) args[1]).clone());
             return null;
-          } else if (name.equals("executeUpdate")) {
+          } else if ("executeUpdate".equals(name)) {
             ds.maybeFail(sql, false);
             int updated = executeUpdate(sql, params, ds);
             ds.maybeFail(sql, true);
             return updated;
-          } else if (name.equals("executeQuery")) {
+          } else if ("executeQuery".equals(name)) {
             ResultSet rs = executeQuery(sql, params, ds);
             params.clear();
             return rs;
-          } else if (name.equals("close")) {
+          } else if ("close".equals(name)) {
             return null;
           }
           return null;
@@ -1387,13 +1394,13 @@ class PostgresCryptoEngineTest {
     InvocationHandler h =
         (proxy, method, args) -> {
           String name = method.getName();
-          if (name.equals("next")) {
+          if ("next".equals(name)) {
             if (remaining[0] > 0) {
               remaining[0]--;
               return true;
             }
             return false;
-          } else if (name.equals("getBytes")) {
+          } else if ("getBytes".equals(name)) {
             String col = (String) args[0];
             if ("key_bytes".equals(col) && keyBytes != null) {
               // Real drivers return a fresh array per call; the engine zeroes it after use,
@@ -1401,9 +1408,9 @@ class PostgresCryptoEngineTest {
               return keyBytes.clone();
             }
             return null;
-          } else if (name.equals("getInt")) {
+          } else if ("getInt".equals(name)) {
             return intValue == null ? 0 : intValue;
-          } else if (name.equals("close")) {
+          } else if ("close".equals(name)) {
             return null;
           }
           return null;

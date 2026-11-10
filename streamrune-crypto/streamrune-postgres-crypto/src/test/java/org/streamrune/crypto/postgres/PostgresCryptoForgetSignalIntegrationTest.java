@@ -25,9 +25,9 @@ import org.streamrune.core.crypto.KeyNotFoundException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * End-to-end: two {@link CachedCryptoEngine} instances (two replicas) over one shared PostgreSQL
@@ -39,8 +39,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresCryptoForgetSignalIntegrationTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   private static PGSimpleDataSource dataSource;
   private static PostgresCryptoEngine delegate;
@@ -144,8 +144,7 @@ class PostgresCryptoForgetSignalIntegrationTest {
     broken.setConnectTimeout(1);
     var channel = new PostgresCryptoForgetSignal(broken);
     try (channel) {
-      channel.publish("some-opaque-token"); // must swallow the connection failure, not throw
-      assertTrue(true);
+      channel.publish("some-opaque-token");
     }
   }
 

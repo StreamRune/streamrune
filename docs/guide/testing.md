@@ -333,7 +333,7 @@ The `ThenStage` methods:
 ## Integration Testing with TestContainers
 
 For tests that must run against real PostgreSQL semantics (transaction isolation, advisory
-locks, Flyway migrations) use the TestContainers JUnit 5 extension.
+locks, Flyway migrations) use the Testcontainers JUnit Jupiter extension.
 
 Start the PostgreSQL major version you run in production. StreamRune requires 17 or newer — an
 older server is refused at startup — so the image below is `postgres:17-alpine`.
@@ -341,8 +341,8 @@ older server is refused at startup — so the image below is `postgres:17-alpine
 ### Gradle dependencies
 
 ```kotlin
-testImplementation("org.testcontainers:junit-jupiter:1.20.4")
-testImplementation("org.testcontainers:postgresql:1.20.4")
+testImplementation("org.testcontainers:testcontainers-junit-jupiter:2.0.5")
+testImplementation("org.testcontainers:testcontainers-postgresql:2.0.5")
 testImplementation("org.postgresql:postgresql:42.7.4")
 ```
 
@@ -353,16 +353,16 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 @Testcontainers
 class OrderPostgresIntegrationTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>("postgres:17-alpine")
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer("postgres:17-alpine")
           .withDatabaseName("streamrune_test");
 
   static PGSimpleDataSource dataSource;

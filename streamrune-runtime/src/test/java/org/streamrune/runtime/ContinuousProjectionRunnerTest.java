@@ -1,6 +1,14 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.TRANSACTIONAL_LOCAL;
 
@@ -493,7 +501,7 @@ class ContinuousProjectionRunnerTest {
                 () -> runner.run(ProjectionName.of("live"), projection, AT_LEAST_ONCE_IDEMPOTENT));
 
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-    while (projection.processed.size() < 1 && System.nanoTime() < deadline) {
+    while (projection.processed.isEmpty() && System.nanoTime() < deadline) {
       Thread.sleep(20);
     }
     assertEquals(1, projection.processed.size());
@@ -645,7 +653,7 @@ class ContinuousProjectionRunnerTest {
         Thread.ofVirtual()
             .start(
                 () -> runner.run(ProjectionName.of("first"), projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       // Wait until the first run is in progress (it won the `running` CAS and reached LIVE). A
       // fixed sleep could let run("second") below win the CAS instead, and that call never returns
       // (this module has no JUnit timeout), so the test would hang rather than fail.
@@ -656,7 +664,6 @@ class ContinuousProjectionRunnerTest {
           IllegalStateException.class,
           () -> runner.run(ProjectionName.of("second"), projection, AT_LEAST_ONCE_IDEMPOTENT));
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
   }
@@ -678,7 +685,7 @@ class ContinuousProjectionRunnerTest {
         Thread.ofVirtual()
             .start(
                 () -> runner.run(ProjectionName.of("first"), projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> runner.state() == ProjectionState.LIVE);
@@ -692,7 +699,6 @@ class ContinuousProjectionRunnerTest {
       assertFalse(ex.getMessage().chars().anyMatch(Character::isISOControl), ex.getMessage());
       assertFalse(ex.getMessage().contains("\u202e"), ex.getMessage());
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
   }
@@ -1317,7 +1323,7 @@ class ContinuousProjectionRunnerTest {
 
     assertEquals(
         "stamp:7",
-        calls.get(0),
+        calls.getFirst(),
         () ->
             "the takeover stamp (with the acquired epoch) must precede ANY processing, but the"
                 + " call order was: "
@@ -1665,10 +1671,10 @@ class ContinuousProjectionRunnerTest {
 
     var entries = dlqStore.read(ProjectionName.of("dlq-text"), 10);
     assertEquals(1, entries.size());
-    assertEquals(LogSanitizer.sanitizeFreeText(raw), entries.get(0).errorMessage());
+    assertEquals(LogSanitizer.sanitizeFreeText(raw), entries.getFirst().errorMessage());
     assertFalse(
-        entries.get(0).errorMessage().chars().anyMatch(Character::isISOControl),
-        entries.get(0).errorMessage());
+        entries.getFirst().errorMessage().chars().anyMatch(Character::isISOControl),
+        entries.getFirst().errorMessage());
 
     runner.close();
     t.join(TimeUnit.SECONDS.toMillis(5));
@@ -1717,8 +1723,8 @@ class ContinuousProjectionRunnerTest {
 
     var entries = dlqStore.read(ProjectionName.of("dlq-proj"), 10);
     assertEquals(1, entries.size());
-    assertEquals(ProjectionName.of("dlq-proj"), entries.get(0).projectionName());
-    assertEquals("java.lang.RuntimeException", entries.get(0).errorType());
+    assertEquals(ProjectionName.of("dlq-proj"), entries.getFirst().projectionName());
+    assertEquals("java.lang.RuntimeException", entries.getFirst().errorType());
 
     // The runner is NOT halted: it advanced past the dead-lettered range and never entered ERROR.
     // The dead-letter write and the checkpoint advance past the range are two separate steps, so
@@ -1754,7 +1760,7 @@ class ContinuousProjectionRunnerTest {
     var calls = new AtomicInteger(0);
     Projection failsOnMiddleChunk =
         events -> {
-          if (((TestEvent) events.get(0).event()).payload().equals("fail")) {
+          if ("fail".equals(((TestEvent) events.getFirst().event()).payload())) {
             calls.incrementAndGet();
             throw new RuntimeException("poison chunk"); // POISON
           }
@@ -1794,7 +1800,7 @@ class ContinuousProjectionRunnerTest {
     // events. The poison chunk is dead-lettered exactly once — no retry storm.
     var entries = dlqStore.read(ProjectionName.of("dlq-range-proj"), 10);
     assertEquals(1, entries.size());
-    var entry = entries.get(0);
+    var entry = entries.getFirst();
     assertEquals(3, entry.fromOffset().value());
     assertEquals(4, entry.toOffset().value());
     assertEquals(2, entry.batchSize());
@@ -1920,7 +1926,7 @@ class ContinuousProjectionRunnerTest {
     Projection proj =
         events -> {
           for (var e : events) {
-            if (((TestEvent) e.event()).payload().equals("fail")) {
+            if ("fail".equals(((TestEvent) e.event()).payload())) {
               throw new RuntimeException("poison batch");
             }
           }
@@ -1965,7 +1971,7 @@ class ContinuousProjectionRunnerTest {
     Projection proj =
         events -> {
           for (var e : events) {
-            if (((TestEvent) e.event()).payload().equals("fail")) {
+            if ("fail".equals(((TestEvent) e.event()).payload())) {
               throw new RuntimeException("poison live batch");
             }
           }
@@ -2068,8 +2074,8 @@ class ContinuousProjectionRunnerTest {
 
     var entries = dlqStore.read(ProjectionName.of("live-dlq"), 10);
     assertEquals(1, entries.size());
-    assertEquals(ProjectionName.of("live-dlq"), entries.get(0).projectionName());
-    assertEquals("java.lang.RuntimeException", entries.get(0).errorType());
+    assertEquals(ProjectionName.of("live-dlq"), entries.getFirst().projectionName());
+    assertEquals("java.lang.RuntimeException", entries.getFirst().errorType());
 
     // The runner is NOT halted: it stays LIVE and never entered ERROR.
     assertNotEquals(ProjectionState.ERROR, runner.state());
@@ -2720,12 +2726,11 @@ class ContinuousProjectionRunnerTest {
                         ProjectionName.of("state-test"), projection, AT_LEAST_ONCE_IDEMPOTENT));
     // A close() that lands before run() has started returns early (no run thread yet), and run()
     // then starts and never stops. Wait until the runner is LIVE so close() has a run to stop.
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> runner.state() == ProjectionState.LIVE);
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
 
@@ -2766,7 +2771,7 @@ class ContinuousProjectionRunnerTest {
                     thrown.set(e);
                   }
                 });
-    try {
+    try (runner) {
       t.join(TimeUnit.SECONDS.toMillis(3));
       assertFalse(t.isAlive(), "run() must return at once: it was told to stop before it started");
       assertNull(thrown.get(), "a cancelled run() returns normally");
@@ -2777,7 +2782,6 @@ class ContinuousProjectionRunnerTest {
           "the checkpoint must not move after the stop");
       assertEquals(ProjectionState.STOPPED, runner.state());
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
   }
@@ -2895,10 +2899,9 @@ class ContinuousProjectionRunnerTest {
     runner.discardHeldStop();
     Thread t =
         Thread.ofVirtual().start(() -> runner.run(name, projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !projection.processed.isEmpty());
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
     assertFalse(t.isAlive());
@@ -2920,12 +2923,11 @@ class ContinuousProjectionRunnerTest {
 
     Thread first =
         Thread.ofVirtual().start(() -> runner.run(name, projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> runner.state() == ProjectionState.LIVE);
     } finally {
-      runner.close();
       first.join(TimeUnit.SECONDS.toMillis(3));
     }
     assertFalse(first.isAlive());
@@ -2935,13 +2937,12 @@ class ContinuousProjectionRunnerTest {
     eventStore.append(s, List.of(envelope(s, 1, "after-restart")), Version.initial());
     Thread second =
         Thread.ofVirtual().start(() -> runner.run(name, projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       // The restarted run catches up on the new event and goes LIVE.
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> projection.processed.size() == 1 && runner.state() == ProjectionState.LIVE);
     } finally {
-      runner.close();
       second.join(TimeUnit.SECONDS.toMillis(3));
     }
     assertFalse(second.isAlive());
@@ -2971,12 +2972,11 @@ class ContinuousProjectionRunnerTest {
 
     Thread next =
         Thread.ofVirtual().start(() -> runner.run(name, projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> projection.processed.size() == 1 && runner.state() == ProjectionState.LIVE);
     } finally {
-      runner.close();
       next.join(TimeUnit.SECONDS.toMillis(3));
     }
     assertFalse(next.isAlive());
@@ -3203,7 +3203,7 @@ class ContinuousProjectionRunnerTest {
   /** Fails only on the payload {@code "poison"}; every other batch is applied cleanly. */
   private static Projection poisonPayloadOnly() {
     return events -> {
-      if (((TestEvent) events.get(0).event()).payload().equals("poison")) {
+      if ("poison".equals(((TestEvent) events.getFirst().event()).payload())) {
         throw new RuntimeException("permanent poison"); // POISON under DLQ; a failure under SKIP
       }
     };
@@ -3235,7 +3235,7 @@ class ContinuousProjectionRunnerTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(name, poisonPayloadOnly(), AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       awaitLive(runner);
       StreamId poison = StreamId.of(TYPE, AggregateId.of("live-dlq-health-poison"));
       eventStore.append(poison, List.of(envelope(poison, 1, "poison")), Version.initial());
@@ -3261,7 +3261,6 @@ class ContinuousProjectionRunnerTest {
       assertEquals(SubscriptionHealth.Status.UP, statusOf(health, name));
       assertNotEquals(ProjectionState.ERROR, runner.state());
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(5));
     }
   }
@@ -3286,7 +3285,7 @@ class ContinuousProjectionRunnerTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(name, poisonPayloadOnly(), AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       awaitLive(runner);
       StreamId poison = StreamId.of(TYPE, AggregateId.of("live-skip-health-poison"));
       eventStore.append(poison, List.of(envelope(poison, 1, "poison")), Version.initial());
@@ -3298,7 +3297,6 @@ class ContinuousProjectionRunnerTest {
           "a skipped live batch must be recorded as a health ERROR, not masked as a success");
       assertEquals(SubscriptionHealth.Status.DEGRADED, statusOf(health, name));
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(5));
     }
   }
@@ -3331,11 +3329,11 @@ class ContinuousProjectionRunnerTest {
     var release = new CountDownLatch(1);
     Projection projection =
         events -> {
-          String payload = ((TestEvent) events.get(0).event()).payload();
-          if (payload.equals("poison")) {
+          String payload = ((TestEvent) events.getFirst().event()).payload();
+          if ("poison".equals(payload)) {
             throw new RuntimeException("permanent poison"); // POISON → dead-lettered
           }
-          if (payload.equals("block")) {
+          if ("block".equals(payload)) {
             try {
               // finish() always releases it; the bound only keeps a broken test from hanging, so
               // it sits far above every wait a test makes while the runner is held here.
@@ -3431,7 +3429,7 @@ class ContinuousProjectionRunnerTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(name, poisonPayloadOnly(), AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       assertTrue(
           awaitCondition(() -> !dlqStore.read(name, 10).isEmpty(), 5),
           "the poison chunk is dead-lettered during catch-up");
@@ -3445,7 +3443,6 @@ class ContinuousProjectionRunnerTest {
           "DEGRADED must persist once state()==LIVE — nothing clean ran between the dead-letter"
               + " and going live to legitimately earn UP");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(5));
     }
   }

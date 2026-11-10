@@ -36,9 +36,9 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The {@code saga_state} statements of {@link PostgresSagaDeadLetterStore} wait at most the
@@ -51,8 +51,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresSagaDeadLetterStoreRowWriteTimeoutTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("saga_shield_bound");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("saga_shield_bound");
 
   record ShieldState(String step) implements SagaState {
     @Override

@@ -37,10 +37,7 @@ class ProjectionRegistrationTest {
 
   @Test
   void nullModeIsRefused_byBothRecords() {
-    assertThatThrownBy(
-            () ->
-                new ProjectionRegistration(
-                    ProjectionName.of("orders"), P, (ProjectionDeliveryMode) null))
+    assertThatThrownBy(() -> new ProjectionRegistration(ProjectionName.of("orders"), P, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("deliveryMode is required");
     assertThatThrownBy(

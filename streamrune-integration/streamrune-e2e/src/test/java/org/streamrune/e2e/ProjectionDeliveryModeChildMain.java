@@ -82,7 +82,7 @@ public final class ProjectionDeliveryModeChildMain {
         mode == ProjectionDeliveryMode.TRANSACTIONAL_LOCAL
             ? repo
             : AtomicBatchProcessor.nonAtomicAtLeastOnce();
-    if (mode == ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT && crash.equals("AFTER_COMMIT")) {
+    if (mode == ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT && "AFTER_COMMIT".equals(crash)) {
       var delegate = offsets;
       offsets =
           new OffsetStore() {
@@ -135,13 +135,13 @@ public final class ProjectionDeliveryModeChildMain {
           int applied =
               tx.findById(name, "row", Count.class).map(Count::applied).orElse(0) + batch.size();
           tx.save(name, "row", new Count("row", applied));
-          if (crash.equals("AFTER_WRITE")) {
+          if ("AFTER_WRITE".equals(crash)) {
             // Written on the transaction's connection, never committed.
             Runtime.getRuntime().halt(HALTED);
           }
           tx.afterCommit(
               () -> {
-                if (crash.equals("AFTER_COMMIT")) {
+                if ("AFTER_COMMIT".equals(crash)) {
                   Runtime.getRuntime().halt(HALTED); // read model and checkpoint both committed
                 }
               });
@@ -157,7 +157,7 @@ public final class ProjectionDeliveryModeChildMain {
       int applied =
           repo.findById(name, "row", Count.class).map(Count::applied).orElse(0) + batch.size();
       repo.save(name, "row", new Count("row", applied)); // autocommit, own connection
-      if (crash.equals("AFTER_WRITE")) {
+      if ("AFTER_WRITE".equals(crash)) {
         Runtime.getRuntime().halt(HALTED); // written and durable, checkpoint not advanced
       }
     };

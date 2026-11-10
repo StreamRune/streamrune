@@ -26,9 +26,9 @@ import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.types.EventType;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Stopping a relay in the middle of a batch against a real PostgreSQL store. The relay runs on its
@@ -41,8 +41,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresOutboxPollerShutdownIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_shutdown");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_shutdown");
 
   /** Schema owner and verification path: a plain connection per call. */
   static PGSimpleDataSource plain;
@@ -115,7 +115,7 @@ class PostgresOutboxPollerShutdownIT {
           @Override
           public void publish(OutboxEntry entry) throws Exception {
             attempted.add(entry.id().value());
-            if (entry.id().value().equals("e3")) {
+            if ("e3".equals(entry.id().value())) {
               // Handed to the transport, waiting for its acknowledgement when close() comes.
               parked.countDown();
               new CountDownLatch(1).await();

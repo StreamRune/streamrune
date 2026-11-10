@@ -3,11 +3,10 @@ package org.streamrune.e2e;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Locale;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.streamrune.core.projection.AtomicBatchProcessor;
@@ -88,7 +87,7 @@ class ProjectionDeliveryModeProcessKillIT extends E2ETestBase {
             .redirectOutput(childLog.toFile())
             .start();
     try {
-      boolean exited = child.waitFor(90, TimeUnit.SECONDS);
+      boolean exited = child.waitFor(Duration.ofSeconds(90));
       assertThat(exited).as("the child must exit; its output:%n%s", childOutput(childLog)).isTrue();
       assertThat(child.exitValue())
           .as("the child halted at the crash point; its output:%n%s", childOutput(childLog))
@@ -98,7 +97,7 @@ class ProjectionDeliveryModeProcessKillIT extends E2ETestBase {
       // connections, and possibly the checkpoint row lock, into the next test.
       if (child.isAlive()) {
         child.destroyForcibly();
-        child.waitFor(30, TimeUnit.SECONDS);
+        child.waitFor(Duration.ofSeconds(30));
       }
     }
 
@@ -109,7 +108,7 @@ class ProjectionDeliveryModeProcessKillIT extends E2ETestBase {
         .isEqualTo(appliedAfterCrash);
     assertThat(offsets.getLastOffset(name))
         .as("durable checkpoint right after the crash")
-        .isEqualTo(crashPoint.equals("AFTER_COMMIT") ? top : GlobalOffset.initial());
+        .isEqualTo("AFTER_COMMIT".equals(crashPoint) ? top : GlobalOffset.initial());
 
     // Rerun, in-process, same mode, no crash point.
     var m = ProjectionDeliveryMode.valueOf(mode);
@@ -125,7 +124,7 @@ class ProjectionDeliveryModeProcessKillIT extends E2ETestBase {
   }
 
   private static String childOutput(Path childLog) throws IOException {
-    return Files.exists(childLog) ? Files.readString(childLog, StandardCharsets.UTF_8) : "<none>";
+    return Files.exists(childLog) ? Files.readString(childLog) : "<none>";
   }
 
   /**

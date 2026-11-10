@@ -182,7 +182,7 @@ public final class HttpOutboxPublisher implements OutboxPublisher, AutoCloseable
     Throwable c = failure;
     for (int depth = 0; c != null && depth < 50; depth++, c = c.getCause()) {
       if (c instanceof HttpDeliveryException h) {
-        return (h.statusCode() >= 500 || h.statusCode() == 429 || isFleetWideStatus(h.statusCode()))
+        return h.statusCode() >= 500 || h.statusCode() == 429 || isFleetWideStatus(h.statusCode())
             ? FailureKind.TRANSPORT
             : FailureKind.ENTRY;
       }

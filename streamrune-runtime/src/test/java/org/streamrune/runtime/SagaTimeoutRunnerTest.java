@@ -1,6 +1,13 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
@@ -532,8 +539,7 @@ class SagaTimeoutRunnerTest {
             .metrics(metrics)
             .build();
 
-    org.junit.jupiter.api.Assertions.assertDoesNotThrow(
-        () -> runner.processTimedOutSaga(SagaId.of("order-1")));
+    assertDoesNotThrow(() -> runner.processTimedOutSaga(SagaId.of("order-1")));
 
     var row =
         inner
@@ -541,7 +547,7 @@ class SagaTimeoutRunnerTest {
             .orElseThrow();
     assertEquals(SagaStatus.COMPENSATING, row.status(), "the row is left to the concurrent winner");
     assertEquals(1L, row.version(), "no write landed");
-    org.junit.jupiter.api.Assertions.assertNull(row.preFaultStatus());
+    assertNull(row.preFaultStatus());
     assertEquals(0, metrics.faulted.get(), "no faulted sample on a conflict");
   }
 
@@ -745,7 +751,7 @@ class SagaTimeoutRunnerTest {
   }
 
   @Test
-  void liveness_accessorsReflectStartAndStop() throws InterruptedException {
+  void liveness_accessorsReflectStartAndStop() throws Exception {
     // The driver exposes isStarted()/isAlive()/consecutiveFailures() so the health
     // contributor
     // can surface a dead/wedged timeout runner as DOWN instead of leaving timed-out sagas stranded.
@@ -1015,7 +1021,7 @@ class SagaTimeoutRunnerTest {
   }
 
   @Test
-  void startAndStopLifecycle() throws InterruptedException {
+  void startAndStopLifecycle() throws Exception {
     var store = new InMemorySagaStore();
     var bus = new CapturingCommandBus();
     var decider = new TimeoutDecider();

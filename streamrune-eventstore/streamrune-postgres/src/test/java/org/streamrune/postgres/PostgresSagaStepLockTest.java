@@ -53,9 +53,9 @@ import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * On {@link PostgresSagaStore}: a saga's deadline passes while a delivery of its start event is
@@ -71,8 +71,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresSagaStepLockTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_step_lock");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_step_lock");
 
   record Opened(String orderId) implements DomainEvent {}
 
@@ -315,7 +315,7 @@ class PostgresSagaStepLockTest {
 
   private static List<String> storedOrder(InMemoryEventStore eventStore) {
     return eventStore.readGlobalStream(GlobalOffset.initial(), 1_000).stream()
-        .map(e -> (DomainEvent) e.event())
+        .map(EventEnvelope::event)
         .filter(e -> e instanceof Reserved || e instanceof Released || e instanceof Refunded)
         .map(e -> e.getClass().getSimpleName())
         .toList();
@@ -345,7 +345,7 @@ class PostgresSagaStepLockTest {
                         Instant.now()))),
             Version.initial());
     return eventStore
-        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-        .get(0);
+        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+        .getFirst();
   }
 }

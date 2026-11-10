@@ -74,7 +74,7 @@ class ProjectionDeadLetteredMetricTest {
     var name = ProjectionName.of("dlq-proj");
     Thread t =
         Thread.ofVirtual().start(() -> runner.run(name, alwaysFail, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       // The poison range is dead-lettered, the runner advances past it and continues; the counter
       // fires exactly once (offset advanced, so no re-drive of the same range).
       awaitDeadLetter(dlqStore, name);
@@ -82,7 +82,6 @@ class ProjectionDeadLetteredMetricTest {
       assertEquals(
           1, metrics.count("projection.deadLettered", name.value()), "tagged by projection");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(5));
     }
   }
@@ -116,7 +115,7 @@ class ProjectionDeadLetteredMetricTest {
                 AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
-    try {
+    try (runner) {
       var name = ProjectionName.of("p");
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
@@ -125,8 +124,6 @@ class ProjectionDeadLetteredMetricTest {
       // — the counter must be at exactly one, tagged with the projection name.
       assertEquals(1, metrics.count("projection.deadLettered"), "dead-letter counter fires once");
       assertEquals(1, metrics.count("projection.deadLettered", "p"), "tagged by projection");
-    } finally {
-      runner.close();
     }
   }
 

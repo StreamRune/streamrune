@@ -404,7 +404,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
                 AGGREGATE_TYPE, Mark.class, CommandBusProvenanceContract::aggregateIdOf, DECIDER)
             .build()) {
 
-      ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+      ScopedValue.where(StreamRuneContext.CURRENT, null)
           .run(() -> bus.execute(new Mark("null-context-1")));
     }
 
@@ -451,7 +451,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
       try (VirtualThreadCommandBus bus = holder[0]) {
         dispatch.accept(bus);
       }
-      assertEquals(null, nesting.thrown);
+      assertNull(nesting.thrown);
       return new UnboundRun(eventStore, List.copyOf(audit));
     }
 
@@ -570,7 +570,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
     }
     UnboundRun run = new UnboundRun(eventStore, List.copyOf(audit));
 
-    assertEquals(null, nesting.thrown);
+    assertNull(nesting.thrown);
     assertEquals(own.correlationId(), run.correlationIdOfTheEventsOf("nested-1"));
     assertEquals(own.correlationId(), run.auditOf("nested-1").correlationId());
     assertEquals(run.correlationIdOfTheEventsOf("outer-1"), run.auditOf("outer-1").correlationId());
@@ -675,7 +675,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
   void aNestedCommandOnTheThreadOfASagasDispatch_isTheSagasWork() {
     NestedRun run = NestedRun.of(nested -> nested);
 
-    assertEquals(null, run.nestedFailure());
+    assertNull(run.nestedFailure());
     assertTheSagasWork(run.outerEvents());
     assertTheSagasWork(run.nestedEvents());
     assertEquals(ORIGIN.correlationId(), run.auditOf("outer-1").correlationId());
@@ -692,7 +692,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
     NestedRun run =
         NestedRun.of(nested -> () -> ScopedValue.where(StreamRuneContext.CURRENT, own).run(nested));
 
-    assertEquals(null, run.nestedFailure());
+    assertNull(run.nestedFailure());
     assertTheSagasWork(run.nestedEvents());
     assertEquals(ORIGIN.correlationId(), run.auditOf("nested-1").correlationId());
     assertEquals(AuditOutcome.SUCCESS, run.auditOf("nested-1").outcome());
@@ -763,7 +763,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
     first.join();
     second.join();
 
-    assertEquals(null, failures[0]);
+    assertNull(failures[0]);
     assertTheSagasWork(
         eventStore.load(StreamId.of(AGGREGATE_TYPE, AggregateId.of("wrapped-2"))).events());
     assertInstanceOf(ReservedCorrelationIdException.class, failures[1]);
@@ -774,7 +774,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
 
   /** Executes one {@link Mark} on a bus of its own over {@code eventStore}. */
   private static void executeOnABusOfItsOwn(InMemoryEventStore eventStore, String aggregateId) {
-    try (VirtualThreadCommandBus bus = bus((EventStore) eventStore)) {
+    try (VirtualThreadCommandBus bus = bus(eventStore)) {
       bus.execute(new Mark(aggregateId));
     }
   }

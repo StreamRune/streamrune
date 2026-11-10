@@ -182,14 +182,23 @@ public final class PostgresNotificationSubscription implements EventSubscription
     if (builder.listenDataSource == null) {
       throw new IllegalArgumentException("listenDataSource is required");
     }
-    if (builder.eventStore == null) throw new IllegalArgumentException("eventStore is required");
-    if (builder.offsetStore == null) throw new IllegalArgumentException("offsetStore is required");
+    if (builder.eventStore == null) {
+      throw new IllegalArgumentException("eventStore is required");
+    }
+    if (builder.offsetStore == null) {
+      throw new IllegalArgumentException("offsetStore is required");
+    }
     EventListener resolvedListener =
         builder.sagaRunner != null ? builder.sagaRunner.asEventListener() : builder.listener;
-    if (resolvedListener == null) throw new IllegalArgumentException("listener is required");
-    if (builder.config == null) throw new IllegalArgumentException("config is required");
-    if (builder.fetchSize <= 0)
+    if (resolvedListener == null) {
+      throw new IllegalArgumentException("listener is required");
+    }
+    if (builder.config == null) {
+      throw new IllegalArgumentException("config is required");
+    }
+    if (builder.fetchSize <= 0) {
       throw new IllegalArgumentException("fetchSize is required and must be positive");
+    }
     this.subscriptionName = builder.subscriptionName;
     this.listenDataSource = builder.listenDataSource;
     this.eventStore = builder.eventStore;
@@ -889,7 +898,9 @@ public final class PostgresNotificationSubscription implements EventSubscription
 
     var config = new HikariConfig();
     config.setJdbcUrl(jdbcUrl);
-    if (dataSourceClassName != null) config.setDataSourceClassName(dataSourceClassName);
+    if (dataSourceClassName != null) {
+      config.setDataSourceClassName(dataSourceClassName);
+    }
     config.setDataSourceProperties(driverProperties);
     // The PostgreSQL driver understands tcpKeepAlive; another data source class may have no such
     // property and would reject it.
@@ -899,8 +910,12 @@ public final class PostgresNotificationSubscription implements EventSubscription
     if (viaPostgresDriver && !driverProperties.containsKey("tcpKeepAlive")) {
       config.addDataSourceProperty("tcpKeepAlive", "true");
     }
-    if (username != null) config.setUsername(username);
-    if (password != null) config.setPassword(password);
+    if (username != null) {
+      config.setUsername(username);
+    }
+    if (password != null) {
+      config.setPassword(password);
+    }
     config.setMaximumPoolSize(1);
     config.setMinimumIdle(1);
     config.setPoolName("streamrune-listen");

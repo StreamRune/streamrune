@@ -81,7 +81,7 @@ class RelayClaimRecoveryIT extends E2ETestBase {
             .build();
 
     poller.start();
-    try {
+    try (poller) {
       // Observe for ~1s: the live, in-lease claim held by relay #1 is invisible to relay #2.
       Thread.sleep(1000);
       assertThat(publisher.published)
@@ -103,8 +103,6 @@ class RelayClaimRecoveryIT extends E2ETestBase {
       // before markDelivered(), so polling the publisher queue could observe the row mid-cycle
       // (still IN_PROGRESS). The DELIVERED row is the proof the whole relay cycle completed.
       await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertStatus(id, "DELIVERED"));
-    } finally {
-      poller.close();
     }
 
     // Delivered EXACTLY ONCE, by relay #2, and the row is terminal DELIVERED.

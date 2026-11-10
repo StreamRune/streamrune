@@ -33,7 +33,9 @@ public final class InMemoryCommandInbox implements CommandInbox {
         .removeIf(
             r -> {
               boolean old = r.processedAt().isBefore(cutoff);
-              if (old) deleted[0]++;
+              if (old) {
+                deleted[0]++;
+              }
               return old;
             });
     return deleted[0];

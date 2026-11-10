@@ -1,6 +1,12 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.TRANSACTIONAL_LOCAL;
 
@@ -516,7 +522,7 @@ class MultiProjectionRunnerTest {
     try {
       awaitSize(processed, 2);
       assertTrue(
-          processed.stream().anyMatch(e -> ((TestEvent) e.event()).payload().equals("second")),
+          processed.stream().anyMatch(e -> "second".equals(((TestEvent) e.event()).payload())),
           "restarted runner must process events appended after stop");
     } finally {
       runner.stop();

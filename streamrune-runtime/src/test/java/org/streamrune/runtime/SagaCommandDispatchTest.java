@@ -49,6 +49,7 @@ class SagaCommandDispatchTest {
 
   private static CommandBus capturing(AtomicReference<Bound> bound) {
     return new CommandBus() {
+      @Override
       public <C extends Command> CommandResult execute(C command) {
         throw new UnsupportedOperationException("use keyed execute");
       }
@@ -127,6 +128,7 @@ class SagaCommandDispatchTest {
     var causes = new java.util.ArrayList<StreamRuneContext.DispatchCause>();
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
@@ -155,6 +157,7 @@ class SagaCommandDispatchTest {
     var executed = new AtomicInteger();
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
@@ -180,6 +183,7 @@ class SagaCommandDispatchTest {
     var executed = new AtomicInteger();
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
@@ -187,7 +191,9 @@ class SagaCommandDispatchTest {
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
             executed.incrementAndGet();
-            if (((Cmd) command).id().equals("a")) throw new RuntimeException("boom");
+            if ("a".equals(((Cmd) command).id())) {
+              throw new RuntimeException("boom");
+            }
             return null;
           }
         };
@@ -206,6 +212,7 @@ class SagaCommandDispatchTest {
     var executed = new AtomicInteger();
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
@@ -213,7 +220,9 @@ class SagaCommandDispatchTest {
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
             executed.incrementAndGet();
-            if (((Cmd) command).id().equals("a")) throw new IllegalArgumentException("rejected");
+            if ("a".equals(((Cmd) command).id())) {
+              throw new IllegalArgumentException("rejected");
+            }
             return null;
           }
         };
@@ -230,14 +239,19 @@ class SagaCommandDispatchTest {
     // retrying a deterministic failure forever is worse than terminalizing.
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
 
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
-            if (((Cmd) command).id().equals("a")) throw new RuntimeException("transient");
-            if (((Cmd) command).id().equals("b")) throw new IllegalArgumentException("permanent");
+            if ("a".equals(((Cmd) command).id())) {
+              throw new RuntimeException("transient");
+            }
+            if ("b".equals(((Cmd) command).id())) {
+              throw new IllegalArgumentException("permanent");
+            }
             return null;
           }
         };
@@ -251,6 +265,7 @@ class SagaCommandDispatchTest {
   void noCompensations_returnsFailed() {
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             return null;
           }
@@ -291,6 +306,7 @@ class SagaCommandDispatchTest {
 
   private static CommandBus busReturning(CommandBus.CommandResult result) {
     return new CommandBus() {
+      @Override
       public <C extends Command> CommandResult execute(C command) {
         throw new UnsupportedOperationException("use keyed execute");
       }
@@ -402,6 +418,7 @@ class SagaCommandDispatchTest {
     var executed = new AtomicInteger();
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
@@ -409,7 +426,7 @@ class SagaCommandDispatchTest {
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
             executed.incrementAndGet();
-            if (((Cmd) command).id().equals("a")) {
+            if ("a".equals(((Cmd) command).id())) {
               return vetoedResult("MaintenanceModeInterceptor");
             }
             return null;

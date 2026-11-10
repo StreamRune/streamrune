@@ -1,6 +1,9 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 import com.zaxxer.hikari.HikariConfig;
@@ -132,7 +135,7 @@ class PgNotificationListenerResilienceTest {
             .build();
 
     listener.start();
-    try {
+    try (listener) {
       // Wait until the listener finally connects (9th attempt) and fires a notification.
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
       while (ds.notificationsFired.get() == 0 && System.nanoTime() < deadline) {
@@ -146,8 +149,6 @@ class PgNotificationListenerResilienceTest {
       assertTrue(
           metrics.reconnects.get() >= 8,
           "expected >=8 reconnect metrics, got " + metrics.reconnects.get());
-    } finally {
-      listener.close();
     }
   }
 
@@ -194,15 +195,13 @@ class PgNotificationListenerResilienceTest {
             .build();
 
     listener.start();
-    try {
+    try (listener) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
       while (listener.isRunning() && System.nanoTime() < deadline) {
         Thread.sleep(50);
       }
       assertTrue(ds.notificationsFired.get() > 0, "the callback must have been invoked");
       assertFalse(listener.isRunning(), "an Error ends the listener as CLOSED, not as LIVE");
-    } finally {
-      listener.close();
     }
   }
 
@@ -229,7 +228,7 @@ class PgNotificationListenerResilienceTest {
               .backoff(5, 20)
               .build();
       listener.start();
-      try {
+      try (listener) {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
         while (listener.isRunning() && System.nanoTime() < deadline) {
           Thread.sleep(50);
@@ -240,8 +239,6 @@ class PgNotificationListenerResilienceTest {
             metrics.reconnects.get(),
             "the connect failure must be counted by the reconnect loop, not swallowed by the"
                 + " pool constructor");
-      } finally {
-        listener.close();
       }
     }
   }

@@ -632,8 +632,8 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
                         Instant.now()))),
             Version.initial());
     return probe
-        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-        .get(0);
+        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+        .getFirst();
   }
 
   LoadedSaga<State> row(String orderId) {

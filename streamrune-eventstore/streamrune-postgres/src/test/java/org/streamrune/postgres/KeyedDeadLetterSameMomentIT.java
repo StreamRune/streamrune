@@ -29,9 +29,9 @@ import org.streamrune.test.ForwardingEventStore;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Two replicas dead-letter the same keyed command at the same moment, against the shipped {@code
@@ -42,8 +42,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class KeyedDeadLetterSameMomentIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("dlq_same_moment");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("dlq_same_moment");
 
   private static final AggregateType COUNTER = AggregateType.of("counter");
 

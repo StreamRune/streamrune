@@ -1,6 +1,10 @@
 package org.streamrune.test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -112,7 +116,7 @@ class InMemorySagaDeadLetterStoreTest {
 
     List<SagaDeadLetterStore.SagaDeadLetterEntry> all = store.findAll(10);
     // most recent first
-    assertEquals(Instant.ofEpochSecond(200), all.get(0).faultedAt());
+    assertEquals(Instant.ofEpochSecond(200), all.getFirst().faultedAt());
     assertEquals(Instant.ofEpochSecond(100), all.get(1).faultedAt());
   }
 
@@ -149,7 +153,7 @@ class InMemorySagaDeadLetterStoreTest {
 
     List<SagaDeadLetterStore.SagaDeadLetterEntry> remaining = store.findBySaga(sid);
     assertEquals(1, remaining.size());
-    assertEquals(GlobalOffset.of(9), remaining.get(0).eventOffset());
+    assertEquals(GlobalOffset.of(9), remaining.getFirst().eventOffset());
   }
 
   @Test
@@ -215,7 +219,7 @@ class InMemorySagaDeadLetterStoreTest {
     // A failed replay re-quarantines the same key with a fresh faultedAt (day 5).
     store.publish(entry(sid, type, 1, day5));
 
-    SagaDeadLetterStore.SagaDeadLetterEntry e = store.findBySaga(sid).get(0);
+    SagaDeadLetterStore.SagaDeadLetterEntry e = store.findBySaga(sid).getFirst();
     assertEquals(day5, e.faultedAt(), "faultedAt refreshes on re-quarantine");
     assertEquals(day0, e.firstFaultedAt(), "firstFaultedAt is immutable across re-quarantines");
   }
@@ -248,7 +252,7 @@ class InMemorySagaDeadLetterStoreTest {
     Instant faultedAt = Instant.parse("2026-01-02T00:00:00Z");
     store.publish(entry(sid, SagaType.of("T"), 1, faultedAt));
 
-    assertEquals(faultedAt, store.findBySaga(sid).get(0).firstFaultedAt());
+    assertEquals(faultedAt, store.findBySaga(sid).getFirst().firstFaultedAt());
   }
 
   @Test
@@ -268,7 +272,7 @@ class InMemorySagaDeadLetterStoreTest {
             faultedAt,
             null));
 
-    assertEquals(faultedAt, store.findBySaga(sid).get(0).firstFaultedAt());
+    assertEquals(faultedAt, store.findBySaga(sid).getFirst().firstFaultedAt());
   }
 
   // --- FAULTED-owner retention guard (parity with the Postgres NOT EXISTS) ---
@@ -484,7 +488,7 @@ class InMemorySagaDeadLetterStoreTest {
 
     store.publish(entry(null, SagaType.of("T"), 94, Instant.ofEpochSecond(60))); // re-quarantine
 
-    var e = store.findAll(10).get(0);
+    var e = store.findAll(10).getFirst();
     assertEquals(SagaId.of("kept-target"), e.targetSagaId(), "stored resolved target wins");
     assertEquals(Instant.ofEpochSecond(60), e.faultedAt(), "faultedAt still refreshes");
   }
@@ -619,7 +623,7 @@ class InMemorySagaDeadLetterStoreTest {
     store.publish(entry(null, SagaType.of("TypeA"), 43, Instant.ofEpochSecond(60)));
 
     assertEquals(1, store.findAll(10).size());
-    assertEquals(Instant.ofEpochSecond(60), store.findAll(10).get(0).faultedAt());
+    assertEquals(Instant.ofEpochSecond(60), store.findAll(10).getFirst().faultedAt());
   }
 
   @Test
@@ -633,7 +637,7 @@ class InMemorySagaDeadLetterStoreTest {
 
     var remaining = store.findAll(10);
     assertEquals(1, remaining.size(), "B's null-saga record must survive A's typed discard");
-    assertEquals(SagaType.of("TypeB"), remaining.get(0).sagaType());
+    assertEquals(SagaType.of("TypeB"), remaining.getFirst().sagaType());
   }
 
   @Test
@@ -650,7 +654,7 @@ class InMemorySagaDeadLetterStoreTest {
 
     assertEquals(
         first,
-        store.findBySaga(sid).get(0).firstReplayStartedAt(),
+        store.findBySaga(sid).getFirst().firstReplayStartedAt(),
         "the re-quarantine upsert must keep the stored anchor");
   }
 
@@ -665,7 +669,7 @@ class InMemorySagaDeadLetterStoreTest {
     var anchor = Instant.ofEpochSecond(500);
     store.establishFirstReplayAnchor(sid, type, GlobalOffset.of(1), anchor);
 
-    var e = store.findBySaga(sid).get(0);
+    var e = store.findBySaga(sid).getFirst();
     assertEquals(anchor, e.firstReplayStartedAt());
   }
 
@@ -679,7 +683,7 @@ class InMemorySagaDeadLetterStoreTest {
     store.establishFirstReplayAnchor(sid, type, GlobalOffset.of(1), Instant.ofEpochSecond(900));
     assertEquals(
         Instant.ofEpochSecond(100),
-        store.findBySaga(sid).get(0).firstReplayStartedAt(),
+        store.findBySaga(sid).getFirst().firstReplayStartedAt(),
         "establish-only: the stored anchor always wins");
 
     var sid2 = SagaId.of("s-est3");
@@ -687,7 +691,7 @@ class InMemorySagaDeadLetterStoreTest {
     store.establishFirstReplayAnchor(
         sid2, SagaType.of("TypeB"), GlobalOffset.of(2), Instant.ofEpochSecond(100));
     assertNull(
-        store.findBySaga(sid2).get(0).firstReplayStartedAt(),
+        store.findBySaga(sid2).getFirst().firstReplayStartedAt(),
         "a foreign type's write must never touch this type's entry");
   }
 

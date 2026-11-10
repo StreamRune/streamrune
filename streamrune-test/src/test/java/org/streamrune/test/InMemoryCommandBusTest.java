@@ -1,6 +1,13 @@
 package org.streamrune.test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.List;
@@ -282,7 +289,7 @@ class InMemoryCommandBusTest {
 
     var first = commandBus.execute(new CreateWithItemCmd("cart-1", "SKU-1"));
     assertEquals(2, first.envelopes().size());
-    assertEquals(1, first.envelopes().get(0).version().value());
+    assertEquals(1, first.envelopes().getFirst().version().value());
     assertEquals(2, first.envelopes().get(1).version().value());
 
     // A follow-up command continues from the stream head, not from zero
@@ -306,7 +313,7 @@ class InMemoryCommandBusTest {
 
     var result = commandBus.execute(new CreateWithItemCmd("cart-1", "SKU-1"));
 
-    var firstMeta = result.envelopes().get(0).metadata();
+    var firstMeta = result.envelopes().getFirst().metadata();
     var secondMeta = result.envelopes().get(1).metadata();
     assertEquals(firstMeta.correlationId(), secondMeta.correlationId());
     assertEquals(firstMeta.commandId(), secondMeta.commandId());

@@ -93,7 +93,7 @@ class HttpOutboxPublisherLifecycleTest {
   @Test
   void close_leavesACallerSuppliedClientOpen() throws Exception {
     HttpClient borrowed = HttpClient.newHttpClient();
-    try {
+    try (borrowed) {
       HttpOutboxPublisher.of(webhookUri(), borrowed).close();
 
       assertFalse(
@@ -101,8 +101,6 @@ class HttpOutboxPublisherLifecycleTest {
       // Still fully usable: a second publisher over the same borrowed client delivers.
       HttpOutboxPublisher.of(webhookUri(), borrowed).publish(entry("borrowed"));
       assertEquals(1, requestsReceived.get());
-    } finally {
-      borrowed.close();
     }
     assertTrue(borrowed.isTerminated(), "the caller closes the client it built");
   }

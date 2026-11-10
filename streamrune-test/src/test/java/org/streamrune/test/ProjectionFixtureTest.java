@@ -1,6 +1,10 @@
 package org.streamrune.test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.streamrune.test.ProjectionFixture.event;
 
 import java.util.ArrayList;
@@ -102,8 +106,8 @@ class ProjectionFixtureTest {
                     new Added("A")))
             .getEvents();
     assertEquals(1, events.size());
-    assertInstanceOf(Added.class, events.get(0).event());
-    assertEquals("A", ((Added) events.get(0).event()).sku());
+    assertInstanceOf(Added.class, events.getFirst().event());
+    assertEquals("A", ((Added) events.getFirst().event()).sku());
     assertThrows(UnsupportedOperationException.class, () -> events.add(null));
   }
 
@@ -212,7 +216,7 @@ class ProjectionFixtureTest {
   void offsetDeduplicatingProjectionProcessesEveryEvent() {
     class OffsetDeduplicatingProjection implements Projection {
       final List<EventEnvelope> processed = new ArrayList<>();
-      long lastSeenOffset = 0;
+      long lastSeenOffset;
 
       @Override
       public void process(List<EventEnvelope> batch) {

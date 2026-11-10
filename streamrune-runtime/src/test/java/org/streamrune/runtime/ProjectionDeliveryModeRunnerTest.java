@@ -160,15 +160,13 @@ class ProjectionDeliveryModeRunnerTest {
             .register(ProjectionName.of("alo"), alo, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(10))
           .until(() -> tl.applications.get() == 3 && alo.applications.get() == 3);
-    } finally {
-      runner.close();
     }
     assertThat(tl.handed).hasSize(1);
-    assertThat(tl.handed.get(0)).isNotSameAs(NULL_MARKER).isNotSameAs(repo);
+    assertThat(tl.handed.getFirst()).isNotSameAs(NULL_MARKER).isNotSameAs(repo);
     assertThat(repo.findById(ProjectionName.of("tl"), "row", String.class))
         .contains("written-in-tx");
     assertThat(alo.handed).containsExactly(NULL_MARKER);
@@ -191,14 +189,12 @@ class ProjectionDeliveryModeRunnerTest {
             .register(ProjectionName.of("alo"), alo, "* * * * * *", AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(10))
           .until(() -> tl.applications.get() == 2 && alo.applications.get() == 2);
-    } finally {
-      runner.close();
     }
-    assertThat(tl.handed.get(0)).isNotSameAs(NULL_MARKER);
+    assertThat(tl.handed.getFirst()).isNotSameAs(NULL_MARKER);
     assertThat(alo.handed).containsExactly(NULL_MARKER);
   }
 
@@ -210,7 +206,7 @@ class ProjectionDeliveryModeRunnerTest {
     var alo = new HandedRecorder("alo");
     runner.run(ProjectionName.of("tl"), tl, TRANSACTIONAL_LOCAL);
     runner.run(ProjectionName.of("alo"), alo, AT_LEAST_ONCE_IDEMPOTENT);
-    assertThat(tl.handed.get(0)).isNotSameAs(NULL_MARKER);
+    assertThat(tl.handed.getFirst()).isNotSameAs(NULL_MARKER);
     assertThat(alo.handed).containsExactly(NULL_MARKER);
   }
 
@@ -230,7 +226,7 @@ class ProjectionDeliveryModeRunnerTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(ProjectionName.of("alo"), alo, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> alo.applications.get() == 1);
       // Only once the runner is LIVE is the next batch guaranteed to be delivered by the
       // subscription, not read by a still-running catch-up.
@@ -240,7 +236,6 @@ class ProjectionDeliveryModeRunnerTest {
       appendPings(store, 2, 2);
       Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> alo.applications.get() == 2);
     } finally {
-      runner.close();
       t.join(5_000);
     }
     assertThat(alo.handed).containsExactly(NULL_MARKER, NULL_MARKER);
@@ -272,12 +267,11 @@ class ProjectionDeliveryModeRunnerTest {
                 () ->
                     runner.run(
                         ProjectionName.of("ctr"), nonIdempotentCounter, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(10))
           .until(() -> offsets.getLastOffset(ProjectionName.of("ctr")).equals(GlobalOffset.of(2)));
     } finally {
-      runner.close();
       t.join(5_000);
     }
     assertThat(offsets.saveAttempts.get()).isEqualTo(2);
@@ -320,7 +314,7 @@ class ProjectionDeliveryModeRunnerTest {
                 () ->
                     runner.run(
                         ProjectionName.of("ctr"), nonIdempotentCounter, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       // Nothing to catch up on: the first batch the projection ever sees is a live one.
       Awaitility.await()
           .atMost(Duration.ofSeconds(10))
@@ -333,7 +327,6 @@ class ProjectionDeliveryModeRunnerTest {
           .atMost(Duration.ofSeconds(10))
           .until(() -> offsets.saveAttempts.get() == 3);
     } finally {
-      runner.close();
       t.join(5_000);
     }
     assertThat(offsets.getLastOffset(ProjectionName.of("ctr"))).isEqualTo(GlobalOffset.of(1));
@@ -381,7 +374,7 @@ class ProjectionDeliveryModeRunnerTest {
                 () ->
                     runner.run(
                         ProjectionName.of("ctr"), counterFailingOnce, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(10))
           .until(() -> runner.state() == ProjectionState.LIVE);
@@ -393,7 +386,6 @@ class ProjectionDeliveryModeRunnerTest {
           .atMost(Duration.ofSeconds(10))
           .until(() -> offsets.saveAttempts.get() == 4);
     } finally {
-      runner.close();
       t.join(5_000);
     }
     assertThat(offsets.getLastOffset(ProjectionName.of("ctr"))).isEqualTo(GlobalOffset.of(1));
@@ -448,12 +440,10 @@ class ProjectionDeliveryModeRunnerTest {
                 AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(10))
           .until(() -> offsets.getLastOffset(ProjectionName.of("ctr")).equals(GlobalOffset.of(2)));
-    } finally {
-      runner.close();
     }
     assertThat(counter.get()).isEqualTo(4);
     assertThat(dlq.all()).isEmpty();
@@ -479,10 +469,8 @@ class ProjectionDeliveryModeRunnerTest {
             .register(ProjectionName.of("audit"), batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
             .build();
     runner.start();
-    try {
+    try (runner) {
       Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> tl.applications.get() == 1);
-    } finally {
-      runner.close();
     }
     var lines =
         continuousLog.list.stream()

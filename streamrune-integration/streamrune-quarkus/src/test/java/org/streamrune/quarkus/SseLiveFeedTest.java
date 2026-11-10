@@ -126,12 +126,12 @@ class SseLiveFeedTest {
           arc.container().instance(BackgroundRelayHealthContributor.class).get();
       assertThat(relayHealth.components())
           .as("nothing is registered before the feed is started")
-          .noneMatch(component -> component.name().equals("sse-event-feed"));
+          .noneMatch(component -> "sse-event-feed".equals(component.name()));
 
       startUp(arc);
 
       assertThat(relayHealth.components())
-          .filteredOn(component -> component.name().equals("sse-event-feed"))
+          .filteredOn(component -> "sse-event-feed".equals(component.name()))
           .singleElement()
           .satisfies(
               feed -> {
@@ -181,7 +181,7 @@ class SseLiveFeedTest {
           .isFalse();
       assertThat(
               arc.container().instance(BackgroundRelayHealthContributor.class).get().components())
-          .noneMatch(component -> component.name().equals("sse-event-feed"));
+          .noneMatch(component -> "sse-event-feed".equals(component.name()));
       shutDown(arc);
     }
   }

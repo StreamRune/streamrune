@@ -36,9 +36,9 @@ final class FaultInjectingDataSource implements DataSource {
 
   private final DataSource delegate;
   private final AtomicInteger connectionAttempts = new AtomicInteger(0);
-  private volatile int failFirst = 0;
+  private volatile int failFirst;
   private volatile int failAfter = Integer.MAX_VALUE;
-  private volatile int failNth = 0; // 0 = disabled; 1-based attempt index
+  private volatile int failNth; // 0 = disabled; 1-based attempt index
   private volatile Supplier<? extends Throwable> uncheckedFault;
 
   FaultInjectingDataSource(DataSource delegate) {

@@ -80,7 +80,9 @@ public final class AuthorizationCommandInterceptor implements CommandInterceptor
    */
   public AuthorizationCommandInterceptor(
       CommandAuthorizationPolicy policy, boolean honorSagaSystemPrincipal) {
-    if (policy == null) throw new IllegalArgumentException("policy is required");
+    if (policy == null) {
+      throw new IllegalArgumentException("policy is required");
+    }
     this.policy = policy;
     this.honorSagaSystemPrincipal = honorSagaSystemPrincipal;
   }

@@ -1,6 +1,9 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -212,7 +215,7 @@ class DlqReplayKeyedIdempotencyTest {
     assertEquals(1, entries.size(), "the failed keyed command must be dead-lettered");
     assertEquals(
         key,
-        entries.get(0).idempotencyKey(),
+        entries.getFirst().idempotencyKey(),
         "the DLQ entry must carry the ORIGINAL client idempotency key");
 
     // (2) The retry runner replays the entry. The fault is gone, so it commits exactly one event —

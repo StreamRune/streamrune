@@ -1,6 +1,13 @@
 package org.streamrune.core;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.Map;
@@ -59,7 +66,7 @@ class StreamRuneContextTest {
   @Test
   void scopedValueShouldNotBeBoundOutsideScope() {
     assertFalse(StreamRuneContext.CURRENT.isBound());
-    assertThrows(NoSuchElementException.class, () -> StreamRuneContext.CURRENT.get());
+    assertThrows(NoSuchElementException.class, StreamRuneContext.CURRENT::get);
   }
 
   @Test
@@ -211,10 +218,9 @@ class StreamRuneContextTest {
 
               ScopedValue.where(StreamRuneContext.CURRENT, inner)
                   .run(
-                      () -> {
-                        assertEquals(
-                            "inner", StreamRuneContext.CURRENT.get().correlationId().value());
-                      });
+                      () ->
+                          assertEquals(
+                              "inner", StreamRuneContext.CURRENT.get().correlationId().value()));
 
               // After inner scope exits, outer value should be restored
               assertEquals("outer", StreamRuneContext.CURRENT.get().correlationId().value());
@@ -616,7 +622,7 @@ class StreamRuneContextTest {
   @Test
   void requireNoForeignReservedCorrelationId_passesForAContextBoundToNull() {
     // ScopedValue.where(CURRENT, StreamRuneContext.capture()) with nothing bound binds null.
-    ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+    ScopedValue.where(StreamRuneContext.CURRENT, null)
         .run(StreamRuneContext::requireNoForeignReservedCorrelationId);
   }
 

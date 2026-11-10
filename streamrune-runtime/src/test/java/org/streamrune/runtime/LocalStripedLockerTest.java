@@ -1,6 +1,11 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -183,9 +188,8 @@ class LocalStripedLockerTest {
     // id.
     // Contend from a DIFFERENT thread: ReentrantLock is reentrant, so the holder would re-acquire.
     var locker = new LocalStripedLocker(1); // single stripe, guaranteed collision
-    var held =
-        locker.acquireLock(StreamId.of(TYPE, AggregateId.of("agg-1")), Duration.ofSeconds(5));
-    try {
+    try (var _ =
+        locker.acquireLock(StreamId.of(TYPE, AggregateId.of("agg-1")), Duration.ofSeconds(5))) {
       var thrown = new AtomicReference<Throwable>();
       var thread =
           Thread.ofVirtual()
@@ -203,8 +207,6 @@ class LocalStripedLockerTest {
       thread.join();
       assertInstanceOf(LockException.class, thrown.get());
       assertInstanceOf(LockAcquisitionException.class, thrown.get());
-    } finally {
-      held.close();
     }
   }
 

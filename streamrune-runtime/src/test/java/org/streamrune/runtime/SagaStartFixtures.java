@@ -302,8 +302,8 @@ final class SagaStartFixtures {
   static EventEnvelope appended(
       org.streamrune.test.InMemoryEventStore eventStore, EventEnvelope event) {
     var result = eventStore.append(event.streamId(), List.of(event), Version.initial());
-    var offset = result.globalOffsets().get(0);
-    return eventStore.readGlobalStream(GlobalOffset.of(offset.value() - 1), 1).get(0);
+    var offset = result.globalOffsets().getFirst();
+    return eventStore.readGlobalStream(GlobalOffset.of(offset.value() - 1), 1).getFirst();
   }
 
   /** Appends {@code event} to a fresh stream and returns the stored envelope (real offset). */
@@ -330,8 +330,8 @@ final class SagaStartFixtures {
                         Instant.now()))),
             Version.initial());
     return eventStore
-        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-        .get(0);
+        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+        .getFirst();
   }
 
   static EventEnvelope startEvent(long globalOffset) {

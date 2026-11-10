@@ -1,12 +1,12 @@
 package org.streamrune.core.metrics;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -90,7 +90,7 @@ class MetricNamesDocLintTest {
   }
 
   @Test
-  void everyMeterShapedNameInTheGuidesIsAMeter() throws IOException {
+  void everyMeterShapedNameInTheGuidesIsAMeter() throws Exception {
     Set<String> meters = meters();
     List<String> problems = new ArrayList<>();
     int checked = 0;
@@ -99,14 +99,14 @@ class MetricNamesDocLintTest {
       guides.filter(p -> p.toString().endsWith(".md")).sorted().forEach(documents::add);
     }
     List<String> otherPages =
-        Files.readAllLines(root().resolve(OTHER_PAGES_LIST), StandardCharsets.UTF_8).stream()
+        Files.readAllLines(root().resolve(OTHER_PAGES_LIST)).stream()
             .map(String::strip)
             .filter(line -> !line.isEmpty() && !line.startsWith("#"))
             .toList();
-    assertTrue(!otherPages.isEmpty(), OTHER_PAGES_LIST + " must list the pages besides the guides");
+    assertFalse(otherPages.isEmpty(), OTHER_PAGES_LIST + " must list the pages besides the guides");
     otherPages.forEach(page -> documents.add(root().resolve(page)));
     for (Path document : documents) {
-      List<String> lines = Files.readAllLines(document, StandardCharsets.UTF_8);
+      List<String> lines = Files.readAllLines(document);
       for (int i = 0; i < lines.size(); i++) {
         Matcher name = BACKTICKED_NAME.matcher(lines.get(i));
         while (name.find()) {
@@ -170,7 +170,7 @@ class MetricNamesDocLintTest {
 
   private static List<String> read(String relative) {
     try {
-      return Files.readAllLines(root().resolve(relative), StandardCharsets.UTF_8);
+      return Files.readAllLines(root().resolve(relative));
     } catch (IOException e) {
       throw new IllegalStateException("cannot read " + relative, e);
     }

@@ -186,8 +186,12 @@ public final class CryptoShreddingModule extends SimpleModule {
 
   CryptoShreddingModule(
       CryptoEngine cryptoEngine, StreamRuneMetrics metrics, int systemicRedactionThreshold) {
-    if (cryptoEngine == null) throw new IllegalArgumentException("cryptoEngine must not be null");
-    if (metrics == null) throw new IllegalArgumentException("metrics must not be null");
+    if (cryptoEngine == null) {
+      throw new IllegalArgumentException("cryptoEngine must not be null");
+    }
+    if (metrics == null) {
+      throw new IllegalArgumentException("metrics must not be null");
+    }
     if (systemicRedactionThreshold < 1) {
       throw new IllegalArgumentException("systemicRedactionThreshold must be >= 1");
     }
@@ -232,7 +236,9 @@ public final class CryptoShreddingModule extends SimpleModule {
    * reflection over {@link RecordComponent}s.
    */
   static Map<String, String> findEncryptedFields(Class<?> beanClass) {
-    if (!beanClass.isRecord()) return Map.of();
+    if (!beanClass.isRecord()) {
+      return Map.of();
+    }
     RecordComponent[] components = beanClass.getRecordComponents();
     Map<String, RecordComponent> componentsByName = new HashMap<>();
     for (RecordComponent rc : components) {
@@ -241,7 +247,9 @@ public final class CryptoShreddingModule extends SimpleModule {
     Map<String, String> result = new HashMap<>();
     for (RecordComponent rc : components) {
       Encrypted ann = rc.getAnnotation(Encrypted.class);
-      if (ann == null) continue;
+      if (ann == null) {
+        continue;
+      }
       if (rc.getType() != String.class) {
         throw new CryptoMappingException(
             "@Encrypted component '"
@@ -336,7 +344,9 @@ public final class CryptoShreddingModule extends SimpleModule {
         List<BeanPropertyWriter> beanProperties) {
 
       Map<String, String> encryptedFields = findEncryptedFields(beanDesc.getBeanClass());
-      if (encryptedFields.isEmpty()) return beanProperties;
+      if (encryptedFields.isEmpty()) {
+        return beanProperties;
+      }
 
       List<BeanPropertyWriter> result = new ArrayList<>(beanProperties.size());
       Set<String> wrapped = new HashSet<>();
@@ -1402,7 +1412,9 @@ public final class CryptoShreddingModule extends SimpleModule {
         DeserializationConfig config, BeanDescription beanDesc, JsonDeserializer<?> deserializer) {
 
       Map<String, String> encryptedFields = findEncryptedFields(beanDesc.getBeanClass());
-      if (encryptedFields.isEmpty()) return deserializer;
+      if (encryptedFields.isEmpty()) {
+        return deserializer;
+      }
 
       // Map each record component name to its external JSON property name so a
       // @JsonProperty-renamed @Encrypted component (or its subjectId reference) can be located in

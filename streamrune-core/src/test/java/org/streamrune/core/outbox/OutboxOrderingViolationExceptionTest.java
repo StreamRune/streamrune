@@ -1,6 +1,7 @@
 package org.streamrune.core.outbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
@@ -26,9 +27,8 @@ class OutboxOrderingViolationExceptionTest {
 
   @Test
   void constructor_rejectsNulls() {
-    org.junit.jupiter.api.Assertions.assertThrows(
-        NullPointerException.class, () -> new OutboxOrderingViolationException(null, "T"));
-    org.junit.jupiter.api.Assertions.assertThrows(
+    assertThrows(NullPointerException.class, () -> new OutboxOrderingViolationException(null, "T"));
+    assertThrows(
         NullPointerException.class,
         () -> new OutboxOrderingViolationException(OutboxEntryId.of("x"), null));
   }

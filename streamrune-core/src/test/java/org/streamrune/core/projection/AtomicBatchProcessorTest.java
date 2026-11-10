@@ -1,6 +1,13 @@
 package org.streamrune.core.projection;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
@@ -65,7 +72,7 @@ class AtomicBatchProcessorTest {
             },
             store);
     assertEquals(1, handed.size());
-    assertNull(handed.get(0), "the nonatomic processor has no transaction-scoped repository");
+    assertNull(handed.getFirst(), "the nonatomic processor has no transaction-scoped repository");
     assertEquals(List.of("update:false"), order, "the save happens AFTER the updater returned");
     assertEquals(GlobalOffset.of(7), store.saved.get(ProjectionName.of("orders")));
   }
@@ -167,10 +174,10 @@ class AtomicBatchProcessorTest {
             AtomicBatchProcessorTest.class.getClassLoader(),
             new Class<?>[] {ProjectionRepository.class, AtomicBatchProcessor.class},
             (proxy, method, args) -> {
-              if (method.getName().equals("writeTargetIdentity")) {
+              if ("writeTargetIdentity".equals(method.getName())) {
                 return identity;
               }
-              if (method.getName().equals("writesTo")) {
+              if ("writesTo".equals(method.getName())) {
                 // A JDK proxy cannot run the interface default itself; forward to the default via
                 // InvocationHandler.invokeDefault, exactly as a bean proxy forwards to its target.
                 return InvocationHandler.invokeDefault(proxy, method, args);
@@ -299,7 +306,7 @@ class AtomicBatchProcessorTest {
 
     assertEquals(2, batches.get());
     assertEquals(2, handed.size());
-    assertSame(repository, handed.get(0));
+    assertSame(repository, handed.getFirst());
     assertNull(handed.get(1));
   }
 }

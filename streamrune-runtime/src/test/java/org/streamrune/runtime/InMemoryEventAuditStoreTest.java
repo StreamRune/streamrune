@@ -1,6 +1,8 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.List;
@@ -69,7 +71,7 @@ class InMemoryEventAuditStoreTest {
     List<EventAuditEntry> result = store.findByCorrelationId(CorrelationId.of("corr-1"));
 
     assertEquals(2, result.size());
-    assertEquals("e1", result.get(0).eventId().value());
+    assertEquals("e1", result.getFirst().eventId().value());
     assertEquals("e2", result.get(1).eventId().value());
   }
 
@@ -84,7 +86,7 @@ class InMemoryEventAuditStoreTest {
 
     assertEquals(2, result.size());
     // sorted ascending by occurredAt
-    assertEquals("e2", result.get(0).eventId().value());
+    assertEquals("e2", result.getFirst().eventId().value());
     assertEquals("e1", result.get(1).eventId().value());
   }
 
@@ -99,7 +101,7 @@ class InMemoryEventAuditStoreTest {
     List<EventAuditEntry> result = store.findByCausationId(CausationId.of("e1"));
 
     assertEquals(2, result.size());
-    assertEquals("e2", result.get(0).eventId().value());
+    assertEquals("e2", result.getFirst().eventId().value());
     assertEquals("e3", result.get(1).eventId().value());
   }
 
@@ -117,7 +119,7 @@ class InMemoryEventAuditStoreTest {
         store.findByStreamId(StreamId.of(TYPE, AggregateId.of("stream-A")), T1, T3);
 
     assertEquals(3, result.size());
-    assertEquals("e2", result.get(0).eventId().value());
+    assertEquals("e2", result.getFirst().eventId().value());
     assertEquals("e3", result.get(1).eventId().value());
     assertEquals("e4", result.get(2).eventId().value());
   }
@@ -134,7 +136,7 @@ class InMemoryEventAuditStoreTest {
     List<EventAuditEntry> result = store.findByUserId(UserId.of("user-1"), T1, T3);
 
     assertEquals(3, result.size());
-    assertEquals("e1", result.get(0).eventId().value());
+    assertEquals("e1", result.getFirst().eventId().value());
     assertEquals("e2", result.get(1).eventId().value());
     assertEquals("e4", result.get(2).eventId().value());
   }
@@ -155,7 +157,7 @@ class InMemoryEventAuditStoreTest {
 
     assertEquals(4, chain.size());
     // sorted by occurredAt ascending
-    assertEquals("e1", chain.get(0).eventId().value());
+    assertEquals("e1", chain.getFirst().eventId().value());
     assertEquals("e2", chain.get(1).eventId().value());
     assertEquals("e3", chain.get(2).eventId().value());
     assertEquals("e4", chain.get(3).eventId().value());
@@ -169,7 +171,7 @@ class InMemoryEventAuditStoreTest {
     List<EventAuditEntry> chain = store.traceFullCausationChain(EventId.of("e1"));
 
     assertEquals(1, chain.size());
-    assertEquals("e1", chain.get(0).eventId().value());
+    assertEquals("e1", chain.getFirst().eventId().value());
   }
 
   /** Unknown event ID produces an empty list, not an exception. */

@@ -73,9 +73,10 @@ class SagaTimeoutRunnerPollLoopTest {
     var runner = builder(failingStore, Duration.ofMillis(400)).build();
 
     runner.start();
-    try {
+    try (runner) {
       awaitTrue(() -> attemptNanos.size() >= 3, "three poll attempts");
-      long firstGapMs = TimeUnit.NANOSECONDS.toMillis(attemptNanos.get(1) - attemptNanos.get(0));
+      long firstGapMs =
+          TimeUnit.NANOSECONDS.toMillis(attemptNanos.get(1) - attemptNanos.getFirst());
       long secondGapMs = TimeUnit.NANOSECONDS.toMillis(attemptNanos.get(2) - attemptNanos.get(1));
       assertTrue(
           firstGapMs >= 150,
@@ -89,8 +90,6 @@ class SagaTimeoutRunnerPollLoopTest {
               + " ms");
       assertTrue(runner.isAlive(), "a failing poll must not kill the poll thread");
       assertTrue(runner.consecutiveFailures() >= 2, "the failures are counted for health");
-    } finally {
-      runner.close();
     }
   }
 
@@ -107,10 +106,8 @@ class SagaTimeoutRunnerPollLoopTest {
     var runner = builder(failingStore, Duration.ofMillis(50)).build();
 
     runner.start();
-    try {
+    try (runner) {
       Thread.sleep(1_000);
-    } finally {
-      runner.close();
     }
 
     // Backoff 50, 100, 200, 400, 800 ms (jittered down to half): at most ~8 attempts in a second.
@@ -134,11 +131,9 @@ class SagaTimeoutRunnerPollLoopTest {
     var runner = builder(flakyStore, Duration.ofMillis(20)).build();
 
     runner.start();
-    try {
+    try (runner) {
       awaitTrue(() -> calls.get() >= 4 && runner.consecutiveFailures() == 0, "recovery");
       assertTrue(runner.isAlive());
-    } finally {
-      runner.close();
     }
   }
 
@@ -175,11 +170,9 @@ class SagaTimeoutRunnerPollLoopTest {
     var runner = builder(brokenStore, Duration.ofMillis(20)).build();
 
     runner.start();
-    try {
+    try (runner) {
       awaitTrue(() -> !runner.isAlive(), "the poll thread to die");
       assertTrue(runner.isStarted(), "started && !alive is the dead-driver signal");
-    } finally {
-      runner.close();
     }
   }
 

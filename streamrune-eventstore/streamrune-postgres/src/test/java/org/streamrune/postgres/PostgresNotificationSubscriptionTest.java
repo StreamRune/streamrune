@@ -1,6 +1,14 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -34,9 +42,9 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Testcontainers-backed tests for {@link PostgresNotificationSubscription}. Covers LISTEN/NOTIFY
@@ -46,8 +54,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresNotificationSubscriptionTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_notify_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_notify_test");
 
   record Added(String sku) implements DomainEvent {}
 
@@ -100,7 +108,9 @@ class PostgresNotificationSubscriptionTest {
 
   @AfterAll
   static void closePool() {
-    if (eventDataSource != null) eventDataSource.close();
+    if (eventDataSource != null) {
+      eventDataSource.close();
+    }
   }
 
   @BeforeEach
@@ -197,7 +207,7 @@ class PostgresNotificationSubscriptionTest {
     store.append(warmup, List.of(envelope(warmup, 1)), Version.initial());
 
     sub.start();
-    try {
+    try (sub) {
       // Barrier: wait until the single catch-up poll delivers the warm-up event. Once seen, the
       // catch-up poll has run to completion, so NOTHING but a live server NOTIFY can drive the next
       // delivery (there is no periodic poll and no in-process shortcut is called here).
@@ -207,7 +217,7 @@ class PostgresNotificationSubscriptionTest {
       }
       assertEquals(
           1, received.size(), "catch-up poll on start must deliver the pre-start warm-up event");
-      assertEquals(TestStreams.stream("cart-notify-warmup"), received.get(0).streamId());
+      assertEquals(TestStreams.stream("cart-notify-warmup"), received.getFirst().streamId());
 
       // Now append the asserted event, strictly AFTER the catch-up poll has completed. Its only
       // possible delivery path is the server-side pg_notify('streamrune_events', …) from the
@@ -230,8 +240,6 @@ class PostgresNotificationSubscriptionTest {
       // Offset should have been advanced by pollAndDeliver
       assertNotEquals(
           GlobalOffset.initial(), offsetStore.getLastOffset(ProjectionName.of("test-sub")));
-    } finally {
-      sub.close();
     }
     // close() should also close the listen data source
     assertTrue(listenDs.isClosed(), "listen data source must be closed after sub.close()");
@@ -259,7 +267,7 @@ class PostgresNotificationSubscriptionTest {
             .build();
 
     sub.start();
-    try {
+    try (sub) {
       long start = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
       while (!sub.isRunning() && System.nanoTime() < start) {
         Thread.sleep(20);
@@ -275,9 +283,7 @@ class PostgresNotificationSubscriptionTest {
         Thread.sleep(50);
       }
       assertEquals(1, received.size(), "the in-process notifyNewEvents() shortcut must deliver");
-      assertEquals(TestStreams.stream("cart-shortcut-1"), received.get(0).streamId());
-    } finally {
-      sub.close();
+      assertEquals(TestStreams.stream("cart-shortcut-1"), received.getFirst().streamId());
     }
   }
 
@@ -302,15 +308,13 @@ class PostgresNotificationSubscriptionTest {
             .build();
 
     sub.start();
-    try {
+    try (sub) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
       while (received.isEmpty() && System.nanoTime() < deadline) {
         Thread.sleep(50);
       }
       assertEquals(1, received.size(), "catch-up poll on start should deliver the missed event");
-      assertEquals(TestStreams.stream("cart-catchup-1"), received.get(0).streamId());
-    } finally {
-      sub.close();
+      assertEquals(TestStreams.stream("cart-catchup-1"), received.getFirst().streamId());
     }
   }
 
@@ -351,7 +355,7 @@ class PostgresNotificationSubscriptionTest {
     store.append(warmup, List.of(envelope(warmup, 1)), Version.initial());
 
     sub.start();
-    try {
+    try (sub) {
       long barrier = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
       while (received.isEmpty() && System.nanoTime() < barrier) {
         Thread.sleep(20);
@@ -380,8 +384,6 @@ class PostgresNotificationSubscriptionTest {
           GlobalOffset.of(1 + burst),
           offsetStore.getLastOffset(ProjectionName.of("drain-sub")),
           "offset must advance to the true tail after draining");
-    } finally {
-      sub.close();
     }
   }
 
@@ -417,7 +419,7 @@ class PostgresNotificationSubscriptionTest {
             .build();
 
     sub.start();
-    try {
+    try (sub) {
       long barrier = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
       while (received.isEmpty() && System.nanoTime() < barrier) {
         Thread.sleep(20);
@@ -438,8 +440,6 @@ class PostgresNotificationSubscriptionTest {
           1 + burst,
           received.size(),
           "the periodic poll fallback must catch up (and drain) all events even with no NOTIFY");
-    } finally {
-      sub.close();
     }
   }
 
@@ -594,7 +594,7 @@ class PostgresNotificationSubscriptionTest {
     StreamId warmup = TestStreams.stream("cart-non-hikari-warmup");
     store.append(warmup, List.of(envelope(warmup, 1)), Version.initial());
     sub.start();
-    try {
+    try (sub) {
       long listening = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
       while (received.isEmpty() && System.nanoTime() < listening) {
         Thread.sleep(20);
@@ -608,8 +608,6 @@ class PostgresNotificationSubscriptionTest {
         Thread.sleep(20);
       }
       assertEquals(2, received.size(), "delivered through the NOTIFY on the supplied connection");
-    } finally {
-      sub.close();
     }
     assertTrue(listenSource.closed, "the subscription closes the LISTEN DataSource it was given");
   }
@@ -754,11 +752,9 @@ class PostgresNotificationSubscriptionTest {
             .build();
 
     sub.start();
-    try {
+    try (sub) {
       assertTrue(sub.isRunning());
       assertThrows(IllegalStateException.class, sub::start);
-    } finally {
-      sub.close();
     }
   }
 

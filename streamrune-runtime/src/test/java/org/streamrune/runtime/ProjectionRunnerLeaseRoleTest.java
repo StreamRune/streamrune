@@ -95,11 +95,10 @@ class ProjectionRunnerLeaseRoleTest {
   void aRunnerWithoutALease_isUngated_whileLive() throws Exception {
     var runner = runner(SubscriptionLeadership.NOOP).build();
     Thread thread = run(runner, batch -> {});
-    try {
+    try (runner) {
       awaitState(runner, ProjectionState.LIVE);
       assertThat(role()).isEqualTo(LeaseRole.UNGATED);
     } finally {
-      runner.close();
       thread.join(10_000);
     }
   }
@@ -109,11 +108,10 @@ class ProjectionRunnerLeaseRoleTest {
     var leadership = ScriptedSubscriptionLeadership.granting();
     var runner = runner(leadership).build();
     Thread thread = run(runner, batch -> {});
-    try {
+    try (runner) {
       awaitState(runner, ProjectionState.LIVE);
       assertThat(role()).isEqualTo(LeaseRole.LEADING);
     } finally {
-      runner.close();
       thread.join(10_000);
     }
   }
@@ -123,11 +121,10 @@ class ProjectionRunnerLeaseRoleTest {
     var leadership = new ScriptedSubscriptionLeadership();
     var runner = runner(leadership).build();
     Thread thread = run(runner, batch -> {});
-    try {
+    try (runner) {
       awaitState(runner, ProjectionState.STANDBY);
       assertThat(role()).isEqualTo(LeaseRole.STANDBY);
     } finally {
-      runner.close();
       thread.join(10_000);
     }
   }
@@ -153,7 +150,7 @@ class ProjectionRunnerLeaseRoleTest {
             batch -> {
               throw new IllegalArgumentException("poison");
             });
-    try {
+    try (runner) {
       awaitState(runner, ProjectionState.LIVE);
       assertThat(deadLetters.all()).hasSize(1);
       assertThat(entry().status()).isEqualTo(SubscriptionHealth.Status.DEGRADED);
@@ -168,7 +165,6 @@ class ProjectionRunnerLeaseRoleTest {
       await().atMost(Duration.ofSeconds(10)).until(() -> role() == LeaseRole.LEADING);
       assertThat(entry().status()).isEqualTo(SubscriptionHealth.Status.DEGRADED);
     } finally {
-      runner.close();
       thread.join(10_000);
     }
   }
@@ -222,7 +218,7 @@ class ProjectionRunnerLeaseRoleTest {
       await().atMost(Duration.ofSeconds(10)).until(() -> role() == LeaseRole.LEADING);
       assertThat(
               contributor.health().stream()
-                  .filter(health -> health.name().value().equals("ungated"))
+                  .filter(health -> "ungated".equals(health.name().value()))
                   .findFirst()
                   .orElseThrow()
                   .role())

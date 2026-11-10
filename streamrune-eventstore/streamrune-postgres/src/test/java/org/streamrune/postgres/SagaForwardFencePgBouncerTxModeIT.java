@@ -40,10 +40,10 @@ import org.streamrune.postgres.SagaFenceNodes.State;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
@@ -72,8 +72,8 @@ class SagaForwardFencePgBouncerTxModeIT {
   private static final Network NETWORK = Network.newNetwork();
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME)
           .withDatabaseName(DB)
           .withUsername(USER)
           .withPassword(PASSWORD)
@@ -381,7 +381,7 @@ class SagaForwardFencePgBouncerTxModeIT {
                 Connection.class.getClassLoader(),
                 new Class<?>[] {Connection.class},
                 (proxy, method, args) -> {
-                  if (method.getName().equals("close")) {
+                  if ("close".equals(method.getName())) {
                     return null;
                   }
                   try {
@@ -395,7 +395,7 @@ class SagaForwardFencePgBouncerTxModeIT {
             DataSource.class.getClassLoader(),
             new Class<?>[] {DataSource.class},
             (proxy, method, args) -> {
-              if (method.getName().equals("getConnection")) {
+              if ("getConnection".equals(method.getName())) {
                 return unclosable;
               }
               throw new UnsupportedOperationException(method.getName());

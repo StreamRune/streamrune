@@ -1,6 +1,9 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -43,7 +46,7 @@ class HybridEventSubscriptionPushHealthTest {
     // HikariConfig, whose validation rejects it — so resolveListenSource throws on the listener
     // thread, which is the startup-failure path above. Polling delivery is unaffected.
     HikariDataSource brokenPool = new HikariDataSource();
-    var subscription =
+    try (var subscription =
         new HybridEventSubscription(
             SubscriptionName.of("orders"),
             brokenPool,
@@ -51,8 +54,7 @@ class HybridEventSubscriptionPushHealthTest {
             offsetStore,
             events -> {},
             CONFIG,
-            100);
-    try {
+            100)) {
       subscription.start();
       contributor.register(SubscriptionName.of("orders"), subscription);
 
@@ -70,7 +72,6 @@ class HybridEventSubscriptionPushHealthTest {
           health.status(),
           "and it must not report DOWN either — polling is still delivering");
     } finally {
-      subscription.close();
       brokenPool.close();
     }
   }
@@ -85,7 +86,7 @@ class HybridEventSubscriptionPushHealthTest {
     var contributor = new SubscriptionHealthContributor(eventStore, offsetStore);
 
     var pollingOnly = new SubscriptionConfig(false, Duration.ofMillis(50), Duration.ofMillis(10));
-    var subscription =
+    try (var subscription =
         new HybridEventSubscription(
             SubscriptionName.of("orders-polling-only"),
             new HikariDataSource(),
@@ -93,14 +94,11 @@ class HybridEventSubscriptionPushHealthTest {
             offsetStore,
             events -> {},
             pollingOnly,
-            100);
-    try {
+            100)) {
       subscription.start();
       contributor.register(SubscriptionName.of("orders-polling-only"), subscription);
 
       assertEquals(SubscriptionHealth.Status.UP, contributor.health().getFirst().status());
-    } finally {
-      subscription.close();
     }
   }
 

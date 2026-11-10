@@ -21,9 +21,11 @@ class MigrateConvergingTest {
    * still says it is checked by {@link ConcurrentSchemaInitializationIT}.
    */
   private static final String REFUSAL =
-      "Unable to baseline schema history table \"public\".\"flyway_schema_history_streamrune\" as"
-          + " it already exists, and is empty.\nDelete the schema history table, and run baseline"
-          + " again.";
+      """
+      Unable to baseline schema history table "public"."flyway_schema_history_streamrune" as\
+       it already exists, and is empty.
+      Delete the schema history table, and run baseline\
+       again.""";
 
   private final AtomicInteger runs = new AtomicInteger();
 

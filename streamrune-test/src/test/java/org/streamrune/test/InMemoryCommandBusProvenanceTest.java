@@ -54,12 +54,12 @@ class InMemoryCommandBusProvenanceTest extends CommandBusProvenanceContract {
     InMemoryEventStore eventStore = new InMemoryEventStore();
     InMemoryCommandBus bus = bus(eventStore);
 
-    ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+    ScopedValue.where(StreamRuneContext.CURRENT, null)
         .run(() -> bus.execute(new Mark("null-context-1")));
 
     List<EventEnvelope> stored = eventStore.readGlobalStream(GlobalOffset.initial(), 10);
     assertEquals(2, stored.size());
     assertEquals(
-        stored.get(0).metadata().correlationId(), stored.get(1).metadata().correlationId());
+        stored.getFirst().metadata().correlationId(), stored.get(1).metadata().correlationId());
   }
 }

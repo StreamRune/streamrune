@@ -1,6 +1,9 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 
 import java.time.Duration;
@@ -428,7 +431,7 @@ class ProjectionRunnerHealthTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(ProjectionName.of("orders"), proj, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       awaitStandby(runner);
 
       var entry = entryFor(contributor, "orders");
@@ -445,7 +448,6 @@ class ProjectionRunnerHealthTest {
           contributor.overallStatus(),
           "a STANDBY replica whose shared checkpoint is current must NOT report DOWN");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
   }
@@ -502,7 +504,7 @@ class ProjectionRunnerHealthTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(ProjectionName.of("orders"), proj, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       awaitStandby(runner);
 
       var entry = entryFor(contributor, "orders");
@@ -520,7 +522,6 @@ class ProjectionRunnerHealthTest {
           contributor.overallStatus(),
           "an all-replicas-standby freeze must surface as DEGRADED, not a silent UP");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
   }
@@ -606,7 +607,7 @@ class ProjectionRunnerHealthTest {
     eventStore.append(poison, List.of(envelope(poison, 1, "poison")), Version.initial());
     Projection proj =
         events -> {
-          if (((TestEvent) events.get(0).event()).payload().equals("poison")) {
+          if ("poison".equals(((TestEvent) events.getFirst().event()).payload())) {
             throw new RuntimeException("permanent poison"); // DLQ'd during catch-up
           }
         };
@@ -626,7 +627,7 @@ class ProjectionRunnerHealthTest {
             .build();
 
     Thread t = Thread.ofVirtual().start(() -> runner.run(name, proj, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       long deadline = System.currentTimeMillis() + 5_000;
       while (runner.state() != ProjectionState.LIVE && System.currentTimeMillis() < deadline) {
         Thread.sleep(10);
@@ -662,7 +663,6 @@ class ProjectionRunnerHealthTest {
               + " catch-up dead-letter and the re-acquire, so this replica has no evidence the"
               + " hole closed");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(5));
     }
   }
@@ -688,11 +688,10 @@ class ProjectionRunnerHealthTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(ProjectionName.of("orders"), proj, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       awaitStandby(runner);
       assertTrue(entryFor(contributor, "orders").isPresent(), "registered while standing by");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
 

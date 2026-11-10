@@ -1,6 +1,8 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.PrintWriter;
 import java.lang.reflect.InvocationTargetException;
@@ -35,9 +37,9 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Proves {@link JdbcProjectionRepository#executeAtomically} runs the projection update and the
@@ -49,8 +51,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class JdbcProjectionRepositoryAtomicityTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_atomic_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_atomic_test");
 
   static PGSimpleDataSource dataSource;
   static PostgresOffsetStore offsetStore;
@@ -1093,7 +1095,7 @@ class JdbcProjectionRepositoryAtomicityTest {
               Connection.class.getClassLoader(),
               new Class<?>[] {Connection.class},
               (proxy, method, args) -> {
-                if (method.getName().equals("close")) {
+                if ("close".equals(method.getName())) {
                   active.decrementAndGet();
                 }
                 try {

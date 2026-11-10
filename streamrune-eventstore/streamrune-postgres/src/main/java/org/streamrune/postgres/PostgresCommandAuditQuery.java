@@ -75,7 +75,9 @@ public final class PostgresCommandAuditQuery implements CommandAuditQuery {
   private final DataSource dataSource;
 
   public PostgresCommandAuditQuery(DataSource dataSource) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     this.dataSource = dataSource;
   }
 

@@ -34,9 +34,9 @@ import org.streamrune.postgres.PostgresEventStoreFactory;
 import org.streamrune.postgres.PostgresOutboxStore;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Integration test that verifies the auto-configuration wires {@link OutboxEventMapper} and {@link
@@ -47,8 +47,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class OutboxAutoConfigIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME)
           .withDatabaseName("streamrune_outbox_autoconfig_it");
 
   record OrderPlaced(String orderId) implements DomainEvent {}

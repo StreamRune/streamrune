@@ -163,7 +163,9 @@ public final class PostgresCryptoEngine implements CryptoEngine {
       String tableName,
       StreamRuneMetrics metrics,
       CipherFactory cipherFactory) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource must not be null");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource must not be null");
+    }
     this.dataSource = dataSource;
     this.tableName = validateTableName(tableName);
     this.metrics = metrics;
@@ -207,8 +209,12 @@ public final class PostgresCryptoEngine implements CryptoEngine {
 
   @Override
   public byte[] encrypt(SubjectId subjectId, byte[] plaintext) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
-    if (plaintext == null) throw new IllegalArgumentException("plaintext must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
+    if (plaintext == null) {
+      throw new IllegalArgumentException("plaintext must not be null");
+    }
     VersionedKey key;
     byte[] result;
     try (Connection conn = dataSource.getConnection()) {
@@ -328,8 +334,12 @@ public final class PostgresCryptoEngine implements CryptoEngine {
 
   @Override
   public byte[] decrypt(SubjectId subjectId, byte[] ciphertext) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
-    if (ciphertext == null) throw new IllegalArgumentException("ciphertext must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
+    if (ciphertext == null) {
+      throw new IllegalArgumentException("ciphertext must not be null");
+    }
     try (Connection conn = dataSource.getConnection()) {
       VersionedKey key = loadKey(conn, subjectId);
       validateCiphertextHeader(subjectId.redacted(), ciphertext, key.version());
@@ -443,7 +453,9 @@ public final class PostgresCryptoEngine implements CryptoEngine {
 
   @Override
   public void deleteKey(SubjectId subjectId) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     Connection conn = null;
     try {
       conn = dataSource.getConnection();
@@ -500,7 +512,9 @@ public final class PostgresCryptoEngine implements CryptoEngine {
 
   @Override
   public void reinstate(SubjectId subjectId) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     // Clearing the tombstone lets the next encrypt mint a fresh key. The old key is gone; only
     // future writes are re-enabled. The subject's erased_key_generations row, which deleteKey
     // wrote when it destroyed the key, is deliberately NEVER REMOVED: it is what makes the next
@@ -589,7 +603,9 @@ public final class PostgresCryptoEngine implements CryptoEngine {
   }
 
   private static void closeQuietly(Connection conn) {
-    if (conn == null) return;
+    if (conn == null) {
+      return;
+    }
     try {
       conn.close();
     } catch (java.sql.SQLException _) {
@@ -629,7 +645,9 @@ public final class PostgresCryptoEngine implements CryptoEngine {
 
   @Override
   public boolean isKeyAvailable(SubjectId subjectId) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     String sql = "SELECT 1 FROM " + tableName + " WHERE subject_id = ?";
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -655,7 +673,9 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     // global lock.
     acquireSubjectLock(conn, subjectId);
     VersionedKey key = loadKeyOrNull(conn, subjectId);
-    if (key != null) return key;
+    if (key != null) {
+      return key;
+    }
     // No key: either brand new, or crypto-shredded. Terminal erasure refuses to mint a fresh key
     // for a forgotten subject; reinstate(subjectId) is the only way to lift that.
     boolean forgotten = isForgotten(conn, subjectId);
@@ -900,7 +920,9 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     }
 
     public PostgresCryptoEngine build() {
-      if (dataSource == null) throw new IllegalStateException("dataSource is required");
+      if (dataSource == null) {
+        throw new IllegalStateException("dataSource is required");
+      }
       return new PostgresCryptoEngine(dataSource, tableName, metrics, cipherFactory);
     }
   }

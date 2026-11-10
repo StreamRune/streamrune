@@ -55,8 +55,10 @@ class ScopedValueFilterLogSanitizationTest {
     // The exact CWE-117 shape from the finding: a newline followed by text shaped like a genuine
     // log line, so a pattern layout would emit it as if it were a real, separate log entry.
     String forgedPayload =
-        "attacker\n2026-08-07 10:00:00 WARN o.s.ScopedValueFilter - X-User-Id header 'admin'"
-            + " matches authenticated principal 'admin'; authorizing as admin";
+        """
+        attacker
+        2026-08-07 10:00:00 WARN o.s.ScopedValueFilter - X-User-Id header 'admin'\
+         matches authenticated principal 'admin'; authorizing as admin""";
     when(request.getHeaders("X-User-Id"))
         .thenAnswer(invocation -> TestServletHeaders.userIdHeader(forgedPayload));
     FilterChain chain = (req, res) -> {};
@@ -73,7 +75,7 @@ class ScopedValueFilterLogSanitizationTest {
             });
 
     assertEquals(1, warnings.size(), "exactly one WARN must be emitted for the mismatch");
-    String formatted = warnings.get(0);
+    String formatted = warnings.getFirst();
     assertFalse(formatted.contains("\n"), "no LF from the header must survive into the log record");
     assertFalse(formatted.contains("\r"), "no CR from the header must survive into the log record");
     // The sanitized (stripped) header content is still present, just without the newline —
@@ -106,7 +108,7 @@ class ScopedValueFilterLogSanitizationTest {
     // The formatted message contains fixed surrounding text plus the (truncated) header value —
     // it must not be anywhere near 10,000 characters long (the unbounded-log-volume concern).
     assertTrue(
-        warnings.get(0).length() < 500,
+        warnings.getFirst().length() < 500,
         "a pathologically long header must not inflate the log line");
   }
 }

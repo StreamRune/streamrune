@@ -32,7 +32,7 @@ import org.streamrune.test.SagaForwardFenceContract;
 import org.streamrune.test.SagaForwardFenceContract.FenceEvent;
 import org.streamrune.test.SagaForwardFenceContract.FenceState;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * What the forward fence costs a keyed one-event append on PostgreSQL: latency (p50, p99) and WAL
@@ -53,8 +53,7 @@ class SagaForwardFenceCostMeasurement {
 
   @Test
   void measureTheFence() throws Exception {
-    try (var pg =
-        new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("fence_cost")) {
+    try (var pg = new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("fence_cost")) {
       pg.start();
       HikariConfig config = new HikariConfig();
       config.setJdbcUrl(pg.getJdbcUrl());
@@ -104,16 +103,16 @@ class SagaForwardFenceCostMeasurement {
                   "| %s | %.3f | %.3f | %.0f |%n",
                   r.name(), r.p50Ms(), r.p99Ms(), r.walBytesPerAppend()));
         }
-        double medianA = (runs.get(0).p99Ms() + runs.get(2).p99Ms()) / 2;
+        double medianA = (runs.getFirst().p99Ms() + runs.get(2).p99Ms()) / 2;
         double medianB = (runs.get(1).p99Ms() + runs.get(3).p99Ms()) / 2;
-        double noise = Math.abs(runs.get(0).p99Ms() - runs.get(2).p99Ms());
+        double noise = Math.abs(runs.getFirst().p99Ms() - runs.get(2).p99Ms());
         double allowed = noise + 0.5;
         table.append(
             String.format(
                 "%nmedian p99 unfenced %.3f ms, fenced %.3f ms, difference %.3f ms;"
                     + " allowed %.3f ms (|A1 - A2| = %.3f ms + 0.5 ms)%n",
                 medianA, medianB, medianB - medianA, allowed, noise));
-        System.out.println(table);
+        IO.println(table);
         assertTrue(
             medianB - medianA <= allowed,
             "the fence's p99 cost is outside the append's noise:\n" + table);

@@ -36,8 +36,8 @@ import org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher;
 import org.streamrune.postgres.PostgresOutboxStore;
 import org.streamrune.runtime.OutboxFailedReplayer;
 import org.streamrune.runtime.OutboxPoller;
-import org.testcontainers.containers.KafkaContainer;
-import org.testcontainers.containers.RabbitMQContainer;
+import org.testcontainers.kafka.ConfluentKafkaContainer;
+import org.testcontainers.rabbitmq.RabbitMQContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
@@ -106,16 +106,18 @@ class OutboxBrokerE2EIT extends E2ETestBase {
 
   @Test
   void kafkaRelayDeliversOutboxEntriesInAggregateOrder() throws Exception {
-    try (var kafka = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"))) {
+    try (var kafka =
+        new ConfluentKafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"))) {
       kafka.start();
       var topic = "outbox-e2e-" + UUID.randomUUID();
-      var producer =
-          new KafkaProducer<String, String>(
-              Map.of(
-                  ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
-                  ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
-                  ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()));
-      try (var consumer = newKafkaConsumer(kafka)) {
+      try (var consumer = newKafkaConsumer(kafka);
+          var producer =
+              new KafkaProducer<String, String>(
+                  Map.of(
+                      ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
+                      ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
+                      ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                          StringSerializer.class.getName()))) {
         consumer.subscribe(List.of(topic));
 
         var store = new PostgresOutboxStore(dataSource, Duration.ofMinutes(5));
@@ -132,7 +134,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
                 .build();
 
         poller.start();
-        try {
+        try (poller) {
           var records = consumeKafka(consumer, 3);
 
           // At-least-once delivery with per-aggregate ordering: all three keyed by the aggregate id
@@ -156,21 +158,17 @@ class OutboxBrokerE2EIT extends E2ETestBase {
           // instant publish() returns, but markDelivered() commits just after — closing the poller
           // here could interrupt the loop mid-cycle before the last row flips to DELIVERED.
           await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertAllDelivered(savedIds));
-        } finally {
-          poller.close();
         }
 
         // Every entry reached the broker and was marked DELIVERED, so none is re-claimable.
         assertThat(new PostgresOutboxStore(dataSource, Duration.ofMinutes(5)).loadPending(10))
             .as("delivered entries are not re-claimable")
             .isEmpty();
-      } finally {
-        producer.close();
       }
     }
   }
 
-  private KafkaConsumer<String, String> newKafkaConsumer(KafkaContainer kafka) {
+  private KafkaConsumer<String, String> newKafkaConsumer(ConfluentKafkaContainer kafka) {
     return new KafkaConsumer<>(
         Map.of(
             ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
@@ -241,7 +239,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
         poller.start();
         var bodies = new ArrayList<String>();
         var entryIds = new ArrayList<String>();
-        try {
+        try (poller) {
           await()
               .atMost(Duration.ofSeconds(60))
               .untilAsserted(
@@ -261,7 +259,6 @@ class OutboxBrokerE2EIT extends E2ETestBase {
           // Kafka test): markDelivered commits just after the message is on the broker.
           await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertAllDelivered(savedIds));
         } finally {
-          poller.close();
           publishChannel.close();
         }
 
@@ -321,10 +318,10 @@ class OutboxBrokerE2EIT extends E2ETestBase {
                 .pollInterval(Duration.ofMillis(100))
                 .build();
         poller.start();
-        try {
+        try (poller) {
           await()
               .atMost(Duration.ofSeconds(30))
-              .untilAsserted(() -> assertThat(statusOf(savedIds.get(0))).isEqualTo("FAILED"));
+              .untilAsserted(() -> assertThat(statusOf(savedIds.getFirst())).isEqualTo("FAILED"));
           // Hold for a few polls: the successors stay PENDING and nothing reaches the broker.
           Thread.sleep(1_500);
           assertThat(statusOf(savedIds.get(1))).isEqualTo("PENDING");
@@ -335,7 +332,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
           var outcome =
               new OutboxFailedReplayer(store, StreamRuneMetrics.NOOP)
                   .skip(
-                      OutboxEntryId.of(savedIds.get(0)),
+                      OutboxEntryId.of(savedIds.getFirst()),
                       "e2e-operator",
                       "unroutable while unbound");
           assertThat(outcome).isEqualTo(OutboxFailedReplayer.SkipOutcome.SKIPPED);
@@ -355,11 +352,10 @@ class OutboxBrokerE2EIT extends E2ETestBase {
           await()
               .atMost(Duration.ofSeconds(20))
               .untilAsserted(() -> assertAllDelivered(savedIds.subList(1, 3)));
-          assertThat(statusOf(savedIds.get(0))).isEqualTo("SKIPPED");
+          assertThat(statusOf(savedIds.getFirst())).isEqualTo("SKIPPED");
           Thread.sleep(500);
           assertThat(consumeChannel.basicGet(queue, true)).as("n0 is never delivered").isNull();
         } finally {
-          poller.close();
           publishChannel.close();
         }
       }
@@ -371,7 +367,8 @@ class OutboxBrokerE2EIT extends E2ETestBase {
     // The topic rejects records above 1 KiB (max.message.bytes) → RecordTooLargeException from the
     // broker: non-retriable → ENTRY → FAILED. n1/n2 wait. Raising the topic limit and replaying n0
     // delivers n0, then n1, then n2 — the replayed head goes first.
-    try (var kafka = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"))) {
+    try (var kafka =
+        new ConfluentKafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"))) {
       kafka.start();
       var topic = "outbox-e2e-strict-" + UUID.randomUUID();
       try (var admin =
@@ -387,14 +384,15 @@ class OutboxBrokerE2EIT extends E2ETestBase {
             .all()
             .get(30, java.util.concurrent.TimeUnit.SECONDS);
 
-        var producer =
-            new KafkaProducer<String, String>(
-                Map.of(
-                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
-                    ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
-                    ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
-                        StringSerializer.class.getName()));
-        try (var consumer = newKafkaConsumer(kafka)) {
+        try (var consumer = newKafkaConsumer(kafka);
+            var producer =
+                new KafkaProducer<String, String>(
+                    Map.of(
+                        ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
+                        ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+                            StringSerializer.class.getName(),
+                        ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                            StringSerializer.class.getName()))) {
           consumer.subscribe(List.of(topic));
           var store =
               new PostgresOutboxStore(
@@ -421,10 +419,10 @@ class OutboxBrokerE2EIT extends E2ETestBase {
                   .pollInterval(Duration.ofMillis(100))
                   .build();
           poller.start();
-          try {
+          try (poller) {
             await()
                 .atMost(Duration.ofSeconds(60))
-                .untilAsserted(() -> assertThat(statusOf(ids.get(0))).isEqualTo("FAILED"));
+                .untilAsserted(() -> assertThat(statusOf(ids.getFirst())).isEqualTo("FAILED"));
             Thread.sleep(1_500);
             assertThat(statusOf(ids.get(1))).isEqualTo("PENDING");
             assertThat(consumer.poll(Duration.ofMillis(500)).count())
@@ -454,11 +452,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
                 .extracting(r -> headerValue(r, "X-Outbox-Entry-Id"))
                 .containsExactlyElementsOf(ids);
             await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertAllDelivered(ids));
-          } finally {
-            poller.close();
           }
-        } finally {
-          producer.close();
         }
       }
     }

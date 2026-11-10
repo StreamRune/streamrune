@@ -3,7 +3,6 @@ package org.streamrune.postgres;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
-import java.io.StringReader;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
@@ -201,7 +200,7 @@ final class ShippedMigrationSeries {
 
     @Override
     public Reader read() {
-      return new StringReader(content);
+      return Reader.of(content);
     }
 
     @Override

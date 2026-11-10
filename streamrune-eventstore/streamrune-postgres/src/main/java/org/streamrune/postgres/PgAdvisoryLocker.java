@@ -93,7 +93,9 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
   }
 
   private PgAdvisoryLocker(DataSource dataSource, AutoCloseable ownedPool) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     this.dataSource = dataSource;
     this.ownedPool = ownedPool;
   }
@@ -114,7 +116,9 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    * @throws IllegalArgumentException if {@code pool} is null
    */
   public static PgAdvisoryLocker withDedicatedPool(DataSource pool) {
-    if (pool == null) throw new IllegalArgumentException("pool is required");
+    if (pool == null) {
+      throw new IllegalArgumentException("pool is required");
+    }
     return new PgAdvisoryLocker(pool, pool instanceof AutoCloseable closeable ? closeable : null);
   }
 

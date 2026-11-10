@@ -34,9 +34,9 @@ import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The engine verifies each encryption before it returns it and retries a failed decryption once
@@ -53,8 +53,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresCryptoEngineCipherIntegrationTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   private static final byte[] PLAINTEXT = "alice@example.com".getBytes(StandardCharsets.UTF_8);
 

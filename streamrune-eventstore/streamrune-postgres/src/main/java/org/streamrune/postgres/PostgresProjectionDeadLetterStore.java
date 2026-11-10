@@ -50,7 +50,9 @@ public final class PostgresProjectionDeadLetterStore implements ProjectionDeadLe
   private final DataSource dataSource;
 
   public PostgresProjectionDeadLetterStore(DataSource dataSource) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     this.dataSource = dataSource;
   }
 
@@ -63,7 +65,9 @@ public final class PostgresProjectionDeadLetterStore implements ProjectionDeadLe
    */
   @Override
   public void save(ProjectionDeadLetterEntry entry) {
-    if (entry == null) throw new IllegalArgumentException("entry is required");
+    if (entry == null) {
+      throw new IllegalArgumentException("entry is required");
+    }
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(UPSERT)) {
       ps.setString(1, entry.projectionName().value());
@@ -112,8 +116,12 @@ public final class PostgresProjectionDeadLetterStore implements ProjectionDeadLe
 
   @Override
   public void discard(ProjectionName projectionName, GlobalOffset fromOffset) {
-    if (projectionName == null) throw new IllegalArgumentException("projectionName is required");
-    if (fromOffset == null) throw new IllegalArgumentException("fromOffset is required");
+    if (projectionName == null) {
+      throw new IllegalArgumentException("projectionName is required");
+    }
+    if (fromOffset == null) {
+      throw new IllegalArgumentException("fromOffset is required");
+    }
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(DELETE)) {
       ps.setString(1, projectionName.value());

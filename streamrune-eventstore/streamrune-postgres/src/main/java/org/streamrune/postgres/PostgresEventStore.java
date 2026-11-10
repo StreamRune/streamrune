@@ -488,9 +488,15 @@ public final class PostgresEventStore implements EventStore {
       SnapshotMigrationChain snapshotMigrations,
       StreamRuneMetrics metrics,
       StatementTimeout statementTimeout) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
-    if (objectMapper == null) throw new IllegalArgumentException("objectMapper is required");
-    if (typeRegistry == null) throw new IllegalArgumentException("typeRegistry is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
+    if (objectMapper == null) {
+      throw new IllegalArgumentException("objectMapper is required");
+    }
+    if (typeRegistry == null) {
+      throw new IllegalArgumentException("typeRegistry is required");
+    }
     this.dataSource = dataSource;
     this.objectMapper = objectMapper;
     this.typeRegistry = typeRegistry;
@@ -1120,7 +1126,7 @@ public final class PostgresEventStore implements EventStore {
   public AppendResult append(
       StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
     List<OutboxEntry> entries =
-        (outboxStore != null && outboxEventMapper != null)
+        outboxStore != null && outboxEventMapper != null
             ? events.stream().flatMap(e -> outboxEventMapper.toOutbox(e).stream()).toList()
             : List.of();
     return append(streamId, events, expectedVersion, entries);
@@ -1287,8 +1293,6 @@ public final class PostgresEventStore implements EventStore {
           restoreAutoCommitQuietly(conn);
         }
       }
-    } catch (OptimisticLockException e) {
-      throw e;
     } catch (SQLException e) {
       // A SQLException reaching here AFTER the commit is post-commit connection cleanup failing
       // (e.g. conn.close() throwing because the connection died right after commit). The events are
@@ -1385,7 +1389,7 @@ public final class PostgresEventStore implements EventStore {
     Objects.requireNonNull(events, "events is required");
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
     List<OutboxEntry> outboxEntries =
-        (outboxStore != null && outboxEventMapper != null)
+        outboxStore != null && outboxEventMapper != null
             ? events.stream().flatMap(e -> outboxEventMapper.toOutbox(e).stream()).toList()
             : List.of();
     // Serialize (Jackson, including any @Encrypted field KMS/Vault calls) BEFORE acquiring a
@@ -1441,7 +1445,9 @@ public final class PostgresEventStore implements EventStore {
           }
           List<GlobalOffset> globalOffsets = insertEvents(conn, streamId, rows, expectedVersion);
           commandInbox.backfillOffsets(idempotencyKey, globalOffsets, conn);
-          if (!outboxEntries.isEmpty()) outboxStore.saveAll(outboxEntries, conn);
+          if (!outboxEntries.isEmpty()) {
+            outboxStore.saveAll(outboxEntries, conn);
+          }
           writeAuditEntries(conn, streamId, events, expectedVersion);
           conn.commit();
           committed = true;
@@ -1473,8 +1479,6 @@ public final class PostgresEventStore implements EventStore {
           restoreAutoCommitQuietly(conn);
         }
       }
-    } catch (OptimisticLockException e) {
-      throw e;
     } catch (SQLException e) {
       // Post-commit connection cleanup (e.g. conn.close()) failing after a durable commit: return
       // the committed result instead of reporting a spurious failure. claimLost is never set on the
@@ -1869,7 +1873,9 @@ public final class PostgresEventStore implements EventStore {
       StreamId streamId,
       List<EventEnvelope> events,
       Version expectedVersion) {
-    if (eventAuditStore == null || events.isEmpty()) return;
+    if (eventAuditStore == null || events.isEmpty()) {
+      return;
+    }
     List<EventAuditEntry> auditEntries = new ArrayList<>();
     long auditVersion = expectedVersion.value();
     for (EventEnvelope envelope : events) {
@@ -1895,7 +1901,9 @@ public final class PostgresEventStore implements EventStore {
    * No-op if {@code globalOffsets} is empty.
    */
   private void notifyAfterCommit(java.sql.Connection conn, List<GlobalOffset> globalOffsets) {
-    if (globalOffsets.isEmpty()) return;
+    if (globalOffsets.isEmpty()) {
+      return;
+    }
     try {
       conn.setAutoCommit(true);
       try (var notifyStmt = conn.prepareStatement(NOTIFY_NEW_EVENTS)) {

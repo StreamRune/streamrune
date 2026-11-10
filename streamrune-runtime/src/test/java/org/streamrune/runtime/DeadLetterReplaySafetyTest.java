@@ -1,6 +1,12 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -739,7 +745,8 @@ class DeadLetterReplaySafetyTest {
               .toList();
       assertEquals(2, forced.size(), forced.toString());
       assertTrue(
-          forced.get(0).contains("unkeyed") && forced.get(0).contains("by ops-7"), forced.get(0));
+          forced.getFirst().contains("unkeyed") && forced.getFirst().contains("by ops-7"),
+          forced.getFirst());
       assertTrue(
           forced.get(1).contains("stale") && forced.get(1).contains("by unknown"), forced.get(1));
       // The operator is named in the log only; the replay itself runs without the caller's context.

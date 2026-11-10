@@ -1,6 +1,9 @@
 package org.streamrune.outbox.kafka;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -23,17 +26,17 @@ import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.StreamId;
-import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.kafka.ConfluentKafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 
 @Testcontainers
 class KafkaOutboxPublisherIntegrationTest {
 
   @Container
-  static final KafkaContainer KAFKA =
-      new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"));
+  static final ConfluentKafkaContainer KAFKA =
+      new ConfluentKafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"));
 
   static KafkaProducer<String, String> producer;
 
@@ -49,7 +52,9 @@ class KafkaOutboxPublisherIntegrationTest {
 
   @AfterAll
   static void cleanup() {
-    if (producer != null) producer.close();
+    if (producer != null) {
+      producer.close();
+    }
   }
 
   private KafkaConsumer<String, String> newConsumer(String topic) {
@@ -70,8 +75,12 @@ class KafkaOutboxPublisherIntegrationTest {
     long deadline = System.currentTimeMillis() + 10_000;
     while (System.currentTimeMillis() < deadline) {
       ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(1));
-      if (records.count() == 1) return records.iterator().next();
-      if (records.count() > 1) fail("Expected 1 record, got " + records.count());
+      if (records.count() == 1) {
+        return records.iterator().next();
+      }
+      if (records.count() > 1) {
+        fail("Expected 1 record, got " + records.count());
+      }
     }
     return fail("No record arrived within timeout");
   }

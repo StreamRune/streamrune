@@ -1,6 +1,10 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.List;
@@ -245,7 +249,7 @@ class HybridEventSubscriptionTest {
   }
 
   @Test
-  void subscriptionNameIsUsedAsOffsetKey() throws InterruptedException {
+  void subscriptionNameIsUsedAsOffsetKey() throws Exception {
     var offsetStore = new RecordingOffsetStore();
     var subscription =
         HybridEventSubscription.builder()
@@ -258,19 +262,16 @@ class HybridEventSubscriptionTest {
             .build();
 
     subscription.start();
-    try {
+    try (subscription) {
       assertTrue(
           offsetStore.firstLookup.await(5, TimeUnit.SECONDS),
           "poll loop should look up the offset within 5s");
       assertEquals(ProjectionName.of("orders-projection"), offsetStore.lastQueriedName);
-    } finally {
-      subscription.close();
     }
   }
 
   @Test
-  void onNotification_swallowsPollException_soListenLoopIsNeverTornDown()
-      throws InterruptedException {
+  void onNotification_swallowsPollException_soListenLoopIsNeverTornDown() throws Exception {
     // A wrapped-listener/read exception on the notify path must NOT propagate out of the
     // notification callback — otherwise it reaches PgNotificationListener's listen loop, which
     // treats it as a LISTEN-connection failure (closes the healthy LISTEN connection + bumps the
@@ -301,7 +302,7 @@ class HybridEventSubscriptionTest {
             pollingOnly,
             100);
     subscription.start();
-    try {
+    try (subscription) {
       // Let the background loop take its first (throwing) poll and enter its long backoff, freeing
       // the poll lock — then the direct notify call reliably reaches the throwing read.
       long deadline = System.currentTimeMillis() + 5_000;
@@ -316,8 +317,6 @@ class HybridEventSubscriptionTest {
       assertTrue(
           reads.get() > before,
           "the notify handler must actually have reached the throwing read (poll lock was free)");
-    } finally {
-      subscription.close();
     }
   }
 

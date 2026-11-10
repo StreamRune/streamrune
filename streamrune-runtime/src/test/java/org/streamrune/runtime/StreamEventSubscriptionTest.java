@@ -1,6 +1,13 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
@@ -254,7 +261,7 @@ class StreamEventSubscriptionTest {
   }
 
   @Test
-  void backgroundPollLoopSurvivesListenerExceptionAndRecovers() throws InterruptedException {
+  void backgroundPollLoopSurvivesListenerExceptionAndRecovers() throws Exception {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-resilient"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
@@ -277,7 +284,7 @@ class StreamEventSubscriptionTest {
             10);
 
     sub.start();
-    try {
+    try (sub) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       // The recovery has two observable effects and the test waits for both. The listener fills
       // `received` from inside the poll cycle; the loop clears its failure counter when that cycle
@@ -289,8 +296,6 @@ class StreamEventSubscriptionTest {
       assertTrue(sub.isRunning(), "transient failures must not stop the subscription");
       assertEquals(1, received.size(), "events must be delivered after the failures pass");
       assertEquals(0, sub.consecutiveFailures(), "failure counter resets after recovery");
-    } finally {
-      sub.close();
     }
   }
 
@@ -316,11 +321,11 @@ class StreamEventSubscriptionTest {
     int delivered = sub.pollOnce();
     assertEquals(1, delivered);
     assertEquals(1, received.size());
-    assertEquals(target, received.get(0).streamId());
+    assertEquals(target, received.getFirst().streamId());
   }
 
   @Test
-  void startCloseToggleRunning() throws InterruptedException {
+  void startCloseToggleRunning() throws Exception {
     var store = new InMemoryEventStore();
     var sub =
         new StreamEventSubscription(
@@ -388,13 +393,7 @@ class StreamEventSubscriptionTest {
         IllegalArgumentException.class,
         () ->
             new StreamEventSubscription(
-                (SubscriptionName) null,
-                StreamId.of(TYPE, AggregateId.of("a")),
-                store,
-                os,
-                listener,
-                cfg,
-                10));
+                null, StreamId.of(TYPE, AggregateId.of("a")), store, os, listener, cfg, 10));
     // A blank subscription name never reaches the constructor: SubscriptionName rejects it first.
     assertThrows(IllegalArgumentException.class, () -> SubscriptionName.of("  "));
     assertThrows(
@@ -526,7 +525,7 @@ class StreamEventSubscriptionTest {
   }
 
   @Test
-  void backgroundPollLoopDeliversEvents() throws InterruptedException {
+  void backgroundPollLoopDeliversEvents() throws Exception {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-bg"));
     store.append(s, List.of(envelope(s, 1), envelope(s, 2)), Version.initial());
@@ -567,7 +566,7 @@ class StreamEventSubscriptionTest {
   }
 
   @Test
-  void foreignReadPoisonStopsTheSubscriptionTerminallyAfterTheBound() throws InterruptedException {
+  void foreignReadPoisonStopsTheSubscriptionTerminallyAfterTheBound() throws Exception {
     // pollOnce() reads the GLOBAL page and filters by streamId only AFTER
     // readGlobalStream has deserialized every foreign event, so an unregistered FOREIGN event
     // type throws inside the read. ResilientPollLoop treated it as transient and retried forever:
@@ -586,7 +585,7 @@ class StreamEventSubscriptionTest {
             .build();
 
     sub.start();
-    try {
+    try (sub) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (sub.isRunning() && System.nanoTime() < deadline) {
         Thread.sleep(20);
@@ -601,14 +600,11 @@ class StreamEventSubscriptionTest {
       ProjectionReadPoisonException poison = ((ReadPoisonAware) sub).readPoisonError();
       assertNotNull(poison, "the terminal read-poison error must be exposed");
       assertInstanceOf(UnknownEventTypeException.class, poison.getCause());
-    } finally {
-      sub.close();
     }
   }
 
   @Test
-  void foreignReadPoisonBound_thenStartSucceedsPromptly_notAfterTheStaleBackoff()
-      throws InterruptedException {
+  void foreignReadPoisonBound_thenStartSucceedsPromptly_notAfterTheStaleBackoff() throws Exception {
     // onReadFailure sets running=false THEN throws the terminal poison (~:402-432);
     // ResilientPollLoop caught it as an ordinary RuntimeException and slept the 5th-failure
     // backoff (initial x 16, capped at max(pollingInterval, 60s)) before ever rechecking
@@ -630,7 +626,7 @@ class StreamEventSubscriptionTest {
             .build();
 
     sub.start();
-    try {
+    try (sub) {
       long boundDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
       while (sub.isRunning() && System.nanoTime() < boundDeadline) {
         Thread.sleep(20);
@@ -656,8 +652,6 @@ class StreamEventSubscriptionTest {
               + " for the stale backoff window the dead terminal thread used to sleep out; last"
               + " failure: "
               + lastFailure);
-    } finally {
-      sub.close();
     }
   }
 
@@ -691,7 +685,7 @@ class StreamEventSubscriptionTest {
   }
 
   @Test
-  void transientReadFailuresNeverCountTowardThePoisonBound() throws InterruptedException {
+  void transientReadFailuresNeverCountTowardThePoisonBound() throws Exception {
     // A SQLException-caused read failure is infrastructure, not poison: the streak resets and the
     // resilient loop's unbounded retry applies — the subscription recovers and delivers even after
     // MORE consecutive failures than the bound.
@@ -721,7 +715,7 @@ class StreamEventSubscriptionTest {
             .build();
 
     impl.start();
-    try {
+    try (impl) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (received.isEmpty() && System.nanoTime() < deadline) {
         Thread.sleep(20);
@@ -729,13 +723,11 @@ class StreamEventSubscriptionTest {
       assertEquals(1, received.size(), "delivery resumes once the transient read failures pass");
       assertTrue(impl.isRunning(), "transient read failures never stop the subscription");
       assertNull(impl.readPoisonError());
-    } finally {
-      impl.close();
     }
   }
 
   @Test
-  void readPoisonBoundZeroKeepsTheUnboundedRetry() throws InterruptedException {
+  void readPoisonBoundZeroKeepsTheUnboundedRetry() throws Exception {
     // Opt-out: readPoisonBound(0) keeps the unbounded retry for callers that prefer it.
     var impl =
         StreamEventSubscription.builder()
@@ -750,7 +742,7 @@ class StreamEventSubscriptionTest {
             .build();
 
     impl.start();
-    try {
+    try (impl) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (impl.consecutiveFailures() <= StreamEventSubscription.DEFAULT_READ_POISON_BOUND
           && System.nanoTime() < deadline) {
@@ -761,8 +753,6 @@ class StreamEventSubscriptionTest {
           "the loop keeps retrying past the default bound");
       assertTrue(impl.isRunning(), "an unbounded subscription never stops itself");
       assertNull(impl.readPoisonError());
-    } finally {
-      impl.close();
     }
   }
 }

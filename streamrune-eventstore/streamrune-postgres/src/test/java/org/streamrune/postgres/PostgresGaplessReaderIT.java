@@ -28,9 +28,9 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Gate test for the gapless, fully-live global reader (the gapless-global-offset fix): {@link
@@ -49,9 +49,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresGaplessReaderIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
-          .withDatabaseName("streamrune_gapless_reader");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_gapless_reader");
 
   static PGSimpleDataSource dataSource;
   static ObjectMapper objectMapper;
@@ -194,8 +193,8 @@ class PostgresGaplessReaderIT {
         batch.stream().map(e -> e.globalOffset().value()).toList(),
         "a checkpoint below the stream start must deliver from the first available offset, not"
             + " stall");
-    assertEquals(41L, r1.globalOffsets().get(0).value());
-    assertEquals(42L, r2.globalOffsets().get(0).value());
+    assertEquals(41L, r1.globalOffsets().getFirst().value());
+    assertEquals(42L, r2.globalOffsets().getFirst().value());
   }
 
   @Test
@@ -331,7 +330,7 @@ class PostgresGaplessReaderIT {
           "E1,E2 must be delivered immediately despite the unrelated open transaction — no added"
               + " latency, no withholding");
       assertTrue(
-          r1.globalOffsets().get(0).value() == 1 && r2.globalOffsets().get(0).value() == 2,
+          r1.globalOffsets().getFirst().value() == 1 && r2.globalOffsets().getFirst().value() == 2,
           "sanity: the two appends took offsets 1 and 2");
 
       longConn.rollback();

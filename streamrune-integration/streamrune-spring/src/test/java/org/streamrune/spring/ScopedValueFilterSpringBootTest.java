@@ -36,6 +36,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -118,7 +119,7 @@ class ScopedValueFilterSpringBootTest {
 
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-      return http.csrf(csrf -> csrf.disable())
+      return http.csrf(CsrfConfigurer::disable)
           .authorizeHttpRequests(
               rules -> rules.requestMatchers("/commands").permitAll().anyRequest().denyAll())
           .build();

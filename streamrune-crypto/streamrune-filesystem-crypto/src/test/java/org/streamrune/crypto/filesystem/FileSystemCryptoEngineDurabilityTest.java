@@ -1,6 +1,11 @@
 package org.streamrune.crypto.filesystem;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
@@ -873,11 +878,21 @@ class FileSystemCryptoEngineDurabilityTest {
     }
 
     private String label(Path path) {
-      if (path.equals(keyPath)) return "key";
-      if (path.equals(tombstone)) return "tombstone";
-      if (path.equals(generation)) return "generation";
-      if (path.equals(keyPath.getParent())) return "shard";
-      if (path.equals(keyDirectory)) return "keyDirectory";
+      if (path.equals(keyPath)) {
+        return "key";
+      }
+      if (path.equals(tombstone)) {
+        return "tombstone";
+      }
+      if (path.equals(generation)) {
+        return "generation";
+      }
+      if (path.equals(keyPath.getParent())) {
+        return "shard";
+      }
+      if (path.equals(keyDirectory)) {
+        return "keyDirectory";
+      }
       String name = path.getFileName().toString();
       if (name.startsWith(generation.getFileName().toString()) && name.endsWith(".gen")) {
         return "generation-tmp";
@@ -958,7 +973,9 @@ class FileSystemCryptoEngineDurabilityTest {
     }
 
     private String relative(Path path) {
-      if (path.equals(tempDir)) return "<tempDir>";
+      if (path.equals(tempDir)) {
+        return "<tempDir>";
+      }
       if (path.getFileName().toString().endsWith(".tmp")) {
         return tempDir.relativize(path.getParent()) + "/key-tmp";
       }
@@ -978,13 +995,17 @@ class FileSystemCryptoEngineDurabilityTest {
 
     @Override
     public void forceFile(Path file) throws IOException {
-      if (failOn.test(file)) throw new IOException("injected fsync failure: " + file);
+      if (failOn.test(file)) {
+        throw new IOException("injected fsync failure: " + file);
+      }
       real.forceFile(file);
     }
 
     @Override
     public void forceDirectory(Path directory) throws IOException {
-      if (failOn.test(directory)) throw new IOException("injected fsync failure: " + directory);
+      if (failOn.test(directory)) {
+        throw new IOException("injected fsync failure: " + directory);
+      }
       real.forceDirectory(directory);
     }
   }

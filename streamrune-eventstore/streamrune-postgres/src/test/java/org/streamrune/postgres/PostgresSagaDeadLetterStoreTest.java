@@ -1,7 +1,11 @@
 package org.streamrune.postgres;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -29,9 +33,9 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Testcontainers-backed tests for {@link PostgresSagaDeadLetterStore}. Exercises publish /
@@ -41,9 +45,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresSagaDeadLetterStoreTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
-          .withDatabaseName("streamrune_saga_dlq_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_saga_dlq_test");
 
   static PGSimpleDataSource dataSource;
   PostgresSagaDeadLetterStore store;
@@ -123,7 +126,7 @@ class PostgresSagaDeadLetterStoreTest {
 
     var results = store.findBySaga(sid);
     assertEquals(1, results.size());
-    var e = results.get(0);
+    var e = results.getFirst();
     assertEquals(sid, e.sagaId());
     assertEquals(type, e.sagaType());
     assertEquals(GlobalOffset.of(1L), e.eventOffset());
@@ -141,7 +144,7 @@ class PostgresSagaDeadLetterStoreTest {
 
     var all = store.findAll(10);
     assertEquals(1, all.size());
-    assertEquals(sid, all.get(0).sagaId());
+    assertEquals(sid, all.getFirst().sagaId());
   }
 
   @Test
@@ -209,8 +212,8 @@ class PostgresSagaDeadLetterStoreTest {
 
     var all = store.findAll(10);
     assertEquals(1, all.size());
-    assertNull(all.get(0).sagaId());
-    assertEquals(SagaType.of("T"), all.get(0).sagaType());
+    assertNull(all.getFirst().sagaId());
+    assertEquals(SagaType.of("T"), all.getFirst().sagaType());
   }
 
   @Test
@@ -276,7 +279,7 @@ class PostgresSagaDeadLetterStoreTest {
 
     store.publish(entry(sid, type, 4242L, "boom", Instant.now()));
 
-    var e = store.findBySaga(sid).get(0);
+    var e = store.findBySaga(sid).getFirst();
     assertEquals(offset, e.eventOffset());
     assertEquals(EventType.of("OrderCreated"), e.eventType());
     // To inspect the actual event data for this entry, an operator reads event_stream at
@@ -294,7 +297,7 @@ class PostgresSagaDeadLetterStoreTest {
 
     var remaining = store.findBySaga(sid);
     assertEquals(1, remaining.size());
-    assertEquals(GlobalOffset.of(9L), remaining.get(0).eventOffset());
+    assertEquals(GlobalOffset.of(9L), remaining.getFirst().eventOffset());
   }
 
   @Test
@@ -409,7 +412,7 @@ class PostgresSagaDeadLetterStoreTest {
     // A failed replay re-quarantines the same key with a fresh faultedAt (day 5).
     store.publish(entry(sid, type, 1L, "still poison", day5));
 
-    var e = store.findBySaga(sid).get(0);
+    var e = store.findBySaga(sid).getFirst();
     assertThat(e.faultedAt())
         .as("faulted_at refreshes on re-quarantine (still-poison detection)")
         .isCloseTo(day5, org.assertj.core.api.Assertions.within(1, ChronoUnit.SECONDS));
@@ -447,7 +450,7 @@ class PostgresSagaDeadLetterStoreTest {
     Instant faultedAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
     store.publish(entry(sid, SagaType.of("T"), 1L, "boom", faultedAt));
 
-    assertThat(store.findBySaga(sid).get(0).firstFaultedAt())
+    assertThat(store.findBySaga(sid).getFirst().firstFaultedAt())
         .isCloseTo(faultedAt, org.assertj.core.api.Assertions.within(1, ChronoUnit.SECONDS));
   }
 
@@ -760,7 +763,7 @@ class PostgresSagaDeadLetterStoreTest {
 
     assertEquals(
         SagaId.of("kept-target"),
-        store.findBySaga(sid).get(0).targetSagaId(),
+        store.findBySaga(sid).getFirst().targetSagaId(),
         "the upsert conflict must keep the STORED resolved target");
   }
 
@@ -976,7 +979,7 @@ class PostgresSagaDeadLetterStoreTest {
 
     var remaining = store.findAll(10);
     assertEquals(1, remaining.size(), "B's null-saga record must survive A's typed discard");
-    assertEquals(SagaType.of("TypeB"), remaining.get(0).sagaType());
+    assertEquals(SagaType.of("TypeB"), remaining.getFirst().sagaType());
   }
 
   // --- The replayAll fold lookup ---
@@ -1016,8 +1019,8 @@ class PostgresSagaDeadLetterStoreTest {
     var folded = store.findNullSagaEntriesByResolvedTarget(type, target);
 
     assertThat(folded).hasSize(1);
-    assertThat(folded.get(0).eventOffset().value()).isEqualTo(10L);
-    assertThat(folded.get(0).errorMessage()).as("newest row of the set").isEqualTo("second");
+    assertThat(folded.getFirst().eventOffset().value()).isEqualTo(10L);
+    assertThat(folded.getFirst().errorMessage()).as("newest row of the set").isEqualTo("second");
     assertThat(store.findNullSagaEntriesByResolvedTarget(SagaType.of("Other"), target))
         .as("the foreign type sees only its own resolved entry")
         .extracting(e -> e.eventOffset().value())
@@ -1035,7 +1038,7 @@ class PostgresSagaDeadLetterStoreTest {
     Instant anchor = Instant.now().truncatedTo(ChronoUnit.MICROS);
     store.establishFirstReplayAnchor(sid, type, GlobalOffset.of(1L), anchor);
 
-    var e = store.findBySaga(sid).get(0);
+    var e = store.findBySaga(sid).getFirst();
     assertThat(e.firstReplayStartedAt())
         .as("the anchor is established")
         .isCloseTo(anchor, org.assertj.core.api.Assertions.within(1, ChronoUnit.SECONDS));
@@ -1052,7 +1055,7 @@ class PostgresSagaDeadLetterStoreTest {
     store.establishFirstReplayAnchor(
         sid, type, GlobalOffset.of(1L), first.plus(3, ChronoUnit.DAYS));
 
-    assertThat(store.findBySaga(sid).get(0).firstReplayStartedAt())
+    assertThat(store.findBySaga(sid).getFirst().firstReplayStartedAt())
         .as("establish-only: the stored anchor always wins (stamp-once)")
         .isCloseTo(first, org.assertj.core.api.Assertions.within(1, ChronoUnit.SECONDS));
   }
@@ -1065,7 +1068,7 @@ class PostgresSagaDeadLetterStoreTest {
     store.establishFirstReplayAnchor(sid, SagaType.of("TypeB"), GlobalOffset.of(1L), Instant.now());
 
     assertNull(
-        store.findBySaga(sid).get(0).firstReplayStartedAt(),
+        store.findBySaga(sid).getFirst().firstReplayStartedAt(),
         "a foreign type's write must never touch this type's entry");
   }
 
@@ -1082,7 +1085,7 @@ class PostgresSagaDeadLetterStoreTest {
 
     store.publish(entry(sid, type, 1L, "still poison", Instant.now())); // re-quarantine
 
-    assertThat(store.findBySaga(sid).get(0).firstReplayStartedAt())
+    assertThat(store.findBySaga(sid).getFirst().firstReplayStartedAt())
         .as("the re-quarantine upsert must keep the stored anchor")
         .isCloseTo(first, org.assertj.core.api.Assertions.within(1, ChronoUnit.SECONDS));
 
@@ -1101,7 +1104,7 @@ class PostgresSagaDeadLetterStoreTest {
             Instant.now(), // incoming anchor must be ignored on conflict
             null));
     assertNull(
-        store.findBySaga(sid2).get(0).firstReplayStartedAt(),
+        store.findBySaga(sid2).getFirst().firstReplayStartedAt(),
         "an upsert conflict must keep the STORED anchor (null here) — publish never stamps");
   }
 
@@ -1145,7 +1148,7 @@ class PostgresSagaDeadLetterStoreTest {
             faultedAt,
             null));
 
-    assertThat(store.findBySaga(sid).get(0).firstFaultedAt())
+    assertThat(store.findBySaga(sid).getFirst().firstFaultedAt())
         .isCloseTo(faultedAt, org.assertj.core.api.Assertions.within(1, ChronoUnit.SECONDS));
   }
 
@@ -1534,7 +1537,7 @@ class PostgresSagaDeadLetterStoreTest {
                     PostgresSagaDeadLetterStoreTest.class.getClassLoader(),
                     new Class<?>[] {DataSource.class},
                     (proxy, method, args) -> {
-                      if (method.getName().equals("getConnection")) {
+                      if ("getConnection".equals(method.getName())) {
                         throw new java.sql.SQLException("connection refused");
                       }
                       throw new UnsupportedOperationException(method.getName());

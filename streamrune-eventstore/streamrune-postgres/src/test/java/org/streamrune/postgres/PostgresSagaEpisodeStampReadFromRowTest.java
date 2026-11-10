@@ -51,9 +51,9 @@ import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * On {@link PostgresSagaStore}: a saga whose own {@code evolve} yields {@code COMPENSATING} on its
@@ -75,8 +75,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresSagaEpisodeStampReadFromRowTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_episode_key");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_episode_key");
 
   record Opened(String orderId) implements DomainEvent {}
 
@@ -444,7 +444,7 @@ class PostgresSagaEpisodeStampReadFromRowTest {
                         Instant.now()))),
             Version.initial());
     return eventStore
-        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-        .get(0);
+        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+        .getFirst();
   }
 }

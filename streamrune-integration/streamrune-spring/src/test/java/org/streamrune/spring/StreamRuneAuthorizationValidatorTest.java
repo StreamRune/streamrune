@@ -77,7 +77,7 @@ class StreamRuneAuthorizationValidatorTest {
     runner
         .withClassLoader(new FilteredClassLoader(SecurityContextHolder.class))
         .withUserConfiguration(GuardedDeciderConfig.class)
-        .run(ctx -> assertRefusedAsUnguarded(ctx));
+        .run(StreamRuneAuthorizationValidatorTest::assertRefusedAsUnguarded);
   }
 
   /**
@@ -143,7 +143,7 @@ class StreamRuneAuthorizationValidatorTest {
     runner
         .withClassLoader(new FilteredClassLoader(SecurityContextHolder.class))
         .withUserConfiguration(HandBuiltBusConfig.class)
-        .run(ctx -> assertRefusedAsUnguarded(ctx));
+        .run(StreamRuneAuthorizationValidatorTest::assertRefusedAsUnguarded);
   }
 
   /**
@@ -156,7 +156,7 @@ class StreamRuneAuthorizationValidatorTest {
     runner
         .withClassLoader(new FilteredClassLoader(SecurityContextHolder.class))
         .withUserConfiguration(HandBuiltBusConfig.class, StubResolverConfig.class)
-        .run(ctx -> assertRefusedAsUnguarded(ctx));
+        .run(StreamRuneAuthorizationValidatorTest::assertRefusedAsUnguarded);
   }
 
   /**
@@ -173,7 +173,7 @@ class StreamRuneAuthorizationValidatorTest {
                 context.addBeanFactoryPostProcessor(
                     new LazyInitializationBeanFactoryPostProcessor()))
         .withUserConfiguration(HandBuiltBusConfig.class)
-        .run(ctx -> assertRefusedAsUnguarded(ctx));
+        .run(StreamRuneAuthorizationValidatorTest::assertRefusedAsUnguarded);
   }
 
   /**

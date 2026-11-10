@@ -29,7 +29,9 @@ public record UserAuthority(Set<String> roles, Set<String> permissions) {
   /** Returns {@code true} if this authority includes at least one of the given roles. */
   public boolean hasAnyRole(String... requiredRoles) {
     for (String r : requiredRoles) {
-      if (roles.contains(r)) return true;
+      if (roles.contains(r)) {
+        return true;
+      }
     }
     return false;
   }
@@ -42,7 +44,9 @@ public record UserAuthority(Set<String> roles, Set<String> permissions) {
   /** Returns {@code true} if this authority includes at least one of the given permissions. */
   public boolean hasAnyPermission(String... requiredPermissions) {
     for (String p : requiredPermissions) {
-      if (permissions.contains(p)) return true;
+      if (permissions.contains(p)) {
+        return true;
+      }
     }
     return false;
   }

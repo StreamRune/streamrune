@@ -4,7 +4,7 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
 
 /** Factory for creating in-memory EventStore instances for testing. */
-public class InMemoryEventStoreFactory implements EventStoreFactory {
+public final class InMemoryEventStoreFactory implements EventStoreFactory {
 
   private InMemoryEventStoreFactory() {}
 

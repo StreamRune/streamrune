@@ -140,36 +140,24 @@ class SpringGdprAutoConfigTest {
   void forgetService_present_withCryptoEngineBean() {
     runner
         .withUserConfiguration(CryptoConfig.class)
-        .run(
-            ctx -> {
-              assertThat(ctx).hasSingleBean(ForgetSubjectService.class);
-            });
+        .run(ctx -> assertThat(ctx).hasSingleBean(ForgetSubjectService.class));
   }
 
   @Test
   void forgetService_absent_withoutCryptoEngineBean() {
-    runner.run(
-        ctx -> {
-          assertThat(ctx).doesNotHaveBean(ForgetSubjectService.class);
-        });
+    runner.run(ctx -> assertThat(ctx).doesNotHaveBean(ForgetSubjectService.class));
   }
 
   @Test
   void exportService_present_withCollectorBean() {
     runner
         .withUserConfiguration(CollectorConfig.class)
-        .run(
-            ctx -> {
-              assertThat(ctx).hasSingleBean(ExportSubjectDataService.class);
-            });
+        .run(ctx -> assertThat(ctx).hasSingleBean(ExportSubjectDataService.class));
   }
 
   @Test
   void exportService_absent_withoutCollectorBeans() {
-    runner.run(
-        ctx -> {
-          assertThat(ctx).doesNotHaveBean(ExportSubjectDataService.class);
-        });
+    runner.run(ctx -> assertThat(ctx).doesNotHaveBean(ExportSubjectDataService.class));
   }
 
   /**

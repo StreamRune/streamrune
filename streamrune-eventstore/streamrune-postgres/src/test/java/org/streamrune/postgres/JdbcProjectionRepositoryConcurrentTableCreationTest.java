@@ -29,7 +29,7 @@ import org.streamrune.core.EventStoreException;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Replicas that read the same projection for the first time at once each create its table. {@code
@@ -40,8 +40,8 @@ import org.testcontainers.containers.PostgreSQLContainer;
  */
 class JdbcProjectionRepositoryConcurrentTableCreationTest {
 
-  static PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_proj_race");
+  static PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_proj_race");
 
   static PGSimpleDataSource dataSource;
 
@@ -382,7 +382,7 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
           DataSource.class,
           target,
           (method, args, result) ->
-              method.getName().equals("getConnection") ? connection((Connection) result) : result);
+              "getConnection".equals(method.getName()) ? connection((Connection) result) : result);
     }
 
     private Connection connection(Connection real) throws SQLException {
@@ -391,13 +391,13 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
           Connection.class,
           real,
           (method, args, result) ->
-              method.getName().equals("createStatement") ? statement((Statement) result) : result);
+              "createStatement".equals(method.getName()) ? statement((Statement) result) : result);
     }
 
     private Statement statement(Statement real) {
       InvocationHandler handler =
           (p, method, args) -> {
-            if (method.getName().equals("execute")
+            if ("execute".equals(method.getName())
                 && args != null
                 && args[0] instanceof String sql
                 && sql.startsWith("CREATE TABLE")

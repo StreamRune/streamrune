@@ -18,9 +18,9 @@ import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.postgres.PostgresEventStoreFactory;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The auto-configured event store reads and writes through the application's {@link DataSource}
@@ -31,8 +31,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class AutoConfiguredEventStoreDataSourceTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_ds_it");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_ds_it");
 
   static PGSimpleDataSource dataSource;
   static final EventTypeRegistry TYPE_REGISTRY = SimpleEventTypeRegistry.builder().build();

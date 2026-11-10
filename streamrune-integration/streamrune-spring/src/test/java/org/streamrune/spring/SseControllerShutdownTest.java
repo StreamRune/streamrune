@@ -77,7 +77,7 @@ class SseControllerShutdownTest {
     verify(publisher)
         .unsubscribe(
             StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-1")),
-            subscribers.getAllValues().get(0));
+            subscribers.getAllValues().getFirst());
     verify(publisher)
         .unsubscribe(
             StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-2")),

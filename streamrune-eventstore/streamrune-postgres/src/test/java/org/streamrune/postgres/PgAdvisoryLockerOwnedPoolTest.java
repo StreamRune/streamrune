@@ -14,9 +14,9 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * {@link PgAdvisoryLocker#withDedicatedPool(javax.sql.DataSource)}: the locker takes a pool of any
@@ -27,8 +27,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PgAdvisoryLockerOwnedPoolTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_lock_owned");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_lock_owned");
 
   private static final StreamId ORDER = StreamId.of(AggregateType.of("order"), AggregateId.of("1"));
 
@@ -114,7 +114,7 @@ class PgAdvisoryLockerOwnedPoolTest {
 
   @Test
   void aPoolIsRequired() {
-    assertThatThrownBy(() -> PgAdvisoryLocker.withDedicatedPool((javax.sql.DataSource) null))
+    assertThatThrownBy(() -> PgAdvisoryLocker.withDedicatedPool(null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("pool is required");
   }

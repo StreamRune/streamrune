@@ -26,7 +26,7 @@ class ShippedMigrationScriptsTest {
   @TempDir Path temp;
 
   @Test
-  void listsTheScriptsOfBothSeriesFromDirectories() throws IOException {
+  void listsTheScriptsOfBothSeriesFromDirectories() throws Exception {
     Path root = temp.resolve("classes");
     write(root, "db/streamrune-migration/V001__baseline.sql");
     write(root, "db/streamrune-migration/V002__more.sql");
@@ -45,7 +45,7 @@ class ShippedMigrationScriptsTest {
   }
 
   @Test
-  void listsTheScriptsOfBothSeriesFromJars() throws IOException {
+  void listsTheScriptsOfBothSeriesFromJars() throws Exception {
     Path jar = temp.resolve("series.jar");
     try (var out = new JarOutputStream(Files.newOutputStream(jar))) {
       for (String name :
@@ -71,7 +71,7 @@ class ShippedMigrationScriptsTest {
   }
 
   @Test
-  void refusesASeriesThatIsNotOnTheClassPath() throws IOException {
+  void refusesASeriesThatIsNotOnTheClassPath() throws Exception {
     Path root = temp.resolve("only-event-store");
     write(root, "db/streamrune-migration/V001__baseline.sql");
 

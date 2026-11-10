@@ -97,11 +97,21 @@ public final class PollingProjectionRunner implements ProjectionRunner {
       int batchSize,
       AtomicBatchProcessor atomicProcessor,
       StreamRuneMetrics metrics) {
-    if (eventStore == null) throw new IllegalArgumentException("eventStore is required");
-    if (offsetStore == null) throw new IllegalArgumentException("offsetStore is required");
-    if (fetchSize <= 0) throw new IllegalArgumentException("fetchSize must be positive");
-    if (batchSize <= 0) throw new IllegalArgumentException("batchSize must be positive");
-    if (atomicProcessor == null) throw new IllegalArgumentException("atomicProcessor is required");
+    if (eventStore == null) {
+      throw new IllegalArgumentException("eventStore is required");
+    }
+    if (offsetStore == null) {
+      throw new IllegalArgumentException("offsetStore is required");
+    }
+    if (fetchSize <= 0) {
+      throw new IllegalArgumentException("fetchSize must be positive");
+    }
+    if (batchSize <= 0) {
+      throw new IllegalArgumentException("batchSize must be positive");
+    }
+    if (atomicProcessor == null) {
+      throw new IllegalArgumentException("atomicProcessor is required");
+    }
     this.eventStore = eventStore;
     this.offsetStore = offsetStore;
     this.fetchSize = fetchSize;
@@ -129,7 +139,9 @@ public final class PollingProjectionRunner implements ProjectionRunner {
     while (true) {
       GlobalOffset lastOffset = offsetStore.getLastOffset(projectionName);
       var events = eventStore.readGlobalStream(lastOffset, fetchSize);
-      if (events.isEmpty()) return;
+      if (events.isEmpty()) {
+        return;
+      }
 
       boolean reReadFromCheckpoint = false;
       for (int i = 0; i < events.size() && !reReadFromCheckpoint; i += batchSize) {

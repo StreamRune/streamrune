@@ -43,7 +43,9 @@ public final class PostgresCommandInbox implements CommandInbox {
   private final DataSource dataSource;
 
   public PostgresCommandInbox(DataSource dataSource) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     this.dataSource = dataSource;
   }
 
@@ -85,11 +87,15 @@ public final class PostgresCommandInbox implements CommandInbox {
         PreparedStatement ps = conn.prepareStatement(FIND)) {
       ps.setString(1, key.value());
       try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) return Optional.empty();
+        if (!rs.next()) {
+          return Optional.empty();
+        }
         List<GlobalOffset> offsets = new ArrayList<>();
         java.sql.Array sqlArr = rs.getArray("global_offsets");
         if (sqlArr != null) {
-          for (Long v : (Long[]) sqlArr.getArray()) offsets.add(GlobalOffset.of(v));
+          for (Long v : (Long[]) sqlArr.getArray()) {
+            offsets.add(GlobalOffset.of(v));
+          }
         }
         return Optional.of(
             new InboxResult(

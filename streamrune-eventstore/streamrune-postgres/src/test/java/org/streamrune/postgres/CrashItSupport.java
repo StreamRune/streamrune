@@ -23,7 +23,7 @@ import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.EventStoreFixture;
 import org.streamrune.test.InMemoryEventStore;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Support for the projection crash tests: the backend killer (a "crash" between the read-model
@@ -36,7 +36,7 @@ final class CrashItSupport {
   private CrashItSupport() {}
 
   /** One unpooled connection per {@code getConnection()}, tagged with {@code applicationName}. */
-  static PGSimpleDataSource dataSource(PostgreSQLContainer<?> pg, String applicationName) {
+  static PGSimpleDataSource dataSource(PostgreSQLContainer pg, String applicationName) {
     var ds = new PGSimpleDataSource();
     ds.setUrl(pg.getJdbcUrl());
     ds.setUser(pg.getUsername());
@@ -47,7 +47,7 @@ final class CrashItSupport {
 
   /** Like {@link #dataSource} with {@code search_path} set to {@code schema}. */
   static PGSimpleDataSource dataSourceForSchema(
-      PostgreSQLContainer<?> pg, String applicationName, String schema) {
+      PostgreSQLContainer pg, String applicationName, String schema) {
     var ds = dataSource(pg, applicationName);
     ds.setCurrentSchema(schema);
     return ds;

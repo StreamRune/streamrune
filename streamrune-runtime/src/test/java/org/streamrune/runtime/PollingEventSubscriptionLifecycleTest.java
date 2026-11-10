@@ -1,6 +1,9 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.lenient;
@@ -55,40 +58,31 @@ class PollingEventSubscriptionLifecycleTest {
 
   @Test
   void state_isRunning_afterStart() {
-    var sub = buildSub();
-    try {
+    try (var sub = buildSub()) {
       sub.start();
       assertEquals(SubscriptionLifecycleState.RUNNING, sub.state());
       assertTrue(sub.isRunning());
-    } finally {
-      sub.close();
     }
   }
 
   @Test
   void state_isPaused_afterPause() {
-    var sub = buildSub();
-    try {
+    try (var sub = buildSub()) {
       sub.start();
       sub.pause();
       assertEquals(SubscriptionLifecycleState.PAUSED, sub.state());
       assertFalse(sub.isRunning());
-    } finally {
-      sub.close();
     }
   }
 
   @Test
   void state_isRunning_afterResume() {
-    var sub = buildSub();
-    try {
+    try (var sub = buildSub()) {
       sub.start();
       sub.pause();
       sub.resume();
       assertEquals(SubscriptionLifecycleState.RUNNING, sub.state());
       assertTrue(sub.isRunning());
-    } finally {
-      sub.close();
     }
   }
 
@@ -135,14 +129,13 @@ class PollingEventSubscriptionLifecycleTest {
           public void saveOffset(ProjectionName name, GlobalOffset offset) {}
         };
 
-    var sub =
+    try (var sub =
         PollingEventSubscription.builder()
             .subscriptionName(SubscriptionName.of("b6-regression"))
             .eventStore(eventStore)
             .offsetStore(blockingOffsetStore)
             .listener(listener)
-            .build();
-    try {
+            .build()) {
       sub.start();
       assertTrue(
           inFirstPoll.await(2, TimeUnit.SECONDS), "poll thread must reach pollOnce before pause");
@@ -161,8 +154,6 @@ class PollingEventSubscriptionLifecycleTest {
         assertTrue(sub.isRunning());
         Thread.sleep(10);
       }
-    } finally {
-      sub.close();
     }
   }
 
@@ -197,15 +188,12 @@ class PollingEventSubscriptionLifecycleTest {
 
   @Test
   void pause_throwsIllegalStateException_whenAlreadyPaused() {
-    var sub = buildSub();
-    try {
+    try (var sub = buildSub()) {
       sub.start();
       sub.pause();
       var ex = assertThrows(IllegalStateException.class, sub::pause);
       assertTrue(
           ex.getMessage().contains("PAUSED"), "message should contain PAUSED: " + ex.getMessage());
-    } finally {
-      sub.close();
     }
   }
 
@@ -223,15 +211,12 @@ class PollingEventSubscriptionLifecycleTest {
 
   @Test
   void resume_throwsIllegalStateException_whenRunning() {
-    var sub = buildSub();
-    try {
+    try (var sub = buildSub()) {
       sub.start();
       var ex = assertThrows(IllegalStateException.class, sub::resume);
       assertTrue(
           ex.getMessage().contains("RUNNING"),
           "message should contain RUNNING: " + ex.getMessage());
-    } finally {
-      sub.close();
     }
   }
 
@@ -249,12 +234,9 @@ class PollingEventSubscriptionLifecycleTest {
 
   @Test
   void start_throwsIllegalStateException_whenAlreadyRunning() {
-    var sub = buildSub();
-    try {
+    try (var sub = buildSub()) {
       sub.start();
       assertThrows(IllegalStateException.class, sub::start);
-    } finally {
-      sub.close();
     }
   }
 

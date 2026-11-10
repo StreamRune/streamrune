@@ -90,7 +90,7 @@ public final class CircuitBreakerCommandInterceptor implements CommandIntercepto
   private final LongSupplier nanoTimeSource;
   private final AtomicInteger failureCount = new AtomicInteger(0);
   private final AtomicReference<State> state = new AtomicReference<>(State.CLOSED);
-  private volatile long openedAtNano = 0;
+  private volatile long openedAtNano;
 
   /**
    * When the current HALF_OPEN probe was designated. A thread takes over as the new probe by

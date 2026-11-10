@@ -378,8 +378,12 @@ public final class MultiProjectionRunner implements AutoCloseable {
     }
 
     public MultiProjectionRunner build() {
-      if (eventStore == null) throw new IllegalArgumentException("eventStore is required");
-      if (offsetStore == null) throw new IllegalArgumentException("offsetStore is required");
+      if (eventStore == null) {
+        throw new IllegalArgumentException("eventStore is required");
+      }
+      if (offsetStore == null) {
+        throw new IllegalArgumentException("offsetStore is required");
+      }
       if (atomicProcessor == null) {
         throw new IllegalArgumentException(
             "atomicProcessor is required: pass the JdbcProjectionRepository your"

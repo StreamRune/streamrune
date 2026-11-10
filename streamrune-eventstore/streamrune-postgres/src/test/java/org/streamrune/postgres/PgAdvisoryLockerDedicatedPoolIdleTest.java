@@ -16,9 +16,9 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The dedicated lock pool of {@link PgAdvisoryLocker#withDedicatedPool} keeps two connections open
@@ -30,8 +30,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PgAdvisoryLockerDedicatedPoolIdleTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_lock_idle");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_lock_idle");
 
   private static final int MAX_POOL_SIZE = 8;
 

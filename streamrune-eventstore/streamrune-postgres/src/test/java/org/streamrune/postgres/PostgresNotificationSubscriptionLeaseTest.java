@@ -44,9 +44,9 @@ import org.streamrune.core.types.Version;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SubscriptionLease;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * A {@link PostgresNotificationSubscription} built with a lease delivers only while this process
@@ -57,8 +57,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresNotificationSubscriptionLeaseTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_lease_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_lease_test");
 
   record Added(String sku) implements DomainEvent {}
 
@@ -115,7 +115,9 @@ class PostgresNotificationSubscriptionLeaseTest {
 
   @AfterAll
   static void closePool() {
-    if (eventDataSource != null) eventDataSource.close();
+    if (eventDataSource != null) {
+      eventDataSource.close();
+    }
   }
 
   @BeforeEach

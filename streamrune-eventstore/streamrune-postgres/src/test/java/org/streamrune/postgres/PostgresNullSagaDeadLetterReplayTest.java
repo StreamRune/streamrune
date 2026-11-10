@@ -44,9 +44,9 @@ import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.MutableClock;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * End-to-end {@link SagaDeadLetterReplayer} runs against the REAL {@link
@@ -68,8 +68,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresNullSagaDeadLetterReplayTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME)
           .withDatabaseName("streamrune_nullsaga_replay_test");
 
   static PGSimpleDataSource dataSource;
@@ -410,8 +410,8 @@ class PostgresNullSagaDeadLetterReplayTest {
                         Instant.now()))),
             Version.initial());
     return eventStore
-        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-        .get(0);
+        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+        .getFirst();
   }
 
   // =========================================================================
@@ -428,7 +428,7 @@ class PostgresNullSagaDeadLetterReplayTest {
     var workStream = TestStreams.stream("order-nullsaga-launder");
     runner.asEventListener().onEvents(List.of(event));
     assertThat(dlq.findAll(10)).hasSize(1);
-    assertThat(dlq.findAll(10).get(0).sagaId()).isNull();
+    assertThat(dlq.findAll(10).getFirst().sagaId()).isNull();
     assertThat(sagaStore.load(sagaId, SagaType.fromClass(FulfillState.class), FulfillState.class))
         .isEmpty();
 
@@ -445,7 +445,7 @@ class PostgresNullSagaDeadLetterReplayTest {
     assertThat(workStore.readStream(workStream, Version.initial(), 100))
         .as("attempt 1 committed the forward command exactly once before dying")
         .hasSize(1);
-    assertThat(dlq.findAll(10).get(0).firstReplayStartedAt()).isEqualTo(t1);
+    assertThat(dlq.findAll(10).getFirst().firstReplayStartedAt()).isEqualTo(t1);
     var genesisPending =
         sagaStore
             .load(sagaId, SagaType.fromClass(FulfillState.class), FulfillState.class)
@@ -557,7 +557,7 @@ class PostgresNullSagaDeadLetterReplayTest {
     var sagaId = SagaId.of("fulfill-order-nullsaga-sweep");
     var workStream = TestStreams.stream("order-nullsaga-sweep");
     runner.asEventListener().onEvents(List.of(event)); // T0: router poison -> R1
-    Instant firstFault = dlq.findAll(10).get(0).firstFaultedAt();
+    Instant firstFault = dlq.findAll(10).getFirst().firstFaultedAt();
     assertThat(firstFault).as("the quarantine establishes the retention anchor T0").isNotNull();
 
     clock =

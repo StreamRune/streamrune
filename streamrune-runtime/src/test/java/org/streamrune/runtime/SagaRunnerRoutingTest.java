@@ -392,7 +392,7 @@ class SagaRunnerRoutingTest {
         .doesNotThrowAnyException();
 
     assertThat(deadLetters.all()).hasSize(1);
-    var entry = deadLetters.all().get(0);
+    var entry = deadLetters.all().getFirst();
     assertThat(entry.sagaId()).isNull();
     assertThat(entry.eventOffset()).isEqualTo(GlobalOffset.of(2L));
     assertThat(entry.errorType()).contains("IllegalStateException");
@@ -412,7 +412,7 @@ class SagaRunnerRoutingTest {
         .doesNotThrowAnyException();
 
     assertThat(deadLetters.all()).hasSize(1);
-    var entry = deadLetters.all().get(0);
+    var entry = deadLetters.all().getFirst();
     assertThat(entry.sagaId()).isNull();
     assertThat(entry.eventOffset()).isEqualTo(GlobalOffset.of(2L));
     assertThat(entry.errorType()).contains("NullPointerException");

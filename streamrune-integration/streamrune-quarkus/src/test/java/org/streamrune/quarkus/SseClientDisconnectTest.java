@@ -87,7 +87,7 @@ class SseClientDisconnectTest {
               new BufferedReader(
                   new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
           String line;
-          while ((line = in.readLine()) != null && !line.equals(": keepalive")) {
+          while ((line = in.readLine()) != null && !": keepalive".equals(line)) {
             // the status line, the headers, then the opening frame
           }
           assertThat(line).as("the stream opened").isEqualTo(": keepalive");

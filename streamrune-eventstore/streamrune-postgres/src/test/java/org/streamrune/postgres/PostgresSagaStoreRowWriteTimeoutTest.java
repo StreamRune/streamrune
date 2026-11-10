@@ -43,9 +43,9 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Every {@code saga_state} write of {@link PostgresSagaStore} waits at most its bound: a claim
@@ -58,8 +58,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresSagaStoreRowWriteTimeoutTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("saga_row_write_bound");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("saga_row_write_bound");
 
   record BoundState(String step) implements SagaState {
     @Override
@@ -475,7 +475,7 @@ class PostgresSagaStoreRowWriteTimeoutTest {
             new Class<?>[] {DataSource.class},
             (proxy, method, args) -> {
               Object result = invoke(delegate, method, args);
-              return method.getName().equals("getConnection")
+              return "getConnection".equals(method.getName())
                   ? recordingConnection((Connection) result, executed)
                   : result;
             });
@@ -488,11 +488,11 @@ class PostgresSagaStoreRowWriteTimeoutTest {
             new Class<?>[] {Connection.class},
             (proxy, method, args) -> {
               Object result = invoke(connection, method, args);
-              if (method.getName().equals("prepareStatement")) {
+              if ("prepareStatement".equals(method.getName())) {
                 return recordingStatement(
                     (Statement) result, PreparedStatement.class, (String) args[0], executed);
               }
-              if (method.getName().equals("createStatement")) {
+              if ("createStatement".equals(method.getName())) {
                 return recordingStatement((Statement) result, Statement.class, null, executed);
               }
               return result;

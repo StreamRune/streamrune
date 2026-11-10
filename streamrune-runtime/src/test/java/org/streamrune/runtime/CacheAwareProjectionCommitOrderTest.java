@@ -1,6 +1,8 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.TRANSACTIONAL_LOCAL;
 
 import java.time.Duration;
@@ -231,12 +233,11 @@ class CacheAwareProjectionCommitOrderTest {
     Projection cacheAware = new CacheAwareProjection(ORDERS, bus.cacheInvalidator());
 
     Thread t = Thread.ofVirtual().start(() -> runner.run(NAME, cacheAware, TRANSACTIONAL_LOCAL));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> committedOrders.get() == 1 && runner.state() == ProjectionState.LIVE);
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
 
