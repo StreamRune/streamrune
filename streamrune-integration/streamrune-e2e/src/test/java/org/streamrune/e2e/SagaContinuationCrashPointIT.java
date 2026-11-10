@@ -672,10 +672,8 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
     void runTheSweeperUntil(BooleanSupplier done) {
       SagaCompensationRetrySweeper<Fulfillment> sweeper = sweeper(new CycleCounter());
       sweeper.start();
-      try {
+      try (sweeper) {
         await().atMost(BOUND).pollInterval(Duration.ofMillis(10)).until(done::getAsBoolean);
-      } finally {
-        sweeper.close();
       }
     }
 
@@ -684,14 +682,12 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
       CycleCounter counter = new CycleCounter();
       SagaCompensationRetrySweeper<Fulfillment> sweeper = sweeper(counter);
       sweeper.start();
-      try {
+      try (sweeper) {
         // A cycle is complete once the next one has begun.
         await()
             .atMost(BOUND)
             .pollInterval(Duration.ofMillis(10))
             .until(() -> counter.begun.get() > cycles);
-      } finally {
-        sweeper.close();
       }
     }
 
@@ -708,7 +704,7 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
               .sagaRunner(runner)
               .build();
       timeouts.start();
-      try {
+      try (timeouts) {
         // The death is an uncaught Error on the runner's thread. It ends that thread, as it ends
         // the process; the wait must not take it for a failure of its own.
         await()
@@ -716,8 +712,6 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
             .atMost(BOUND)
             .pollInterval(Duration.ofMillis(10))
             .until(() -> done.getAsBoolean() || bus.hasDied());
-      } finally {
-        timeouts.close();
       }
     }
 

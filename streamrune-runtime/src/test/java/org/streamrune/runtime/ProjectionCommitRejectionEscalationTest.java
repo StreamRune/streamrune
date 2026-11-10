@@ -120,13 +120,11 @@ class ProjectionCommitRejectionEscalationTest {
                     thrown.set(t);
                   }
                 });
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(15))
           .until(() -> runner.state() == ProjectionState.ERROR);
       run.join(10_000);
-    } finally {
-      runner.close();
     }
 
     assertThat(run.isAlive()).as("the run ends instead of retrying forever").isFalse();
@@ -165,7 +163,7 @@ class ProjectionCommitRejectionEscalationTest {
             .build();
 
     Thread run = Thread.ofVirtual().start(() -> runner.run(name, projection, TRANSACTIONAL_LOCAL));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(15))
           .until(() -> store.getLastOffset(name).equals(GlobalOffset.of(2)));
@@ -174,7 +172,6 @@ class ProjectionCommitRejectionEscalationTest {
       assertThat(runner.lastError()).isNull();
       assertThat(store.findById(name, "row", Applied.class)).contains(new Applied(2));
     } finally {
-      runner.close();
       run.join(10_000);
     }
   }
@@ -215,13 +212,12 @@ class ProjectionCommitRejectionEscalationTest {
                         batch -> {},
                         org.streamrune.core.projection.ProjectionDeliveryMode
                             .AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await().atMost(Duration.ofSeconds(15)).until(() -> rejections.get() >= 4);
       assertThat(runner.state()).isNotEqualTo(ProjectionState.ERROR);
       assertThat(runner.lastError()).isNull();
       assertThat(offsets.getLastOffset(name)).isEqualTo(GlobalOffset.initial());
     } finally {
-      runner.close();
       run.join(10_000);
     }
   }

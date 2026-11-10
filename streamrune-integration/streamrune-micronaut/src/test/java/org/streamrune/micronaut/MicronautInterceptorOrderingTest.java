@@ -80,7 +80,7 @@ class MicronautInterceptorOrderingTest {
                 c -> AggregateId.of(c.id()),
                 new WidgetDecider()));
 
-    VirtualThreadCommandBus bus =
+    try (VirtualThreadCommandBus bus =
         module.virtualThreadCommandBus(
             new InMemoryEventStore(),
             module.aggregateLocker(StreamRuneMicronautProperties.withDefaults()),
@@ -92,14 +92,11 @@ class MicronautInterceptorOrderingTest {
             null,
             null,
             null,
-            false);
-    try {
+            false)) {
       assertThrows(AuthorizationException.class, () -> bus.execute(new WidgetCommand("w-1")));
       assertTrue(
           saved.stream().anyMatch(e -> e.outcome() == AuditOutcome.FAILURE),
           "a policy-denied command must be audited as FAILURE — proving audit runs outside authz");
-    } finally {
-      bus.close();
     }
   }
 }

@@ -162,7 +162,7 @@ class ListenConnectionSilentPeerTest {
             .build();
 
     sub.start();
-    try {
+    try (sub) {
       // The start-time catch-up poll delivers the first event once LISTEN is registered.
       append(store, "cart-before");
       await(() -> received.size() == 1, "the first event was not delivered");
@@ -176,8 +176,6 @@ class ListenConnectionSilentPeerTest {
               + " has replaced its LISTEN connection, not at the next fallback poll");
       assertEquals(TestStreams.stream("cart-after"), received.get(1).streamId());
       assertTrue(sub.isRunning());
-    } finally {
-      sub.close();
     }
   }
 
@@ -205,7 +203,7 @@ class ListenConnectionSilentPeerTest {
                     .livenessProbe(PROBE_INTERVAL_MS, PROBE_TIMEOUT_MS)
                     .reconnectGrace(1_000));
     sub.start();
-    try {
+    try (sub) {
       health.register(SubscriptionName.of("silent-peer-hybrid"), sub);
       await(() -> sub.notificationListener().isListening(), "the listener never connected");
       assertEquals(PushPathStatus.LIVE, sub.pushPathStatus());
@@ -228,8 +226,6 @@ class ListenConnectionSilentPeerTest {
           "a push path that reconnected must report LIVE again");
       assertTrue(sub.notificationListener().isListening());
       assertEquals(SubscriptionHealth.Status.UP, health.health().getFirst().status());
-    } finally {
-      sub.close();
     }
   }
 

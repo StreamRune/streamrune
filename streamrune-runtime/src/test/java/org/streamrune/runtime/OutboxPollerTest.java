@@ -730,10 +730,8 @@ class OutboxPollerTest {
             .build();
 
     poller.start();
-    try {
+    try (poller) {
       Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !delivered.isEmpty());
-    } finally {
-      poller.close();
     }
 
     assertEquals("bg", delivered.getFirst().id().value(), "poller must have delivered the entry");
@@ -839,7 +837,7 @@ class OutboxPollerTest {
             .build();
 
     poller.start();
-    try {
+    try (poller) {
       long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
       while (delivered.isEmpty() && System.nanoTime() < deadline) {
         Thread.sleep(10);
@@ -853,8 +851,6 @@ class OutboxPollerTest {
         Thread.sleep(10);
       }
       assertEquals(0, poller.consecutiveFailures(), "failure counter resets after recovery");
-    } finally {
-      poller.close();
     }
   }
 
@@ -3202,7 +3198,7 @@ class OutboxPollerTest {
             .metrics(metrics)
             .build();
     poller.start();
-    try {
+    try (poller) {
       long deadline = System.currentTimeMillis() + 5000;
       while (metrics.lastRelayDegradation < 1 && System.currentTimeMillis() < deadline) {
         Thread.sleep(20);
@@ -3213,8 +3209,6 @@ class OutboxPollerTest {
               + metrics.lastRelayDegradation
               + ")");
       assertTrue(poller.isAlive(), "the relay thread must stay alive while degraded");
-    } finally {
-      poller.close();
     }
   }
 

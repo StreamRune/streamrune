@@ -110,13 +110,14 @@ class OutboxBrokerE2EIT extends E2ETestBase {
         new ConfluentKafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"))) {
       kafka.start();
       var topic = "outbox-e2e-" + UUID.randomUUID();
-      var producer =
-          new KafkaProducer<String, String>(
-              Map.of(
-                  ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
-                  ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
-                  ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()));
-      try (var consumer = newKafkaConsumer(kafka)) {
+      try (var consumer = newKafkaConsumer(kafka);
+          var producer =
+              new KafkaProducer<String, String>(
+                  Map.of(
+                      ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
+                      ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
+                      ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                          StringSerializer.class.getName()))) {
         consumer.subscribe(List.of(topic));
 
         var store = new PostgresOutboxStore(dataSource, Duration.ofMinutes(5));
@@ -133,7 +134,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
                 .build();
 
         poller.start();
-        try {
+        try (poller) {
           var records = consumeKafka(consumer, 3);
 
           // At-least-once delivery with per-aggregate ordering: all three keyed by the aggregate id
@@ -157,16 +158,12 @@ class OutboxBrokerE2EIT extends E2ETestBase {
           // instant publish() returns, but markDelivered() commits just after — closing the poller
           // here could interrupt the loop mid-cycle before the last row flips to DELIVERED.
           await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertAllDelivered(savedIds));
-        } finally {
-          poller.close();
         }
 
         // Every entry reached the broker and was marked DELIVERED, so none is re-claimable.
         assertThat(new PostgresOutboxStore(dataSource, Duration.ofMinutes(5)).loadPending(10))
             .as("delivered entries are not re-claimable")
             .isEmpty();
-      } finally {
-        producer.close();
       }
     }
   }
@@ -242,7 +239,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
         poller.start();
         var bodies = new ArrayList<String>();
         var entryIds = new ArrayList<String>();
-        try {
+        try (poller) {
           await()
               .atMost(Duration.ofSeconds(60))
               .untilAsserted(
@@ -262,7 +259,6 @@ class OutboxBrokerE2EIT extends E2ETestBase {
           // Kafka test): markDelivered commits just after the message is on the broker.
           await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertAllDelivered(savedIds));
         } finally {
-          poller.close();
           publishChannel.close();
         }
 
@@ -322,7 +318,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
                 .pollInterval(Duration.ofMillis(100))
                 .build();
         poller.start();
-        try {
+        try (poller) {
           await()
               .atMost(Duration.ofSeconds(30))
               .untilAsserted(() -> assertThat(statusOf(savedIds.getFirst())).isEqualTo("FAILED"));
@@ -360,7 +356,6 @@ class OutboxBrokerE2EIT extends E2ETestBase {
           Thread.sleep(500);
           assertThat(consumeChannel.basicGet(queue, true)).as("n0 is never delivered").isNull();
         } finally {
-          poller.close();
           publishChannel.close();
         }
       }
@@ -389,14 +384,15 @@ class OutboxBrokerE2EIT extends E2ETestBase {
             .all()
             .get(30, java.util.concurrent.TimeUnit.SECONDS);
 
-        var producer =
-            new KafkaProducer<String, String>(
-                Map.of(
-                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
-                    ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
-                    ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
-                        StringSerializer.class.getName()));
-        try (var consumer = newKafkaConsumer(kafka)) {
+        try (var consumer = newKafkaConsumer(kafka);
+            var producer =
+                new KafkaProducer<String, String>(
+                    Map.of(
+                        ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
+                        ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+                            StringSerializer.class.getName(),
+                        ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                            StringSerializer.class.getName()))) {
           consumer.subscribe(List.of(topic));
           var store =
               new PostgresOutboxStore(
@@ -423,7 +419,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
                   .pollInterval(Duration.ofMillis(100))
                   .build();
           poller.start();
-          try {
+          try (poller) {
             await()
                 .atMost(Duration.ofSeconds(60))
                 .untilAsserted(() -> assertThat(statusOf(ids.getFirst())).isEqualTo("FAILED"));
@@ -456,11 +452,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
                 .extracting(r -> headerValue(r, "X-Outbox-Entry-Id"))
                 .containsExactlyElementsOf(ids);
             await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertAllDelivered(ids));
-          } finally {
-            poller.close();
           }
-        } finally {
-          producer.close();
         }
       }
     }

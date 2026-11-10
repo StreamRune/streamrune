@@ -197,7 +197,7 @@ class SseLiveFeedTest {
                 "streamrune.sse.keep-alive-interval=30s")
             .run();
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
-    try {
+    try (context) {
       int port = ((WebServerApplicationContext) context).getWebServer().getPort();
       HttpResponse<InputStream> response =
           client.send(
@@ -226,7 +226,6 @@ class SseLiveFeedTest {
                       .flatMap(List::stream)
                       .anyMatch(line -> line.contains("placed-after-it")));
     } finally {
-      context.close();
       client.shutdownNow();
     }
   }
@@ -250,7 +249,7 @@ class SseLiveFeedTest {
                 "streamrune.sse.keep-alive-interval=30s")
             .run();
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
-    try {
+    try (context) {
       int port = ((WebServerApplicationContext) context).getWebServer().getPort();
       HttpResponse<InputStream> response =
           client.send(
@@ -278,7 +277,6 @@ class SseLiveFeedTest {
                       .flatMap(List::stream)
                       .anyMatch(line -> line.contains("placed-after-it")));
     } finally {
-      context.close();
       client.shutdownNow();
     }
   }
@@ -298,19 +296,16 @@ class SseLiveFeedTest {
                 started.getApplicationContext().getBean(SseEventFeed.class).isRunning());
           }
         };
-    ConfigurableApplicationContext context =
+    try (ConfigurableApplicationContext _ =
         new SpringApplicationBuilder(SseApplication.class)
             .web(WebApplicationType.SERVLET)
             .registerShutdownHook(false)
             .listeners(atWebServerStart)
             .properties("server.port=0", "streamrune.sse.enabled=true")
-            .run();
-    try {
+            .run()) {
       assertThat(feedRunningWhenTheWebServerStarted)
           .as("the state of the feed at the moment the web server was started")
           .containsExactly(true);
-    } finally {
-      context.close();
     }
   }
 

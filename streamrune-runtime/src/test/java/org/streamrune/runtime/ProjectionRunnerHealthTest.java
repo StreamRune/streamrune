@@ -431,7 +431,7 @@ class ProjectionRunnerHealthTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(ProjectionName.of("orders"), proj, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       awaitStandby(runner);
 
       var entry = entryFor(contributor, "orders");
@@ -448,7 +448,6 @@ class ProjectionRunnerHealthTest {
           contributor.overallStatus(),
           "a STANDBY replica whose shared checkpoint is current must NOT report DOWN");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
   }
@@ -505,7 +504,7 @@ class ProjectionRunnerHealthTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(ProjectionName.of("orders"), proj, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       awaitStandby(runner);
 
       var entry = entryFor(contributor, "orders");
@@ -523,7 +522,6 @@ class ProjectionRunnerHealthTest {
           contributor.overallStatus(),
           "an all-replicas-standby freeze must surface as DEGRADED, not a silent UP");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
   }
@@ -629,7 +627,7 @@ class ProjectionRunnerHealthTest {
             .build();
 
     Thread t = Thread.ofVirtual().start(() -> runner.run(name, proj, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       long deadline = System.currentTimeMillis() + 5_000;
       while (runner.state() != ProjectionState.LIVE && System.currentTimeMillis() < deadline) {
         Thread.sleep(10);
@@ -665,7 +663,6 @@ class ProjectionRunnerHealthTest {
               + " catch-up dead-letter and the re-acquire, so this replica has no evidence the"
               + " hole closed");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(5));
     }
   }
@@ -691,11 +688,10 @@ class ProjectionRunnerHealthTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(ProjectionName.of("orders"), proj, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       awaitStandby(runner);
       assertTrue(entryFor(contributor, "orders").isPresent(), "registered while standing by");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
 

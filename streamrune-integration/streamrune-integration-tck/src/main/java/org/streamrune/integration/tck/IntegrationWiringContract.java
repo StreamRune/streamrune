@@ -444,15 +444,12 @@ public abstract class IntegrationWiringContract {
   private void assertRunnersStopBeforeTheDatabaseCloses(Map<String, String> properties)
       throws InterruptedException {
     RecordingDataSource database = new RecordingDataSource(postgresql());
-    Application application = start(database, properties, Set.of(ContractProjection.class));
-    try {
+    try (Application application = start(database, properties, Set.of(ContractProjection.class))) {
       assertStarted(application);
       long afterStart = database.connectionsGranted();
       await(
           () -> database.connectionsGranted() > afterStart + 5,
           "the projection runner must poll the database while the application runs " + properties);
-    } finally {
-      application.close();
     }
     assertTrue(
         database.isClosed(),

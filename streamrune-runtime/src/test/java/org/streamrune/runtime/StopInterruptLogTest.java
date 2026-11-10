@@ -137,7 +137,7 @@ class StopInterruptLogTest {
 
     subscription.pause();
 
-    try {
+    try (subscription) {
       await()
           .atMost(Duration.ofSeconds(5))
           .untilAsserted(
@@ -152,8 +152,6 @@ class StopInterruptLogTest {
                             assertThat(event.getThrowableProxy()).isNull();
                           }));
       assertThat(errors()).as("the pause cut the read short").isEmpty();
-    } finally {
-      subscription.close();
     }
   }
 

@@ -284,7 +284,7 @@ class StreamEventSubscriptionTest {
             10);
 
     sub.start();
-    try {
+    try (sub) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       // The recovery has two observable effects and the test waits for both. The listener fills
       // `received` from inside the poll cycle; the loop clears its failure counter when that cycle
@@ -296,8 +296,6 @@ class StreamEventSubscriptionTest {
       assertTrue(sub.isRunning(), "transient failures must not stop the subscription");
       assertEquals(1, received.size(), "events must be delivered after the failures pass");
       assertEquals(0, sub.consecutiveFailures(), "failure counter resets after recovery");
-    } finally {
-      sub.close();
     }
   }
 
@@ -587,7 +585,7 @@ class StreamEventSubscriptionTest {
             .build();
 
     sub.start();
-    try {
+    try (sub) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (sub.isRunning() && System.nanoTime() < deadline) {
         Thread.sleep(20);
@@ -602,8 +600,6 @@ class StreamEventSubscriptionTest {
       ProjectionReadPoisonException poison = ((ReadPoisonAware) sub).readPoisonError();
       assertNotNull(poison, "the terminal read-poison error must be exposed");
       assertInstanceOf(UnknownEventTypeException.class, poison.getCause());
-    } finally {
-      sub.close();
     }
   }
 
@@ -630,7 +626,7 @@ class StreamEventSubscriptionTest {
             .build();
 
     sub.start();
-    try {
+    try (sub) {
       long boundDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
       while (sub.isRunning() && System.nanoTime() < boundDeadline) {
         Thread.sleep(20);
@@ -656,8 +652,6 @@ class StreamEventSubscriptionTest {
               + " for the stale backoff window the dead terminal thread used to sleep out; last"
               + " failure: "
               + lastFailure);
-    } finally {
-      sub.close();
     }
   }
 
@@ -721,7 +715,7 @@ class StreamEventSubscriptionTest {
             .build();
 
     impl.start();
-    try {
+    try (impl) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (received.isEmpty() && System.nanoTime() < deadline) {
         Thread.sleep(20);
@@ -729,8 +723,6 @@ class StreamEventSubscriptionTest {
       assertEquals(1, received.size(), "delivery resumes once the transient read failures pass");
       assertTrue(impl.isRunning(), "transient read failures never stop the subscription");
       assertNull(impl.readPoisonError());
-    } finally {
-      impl.close();
     }
   }
 
@@ -750,7 +742,7 @@ class StreamEventSubscriptionTest {
             .build();
 
     impl.start();
-    try {
+    try (impl) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (impl.consecutiveFailures() <= StreamEventSubscription.DEFAULT_READ_POISON_BOUND
           && System.nanoTime() < deadline) {
@@ -761,8 +753,6 @@ class StreamEventSubscriptionTest {
           "the loop keeps retrying past the default bound");
       assertTrue(impl.isRunning(), "an unbounded subscription never stops itself");
       assertNull(impl.readPoisonError());
-    } finally {
-      impl.close();
     }
   }
 }

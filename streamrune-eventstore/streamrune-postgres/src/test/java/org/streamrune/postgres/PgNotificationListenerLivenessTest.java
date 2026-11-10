@@ -50,15 +50,13 @@ class PgNotificationListenerLivenessTest {
     var listener = listener(dataSource, metrics, Duration.ofSeconds(30));
 
     listener.start();
-    try {
+    try (listener) {
       await(() -> dataSource.handedOut.size() == 2, "the dead connection was never replaced");
       await(listener::isListening, "the listener did not listen on the replacement connection");
       assertEquals(1, metrics.reconnects.get(), "a failed liveness probe is a lost connection");
       assertTrue(listener.isRunning());
       verify(dead).setNetworkTimeout(any(), eq((int) PROBE_TIMEOUT_MS));
       verify(dead).close();
-    } finally {
-      listener.close();
     }
   }
 
@@ -70,7 +68,7 @@ class PgNotificationListenerLivenessTest {
     var listener = listener(dataSource, metrics, Duration.ofSeconds(30));
 
     listener.start();
-    try {
+    try (listener) {
       Statement probe = healthy.createStatement();
       // A probe is its statement and then, on this manual-commit connection, the rollback that
       // ends its transaction: the listen thread issues the rollback after the statement has
@@ -84,8 +82,6 @@ class PgNotificationListenerLivenessTest {
       // The mock connection is in manual-commit mode: every probe must end its transaction, or
       // the backend would hold every NOTIFY until it ended.
       verify(healthy, atLeast(3)).rollback();
-    } finally {
-      listener.close();
     }
   }
 
@@ -102,12 +98,10 @@ class PgNotificationListenerLivenessTest {
             .build();
 
     listener.start();
-    try {
+    try (listener) {
       await(() -> notified.get() >= 20, "notifications were not delivered");
       Thread.sleep(PROBE_INTERVAL_MS * 4);
       verify(busy.createStatement(), never()).execute("SELECT 1");
-    } finally {
-      listener.close();
     }
   }
 
@@ -122,18 +116,16 @@ class PgNotificationListenerLivenessTest {
     // depend on how soon after start() the test thread gets to ask.
     var patient = listener(dataSource, new CountingMetrics(), Duration.ofSeconds(30));
     patient.start();
-    try {
+    try (patient) {
       assertTrue(patient.isPushPathLive(), "a listener that has just started is within its grace");
       assertFalse(patient.isListening());
-    } finally {
-      patient.close();
     }
 
     // Past its grace: with a short one the test waits for the push path to be reported dead.
     var listener = listener(dataSource, new CountingMetrics(), Duration.ofMillis(200));
 
     listener.start();
-    try {
+    try (listener) {
       await(() -> !listener.isPushPathLive(), "a push path that cannot connect stayed live");
       assertTrue(listener.isRunning(), "the listener keeps reconnecting — it never gives up");
       assertFalse(listener.isListening());
@@ -141,8 +133,6 @@ class PgNotificationListenerLivenessTest {
       dataSource.down = false;
       await(listener::isListening, "the listener did not reconnect");
       assertTrue(listener.isPushPathLive(), "a reconnected push path is live again");
-    } finally {
-      listener.close();
     }
     assertFalse(listener.isPushPathLive(), "a closed listener has no push path");
     assertFalse(listener.isListening());

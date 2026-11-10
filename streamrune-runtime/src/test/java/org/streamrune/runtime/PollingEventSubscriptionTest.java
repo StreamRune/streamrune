@@ -391,7 +391,7 @@ class PollingEventSubscriptionTest {
             10);
 
     sub.start();
-    try {
+    try (sub) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       // Wait for BOTH observable effects of the recovery, not just the first one. The listener
       // appends to `received` from inside the poll cycle, while the loop clears its failure
@@ -405,8 +405,6 @@ class PollingEventSubscriptionTest {
       assertTrue(sub.isRunning(), "transient failures must not stop the subscription");
       assertEquals(1, received.size(), "events must be delivered after the failures pass");
       assertEquals(0, sub.consecutiveFailures(), "failure counter resets after recovery");
-    } finally {
-      sub.close();
     }
   }
 
@@ -444,7 +442,7 @@ class PollingEventSubscriptionTest {
             10);
 
     sub.start();
-    try {
+    try (sub) {
       assertTrue(sub.isRunning(), "subscription must be RUNNING right after start()");
       seenRunning.countDown();
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -455,8 +453,6 @@ class PollingEventSubscriptionTest {
           sub.isRunning(),
           "an uncaught Error that kills the poll thread must flip isRunning() to false so the"
               + " owning runner surfaces a terminal ERROR — not leave it stuck RUNNING");
-    } finally {
-      sub.close();
     }
   }
 
@@ -478,15 +474,13 @@ class PollingEventSubscriptionTest {
             10);
 
     sub.start();
-    try {
+    try (sub) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (sub.consecutiveFailures() < 1 && System.nanoTime() < deadline) {
         Thread.sleep(20);
       }
       assertTrue(sub.isRunning(), "subscription stays RUNNING (degraded) while retrying");
       assertTrue(sub.consecutiveFailures() >= 1, "degraded status must be observable");
-    } finally {
-      sub.close();
     }
   }
 

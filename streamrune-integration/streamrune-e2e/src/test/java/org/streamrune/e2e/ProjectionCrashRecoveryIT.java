@@ -113,14 +113,13 @@ class ProjectionCrashRecoveryIT extends E2ETestBase {
         Thread.ofVirtual()
             .start(
                 () -> runner2.run(projection, proj2, ProjectionDeliveryMode.TRANSACTIONAL_LOCAL));
-    try {
+    try (runner2) {
       await()
           .atMost(Duration.ofSeconds(30))
           .untilAsserted(
               () ->
                   assertThat(offsetStore.getLastOffset(projection).value()).isEqualTo(finalOffset));
     } finally {
-      runner2.close();
       t2.join(Duration.ofSeconds(10).toMillis());
     }
 
