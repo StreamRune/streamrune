@@ -84,7 +84,7 @@ class SseIdleFeedTest {
                 "streamrune.sse.keep-alive-interval=50ms")
             .run();
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
-    try {
+    try (context) {
       int port = ((WebServerApplicationContext) context).getWebServer().getPort();
       CountedReadsEventStore store = context.getBean(CountedReadsEventStore.class);
       CommandBus bus = context.getBean(CommandBus.class);
@@ -134,7 +134,6 @@ class SseIdleFeedTest {
         await().atMost(Duration.ofSeconds(10)).until(() -> controller.activeCountForTest() == 0);
       }
     } finally {
-      context.close();
       client.shutdownNow();
     }
   }

@@ -106,14 +106,13 @@ class HaDualInstanceAtLeastOnceIT extends E2ETestBase {
                 () ->
                     runnerB.run(
                         projection, projB, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runnerA) {
       await()
           .atMost(Duration.ofSeconds(60))
           .pollInterval(Duration.ofMillis(50))
           .untilAsserted(
               () -> assertThat(offsetStore.getLastOffset(projection).value()).isEqualTo(topOffset));
     } finally {
-      runnerA.close();
       runnerB.close();
       tA.join(Duration.ofSeconds(15).toMillis());
       tB.join(Duration.ofSeconds(15).toMillis());

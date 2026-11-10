@@ -471,15 +471,13 @@ class SagaEventPathRetentionContainerWiringTest {
     when(dataSource.isUnsatisfied()).thenReturn(false);
     when(dataSource.isResolvable()).thenReturn(true);
     when(dataSource.get()).thenReturn(mock(DataSource.class));
-    SubscriptionLeadership leadership =
-        new StreamRuneProducers().subscriptionLeadership(dataSource, TestProperties.of(properties));
-    try {
+    try (SubscriptionLeadership leadership =
+        new StreamRuneProducers()
+            .subscriptionLeadership(dataSource, TestProperties.of(properties))) {
       assertEquals(
           on,
           leadership instanceof org.streamrune.postgres.LeaseBasedLeadership,
           () -> "leadership for enabled=" + value);
-    } finally {
-      leadership.close();
     }
     startWith(
         properties,

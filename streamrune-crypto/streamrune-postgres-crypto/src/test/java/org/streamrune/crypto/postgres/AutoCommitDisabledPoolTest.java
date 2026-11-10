@@ -108,8 +108,7 @@ class AutoCommitDisabledPoolTest {
     // pg_notify is delivered at commit: an uncommitted NOTIFY is discarded with its transaction.
     var received = new LinkedBlockingQueue<String>();
     var listening = new PostgresCryptoForgetSignal(plain);
-    var publishing = new PostgresCryptoForgetSignal(pool);
-    try {
+    try (var publishing = new PostgresCryptoForgetSignal(pool)) {
       listening.subscribe(received::add);
       // The LISTEN registration races the first publish; keep publishing until one lands.
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
@@ -121,7 +120,6 @@ class AutoCommitDisabledPoolTest {
       assertEquals("forget-token", token, "a NOTIFY published on an autoCommit=false connection");
     } finally {
       listening.close();
-      publishing.close();
     }
   }
 }

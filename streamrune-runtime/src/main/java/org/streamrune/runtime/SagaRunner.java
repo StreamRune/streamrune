@@ -1110,15 +1110,13 @@ public final class SagaRunner<S extends SagaState> {
     if (claimHold == null) {
       return StepOutcome.CLAIM_DEFERRED;
     }
-    try {
+    try (claimHold) {
       var existing =
           sagaStore.load(
               sagaId,
               SagaType.fromClass(orchestrator.stateType()),
               orchestrator.stateType()); // INFRA load → propagates
       return executor.execute(sagaId, existing, new SagaTrigger.CompensateForwardFault(claimHold));
-    } finally {
-      claimHold.close(); // every exit on which the executor did not reach its claim
     }
   }
 

@@ -190,12 +190,11 @@ class ProjectionDeliveryModeCrashIT {
         };
     var runnerLog = attachRunnerLogAppender();
     Thread t = Thread.ofVirtual().start(() -> runner.run(name, both, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(30))
           .until(() -> failingOnce.getLastOffset(name).equals(GlobalOffset.of(2)));
     } finally {
-      runner.close();
       t.join(10_000);
       detachRunnerLogAppender(runnerLog);
     }

@@ -242,7 +242,7 @@ class SagaCompensationRetryLifecycleWiringTest {
             false);
 
     lifecycle.startSweepers();
-    try {
+    try (lifecycle) {
       assertEquals(1, lifecycle.sweepers().size());
       assertFalse(
           lifecycle.sweepers().getFirst().isCompensationRetryEnabled(),
@@ -257,8 +257,6 @@ class SagaCompensationRetryLifecycleWiringTest {
           "streamrune.saga.compensating must be sampled with compensation retry OFF — the knob"
               + " stops the re-drive, not the observability");
       assertTrue(metrics.faultedRows.get() > 0, "streamrune.saga.faulted_rows likewise");
-    } finally {
-      lifecycle.close();
     }
   }
 

@@ -351,7 +351,7 @@ class LeaseBasedLeadershipTest {
     var warnings = captureLeadershipLog();
     var acquired = new AtomicReference<Optional<Lease>>();
     var stillInterrupted = new AtomicBoolean();
-    try {
+    try (warnings) {
       // A platform thread: its blocking socket I/O ignores an interrupt, so the database would
       // happily grant the lease were the acquire to reach it.
       var caller =
@@ -363,8 +363,6 @@ class LeaseBasedLeadershipTest {
               });
       caller.start();
       caller.join();
-    } finally {
-      warnings.close();
     }
 
     assertTrue(acquired.get().isEmpty(), "an interrupted caller does not acquire");
@@ -406,12 +404,10 @@ class LeaseBasedLeadershipTest {
     managed.add(a);
     var warnings = captureLeadershipLog();
     var acquired = new AtomicReference<Optional<Lease>>();
-    try {
+    try (warnings) {
       Thread.ofVirtual()
           .start(() -> acquired.set(a.tryAcquire(SubscriptionName.of("p-interrupted-inflight"))))
           .join();
-    } finally {
-      warnings.close();
     }
 
     assertTrue(acquired.get().isEmpty(), "an acquire ended by an interrupt fails closed");

@@ -262,13 +262,11 @@ class HybridEventSubscriptionTest {
             .build();
 
     subscription.start();
-    try {
+    try (subscription) {
       assertTrue(
           offsetStore.firstLookup.await(5, TimeUnit.SECONDS),
           "poll loop should look up the offset within 5s");
       assertEquals(ProjectionName.of("orders-projection"), offsetStore.lastQueriedName);
-    } finally {
-      subscription.close();
     }
   }
 
@@ -304,7 +302,7 @@ class HybridEventSubscriptionTest {
             pollingOnly,
             100);
     subscription.start();
-    try {
+    try (subscription) {
       // Let the background loop take its first (throwing) poll and enter its long backoff, freeing
       // the poll lock — then the direct notify call reliably reaches the throwing read.
       long deadline = System.currentTimeMillis() + 5_000;
@@ -319,8 +317,6 @@ class HybridEventSubscriptionTest {
       assertTrue(
           reads.get() > before,
           "the notify handler must actually have reached the throwing read (poll lock was free)");
-    } finally {
-      subscription.close();
     }
   }
 

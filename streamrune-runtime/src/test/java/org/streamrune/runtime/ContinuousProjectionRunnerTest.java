@@ -653,7 +653,7 @@ class ContinuousProjectionRunnerTest {
         Thread.ofVirtual()
             .start(
                 () -> runner.run(ProjectionName.of("first"), projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       // Wait until the first run is in progress (it won the `running` CAS and reached LIVE). A
       // fixed sleep could let run("second") below win the CAS instead, and that call never returns
       // (this module has no JUnit timeout), so the test would hang rather than fail.
@@ -664,7 +664,6 @@ class ContinuousProjectionRunnerTest {
           IllegalStateException.class,
           () -> runner.run(ProjectionName.of("second"), projection, AT_LEAST_ONCE_IDEMPOTENT));
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
   }
@@ -686,7 +685,7 @@ class ContinuousProjectionRunnerTest {
         Thread.ofVirtual()
             .start(
                 () -> runner.run(ProjectionName.of("first"), projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> runner.state() == ProjectionState.LIVE);
@@ -700,7 +699,6 @@ class ContinuousProjectionRunnerTest {
       assertFalse(ex.getMessage().chars().anyMatch(Character::isISOControl), ex.getMessage());
       assertFalse(ex.getMessage().contains("\u202e"), ex.getMessage());
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
   }
@@ -2728,12 +2726,11 @@ class ContinuousProjectionRunnerTest {
                         ProjectionName.of("state-test"), projection, AT_LEAST_ONCE_IDEMPOTENT));
     // A close() that lands before run() has started returns early (no run thread yet), and run()
     // then starts and never stops. Wait until the runner is LIVE so close() has a run to stop.
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> runner.state() == ProjectionState.LIVE);
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
 
@@ -2774,7 +2771,7 @@ class ContinuousProjectionRunnerTest {
                     thrown.set(e);
                   }
                 });
-    try {
+    try (runner) {
       t.join(TimeUnit.SECONDS.toMillis(3));
       assertFalse(t.isAlive(), "run() must return at once: it was told to stop before it started");
       assertNull(thrown.get(), "a cancelled run() returns normally");
@@ -2785,7 +2782,6 @@ class ContinuousProjectionRunnerTest {
           "the checkpoint must not move after the stop");
       assertEquals(ProjectionState.STOPPED, runner.state());
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
   }
@@ -2903,10 +2899,9 @@ class ContinuousProjectionRunnerTest {
     runner.discardHeldStop();
     Thread t =
         Thread.ofVirtual().start(() -> runner.run(name, projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !projection.processed.isEmpty());
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(3));
     }
     assertFalse(t.isAlive());
@@ -2928,12 +2923,11 @@ class ContinuousProjectionRunnerTest {
 
     Thread first =
         Thread.ofVirtual().start(() -> runner.run(name, projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> runner.state() == ProjectionState.LIVE);
     } finally {
-      runner.close();
       first.join(TimeUnit.SECONDS.toMillis(3));
     }
     assertFalse(first.isAlive());
@@ -2943,13 +2937,12 @@ class ContinuousProjectionRunnerTest {
     eventStore.append(s, List.of(envelope(s, 1, "after-restart")), Version.initial());
     Thread second =
         Thread.ofVirtual().start(() -> runner.run(name, projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       // The restarted run catches up on the new event and goes LIVE.
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> projection.processed.size() == 1 && runner.state() == ProjectionState.LIVE);
     } finally {
-      runner.close();
       second.join(TimeUnit.SECONDS.toMillis(3));
     }
     assertFalse(second.isAlive());
@@ -2979,12 +2972,11 @@ class ContinuousProjectionRunnerTest {
 
     Thread next =
         Thread.ofVirtual().start(() -> runner.run(name, projection, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       Awaitility.await()
           .atMost(Duration.ofSeconds(5))
           .until(() -> projection.processed.size() == 1 && runner.state() == ProjectionState.LIVE);
     } finally {
-      runner.close();
       next.join(TimeUnit.SECONDS.toMillis(3));
     }
     assertFalse(next.isAlive());
@@ -3243,7 +3235,7 @@ class ContinuousProjectionRunnerTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(name, poisonPayloadOnly(), AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       awaitLive(runner);
       StreamId poison = StreamId.of(TYPE, AggregateId.of("live-dlq-health-poison"));
       eventStore.append(poison, List.of(envelope(poison, 1, "poison")), Version.initial());
@@ -3269,7 +3261,6 @@ class ContinuousProjectionRunnerTest {
       assertEquals(SubscriptionHealth.Status.UP, statusOf(health, name));
       assertNotEquals(ProjectionState.ERROR, runner.state());
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(5));
     }
   }
@@ -3294,7 +3285,7 @@ class ContinuousProjectionRunnerTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(name, poisonPayloadOnly(), AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       awaitLive(runner);
       StreamId poison = StreamId.of(TYPE, AggregateId.of("live-skip-health-poison"));
       eventStore.append(poison, List.of(envelope(poison, 1, "poison")), Version.initial());
@@ -3306,7 +3297,6 @@ class ContinuousProjectionRunnerTest {
           "a skipped live batch must be recorded as a health ERROR, not masked as a success");
       assertEquals(SubscriptionHealth.Status.DEGRADED, statusOf(health, name));
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(5));
     }
   }
@@ -3439,7 +3429,7 @@ class ContinuousProjectionRunnerTest {
     Thread t =
         Thread.ofVirtual()
             .start(() -> runner.run(name, poisonPayloadOnly(), AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       assertTrue(
           awaitCondition(() -> !dlqStore.read(name, 10).isEmpty(), 5),
           "the poison chunk is dead-lettered during catch-up");
@@ -3453,7 +3443,6 @@ class ContinuousProjectionRunnerTest {
           "DEGRADED must persist once state()==LIVE — nothing clean ran between the dead-letter"
               + " and going live to legitimately earn UP");
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(5));
     }
   }

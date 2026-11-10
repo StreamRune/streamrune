@@ -1586,7 +1586,7 @@ class SagaCompensationRetrySweeperTest {
             .build();
 
     samplingOnly.start();
-    try {
+    try (samplingOnly) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (samplingOnly.consecutiveFailures() == 0 && System.nanoTime() < deadline) {
         Thread.sleep(20);
@@ -1605,8 +1605,6 @@ class SagaCompensationRetrySweeperTest {
               "the relay-health status for this component must read DEGRADED, not UP, through"
                   + " the outage")
           .isEqualTo(BackgroundRelayHealthContributor.Status.DEGRADED);
-    } finally {
-      samplingOnly.close();
     }
   }
 
@@ -1655,13 +1653,12 @@ class SagaCompensationRetrySweeperTest {
     appender.start();
     logger.addAppender(appender);
     samplingOnly.start();
-    try {
+    try (samplingOnly) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (appender.list.isEmpty() && System.nanoTime() < deadline) {
         Thread.sleep(20);
       }
     } finally {
-      samplingOnly.close();
       logger.detachAppender(appender);
       appender.stop();
     }
@@ -1729,12 +1726,11 @@ class SagaCompensationRetrySweeperTest {
     appender.start();
     logger.addAppender(appender);
     samplingOnly.start();
-    try {
+    try (samplingOnly) {
       // ~20 retry-interval cycles (20ms each) — long enough that a per-cycle WARN would show up
       // as many entries if the latch did not hold.
       Thread.sleep(400);
     } finally {
-      samplingOnly.close();
       logger.detachAppender(appender);
       appender.stop();
     }

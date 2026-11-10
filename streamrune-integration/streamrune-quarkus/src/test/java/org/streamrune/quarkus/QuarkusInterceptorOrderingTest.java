@@ -82,7 +82,7 @@ class QuarkusInterceptorOrderingTest {
                 c -> AggregateId.of(c.id()),
                 new WidgetDecider()));
 
-    VirtualThreadCommandBus bus =
+    try (VirtualThreadCommandBus bus =
         producers.virtualThreadCommandBus(
             new InMemoryEventStore(),
             producers.aggregateLocker(TestProperties.defaults()),
@@ -94,14 +94,11 @@ class QuarkusInterceptorOrderingTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
-    try {
+            unsatisfied())) {
       assertThrows(AuthorizationException.class, () -> bus.execute(new WidgetCommand("w-1")));
       assertTrue(
           saved.stream().anyMatch(e -> e.outcome() == AuditOutcome.FAILURE),
           "a policy-denied command must be audited as FAILURE — proving audit runs outside authz");
-    } finally {
-      bus.close();
     }
   }
 

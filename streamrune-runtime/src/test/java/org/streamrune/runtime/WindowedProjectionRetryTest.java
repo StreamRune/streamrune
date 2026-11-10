@@ -92,7 +92,7 @@ class WindowedProjectionRetryTest {
             .build();
 
     Thread t = Thread.ofVirtual().start(() -> runner.run(name, windowed, AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       // The checkpoint-save failure is backed off (about a second) and the runner re-reads offsets
       // 1..3 from the un-advanced checkpoint before batch 2 closes the window.
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
@@ -108,7 +108,6 @@ class WindowedProjectionRetryTest {
                   + " second time")
           .isEqualTo(3);
     } finally {
-      runner.close();
       t.join(TimeUnit.SECONDS.toMillis(5));
     }
   }

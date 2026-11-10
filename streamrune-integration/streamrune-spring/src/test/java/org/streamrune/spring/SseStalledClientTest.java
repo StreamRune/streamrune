@@ -79,8 +79,7 @@ class SseStalledClientTest {
                 "streamrune.sse.keep-alive-interval=1h")
             .run();
     HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
-    Socket stalled = new Socket();
-    try {
+    try (Socket stalled = new Socket()) {
       int port = ((WebServerApplicationContext) context).getWebServer().getPort();
       SseController controller = context.getBean(SseController.class);
 
@@ -148,8 +147,6 @@ class SseStalledClientTest {
                           WRITE_TIMEOUT)
                       .anyMatch(line -> line.contains("placed-after-the-eviction")));
     } finally {
-      // Ends the blocked write, so nothing of the stalled request outlives the test.
-      stalled.close();
       context.close();
       client.shutdownNow();
     }

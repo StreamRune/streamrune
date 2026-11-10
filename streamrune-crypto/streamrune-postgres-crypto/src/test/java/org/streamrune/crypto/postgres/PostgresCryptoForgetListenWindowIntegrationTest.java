@@ -95,8 +95,8 @@ class PostgresCryptoForgetListenWindowIntegrationTest {
             .delegate(delegate)
             .forgetSignal(new PostgresCryptoForgetSignal(dataSource))
             .build();
-    var replicaB = CachedCryptoEngine.builder().delegate(delegate).forgetSignal(signalB).build();
-    try {
+    try (var replicaB =
+        CachedCryptoEngine.builder().delegate(delegate).forgetSignal(signalB).build()) {
       BlockingQueue<String> heardByB = new LinkedBlockingQueue<>();
       signalB.subscribe(heardByB::add);
 
@@ -118,7 +118,6 @@ class PostgresCryptoForgetListenWindowIntegrationTest {
           "B served the plaintext of a subject forgotten before its LISTEN took effect");
     } finally {
       replicaA.close();
-      replicaB.close();
     }
   }
 
@@ -135,8 +134,8 @@ class PostgresCryptoForgetListenWindowIntegrationTest {
             .delegate(delegate)
             .forgetSignal(new PostgresCryptoForgetSignal(dataSource))
             .build();
-    var replicaB = CachedCryptoEngine.builder().delegate(delegate).forgetSignal(signalB).build();
-    try {
+    try (var replicaB =
+        CachedCryptoEngine.builder().delegate(delegate).forgetSignal(signalB).build()) {
       BlockingQueue<String> heardByB = new LinkedBlockingQueue<>();
       signalB.subscribe(heardByB::add);
       listenPool.releaseOneBorrow();
@@ -163,7 +162,6 @@ class PostgresCryptoForgetListenWindowIntegrationTest {
           "B served the plaintext of a subject forgotten while its LISTEN connection was down");
     } finally {
       replicaA.close();
-      replicaB.close();
     }
   }
 
@@ -258,8 +256,8 @@ class PostgresCryptoForgetListenWindowIntegrationTest {
             .delegate(delegate)
             .forgetSignal(new PostgresCryptoForgetSignal(dataSource))
             .build();
-    var replicaB = CachedCryptoEngine.builder().delegate(delegate).forgetSignal(signalB).build();
-    try {
+    try (var replicaB =
+        CachedCryptoEngine.builder().delegate(delegate).forgetSignal(signalB).build()) {
       BlockingQueue<String> heardByB = new LinkedBlockingQueue<>();
       signalB.subscribe(heardByB::add);
       listenPool.releaseOneBorrow();
@@ -297,7 +295,6 @@ class PostgresCryptoForgetListenWindowIntegrationTest {
           "B served the plaintext of a subject forgotten while its LISTEN connection was dead");
     } finally {
       replicaA.close();
-      replicaB.close();
     }
   }
 

@@ -110,8 +110,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
     OffsetCountingProjection projection = new OffsetCountingProjection(PROJECTION);
 
     LeaseBasedLeadership leadershipA = new LeaseBasedLeadership(dataSource, SHORT_TTL);
-    LeaseBasedLeadership leadershipB = new LeaseBasedLeadership(dataSource, LONG_TTL);
-    try {
+    try (LeaseBasedLeadership leadershipB = new LeaseBasedLeadership(dataSource, LONG_TTL)) {
       // 1. Leader A acquires the name → epoch a (== 1) and commits event 1 under it. Its advancing
       //    commit stamps epoch a onto the checkpoint (GREATEST(0, a)).
       long epochA = leadershipA.tryAcquire(SubscriptionName.of(CONSUMER)).orElseThrow().epoch();
@@ -177,8 +176,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
       assertThat(applied.get(1L).n()).as("offset 1 carries A's payload").isZero();
       assertThat(applied.get(2L).n()).as("offset 2 carries B's payload").isEqualTo(1);
     } finally {
-      leadershipA.close(); // idempotent — already closed in the body
-      leadershipB.close();
+      leadershipA.close();
     }
   }
 
@@ -196,8 +194,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
     OffsetCountingProjection projection = new OffsetCountingProjection(PROJECTION);
 
     LeaseBasedLeadership leadershipA = new LeaseBasedLeadership(dataSource, SHORT_TTL);
-    LeaseBasedLeadership leadershipB = new LeaseBasedLeadership(dataSource, LONG_TTL);
-    try {
+    try (LeaseBasedLeadership leadershipB = new LeaseBasedLeadership(dataSource, LONG_TTL)) {
       long epochA = leadershipA.tryAcquire(SubscriptionName.of(CONSUMER)).orElseThrow().epoch();
       commit(repo, projection, offsetStore, /* offset= */ 1L, /* n= */ 0, epochA);
       leadershipA.close();
@@ -243,7 +240,6 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
           .allSatisfy(row -> assertThat(row.applyCount()).isEqualTo(1));
     } finally {
       leadershipA.close();
-      leadershipB.close();
     }
   }
 
@@ -255,8 +251,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
     OffsetCountingProjection projection = new OffsetCountingProjection(PROJECTION);
 
     LeaseBasedLeadership leadershipA = new LeaseBasedLeadership(dataSource, SHORT_TTL);
-    LeaseBasedLeadership leadershipB = new LeaseBasedLeadership(dataSource, LONG_TTL);
-    try {
+    try (LeaseBasedLeadership leadershipB = new LeaseBasedLeadership(dataSource, LONG_TTL)) {
       // Seed the checkpoint at (offset 1, epoch a) with A's first commit, then A dies and B takes
       // over at epoch b — but B has NOT yet committed, so the checkpoint still carries epoch a.
       long epochA = leadershipA.tryAcquire(SubscriptionName.of(CONSUMER)).orElseThrow().epoch();
@@ -350,8 +345,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
             .containsExactlyInAnyOrder(1L, 3L);
       }
     } finally {
-      leadershipA.close(); // idempotent — already closed in the body
-      leadershipB.close();
+      leadershipA.close();
     }
   }
 

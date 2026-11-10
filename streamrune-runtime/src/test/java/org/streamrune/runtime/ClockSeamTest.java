@@ -140,10 +140,9 @@ class ClockSeamTest {
                           throw new IllegalArgumentException("poison");
                         },
                         AT_LEAST_ONCE_IDEMPOTENT));
-    try {
+    try (runner) {
       await().atMost(Duration.ofSeconds(10)).until(() -> !deadLetters.all().isEmpty());
     } finally {
-      runner.close();
       run.join(10_000);
     }
 

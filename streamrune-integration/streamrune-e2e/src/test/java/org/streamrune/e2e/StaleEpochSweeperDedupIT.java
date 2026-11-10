@@ -338,7 +338,7 @@ class StaleEpochSweeperDedupIT extends E2ETestBase {
             .giveUpAfter(Duration.ofDays(1))
             .build();
     leaderSweeper.start();
-    try {
+    try (leaderSweeper) {
       await()
           .atMost(Duration.ofSeconds(30))
           .untilAsserted(
@@ -347,9 +347,6 @@ class StaleEpochSweeperDedupIT extends E2ETestBase {
                       .as(
                           "the leader sweeper drives the stuck compensation to terminal COMPENSATED")
                       .contains(SagaStatus.COMPENSATED.name()));
-    } finally {
-      // Stop the leader sweep BEFORE the stale re-drive so nothing races the deterministic phase.
-      leaderSweeper.close();
     }
 
     long versionAfterLeader = sagaVersion(sagaId);
@@ -377,8 +374,7 @@ class StaleEpochSweeperDedupIT extends E2ETestBase {
     //    sweep dispatches the SAME compensation command under the SAME episodeCompensationKey
     // through
     //    a SECOND bus over the SHARED inbox. The inbox MUST dedup: the handler does not run again.
-    VirtualThreadCommandBus staleBus = busFor(compensationExecutions);
-    try {
+    try (VirtualThreadCommandBus staleBus = busFor(compensationExecutions)) {
       CommandBus.CommandResult staleResult = staleBus.execute(new CancelOrder(orderId), episodeKey);
 
       assertThat(staleResult.idempotentReplay())
@@ -388,8 +384,6 @@ class StaleEpochSweeperDedupIT extends E2ETestBase {
                   + "epoch fence")
           .isTrue();
       assertThat(staleResult.events()).as("a deduped replay produces no new events").isEmpty();
-    } finally {
-      staleBus.close();
     }
 
     // 4. Exactly-once holds across the stale re-drive: the side-effect count, the domain event, and

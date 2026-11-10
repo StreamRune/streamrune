@@ -97,7 +97,7 @@ class HybridEventSubscriptionLeaseTest {
             .leadership(leadership)
             .build();
     sub.start();
-    try {
+    try (sub) {
       await().atMost(5, TimeUnit.SECONDS).until(() -> leadership.tryAcquires(NAME) == 1);
 
       for (int i = 0; i < 20; i++) {
@@ -106,8 +106,6 @@ class HybridEventSubscriptionLeaseTest {
 
       assertThat(leadership.tryAcquires(NAME)).isEqualTo(1);
       verifyNoInteractions(eventStore, offsetStore);
-    } finally {
-      sub.close();
     }
   }
 
@@ -143,7 +141,7 @@ class HybridEventSubscriptionLeaseTest {
             .sagaRunner(runner)
             .build();
     sub.start();
-    try {
+    try (sub) {
       assertThat(runner.lease().everAnchored()).isTrue();
       append(eventStore, new Opened("1"));
 
@@ -157,8 +155,6 @@ class HybridEventSubscriptionLeaseTest {
                           OrderState.class)
                       .isPresent());
       assertThat(runner.lease().isLeadingHere()).isTrue();
-    } finally {
-      sub.close();
     }
     assertThat(runner.lease().isLeadingHere()).isFalse();
   }

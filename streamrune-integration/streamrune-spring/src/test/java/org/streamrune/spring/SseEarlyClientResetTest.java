@@ -104,8 +104,8 @@ class SseEarlyClientResetTest {
 
   @Test
   void anErrorOfAnOrdinaryControllerIsStillResolvedBySpringMvcsOwnResolvers() throws Exception {
-    ConfigurableApplicationContext context = start(SseApplication.class, "0");
-    try (HttpClient client = HttpClient.newHttpClient()) {
+    try (HttpClient client = HttpClient.newHttpClient();
+        ConfigurableApplicationContext context = start(SseApplication.class, "0")) {
       int port = ((WebServerApplicationContext) context).getWebServer().getPort();
 
       HttpResponse<String> response =
@@ -116,8 +116,6 @@ class SseEarlyClientResetTest {
       assertThat(response.statusCode())
           .as("a ResponseStatusException is resolved to its status by Spring MVC's resolver")
           .isEqualTo(HttpStatus.I_AM_A_TEAPOT.value());
-    } finally {
-      context.close();
     }
   }
 

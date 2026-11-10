@@ -65,7 +65,7 @@ class HybridEventSubscriptionReadPoisonTest {
         ReadPoisonAware.class, hybrid, "HybridEventSubscription must be ReadPoisonAware");
 
     hybrid.start();
-    try {
+    try (hybrid) {
       // After the bound (2) consecutive poison reads at the same checkpoint, the internal polling
       // subscription stops terminally, so the Hybrid reports not-running.
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -78,8 +78,6 @@ class HybridEventSubscriptionReadPoisonTest {
       assertNotNull(
           hybrid.readPoisonError(),
           "the Hybrid subscription must surface the terminal read-poison via readPoisonError()");
-    } finally {
-      hybrid.close();
     }
   }
 

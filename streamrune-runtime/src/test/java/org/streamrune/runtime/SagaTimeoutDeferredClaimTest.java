@@ -275,7 +275,7 @@ class SagaTimeoutDeferredClaimTest {
       var hung = new StepsThatDoNotReturn(p, "1");
       p.clock.advance(TIMEOUT.plusSeconds(1));
       timeouts.start();
-      try {
+      try (timeouts) {
         awaitUntil(
             "a poll waited for the saga in a step and deferred its claim",
             () -> timeouts.claimsDeferredPastTheWait() == 1);
@@ -298,8 +298,6 @@ class SagaTimeoutDeferredClaimTest {
         awaitUntil("the poll that made it ended", () -> timeouts.claimsDeferredPastTheWait() == 0);
 
         assertThat(health.overallStatus()).isEqualTo(Status.UP);
-      } finally {
-        timeouts.close();
       }
     }
   }
