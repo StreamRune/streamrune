@@ -21,9 +21,9 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Read-path tolerance.
@@ -45,8 +45,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresEventStoreLegacyMetadataIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("legacy_metadata");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("legacy_metadata");
 
   private static final String OVERSIZED_CORRELATION_ID = "legacy-corr-" + "x".repeat(300);
 

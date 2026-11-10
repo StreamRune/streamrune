@@ -41,9 +41,9 @@ import org.streamrune.crypto.CryptoForgetSignal;
 import org.streamrune.crypto.postgres.PostgresCryptoEngine;
 import org.streamrune.crypto.postgres.PostgresCryptoForgetSignal;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Cross-replica crypto-forget eviction on Quarkus, against the {@code DataSource} a Quarkus
@@ -63,8 +63,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class QuarkusCryptoForgetListenTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   private static final String CHANNEL = "streamrune_crypto_forget";
   private static final String POSTGRES = "streamrune.crypto.postgres.enabled";

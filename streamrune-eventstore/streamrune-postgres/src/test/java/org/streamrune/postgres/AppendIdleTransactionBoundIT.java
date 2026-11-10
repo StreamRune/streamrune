@@ -39,10 +39,10 @@ import org.streamrune.test.SagaForwardFenceContract.FenceEvent;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
@@ -65,8 +65,8 @@ class AppendIdleTransactionBoundIT {
   private static final Network NETWORK = Network.newNetwork();
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME)
           .withDatabaseName(DB)
           .withUsername(USER)
           .withPassword(PASSWORD)

@@ -23,9 +23,9 @@ import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.CryptoShreddingModule;
 import org.streamrune.test.InMemoryCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Pins that a {@link PostgresSagaStore} built with a crypto-aware {@link ObjectMapper} (one with
@@ -41,8 +41,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresSagaStoreCryptoShreddingTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   /** Saga state carrying one {@code @Encrypted} PII field, keyed off {@code customerId}. */
   record CustomerSagaState(

@@ -28,7 +28,7 @@ public final class PostgresTestImage {
   /** The image used when {@link #PROPERTY} is unset or blank: the newest supported server. */
   public static final String DEFAULT = "postgres:18-alpine";
 
-  /** The image to hand to {@code new PostgreSQLContainer<>(...)}. */
+  /** The image to hand to {@code new PostgreSQLContainer(...)}. */
   public static final String NAME = resolve(System.getProperty(PROPERTY));
 
   private PostgresTestImage() {}

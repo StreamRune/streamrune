@@ -17,8 +17,8 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.postgres.PostgresCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The shared crypto schema ({@code forgotten_subjects}, {@code encryption_keys}) lives only in the
@@ -33,8 +33,8 @@ import org.testcontainers.junit.jupiter.Container;
 class PostgresCryptoSchemaProvisioningIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   private static final EventTypeRegistry EMPTY_REGISTRY =
       new EventTypeRegistry() {

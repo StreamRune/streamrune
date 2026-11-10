@@ -40,9 +40,9 @@ import org.streamrune.runtime.gdpr.ForgetResult;
 import org.streamrune.runtime.gdpr.ForgetSubjectService;
 import org.streamrune.test.InMemoryCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * End-to-end verification against real PostgreSQL:
@@ -59,8 +59,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class SpringPostgresWiringIntegrationTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_spring_it");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_spring_it");
 
   record CustomerRegistered(String customerId, @Encrypted(subjectId = "customerId") String email)
       implements DomainEvent {}

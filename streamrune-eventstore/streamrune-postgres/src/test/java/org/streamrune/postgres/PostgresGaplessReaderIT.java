@@ -28,9 +28,9 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Gate test for the gapless, fully-live global reader (the gapless-global-offset fix): {@link
@@ -49,9 +49,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresGaplessReaderIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
-          .withDatabaseName("streamrune_gapless_reader");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_gapless_reader");
 
   static PGSimpleDataSource dataSource;
   static ObjectMapper objectMapper;

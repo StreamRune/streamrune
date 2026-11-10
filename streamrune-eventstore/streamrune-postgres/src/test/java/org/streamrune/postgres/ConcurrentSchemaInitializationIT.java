@@ -22,9 +22,9 @@ import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Replicas that start together on a new database all initialize the schema, and the series is
@@ -47,8 +47,8 @@ class ConcurrentSchemaInitializationIT {
   private static final AtomicInteger DATABASES = new AtomicInteger();
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("concurrent_init");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("concurrent_init");
 
   private static final EventTypeRegistry REGISTRY = SimpleEventTypeRegistry.builder().build();
 

@@ -29,9 +29,9 @@ import org.streamrune.core.types.ProjectionName;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.crypto.postgres.PostgresCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The projection-repository counterpart of {@link PostgresCryptoConnectionIT} and {@link
@@ -55,8 +55,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class JdbcProjectionRepositoryCryptoConnectionIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME)
           .withDatabaseName("projection_crypto_conn_test");
 
   private static final int POOL_SIZE = 3;

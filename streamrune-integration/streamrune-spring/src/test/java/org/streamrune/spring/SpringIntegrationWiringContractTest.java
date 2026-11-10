@@ -65,7 +65,7 @@ import org.streamrune.integration.tck.IntegrationWiringContract;
 import org.streamrune.test.InMemoryEventStoreFactory;
 import org.streamrune.test.InMemoryOffsetStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The integration wiring contract on Spring Boot. Each start is a {@code SpringApplication} with an
@@ -82,7 +82,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
 
   /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
-  private static PostgreSQLContainer<?> postgres;
+  private static PostgreSQLContainer postgres;
 
   private static final AtomicInteger DATABASES = new AtomicInteger();
 
@@ -220,7 +220,7 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
   protected DataSource postgresql() {
     synchronized (SpringIntegrationWiringContractTest.class) {
       if (postgres == null) {
-        postgres = new PostgreSQLContainer<>(PostgresTestImage.NAME);
+        postgres = new PostgreSQLContainer(PostgresTestImage.NAME);
         postgres.start();
       }
     }

@@ -23,17 +23,17 @@ import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.StreamId;
-import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.kafka.ConfluentKafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 
 @Testcontainers
 class KafkaOutboxPublisherIntegrationTest {
 
   @Container
-  static final KafkaContainer KAFKA =
-      new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"));
+  static final ConfluentKafkaContainer KAFKA =
+      new ConfluentKafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"));
 
   static KafkaProducer<String, String> producer;
 

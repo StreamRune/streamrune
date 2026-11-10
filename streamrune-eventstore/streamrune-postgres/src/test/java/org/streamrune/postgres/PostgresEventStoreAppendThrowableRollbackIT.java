@@ -29,9 +29,9 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * A non-{@link java.sql.SQLException} {@link Throwable} escaping {@code append} / {@code
@@ -51,8 +51,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresEventStoreAppendThrowableRollbackIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_esint1_it");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_esint1_it");
 
   static PGSimpleDataSource dataSource;
   static EventTypeRegistry typeRegistry;

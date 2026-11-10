@@ -15,9 +15,9 @@ import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Proves the framework's own {@link BaseProjection} base class is protected by the Monotonic guard
@@ -32,9 +32,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class BaseProjectionAtomicityTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
-          .withDatabaseName("streamrune_baseproj_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_baseproj_test");
 
   static PGSimpleDataSource dataSource;
   static PostgresOffsetStore offsetStore;

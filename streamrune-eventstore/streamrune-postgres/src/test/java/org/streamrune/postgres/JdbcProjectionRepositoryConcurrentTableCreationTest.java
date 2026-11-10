@@ -29,7 +29,7 @@ import org.streamrune.core.EventStoreException;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Replicas that read the same projection for the first time at once each create its table. {@code
@@ -40,8 +40,8 @@ import org.testcontainers.containers.PostgreSQLContainer;
  */
 class JdbcProjectionRepositoryConcurrentTableCreationTest {
 
-  static PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_proj_race");
+  static PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_proj_race");
 
   static PGSimpleDataSource dataSource;
 

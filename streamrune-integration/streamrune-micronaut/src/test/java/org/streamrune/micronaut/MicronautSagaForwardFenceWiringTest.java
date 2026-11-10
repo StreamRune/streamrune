@@ -15,9 +15,9 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The integration's event store fences a saga's forward commands against the rows of the
@@ -29,8 +29,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class MicronautSagaForwardFenceWiringTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_fence");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_fence");
 
   static volatile PGSimpleDataSource applicationDataSource;
 

@@ -13,9 +13,9 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Testcontainers-backed tests for {@link PostgresProjectionDeadLetterStore}. Exercises the full
@@ -26,9 +26,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresProjectionDeadLetterStoreTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
-          .withDatabaseName("streamrune_proj_dlq_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_proj_dlq_test");
 
   static PGSimpleDataSource dataSource;
   PostgresProjectionDeadLetterStore store;

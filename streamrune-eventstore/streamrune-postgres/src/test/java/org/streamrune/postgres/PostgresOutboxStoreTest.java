@@ -24,9 +24,9 @@ import org.streamrune.core.outbox.OutboxOrderingViolationException;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.types.EventType;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Store-specific pins for {@link PostgresOutboxStore}: lease and claim mechanics, the mark* CAS,
@@ -43,8 +43,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresOutboxStoreTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_outbox_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_outbox_test");
 
   static PGSimpleDataSource dataSource;
   PostgresOutboxStore store;

@@ -35,9 +35,9 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Proves {@link JdbcProjectionRepository#executeAtomically} runs the projection update and the
@@ -49,8 +49,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class JdbcProjectionRepositoryAtomicityTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_atomic_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_atomic_test");
 
   static PGSimpleDataSource dataSource;
   static PostgresOffsetStore offsetStore;

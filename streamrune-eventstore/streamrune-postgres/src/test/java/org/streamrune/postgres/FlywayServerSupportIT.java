@@ -14,9 +14,9 @@ import org.slf4j.LoggerFactory;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.crypto.postgres.PostgresCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The Flyway on the classpath must officially support the PostgreSQL server StreamRune is tested
@@ -42,8 +42,8 @@ class FlywayServerSupportIT {
   private static final String FLYWAY_LOGGER = "org.flywaydb";
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("flyway_support_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("flyway_support_test");
 
   @Test
   void initializeSchema_onTheTestedServer_logsNoFlywayWarning() {

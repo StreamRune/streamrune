@@ -31,9 +31,9 @@ import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.CryptoShreddingModule;
 import org.streamrune.crypto.postgres.PostgresCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The saga-store counterpart of {@link PostgresCryptoConnectionIT}: {@code PostgresSagaStore}'s
@@ -66,8 +66,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresSagaStoreCryptoConnectionIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("saga_crypto_conn_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("saga_crypto_conn_test");
 
   private static final int POOL_SIZE = 2;
   private static final int CONCURRENT_CREATES = POOL_SIZE * 3;
