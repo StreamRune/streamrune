@@ -173,6 +173,8 @@ the calling thread (the class javadoc of each says why); `ForwardingCommandBus` 
   HashiCorp Vault with the transit engine enabled, over its HTTP API (`streamrune-vault-crypto`).
   `streamrune-crypto-api` brings Caffeine 3.2.
 - GraalVM native image: GraalVM CE 25.0.1.
+- `streamrune-test` and `streamrune-integration-tck` bring JUnit Jupiter 6.1 (`junit-jupiter-api`
+  through the JUnit 6.1.3 BOM, an `api` dependency).
 - Docker is needed only to run the framework's own PostgreSQL-backed test suites (Testcontainers).
 
 ### Known limitations
