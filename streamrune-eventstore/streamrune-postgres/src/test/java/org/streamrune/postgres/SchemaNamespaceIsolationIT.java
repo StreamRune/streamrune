@@ -17,9 +17,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The published event-store series must not share a Flyway namespace with the consuming
@@ -56,8 +56,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class SchemaNamespaceIsolationIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("namespace_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("namespace_test");
 
   static PGSimpleDataSource dataSource;
 

@@ -21,9 +21,9 @@ import org.junit.jupiter.api.Timeout;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.LockException;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Regression: a DB failover / connection blip <em>during</em> a lock acquisition must never leak
@@ -47,8 +47,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PgAdvisoryLockerConnectionLeakTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_leak_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_leak_test");
 
   static PGSimpleDataSource realDs;
 

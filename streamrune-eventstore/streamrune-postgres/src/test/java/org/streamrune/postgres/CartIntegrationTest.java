@@ -38,9 +38,9 @@ import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.StreamRune;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Full integration test exercising the StreamRune builder, CartDecider, PostgreSQL event store, and
@@ -50,8 +50,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class CartIntegrationTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   static PGSimpleDataSource dataSource;
   static ObjectMapper objectMapper;

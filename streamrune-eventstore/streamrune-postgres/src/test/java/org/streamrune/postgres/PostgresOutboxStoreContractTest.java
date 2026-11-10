@@ -9,17 +9,17 @@ import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.types.EventType;
 import org.streamrune.test.OutboxStoreContract;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /** The shared ordering-mode contract against the real claim SQL on the V001 schema. */
 @Testcontainers
 class PostgresOutboxStoreContractTest extends OutboxStoreContract {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("outbox_store_contract");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("outbox_store_contract");
 
   static PGSimpleDataSource dataSource;
 

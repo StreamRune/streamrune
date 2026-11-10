@@ -27,9 +27,9 @@ import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Ordering under real PostgreSQL READ COMMITTED: two relays never claim past a FAILED head in
@@ -42,8 +42,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresOutboxStoreStrictOrderingIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("outbox_strict_ordering");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("outbox_strict_ordering");
 
   static PGSimpleDataSource dataSource;
   static final StreamId A = TestStreams.stream("agg-strict");

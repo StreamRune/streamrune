@@ -32,7 +32,7 @@ import org.streamrune.test.SagaForwardFenceContract;
 import org.streamrune.test.SagaForwardFenceContract.FenceEvent;
 import org.streamrune.test.SagaForwardFenceContract.FenceState;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * What the forward fence costs a keyed one-event append on PostgreSQL: latency (p50, p99) and WAL
@@ -53,8 +53,7 @@ class SagaForwardFenceCostMeasurement {
 
   @Test
   void measureTheFence() throws Exception {
-    try (var pg =
-        new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("fence_cost")) {
+    try (var pg = new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("fence_cost")) {
       pg.start();
       HikariConfig config = new HikariConfig();
       config.setJdbcUrl(pg.getJdbcUrl());

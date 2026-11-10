@@ -47,9 +47,9 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The event store built by {@link PostgresEventStoreFactory} borrows every connection from the
@@ -61,8 +61,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresEventStoreFactoryDataSourceTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("factory_datasource_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("factory_datasource_test");
 
   /** Bound used by the blocking tests: short enough to keep them quick, long enough to be real. */
   private static final Duration BOUND = Duration.ofMillis(300);

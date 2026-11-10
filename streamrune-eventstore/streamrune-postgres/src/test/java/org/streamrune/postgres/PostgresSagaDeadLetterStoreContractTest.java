@@ -10,16 +10,16 @@ import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.types.EventType;
 import org.streamrune.test.SagaDeadLetterStoreContract;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 @Testcontainers
 class PostgresSagaDeadLetterStoreContractTest extends SagaDeadLetterStoreContract {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("saga_dlq_contract");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("saga_dlq_contract");
 
   static PGSimpleDataSource dataSource;
   static ObjectMapper objectMapper;

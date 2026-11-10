@@ -34,9 +34,9 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Testcontainers-backed tests for {@link PostgresNotificationSubscription}. Covers LISTEN/NOTIFY
@@ -46,8 +46,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresNotificationSubscriptionTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_notify_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_notify_test");
 
   record Added(String sku) implements DomainEvent {}
 

@@ -65,7 +65,7 @@ required):
     ./gradlew postgresTest -PpostgresImage=postgres:17-alpine
 
 A test never names a PostgreSQL image itself: it starts
-`new PostgreSQLContainer<>(PostgresTestImage.NAME)`, which reads the image from that property
+`new PostgreSQLContainer(PostgresTestImage.NAME)`, which reads the image from that property
 (default `postgres:18-alpine`). `./gradlew verifyPostgresTestImage` (part of `check`) fails the build
 on a hard-coded image, or on a module outside the PostgreSQL-backed list in the root
 `build.gradle.kts` (`postgresBackedModules`) that starts a PostgreSQL container — add the module

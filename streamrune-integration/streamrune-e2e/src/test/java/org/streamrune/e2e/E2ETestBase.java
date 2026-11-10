@@ -24,7 +24,7 @@ import org.streamrune.postgres.PostgresEventStore;
 import org.streamrune.postgres.PostgresEventStoreFactory;
 import org.streamrune.postgres.PostgresOutboxStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Shared base for the end-to-end crash-recovery / HA tests.
@@ -49,8 +49,8 @@ abstract class E2ETestBase {
    * static container is per-class, so each IT would spin up its own Postgres. A plain static
    * singleton started in {@link #startContainer()} is shared across every IT in the module.
    */
-  static final PostgreSQLContainer<?> POSTGRES =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_e2e");
+  static final PostgreSQLContainer POSTGRES =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_e2e");
 
   /**
    * Source pointed straight at the container. A {@link PGSimpleDataSource} opens a fresh physical

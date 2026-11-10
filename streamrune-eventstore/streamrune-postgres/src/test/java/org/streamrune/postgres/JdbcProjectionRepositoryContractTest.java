@@ -12,18 +12,17 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.test.AtomicBatchProcessorContract;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /** {@link JdbcProjectionRepository} honours the {@code supportsFencing()} contract. */
 @Testcontainers
 class JdbcProjectionRepositoryContractTest extends AtomicBatchProcessorContract {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
-          .withDatabaseName("streamrune_contract_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_contract_test");
 
   static PGSimpleDataSource dataSource;
   static JdbcProjectionRepository repo;

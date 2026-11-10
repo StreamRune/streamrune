@@ -24,9 +24,9 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxPublisher.FailureKind;
-import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.rabbitmq.RabbitMQContainer;
 
 @Testcontainers
 class RabbitMqOutboxPublisherIntegrationTest {

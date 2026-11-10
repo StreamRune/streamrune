@@ -22,13 +22,13 @@ import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /** Integration tests for JdbcProjectionRepository. */
 class JdbcProjectionRepositoryTest {
 
-  static PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_proj_test");
+  static PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_proj_test");
 
   static org.postgresql.ds.PGSimpleDataSource dataSource;
   static JdbcProjectionRepository repo;

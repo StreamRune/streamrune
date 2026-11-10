@@ -34,9 +34,9 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Gate test for gapless, commit-ordered {@code global_offset} assignment: offsets are reserved from
@@ -49,8 +49,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresGaplessOffsetIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_gapless");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_gapless");
 
   static PGSimpleDataSource dataSource;
   static ObjectMapper objectMapper;

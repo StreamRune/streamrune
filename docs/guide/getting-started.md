@@ -62,8 +62,8 @@ dependencies {
     // Testing: InMemoryEventStore, EventStoreFixture
     testImplementation("org.streamrune:streamrune-test:1.0.0-alpha-SNAPSHOT")
 
-    // JUnit 5
-    testImplementation("org.junit.jupiter:junit-jupiter:5.11.0")
+    // JUnit
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

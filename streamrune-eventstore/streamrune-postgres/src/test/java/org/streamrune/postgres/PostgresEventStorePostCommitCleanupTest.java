@@ -33,9 +33,9 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Regression: {@link PostgresEventStore#append} / {@link PostgresEventStore#appendWithKey} commit
@@ -55,8 +55,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresEventStorePostCommitCleanupTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("postcommit_cleanup_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("postcommit_cleanup_test");
 
   static PGSimpleDataSource realDataSource;
   static ObjectMapper objectMapper;

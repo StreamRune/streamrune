@@ -37,9 +37,9 @@ import org.streamrune.runtime.CacheAwareProjection;
 import org.streamrune.runtime.CachingQueryBus;
 import org.streamrune.runtime.SimpleQueryBus;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The query cache and the read-model transaction of {@link JdbcProjectionRepository#
@@ -64,8 +64,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class JdbcProjectionRepositoryAfterCommitTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_after_commit");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_after_commit");
 
   static PGSimpleDataSource dataSource;
 

@@ -20,9 +20,9 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.postgres.SagaFenceNodes.Node;
 import org.streamrune.postgres.SagaFenceNodes.Opened;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * A process cut off from the database while it is inside a saga's forward append delays another
@@ -41,8 +41,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class SagaForwardFencePartitionIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("saga_fence_partition");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("saga_fence_partition");
 
   private static final String ORDER = "1";
   private static final Duration STATEMENT_TIMEOUT = Duration.ofSeconds(2);

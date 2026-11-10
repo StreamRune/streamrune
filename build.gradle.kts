@@ -1765,7 +1765,7 @@ tasks.register("postgresTest") {
 // default build is green on it — yet it makes the postgres-17 job run that test on 18, so the CI
 // leg would report a version it did not test. Two rules, scanned over every module's sources
 // (main, test, jmh, any other source set):
-//   1. `new PostgreSQLContainer<>(...)` (or the raw type) takes `PostgresTestImage.NAME`, and no
+//   1. `new PostgreSQLContainer(...)` (or a parameterized form) takes `PostgresTestImage.NAME`, and no
 //      source names a `"postgres:<tag>"` image literal (the shared class itself aside);
 //   2. only a module in `postgresBackedModules` constructs or imports PostgreSQLContainer — a
 //      module outside it would get neither the shared class nor the postgres-17 job's coverage
@@ -1821,7 +1821,7 @@ val verifyPostgresTestImage =
                 }
                 container.findAll(text).forEach {
                     violations +=
-                        "$where: new PostgreSQLContainer<>(...) must take PostgresTestImage.NAME"
+                        "$where: new PostgreSQLContainer(...) must take PostgresTestImage.NAME"
                 }
                 imageLiteral.findAll(text).forEach {
                     violations +=

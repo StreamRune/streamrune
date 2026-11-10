@@ -37,9 +37,9 @@ import org.streamrune.core.types.SubjectId;
 import org.streamrune.core.types.Version;
 import org.streamrune.crypto.CryptoShreddingModule;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Reproduces (and then guards against) JDBC connection-pool starvation caused by {@code @Encrypted}
@@ -67,8 +67,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresCryptoConnectionIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("crypto_conn_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("crypto_conn_test");
 
   private static final int POOL_SIZE = 2;
   private static final int CONCURRENT_APPENDS = POOL_SIZE * 3;

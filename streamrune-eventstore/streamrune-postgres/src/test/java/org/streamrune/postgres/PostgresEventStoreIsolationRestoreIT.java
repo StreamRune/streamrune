@@ -35,9 +35,9 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * {@code append}/{@code appendWithKey} pin READ COMMITTED for the duration of the append
@@ -60,8 +60,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresEventStoreIsolationRestoreIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("isolation_restore");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("isolation_restore");
 
   static PGSimpleDataSource realDataSource;
   static ObjectMapper objectMapper;

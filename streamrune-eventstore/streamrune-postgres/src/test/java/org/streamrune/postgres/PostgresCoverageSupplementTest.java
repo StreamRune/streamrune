@@ -21,9 +21,9 @@ import org.streamrune.core.LockException;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Supplementary coverage tests for {@link PgAdvisoryLocker} retry/timeout paths, {@link
@@ -34,8 +34,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresCoverageSupplementTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_supp_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_supp_test");
 
   static PGSimpleDataSource dataSource;
 

@@ -18,9 +18,9 @@ import org.junit.jupiter.api.Timeout;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The crypto stores must make their writes durable on a pool configured with {@code
@@ -35,8 +35,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class AutoCommitDisabledPoolTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME)
           .withDatabaseName("streamrune_crypto_autocommit_off_test");
 
   /** The schema owner and the verification path: a plain, autoCommit=true connection per call. */

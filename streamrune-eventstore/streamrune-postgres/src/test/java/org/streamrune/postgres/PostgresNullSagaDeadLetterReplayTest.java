@@ -44,9 +44,9 @@ import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.MutableClock;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * End-to-end {@link SagaDeadLetterReplayer} runs against the REAL {@link
@@ -68,8 +68,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresNullSagaDeadLetterReplayTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME)
           .withDatabaseName("streamrune_nullsaga_replay_test");
 
   static PGSimpleDataSource dataSource;

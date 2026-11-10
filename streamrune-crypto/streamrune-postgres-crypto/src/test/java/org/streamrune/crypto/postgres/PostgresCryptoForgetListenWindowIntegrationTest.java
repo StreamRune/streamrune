@@ -37,9 +37,9 @@ import org.streamrune.core.crypto.KeyNotFoundException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * A replica that cannot hear forgets — its {@code LISTEN} has not taken effect yet, or its LISTEN
@@ -54,8 +54,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresCryptoForgetListenWindowIntegrationTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_test");
 
   private static final byte[] PLAINTEXT = "alice@example.com".getBytes(StandardCharsets.UTF_8);
 

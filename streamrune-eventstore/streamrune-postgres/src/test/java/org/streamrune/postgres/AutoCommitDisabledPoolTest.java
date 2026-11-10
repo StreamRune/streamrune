@@ -58,9 +58,9 @@ import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Every Postgres store must make its writes durable on a pool configured with {@code
@@ -77,8 +77,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class AutoCommitDisabledPoolTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME)
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME)
           .withDatabaseName("streamrune_autocommit_off_test");
 
   record SnapshotState(String value) implements AggregateState {}

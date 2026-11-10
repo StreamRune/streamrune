@@ -42,9 +42,9 @@ import org.streamrune.runtime.PushHealthAware.PushPathStatus;
 import org.streamrune.runtime.SubscriptionHealthContributor;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * A database host that dies without closing its connections — a crashed or replaced node behind a
@@ -59,8 +59,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class ListenConnectionSilentPeerTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_silent_peer");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_silent_peer");
 
   private static final long PROBE_INTERVAL_MS = 200;
   private static final long PROBE_TIMEOUT_MS = 500;

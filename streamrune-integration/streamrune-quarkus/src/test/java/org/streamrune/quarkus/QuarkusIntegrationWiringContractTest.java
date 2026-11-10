@@ -67,7 +67,7 @@ import org.streamrune.integration.tck.IntegrationWiringContract;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The integration wiring contract on Quarkus. Each start boots a real Arc container ({@link
@@ -131,7 +131,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   static final List<Class<?>> REST_PROVIDERS = List.of(StreamRuneRequestFilter.class);
 
   /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
-  private static PostgreSQLContainer<?> postgres;
+  private static PostgreSQLContainer postgres;
 
   private static final AtomicInteger DATABASES = new AtomicInteger();
 
@@ -393,7 +393,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   protected DataSource postgresql() {
     synchronized (QuarkusIntegrationWiringContractTest.class) {
       if (postgres == null) {
-        postgres = new PostgreSQLContainer<>(PostgresTestImage.NAME);
+        postgres = new PostgreSQLContainer(PostgresTestImage.NAME);
         postgres.start();
       }
     }

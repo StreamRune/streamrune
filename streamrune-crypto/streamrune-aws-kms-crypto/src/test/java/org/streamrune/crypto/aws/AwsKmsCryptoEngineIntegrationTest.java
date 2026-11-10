@@ -14,9 +14,9 @@ import org.streamrune.core.crypto.KeyNotFoundException;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.InMemoryForgottenSubjectStore;
-import org.testcontainers.containers.localstack.LocalStackContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.localstack.LocalStackContainer;
 import org.testcontainers.utility.DockerImageName;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -35,7 +35,7 @@ class AwsKmsCryptoEngineIntegrationTest {
   @Container
   static final LocalStackContainer LOCALSTACK =
       new LocalStackContainer(DockerImageName.parse("localstack/localstack:4.4"))
-          .withServices(LocalStackContainer.Service.KMS);
+          .withServices("kms");
 
   private static KmsClient kmsClient;
   private static String keyId;
@@ -44,7 +44,7 @@ class AwsKmsCryptoEngineIntegrationTest {
 
   @BeforeAll
   static void init() {
-    URI endpoint = LOCALSTACK.getEndpointOverride(LocalStackContainer.Service.KMS);
+    URI endpoint = LOCALSTACK.getEndpoint();
     kmsClient =
         KmsClient.builder()
             .endpointOverride(endpoint)

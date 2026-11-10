@@ -36,8 +36,8 @@ import org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher;
 import org.streamrune.postgres.PostgresOutboxStore;
 import org.streamrune.runtime.OutboxFailedReplayer;
 import org.streamrune.runtime.OutboxPoller;
-import org.testcontainers.containers.KafkaContainer;
-import org.testcontainers.containers.RabbitMQContainer;
+import org.testcontainers.kafka.ConfluentKafkaContainer;
+import org.testcontainers.rabbitmq.RabbitMQContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
@@ -106,7 +106,8 @@ class OutboxBrokerE2EIT extends E2ETestBase {
 
   @Test
   void kafkaRelayDeliversOutboxEntriesInAggregateOrder() throws Exception {
-    try (var kafka = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"))) {
+    try (var kafka =
+        new ConfluentKafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"))) {
       kafka.start();
       var topic = "outbox-e2e-" + UUID.randomUUID();
       var producer =
@@ -170,7 +171,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
     }
   }
 
-  private KafkaConsumer<String, String> newKafkaConsumer(KafkaContainer kafka) {
+  private KafkaConsumer<String, String> newKafkaConsumer(ConfluentKafkaContainer kafka) {
     return new KafkaConsumer<>(
         Map.of(
             ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
@@ -371,7 +372,8 @@ class OutboxBrokerE2EIT extends E2ETestBase {
     // The topic rejects records above 1 KiB (max.message.bytes) → RecordTooLargeException from the
     // broker: non-retriable → ENTRY → FAILED. n1/n2 wait. Raising the topic limit and replaying n0
     // delivers n0, then n1, then n2 — the replayed head goes first.
-    try (var kafka = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"))) {
+    try (var kafka =
+        new ConfluentKafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.7.0"))) {
       kafka.start();
       var topic = "outbox-e2e-strict-" + UUID.randomUUID();
       try (var admin =

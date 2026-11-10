@@ -24,9 +24,9 @@ import org.streamrune.postgres.SagaFenceNodes.Refund;
 import org.streamrune.postgres.SagaFenceNodes.Reserve;
 import org.streamrune.postgres.SagaFenceNodes.Ship;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Every point at which a process can die around a fenced forward command, and the rerun that
@@ -44,8 +44,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class SagaForwardFenceCrashPointIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("saga_fence_crash");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("saga_fence_crash");
 
   /** The first statement of an append after its fence read: the offset reservation. */
   private static final String OFFSET_RESERVATION = "UPDATE global_offset_sequence";

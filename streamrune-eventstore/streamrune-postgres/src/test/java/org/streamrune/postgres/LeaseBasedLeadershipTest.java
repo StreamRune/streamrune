@@ -23,9 +23,9 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLeadership.Lease;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Testcontainers coverage for {@link LeaseBasedLeadership} against a real PostgreSQL migrated to
@@ -41,8 +41,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class LeaseBasedLeadershipTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_lease_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_lease_test");
 
   static PGSimpleDataSource dataSource;
 

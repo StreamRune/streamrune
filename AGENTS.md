@@ -179,7 +179,7 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   and has a test per crash point that stops the flow there, runs it again and asserts that it
   converges. `FaultSchedule.crashAfter(method)` on the forwarding store of the write stops it
   there; `SagaFixture.redeliver()` delivers a saga's events again at the same offsets.
-- **PostgreSQL containers** start as `new PostgreSQLContainer<>(PostgresTestImage.NAME)`, and a
+- **PostgreSQL containers** start as `new PostgreSQLContainer(PostgresTestImage.NAME)`, and a
   module whose tests start one is listed in `postgresBackedModules` in the root build script.
 
 ## 5. Public text

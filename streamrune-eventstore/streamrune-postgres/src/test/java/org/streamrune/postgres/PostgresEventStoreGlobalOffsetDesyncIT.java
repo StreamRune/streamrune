@@ -32,9 +32,9 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * {@code event_stream} carries TWO unique constraints and only one of them is an
@@ -57,8 +57,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresEventStoreGlobalOffsetDesyncIT {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("offset_desync");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("offset_desync");
 
   static PGSimpleDataSource dataSource;
   static ObjectMapper objectMapper;

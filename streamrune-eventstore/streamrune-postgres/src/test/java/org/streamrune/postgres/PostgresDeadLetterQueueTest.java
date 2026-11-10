@@ -24,9 +24,9 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.testsupport.PostgresTestImage;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Testcontainers-backed tests for {@link PostgresDeadLetterQueue}. Exercises the full
@@ -37,8 +37,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PostgresDeadLetterQueueTest {
 
   @Container
-  static final PostgreSQLContainer<?> PG =
-      new PostgreSQLContainer<>(PostgresTestImage.NAME).withDatabaseName("streamrune_dlq_test");
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_dlq_test");
 
   static PGSimpleDataSource dataSource;
   PostgresDeadLetterQueue dlq;
