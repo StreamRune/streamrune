@@ -519,13 +519,9 @@ public final class SagaRunner<S extends SagaState> {
           SagaId poisonSagaId = poison.sagaId();
           recordPoison(poisonSagaId, event, poison.getCause());
           LOG.warn(
-              "Saga poison event quarantined (saga="
-                  + (poisonSagaId == null
-                      ? "<null>"
-                      : LogSanitizer.sanitizeForLog(poisonSagaId.value()))
-                  + ", offset="
-                  + event.globalOffset().value()
-                  + ")",
+              "Saga poison event quarantined (saga={}, offset={})",
+              (poisonSagaId == null ? "<null>" : LogSanitizer.sanitizeForLog(poisonSagaId.value())),
+              event.globalOffset().value(),
               poison.getCause());
         }
         // SagaStore (load/create/CAS) failures are NOT SagaPoisonException: they propagate out of
@@ -624,11 +620,10 @@ public final class SagaRunner<S extends SagaState> {
     } catch (SagaPoisonException poison) {
       recordPoison(sagaId, event, poison.getCause());
       LOG.warn(
-          "Replayed saga event is still poison (saga="
-              + LogSanitizer.sanitizeForLog(sagaId.value())
-              + ", offset="
-              + event.globalOffset().value()
-              + "); the entry was refreshed and the saga stays FAULTED",
+          "Replayed saga event is still poison (saga={}, offset={}); the entry was refreshed and"
+              + " the saga stays FAULTED",
+          LogSanitizer.sanitizeForLog(sagaId.value()),
+          event.globalOffset().value(),
           poison.getCause());
       return StepOutcome.FAULTED;
     }
@@ -984,10 +979,10 @@ public final class SagaRunner<S extends SagaState> {
 
   private void logRowlessResidual(SagaId sagaId, RuntimeException initialStateFailure) {
     LOG.warn(
-        "orchestrator.initialState failed while creating a FAULTED row for saga "
-            + LogSanitizer.sanitizeForLog(sagaId.value())
-            + " — the poison event is recorded in the dead-letter store and this saga stays"
+        "orchestrator.initialState failed while creating a FAULTED row for saga {} — the poison"
+            + " event is recorded in the dead-letter store and this saga stays"
             + " row-less until a replay of its start entry succeeds (the one row-less case)",
+        LogSanitizer.sanitizeForLog(sagaId.value()),
         initialStateFailure);
   }
 
@@ -1250,13 +1245,12 @@ public final class SagaRunner<S extends SagaState> {
    */
   private void logFaultWriteSkipped(SagaId sagaId, Throwable conversionFailed) {
     LOG.warn(
-        "Saga "
-            + LogSanitizer.sanitizeForLog(sagaId.value())
-            + " state cannot be converted to or from its stored form, so its row was not marked"
+        "Saga {} state cannot be converted to or from its stored form, so its row was not marked"
             + " FAULTED — the poison event IS recorded in the saga dead-letter store and the"
             + " dead-letter shield is set. Fix the saga state type (or the crypto configuration it"
             + " depends on), then replay the entry; the row is skipped rather than retried so the"
             + " subscription is not wedged.",
+        LogSanitizer.sanitizeForLog(sagaId.value()),
         conversionFailed);
   }
 
@@ -1269,7 +1263,7 @@ public final class SagaRunner<S extends SagaState> {
     try {
       metricCall.run();
     } catch (RuntimeException e) {
-      LOG.warn("Metrics recording failed for " + metricName, e);
+      LOG.warn("Metrics recording failed for {}", metricName, e);
     }
   }
 

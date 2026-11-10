@@ -618,7 +618,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       return claimAtTheDeadline(sagaId, cause);
     } catch (Exception e) {
       LOG.warn(
-          "Failed to process timed-out saga: " + LogSanitizer.sanitizeForLog(sagaId.value()), e);
+          "Failed to process timed-out saga: {}", LogSanitizer.sanitizeForLog(sagaId.value()), e);
       return false;
     }
   }
@@ -885,7 +885,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
     try {
       metricCall.run();
     } catch (RuntimeException e) {
-      LOG.warn("Metrics recording failed for " + metricName, e);
+      LOG.warn("Metrics recording failed for {}", metricName, e);
     }
   }
 

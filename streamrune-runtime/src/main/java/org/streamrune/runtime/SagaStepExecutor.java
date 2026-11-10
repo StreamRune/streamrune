@@ -720,17 +720,15 @@ final class SagaStepExecutor<S extends SagaState> {
           throw forwardRetryLater(sagaId, index, sagaCommand, primary);
         }
         LOG.warn(
-            "Saga "
-                + LogSanitizer.sanitizeForLog(sagaId.value())
-                + " forward command "
-                + sagaCommand.command().getClass().getSimpleName()
-                + " (index "
-                + index
-                + ") failed and the failure is not provably retriable; claiming the"
+            "Saga {} forward command {} (index {}) failed and the failure is not provably"
+                + " retriable; claiming the"
                 + " compensation episode and undoing the flow. A business rejection is the"
                 + " expected reason; any other failure type here is one the framework cannot"
                 + " prove transient, and terminalizing is preferred to retrying a batch that"
                 + " may never succeed — see SagaCommandDispatch.isRetryLater.",
+            LogSanitizer.sanitizeForLog(sagaId.value()),
+            sagaCommand.command().getClass().getSimpleName(),
+            index,
             primary);
         return new ForwardDispatch(
             claimFirstAndCompensate(
@@ -890,18 +888,16 @@ final class SagaStepExecutor<S extends SagaState> {
   private RuntimeException forwardRetryLater(
       SagaId sagaId, int index, SagaCommand sagaCommand, Exception failure) {
     LOG.warn(
-        "Saga "
-            + LogSanitizer.sanitizeForLog(sagaId.value())
-            + " forward command "
-            + sagaCommand.command().getClass().getSimpleName()
-            + " (index "
-            + index
-            + ") failed transiently, was refused admission by a circuit breaker or an"
+        "Saga {} forward command {} (index {}) failed transiently, was refused admission by a"
+            + " circuit breaker or an"
             + " interceptor veto, or loads an event stored at a schema version this replica does"
             + " not read yet; the saga is left untouched (RUNNING, same version, no"
             + " compensation claimed) and the failure propagates so the subscription redelivers"
             + " the event. Already-dispatched forward commands dedup on their forward keys, so"
             + " only this index re-runs.",
+        LogSanitizer.sanitizeForLog(sagaId.value()),
+        sagaCommand.command().getClass().getSimpleName(),
+        index,
         failure);
     return failure instanceof RuntimeException re ? re : new RuntimeException(failure);
   }
@@ -926,18 +922,16 @@ final class SagaStepExecutor<S extends SagaState> {
   private RuntimeException forwardBindingRefused(
       SagaId sagaId, int index, SagaCommand sagaCommand, Exception failure) {
     LOG.error(
-        "Saga "
-            + LogSanitizer.sanitizeForLog(sagaId.value())
-            + " forward command "
-            + sagaCommand.command().getClass().getSimpleName()
-            + " (index "
-            + index
-            + ") was refused by the command bus for the bindings its dispatch made: a framework"
+        "Saga {} forward command {} (index {}) was refused by the command bus for the bindings its"
+            + " dispatch made: a framework"
             + " invariant failed, not the business. The saga is left untouched (no compensation"
             + " claimed)"
             + " and the failure propagates so the subscription delivers the event again; the"
             + " forward commands already stored answer from the command inbox. The command bus's"
             + " refusal line, logged just before, names the bindings it read.",
+        LogSanitizer.sanitizeForLog(sagaId.value()),
+        sagaCommand.command().getClass().getSimpleName(),
+        index,
         failure);
     return failure instanceof RuntimeException re ? re : new RuntimeException(failure);
   }
@@ -1442,10 +1436,10 @@ final class SagaStepExecutor<S extends SagaState> {
   private StepOutcome faultEpisode(SagaId sagaId, long version, Throwable cause) {
     SagaType type = SagaType.fromClass(orchestrator.stateType());
     LOG.warn(
-        "Compensation threw while resuming saga "
-            + LogSanitizer.sanitizeForLog(sagaId.value())
-            + "; marking FAULTED — fix the orchestrator, then resume the episode with"
+        "Compensation threw while resuming saga {}; marking FAULTED — fix the orchestrator, then"
+            + " resume the episode with"
             + " SagaDeadLetterReplayer.resumeFaulted(sagaId)",
+        LogSanitizer.sanitizeForLog(sagaId.value()),
         cause);
     try {
       if (sagaStore.markFaulted(sagaId, type, version)) {
