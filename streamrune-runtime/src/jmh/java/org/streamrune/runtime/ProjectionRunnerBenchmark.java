@@ -40,7 +40,11 @@ import org.streamrune.test.InMemoryProjectionRepository;
  * projection up over {@code batchSize} events of an {@link InMemoryEventStore}, as one batch. One
  * invocation is the cost of one batch: the read of the global stream, the batch handed through the
  * {@link org.streamrune.core.projection.AtomicBatchProcessor} to the projection, a read and a write
- * of a read model per event, and the checkpoint the batch commits with it.
+ * of a read model per event, and the checkpoint the batch commits with it. Precisely, the number is
+ * one catch-up call of {@link PollingProjectionRunner#run}, so it includes what that method does
+ * once per call besides the batch: the delivery-policy check of the projection and the processor,
+ * and the INFO line naming the delivery mode, whose cost depends on the logging configuration on
+ * the classpath (this module's {@code logback-test.xml} logs at WARN, so the line is filtered).
  *
  * <p>The processor and the offset store are one {@link InMemoryProjectionRepository}, the
  * Docker-free counterpart of {@code JdbcProjectionRepository}: the measured cost is the runner's

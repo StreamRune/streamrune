@@ -4,7 +4,7 @@ Micro-benchmarks for the framework's hot paths. Three modules have them, each in
 
 | Module | Benchmarks | Needs |
 | --- | --- | --- |
-| `streamrune-runtime` (this directory) | `StreamRuneBenchmark`, `OutboxEventMapperBenchmark`, `ProjectionRunnerBenchmark`, `PerfCandidatesBenchmark` | nothing |
+| `streamrune-runtime` (this directory) | `StreamRuneBenchmark`, `OutboxEventMapperBenchmark`, `ProjectionRunnerBenchmark`, `EventSerializationBenchmark`, `PerfCandidatesBenchmark` | nothing |
 | `streamrune-eventstore/streamrune-postgres` | `PostgresEventStoreBenchmark`: append, load, load through an upcaster chain | PostgreSQL: Docker, or a server named in `STREAMRUNE_BENCH_JDBC_URL` |
 | `streamrune-crypto/streamrune-filesystem-crypto` | `CryptoShreddingBenchmark`: serialization of `@Encrypted` fields on the AES-GCM engine | nothing |
 
@@ -55,10 +55,10 @@ a run of the benchmark on both commits on one machine confirms it.
 Benchmarks are **not** run under the JMH harness by `check` or `build` — they assert nothing and are
 slow. What `check` does enforce is that they still **compile** (`compileJmhJava`, wired in by
 the root `build.gradle.kts`) and that every benchmark method still **runs**: the `jmhSmokeTest` task
-of each module executes the JUnit smoke tests beside its benchmarks (`StreamRuneBenchmarkSmokeTest`
-and `ProjectionRunnerBenchmarkSmokeTest` here), which invoke each method twice against a real
-`@Setup` state, outside the harness, to catch a benchmark that compiles but throws or measures a
-degenerate state. The compile gate makes an API change that breaks a benchmark fail `check`: nothing
+of each module executes the JUnit smoke tests beside its benchmarks (`StreamRuneBenchmarkSmokeTest`,
+`ProjectionRunnerBenchmarkSmokeTest` and `EventSerializationBenchmarkSmokeTest` here), which invoke
+each method twice against a real `@Setup` state, outside the harness, to catch a benchmark that
+compiles but throws or measures a degenerate state. The compile gate makes an API change that breaks a benchmark fail `check`: nothing
 else in the default task graph compiles this source set. The PostgreSQL smoke test starts a
 Testcontainers container, so `streamrune-postgres`'s `check` needs Docker, as its tests do.
 
@@ -110,12 +110,30 @@ sizes 0/10/100. No landed change traces to these; they exist as a regression bas
 The cost of one projection batch: `PollingProjectionRunner` catching a `TRANSACTIONAL_LOCAL`
 `BaseProjection` up over 10 or 100 events of an `InMemoryEventStore` as one batch — the read of the
 global stream, the batch through the `AtomicBatchProcessor`, a read and a write of a read model per
-event, and the checkpoint. The processor and offset store are one `InMemoryProjectionRepository`, so
+event, and the checkpoint. The number is one catch-up call of `PollingProjectionRunner.run`,
+including what the method does once per call besides the batch — the delivery-policy check and the
+INFO line naming the delivery mode — so the logging configuration on the classpath affects it (the
+module's `logback-test.xml` logs at WARN, which filters the line). The processor and offset store are one `InMemoryProjectionRepository`, so
 the cost is the runner's and the projection's own, without a database. Each invocation rewinds the
 checkpoint and processes the same events again; the projection writes each read model from its event
 alone, so every invocation meets the same state. The polling runner is the one that returns once the
 projection has caught up; the continuous runner of `MultiProjectionRunner` hands its batches to the
 same processor and projection call from a loop that runs until it is stopped.
+
+### `EventSerializationBenchmark`
+
+Event deserialization and upcasting without a database: a load of 100 events from an
+`InMemoryEventStore` in its serializing mode (`InMemoryEventStore.serializing(...)` with
+`withUpcasters(...)`), stored at schema version 3, 2 or 1 and read by a reader that expects version 3
+— 0, 1 or 2 upcast steps per event (`upcastSteps`). The serializing mode reads events the way
+`PostgresEventStore` does: `readValue` for an event at the current version; for an older one
+`readValue` to a map, `UpcasterChain.upcast`, then `convertValue`.
+
+Two benchmarks cover upcasting, on purpose. This one is the low-noise CPU signal of the Jackson and
+upcaster-chain mechanism. `PostgresEventStoreBenchmark.loadWithUpcasting` in `streamrune-postgres` is
+the production path — the same mechanism inside `PostgresEventStore`, behind a database round trip
+whose cost and variance hide a single upcast step. Read a change in upcasting cost here, and confirm
+on the PostgreSQL benchmark that the production path moves with it.
 
 ## A note on drift
 

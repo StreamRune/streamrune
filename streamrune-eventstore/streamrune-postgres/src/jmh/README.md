@@ -17,7 +17,9 @@ the latency of one operation, not the throughput of the single-writer append lan
 `loadWithUpcasting` is the event read path with upcasting: the 100 events are written by a store
 without upcasters, which stamps them version 1, and read by a store whose upcaster expects version 2
 (`amount` renamed) or 3 (a `currency` added). Its difference from `load` at a length of 100 is the cost
-of the upcasting.
+of the upcasting on the production path, behind a database round trip whose variance hides a single
+step; `EventSerializationBenchmark` in `streamrune-runtime/src/jmh` measures the same Jackson and
+upcaster-chain mechanism without a database, the low-noise signal to read first.
 
 ## The database
 
