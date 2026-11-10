@@ -80,11 +80,12 @@ class PostgresCryptoForgetSignalIntegrationTest {
             .delegate(delegate)
             .forgetSignal(new PostgresCryptoForgetSignal(dataSource))
             .build();
-    try (var replicaB =
+    var replicaB =
         CachedCryptoEngine.builder()
             .delegate(delegate)
             .forgetSignal(new PostgresCryptoForgetSignal(dataSourceNamed(replicaBName)))
-            .build()) {
+            .build();
+    try {
       // B caches the decrypted plaintext for the subject (a cache hit is served without the
       // delegate).
       assertArrayEquals(
@@ -106,6 +107,7 @@ class PostgresCryptoForgetSignalIntegrationTest {
       awaitCacheInvalidated(replicaB, subject, ciphertext, Duration.ofSeconds(15));
     } finally {
       replicaA.close();
+      replicaB.close();
     }
   }
 
@@ -204,12 +206,15 @@ class PostgresCryptoForgetSignalIntegrationTest {
     String urlWithCredentials =
         jdbcUrlNamed(name) + "&user=" + PG.getUsername() + "&password=" + PG.getPassword();
     var minimal = new UrlOnlyDataSource(urlWithCredentials);
-    try (var channel = new PostgresCryptoForgetSignal(minimal)) {
+    var channel = new PostgresCryptoForgetSignal(minimal);
+    try {
       BlockingQueue<String> received = new LinkedBlockingQueue<>();
       channel.subscribe(received::add);
       awaitListening(name);
       channel.publish("url-only-branch-token");
       assertEquals("url-only-branch-token", received.poll(15, TimeUnit.SECONDS));
+    } finally {
+      channel.close();
     }
   }
 

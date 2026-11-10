@@ -156,7 +156,8 @@ class LeaseLeadershipPgBouncerTxModeIT {
     // both could win here because each statement may land on a different backend session; the lease
     // acquire is a single atomic INSERT ... ON CONFLICT, so it cannot.
     var replicaA = new LeaseBasedLeadership(pooled, Duration.ofSeconds(30));
-    try (var replicaB = new LeaseBasedLeadership(pooled, Duration.ofSeconds(30))) {
+    var replicaB = new LeaseBasedLeadership(pooled, Duration.ofSeconds(30));
+    try {
       Optional<Lease> a = replicaA.tryAcquire(SubscriptionName.of(consumer));
       Optional<Lease> b = replicaB.tryAcquire(SubscriptionName.of(consumer));
 
@@ -236,6 +237,7 @@ class LeaseLeadershipPgBouncerTxModeIT {
           "a fenced-out stale-epoch commit must not overwrite the read model");
     } finally {
       replicaA.close();
+      replicaB.close();
     }
   }
 }

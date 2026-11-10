@@ -83,7 +83,7 @@ class HaDualInstanceProjectionIT extends E2ETestBase {
             .start(
                 () -> runnerB.run(projection, projB, ProjectionDeliveryMode.TRANSACTIONAL_LOCAL));
 
-    try (runnerA) {
+    try {
       // Offset convergence + liveness: the shared committed offset reaches the top. If either
       // runner deadlocked, this never happens and the test fails on timeout.
       await()
@@ -92,6 +92,7 @@ class HaDualInstanceProjectionIT extends E2ETestBase {
           .untilAsserted(
               () -> assertThat(offsetStore.getLastOffset(projection).value()).isEqualTo(topOffset));
     } finally {
+      runnerA.close();
       runnerB.close();
       tA.join(Duration.ofSeconds(15).toMillis());
       tB.join(Duration.ofSeconds(15).toMillis());
