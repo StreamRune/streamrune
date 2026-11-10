@@ -158,7 +158,7 @@ class StreamRunePropertiesTest {
     var bound =
         new Binder(
                 org.springframework.boot.context.properties.source.ConfigurationPropertySources
-                    .from(loaded.get(0)))
+                    .from(loaded.getFirst()))
             .bindOrCreate("streamrune", Bindable.of(StreamRuneProperties.class));
     assertThat(bound.saga().forwardFence()).isEqualTo("true");
     assertThat(

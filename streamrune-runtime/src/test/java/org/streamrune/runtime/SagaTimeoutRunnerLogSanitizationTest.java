@@ -56,8 +56,10 @@ class SagaTimeoutRunnerLogSanitizationTest {
    * reader (or a downstream SIEM's line-oriented parser) cannot tell it from real framework output.
    */
   private static final String FORGED_TAIL =
-      "\nWARN SagaTimeoutRunner: Saga order-victim compensated successfully; no operator action"
-          + " required";
+      """
+
+      WARN SagaTimeoutRunner: Saga order-victim compensated successfully; no operator action\
+       required""";
 
   record OrderState(SagaId sagaId, SagaStatus status) implements SagaState {
     @JsonCreator
@@ -180,7 +182,7 @@ class SagaTimeoutRunnerLogSanitizationTest {
     List<String> rendered = run.get();
 
     assertEquals(1, rendered.size(), "the processing failure must emit exactly one WARNING");
-    String record = rendered.get(0);
+    String record = rendered.getFirst();
     // The layout renders one event as exactly one line. Anything beyond that came out of the
     // identifier.
     assertEquals(
@@ -204,8 +206,8 @@ class SagaTimeoutRunnerLogSanitizationTest {
 
     assertEquals(1, rendered.size());
     assertTrue(
-        rendered.get(0).length() < 300,
-        "a 255-character saga id must be truncated at the sink: " + rendered.get(0).length());
-    assertTrue(rendered.get(0).contains("..."), "truncation must be visible, not silent");
+        rendered.getFirst().length() < 300,
+        "a 255-character saga id must be truncated at the sink: " + rendered.getFirst().length());
+    assertTrue(rendered.getFirst().contains("..."), "truncation must be visible, not silent");
   }
 }

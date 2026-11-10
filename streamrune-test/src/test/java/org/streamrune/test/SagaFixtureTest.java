@@ -287,7 +287,7 @@ class SagaFixtureTest {
     fixture.given(own).when(ORDER_1, new OrderCancelled("1"));
 
     List<EventEnvelope> delivered = fixture.delivered();
-    assertEquals(GlobalOffset.of(40), delivered.get(0).globalOffset());
+    assertEquals(GlobalOffset.of(40), delivered.getFirst().globalOffset());
     assertEquals(GlobalOffset.of(41), delivered.get(1).globalOffset());
   }
 
@@ -307,7 +307,7 @@ class SagaFixtureTest {
     fixture.given(own).when(ORDER_1, new OrderCancelled("1"));
 
     List<EventEnvelope> delivered = fixture.delivered();
-    assertEquals(new Version(3), delivered.get(0).version());
+    assertEquals(new Version(3), delivered.getFirst().version());
     assertEquals(GlobalOffset.of(8), delivered.get(1).globalOffset());
     assertEquals(new Version(4), delivered.get(1).version());
   }

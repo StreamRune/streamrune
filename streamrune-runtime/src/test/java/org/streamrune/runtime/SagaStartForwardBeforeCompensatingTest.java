@@ -16,7 +16,6 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
-import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.saga.LoadedSaga;
@@ -82,7 +81,7 @@ class SagaStartForwardBeforeCompensatingTest {
   /** The stored forward and compensation events of the saga, by name, in global order. */
   private static List<String> stored(Harness h) {
     return h.eventStore.readGlobalStream(GlobalOffset.initial(), 1_000).stream()
-        .map(e -> (DomainEvent) e.event())
+        .map(e -> e.event())
         .filter(
             e ->
                 e instanceof Reserved

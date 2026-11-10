@@ -65,7 +65,7 @@ class AtomicBatchProcessorTest {
             },
             store);
     assertEquals(1, handed.size());
-    assertNull(handed.get(0), "the nonatomic processor has no transaction-scoped repository");
+    assertNull(handed.getFirst(), "the nonatomic processor has no transaction-scoped repository");
     assertEquals(List.of("update:false"), order, "the save happens AFTER the updater returned");
     assertEquals(GlobalOffset.of(7), store.saved.get(ProjectionName.of("orders")));
   }
@@ -299,7 +299,7 @@ class AtomicBatchProcessorTest {
 
     assertEquals(2, batches.get());
     assertEquals(2, handed.size());
-    assertSame(repository, handed.get(0));
+    assertSame(repository, handed.getFirst());
     assertNull(handed.get(1));
   }
 }

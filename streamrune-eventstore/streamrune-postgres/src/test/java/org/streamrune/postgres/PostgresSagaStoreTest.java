@@ -695,8 +695,8 @@ class PostgresSagaStoreTest {
     var result = sagaStore.findCompensating(type, Instant.now().plusSeconds(60), 10);
 
     assertThat(result).hasSize(1);
-    assertThat(result.get(0).sagaId()).isEqualTo(compensating);
-    assertThat(result.get(0).updatedAt()).isNotNull();
+    assertThat(result.getFirst().sagaId()).isEqualTo(compensating);
+    assertThat(result.getFirst().updatedAt()).isNotNull();
   }
 
   @Test

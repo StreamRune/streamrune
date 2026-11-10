@@ -240,7 +240,7 @@ class InMemoryEventStoreTest {
 
     List<EventEnvelope> all = store.readGlobalStream(GlobalOffset.initial(), 100);
     assertEquals(3, all.size());
-    assertEquals(1, all.get(0).globalOffset().value());
+    assertEquals(1, all.getFirst().globalOffset().value());
     assertEquals(3, all.get(2).globalOffset().value());
   }
 

@@ -190,7 +190,7 @@ class FileSystemCryptoEngineCipherTest {
 
   private static Path onlyKeyFile(List<Path> files) {
     assertEquals(1, files.size(), "only the key file the first attempt minted: " + files);
-    return files.get(0);
+    return files.getFirst();
   }
 
   @Test

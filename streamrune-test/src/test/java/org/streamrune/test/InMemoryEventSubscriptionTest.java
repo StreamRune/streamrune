@@ -216,7 +216,7 @@ class InMemoryEventSubscriptionTest {
     append(s, 3, "C");
 
     assertEquals(3, seen.size());
-    assertDetached(seen.get(0));
+    assertDetached(seen.getFirst());
     assertDetached(seen.get(1));
     assertEquals(
         Bound.NOTHING,

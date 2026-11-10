@@ -533,7 +533,8 @@ class SseControllerTest {
       var ex =
           assertThrows(
               ResponseStatusException.class,
-              () -> controller.stream(bad.get(0), bad.get(1), List.of(), SseCallers.anonymous()));
+              () ->
+                  controller.stream(bad.getFirst(), bad.get(1), List.of(), SseCallers.anonymous()));
       assertEquals(400, ex.getStatusCode().value());
     }
     assertEquals(0, authorizerCalls.get());

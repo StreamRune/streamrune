@@ -37,6 +37,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -176,7 +177,7 @@ class ScopedValueFilterCorsSpringBootTest {
 
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-      return http.csrf(csrf -> csrf.disable())
+      return http.csrf(CsrfConfigurer::disable)
           .cors(Customizer.withDefaults())
           .authorizeHttpRequests(rules -> rules.anyRequest().permitAll())
           .build();

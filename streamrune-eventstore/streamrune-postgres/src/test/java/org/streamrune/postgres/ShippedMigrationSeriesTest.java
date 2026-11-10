@@ -18,6 +18,7 @@ import java.net.URLConnection;
 import java.net.URLStreamHandler;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import org.flywaydb.core.api.Location;
 import org.flywaydb.core.api.ResourceProvider;
 import org.flywaydb.core.api.configuration.FluentConfiguration;
 import org.flywaydb.core.api.resource.LoadableResource;
@@ -106,7 +107,7 @@ class ShippedMigrationSeriesTest {
     assertEquals(
         List.of(ShippedMigrationSeries.EVENT_STORE.location()),
         java.util.Arrays.stream(configuration.getLocations())
-            .map(location -> location.getDescriptor())
+            .map(Location::getDescriptor)
             .toList());
   }
 

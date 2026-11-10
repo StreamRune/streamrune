@@ -59,9 +59,9 @@ class WindowedProjectionRecoveryTest {
     assertThat(emissions)
         .as("the redelivered (wholly fenced) batch must still run the close scan")
         .hasSize(1);
-    assertThat(emissions.get(0).isFinal()).isTrue();
-    assertThat(emissions.get(0).state()).isEqualTo(2);
-    assertThat(emissions.get(0).window().start()).isEqualTo(T0);
+    assertThat(emissions.getFirst().isFinal()).isTrue();
+    assertThat(emissions.getFirst().state()).isEqualTo(2);
+    assertThat(emissions.getFirst().window().start()).isEqualTo(T0);
 
     // Idempotent: a third delivery of the same batch emits nothing more.
     windowed.process(List.of(closer));

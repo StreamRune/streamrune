@@ -245,7 +245,7 @@ class KafkaOutboxPublisherTest {
 
     var captor = ArgumentCaptor.forClass(ProducerRecord.class);
     verify(producer, times(2)).send(captor.capture());
-    assertEquals("order:order-7", captor.getAllValues().get(0).key());
+    assertEquals("order:order-7", captor.getAllValues().getFirst().key());
     assertEquals("order:order-7", captor.getAllValues().get(1).key());
   }
 
@@ -268,7 +268,7 @@ class KafkaOutboxPublisherTest {
 
     var captor = ArgumentCaptor.forClass(ProducerRecord.class);
     verify(producer, times(2)).send(captor.capture());
-    assertEquals("product:p-1", captor.getAllValues().get(0).key());
+    assertEquals("product:p-1", captor.getAllValues().getFirst().key());
     assertEquals("inventory:p-1", captor.getAllValues().get(1).key());
   }
 

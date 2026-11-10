@@ -233,8 +233,8 @@ class ListenerContinuationTest {
     private EventEnvelope append(EventEnvelope envelope) {
       var appended = eventStore.append(envelope.streamId(), List.of(envelope), Version.initial());
       return eventStore
-          .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-          .get(0);
+          .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+          .getFirst();
     }
 
     List<EventEnvelope> captured() {
@@ -553,8 +553,7 @@ class ListenerContinuationTest {
   @TestFactory
   Stream<DynamicTest> everyFailedDeliveryLeavesNoEntry_andTheCommandIsStoredOnce() {
     return forEachCauseOnBothSubscriptions(
-        (harness, listener, feed) ->
-            threeFailedDeliveriesThenOneThatSucceeds(harness, listener, feed));
+        ListenerContinuationTest::threeFailedDeliveriesThenOneThatSucceeds);
   }
 
   /**
@@ -651,7 +650,7 @@ class ListenerContinuationTest {
           List<EventEnvelope> captured = harness.captured();
           assertThat(captured).as("no key, no deduplication: the application's choice").hasSize(2);
           assertThat(captured).allSatisfy(event -> assertContinues(initiated, event));
-          assertThat(captured.get(0).metadata().eventId())
+          assertThat(captured.getFirst().metadata().eventId())
               .isNotEqualTo(captured.get(1).metadata().eventId());
           assertThat(harness.dlq.all()).isEmpty();
         });

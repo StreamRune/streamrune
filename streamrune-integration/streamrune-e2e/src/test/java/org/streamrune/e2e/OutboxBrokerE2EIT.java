@@ -325,7 +325,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
         try {
           await()
               .atMost(Duration.ofSeconds(30))
-              .untilAsserted(() -> assertThat(statusOf(savedIds.get(0))).isEqualTo("FAILED"));
+              .untilAsserted(() -> assertThat(statusOf(savedIds.getFirst())).isEqualTo("FAILED"));
           // Hold for a few polls: the successors stay PENDING and nothing reaches the broker.
           Thread.sleep(1_500);
           assertThat(statusOf(savedIds.get(1))).isEqualTo("PENDING");
@@ -336,7 +336,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
           var outcome =
               new OutboxFailedReplayer(store, StreamRuneMetrics.NOOP)
                   .skip(
-                      OutboxEntryId.of(savedIds.get(0)),
+                      OutboxEntryId.of(savedIds.getFirst()),
                       "e2e-operator",
                       "unroutable while unbound");
           assertThat(outcome).isEqualTo(OutboxFailedReplayer.SkipOutcome.SKIPPED);
@@ -356,7 +356,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
           await()
               .atMost(Duration.ofSeconds(20))
               .untilAsserted(() -> assertAllDelivered(savedIds.subList(1, 3)));
-          assertThat(statusOf(savedIds.get(0))).isEqualTo("SKIPPED");
+          assertThat(statusOf(savedIds.getFirst())).isEqualTo("SKIPPED");
           Thread.sleep(500);
           assertThat(consumeChannel.basicGet(queue, true)).as("n0 is never delivered").isNull();
         } finally {
@@ -426,7 +426,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
           try {
             await()
                 .atMost(Duration.ofSeconds(60))
-                .untilAsserted(() -> assertThat(statusOf(ids.get(0))).isEqualTo("FAILED"));
+                .untilAsserted(() -> assertThat(statusOf(ids.getFirst())).isEqualTo("FAILED"));
             Thread.sleep(1_500);
             assertThat(statusOf(ids.get(1))).isEqualTo("PENDING");
             assertThat(consumer.poll(Duration.ofMillis(500)).count())

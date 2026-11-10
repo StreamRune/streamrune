@@ -68,7 +68,7 @@ class SagaForwardFenceTwoNodesIT extends SagaForwardFenceNodes {
     List<String> keys =
         SagaForwardFenceInvariant.compensationKeysOf(dataSource, sagaOf(ORDER).value());
     assertThat(keys).hasSize(2);
-    assertThat(keys.get(0)).endsWith(":comp:0");
+    assertThat(keys.getFirst()).endsWith(":comp:0");
     assertThat(keys.get(1)).endsWith(":comp:1");
   }
 

@@ -102,8 +102,8 @@ class ProjectionFixtureTest {
                     new Added("A")))
             .getEvents();
     assertEquals(1, events.size());
-    assertInstanceOf(Added.class, events.get(0).event());
-    assertEquals("A", ((Added) events.get(0).event()).sku());
+    assertInstanceOf(Added.class, events.getFirst().event());
+    assertEquals("A", ((Added) events.getFirst().event()).sku());
     assertThrows(UnsupportedOperationException.class, () -> events.add(null));
   }
 

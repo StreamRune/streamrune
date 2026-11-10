@@ -349,7 +349,7 @@ class OutboxFailedReplayerTest {
           .skip(OutboxEntryId.of("l1"), "ops", "poison");
       var warns = warnLines(appender);
       assertThat(warns).hasSize(1);
-      assertThat(warns.get(0))
+      assertThat(warns.getFirst())
           .contains("SKIPPED by ops")
           .contains("this entry will never be delivered")
           .contains("the downstream did NOT receive this change")
@@ -443,7 +443,7 @@ class OutboxFailedReplayerTest {
       new OutboxFailedReplayer(store, StreamRuneMetrics.NOOP).skipFailed(5, "ops", "retired");
       var warns = warnLines(appender);
       assertThat(warns).hasSize(1);
-      assertThat(warns.get(0))
+      assertThat(warns.getFirst())
           .contains("Outbox bulk skip: 2 of 2 enumerated FAILED entries SKIPPED by ops")
           .contains("(maxEntries=5)")
           .contains("none of them was delivered downstream");

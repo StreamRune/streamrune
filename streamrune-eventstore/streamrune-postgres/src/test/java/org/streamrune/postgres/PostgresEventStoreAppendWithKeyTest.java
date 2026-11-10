@@ -204,7 +204,7 @@ class PostgresEventStoreAppendWithKeyTest {
             Version.initial(),
             IdempotencyKey.of("key-seed"),
             "TestCommand");
-    long seedOffset = seed.globalOffsets().get(0).value();
+    long seedOffset = seed.globalOffsets().getFirst().value();
 
     // A 3-event batch at the SAME expectedVersion=initial under a NEW key: the claim succeeds, then
     // insertEvents' first row (version 1) collides.
@@ -231,7 +231,7 @@ class PostgresEventStoreAppendWithKeyTest {
             "TestCommand");
     assertEquals(
         seedOffset + 1,
-        next.globalOffsets().get(0).value(),
+        next.globalOffsets().getFirst().value(),
         "the conflicting keyed batch must burn no global offset");
 
     // The rolled-back claim must not persist either: exactly the two committed events for this
@@ -312,8 +312,8 @@ class PostgresEventStoreAppendWithKeyTest {
     assertEquals(1, winners.size(), "exactly one thread must win the key (alreadyApplied==false)");
     assertEquals(1, losers.size(), "exactly one thread must lose the key (alreadyApplied==true)");
 
-    IdempotentAppendResult winner = winners.get(0);
-    IdempotentAppendResult loser = losers.get(0);
+    IdempotentAppendResult winner = winners.getFirst();
+    IdempotentAppendResult loser = losers.getFirst();
     assertEquals(1, winner.globalOffsets().size(), "the winner appended exactly one event");
     assertEquals(new Version(1), winner.finalVersion());
     assertEquals(
@@ -687,7 +687,7 @@ class PostgresEventStoreAppendWithKeyTest {
         message.contains("stream-race-alice") && message.contains("stream-race-bob"),
         "message must name both the stored and the presented stream, got: " + message);
 
-    long total = streamRowCount(streams.get(0)) + streamRowCount(streams.get(1));
+    long total = streamRowCount(streams.getFirst()) + streamRowCount(streams.get(1));
     assertEquals(1, total, "only the winner's stream may hold an event");
   }
 

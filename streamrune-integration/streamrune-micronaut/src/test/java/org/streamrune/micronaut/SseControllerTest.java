@@ -179,7 +179,8 @@ class SseControllerTest {
       var ex =
           assertThrows(
               HttpStatusException.class,
-              () -> controller.stream(bad.get(0), bad.get(1), List.of(), SseCallers.anonymous()),
+              () ->
+                  controller.stream(bad.getFirst(), bad.get(1), List.of(), SseCallers.anonymous()),
               bad.toString());
       assertEquals(400, ex.getStatus().getCode(), bad.toString());
       assertEquals("Invalid aggregate type or aggregate id", ex.getMessage());

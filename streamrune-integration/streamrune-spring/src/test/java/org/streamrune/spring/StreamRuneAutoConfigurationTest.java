@@ -723,10 +723,7 @@ class StreamRuneAutoConfigurationTest {
 
   @Test
   void circuitBreakerInterceptorIsRegistered() {
-    contextRunner.run(
-        ctx -> {
-          assertThat(ctx).hasSingleBean(CircuitBreakerCommandInterceptor.class);
-        });
+    contextRunner.run(ctx -> assertThat(ctx).hasSingleBean(CircuitBreakerCommandInterceptor.class));
   }
 
   @Test
@@ -943,10 +940,9 @@ class StreamRuneAutoConfigurationTest {
   @Test
   void authorizationInterceptorNotRegisteredWithoutPolicy() {
     contextRunner.run(
-        ctx -> {
-          assertThat(ctx)
-              .doesNotHaveBean(org.streamrune.runtime.AuthorizationCommandInterceptor.class);
-        });
+        ctx ->
+            assertThat(ctx)
+                .doesNotHaveBean(org.streamrune.runtime.AuthorizationCommandInterceptor.class));
   }
 
   @Test
@@ -954,10 +950,9 @@ class StreamRuneAutoConfigurationTest {
     contextRunner
         .withUserConfiguration(StubAuthorizationPolicyConfig.class)
         .run(
-            ctx -> {
-              assertThat(ctx)
-                  .hasSingleBean(org.streamrune.runtime.AuthorizationCommandInterceptor.class);
-            });
+            ctx ->
+                assertThat(ctx)
+                    .hasSingleBean(org.streamrune.runtime.AuthorizationCommandInterceptor.class));
   }
 
   @Configuration
@@ -981,9 +976,7 @@ class StreamRuneAutoConfigurationTest {
   @Test
   void auditCommandInterceptorIsRegistered() {
     contextRunner.run(
-        ctx -> {
-          assertThat(ctx).hasSingleBean(org.streamrune.runtime.AuditCommandInterceptor.class);
-        });
+        ctx -> assertThat(ctx).hasSingleBean(org.streamrune.runtime.AuditCommandInterceptor.class));
   }
 
   @Test

@@ -149,7 +149,7 @@ class AwsKmsCryptoEngineIntegrationTest {
     for (int i = 0; i < 3; i++) {
       blobs.add(writer.encrypt(subject, value(5_000 + i)));
     }
-    assertArrayEquals(value(5_000), reader.decrypt(subject, blobs.get(0))); // reader caches too
+    assertArrayEquals(value(5_000), reader.decrypt(subject, blobs.getFirst())); // reader caches too
     byte[] kept = writer.encrypt(bystander, value(10));
 
     writer.deleteKey(subject);

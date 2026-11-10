@@ -168,7 +168,7 @@ class ProjectionDeliveryModeRunnerTest {
       runner.close();
     }
     assertThat(tl.handed).hasSize(1);
-    assertThat(tl.handed.get(0)).isNotSameAs(NULL_MARKER).isNotSameAs(repo);
+    assertThat(tl.handed.getFirst()).isNotSameAs(NULL_MARKER).isNotSameAs(repo);
     assertThat(repo.findById(ProjectionName.of("tl"), "row", String.class))
         .contains("written-in-tx");
     assertThat(alo.handed).containsExactly(NULL_MARKER);
@@ -198,7 +198,7 @@ class ProjectionDeliveryModeRunnerTest {
     } finally {
       runner.close();
     }
-    assertThat(tl.handed.get(0)).isNotSameAs(NULL_MARKER);
+    assertThat(tl.handed.getFirst()).isNotSameAs(NULL_MARKER);
     assertThat(alo.handed).containsExactly(NULL_MARKER);
   }
 
@@ -210,7 +210,7 @@ class ProjectionDeliveryModeRunnerTest {
     var alo = new HandedRecorder("alo");
     runner.run(ProjectionName.of("tl"), tl, TRANSACTIONAL_LOCAL);
     runner.run(ProjectionName.of("alo"), alo, AT_LEAST_ONCE_IDEMPOTENT);
-    assertThat(tl.handed.get(0)).isNotSameAs(NULL_MARKER);
+    assertThat(tl.handed.getFirst()).isNotSameAs(NULL_MARKER);
     assertThat(alo.handed).containsExactly(NULL_MARKER);
   }
 

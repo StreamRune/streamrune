@@ -316,7 +316,7 @@ class StreamEventSubscriptionTest {
     int delivered = sub.pollOnce();
     assertEquals(1, delivered);
     assertEquals(1, received.size());
-    assertEquals(target, received.get(0).streamId());
+    assertEquals(target, received.getFirst().streamId());
   }
 
   @Test
@@ -388,13 +388,7 @@ class StreamEventSubscriptionTest {
         IllegalArgumentException.class,
         () ->
             new StreamEventSubscription(
-                (SubscriptionName) null,
-                StreamId.of(TYPE, AggregateId.of("a")),
-                store,
-                os,
-                listener,
-                cfg,
-                10));
+                null, StreamId.of(TYPE, AggregateId.of("a")), store, os, listener, cfg, 10));
     // A blank subscription name never reaches the constructor: SubscriptionName rejects it first.
     assertThrows(IllegalArgumentException.class, () -> SubscriptionName.of("  "));
     assertThrows(

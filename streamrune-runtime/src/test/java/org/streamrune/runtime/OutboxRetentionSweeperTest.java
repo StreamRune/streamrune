@@ -19,42 +19,53 @@ class OutboxRetentionSweeperTest {
   /** Minimal no-op store; subclasses override only the methods they need. */
   private static OutboxStore noopStore() {
     return new OutboxStore() {
+      @Override
       public void save(OutboxEntry e) {}
 
+      @Override
       public java.util.List<OutboxEntry> loadPending(int l) {
         return java.util.List.of();
       }
 
+      @Override
       public String claimedBy() {
         return "test";
       }
 
+      @Override
       public boolean markDelivered(OutboxEntryId id, String claimedBy) {
         return true;
       }
 
+      @Override
       public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
         return true;
       }
 
+      @Override
       public boolean markRetry(OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
         return true;
       }
 
+      @Override
       public void delete(OutboxEntryId id) {}
 
+      @Override
       public java.util.List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
         return java.util.List.of();
       }
 
+      @Override
       public boolean resetFailedToPending(OutboxEntryId id) {
         return false;
       }
 
+      @Override
       public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
         return java.util.Optional.empty();
       }
 
+      @Override
       public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
         return false;
       }
@@ -102,42 +113,53 @@ class OutboxRetentionSweeperTest {
       this.skippedRows = skippedRows;
     }
 
+    @Override
     public void save(OutboxEntry e) {}
 
+    @Override
     public java.util.List<OutboxEntry> loadPending(int l) {
       return java.util.List.of();
     }
 
+    @Override
     public String claimedBy() {
       return "test";
     }
 
+    @Override
     public boolean markDelivered(OutboxEntryId id, String claimedBy) {
       return true;
     }
 
+    @Override
     public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
       return true;
     }
 
+    @Override
     public boolean markRetry(OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
       return true;
     }
 
+    @Override
     public void delete(OutboxEntryId id) {}
 
+    @Override
     public java.util.List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
       return java.util.List.of();
     }
 
+    @Override
     public boolean resetFailedToPending(OutboxEntryId id) {
       return false;
     }
 
+    @Override
     public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
       return java.util.Optional.empty();
     }
 
+    @Override
     public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
       return false;
     }
@@ -166,43 +188,54 @@ class OutboxRetentionSweeperTest {
     Clock clock = Clock.fixed(Instant.parse("2026-06-21T00:00:00Z"), ZoneOffset.UTC);
     OutboxStore store =
         new OutboxStore() {
+          @Override
           public void save(OutboxEntry e) {}
 
+          @Override
           public java.util.List<OutboxEntry> loadPending(int l) {
             return java.util.List.of();
           }
 
+          @Override
           public String claimedBy() {
             return "test";
           }
 
+          @Override
           public boolean markDelivered(OutboxEntryId id, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markRetry(
               OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
             return true;
           }
 
+          @Override
           public void delete(OutboxEntryId id) {}
 
+          @Override
           public java.util.List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
             return java.util.List.of();
           }
 
+          @Override
           public boolean resetFailedToPending(OutboxEntryId id) {
             return false;
           }
 
+          @Override
           public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
             return java.util.Optional.empty();
           }
 
+          @Override
           public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
             return false;
           }
@@ -235,43 +268,54 @@ class OutboxRetentionSweeperTest {
     var deleteCount = new AtomicInteger(0);
     OutboxStore countingStore =
         new OutboxStore() {
+          @Override
           public void save(OutboxEntry e) {}
 
+          @Override
           public java.util.List<OutboxEntry> loadPending(int l) {
             return java.util.List.of();
           }
 
+          @Override
           public String claimedBy() {
             return "test";
           }
 
+          @Override
           public boolean markDelivered(OutboxEntryId id, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markRetry(
               OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
             return true;
           }
 
+          @Override
           public void delete(OutboxEntryId id) {}
 
+          @Override
           public java.util.List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
             return java.util.List.of();
           }
 
+          @Override
           public boolean resetFailedToPending(OutboxEntryId id) {
             return false;
           }
 
+          @Override
           public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
             return java.util.Optional.empty();
           }
 
+          @Override
           public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
             return false;
           }
@@ -338,43 +382,54 @@ class OutboxRetentionSweeperTest {
     Clock clock = Clock.fixed(Instant.parse("2026-06-21T00:00:00Z"), ZoneOffset.UTC);
     OutboxStore store =
         new OutboxStore() {
+          @Override
           public void save(OutboxEntry e) {}
 
+          @Override
           public java.util.List<OutboxEntry> loadPending(int l) {
             return java.util.List.of();
           }
 
+          @Override
           public String claimedBy() {
             return "test";
           }
 
+          @Override
           public boolean markDelivered(OutboxEntryId id, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markRetry(
               OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
             return true;
           }
 
+          @Override
           public void delete(OutboxEntryId id) {}
 
+          @Override
           public java.util.List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
             return java.util.List.of();
           }
 
+          @Override
           public boolean resetFailedToPending(OutboxEntryId id) {
             return false;
           }
 
+          @Override
           public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
             return java.util.Optional.empty();
           }
 
+          @Override
           public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
             return false;
           }

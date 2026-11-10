@@ -1317,7 +1317,7 @@ class ContinuousProjectionRunnerTest {
 
     assertEquals(
         "stamp:7",
-        calls.get(0),
+        calls.getFirst(),
         () ->
             "the takeover stamp (with the acquired epoch) must precede ANY processing, but the"
                 + " call order was: "
@@ -1665,10 +1665,10 @@ class ContinuousProjectionRunnerTest {
 
     var entries = dlqStore.read(ProjectionName.of("dlq-text"), 10);
     assertEquals(1, entries.size());
-    assertEquals(LogSanitizer.sanitizeFreeText(raw), entries.get(0).errorMessage());
+    assertEquals(LogSanitizer.sanitizeFreeText(raw), entries.getFirst().errorMessage());
     assertFalse(
-        entries.get(0).errorMessage().chars().anyMatch(Character::isISOControl),
-        entries.get(0).errorMessage());
+        entries.getFirst().errorMessage().chars().anyMatch(Character::isISOControl),
+        entries.getFirst().errorMessage());
 
     runner.close();
     t.join(TimeUnit.SECONDS.toMillis(5));
@@ -1717,8 +1717,8 @@ class ContinuousProjectionRunnerTest {
 
     var entries = dlqStore.read(ProjectionName.of("dlq-proj"), 10);
     assertEquals(1, entries.size());
-    assertEquals(ProjectionName.of("dlq-proj"), entries.get(0).projectionName());
-    assertEquals("java.lang.RuntimeException", entries.get(0).errorType());
+    assertEquals(ProjectionName.of("dlq-proj"), entries.getFirst().projectionName());
+    assertEquals("java.lang.RuntimeException", entries.getFirst().errorType());
 
     // The runner is NOT halted: it advanced past the dead-lettered range and never entered ERROR.
     // The dead-letter write and the checkpoint advance past the range are two separate steps, so
@@ -1754,7 +1754,7 @@ class ContinuousProjectionRunnerTest {
     var calls = new AtomicInteger(0);
     Projection failsOnMiddleChunk =
         events -> {
-          if (((TestEvent) events.get(0).event()).payload().equals("fail")) {
+          if (((TestEvent) events.getFirst().event()).payload().equals("fail")) {
             calls.incrementAndGet();
             throw new RuntimeException("poison chunk"); // POISON
           }
@@ -1794,7 +1794,7 @@ class ContinuousProjectionRunnerTest {
     // events. The poison chunk is dead-lettered exactly once — no retry storm.
     var entries = dlqStore.read(ProjectionName.of("dlq-range-proj"), 10);
     assertEquals(1, entries.size());
-    var entry = entries.get(0);
+    var entry = entries.getFirst();
     assertEquals(3, entry.fromOffset().value());
     assertEquals(4, entry.toOffset().value());
     assertEquals(2, entry.batchSize());
@@ -2068,8 +2068,8 @@ class ContinuousProjectionRunnerTest {
 
     var entries = dlqStore.read(ProjectionName.of("live-dlq"), 10);
     assertEquals(1, entries.size());
-    assertEquals(ProjectionName.of("live-dlq"), entries.get(0).projectionName());
-    assertEquals("java.lang.RuntimeException", entries.get(0).errorType());
+    assertEquals(ProjectionName.of("live-dlq"), entries.getFirst().projectionName());
+    assertEquals("java.lang.RuntimeException", entries.getFirst().errorType());
 
     // The runner is NOT halted: it stays LIVE and never entered ERROR.
     assertNotEquals(ProjectionState.ERROR, runner.state());
@@ -3203,7 +3203,7 @@ class ContinuousProjectionRunnerTest {
   /** Fails only on the payload {@code "poison"}; every other batch is applied cleanly. */
   private static Projection poisonPayloadOnly() {
     return events -> {
-      if (((TestEvent) events.get(0).event()).payload().equals("poison")) {
+      if (((TestEvent) events.getFirst().event()).payload().equals("poison")) {
         throw new RuntimeException("permanent poison"); // POISON under DLQ; a failure under SKIP
       }
     };
@@ -3331,7 +3331,7 @@ class ContinuousProjectionRunnerTest {
     var release = new CountDownLatch(1);
     Projection projection =
         events -> {
-          String payload = ((TestEvent) events.get(0).event()).payload();
+          String payload = ((TestEvent) events.getFirst().event()).payload();
           if (payload.equals("poison")) {
             throw new RuntimeException("permanent poison"); // POISON → dead-lettered
           }

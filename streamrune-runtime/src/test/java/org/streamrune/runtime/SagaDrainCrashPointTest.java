@@ -37,7 +37,7 @@ class SagaDrainCrashPointTest {
     Throwable crash = catchThrowable(() -> h.replayer.replayAll(SAGA));
     assertThat(crash).isInstanceOf(ForwardingSagaStore.SimulatedCrash.class);
     assertThat(h.bus.count("step-1")).isZero();
-    assertThat(h.entries().get(0).firstReplayStartedAt()).isEqualTo(attempt);
+    assertThat(h.entries().getFirst().firstReplayStartedAt()).isEqualTo(attempt);
 
     h.clock.advance(SagaDeadLetterReplayerTest.WINDOW.plusHours(1));
     assertThat(h.replayer.replayAll(SAGA)).containsExactly(ReplayOutcome.STALE_REDRIVE_BLOCKED);

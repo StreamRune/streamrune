@@ -514,7 +514,7 @@ class BackgroundRelayHealthContributorTest {
     // Each reads its own channel: one that listens does not hide the one that does not.
     second.listening = true;
     var byName = contributor.components();
-    assertEquals(Status.DEGRADED, byName.get(0).status());
+    assertEquals(Status.DEGRADED, byName.getFirst().status());
     assertEquals(Status.UP, byName.get(1).status());
     assertEquals(Status.DEGRADED, byName.get(2).status());
   }

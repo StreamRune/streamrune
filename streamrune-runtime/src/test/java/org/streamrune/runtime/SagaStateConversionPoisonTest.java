@@ -363,7 +363,7 @@ class SagaStateConversionPoisonTest {
         .doesNotThrowAnyException();
 
     assertThat(deadLetters.all()).hasSize(1);
-    assertThat(deadLetters.all().get(0).errorType())
+    assertThat(deadLetters.all().getFirst().errorType())
         .isEqualTo(SagaStateSerializationException.class.getName());
     assertThat(
             backing
@@ -381,7 +381,7 @@ class SagaStateConversionPoisonTest {
     assertThatCode(() -> listener.onEvents(List.of(event))).doesNotThrowAnyException();
 
     assertThat(deadLetters.all()).hasSize(1);
-    assertThat(deadLetters.all().get(0).sagaId()).isEqualTo(SagaId.of("saga-1"));
+    assertThat(deadLetters.all().getFirst().sagaId()).isEqualTo(SagaId.of("saga-1"));
   }
 
   // ---------------------------------------------------------------- read path
@@ -399,7 +399,7 @@ class SagaStateConversionPoisonTest {
         .doesNotThrowAnyException();
 
     assertThat(deadLetters.all()).hasSize(1);
-    assertThat(deadLetters.all().get(0).errorType())
+    assertThat(deadLetters.all().getFirst().errorType())
         .isEqualTo(SagaStateSerializationException.class.getName());
   }
 

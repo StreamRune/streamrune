@@ -139,8 +139,8 @@ class AwsKmsCryptoEngineTest {
       blobs.add(engine.encrypt(subject, bytes("same value")));
     }
     verify(kmsClient, times(1)).generateDataKey(any(GenerateDataKeyRequest.class));
-    assertArrayEquals(wrappedKey(blobs.get(0)), wrappedKey(blobs.get(49)), "one data key");
-    assertFalse(Arrays.equals(blobs.get(0), blobs.get(1)), "a fresh nonce per value");
+    assertArrayEquals(wrappedKey(blobs.getFirst()), wrappedKey(blobs.get(49)), "one data key");
+    assertFalse(Arrays.equals(blobs.getFirst(), blobs.get(1)), "a fresh nonce per value");
 
     // The encrypting engine already holds the key: decrypt needs no KMS call.
     for (byte[] blob : blobs) {
@@ -233,7 +233,7 @@ class AwsKmsCryptoEngineTest {
       blobs.add(budgeted.encrypt(subject, bytes("v" + i)));
     }
     verify(kmsClient, times(3)).generateDataKey(any(GenerateDataKeyRequest.class));
-    assertArrayEquals(wrappedKey(blobs.get(0)), wrappedKey(blobs.get(2)));
+    assertArrayEquals(wrappedKey(blobs.getFirst()), wrappedKey(blobs.get(2)));
     assertFalse(Arrays.equals(wrappedKey(blobs.get(2)), wrappedKey(blobs.get(3))));
     assertArrayEquals(wrappedKey(blobs.get(3)), wrappedKey(blobs.get(5)));
     assertFalse(Arrays.equals(wrappedKey(blobs.get(5)), wrappedKey(blobs.get(6))));

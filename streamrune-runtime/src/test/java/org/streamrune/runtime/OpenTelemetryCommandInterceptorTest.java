@@ -71,7 +71,7 @@ class OpenTelemetryCommandInterceptorTest {
 
     List<SpanData> spans = otelTesting.getSpans();
     assertEquals(1, spans.size());
-    SpanData span = spans.get(0);
+    SpanData span = spans.getFirst();
     assertEquals(TraceAttributes.commandSpanName("PlaceOrder"), span.getName());
     assertEquals(SpanKind.INTERNAL, span.getKind());
     assertEquals(StatusCode.OK, span.getStatus().getStatusCode());
@@ -137,11 +137,11 @@ class OpenTelemetryCommandInterceptorTest {
 
     List<SpanData> spans = otelTesting.getSpans();
     assertEquals(1, spans.size());
-    assertEquals(StatusCode.ERROR, spans.get(0).getStatus().getStatusCode());
-    assertFalse(spans.get(0).getEvents().isEmpty());
+    assertEquals(StatusCode.ERROR, spans.getFirst().getStatus().getStatusCode());
+    assertFalse(spans.getFirst().getEvents().isEmpty());
     // The stream is composed before any interceptor runs, so a failed command's span names it too.
-    assertEquals("orders", spans.get(0).getAttributes().get(TraceAttributes.AGGREGATE_TYPE));
-    assertEquals("orders:agg-1", spans.get(0).getAttributes().get(TraceAttributes.STREAM_ID));
+    assertEquals("orders", spans.getFirst().getAttributes().get(TraceAttributes.AGGREGATE_TYPE));
+    assertEquals("orders:agg-1", spans.getFirst().getAttributes().get(TraceAttributes.STREAM_ID));
   }
 
   @Test

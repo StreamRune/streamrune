@@ -229,7 +229,7 @@ class PostgresEventStoreGlobalOffsetDesyncIT {
     var result = store.append(fresh, List.of(envelope(fresh, 1)), Version.initial());
     assertEquals(
         2L,
-        result.globalOffsets().get(0).value(),
+        result.globalOffsets().getFirst().value(),
         "after re-seeding, the next append continues the dense sequence");
   }
 

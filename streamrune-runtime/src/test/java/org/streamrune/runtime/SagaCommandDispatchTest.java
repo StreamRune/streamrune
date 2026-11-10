@@ -49,6 +49,7 @@ class SagaCommandDispatchTest {
 
   private static CommandBus capturing(AtomicReference<Bound> bound) {
     return new CommandBus() {
+      @Override
       public <C extends Command> CommandResult execute(C command) {
         throw new UnsupportedOperationException("use keyed execute");
       }
@@ -127,6 +128,7 @@ class SagaCommandDispatchTest {
     var causes = new java.util.ArrayList<StreamRuneContext.DispatchCause>();
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
@@ -155,6 +157,7 @@ class SagaCommandDispatchTest {
     var executed = new AtomicInteger();
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
@@ -180,6 +183,7 @@ class SagaCommandDispatchTest {
     var executed = new AtomicInteger();
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
@@ -206,6 +210,7 @@ class SagaCommandDispatchTest {
     var executed = new AtomicInteger();
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
@@ -230,6 +235,7 @@ class SagaCommandDispatchTest {
     // retrying a deterministic failure forever is worse than terminalizing.
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }
@@ -251,6 +257,7 @@ class SagaCommandDispatchTest {
   void noCompensations_returnsFailed() {
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             return null;
           }
@@ -291,6 +298,7 @@ class SagaCommandDispatchTest {
 
   private static CommandBus busReturning(CommandBus.CommandResult result) {
     return new CommandBus() {
+      @Override
       public <C extends Command> CommandResult execute(C command) {
         throw new UnsupportedOperationException("use keyed execute");
       }
@@ -402,6 +410,7 @@ class SagaCommandDispatchTest {
     var executed = new AtomicInteger();
     CommandBus bus =
         new CommandBus() {
+          @Override
           public <C extends Command> CommandResult execute(C command) {
             throw new UnsupportedOperationException("use keyed execute");
           }

@@ -164,7 +164,7 @@ class CommandInterceptorReentrancyTest {
             });
 
     assertEquals(2, store.entries.size());
-    AuditEntry inner = store.entries.get(0);
+    AuditEntry inner = store.entries.getFirst();
     AuditEntry outer = store.entries.get(1);
     assertEquals(CommandId.of("inner"), inner.commandId());
     assertEquals(CommandId.of("outer"), outer.commandId());

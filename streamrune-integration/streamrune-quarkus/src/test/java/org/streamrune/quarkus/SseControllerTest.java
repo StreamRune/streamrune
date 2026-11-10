@@ -170,7 +170,7 @@ class SseControllerTest {
     assertEquals(2, testSubscriber.getItems().size());
     assertSame(
         SseController.KEEP_ALIVE,
-        testSubscriber.getItems().get(0),
+        testSubscriber.getItems().getFirst(),
         "the stream opens with the comment frame, emitted once the client is registered");
     OutboundSseEvent item = testSubscriber.getItems().get(1);
     // Framework-serialized event: id = global offset, data = full domain event as JSON.
@@ -293,7 +293,7 @@ class SseControllerTest {
       worker.get().join(5_000);
       assertSame(
           SseController.KEEP_ALIVE,
-          client.getItems().get(0),
+          client.getItems().getFirst(),
           "the opening comment is the first frame of the stream");
       assertEquals("1", client.getItems().get(1).getId(), "the event follows it and is not lost");
     } finally {
@@ -1096,7 +1096,8 @@ class SseControllerTest {
       var ex =
           assertThrows(
               BadRequestException.class,
-              () -> controller.stream(bad.get(0), bad.get(1), List.of(), SseCallers.anonymous()));
+              () ->
+                  controller.stream(bad.getFirst(), bad.get(1), List.of(), SseCallers.anonymous()));
       assertEquals(400, ex.getResponse().getStatus());
       assertEquals("Invalid aggregate type or aggregate id", ex.getMessage());
     }

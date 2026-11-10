@@ -253,7 +253,7 @@ class ScheduledProjectionRunnerTest {
     var store = listStore(List.of(evt(Instant.parse("2026-01-01T00:00:00Z"))));
     var offsets = memOffsetStore();
     var processed = new ConcurrentLinkedQueue<EventEnvelope>();
-    Projection nonWriteThrough = batch -> processed.addAll(batch);
+    Projection nonWriteThrough = processed::addAll;
 
     runner =
         ScheduledProjectionRunner.builder()
@@ -306,7 +306,7 @@ class ScheduledProjectionRunnerTest {
                 evt(Instant.parse("2026-01-01T00:00:01Z"))));
     var offsets = memOffsetStore();
     var atLeastOnceProcessed = new ConcurrentLinkedQueue<EventEnvelope>();
-    Projection atLeastOnceLambda = batch -> atLeastOnceProcessed.addAll(batch);
+    Projection atLeastOnceLambda = atLeastOnceProcessed::addAll;
     var writeThrough = new WriteThroughProjection();
 
     runner =
@@ -369,7 +369,7 @@ class ScheduledProjectionRunnerTest {
     var store = listStore(List.of(evt(Instant.parse("2026-01-01T00:00:00Z"))));
     var offsets = memOffsetStore();
     var processed = new ConcurrentLinkedQueue<EventEnvelope>();
-    Projection p = batch -> processed.addAll(batch);
+    Projection p = processed::addAll;
 
     runner =
         ScheduledProjectionRunner.builder()
@@ -805,7 +805,7 @@ class ScheduledProjectionRunnerTest {
 
     Projection p =
         batch -> {
-          if (batch.get(0).globalOffset().value() == 1L) {
+          if (batch.getFirst().globalOffset().value() == 1L) {
             throw new RuntimeException("poison"); // chunk 1 → SKIP
           }
         };
@@ -852,7 +852,7 @@ class ScheduledProjectionRunnerTest {
     var store = new ContiguityTruncatingEventStore(events);
     var offsets = memOffsetStore();
     var processed = new ConcurrentLinkedQueue<EventEnvelope>();
-    Projection p = batch -> processed.addAll(batch);
+    Projection p = processed::addAll;
 
     runner =
         ScheduledProjectionRunner.builder()

@@ -40,7 +40,7 @@ class WindowedProjectionTest {
             evt(T0.plusSeconds(700)))); // 11m40s — past 10m boundary
 
     assertThat(emissions).hasSize(1);
-    var r = emissions.get(0);
+    var r = emissions.getFirst();
     assertThat(r.window().start()).isEqualTo(T0);
     assertThat(r.window().end()).isEqualTo(T0.plus(Duration.ofMinutes(10)));
     assertThat(r.state()).isEqualTo(3);
@@ -79,7 +79,7 @@ class WindowedProjectionTest {
     w.process(List.of(evt(T0.plusSeconds(30)), evt(T0.plusSeconds(120))));
 
     assertThat(emissions).hasSize(1);
-    assertThat(emissions.get(0).state()).isEqualTo(1);
+    assertThat(emissions.getFirst().state()).isEqualTo(1);
   }
 
   @Test
@@ -104,8 +104,8 @@ class WindowedProjectionTest {
             evt(T0.plusSeconds(130))));
 
     assertThat(emissions).hasSize(2);
-    assertThat(emissions.get(0).window().start()).isEqualTo(T0);
-    assertThat(emissions.get(0).state()).isEqualTo(2);
+    assertThat(emissions.getFirst().window().start()).isEqualTo(T0);
+    assertThat(emissions.getFirst().state()).isEqualTo(2);
     assertThat(emissions.get(1).window().start()).isEqualTo(T0.plusSeconds(60));
     // window2 contains only the 90s event — the 130s event is in window3 which doesn't close yet
     assertThat(emissions.get(1).state()).isEqualTo(1);
@@ -235,7 +235,7 @@ class WindowedProjectionTest {
     w.process(List.of(evt(T0.plusSeconds(30)), evt(T0.plusSeconds(120))));
 
     assertThat(emissions).hasSize(1);
-    assertThat(emissions.get(0).state()).isEqualTo(3);
+    assertThat(emissions.getFirst().state()).isEqualTo(3);
   }
 
   @Test
@@ -262,15 +262,15 @@ class WindowedProjectionTest {
 
     w.process(batch);
     assertThat(emissions).hasSize(1);
-    assertThat(emissions.get(0).state()).isEqualTo(2);
-    assertThat(emissions.get(0).isFinal()).isTrue();
+    assertThat(emissions.getFirst().state()).isEqualTo(2);
+    assertThat(emissions.getFirst().isFinal()).isTrue();
 
     w.process(batch);
 
     assertThat(emissions)
         .as("a re-delivered batch must neither re-accumulate nor re-emit the closed window")
         .hasSize(1);
-    assertThat(emissions.get(0).state()).isEqualTo(2);
+    assertThat(emissions.getFirst().state()).isEqualTo(2);
   }
 
   @Test
@@ -308,7 +308,7 @@ class WindowedProjectionTest {
     w.process(List.of(evt(T0.plusSeconds(700)))); // closes the window
 
     assertThat(emissions).hasSize(1);
-    assertThat(emissions.get(0).state())
+    assertThat(emissions.getFirst().state())
         .as("each of the four events counts exactly once across the failed attempt and its retry")
         .isEqualTo(4);
   }
@@ -337,7 +337,7 @@ class WindowedProjectionTest {
     w.process(List.of(evt(T0.plusSeconds(700)))); // closes the window
 
     assertThat(emissions).hasSize(1);
-    assertThat(emissions.get(0).state())
+    assertThat(emissions.getFirst().state())
         .as("four distinct offsets were delivered, so the window holds four")
         .isEqualTo(4);
   }

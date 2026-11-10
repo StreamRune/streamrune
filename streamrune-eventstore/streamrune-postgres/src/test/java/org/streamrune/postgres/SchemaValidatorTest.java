@@ -227,10 +227,10 @@ class SchemaValidatorTest {
         result.isValid(), () -> "A schema behind EXPECTED_VERSION must fail: " + result.issues());
     assertEquals(
         1, errors.size(), () -> "the behind-version ERROR must be the only one: " + errors);
-    assertEquals("flyway_schema_history_streamrune", errors.get(0).table());
+    assertEquals("flyway_schema_history_streamrune", errors.getFirst().table());
     assertTrue(
         errors
-            .get(0)
+            .getFirst()
             .message()
             .contains("(0) is behind expected version (" + SchemaValidator.EXPECTED_VERSION + ")"),
         () -> "Should report the schema version is behind expected: " + errors);

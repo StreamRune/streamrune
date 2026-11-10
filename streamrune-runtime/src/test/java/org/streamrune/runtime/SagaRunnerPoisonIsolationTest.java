@@ -483,7 +483,7 @@ class SagaRunnerPoisonIsolationTest {
     runner.asEventListener().onEvents(List.of(strayEvent));
 
     assertThat(sagaDlq.findAll(10)).hasSize(1);
-    assertThat(sagaDlq.findAll(10).get(0).sagaId()).isNull();
+    assertThat(sagaDlq.findAll(10).getFirst().sagaId()).isNull();
   }
 
   /**

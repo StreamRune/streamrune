@@ -53,8 +53,10 @@ class SpringSecurityUserRoleResolverLogSanitizationTest {
     var auth = new TestingAuthenticationToken("bob", null, List.of());
     SecurityContextHolder.getContext().setAuthentication(auth);
     String forgedPayload =
-        "attacker\n2026-08-07 10:00:00 DEBUG o.s.SpringSecurityUserRoleResolver - Requested"
-            + " userId 'admin' does not match authenticated principal 'admin'";
+        """
+        attacker
+        2026-08-07 10:00:00 DEBUG o.s.SpringSecurityUserRoleResolver - Requested\
+         userId 'admin' does not match authenticated principal 'admin'""";
     UserId maliciousUserId = UserId.of(forgedPayload);
 
     List<String> logs =
@@ -62,8 +64,10 @@ class SpringSecurityUserRoleResolverLogSanitizationTest {
             SpringSecurityUserRoleResolver.class, () -> resolver.resolve(maliciousUserId));
 
     assertEquals(1, logs.size(), "exactly one DEBUG must be emitted for the mismatch");
-    assertFalse(logs.get(0).contains("\n"), "no LF from userId must survive into the log record");
-    assertFalse(logs.get(0).contains("\r"), "no CR from userId must survive into the log record");
+    assertFalse(
+        logs.getFirst().contains("\n"), "no LF from userId must survive into the log record");
+    assertFalse(
+        logs.getFirst().contains("\r"), "no CR from userId must survive into the log record");
   }
 
   /**
@@ -77,8 +81,10 @@ class SpringSecurityUserRoleResolverLogSanitizationTest {
   @Test
   void mismatchDebugLogDoesNotEmitAForgedAuthenticatedPrincipalName() {
     String forgedPrincipal =
-        "bob\n2026-08-07 10:00:00 DEBUG o.s.SpringSecurityUserRoleResolver - Requested userId"
-            + " 'admin' matches authenticated principal 'admin'";
+        """
+        bob
+        2026-08-07 10:00:00 DEBUG o.s.SpringSecurityUserRoleResolver - Requested userId\
+         'admin' matches authenticated principal 'admin'""";
     SecurityContextHolder.getContext()
         .setAuthentication(new TestingAuthenticationToken(forgedPrincipal, null, List.of()));
 
@@ -88,9 +94,9 @@ class SpringSecurityUserRoleResolverLogSanitizationTest {
 
     assertEquals(1, logs.size(), "exactly one DEBUG must be emitted for the mismatch");
     assertFalse(
-        logs.get(0).contains("\n") || logs.get(0).contains("\r"),
-        "the authenticated principal name must not open a second log line: " + logs.get(0));
+        logs.getFirst().contains("\n") || logs.getFirst().contains("\r"),
+        "the authenticated principal name must not open a second log line: " + logs.getFirst());
     assertTrue(
-        logs.get(0).contains("bob"), "the principal must still be identifiable, just declawed");
+        logs.getFirst().contains("bob"), "the principal must still be identifiable, just declawed");
   }
 }

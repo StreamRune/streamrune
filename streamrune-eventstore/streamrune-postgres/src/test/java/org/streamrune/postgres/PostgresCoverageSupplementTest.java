@@ -79,8 +79,7 @@ class PostgresCoverageSupplementTest {
   @Test
   void advisoryLockerAcquiresWithNullTimeoutUsingDefault() throws Exception {
     var locker = new PgAdvisoryLocker(dataSource);
-    try (var ignored =
-        (AutoCloseable) locker.acquireLock(TestStreams.stream("null-timeout"), null)) {
+    try (var ignored = locker.acquireLock(TestStreams.stream("null-timeout"), null)) {
       assertNotNull(ignored);
     }
   }
@@ -111,8 +110,7 @@ class PostgresCoverageSupplementTest {
   @Test
   void advisoryLockerAcquiresWithZeroTimeoutWhenUncontended() throws Exception {
     var locker = new PgAdvisoryLocker(dataSource);
-    try (var ignored =
-        (AutoCloseable) locker.acquireLock(TestStreams.stream("zero-timeout"), Duration.ZERO)) {
+    try (var ignored = locker.acquireLock(TestStreams.stream("zero-timeout"), Duration.ZERO)) {
       assertNotNull(ignored);
     }
   }

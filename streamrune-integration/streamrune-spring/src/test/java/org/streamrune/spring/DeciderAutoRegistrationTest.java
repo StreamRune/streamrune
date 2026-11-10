@@ -75,8 +75,8 @@ class DeciderAutoRegistrationTest {
         .withBean(DataSource.class, () -> mock(DataSource.class))
         .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
-        .withBean("first", DeciderRegistration.class, () -> registration())
-        .withBean("second", DeciderRegistration.class, () -> registration())
+        .withBean("first", DeciderRegistration.class, DeciderAutoRegistrationTest::registration)
+        .withBean("second", DeciderRegistration.class, DeciderAutoRegistrationTest::registration)
         .run(
             ctx -> {
               assertThat(ctx).hasFailed();
@@ -124,7 +124,7 @@ class DeciderAutoRegistrationTest {
         .withBean(DataSource.class, () -> mock(DataSource.class))
         .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
-        .withBean("test", DeciderRegistration.class, () -> registration())
+        .withBean("test", DeciderRegistration.class, DeciderAutoRegistrationTest::registration)
         .withBean(
             "place",
             DeciderRegistration.class,

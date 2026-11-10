@@ -816,7 +816,7 @@ class PostgresDeadLetterQueueTest {
     var entries = dlq.read(10);
     assertEquals(2, entries.size());
     // Newest first (descending)
-    assertEquals("Second", entries.get(0).commandType());
+    assertEquals("Second", entries.getFirst().commandType());
     assertEquals("First", entries.get(1).commandType());
   }
 
@@ -1158,7 +1158,7 @@ class PostgresDeadLetterQueueTest {
 
     var retryable = dlq.readRetryable(5, 10, true, null);
     assertEquals(2, retryable.size());
-    assertEquals("First", retryable.get(0).commandType());
+    assertEquals("First", retryable.getFirst().commandType());
     assertEquals("Second", retryable.get(1).commandType());
   }
 
@@ -1210,7 +1210,7 @@ class PostgresDeadLetterQueueTest {
     assertEquals(2, retryable.size());
     assertEquals(
         "Newer",
-        retryable.get(0).commandType(),
+        retryable.getFirst().commandType(),
         "the never-attempted entry (older activity) sorts first");
     assertEquals(
         "Older",

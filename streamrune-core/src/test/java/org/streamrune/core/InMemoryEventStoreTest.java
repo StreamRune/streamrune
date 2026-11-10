@@ -57,7 +57,7 @@ class InMemoryEventStoreTest {
     // Then
     var history = eventStore.load(streamId);
     assertEquals(1, history.events().size());
-    assertEquals("ItemAdded", history.events().get(0).eventType().value());
+    assertEquals("ItemAdded", history.events().getFirst().eventType().value());
   }
 
   @Test
@@ -158,7 +158,7 @@ class InMemoryEventStoreTest {
     // Then
     assertEquals(cartState, history.snapshotState());
     assertEquals(1, history.events().size());
-    assertEquals("ItemRemoved", history.events().get(0).eventType().value());
+    assertEquals("ItemRemoved", history.events().getFirst().eventType().value());
   }
 
   @Test

@@ -77,7 +77,7 @@ class SseEventPublisherTest {
       publisher.publish(envelope);
 
       Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> received.size() == 1);
-      assertSame(envelope, received.get(0));
+      assertSame(envelope, received.getFirst());
     }
   }
 

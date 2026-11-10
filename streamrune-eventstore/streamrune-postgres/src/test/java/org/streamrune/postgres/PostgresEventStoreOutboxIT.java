@@ -150,12 +150,12 @@ class PostgresEventStoreOutboxIT {
 
     var pending = outboxStore.loadPending(10);
     assertEquals(1, pending.size(), "exactly one outbox entry must be written");
-    assertEquals("MappedEvent", pending.get(0).payloadType());
-    assertEquals(streamId, pending.get(0).streamId());
+    assertEquals("MappedEvent", pending.getFirst().payloadType());
+    assertEquals(streamId, pending.getFirst().streamId());
     // PostgreSQL normalizes JSONB spacing on store; compare without whitespace
     assertEquals(
         "{\"k\":1}",
-        pending.get(0).payload().replaceAll("\\s", ""),
+        pending.getFirst().payload().replaceAll("\\s", ""),
         "payload must round-trip through JSONB (normalization ignored)");
   }
 

@@ -88,11 +88,11 @@ class PerformanceTest {
     int totalCommands = threads * commandsPerThread;
     double throughput = totalCommands / durationSeconds;
 
-    System.out.println("\n=== Command Bus Throughput ===");
-    System.out.println("Threads: " + threads);
-    System.out.println("Commands: " + totalCommands);
-    System.out.println("Duration: " + durationSeconds + "s");
-    System.out.println("Throughput: " + String.format("%,.0f", throughput) + " commands/sec");
+    IO.println("\n=== Command Bus Throughput ===");
+    IO.println("Threads: " + threads);
+    IO.println("Commands: " + totalCommands);
+    IO.println("Duration: " + durationSeconds + "s");
+    IO.println("Throughput: " + String.format("%,.0f", throughput) + " commands/sec");
 
     assertTrue(throughput > 1000, "Should handle at least 1000 commands/sec");
   }
@@ -137,11 +137,11 @@ class PerformanceTest {
     int totalAppends = threads * appendsPerThread;
     double throughput = totalAppends / durationSeconds;
 
-    System.out.println("\n=== Event Store Append Throughput ===");
-    System.out.println("Threads: " + threads);
-    System.out.println("Appends: " + totalAppends);
-    System.out.println("Duration: " + durationSeconds + "s");
-    System.out.println("Throughput: " + String.format("%,.0f", throughput) + " appends/sec");
+    IO.println("\n=== Event Store Append Throughput ===");
+    IO.println("Threads: " + threads);
+    IO.println("Appends: " + totalAppends);
+    IO.println("Duration: " + durationSeconds + "s");
+    IO.println("Throughput: " + String.format("%,.0f", throughput) + " appends/sec");
 
     assertTrue(throughput > 1000, "Should handle at least 1000 appends/sec");
   }
@@ -180,12 +180,12 @@ class PerformanceTest {
     long p95 = latencies[(int) (iterations * 0.95)];
     long p99 = latencies[(int) (iterations * 0.99)];
 
-    System.out.println("\n=== Command Execution Latency ===");
-    System.out.println("Avg: " + String.format("%.2f", avgMicros) + " µs");
-    System.out.println("P50: " + (p50 / 1000.0) + " µs");
-    System.out.println("P95: " + (p95 / 1000.0) + " µs");
-    System.out.println("P99: " + (p99 / 1000.0) + " µs");
-    System.out.println("Max: " + (max / 1000.0) + " µs");
+    IO.println("\n=== Command Execution Latency ===");
+    IO.println("Avg: " + String.format("%.2f", avgMicros) + " µs");
+    IO.println("P50: " + (p50 / 1000.0) + " µs");
+    IO.println("P95: " + (p95 / 1000.0) + " µs");
+    IO.println("P99: " + (p99 / 1000.0) + " µs");
+    IO.println("Max: " + (max / 1000.0) + " µs");
 
     assertTrue(avgMicros < 1000, "Average latency should be under 1ms");
   }
@@ -218,9 +218,9 @@ class PerformanceTest {
     java.util.Arrays.sort(latencies);
     long p99 = latencies[(int) (iterations * 0.99)];
 
-    System.out.println("\n=== Event Store Load Latency ===");
-    System.out.println("Avg: " + String.format("%.2f", avgMicros) + " µs");
-    System.out.println("P99: " + (p99 / 1000.0) + " µs");
+    IO.println("\n=== Event Store Load Latency ===");
+    IO.println("Avg: " + String.format("%.2f", avgMicros) + " µs");
+    IO.println("P99: " + (p99 / 1000.0) + " µs");
 
     assertTrue(avgMicros < 500, "Average load latency should be under 500µs");
   }
@@ -273,9 +273,9 @@ class PerformanceTest {
 
     assertTrue(doneLatch.await(30, TimeUnit.SECONDS));
 
-    System.out.println("\n=== Concurrent Read/Write ===");
-    System.out.println("Writes: " + writeSuccess.get() + "/" + writeCount);
-    System.out.println("Reads: " + readSuccess.get() + "/" + readCount);
+    IO.println("\n=== Concurrent Read/Write ===");
+    IO.println("Writes: " + writeSuccess.get() + "/" + writeCount);
+    IO.println("Reads: " + readSuccess.get() + "/" + readCount);
 
     assertEquals(writeCount, writeSuccess.get());
     assertEquals(readCount, readSuccess.get());

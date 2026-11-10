@@ -29,10 +29,7 @@ class SpringQueryCacheAutoConfigTest {
 
   @Test
   void queryCache_disabled_byDefault_noCachingBus() {
-    runner.run(
-        ctx -> {
-          assertThat(ctx).doesNotHaveBean(CachingQueryBus.class);
-        });
+    runner.run(ctx -> assertThat(ctx).doesNotHaveBean(CachingQueryBus.class));
   }
 
   @Test
@@ -52,18 +49,12 @@ class SpringQueryCacheAutoConfigTest {
   void queryCache_enabled_providesCacheInvalidator() {
     runner
         .withPropertyValues("streamrune.query-cache.enabled=true")
-        .run(
-            ctx -> {
-              assertThat(ctx).hasSingleBean(CacheInvalidator.class);
-            });
+        .run(ctx -> assertThat(ctx).hasSingleBean(CacheInvalidator.class));
   }
 
   @Test
   void queryCache_disabled_noCacheInvalidator() {
-    runner.run(
-        ctx -> {
-          assertThat(ctx).doesNotHaveBean(CacheInvalidator.class);
-        });
+    runner.run(ctx -> assertThat(ctx).doesNotHaveBean(CacheInvalidator.class));
   }
 
   @Test

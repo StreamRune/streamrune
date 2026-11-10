@@ -133,8 +133,8 @@ class MicrometerStreamRuneMetricsPrometheusTest {
         auditSeries.size(),
         "the scrape must carry exactly one delivery_mode series for audit, got:\n" + scrape);
     assertTrue(
-        auditSeries.get(0).contains("delivery_mode=\"AT_LEAST_ONCE_IDEMPOTENT\""),
-        "the audit series must carry its declared mode, got: " + auditSeries.get(0));
+        auditSeries.getFirst().contains("delivery_mode=\"AT_LEAST_ONCE_IDEMPOTENT\""),
+        "the audit series must carry its declared mode, got: " + auditSeries.getFirst());
     assertTrue(
         scrape.contains("streamrune_projections_delivery_mode{"),
         "the scrape must expose the delivery_mode gauge, got:\n" + scrape);

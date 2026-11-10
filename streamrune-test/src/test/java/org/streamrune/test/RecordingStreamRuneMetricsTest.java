@@ -294,8 +294,8 @@ class RecordingStreamRuneMetricsTest {
   @Test
   void aNullName_isRecordedAsANullTagValue() {
     var metrics = new RecordingStreamRuneMetrics();
-    metrics.recordProjectionProcessed((ProjectionName) null);
-    metrics.recordSubscriptionEventReceived((SubscriptionName) null);
+    metrics.recordProjectionProcessed(null);
+    metrics.recordSubscriptionEventReceived(null);
     metrics.recordProjectionDeliveryMode(null, null);
 
     assertEquals(

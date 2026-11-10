@@ -188,9 +188,10 @@ class SseEventPublisherLogForgingTest {
               .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
               .toList();
       assertTrue(
-          warnings.get(0).startsWith("SSE subscriber send failed for stream"), warnings.get(0));
-      assertTrue(warnings.get(0).contains("IllegalStateException"), warnings.get(0));
-      assertNoForgedLine(warnings.get(0), "the WARN of a failed send");
+          warnings.getFirst().startsWith("SSE subscriber send failed for stream"),
+          warnings.getFirst());
+      assertTrue(warnings.getFirst().contains("IllegalStateException"), warnings.getFirst());
+      assertNoForgedLine(warnings.getFirst(), "the WARN of a failed send");
       assertTrue(
           warnings.get(1).startsWith("SSE disconnect hook failed for stream"), warnings.get(1));
       assertNoForgedLine(warnings.get(1), "the WARN of a failed disconnect hook");

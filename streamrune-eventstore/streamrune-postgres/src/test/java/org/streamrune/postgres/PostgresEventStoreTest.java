@@ -729,7 +729,7 @@ class PostgresEventStoreTest {
 
     assertEquals(3, history.version().value());
     assertEquals(3, history.events().size());
-    assertEquals("a", ((TestEvent) history.events().get(0).event()).value());
+    assertEquals("a", ((TestEvent) history.events().getFirst().event()).value());
     assertEquals("b", ((TestEvent) history.events().get(1).event()).value());
     assertEquals("c", ((TestEvent) history.events().get(2).event()).value());
   }

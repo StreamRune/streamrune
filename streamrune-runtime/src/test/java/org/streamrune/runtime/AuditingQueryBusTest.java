@@ -86,7 +86,7 @@ class AuditingQueryBusTest {
   void aContextBoundToNullIsAuditedAsNoContext() {
     delegate.register(FindUserById.class, q -> new FindUserByIdResult("Dave"));
 
-    ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+    ScopedValue.where(StreamRuneContext.CURRENT, null)
         .run(() -> bus.dispatch(new FindUserById("u10")));
 
     ArgumentCaptor<AuditEntry> captor = ArgumentCaptor.forClass(AuditEntry.class);

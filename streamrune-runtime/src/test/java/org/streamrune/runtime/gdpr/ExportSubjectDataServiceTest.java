@@ -93,7 +93,7 @@ class ExportSubjectDataServiceTest {
     assertEquals(SubjectId.of("user-1"), export.subjectId());
     assertEquals(2, export.sections().size());
     var keys = new ArrayList<>(export.sections().keySet());
-    assertEquals("profile", keys.get(0));
+    assertEquals("profile", keys.getFirst());
     assertEquals("orders", keys.get(1));
   }
 

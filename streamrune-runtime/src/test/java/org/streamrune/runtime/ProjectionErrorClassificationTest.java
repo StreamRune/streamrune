@@ -179,7 +179,7 @@ class ProjectionErrorClassificationTest {
 
     var entries = dlqStore.read(ProjectionName.of("poison-proj"), 10);
     assertThat(entries).hasSize(1);
-    assertThat(entries.get(0).errorType()).isEqualTo("java.lang.RuntimeException");
+    assertThat(entries.getFirst().errorType()).isEqualTo("java.lang.RuntimeException");
     // The projection was invoked once (poison => no retry before dead-lettering the range).
     assertThat(calls.get()).isEqualTo(1);
   }
@@ -246,8 +246,8 @@ class ProjectionErrorClassificationTest {
 
     var entries = dlqStore.read(ProjectionName.of("continue-proj"), 10);
     assertThat(entries).hasSize(1);
-    assertThat(entries.get(0).fromOffset().value()).isEqualTo(3);
-    assertThat(entries.get(0).toOffset().value()).isEqualTo(4);
+    assertThat(entries.getFirst().fromOffset().value()).isEqualTo(3);
+    assertThat(entries.getFirst().toOffset().value()).isEqualTo(4);
     // Committed offset advanced past the dead-lettered range to the trailing chunk.
     assertThat(offsetStore.getLastOffset(ProjectionName.of("continue-proj")).value()).isEqualTo(6);
     // The runner is NOT in ERROR (old behavior halted here).

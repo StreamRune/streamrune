@@ -282,7 +282,7 @@ class InMemoryCommandBusTest {
 
     var first = commandBus.execute(new CreateWithItemCmd("cart-1", "SKU-1"));
     assertEquals(2, first.envelopes().size());
-    assertEquals(1, first.envelopes().get(0).version().value());
+    assertEquals(1, first.envelopes().getFirst().version().value());
     assertEquals(2, first.envelopes().get(1).version().value());
 
     // A follow-up command continues from the stream head, not from zero
@@ -306,7 +306,7 @@ class InMemoryCommandBusTest {
 
     var result = commandBus.execute(new CreateWithItemCmd("cart-1", "SKU-1"));
 
-    var firstMeta = result.envelopes().get(0).metadata();
+    var firstMeta = result.envelopes().getFirst().metadata();
     var secondMeta = result.envelopes().get(1).metadata();
     assertEquals(firstMeta.correlationId(), secondMeta.correlationId());
     assertEquals(firstMeta.commandId(), secondMeta.commandId());

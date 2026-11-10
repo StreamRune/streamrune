@@ -32,7 +32,7 @@ class TracingProjectionDecoratorTest {
 
     List<SpanData> spans = otelTesting.getSpans();
     assertEquals(1, spans.size());
-    SpanData span = spans.get(0);
+    SpanData span = spans.getFirst();
     assertEquals("projection/OrdersProjection/process", span.getName());
     assertEquals(StatusCode.OK, span.getStatus().getStatusCode());
     assertEquals(0L, (long) span.getAttributes().get(TraceAttributes.BATCH_SIZE));
@@ -59,10 +59,10 @@ class TracingProjectionDecoratorTest {
 
     List<SpanData> spans = otelTesting.getSpans();
     assertEquals(1, spans.size());
-    assertEquals(StatusCode.ERROR, spans.get(0).getStatus().getStatusCode());
-    assertFalse(spans.get(0).getEvents().isEmpty()); // recordException called
-    assertEquals("exception", spans.get(0).getEvents().get(0).getName());
-    assertEquals("DB error", spans.get(0).getStatus().getDescription());
+    assertEquals(StatusCode.ERROR, spans.getFirst().getStatus().getStatusCode());
+    assertFalse(spans.getFirst().getEvents().isEmpty()); // recordException called
+    assertEquals("exception", spans.getFirst().getEvents().getFirst().getName());
+    assertEquals("DB error", spans.getFirst().getStatus().getDescription());
   }
 
   // This decorator overrides process(List, ProjectionRepository) only

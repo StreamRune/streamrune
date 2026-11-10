@@ -108,11 +108,11 @@ class PostgresPerformanceTest {
     int totalCommands = threads * commandsPerThread;
     double throughput = totalCommands / durationSeconds;
 
-    System.out.println("\n=== PostgreSQL Command Bus Throughput ===");
-    System.out.println("Threads: " + threads);
-    System.out.println("Commands: " + totalCommands);
-    System.out.println("Duration: " + durationSeconds + "s");
-    System.out.println("Throughput: " + String.format("%,.0f", throughput) + " commands/sec");
+    IO.println("\n=== PostgreSQL Command Bus Throughput ===");
+    IO.println("Threads: " + threads);
+    IO.println("Commands: " + totalCommands);
+    IO.println("Duration: " + durationSeconds + "s");
+    IO.println("Throughput: " + String.format("%,.0f", throughput) + " commands/sec");
 
     assertTrue(throughput > 100, "Should handle at least 100 commands/sec with PostgreSQL");
   }
@@ -156,11 +156,11 @@ class PostgresPerformanceTest {
     int totalAppends = threads * appendsPerThread;
     double throughput = totalAppends / durationSeconds;
 
-    System.out.println("\n=== PostgreSQL Event Store Append ===");
-    System.out.println("Threads: " + threads);
-    System.out.println("Appends: " + totalAppends);
-    System.out.println("Duration: " + durationSeconds + "s");
-    System.out.println("Throughput: " + String.format("%,.0f", throughput) + " appends/sec");
+    IO.println("\n=== PostgreSQL Event Store Append ===");
+    IO.println("Threads: " + threads);
+    IO.println("Appends: " + totalAppends);
+    IO.println("Duration: " + durationSeconds + "s");
+    IO.println("Throughput: " + String.format("%,.0f", throughput) + " appends/sec");
 
     assertTrue(throughput > 100, "Should handle at least 100 appends/sec with PostgreSQL");
   }
@@ -188,11 +188,11 @@ class PostgresPerformanceTest {
     long p95 = latencies[(int) (iterations * 0.95)];
     long p99 = latencies[(int) (iterations * 0.99)];
 
-    System.out.println("\n=== PostgreSQL Latency ===");
-    System.out.println("Avg: " + String.format("%.2f", avgMs) + " ms");
-    System.out.println("P50: " + String.format("%.2f", p50 / 1_000_000.0) + " ms");
-    System.out.println("P95: " + String.format("%.2f", p95 / 1_000_000.0) + " ms");
-    System.out.println("P99: " + String.format("%.2f", p99 / 1_000_000.0) + " ms");
+    IO.println("\n=== PostgreSQL Latency ===");
+    IO.println("Avg: " + String.format("%.2f", avgMs) + " ms");
+    IO.println("P50: " + String.format("%.2f", p50 / 1_000_000.0) + " ms");
+    IO.println("P95: " + String.format("%.2f", p95 / 1_000_000.0) + " ms");
+    IO.println("P99: " + String.format("%.2f", p99 / 1_000_000.0) + " ms");
 
     // PostgreSQL should be under 100ms average
     assertTrue(

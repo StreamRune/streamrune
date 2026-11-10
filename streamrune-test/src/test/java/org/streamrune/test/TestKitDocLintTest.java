@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
 import java.lang.reflect.Modifier;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -156,7 +155,7 @@ class TestKitDocLintTest {
   }
 
   private static List<String> read(String relative) throws IOException {
-    return Files.readAllLines(root().resolve(relative), StandardCharsets.UTF_8);
+    return Files.readAllLines(root().resolve(relative));
   }
 
   private static Path root() {

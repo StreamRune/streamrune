@@ -56,9 +56,9 @@ class InMemoryOutboxStoreTest {
     // loadPending claims, so inspect the single returned batch (a second call would see nothing).
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals("id-1", pending.get(0).id().value());
+    assertEquals("id-1", pending.getFirst().id().value());
     // The claim moved the entry to IN_PROGRESS — mirrors PostgresOutboxStore.
-    assertEquals(OutboxStatus.IN_PROGRESS, pending.get(0).status());
+    assertEquals(OutboxStatus.IN_PROGRESS, pending.getFirst().status());
   }
 
   @Test
@@ -68,7 +68,7 @@ class InMemoryOutboxStoreTest {
     store.save(OutboxEntry.pending(id, "{\"a\":2}", "Event")); // second save ignored
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals("{\"a\":1}", pending.get(0).payload());
+    assertEquals("{\"a\":1}", pending.getFirst().payload());
   }
 
   @Test
@@ -112,7 +112,7 @@ class InMemoryOutboxStoreTest {
 
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals("pend", pending.get(0).id().value());
+    assertEquals("pend", pending.getFirst().id().value());
   }
 
   @Test
@@ -130,7 +130,7 @@ class InMemoryOutboxStoreTest {
     store.save(OutboxEntry.pending(OutboxEntryId.of("second"), "{}", "Event"));
 
     var pending = store.loadPending(10);
-    assertEquals("first", pending.get(0).id().value());
+    assertEquals("first", pending.getFirst().id().value());
     assertEquals("second", pending.get(1).id().value());
   }
 
@@ -202,7 +202,7 @@ class InMemoryOutboxStoreTest {
 
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals("past-retry", pending.get(0).id().value());
+    assertEquals("past-retry", pending.getFirst().id().value());
   }
 
   @Test
@@ -250,7 +250,7 @@ class InMemoryOutboxStoreTest {
 
     var firstPoll = store.loadPending(10);
     assertEquals(1, firstPoll.size());
-    assertEquals(OutboxStatus.IN_PROGRESS, firstPoll.get(0).status());
+    assertEquals(OutboxStatus.IN_PROGRESS, firstPoll.getFirst().status());
 
     assertTrue(store.loadPending(10).isEmpty(), "claimed entry must not be claimed twice");
 
@@ -275,7 +275,7 @@ class InMemoryOutboxStoreTest {
 
     var reclaimed = s.loadPending(10);
     assertEquals(1, reclaimed.size(), "expired claim must be reclaimable");
-    assertEquals(id.value(), reclaimed.get(0).id().value());
+    assertEquals(id.value(), reclaimed.getFirst().id().value());
   }
 
   @Test

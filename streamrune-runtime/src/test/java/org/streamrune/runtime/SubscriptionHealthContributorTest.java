@@ -713,8 +713,8 @@ class SubscriptionHealthContributorTest {
         assertDoesNotThrow(c::health, "a throwing metrics backend must not fail the whole scrape");
 
     assertEquals(1, healths.size());
-    assertEquals(SubscriptionHealth.Status.UP, healths.get(0).status());
-    assertEquals(5, healths.get(0).lag());
+    assertEquals(SubscriptionHealth.Status.UP, healths.getFirst().status());
+    assertEquals(5, healths.getFirst().lag());
   }
 
   @Test

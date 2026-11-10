@@ -253,8 +253,8 @@ final class SagaForwardFenceTwoNodeFixture implements AutoCloseable {
                         Instant.now()))),
             Version.initial());
     return eventStore
-        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-        .get(0);
+        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+        .getFirst();
   }
 
   LoadedSaga<State> row(String orderId) {
@@ -265,7 +265,7 @@ final class SagaForwardFenceTwoNodeFixture implements AutoCloseable {
   /** The stored forward and compensation events of one order, in global order. */
   List<String> storedOrder(String orderId) {
     return eventStore.readGlobalStream(GlobalOffset.initial(), 100_000).stream()
-        .map(e -> (DomainEvent) e.event())
+        .map(e -> e.event())
         .filter(e -> orderId.equals(SagaStepLockFixture.orderOf(e)))
         .map(e -> e.getClass().getSimpleName())
         .toList();

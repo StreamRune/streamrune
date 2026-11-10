@@ -374,7 +374,7 @@ class PostgresOutboxStoreStrictOrderingIT {
     for (JsonNode child : node.path("Plans")) {
       if (pathTo(child, target, path)) return true;
     }
-    path.remove(path.size() - 1);
+    path.removeLast();
     return false;
   }
 }

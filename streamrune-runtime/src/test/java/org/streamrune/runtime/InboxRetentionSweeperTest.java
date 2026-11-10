@@ -32,10 +32,12 @@ class InboxRetentionSweeperTest {
   /** Minimal no-op inbox; subclasses override only the methods they need. */
   private static CommandInbox noopInbox() {
     return new CommandInbox() {
+      @Override
       public Optional<InboxResult> find(IdempotencyKey key) {
         return Optional.empty();
       }
 
+      @Override
       public int deleteProcessedBefore(Instant cutoff) {
         return 0;
       }
@@ -58,10 +60,12 @@ class InboxRetentionSweeperTest {
     Clock clock = Clock.fixed(Instant.parse("2026-06-21T00:00:00Z"), ZoneOffset.UTC);
     CommandInbox inbox =
         new CommandInbox() {
+          @Override
           public Optional<InboxResult> find(IdempotencyKey key) {
             return Optional.empty();
           }
 
+          @Override
           public int deleteProcessedBefore(Instant olderThan) {
             cutoff.set(olderThan);
             return 3;
@@ -119,10 +123,12 @@ class InboxRetentionSweeperTest {
     var deleteCount = new AtomicInteger(0);
     CommandInbox countingInbox =
         new CommandInbox() {
+          @Override
           public Optional<InboxResult> find(IdempotencyKey key) {
             return Optional.empty();
           }
 
+          @Override
           public int deleteProcessedBefore(Instant cutoff) {
             deleteCount.incrementAndGet();
             return 1;

@@ -21,16 +21,16 @@ class SortTest {
   void by_fieldAsc_defaultDirection() {
     var sort = Sort.by("name");
     assertEquals(1, sort.orders().size());
-    assertEquals("name", sort.orders().get(0).field());
-    assertEquals(SortDirection.ASC, sort.orders().get(0).direction());
+    assertEquals("name", sort.orders().getFirst().field());
+    assertEquals(SortDirection.ASC, sort.orders().getFirst().direction());
   }
 
   @Test
   void by_fieldAndDirection() {
     var sort = Sort.by("createdAt", SortDirection.DESC);
     assertEquals(1, sort.orders().size());
-    assertEquals("createdAt", sort.orders().get(0).field());
-    assertEquals(SortDirection.DESC, sort.orders().get(0).direction());
+    assertEquals("createdAt", sort.orders().getFirst().field());
+    assertEquals(SortDirection.DESC, sort.orders().getFirst().direction());
   }
 
   @Test

@@ -274,7 +274,7 @@ class ForgetSubjectServiceReinstateTest {
     assertTrue(
         auditLog.stream()
             .allMatch(e -> e.aggregateId().equals(AggregateId.of(SUBJECT.redacted()))));
-    assertEquals(UserId.of("dpo-1"), auditLog.get(0).userId());
+    assertEquals(UserId.of("dpo-1"), auditLog.getFirst().userId());
     assertEquals(DPO, auditLog.get(1).userId());
   }
 

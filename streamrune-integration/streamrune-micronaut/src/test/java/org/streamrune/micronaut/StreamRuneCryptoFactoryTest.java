@@ -423,34 +423,43 @@ class StreamRuneCryptoFactoryTest {
     var props = CryptoTestProps.builder().build();
     DataSource ds =
         new javax.sql.DataSource() {
+          @Override
           public java.sql.Connection getConnection() {
             return null;
           }
 
+          @Override
           public java.sql.Connection getConnection(String u, String p) {
             return null;
           }
 
+          @Override
           public java.io.PrintWriter getLogWriter() {
             return null;
           }
 
+          @Override
           public void setLogWriter(java.io.PrintWriter w) {}
 
+          @Override
           public void setLoginTimeout(int s) {}
 
+          @Override
           public int getLoginTimeout() {
             return 0;
           }
 
+          @Override
           public java.util.logging.Logger getParentLogger() {
             return null;
           }
 
+          @Override
           public <T> T unwrap(Class<T> c) {
             return null;
           }
 
+          @Override
           public boolean isWrapperFor(Class<?> c) {
             return false;
           }

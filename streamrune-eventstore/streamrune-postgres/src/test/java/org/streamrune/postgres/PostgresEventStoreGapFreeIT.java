@@ -164,7 +164,7 @@ class PostgresEventStoreGapFreeIT {
         break;
       }
       batch.forEach(e -> delivered.add(e.globalOffset().value()));
-      cursor = batch.get(batch.size() - 1).globalOffset().value();
+      cursor = batch.getLast().globalOffset().value();
     }
     assertEquals(
         java.util.List.of(1L, 2L, 4L, 5L),

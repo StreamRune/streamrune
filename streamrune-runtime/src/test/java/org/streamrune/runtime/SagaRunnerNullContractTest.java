@@ -261,7 +261,7 @@ class SagaRunnerNullContractTest {
         .as("exactly one dead-letter entry for the offending event")
         .hasSize(1)
         .allSatisfy(e -> assertThat(e.eventOffset()).isEqualTo(poisonEvent.globalOffset()));
-    assertThat(entries.get(0).errorType())
+    assertThat(entries.getFirst().errorType())
         .as("the contract violation is recorded as the cause")
         .contains("NullPointerException");
     assertThat(
@@ -391,8 +391,8 @@ class SagaRunnerNullContractTest {
     assertThat(entries)
         .as("a null initialState() return must be quarantined, not silently accepted")
         .hasSize(1);
-    assertThat(entries.get(0).eventOffset()).isEqualTo(poison.globalOffset());
-    assertThat(entries.get(0).errorType()).contains("NullPointerException");
+    assertThat(entries.getFirst().eventOffset()).isEqualTo(poison.globalOffset());
+    assertThat(entries.getFirst().errorType()).contains("NullPointerException");
     assertThat(commandBus.dispatched).isEmpty();
   }
 }

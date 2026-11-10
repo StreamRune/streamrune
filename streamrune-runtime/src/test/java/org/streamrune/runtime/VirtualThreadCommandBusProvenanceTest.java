@@ -404,7 +404,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
                 AGGREGATE_TYPE, Mark.class, CommandBusProvenanceContract::aggregateIdOf, DECIDER)
             .build()) {
 
-      ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+      ScopedValue.where(StreamRuneContext.CURRENT, null)
           .run(() -> bus.execute(new Mark("null-context-1")));
     }
 
@@ -774,7 +774,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
 
   /** Executes one {@link Mark} on a bus of its own over {@code eventStore}. */
   private static void executeOnABusOfItsOwn(InMemoryEventStore eventStore, String aggregateId) {
-    try (VirtualThreadCommandBus bus = bus((EventStore) eventStore)) {
+    try (VirtualThreadCommandBus bus = bus(eventStore)) {
       bus.execute(new Mark(aggregateId));
     }
   }

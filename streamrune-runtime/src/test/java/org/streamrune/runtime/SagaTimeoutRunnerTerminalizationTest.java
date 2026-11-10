@@ -219,7 +219,7 @@ class SagaTimeoutRunnerTerminalizationTest {
     assertThat(bus.executed)
         .as("Undo command must have been dispatched")
         .hasSize(1)
-        .allMatch(c -> c instanceof Undo);
+        .allMatch(Undo.class::isInstance);
   }
 
   /**

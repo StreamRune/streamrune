@@ -242,12 +242,12 @@ class CartIntegrationTest {
     assertEquals(3, history.events().size());
 
     // Verify event types in order
-    assertInstanceOf(CartEvent.ItemAdded.class, history.events().get(0).event());
+    assertInstanceOf(CartEvent.ItemAdded.class, history.events().getFirst().event());
     assertInstanceOf(CartEvent.ItemAdded.class, history.events().get(1).event());
     assertInstanceOf(CartEvent.CheckedOut.class, history.events().get(2).event());
 
     // Verify event content
-    var firstAdd = (CartEvent.ItemAdded) history.events().get(0).event();
+    var firstAdd = (CartEvent.ItemAdded) history.events().getFirst().event();
     assertEquals("SKU-42", firstAdd.sku());
     assertEquals(3, firstAdd.qty());
 
@@ -256,7 +256,7 @@ class CartIntegrationTest {
     assertEquals(1, secondAdd.qty());
 
     // Verify metadata propagation from ScopedValue context
-    var metadata = history.events().get(0).metadata();
+    var metadata = history.events().getFirst().metadata();
     assertEquals(ctx.correlationId().value(), metadata.correlationId().value());
     assertEquals("test-user", metadata.userId().value());
   }
