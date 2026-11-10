@@ -432,7 +432,7 @@ public abstract class IntegrationWiringContract {
    * parks it in standby.
    */
   @Test
-  public void shutdownStopsRunnersBeforeTheEventStoreCloses() throws Exception {
+  public void shutdownStopsRunnersBeforeTheEventStoreCloses() throws InterruptedException {
     Map<String, String> polling =
         Map.of("streamrune.polling-interval", "PT0.02S", "streamrune.polling-jitter", "PT0S");
     assertRunnersStopBeforeTheDatabaseCloses(polling);

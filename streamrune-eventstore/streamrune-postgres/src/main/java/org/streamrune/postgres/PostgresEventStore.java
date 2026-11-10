@@ -878,7 +878,7 @@ public final class PostgresEventStore implements EventStore {
                 + " aggregate-state field was renamed or removed without bumping the snapshot"
                 + " version — bump SnapshotPolicy's snapshotVersion so fresh snapshots are written.",
             LogSanitizer.sanitizeForLog(streamId.value()),
-            e,
+            e.toString(),
             e);
         recordSnapshotDiscarded("deserialize_failure", streamId);
         List<RawEventRow> replayRows = readRawEvents(streamId, Version.initial());
@@ -935,7 +935,7 @@ public final class PostgresEventStore implements EventStore {
                   + " SnapshotMigration step has a bug — inspect the migration chain for the"
                   + " version this stream's snapshot was stored at.",
               LogSanitizer.sanitizeForLog(streamId.value()),
-              e,
+              e.toString(),
               e);
           recordSnapshotDiscarded("migration_failure", streamId);
           List<RawEventRow> replayRows = readRawEvents(streamId, Version.initial());
