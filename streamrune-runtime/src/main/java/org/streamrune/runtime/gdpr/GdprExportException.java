@@ -1,6 +1,7 @@
 package org.streamrune.runtime.gdpr;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.io.Serial;
 import java.util.Map;
 import java.util.Objects;
 import org.streamrune.core.types.LogSanitizer;
@@ -22,7 +23,7 @@ import org.streamrune.core.types.SubjectId;
  */
 public final class GdprExportException extends RuntimeException {
 
-  private static final long serialVersionUID = 1L;
+  @Serial private static final long serialVersionUID = 1L;
 
   // The raw value, not the SubjectId record: the record is not Serializable and an exception is.
   private final String subjectId;

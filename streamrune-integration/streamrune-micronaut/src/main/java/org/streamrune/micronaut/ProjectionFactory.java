@@ -610,7 +610,7 @@ public class ProjectionFactory {
               + " store. Ensure exactly one ProjectionDeadLetterStore bean is resolvable (remove"
               + " duplicates or qualify one with @Primary).");
     }
-    return dlqs.get(0);
+    return dlqs.getFirst();
   }
 
   /** One runner's registrations, as the processor-resolution rule reads them. */

@@ -72,7 +72,7 @@ public record OutboxEntry(
    * it at save time with {@link OutboxOrderingViolationException}.
    */
   public static OutboxEntry pending(OutboxEntryId id, String payload, String payloadType) {
-    return pending(id, payload, payloadType, (StreamId) null);
+    return pending(id, payload, payloadType, null);
   }
 
   /**

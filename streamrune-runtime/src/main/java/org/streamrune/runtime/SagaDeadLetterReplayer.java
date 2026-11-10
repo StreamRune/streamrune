@@ -1382,10 +1382,10 @@ public final class SagaDeadLetterReplayer {
 
   private Optional<EventEnvelope> readEvent(GlobalOffset offset) {
     List<EventEnvelope> read = eventStore.readGlobalStream(GlobalOffset.of(offset.value() - 1), 1);
-    if (read.isEmpty() || !read.get(0).globalOffset().equals(offset)) {
+    if (read.isEmpty() || !read.getFirst().globalOffset().equals(offset)) {
       return Optional.empty();
     }
-    return Optional.of(read.get(0));
+    return Optional.of(read.getFirst());
   }
 
   private void logDrainStopped(SagaId sagaId, DrainItem item, ReplayOutcome outcome, int left) {

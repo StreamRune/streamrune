@@ -1,5 +1,7 @@
 package org.streamrune.runtime;
 
+import java.io.Serial;
+
 /**
  * The command bus refused a saga's command because the bindings it read under the saga's dispatch
  * name another saga than the one the dispatch was made for.
@@ -18,7 +20,7 @@ package org.streamrune.runtime;
  */
 public final class SagaBindingsMismatchException extends RuntimeException {
 
-  private static final long serialVersionUID = 1L;
+  @Serial private static final long serialVersionUID = 1L;
 
   /** Creates the refusal with its one fixed message. */
   public SagaBindingsMismatchException() {

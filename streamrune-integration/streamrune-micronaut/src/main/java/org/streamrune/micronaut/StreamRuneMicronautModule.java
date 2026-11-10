@@ -206,7 +206,7 @@ public class StreamRuneMicronautModule {
       }
     }
     if (!cryptoEngines.isEmpty()) {
-      factory.cryptoEngine(cryptoEngines.get(0));
+      factory.cryptoEngine(cryptoEngines.getFirst());
     }
     if (!upcasters.isEmpty()) {
       factory.upcasters(upcasters);
@@ -667,7 +667,7 @@ public class StreamRuneMicronautModule {
               + "); register exactly one or qualify them. Found: "
               + cryptoEngines);
     }
-    CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.get(0);
+    CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
     java.util.List<Class<?>> commandTypes =
         registrations.stream()
             .map(org.streamrune.runtime.DeciderRegistration::commandType)
@@ -1019,7 +1019,7 @@ public class StreamRuneMicronautModule {
               + "); register exactly one or qualify them. Found: "
               + cryptoEngines);
     }
-    CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.get(0);
+    CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
     // Thread the metrics bean into the saga store's CryptoShreddingModule so a redaction
     // on the saga-state decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
     return new org.streamrune.postgres.PostgresSagaStore(
@@ -1197,7 +1197,7 @@ public class StreamRuneMicronautModule {
               + "); register exactly one or qualify them. Found: "
               + cryptoEngines);
     }
-    CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.get(0);
+    CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
     // Thread the metrics bean into the repository's CryptoShreddingModule so a redaction
     // on the read-model decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
     return new org.streamrune.postgres.JdbcProjectionRepository(
@@ -1359,7 +1359,7 @@ public class StreamRuneMicronautModule {
               + "); register exactly one or qualify them. Found: "
               + cryptoEngines);
     }
-    CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.get(0);
+    CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
     var builder =
         DeadLetterRetryRunner.builder()
             .deadLetterQueue(deadLetterQueue)

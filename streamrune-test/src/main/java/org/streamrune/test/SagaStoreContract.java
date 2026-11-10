@@ -1011,7 +1011,7 @@ public abstract class SagaStoreContract {
         "a saga past its deadline must be selected even while the compensating backlog alone"
             + " could fill the batch: "
             + batch);
-    assertEquals(overdue, batch.get(0), "the forward timeout takes the first slot");
+    assertEquals(overdue, batch.getFirst(), "the forward timeout takes the first slot");
     assertEquals(4, batch.size(), "slots the forward population leaves unused go to the backlog");
   }
 
@@ -1048,11 +1048,16 @@ public abstract class SagaStoreContract {
     }
 
     assertEquals(
-        List.of(forward.get(0), episodes.get(0), forward.get(1), episodes.get(1)),
+        List.of(forward.getFirst(), episodes.getFirst(), forward.get(1), episodes.get(1)),
         store.findTimedOut(TYPE, everythingTimedOut(), 4),
         "each population gets half the batch, oldest first, forward first at each rank");
     assertEquals(
-        List.of(forward.get(0), episodes.get(0), forward.get(1), episodes.get(1), forward.get(2)),
+        List.of(
+            forward.getFirst(),
+            episodes.getFirst(),
+            forward.get(1),
+            episodes.get(1),
+            forward.get(2)),
         store.findTimedOut(TYPE, everythingTimedOut(), 5),
         "an odd slot goes to the forward population");
   }
