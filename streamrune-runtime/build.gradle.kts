@@ -41,57 +41,11 @@ dependencies {
     // Hibernate Validator reference implementation (for tests)
     testImplementation(libs.hibernate.validator)
     testImplementation(libs.jakarta.el) // EL implementation for @Size
-
-    // For JMH benchmarks
-    jmhImplementation(libs.jmh.core)
-    jmhAnnotationProcessor(libs.jmh.generator.annprocess)
-
-    // StreamRuneBenchmarkSmokeTest is a plain JUnit test colocated in
-    // src/jmh/java (so it can call the @State/@Benchmark classes' public setup/benchmark methods
-    // directly) that invokes every benchmark method twice outside the JMH harness. Compilation
-    // alone does not catch a benchmark that compiles fine
-    // but throws -- or silently measures nothing -- on a real invocation; this closes that gap.
-    // See the jmhSmokeTest task below, which wires it into `check`.
-    jmhImplementation(platform(libs.junit.bom))
-    jmhImplementation("org.junit.jupiter:junit-jupiter")
-    jmhImplementation(libs.assertj.core)
-    jmhRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-// The JMH plugin's `jmhJar` captures the `Project` instance in a task action, so storing the
-// configuration cache entry for any graph containing it fails with "cannot serialize object of
-// type 'org.gradle.api.internal.project.DefaultProject'". Undeclared, that failure would stop
-// `./gradlew :streamrune-runtime:jmh` cold: the benchmark jar is built and then the build fails
-// on the cache store. Declaring the incompatibility makes Gradle DEGRADE instead of fail — it
-// disables the configuration cache for that invocation and reports no problem.
-//
-// The cost is bounded to benchmark runs. `jmhJar` is only ever in the graph when a developer asks
-// for `jmh`/`jmhJar` explicitly; `check` gates the benchmarks via `compileJmhJava`, which is config-cache clean, so the normal
-// `build`/`check` path keeps the configuration cache intact.
-tasks.named("jmhJar") {
-    notCompatibleWithConfigurationCache(
-        "me.champeau.jmh's jmhJar holds a Project reference; benchmarks are an on-demand task")
-}
-
-// Runs StreamRuneBenchmarkSmokeTest -- and only that class, since
-// nothing else under src/jmh carries JUnit annotations for JUnit Platform to discover; the actual
-// @State/@Benchmark classes in the same source set are simply skipped during discovery, not an
-// error. This task is wired into `check`: a benchmark that throws (or measures an
-// unpopulated/degenerate state) on a real invocation must fail the build, not sit invisible until
-// someone runs `:streamrune-runtime:jmh` by hand.
-val jmhSmokeTestTask = tasks.register<Test>("jmhSmokeTest") {
-    description =
-        "Runs each JMH benchmark method twice outside the JMH harness (StreamRuneBenchmarkSmokeTest) " +
-            "to catch a benchmark that compiles but breaks on a real invocation."
-    group = "verification"
-    testClassesDirs = sourceSets["jmh"].output.classesDirs
-    classpath = sourceSets["jmh"].runtimeClasspath
-    useJUnitPlatform()
-}
-
-tasks.named("check") {
-    dependsOn(jmhSmokeTestTask)
-}
+// The JMH setup — JSON results, the -PbenchCi settings of the nightly benchmark workflow, the
+// JUnit dependencies and the `jmhSmokeTest` task of src/jmh, `jmhJar` declared incompatible with
+// the configuration cache — is shared by every module that applies the plugin (root build).
 
 // Runs GraalJitGuardLiveTest, and only that class, on a test JVM with the flags
 // -PgraalJitGuardTestFlags names, so that the guard meets the JVM as an application meets it:

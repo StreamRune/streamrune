@@ -58,6 +58,7 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 | `./gradlew :streamrune-integration:streamrune-e2e:brokerTest` | The Kafka and RabbitMQ end-to-end suite, which is not part of `check` | |
 | `./gradlew docLintTest` | The doc-lint tests of every module (section 5); `check` and `quickCheck` run them too | seconds |
 | `./gradlew spotlessApply` | Formats the Java sources | |
+| `./gradlew :streamrune-runtime:jmh -PjmhIncludes=ProjectionRunnerBenchmark` | The JMH benchmarks of a module whose name matches; `-PbenchCi` gives them the nightly settings (section 2, Benchmarks) | seconds to minutes per benchmark |
 
 - **`quickCheck` is the inner loop, `build` is the gate.** A green `quickCheck` says nothing about
   the Testcontainers suites, the coverage gates or Javadoc: run `./gradlew build` before every pull
@@ -106,6 +107,15 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   pipeline reports the status of its last command, not Gradle's. Redirect and print the status
   instead, `./gradlew build > build.log 2>&1; echo "EXIT=$?"`, and start a full build in the
   background.
+- **Benchmarks.** `streamrune-runtime`, `streamrune-postgres` and `streamrune-filesystem-crypto`
+  have JMH benchmarks in `src/jmh` (`jmhModules` in the root build script; the README in each
+  `src/jmh` describes them). `check` compiles them and runs their smoke tests (`jmhSmokeTest`,
+  which invokes every benchmark method twice outside the harness); the harness itself runs only on
+  demand (`./gradlew :<module>:jmh`) and in the nightly `benchmark.yml` workflow, which runs the
+  three modules with `-PbenchCi` (average time per operation in microseconds, two forks of three
+  warmup and five measurement iterations of a second) and records the results on the `gh-pages`
+  branch, where a benchmark more than 30% slower than the run before gets a comment on its commit.
+  `streamrune-runtime/src/jmh/README.md` says how to read that history.
 - **Reused results.** The build cache and the configuration cache are on, so an unchanged test task
   reports `UP-TO-DATE` or `FROM-CACHE` without running. `--rerun` runs one task again:
   `./gradlew :streamrune-core:test --rerun`.

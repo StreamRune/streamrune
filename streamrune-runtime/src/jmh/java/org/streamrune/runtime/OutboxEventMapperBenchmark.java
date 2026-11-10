@@ -40,7 +40,7 @@ import org.streamrune.core.types.Version;
  * SKIPPED event (type-check only, returns empty list) vs a PUBLISHED event (one Jackson {@code
  * writeValueAsString} call). No database — pure CPU, laptop-reproducible.
  *
- * <p>Run: {@code ./gradlew :streamrune-runtime:jmh -Pjmh.include=OutboxEventMapperBenchmark}
+ * <p>Run: {@code ./gradlew :streamrune-runtime:jmh -PjmhIncludes=OutboxEventMapperBenchmark}
  */
 public class OutboxEventMapperBenchmark {
 
