@@ -1,3 +1,7 @@
+plugins {
+    alias(libs.plugins.jmh)
+}
+
 description = "StreamRune Postgres event store: JDBC-backed event store, projection repository, LISTEN/NOTIFY subscription."
 
 dependencies {
@@ -65,4 +69,8 @@ dependencies {
     // Test scope only — no main artifact gains a logging backend. Quiet defaults in
     // src/test/resources/logback-test.xml.
     testImplementation(libs.logback.classic)
+
+    // src/jmh: PostgresEventStoreBenchmark and its smoke test (src/jmh/README.md). The JMH source
+    // set sees the test classpath (the plugin's includeTests), so it starts its PostgreSQL through
+    // the same Testcontainers dependency and PostgresTestImage as the tests.
 }
