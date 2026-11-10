@@ -1,6 +1,9 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 
 import java.time.Duration;
@@ -606,7 +609,7 @@ class ProjectionRunnerHealthTest {
     eventStore.append(poison, List.of(envelope(poison, 1, "poison")), Version.initial());
     Projection proj =
         events -> {
-          if (((TestEvent) events.get(0).event()).payload().equals("poison")) {
+          if ("poison".equals(((TestEvent) events.getFirst().event()).payload())) {
             throw new RuntimeException("permanent poison"); // DLQ'd during catch-up
           }
         };

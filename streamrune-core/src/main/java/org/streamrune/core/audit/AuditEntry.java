@@ -57,7 +57,9 @@ public record AuditEntry(
     Objects.requireNonNull(commandType, "commandType is required");
     Objects.requireNonNull(occurredAt, "occurredAt is required");
     Objects.requireNonNull(outcome, "outcome is required");
-    if (eventCount < 0) throw new IllegalArgumentException("eventCount must be non-negative");
+    if (eventCount < 0) {
+      throw new IllegalArgumentException("eventCount must be non-negative");
+    }
     if (outcome == AuditOutcome.FAILURE && eventCount != 0) {
       throw new IllegalArgumentException("eventCount must be 0 for FAILURE outcomes");
     }

@@ -189,9 +189,12 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
       new EventTypeRegistry() {
         @Override
         public Class<?> resolveEventType(EventType eventType) {
-          if (EventType.fromClass(OrderPlaced.class).equals(eventType)) return OrderPlaced.class;
-          if (EventType.fromClass(OrderCancelled.class).equals(eventType))
+          if (EventType.fromClass(OrderPlaced.class).equals(eventType)) {
+            return OrderPlaced.class;
+          }
+          if (EventType.fromClass(OrderCancelled.class).equals(eventType)) {
             return OrderCancelled.class;
+          }
           throw new IllegalArgumentException("Unknown event type: " + eventType);
         }
 

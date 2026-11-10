@@ -65,7 +65,7 @@ class SagaLeaseWiringTest {
 
     assertThat(reported).isEqualTo(2);
     assertThat(warnings()).hasSize(2);
-    assertThat(warnings().get(0))
+    assertThat(warnings().getFirst())
         .contains("Saga type " + ungatedAlpha.sagaType().value() + " is delivered on every replica")
         .contains("SagaRunner.Builder.leadership(...)")
         .contains(".sagaRunner(runner)");

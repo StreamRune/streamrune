@@ -34,7 +34,11 @@ public record SubscriptionHealth(
     Objects.requireNonNull(state, "state");
     Objects.requireNonNull(status, "status");
     Objects.requireNonNull(role, "role");
-    if (lag < 0) throw new IllegalArgumentException("lag must be >= 0");
-    if (errorCount < 0) throw new IllegalArgumentException("errorCount must be >= 0");
+    if (lag < 0) {
+      throw new IllegalArgumentException("lag must be >= 0");
+    }
+    if (errorCount < 0) {
+      throw new IllegalArgumentException("errorCount must be >= 0");
+    }
   }
 }

@@ -1,6 +1,10 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.List;
@@ -74,9 +78,9 @@ class VirtualThreadCommandBusIdempotencyInterceptorTest {
     final List<String> log = new CopyOnWriteArrayList<>();
     final AtomicInteger beforeCalls = new AtomicInteger();
     final AtomicInteger afterCalls = new AtomicInteger();
-    RuntimeException throwOnBeforeCall = null; // thrown on the Nth before() call (1-based), if set
+    RuntimeException throwOnBeforeCall; // thrown on the Nth before() call (1-based), if set
     int throwOnBeforeCallNumber = -1;
-    boolean vetoOnSecondCall = false;
+    boolean vetoOnSecondCall;
 
     @Override
     public boolean before(CommandContext ctx) {
@@ -85,10 +89,7 @@ class VirtualThreadCommandBusIdempotencyInterceptorTest {
       if (throwOnBeforeCall != null && n == throwOnBeforeCallNumber) {
         throw throwOnBeforeCall;
       }
-      if (vetoOnSecondCall && n == 2) {
-        return false;
-      }
-      return true;
+      return !(vetoOnSecondCall && n == 2);
     }
 
     @Override

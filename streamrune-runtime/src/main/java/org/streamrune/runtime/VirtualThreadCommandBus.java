@@ -960,19 +960,19 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
     if (capturedDlqReplay != null) {
       carrier =
-          (carrier == null)
+          carrier == null
               ? ScopedValue.where(DLQ_REPLAY, capturedDlqReplay)
               : carrier.where(DLQ_REPLAY, capturedDlqReplay);
     }
     if (capturedSagaOwned != null) {
       carrier =
-          (carrier == null)
+          carrier == null
               ? ScopedValue.where(StreamRuneContext.SAGA_OWNED, capturedSagaOwned)
               : carrier.where(StreamRuneContext.SAGA_OWNED, capturedSagaOwned);
     }
     if (capturedCause != null) {
       carrier =
-          (carrier == null)
+          carrier == null
               ? ScopedValue.where(StreamRuneContext.CAUSE, capturedCause)
               : carrier.where(StreamRuneContext.CAUSE, capturedCause);
     }
@@ -1101,7 +1101,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         // switched to never() must not silently keep rehydrating a state whose schema may have
         // moved on since.
         int expectedSnapshotVersion =
-            (snapshotPolicy instanceof SnapshotPolicy.EveryNEvents e)
+            snapshotPolicy instanceof SnapshotPolicy.EveryNEvents e
                 ? e.snapshotVersion()
                 : EventStore.IGNORE_SNAPSHOT;
         AggregateHistory history = eventStore.load(streamId, expectedSnapshotVersion);
@@ -1553,7 +1553,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       int attempts,
       Instant timestamp,
       IdempotencyKey key) {
-    if (deadLetterQueue == null) return null;
+    if (deadLetterQueue == null) {
+      return null;
+    }
     if (Boolean.TRUE.equals(ScopedValueReads.valueOrNull(DLQ_REPLAY))) {
       // This execution replays an existing DLQ entry; the retry infrastructure tracks attempts
       // on the original entry. Publishing again would add a new entry on every retry cycle.

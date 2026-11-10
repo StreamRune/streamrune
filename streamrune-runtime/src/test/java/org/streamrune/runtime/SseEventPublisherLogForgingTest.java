@@ -2,6 +2,7 @@ package org.streamrune.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -133,9 +134,7 @@ class SseEventPublisherLogForgingTest {
     assertTrue(evicted.await(5, TimeUnit.SECONDS), "the slow consumer must have been evicted");
     releaseSend.countDown();
 
-    var slowConsumer =
-        org.junit.jupiter.api.Assertions.assertInstanceOf(
-            SseEventPublisher.SlowConsumerException.class, cause.get());
+    var slowConsumer = assertInstanceOf(SseEventPublisher.SlowConsumerException.class, cause.get());
     assertNoForgedLine(slowConsumer.getMessage(), "the SlowConsumerException message");
     assertEquals(
         FORGED,
@@ -188,9 +187,10 @@ class SseEventPublisherLogForgingTest {
               .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
               .toList();
       assertTrue(
-          warnings.get(0).startsWith("SSE subscriber send failed for stream"), warnings.get(0));
-      assertTrue(warnings.get(0).contains("IllegalStateException"), warnings.get(0));
-      assertNoForgedLine(warnings.get(0), "the WARN of a failed send");
+          warnings.getFirst().startsWith("SSE subscriber send failed for stream"),
+          warnings.getFirst());
+      assertTrue(warnings.getFirst().contains("IllegalStateException"), warnings.getFirst());
+      assertNoForgedLine(warnings.getFirst(), "the WARN of a failed send");
       assertTrue(
           warnings.get(1).startsWith("SSE disconnect hook failed for stream"), warnings.get(1));
       assertNoForgedLine(warnings.get(1), "the WARN of a failed disconnect hook");

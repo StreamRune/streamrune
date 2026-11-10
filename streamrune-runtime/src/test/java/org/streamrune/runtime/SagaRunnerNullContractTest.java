@@ -77,13 +77,13 @@ class SagaRunnerNullContractTest {
    */
   static class NullContractSaga implements SagaOrchestrator<OrderState> {
 
-    volatile boolean initialStateReturnsNull = false;
-    volatile boolean evolveReturnsNull = false;
-    volatile boolean evolveReturnsNullStatus = false;
-    volatile boolean handleReturnsNull = false;
-    volatile boolean handleReturnsNullElement = false;
-    volatile boolean compensateReturnsNull = false;
-    volatile boolean compensateReturnsNullElement = false;
+    volatile boolean initialStateReturnsNull;
+    volatile boolean evolveReturnsNull;
+    volatile boolean evolveReturnsNullStatus;
+    volatile boolean handleReturnsNull;
+    volatile boolean handleReturnsNullElement;
+    volatile boolean compensateReturnsNull;
+    volatile boolean compensateReturnsNullElement;
 
     @Override
     public Class<OrderState> stateType() {
@@ -160,7 +160,7 @@ class SagaRunnerNullContractTest {
 
   static class CapturingCommandBus implements CommandBus {
     final List<Object> dispatched = new ArrayList<>();
-    private RuntimeException failWith = null;
+    private RuntimeException failWith;
 
     @Override
     public boolean supportsIdempotentExecution() {
@@ -261,7 +261,7 @@ class SagaRunnerNullContractTest {
         .as("exactly one dead-letter entry for the offending event")
         .hasSize(1)
         .allSatisfy(e -> assertThat(e.eventOffset()).isEqualTo(poisonEvent.globalOffset()));
-    assertThat(entries.get(0).errorType())
+    assertThat(entries.getFirst().errorType())
         .as("the contract violation is recorded as the cause")
         .contains("NullPointerException");
     assertThat(
@@ -391,8 +391,8 @@ class SagaRunnerNullContractTest {
     assertThat(entries)
         .as("a null initialState() return must be quarantined, not silently accepted")
         .hasSize(1);
-    assertThat(entries.get(0).eventOffset()).isEqualTo(poison.globalOffset());
-    assertThat(entries.get(0).errorType()).contains("NullPointerException");
+    assertThat(entries.getFirst().eventOffset()).isEqualTo(poison.globalOffset());
+    assertThat(entries.getFirst().errorType()).contains("NullPointerException");
     assertThat(commandBus.dispatched).isEmpty();
   }
 }

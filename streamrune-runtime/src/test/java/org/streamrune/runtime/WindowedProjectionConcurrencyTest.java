@@ -109,8 +109,8 @@ class WindowedProjectionConcurrencyTest {
     projection.process(List.of(closingEvent));
 
     assertThat(emissions).hasSize(1);
-    assertThat(emissions.get(0).isFinal()).isTrue();
-    assertThat(emissions.get(0).state())
+    assertThat(emissions.getFirst().isFinal()).isTrue();
+    assertThat(emissions.getFirst().state())
         .as("both concurrently-accumulated events must survive into the final window state")
         .isEqualTo(2);
   }

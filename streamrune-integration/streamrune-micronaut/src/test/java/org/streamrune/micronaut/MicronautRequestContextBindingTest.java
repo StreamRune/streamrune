@@ -564,7 +564,7 @@ class MicronautRequestContextBindingTest {
         return Mono.empty();
       }
       return Mono.just(
-          Authentication.build(name, name.equals("bob") ? List.of("ADMIN") : List.of()));
+          Authentication.build(name, "bob".equals(name) ? List.of("ADMIN") : List.of()));
     }
   }
 

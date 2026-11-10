@@ -1,9 +1,11 @@
 package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -376,7 +378,7 @@ class QuarkusBeanWiringTest {
               .get();
       assertTrue(
           relayHealth.components().stream()
-              .anyMatch(c -> c.name().equals("saga-dead-letter-retention-sweeper")),
+              .anyMatch(c -> "saga-dead-letter-retention-sweeper".equals(c.name())),
           "the produced saga dead-letter retention sweeper must be registered with the relay-health"
               + " contributor so a dead sweep thread reports DOWN");
 
@@ -472,10 +474,9 @@ class QuarkusBeanWiringTest {
               .get();
       assertTrue(
           relayHealth.components().stream()
-              .anyMatch(c -> c.name().equals("dead-letter-retention-sweeper")),
+              .anyMatch(c -> "dead-letter-retention-sweeper".equals(c.name())),
           "and its liveness must still be reported through the relay health");
-      assertEquals(
-          null,
+      assertNull(
           arc.container()
               .instance(
                   org.streamrune.runtime.DeadLetterRetryRunner.class,
@@ -518,7 +519,7 @@ class QuarkusBeanWiringTest {
                 ApplicationInfrastructure.class,
                 ApplicationCommandInbox.class))) {
       var failure =
-          org.junit.jupiter.api.Assertions.assertThrows(
+          assertThrows(
               RuntimeException.class,
               () -> arc.container().instance(org.streamrune.core.EventStoreFactory.class).get(),
               "a custom CommandInbox without a custom EventStoreFactory must fail at wiring");
@@ -629,7 +630,7 @@ class QuarkusBeanWiringTest {
     assertEquals(Duration.ofSeconds(5), props.lockTimeout(), "lock-timeout default");
     assertEquals(1024, props.stripeCount(), "stripe-count default");
     assertTrue(props.saga().enabled(), "saga.enabled defaults to true");
-    assertEquals(false, props.outbox().enabled(), "outbox.enabled defaults to false");
+    assertFalse(props.outbox().enabled(), "outbox.enabled defaults to false");
     assertTrue(
         props.eventStore().schema().autoInitialize(),
         "event-store.schema.auto-initialize defaults to true");
@@ -648,11 +649,10 @@ class QuarkusBeanWiringTest {
                 "streamrune.event-store.schema.auto-initialize", "false"));
     assertEquals(42, props.snapshotEveryNEvents());
     assertEquals(Duration.ofSeconds(11), props.lockTimeout());
-    assertEquals(false, props.saga().enabled(), "nested streamrune.saga.enabled must bind");
+    assertFalse(props.saga().enabled(), "nested streamrune.saga.enabled must bind");
     assertTrue(props.outbox().enabled(), "nested streamrune.outbox.enabled must bind");
     assertEquals(7, props.outbox().batchSize(), "nested streamrune.outbox.batch-size must bind");
-    assertEquals(
-        false,
+    assertFalse(
         props.eventStore().schema().autoInitialize(),
         "doubly-nested streamrune.event-store.schema.auto-initialize must bind");
     assertEquals(3, props.retryMaxAttempts(), "unset keys keep their @WithDefault");

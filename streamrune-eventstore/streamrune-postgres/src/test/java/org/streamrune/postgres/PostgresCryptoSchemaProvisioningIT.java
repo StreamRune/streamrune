@@ -385,7 +385,7 @@ class PostgresCryptoSchemaProvisioningIT {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("encryption_keys")
+                        && "encryption_keys".equals(i.table())
                         && i.message().contains("Missing column: key_version")),
         () -> "must flag encryption_keys.key_version: " + result.issues());
     assertTrue(
@@ -393,7 +393,7 @@ class PostgresCryptoSchemaProvisioningIT {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("erased_key_generations")
+                        && "erased_key_generations".equals(i.table())
                         && i.message().contains("Missing column: max_erased_version")),
         () -> "must flag erased_key_generations.max_erased_version: " + result.issues());
     assertTrue(
@@ -401,7 +401,7 @@ class PostgresCryptoSchemaProvisioningIT {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("forgotten_subjects")
+                        && "forgotten_subjects".equals(i.table())
                         && i.message().contains("Missing column: forgotten_at")),
         () ->
             "must flag forgotten_subjects.forgotten_at (read by the Vault reinstate identity"
@@ -412,7 +412,7 @@ class PostgresCryptoSchemaProvisioningIT {
             .anyMatch(
                 i ->
                     i.severity() == SchemaIssue.Severity.ERROR
-                        && i.table().equals("forgotten_subjects")
+                        && "forgotten_subjects".equals(i.table())
                         && i.message().contains("Missing column: key_created_at")),
         () ->
             "must flag forgotten_subjects.key_created_at — every Vault erasure NAMES it in"
@@ -425,7 +425,7 @@ class PostgresCryptoSchemaProvisioningIT {
         result.issues().stream()
             .anyMatch(
                 i ->
-                    i.table().equals("encryption_keys")
+                    "encryption_keys".equals(i.table())
                         && i.message()
                             .contains(
                                 "ALTER TABLE encryption_keys ADD COLUMN key_version SMALLINT NOT"
@@ -447,7 +447,7 @@ class PostgresCryptoSchemaProvisioningIT {
     // as wrong and works around it.
     assertTrue(
         result.issues().stream()
-            .filter(i -> i.table().equals("forgotten_subjects"))
+            .filter(i -> "forgotten_subjects".equals(i.table()))
             .allMatch(i -> i.message().contains("shared by every crypto backend")),
         () ->
             "the forgotten_subjects remediation must explain that the requirement is table-scoped,"
@@ -489,7 +489,7 @@ class PostgresCryptoSchemaProvisioningIT {
         result.issues().stream()
             .anyMatch(
                 i ->
-                    i.table().equals("tenant_keys")
+                    "tenant_keys".equals(i.table())
                         && i.message().contains("Missing column: key_version")),
         () -> "the custom-named key table must be column-checked too: " + result.issues());
 
@@ -502,7 +502,7 @@ class PostgresCryptoSchemaProvisioningIT {
     // named the real object; making the failure earlier must not make the guidance wrong.
     String message =
         result.issues().stream()
-            .filter(i -> i.table().equals("tenant_keys"))
+            .filter(i -> "tenant_keys".equals(i.table()))
             .map(SchemaIssue::message)
             .findFirst()
             .orElseThrow();

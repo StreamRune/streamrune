@@ -363,9 +363,13 @@ public class StreamRuneCryptoFactory {
             .maximumSize(cache.maximumSize())
             .forgetSignal(forgetSignal);
     Duration write = cache.expireAfterWrite();
-    if (write != null) builder.expireAfterWrite(write);
+    if (write != null) {
+      builder.expireAfterWrite(write);
+    }
     Duration access = cache.expireAfterAccess();
-    if (access != null) builder.expireAfterAccess(access);
+    if (access != null) {
+      builder.expireAfterAccess(access);
+    }
     return builder.build();
   }
 }

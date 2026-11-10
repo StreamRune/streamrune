@@ -524,14 +524,14 @@ class PostgresCryptoForgetListenWindowIntegrationTest {
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
       String name = method.getName();
-      if (name.equals("unwrap") && args[0] == PGConnection.class) {
+      if ("unwrap".equals(name) && args[0] == PGConnection.class) {
         return proxy;
       }
-      if (silenced && name.equals("getNotifications")) {
+      if (silenced && "getNotifications".equals(name)) {
         Thread.sleep(args == null ? 0 : (int) args[0]);
         return new PGNotification[0];
       }
-      if (silenced && name.equals("isValid")) {
+      if (silenced && "isValid".equals(name)) {
         probing.countDown();
         probeFails.await();
         return false;

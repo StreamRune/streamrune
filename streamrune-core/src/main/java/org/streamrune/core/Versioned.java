@@ -13,6 +13,8 @@ public record Versioned<T>(T data, long version) {
 
   public Versioned {
     Objects.requireNonNull(data, "data");
-    if (version < 0) throw new IllegalArgumentException("version must be >= 0");
+    if (version < 0) {
+      throw new IllegalArgumentException("version must be >= 0");
+    }
   }
 }

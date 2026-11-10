@@ -1,6 +1,9 @@
 package org.streamrune.test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,9 +38,9 @@ class InMemoryProjectionDeadLetterStoreTest {
     store.save(entry("OrderProjection", 1, 5));
     var results = store.read(ProjectionName.of("OrderProjection"), 10);
     assertEquals(1, results.size());
-    assertEquals(ProjectionName.of("OrderProjection"), results.get(0).projectionName());
-    assertEquals(GlobalOffset.of(1), results.get(0).fromOffset());
-    assertEquals(GlobalOffset.of(5), results.get(0).toOffset());
+    assertEquals(ProjectionName.of("OrderProjection"), results.getFirst().projectionName());
+    assertEquals(GlobalOffset.of(1), results.getFirst().fromOffset());
+    assertEquals(GlobalOffset.of(5), results.getFirst().toOffset());
   }
 
   @Test
@@ -50,16 +53,16 @@ class InMemoryProjectionDeadLetterStoreTest {
   }
 
   @Test
-  void read_returns_oldest_first() throws InterruptedException {
+  void read_returns_oldest_first() throws Exception {
     store.save(entry("OrderProjection", 1, 1));
     Thread.sleep(5);
     store.save(entry("OrderProjection", 2, 2));
     var results = store.read(ProjectionName.of("OrderProjection"), 10);
     assertEquals(2, results.size());
     assertTrue(
-        results.get(0).failedAt().isBefore(results.get(1).failedAt())
-            || results.get(0).failedAt().equals(results.get(1).failedAt()));
-    assertEquals(GlobalOffset.of(1), results.get(0).fromOffset());
+        results.getFirst().failedAt().isBefore(results.get(1).failedAt())
+            || results.getFirst().failedAt().equals(results.get(1).failedAt()));
+    assertEquals(GlobalOffset.of(1), results.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(2), results.get(1).fromOffset());
   }
 
@@ -84,13 +87,13 @@ class InMemoryProjectionDeadLetterStoreTest {
 
     var page1 = store.read(ProjectionName.of("OrderProjection"), 2);
     assertEquals(2, page1.size());
-    assertEquals(GlobalOffset.of(1), page1.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(1), page1.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(2), page1.get(1).fromOffset());
 
-    store.discard(ProjectionName.of("OrderProjection"), page1.get(0).fromOffset());
+    store.discard(ProjectionName.of("OrderProjection"), page1.getFirst().fromOffset());
     store.discard(ProjectionName.of("OrderProjection"), page1.get(1).fromOffset());
     var page2 = store.read(ProjectionName.of("OrderProjection"), 2);
-    assertEquals(GlobalOffset.of(3), page2.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(3), page2.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(4), page2.get(1).fromOffset());
   }
 
@@ -103,7 +106,7 @@ class InMemoryProjectionDeadLetterStoreTest {
 
     var page1 = store.readAll(2);
     assertEquals(2, page1.size());
-    assertEquals(GlobalOffset.of(1), page1.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(1), page1.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(2), page1.get(1).fromOffset());
   }
 
@@ -116,7 +119,7 @@ class InMemoryProjectionDeadLetterStoreTest {
 
     var results = store.read(ProjectionName.of("OrderProjection"), 10);
     assertEquals(3, results.size());
-    assertEquals(GlobalOffset.of(1), results.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(1), results.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(3), results.get(1).fromOffset());
     assertEquals(GlobalOffset.of(5), results.get(2).fromOffset());
   }
@@ -130,7 +133,7 @@ class InMemoryProjectionDeadLetterStoreTest {
 
     var results = store.readAll(10);
     assertEquals(3, results.size());
-    assertEquals(GlobalOffset.of(1), results.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(1), results.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(3), results.get(1).fromOffset());
     assertEquals(GlobalOffset.of(5), results.get(2).fromOffset());
   }
@@ -195,8 +198,7 @@ class InMemoryProjectionDeadLetterStoreTest {
 
   @Test
   void discard_rejects_null_projection_name() {
-    assertThrows(
-        NullPointerException.class, () -> store.discard((ProjectionName) null, GlobalOffset.of(1)));
+    assertThrows(NullPointerException.class, () -> store.discard(null, GlobalOffset.of(1)));
   }
 
   @Test

@@ -1,6 +1,8 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 import java.util.function.Consumer;
@@ -102,7 +104,7 @@ class BackgroundRelayHealthContributorTest {
     assertEquals(2, components.size());
     var dlqHealth =
         components.stream()
-            .filter(c -> c.name().equals("dead-letter-retry"))
+            .filter(c -> "dead-letter-retry".equals(c.name()))
             .findFirst()
             .orElseThrow();
     assertEquals(Status.DOWN, dlqHealth.status());
@@ -514,7 +516,7 @@ class BackgroundRelayHealthContributorTest {
     // Each reads its own channel: one that listens does not hide the one that does not.
     second.listening = true;
     var byName = contributor.components();
-    assertEquals(Status.DEGRADED, byName.get(0).status());
+    assertEquals(Status.DEGRADED, byName.getFirst().status());
     assertEquals(Status.UP, byName.get(1).status());
     assertEquals(Status.DEGRADED, byName.get(2).status());
   }

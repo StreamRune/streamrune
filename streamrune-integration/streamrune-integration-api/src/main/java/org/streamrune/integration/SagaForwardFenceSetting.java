@@ -38,7 +38,7 @@ public enum SagaForwardFenceSetting {
       return AUTO;
     }
     String normalized = value.strip().toLowerCase(Locale.ROOT);
-    if (normalized.equals("auto")) {
+    if ("auto".equals(normalized)) {
       return AUTO;
     }
     try {

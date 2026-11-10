@@ -1,5 +1,7 @@
 package org.streamrune.test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -178,13 +180,13 @@ public final class EventStoreFixture {
     /** Asserts the stream currently has the expected number of events (snapshot excluded). */
     public ThenStage expectEventCount(StreamId streamId, int count) {
       var history = eventStore.load(streamId);
-      org.junit.jupiter.api.Assertions.assertEquals(count, history.events().size());
+      assertEquals(count, history.events().size());
       return this;
     }
 
     /** Asserts the version of the history captured by {@code when().load(...)}. */
     public ThenStage expectLoadedVersion(long version) {
-      org.junit.jupiter.api.Assertions.assertEquals(version, loadedHistory().version().value());
+      assertEquals(version, loadedHistory().version().value());
       return this;
     }
 

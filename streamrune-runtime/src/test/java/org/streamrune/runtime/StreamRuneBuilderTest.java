@@ -1,6 +1,14 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 
 import java.time.Duration;
@@ -291,7 +299,7 @@ class StreamRuneBuilderTest {
   }
 
   @Test
-  void shouldRunProjectionsWithRunnerFromFactory() throws InterruptedException {
+  void shouldRunProjectionsWithRunnerFromFactory() throws Exception {
     // startProjections() now runs each registration on its own thread, so the assertion
     // below must wait for it rather than checking a flag set by a not-yet-scheduled thread.
     var started = new CountDownLatch(1);
@@ -336,7 +344,7 @@ class StreamRuneBuilderTest {
   }
 
   @Test
-  void startProjectionsPassesEachRegistrationsModeToItsRunner() throws InterruptedException {
+  void startProjectionsPassesEachRegistrationsModeToItsRunner() throws Exception {
     var seenModes = new java.util.concurrent.ConcurrentHashMap<String, ProjectionDeliveryMode>();
     var seenProjections = new java.util.concurrent.ConcurrentHashMap<String, Projection>();
     var both = new CountDownLatch(2);
@@ -522,7 +530,7 @@ class StreamRuneBuilderTest {
   }
 
   @Test
-  void shouldStartAndStopProjections() throws InterruptedException {
+  void shouldStartAndStopProjections() throws Exception {
     var store = new InMemoryEventStore();
     // startProjections() now runs each registration on its own thread, so the assertion
     // below must wait for it rather than checking a flag set by a not-yet-scheduled thread.
@@ -584,7 +592,7 @@ class StreamRuneBuilderTest {
         new ProjectionRunner() {
           @Override
           public void run(ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
-            if (name.value().equals("proj1")) {
+            if ("proj1".equals(name.value())) {
               started1.countDown();
             } else {
               started2.countDown();
@@ -682,7 +690,7 @@ class StreamRuneBuilderTest {
                     @Override
                     public void run(
                         ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
-                      (name.value().equals("proj1") ? latch1 : latch2).countDown();
+                      ("proj1".equals(name.value()) ? latch1 : latch2).countDown();
                     }
 
                     @Override

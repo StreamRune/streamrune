@@ -222,7 +222,7 @@ class ProjectionRunnerLeaseRoleTest {
       await().atMost(Duration.ofSeconds(10)).until(() -> role() == LeaseRole.LEADING);
       assertThat(
               contributor.health().stream()
-                  .filter(health -> health.name().value().equals("ungated"))
+                  .filter(health -> "ungated".equals(health.name().value()))
                   .findFirst()
                   .orElseThrow()
                   .role())

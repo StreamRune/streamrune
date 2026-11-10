@@ -1,6 +1,9 @@
 package org.streamrune.test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -56,7 +59,7 @@ class InMemoryDeadLetterQueueTest {
     dlq.publish(request("cmd-1", "First"));
     dlq.publish(request("cmd-2", "Second"));
     var entries = dlq.read(10);
-    assertEquals("Second", entries.get(0).commandType());
+    assertEquals("Second", entries.getFirst().commandType());
     assertEquals("First", entries.get(1).commandType());
   }
 
@@ -312,7 +315,7 @@ class InMemoryDeadLetterQueueTest {
     dlq.publish(request("cmd-2", "Second"));
 
     var retryable = dlq.readRetryable(5, 10, true, null);
-    assertEquals("First", retryable.get(0).commandType());
+    assertEquals("First", retryable.getFirst().commandType());
     assertEquals("Second", retryable.get(1).commandType());
   }
 
@@ -405,8 +408,8 @@ class InMemoryDeadLetterQueueTest {
     q.publish(request("cmd-2", "Second"));
 
     var entries = q.read(10); // newest first
-    assertEquals("Second", entries.get(0).commandType());
-    assertEquals(Instant.parse("2026-01-01T00:00:01Z"), entries.get(0).publishedAt());
+    assertEquals("Second", entries.getFirst().commandType());
+    assertEquals(Instant.parse("2026-01-01T00:00:01Z"), entries.getFirst().publishedAt());
     assertEquals("First", entries.get(1).commandType());
     assertEquals(Instant.parse("2026-01-01T00:00:00Z"), entries.get(1).publishedAt());
   }

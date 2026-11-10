@@ -1,6 +1,12 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -816,7 +822,7 @@ class PostgresDeadLetterQueueTest {
     var entries = dlq.read(10);
     assertEquals(2, entries.size());
     // Newest first (descending)
-    assertEquals("Second", entries.get(0).commandType());
+    assertEquals("Second", entries.getFirst().commandType());
     assertEquals("First", entries.get(1).commandType());
   }
 
@@ -1063,7 +1069,7 @@ class PostgresDeadLetterQueueTest {
               "Err",
               "msg",
               1,
-              row[2].equals("old") ? old : now,
+              "old".equals(row[2]) ? old : now,
               null,
               null,
               null,
@@ -1158,7 +1164,7 @@ class PostgresDeadLetterQueueTest {
 
     var retryable = dlq.readRetryable(5, 10, true, null);
     assertEquals(2, retryable.size());
-    assertEquals("First", retryable.get(0).commandType());
+    assertEquals("First", retryable.getFirst().commandType());
     assertEquals("Second", retryable.get(1).commandType());
   }
 
@@ -1210,7 +1216,7 @@ class PostgresDeadLetterQueueTest {
     assertEquals(2, retryable.size());
     assertEquals(
         "Newer",
-        retryable.get(0).commandType(),
+        retryable.getFirst().commandType(),
         "the never-attempted entry (older activity) sorts first");
     assertEquals(
         "Older",

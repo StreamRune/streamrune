@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
 import java.lang.reflect.Modifier;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -126,7 +125,7 @@ class TestKitDocLintTest {
               + " public type(s) of org.streamrune.test not named as themselves in "
               + document
               + " (a heading, or "
-              + (document.equals(README)
+              + (README.equals(document)
                   ? "a code span of the name in the first cell of the type table"
                   : "a code span of the name alone")
               + "): "
@@ -140,7 +139,7 @@ class TestKitDocLintTest {
     try (Stream<Path> sources = Files.list(Path.of("src/main/java/org/streamrune/test"))) {
       for (Path source : sources.sorted().toList()) {
         String file = source.getFileName().toString();
-        if (!file.endsWith(".java") || file.equals("package-info.java")) {
+        if (!file.endsWith(".java") || "package-info.java".equals(file)) {
           continue;
         }
         String name = file.substring(0, file.length() - ".java".length());
@@ -156,7 +155,7 @@ class TestKitDocLintTest {
   }
 
   private static List<String> read(String relative) throws IOException {
-    return Files.readAllLines(root().resolve(relative), StandardCharsets.UTF_8);
+    return Files.readAllLines(root().resolve(relative));
   }
 
   private static Path root() {

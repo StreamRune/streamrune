@@ -466,7 +466,7 @@ public final class HybridEventSubscription
     private SubscriptionConfig config = SubscriptionConfig.DEFAULT;
     private int fetchSize = 100;
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
-    private int readPoisonBound = 0;
+    private int readPoisonBound = 0; // 0 = unbounded (standalone default)
     private SubscriptionLease lease;
     private SubscriptionLeadership leadership;
     private SagaRunner<?> sagaRunner;

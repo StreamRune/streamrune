@@ -1265,7 +1265,7 @@ public final class VaultCryptoEngine implements CryptoEngine {
     // No silent default — build() fails closed unless a tombstone
     // store is supplied, so Vault erasure can never silently be non-terminal (a post-erasure
     // encrypt would otherwise resurrect the subject under a fresh Vault transit key).
-    private ForgottenSubjectStore forgottenSubjects = null;
+    private ForgottenSubjectStore forgottenSubjects;
     private Duration revivalIdentityMargin = DEFAULT_REVIVAL_IDENTITY_MARGIN;
 
     public Builder httpClient(HttpClient client) {
@@ -1361,19 +1361,29 @@ public final class VaultCryptoEngine implements CryptoEngine {
     }
 
     public VaultCryptoEngine build() {
-      if (httpClient == null) throw new IllegalStateException("httpClient is required");
-      if (token == null || token.isBlank()) throw new IllegalStateException("token is required");
-      if (engineMount == null || engineMount.isBlank())
+      if (httpClient == null) {
+        throw new IllegalStateException("httpClient is required");
+      }
+      if (token == null || token.isBlank()) {
+        throw new IllegalStateException("token is required");
+      }
+      if (engineMount == null || engineMount.isBlank()) {
         throw new IllegalStateException("engineMount is required");
-      if (requestTimeout == null || requestTimeout.isZero() || requestTimeout.isNegative())
+      }
+      if (requestTimeout == null || requestTimeout.isZero() || requestTimeout.isNegative()) {
         throw new IllegalArgumentException("requestTimeout must be positive");
-      if (maxRetries < 0) throw new IllegalArgumentException("maxRetries must be non-negative");
+      }
+      if (maxRetries < 0) {
+        throw new IllegalArgumentException("maxRetries must be non-negative");
+      }
       if (revivalIdentityMargin == null
           || revivalIdentityMargin.isZero()
-          || revivalIdentityMargin.isNegative())
+          || revivalIdentityMargin.isNegative()) {
         throw new IllegalArgumentException("revivalIdentityMargin must be positive");
-      if (retryDelay == null || retryDelay.isNegative())
+      }
+      if (retryDelay == null || retryDelay.isNegative()) {
         throw new IllegalArgumentException("retryDelay must be non-negative");
+      }
       if (forgottenSubjects == null) {
         // Fail-closed: refuse to build an engine whose GDPR erasure
         // would be non-terminal. Vault transit re-creates a deleted key on the next encrypt, so an

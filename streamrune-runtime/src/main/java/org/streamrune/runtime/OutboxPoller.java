@@ -298,7 +298,7 @@ public final class OutboxPoller implements AutoCloseable {
    * running a cycle; on the self-close path two threads may both set it, which is harmless for a
    * flag that is only ever set to {@code true}.
    */
-  private volatile boolean zeroHorizonViolationLogged = false;
+  private volatile boolean zeroHorizonViolationLogged;
 
   // Reads "now" for the age of the oldest FAILED entry (streamrune.outbox.blockage_age_seconds),
   // compared with the instant the store stamped it with. The builder's clock, or the system's.
@@ -719,7 +719,7 @@ public final class OutboxPoller implements AutoCloseable {
    * which likewise treats a null/zero/negative horizon as no constraint.
    */
   private static Duration normalizeHorizon(Duration horizon) {
-    return (horizon == null || horizon.isNegative()) ? Duration.ZERO : horizon;
+    return horizon == null || horizon.isNegative() ? Duration.ZERO : horizon;
   }
 
   /**
@@ -1311,10 +1311,18 @@ public final class OutboxPoller implements AutoCloseable {
     }
 
     public OutboxPoller build() {
-      if (store == null) throw new IllegalStateException("outboxStore is required");
-      if (publisher == null) throw new IllegalStateException("publisher is required");
-      if (retryPolicy == null) throw new IllegalStateException("retryPolicy is required");
-      if (batchSize < 1) throw new IllegalStateException("batchSize must be >= 1");
+      if (store == null) {
+        throw new IllegalStateException("outboxStore is required");
+      }
+      if (publisher == null) {
+        throw new IllegalStateException("publisher is required");
+      }
+      if (retryPolicy == null) {
+        throw new IllegalStateException("retryPolicy is required");
+      }
+      if (batchSize < 1) {
+        throw new IllegalStateException("batchSize must be >= 1");
+      }
       if (pollInterval == null || pollInterval.isNegative() || pollInterval.isZero()) {
         throw new IllegalStateException(
             "pollInterval must be non-null and positive (Duration.ZERO causes a tight spin loop)");

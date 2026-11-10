@@ -300,8 +300,8 @@ class SagaForwardFenceDispatchTest {
                           Instant.now()))),
               Version.initial());
       return eventStore
-          .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-          .get(0);
+          .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+          .getFirst();
     }
 
     void deliver(EventEnvelope event) {
@@ -476,7 +476,7 @@ class SagaForwardFenceDispatchTest {
       h.saga.poisonAdvanced = true;
       h.deliver(h.append(new Advanced(ORDER)));
       assertThat(h.row().status()).isEqualTo(SagaStatus.FAULTED);
-      var entry = h.deadLetters.findBySaga(SAGA).get(0);
+      var entry = h.deadLetters.findBySaga(SAGA).getFirst();
       assertThat(h.replayer.discard(SAGA, entry.eventOffset())).isTrue();
 
       assertThat(h.replayer.compensateFaulted(SAGA)).isEqualTo(CompensateOutcome.TERMINAL);

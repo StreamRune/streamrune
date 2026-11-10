@@ -322,7 +322,10 @@ class SagaCompensationRetryLifecycleAutoConfigurationTest {
             "relayHealth",
             BackgroundRelayHealthContributor.class,
             BackgroundRelayHealthContributor::new)
-        .withBean("orderTimeoutRunner", SagaTimeoutRunner.class, () -> timeoutRunner())
+        .withBean(
+            "orderTimeoutRunner",
+            SagaTimeoutRunner.class,
+            SagaCompensationRetryLifecycleAutoConfigurationTest::timeoutRunner)
         .run(
             ctx -> {
               assertThat(ctx).doesNotHaveBean(SagaCompensationRetryLifecycle.class);

@@ -15,9 +15,15 @@ public record Page<T>(List<T> content, long totalElements, int page, int size) {
 
   public Page {
     Objects.requireNonNull(content, "content");
-    if (totalElements < 0) throw new IllegalArgumentException("totalElements must be >= 0");
-    if (page < 0) throw new IllegalArgumentException("page must be >= 0");
-    if (size < 1) throw new IllegalArgumentException("size must be >= 1");
+    if (totalElements < 0) {
+      throw new IllegalArgumentException("totalElements must be >= 0");
+    }
+    if (page < 0) {
+      throw new IllegalArgumentException("page must be >= 0");
+    }
+    if (size < 1) {
+      throw new IllegalArgumentException("size must be >= 1");
+    }
     content = List.copyOf(content);
     if (content.size() > size) {
       throw new IllegalArgumentException(

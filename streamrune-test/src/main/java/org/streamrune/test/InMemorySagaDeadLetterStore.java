@@ -114,7 +114,9 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
 
   @Override
   public void publish(SagaDeadLetterEntry entry) {
-    if (entry == null) throw new IllegalArgumentException("entry must not be null");
+    if (entry == null) {
+      throw new IllegalArgumentException("entry must not be null");
+    }
     synchronized (entriesMonitor) { // see entriesMonitor: serializes P against the clear
       upsert(entry);
     }
@@ -128,8 +130,12 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
    */
   @Override
   public void publishShielded(SagaDeadLetterEntry entry) {
-    if (entry == null) throw new IllegalArgumentException("entry must not be null");
-    if (entry.sagaId() == null) throw new IllegalArgumentException("sagaId is required");
+    if (entry == null) {
+      throw new IllegalArgumentException("entry must not be null");
+    }
+    if (entry.sagaId() == null) {
+      throw new IllegalArgumentException("sagaId is required");
+    }
     synchronized (entriesMonitor) {
       upsert(entry);
       sagaStore.setDeadLetterPending(entry.sagaId(), entry.sagaType(), true);
@@ -172,7 +178,9 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
   @Override
   public void establishFirstReplayAnchor(
       SagaId sagaId, SagaType sagaType, GlobalOffset eventOffset, Instant anchorIfAbsent) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
     Objects.requireNonNull(eventOffset, "eventOffset is required");
     Objects.requireNonNull(anchorIfAbsent, "anchorIfAbsent is required");
     if (sagaId != null) {
@@ -203,7 +211,9 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
    */
   @Override
   public void setResolvedTarget(SagaType sagaType, GlobalOffset eventOffset, SagaId targetSagaId) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
     Objects.requireNonNull(eventOffset, "eventOffset is required");
     Objects.requireNonNull(targetSagaId, "targetSagaId is required");
     synchronized (entriesMonitor) { // a resolution makes the entry count for the target's shield
@@ -298,7 +308,9 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
   @Override
   public List<SagaDeadLetterEntry> findNullSagaEntriesByResolvedTarget(
       SagaType sagaType, SagaId targetSagaId) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
     Objects.requireNonNull(targetSagaId, "targetSagaId is required");
     java.util.Map<Long, SagaDeadLetterEntry> byOffset = new java.util.TreeMap<>();
     for (SagaDeadLetterEntry e : store.values()) {
@@ -322,7 +334,9 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
    */
   @Override
   public boolean discard(SagaId sagaId, SagaType sagaType, GlobalOffset eventOffset) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
     Objects.requireNonNull(eventOffset, "eventOffset is required");
     if (sagaId != null) {
       Key key = new Key(sagaId.value(), "", eventOffset.value());
@@ -349,8 +363,12 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
    */
   @Override
   public boolean clearShieldIfDrained(SagaId sagaId, SagaType sagaType) {
-    if (sagaId == null) throw new IllegalArgumentException("sagaId is required");
-    if (sagaType == null) throw new IllegalArgumentException("sagaType is required");
+    if (sagaId == null) {
+      throw new IllegalArgumentException("sagaId is required");
+    }
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType is required");
+    }
     synchronized (entriesMonitor) {
       boolean entryExists =
           store.values().stream().anyMatch(e -> countsForShieldOf(e, sagaId, sagaType));

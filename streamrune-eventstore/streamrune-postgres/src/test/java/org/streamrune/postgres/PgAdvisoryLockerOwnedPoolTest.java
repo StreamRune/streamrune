@@ -114,7 +114,7 @@ class PgAdvisoryLockerOwnedPoolTest {
 
   @Test
   void aPoolIsRequired() {
-    assertThatThrownBy(() -> PgAdvisoryLocker.withDedicatedPool((javax.sql.DataSource) null))
+    assertThatThrownBy(() -> PgAdvisoryLocker.withDedicatedPool(null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("pool is required");
   }

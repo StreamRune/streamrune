@@ -1,6 +1,8 @@
 package org.streamrune.core;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -18,9 +20,9 @@ class ValidationExceptionTest {
 
     assertEquals("Validation failed", ex.getMessage());
     assertEquals(2, ex.errors().size());
-    assertEquals("name", ex.errors().get(0).field());
-    assertEquals("must not be blank", ex.errors().get(0).message());
-    assertEquals("NotBlank", ex.errors().get(0).code());
+    assertEquals("name", ex.errors().getFirst().field());
+    assertEquals("must not be blank", ex.errors().getFirst().message());
+    assertEquals("NotBlank", ex.errors().getFirst().code());
   }
 
   @Test
@@ -29,7 +31,7 @@ class ValidationExceptionTest {
     var ex = new ValidationException(List.of(error));
 
     assertEquals(1, ex.errors().size());
-    assertEquals("email", ex.errors().get(0).field());
+    assertEquals("email", ex.errors().getFirst().field());
     assertEquals("Command validation failed", ex.getMessage());
   }
 

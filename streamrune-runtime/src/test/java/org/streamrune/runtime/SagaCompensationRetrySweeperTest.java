@@ -2,6 +2,7 @@ package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
@@ -86,7 +87,7 @@ class SagaCompensationRetrySweeperTest {
    * poison-during-sweep path.
    */
   static final class FakeOrchestrator implements SagaOrchestrator<FakeSagaState> {
-    volatile boolean throwOnCompensate = false;
+    volatile boolean throwOnCompensate;
 
     @Override
     public Class<FakeSagaState> stateType() {
@@ -244,7 +245,7 @@ class SagaCompensationRetrySweeperTest {
   static final class ToggleLeadership implements SubscriptionLeadership {
     private static final Optional<Lease> LEASE = Optional.of(new Lease(1L));
     volatile boolean leader;
-    volatile int resigns = 0;
+    volatile int resigns;
 
     ToggleLeadership(boolean leader) {
       this.leader = leader;
@@ -453,8 +454,7 @@ class SagaCompensationRetrySweeperTest {
     var sweeper = sweeper(leadership, Duration.ofSeconds(60), Duration.ofHours(1));
     sweeper.start();
 
-    org.junit.jupiter.api.Assertions.assertDoesNotThrow(
-        sweeper::close, "close() must survive a throwing resign");
+    assertDoesNotThrow(sweeper::close, "close() must survive a throwing resign");
     assertThat(sweeper.isStarted())
         .as("the started guard must be reset so the sweeper stays restartable")
         .isFalse();
@@ -462,7 +462,7 @@ class SagaCompensationRetrySweeperTest {
     // Restartable for real: a second lifecycle cycle works.
     sweeper.start();
     assertThat(sweeper.isAlive()).isTrue();
-    org.junit.jupiter.api.Assertions.assertDoesNotThrow(sweeper::close);
+    assertDoesNotThrow(sweeper::close);
   }
 
   @Test
@@ -1112,7 +1112,7 @@ class SagaCompensationRetrySweeperTest {
             SagaStore.class.getClassLoader(),
             new Class<?>[] {SagaStore.class},
             (proxy, method, args) -> {
-              if (outage.get() && method.getName().equals("findCompensating")) {
+              if (outage.get() && "findCompensating".equals(method.getName())) {
                 throw new IllegalStateException("store unreachable");
               }
               try {
@@ -1561,7 +1561,7 @@ class SagaCompensationRetrySweeperTest {
 
   @Test
   void samplingOnlyMode_backlogSampleFailure_degradesConsecutiveFailures_insteadOfSwallowed()
-      throws InterruptedException {
+      throws Exception {
     // sampleBacklog() swallowed every RuntimeException from countByStatus — correct in
     // re-drive mode, where a saga-store outage is ALSO signaled by findCompensating failing and
     // propagating through sweepOnce(). But sampling-only mode never calls findCompensating at
@@ -1612,7 +1612,7 @@ class SagaCompensationRetrySweeperTest {
 
   @Test
   void samplingOnlyMode_throwingMetricsSink_doesNotDegradeConsecutiveFailures_butWarns()
-      throws InterruptedException {
+      throws Exception {
     // sampleBacklog() used to wrap BOTH the countByStatus reads AND the metrics.record*
     // writes in one try; the "propagate any RuntimeException in sampling-only mode" rule
     // (correct for a REAL saga-store outage — see the test above) then ALSO caught a throwing
@@ -1689,8 +1689,7 @@ class SagaCompensationRetrySweeperTest {
   }
 
   @Test
-  void samplingOnlyMode_throwingMetricsSink_warnsOnceAcrossManyRetryCycles()
-      throws InterruptedException {
+  void samplingOnlyMode_throwingMetricsSink_warnsOnceAcrossManyRetryCycles() throws Exception {
     // recordMetric's guard used to WARN-with-stack-trace on EVERY call, and
     // sampleBacklog() calls it every single sweep cycle regardless of mode — a persistently
     // throwing sink therefore flooded the log at retry-interval cadence, forever, the same class

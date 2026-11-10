@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
@@ -213,8 +212,7 @@ class SchemaNamespaceIsolationIT {
     Files.createDirectories(dir);
     Files.writeString(
         dir.resolve("V1__create_orders.sql"),
-        "CREATE TABLE foreign_app_table (id INT PRIMARY KEY);\n",
-        StandardCharsets.UTF_8);
+        "CREATE TABLE foreign_app_table (id INT PRIMARY KEY);\n");
   }
 
   /** Runs {@code action} with {@code root} prepended to the thread-context classloader. */

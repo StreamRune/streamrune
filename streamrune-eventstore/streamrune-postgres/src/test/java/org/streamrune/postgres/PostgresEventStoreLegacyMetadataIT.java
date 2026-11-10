@@ -144,7 +144,7 @@ class PostgresEventStoreLegacyMetadataIT {
     assertEquals(1, history.events().size());
     assertEquals(
         OVERSIZED_CORRELATION_ID,
-        history.events().get(0).metadata().correlationId().value(),
+        history.events().getFirst().metadata().correlationId().value(),
         "the stored value is returned verbatim — reconstruction must never rewrite history");
   }
 
@@ -159,8 +159,8 @@ class PostgresEventStoreLegacyMetadataIT {
     var history = assertDoesNotThrow(() -> store.load(streamId));
 
     assertEquals(1, history.events().size());
-    assertNull(history.events().get(0).metadata().sagaOrigin());
-    assertEquals("legacy-corr-1", history.events().get(0).metadata().correlationId().value());
+    assertNull(history.events().getFirst().metadata().sagaOrigin());
+    assertEquals("legacy-corr-1", history.events().getFirst().metadata().correlationId().value());
   }
 
   @Test
@@ -193,7 +193,7 @@ class PostgresEventStoreLegacyMetadataIT {
     insertLegacyRow(streamId, 1L, metadataWith("legacy-corr-1", "trace\\r\\n1"));
 
     var history = assertDoesNotThrow(() -> store.load(streamId));
-    assertEquals("trace\r\n1", history.events().get(0).metadata().traceId().value());
+    assertEquals("trace\r\n1", history.events().getFirst().metadata().traceId().value());
   }
 
   @Test

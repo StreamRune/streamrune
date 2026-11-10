@@ -198,7 +198,9 @@ public final class InMemorySagaStore implements SagaStore {
       long expectedVersion,
       AppliedEvent applied) {
     requireArgs(sagaId, sagaType, state, status);
-    if (applied == null) throw new IllegalArgumentException("applied must not be null");
+    if (applied == null) {
+      throw new IllegalArgumentException("applied must not be null");
+    }
     casUpdate(sagaId, sagaType, state, status, expectedVersion, applied, applied.eventId());
   }
 
@@ -388,7 +390,9 @@ public final class InMemorySagaStore implements SagaStore {
   public <S extends SagaState> Optional<LoadedSaga<S>> load(
       SagaId sagaId, SagaType sagaType, Class<S> stateType) {
     requireKey(sagaId, sagaType);
-    if (stateType == null) throw new IllegalArgumentException("stateType must not be null");
+    if (stateType == null) {
+      throw new IllegalArgumentException("stateType must not be null");
+    }
     SagaEntry entry = store.get(sagaId);
     if (entry == null || !entry.sagaType().equals(sagaType)) {
       return Optional.empty();
@@ -445,7 +449,9 @@ public final class InMemorySagaStore implements SagaStore {
   @Override
   public List<SagaId> findTimedOut(SagaType sagaType, Instant cutoff, int limit) {
     requireType(sagaType);
-    if (cutoff == null) throw new IllegalArgumentException("cutoff must not be null");
+    if (cutoff == null) {
+      throw new IllegalArgumentException("cutoff must not be null");
+    }
     // Mirrors PostgresSagaStore.SELECT_TIMED_OUT: each population in its own deadline order, each
     // limited to the whole batch, then interleaved by rank, forward first (SagaStore#findTimedOut).
     List<SagaId> forward =
@@ -458,8 +464,12 @@ public final class InMemorySagaStore implements SagaStore {
         oldestFirst(sagaType, cutoff, limit, status -> status == SagaStatus.COMPENSATING);
     List<SagaId> batch = new ArrayList<>();
     for (int slot = 0; slot < Math.max(forward.size(), compensating.size()); slot++) {
-      if (slot < forward.size() && batch.size() < limit) batch.add(forward.get(slot));
-      if (slot < compensating.size() && batch.size() < limit) batch.add(compensating.get(slot));
+      if (slot < forward.size() && batch.size() < limit) {
+        batch.add(forward.get(slot));
+      }
+      if (slot < compensating.size() && batch.size() < limit) {
+        batch.add(compensating.get(slot));
+      }
     }
     return List.copyOf(batch);
   }
@@ -522,7 +532,9 @@ public final class InMemorySagaStore implements SagaStore {
   public List<CompensatingSaga> findCompensating(
       SagaType sagaType, Instant updatedBefore, int limit) {
     requireType(sagaType);
-    if (updatedBefore == null) throw new IllegalArgumentException("updatedBefore must not be null");
+    if (updatedBefore == null) {
+      throw new IllegalArgumentException("updatedBefore must not be null");
+    }
     return store.entrySet().stream()
         .filter(e -> e.getValue().sagaType().equals(sagaType))
         .filter(e -> e.getValue().status() == SagaStatus.COMPENSATING)
@@ -550,21 +562,29 @@ public final class InMemorySagaStore implements SagaStore {
   private static void requireArgs(
       SagaId sagaId, SagaType sagaType, SagaState state, SagaStatus status) {
     requireKey(sagaId, sagaType);
-    if (state == null) throw new IllegalArgumentException("state must not be null");
+    if (state == null) {
+      throw new IllegalArgumentException("state must not be null");
+    }
     requireStatus(status);
   }
 
   private static void requireKey(SagaId sagaId, SagaType sagaType) {
-    if (sagaId == null) throw new IllegalArgumentException("sagaId must not be null");
+    if (sagaId == null) {
+      throw new IllegalArgumentException("sagaId must not be null");
+    }
     requireType(sagaType);
   }
 
   private static void requireType(SagaType sagaType) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
   }
 
   private static void requireStatus(SagaStatus status) {
-    if (status == null) throw new IllegalArgumentException("status must not be null");
+    if (status == null) {
+      throw new IllegalArgumentException("status must not be null");
+    }
   }
 
   private static OptimisticLockException staleView(SagaId sagaId, long expectedVersion) {

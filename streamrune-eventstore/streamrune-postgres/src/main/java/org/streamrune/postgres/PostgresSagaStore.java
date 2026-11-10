@@ -377,8 +377,12 @@ public final class PostgresSagaStore implements SagaStore {
    * bound in less than {@link #ROW_WRITE_TIMEOUT}.
    */
   PostgresSagaStore(DataSource dataSource, ObjectMapper objectMapper, Duration rowWriteTimeout) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
-    if (objectMapper == null) throw new IllegalArgumentException("objectMapper is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
+    if (objectMapper == null) {
+      throw new IllegalArgumentException("objectMapper is required");
+    }
     this.dataSource = dataSource;
     this.objectMapper = objectMapper;
     this.rowWriteTimeout = StatementTimeout.of(rowWriteTimeout);
@@ -662,7 +666,9 @@ public final class PostgresSagaStore implements SagaStore {
       long expectedVersion,
       AppliedEvent applied) {
     requireWrite(sagaId, sagaType, state, status);
-    if (applied == null) throw new IllegalArgumentException("applied must not be null");
+    if (applied == null) {
+      throw new IllegalArgumentException("applied must not be null");
+    }
     long eventOffset = applied.eventOffset().value();
     String json = serialize(sagaId, state);
     boolean entersEpisode = status == SagaStatus.COMPENSATING; // the episode stamp rule
@@ -941,7 +947,9 @@ public final class PostgresSagaStore implements SagaStore {
   public <S extends SagaState> Optional<LoadedSaga<S>> load(
       SagaId sagaId, SagaType sagaType, Class<S> stateType) {
     requireKey(sagaId, sagaType);
-    if (stateType == null) throw new IllegalArgumentException("stateType must not be null");
+    if (stateType == null) {
+      throw new IllegalArgumentException("stateType must not be null");
+    }
     String stateJson = null;
     SagaStatus status = null;
     long version = 0;
@@ -1047,7 +1055,9 @@ public final class PostgresSagaStore implements SagaStore {
   @Override
   public List<SagaId> findTimedOut(SagaType sagaType, Instant cutoff, int limit) {
     requireType(sagaType);
-    if (cutoff == null) throw new IllegalArgumentException("cutoff must not be null");
+    if (cutoff == null) {
+      throw new IllegalArgumentException("cutoff must not be null");
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SELECT_TIMED_OUT)) {
       java.sql.Timestamp cutoffTs = java.sql.Timestamp.from(cutoff);
@@ -1114,7 +1124,9 @@ public final class PostgresSagaStore implements SagaStore {
   public List<CompensatingSaga> findCompensating(
       SagaType sagaType, Instant updatedBefore, int limit) {
     requireType(sagaType);
-    if (updatedBefore == null) throw new IllegalArgumentException("updatedBefore must not be null");
+    if (updatedBefore == null) {
+      throw new IllegalArgumentException("updatedBefore must not be null");
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SELECT_COMPENSATING)) {
       ps.setString(1, sagaType.value());
@@ -1150,11 +1162,15 @@ public final class PostgresSagaStore implements SagaStore {
    * state).
    */
   private static void requireType(SagaType sagaType) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
   }
 
   private static void requireStatus(SagaStatus status) {
-    if (status == null) throw new IllegalArgumentException("status must not be null");
+    if (status == null) {
+      throw new IllegalArgumentException("status must not be null");
+    }
   }
 
   /**
@@ -1164,7 +1180,9 @@ public final class PostgresSagaStore implements SagaStore {
    * EventStoreException} the saga runtime retries as infrastructure forever.
    */
   private static void requireKey(SagaId sagaId, SagaType sagaType) {
-    if (sagaId == null) throw new IllegalArgumentException("sagaId must not be null");
+    if (sagaId == null) {
+      throw new IllegalArgumentException("sagaId must not be null");
+    }
     requireType(sagaType);
   }
 
@@ -1172,7 +1190,9 @@ public final class PostgresSagaStore implements SagaStore {
   private static void requireWrite(
       SagaId sagaId, SagaType sagaType, SagaState state, SagaStatus status) {
     requireKey(sagaId, sagaType);
-    if (state == null) throw new IllegalArgumentException("state must not be null");
+    if (state == null) {
+      throw new IllegalArgumentException("state must not be null");
+    }
     requireStatus(status);
   }
 

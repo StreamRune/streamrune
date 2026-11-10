@@ -38,7 +38,9 @@ public final class PostgresOffsetStore implements OffsetStore {
   private final DataSource dataSource;
 
   public PostgresOffsetStore(DataSource dataSource) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     this.dataSource = dataSource;
   }
 

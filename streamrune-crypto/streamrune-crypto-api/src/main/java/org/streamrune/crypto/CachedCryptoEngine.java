@@ -212,8 +212,12 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
 
   @Override
   public byte[] decrypt(SubjectId subjectId, byte[] ciphertext) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
-    if (ciphertext == null) throw new IllegalArgumentException("ciphertext must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
+    if (ciphertext == null) {
+      throw new IllegalArgumentException("ciphertext must not be null");
+    }
     CacheKey key = new CacheKey(subjectId, sha256Hex(ciphertext));
     byte[] cached = cache.getIfPresent(key);
     if (cached != null) {
@@ -479,8 +483,12 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
     }
 
     public CachedCryptoEngine build() {
-      if (delegate == null) throw new IllegalStateException("delegate is required");
-      if (maximumSize < 0) throw new IllegalArgumentException("maximumSize must be non-negative");
+      if (delegate == null) {
+        throw new IllegalStateException("delegate is required");
+      }
+      if (maximumSize < 0) {
+        throw new IllegalArgumentException("maximumSize must be non-negative");
+      }
       return new CachedCryptoEngine(this);
     }
   }

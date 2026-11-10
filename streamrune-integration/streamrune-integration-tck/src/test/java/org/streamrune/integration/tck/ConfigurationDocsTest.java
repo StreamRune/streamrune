@@ -1,6 +1,7 @@
 package org.streamrune.integration.tck;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
@@ -280,7 +281,7 @@ class ConfigurationDocsTest {
     assertTrue(docs.fileNames().contains("docs/guide/production.md"), docs.fileNames().toString());
     assertTrue(docs.fileNames().contains("streamrune-integration/streamrune-spring/README.md"));
     List<String> otherPages = ConfigurationDocs.otherPages(root);
-    assertTrue(!otherPages.isEmpty(), ConfigurationDocs.OTHER_PAGES_LIST + " lists no page");
+    assertFalse(otherPages.isEmpty(), ConfigurationDocs.OTHER_PAGES_LIST + " lists no page");
     assertTrue(docs.fileNames().containsAll(otherPages), docs.fileNames().toString());
     assertTrue(docs.fileNames().size() > 10, docs.fileNames().toString());
   }

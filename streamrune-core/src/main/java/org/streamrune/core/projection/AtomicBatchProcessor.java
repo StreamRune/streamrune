@@ -316,7 +316,7 @@ public interface AtomicBatchProcessor {
     if (target == null) {
       throw new IllegalArgumentException("target is required");
     }
-    Object mine = (this instanceof ProjectionRepository self) ? self.writeTargetIdentity() : this;
+    Object mine = this instanceof ProjectionRepository self ? self.writeTargetIdentity() : this;
     return mine.equals(target.writeTargetIdentity());
   }
 

@@ -502,7 +502,7 @@ class JdbcProjectionRepositoryAfterCommitTest {
                   new Class<?>[] {Connection.class},
                   (p, m, a) -> {
                     Object r = invoke(m, connection, a);
-                    if (m.getName().equals("commit")) {
+                    if ("commit".equals(m.getName())) {
                       Throwable failure = commitFailureOrNull.get();
                       if (failure != null) {
                         throw failure;

@@ -152,7 +152,7 @@ class PostgresGaplessOffsetIT {
                   AppendResult result =
                       store.append(
                           streamId, List.of(envelope(streamId, "v" + idx)), Version.initial());
-                  return result.globalOffsets().get(0).value();
+                  return result.globalOffsets().getFirst().value();
                 }));
       }
 
@@ -186,7 +186,7 @@ class PostgresGaplessOffsetIT {
 
     // v1 -> offset 1
     AppendResult first = store.append(streamS, List.of(envelope(streamS, "v1")), Version.initial());
-    assertEquals(1L, first.globalOffsets().get(0).value());
+    assertEquals(1L, first.globalOffsets().getFirst().value());
 
     // Two concurrent appends both at expectedVersion=1: one wins (offset 2), one loses with
     // OptimisticLockException and must NOT burn an offset.
@@ -205,7 +205,7 @@ class PostgresGaplessOffsetIT {
                 try {
                   AppendResult r =
                       store.append(streamS, List.of(envelope(streamS, "v2-a")), new Version(1));
-                  winnerOffset.set(r.globalOffsets().get(0).value());
+                  winnerOffset.set(r.globalOffsets().getFirst().value());
                 } catch (OptimisticLockException e) {
                   loserException.set(e);
                 }
@@ -218,7 +218,7 @@ class PostgresGaplessOffsetIT {
                 try {
                   AppendResult r =
                       store.append(streamS, List.of(envelope(streamS, "v2-b")), new Version(1));
-                  winnerOffset.set(r.globalOffsets().get(0).value());
+                  winnerOffset.set(r.globalOffsets().getFirst().value());
                 } catch (OptimisticLockException e) {
                   loserException.set(e);
                 }
@@ -240,7 +240,7 @@ class PostgresGaplessOffsetIT {
     StreamId streamOther = TestStreams.stream("gapless-conflict-other");
     AppendResult third =
         store.append(streamOther, List.of(envelope(streamOther, "v1")), Version.initial());
-    assertEquals(3L, third.globalOffsets().get(0).value());
+    assertEquals(3L, third.globalOffsets().getFirst().value());
 
     assertEquals(
         List.of(1L, 2L, 3L),
@@ -272,7 +272,7 @@ class PostgresGaplessOffsetIT {
         store.append(streamId, List.of(envelope(streamId, "v1")), Version.initial());
     assertEquals(
         1L,
-        result.globalOffsets().get(0).value(),
+        result.globalOffsets().getFirst().value(),
         "the rolled-back reservation must be reused, not skipped");
   }
 
@@ -305,7 +305,7 @@ class PostgresGaplessOffsetIT {
     AppendResult next = store.append(other, List.of(envelope(other, "v1")), Version.initial());
     assertEquals(
         2L,
-        next.globalOffsets().get(0).value(),
+        next.globalOffsets().getFirst().value(),
         "the conflicting batch must burn no global offset");
     assertEquals(
         List.of(1L, 2L),
@@ -345,7 +345,7 @@ class PostgresGaplessOffsetIT {
                   AppendResult result =
                       rrStore.append(
                           streamId, List.of(envelope(streamId, "v" + idx)), Version.initial());
-                  return result.globalOffsets().get(0).value();
+                  return result.globalOffsets().getFirst().value();
                 }));
       }
       ready.await(10, TimeUnit.SECONDS);

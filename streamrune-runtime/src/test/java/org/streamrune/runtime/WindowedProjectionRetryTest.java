@@ -194,9 +194,9 @@ class WindowedProjectionRetryTest {
     w.process(List.of(evt(T0.plusSeconds(240))));
 
     assertThat(emissions).hasSize(2);
-    assertThat(emissions.get(0).window().start()).isEqualTo(T0);
-    assertThat(emissions.get(0).isFinal()).isTrue();
-    assertThat(emissions.get(0).state())
+    assertThat(emissions.getFirst().window().start()).isEqualTo(T0);
+    assertThat(emissions.getFirst().isFinal()).isTrue();
+    assertThat(emissions.getFirst().state())
         .as(
             "the first owning window must count the event exactly once — a partial commit before"
                 + " the second window's throw would make the retry double-count it")

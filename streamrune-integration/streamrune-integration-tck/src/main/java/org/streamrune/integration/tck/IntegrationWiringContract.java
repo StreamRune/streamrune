@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -485,9 +484,14 @@ public abstract class IntegrationWiringContract {
     try (Application application = start(null, Map.of(), Set.of())) {
       assertStarted(application);
       Map<String, String> bound = new TreeMap<>(configurationDefaults(application));
-      assertEquals("7d", bound.get("streamrune.dead-letter.retention-max-age"), () -> "" + bound);
-      assertEquals("7d", bound.get("streamrune.inbox.retention-max-age"), () -> "" + bound);
-      assertEquals("5m", bound.get("streamrune.crypto.cache.expire-after-write"), () -> "" + bound);
+      assertEquals(
+          "7d", bound.get("streamrune.dead-letter.retention-max-age"), () -> String.valueOf(bound));
+      assertEquals(
+          "7d", bound.get("streamrune.inbox.retention-max-age"), () -> String.valueOf(bound));
+      assertEquals(
+          "5m",
+          bound.get("streamrune.crypto.cache.expire-after-write"),
+          () -> String.valueOf(bound));
 
       Map<String, String> stated = configurationReference();
       List<String> problems = new ArrayList<>();
@@ -630,10 +634,12 @@ public abstract class IntegrationWiringContract {
     boolean inTable = false;
     for (String line : guide("docs/guide/configuration.md").split("\n", -1)) {
       List<String> cells = cells(line);
-      if (cells.size() >= 2 && cells.get(0).equals("Property") && cells.get(1).equals("Default")) {
+      if (cells.size() >= 2
+          && "Property".equals(cells.getFirst())
+          && "Default".equals(cells.get(1))) {
         inTable = true;
       } else if (inTable && cells.size() >= 2) {
-        String key = cells.get(0).replace("`", "");
+        String key = cells.getFirst().replace("`", "");
         if (key.startsWith("streamrune.")) {
           stated.put(key, cells.get(1).replace("`", ""));
         }
@@ -664,7 +670,7 @@ public abstract class IntegrationWiringContract {
   private static String guide(String file) {
     Path path = ConfigurationDocs.repositoryRoot().resolve(file);
     try {
-      return Files.readString(path, StandardCharsets.UTF_8);
+      return Files.readString(path);
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }

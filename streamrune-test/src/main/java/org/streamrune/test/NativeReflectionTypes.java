@@ -3,6 +3,7 @@ package org.streamrune.test;
 import com.fasterxml.jackson.annotation.JsonValue;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
@@ -139,7 +140,7 @@ public final class NativeReflectionTypes {
     for (Class<?> type : classesUnderPackage(SubjectId.class, CORE_PACKAGE)) {
       if ((type.isRecord() || type.isEnum())
           && type.getEnclosingClass() == null
-          && java.lang.reflect.Modifier.isPublic(type.getModifiers())) {
+          && Modifier.isPublic(type.getModifiers())) {
         result.add(type);
       }
     }
@@ -211,8 +212,7 @@ public final class NativeReflectionTypes {
       return false;
     }
     for (java.lang.reflect.Method method : type.getDeclaredMethods()) {
-      if (java.lang.reflect.Modifier.isPublic(method.getModifiers())
-          && method.isAnnotationPresent(JsonValue.class)) {
+      if (Modifier.isPublic(method.getModifiers()) && method.isAnnotationPresent(JsonValue.class)) {
         return true;
       }
     }

@@ -267,7 +267,7 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
    * stay out of the contract.
    */
   @Test
-  void theApplicationImportsEveryStreamRuneAutoConfiguration() throws IOException {
+  void theApplicationImportsEveryStreamRuneAutoConfiguration() throws Exception {
     String imports;
     try (var in =
         getClass()

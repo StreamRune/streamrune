@@ -15,7 +15,6 @@ import com.fasterxml.jackson.databind.ser.Serializers;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -142,7 +141,7 @@ public final class EventStreamFixtures {
     if (parent != null) {
       Files.createDirectories(parent);
     }
-    Files.writeString(file, WRITER.writeValueAsString(events) + "\n", StandardCharsets.UTF_8);
+    Files.writeString(file, WRITER.writeValueAsString(events) + "\n");
   }
 
   /**

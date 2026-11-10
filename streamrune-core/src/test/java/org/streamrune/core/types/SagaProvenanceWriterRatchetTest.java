@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -345,7 +344,7 @@ class SagaProvenanceWriterRatchetTest {
       if (source.contains(CAUSATION_BAGGAGE_CONSTANT)) {
         violations.add(relative + ": names " + CAUSATION_BAGGAGE_CONSTANT);
       }
-      if (source.contains(CAUSATION_BAGGAGE_KEY) && !relative.equals(BUS_CONTRACT)) {
+      if (source.contains(CAUSATION_BAGGAGE_KEY) && !BUS_CONTRACT.equals(relative)) {
         violations.add(relative + ": names the baggage key " + CAUSATION_BAGGAGE_KEY);
       }
     }
@@ -847,15 +846,24 @@ class SagaProvenanceWriterRatchetTest {
   @Test
   void theUncheckedSagaIdScanRecognisesASampleThatThrowsOnTheEventsData() {
     String unchecked =
-        "```java\n    @Override\n"
-            + "    public Optional<SagaId> correlateByEventData(StreamId streamId,"
-            + " DomainEvent event) {\n"
-            + "        return event instanceof OrderCancelled e\n"
-            + "            ? Optional.of(SagaId.of(\"order-saga-\" + e.orderId()))\n"
-            + "            : Optional.empty();\n    }\n```\n";
+        """
+        ```java
+            @Override
+            public Optional<SagaId> correlateByEventData(StreamId streamId,\
+         DomainEvent event) {
+                return event instanceof OrderCancelled e
+                    ? Optional.of(SagaId.of("order-saga-" + e.orderId()))
+                    : Optional.empty();
+            }
+        ```
+        """;
     String uncheckedOnTheBuilder =
-        "```java\n.extractSagaId(event ->"
-            + " SagaId.of(\"order-saga-\" + ((OrderPlaced) event.event()).orderId()))\n```\n";
+        """
+        ```java
+        .extractSagaId(event ->\
+         SagaId.of("order-saga-" + ((OrderPlaced) event.event()).orderId()))
+        ```
+        """;
     for (String sample : List.of(unchecked, uncheckedOnTheBuilder)) {
       assertTrue(
           markdownPassages(sample).stream()
@@ -863,17 +871,27 @@ class SagaProvenanceWriterRatchetTest {
           "must reject: " + sample);
     }
     String checked =
-        "```java\n    @Override\n"
-            + "    public Optional<SagaId> correlateByEventData(StreamId streamId,"
-            + " DomainEvent event) {\n"
-            + "        return event instanceof OrderCancelled e ? sagaOf(e.orderId())"
-            + " : Optional.empty();\n    }\n\n"
-            + "    static Optional<SagaId> sagaOf(String orderId) {\n"
-            + "        String id = \"order-saga-\" + orderId;\n"
-            + "        return id.length() > SagaId.MAX_LENGTH\n"
-            + "            ? Optional.empty() : Optional.of(SagaId.of(id));\n    }\n```\n\n"
-            + "```java\n.extractSagaId(event ->"
-            + " OrderSaga.sagaOf(((OrderPlaced) event.event()).orderId()).orElseThrow())\n```\n";
+        """
+        ```java
+            @Override
+            public Optional<SagaId> correlateByEventData(StreamId streamId,\
+         DomainEvent event) {
+                return event instanceof OrderCancelled e ? sagaOf(e.orderId())\
+         : Optional.empty();
+            }
+
+            static Optional<SagaId> sagaOf(String orderId) {
+                String id = "order-saga-" + orderId;
+                return id.length() > SagaId.MAX_LENGTH
+                    ? Optional.empty() : Optional.of(SagaId.of(id));
+            }
+        ```
+
+        ```java
+        .extractSagaId(event ->\
+         OrderSaga.sagaOf(((OrderPlaced) event.event()).orderId()).orElseThrow())
+        ```
+        """;
     assertTrue(
         markdownPassages(checked).stream()
             .noneMatch(SagaProvenanceWriterRatchetTest::buildsAnUncheckedSagaId),
@@ -960,28 +978,62 @@ class SagaProvenanceWriterRatchetTest {
             + "`); correlation rides on\n  `EventMetadata.correlationId`, set to the saga id.\n");
     rejected.put(
         "a helper of the start router, declared in a second fenced block",
-        "```java\n@Override\npublic SagaId extractSagaId(EventEnvelope event) {\n"
-            + "    return sagaOf(event);\n}\n```\n\n"
-            + "```java\nprivate static SagaId sagaOf(EventEnvelope event) {\n"
-            + "    return SagaId.of(event.metadata().correlationId().value());\n}\n```\n");
+        """
+        ```java
+        @Override
+        public SagaId extractSagaId(EventEnvelope event) {
+            return sagaOf(event);
+        }
+        ```
+
+        ```java
+        private static SagaId sagaOf(EventEnvelope event) {
+            return SagaId.of(event.metadata().correlationId().value());
+        }
+        ```
+        """);
     rejected.put(
         "a helper of a helper, three blocks apart, that reads baggage",
-        "```java\npublic SagaId extractSagaId(EventEnvelope event) {\n    return sagaOf(event);\n}\n"
-            + "```\n\nText.\n\n```java\nprivate SagaId sagaOf(EventEnvelope event) {\n"
-            + "    return new SagaId(keyOf(event));\n}\n```\n\n"
-            + "```java\nprivate String keyOf(EventEnvelope event) {\n"
-            + "    var meta = event.metadata();\n    return meta.baggage().get(\"saga\");\n}\n```\n");
+        """
+        ```java
+        public SagaId extractSagaId(EventEnvelope event) {
+            return sagaOf(event);
+        }
+        ```
+
+        Text.
+
+        ```java
+        private SagaId sagaOf(EventEnvelope event) {
+            return new SagaId(keyOf(event));
+        }
+        ```
+
+        ```java
+        private String keyOf(EventEnvelope event) {
+            var meta = event.metadata();
+            return meta.baggage().get("saga");
+        }
+        ```
+        """);
     rejected.put(
         "a start router by the trace id",
-        "```java\n.startWhen(e -> e.event() instanceof OrderPlaced)\n"
-            + ".extractSagaId(event -> SagaId.of(event.metadata().traceId().value()))\n```\n");
+        """
+        ```java
+        .startWhen(e -> e.event() instanceof OrderPlaced)
+        .extractSagaId(event -> SagaId.of(event.metadata().traceId().value()))
+        ```
+        """);
     rejected.put(
         "a start router by a baggage entry",
         "```java\n.extractSagaId(event -> SagaId.of(event.metadata().baggage().get(\"saga\")))\n```\n");
     rejected.put(
         "a start router by the user id",
-        "```java\n.extractSagaId(event -> SagaId.of(\"cart-\" + event.metadata().userId().value()))\n"
-            + "```\n");
+        """
+        ```java
+        .extractSagaId(event -> SagaId.of("cart-" + event.metadata().userId().value()))
+        ```
+        """);
     rejected.put(
         "prose without a word of routing",
         "The saga a reply belongs to is the one named by the event's `correlationId`: saga dispatch"
@@ -1000,19 +1052,34 @@ class SagaProvenanceWriterRatchetTest {
         "A saga's reply carries `correlationId`. Take the saga from `correlationId`.\n");
     rejected.put(
         "isStartEvent decided by the correlation id through local variables",
-        "```java\npublic boolean isStartEvent(EventEnvelope event) {\n"
-            + "    var meta = event.metadata();\n    var corr = meta.correlationId();\n"
-            + "    return !corr.value().startsWith(\"order-saga-\");\n}\n```\n");
+        """
+        ```java
+        public boolean isStartEvent(EventEnvelope event) {
+            var meta = event.metadata();
+            var corr = meta.correlationId();
+            return !corr.value().startsWith("order-saga-");
+        }
+        ```
+        """);
     rejected.put(
         "an idempotency key from the correlation id",
-        "```java\ncommandBus.execute(cmd, IdempotencyKey.of(\"capture:\""
-            + " + event.metadata().correlationId().value()));\n```\n");
+        """
+        ```java
+        commandBus.execute(cmd, IdempotencyKey.of("capture:"\
+         + event.metadata().correlationId().value()));
+        ```
+        """);
     rejected.put(
         "the event-data method through a map keyed by the bound context's correlation id",
-        "```java\npublic Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event)"
-            + " {\n    return Optional.ofNullable(\n"
-            + "        SAGA_BY_CORRELATION.get(StreamRuneContext.capture().correlationId()));\n}\n"
-            + "```\n");
+        """
+        ```java
+        public Optional<SagaId> correlateByEventData(StreamId streamId, DomainEvent event)\
+         {
+            return Optional.ofNullable(
+                SAGA_BY_CORRELATION.get(StreamRuneContext.capture().correlationId()));
+        }
+        ```
+        """);
     rejected.forEach((what, text) -> assertTrue(flagsMarkdown(text), "must reject: " + what));
 
     Map<String, String> rejectedJavadoc = new java.util.LinkedHashMap<>();
@@ -1030,60 +1097,89 @@ class SagaProvenanceWriterRatchetTest {
             + "(EventEnvelope event);");
     rejectedJavadoc.put(
         "a class comment with a sample and no routing method named",
-        "/**\n * Finds the saga of a reply: {@code"
-            + " SagaId.of(event.metadata().correlationId().value())}.\n */\n"
-            + "public final class SagaLookup {");
+        """
+        /**
+         * Finds the saga of a reply: {@code\
+         SagaId.of(event.metadata().correlationId().value())}.
+         */
+        public final class SagaLookup {""");
     rejectedJavadoc.put(
         "the start router's comment: the user id",
-        "  /**\n   * Typical implementation: {@code SagaId.of(event.metadata().userId().value())}.\n"
-            + "   */\n  SagaId extractSagaId(EventEnvelope event);");
+        """
+          /**
+           * Typical implementation: {@code SagaId.of(event.metadata().userId().value())}.
+           */
+          SagaId extractSagaId(EventEnvelope event);\
+        """);
     rejectedJavadoc.forEach((what, text) -> assertTrue(flagsJavadoc(text), "must reject: " + what));
 
     // What the guides say instead.
     String routedByData =
-        "The runner asks `correlateByEventData(streamId, event)`.\n\n"
-            + "A correlation id is tracing data. A client sets it with `X-Correlation-Id`, so never"
-            + " route, authorise or deduplicate by it.\n\n```java\n"
-            + "    @Override\n"
-            + "    public SagaId extractSagaId(EventEnvelope event) {\n"
-            + "        return sagaOf(((OrderPlaced) event.event()).orderId()).orElseThrow();\n"
-            + "    }\n\n"
-            + "    @Override\n"
-            + "    public Optional<SagaId> correlateByEventData(StreamId streamId,"
-            + " DomainEvent event) {\n"
-            + "        return event instanceof OrderCancelled e ? sagaOf(e.orderId())"
-            + " : Optional.empty();\n"
-            + "    }\n\n"
-            + "    private static Optional<SagaId> sagaOf(String orderId) {\n"
-            + "        String id = \"order-saga-\" + orderId;\n"
-            + "        return id.length() > SagaId.MAX_LENGTH\n"
-            + "            ? Optional.empty() : Optional.of(new SagaId(id));\n"
-            + "    }\n```\n\n"
-            + "```java\n// A listener keys its command by the causing event\n"
-            + "commandBus.execute(command,\n"
-            + "    IdempotencyKey.of(\"capture:\" + event.metadata().eventId().value()));\n```\n\n"
-            + "```java\n// An audit lookup: no routing method, no saga id, no key\n"
-            + "audit.findByCorrelationId(ctx.correlationId());\n```\n\n"
-            + "| `correlationId` | `X-Correlation-Id`; generated when absent | yes |\n"
-            + "| `sagaOrigin` | saga dispatch | no |\n"
-            + "- `EventMetadata` on every envelope: `eventId`, `correlationId`, `causationId`.\n"
-            + "- A saga is driven by `SagaRunner` as an `EventListener`.\n"
-            + "- `EventMetadata` on every envelope: `traceId`, `spanId`, `correlationId`,\n"
-            + "  `causationId`, `userId` and `sagaOrigin`, which names the saga whose dispatch\n"
-            + "  caused the event.\n\n"
-            + "For an event a saga caused, `EventMetadata.correlationId` holds the reserved form"
-            + " `streamrune:saga:<sagaId>`.\n\n"
-            + "The audit row of a compensation shows `correlationId` next to the saga's"
-            + " commands.\n\n"
-            + "A saga dispatch stores its `correlationId` in every event of the command.\n";
+        """
+        The runner asks `correlateByEventData(streamId, event)`.
+
+        A correlation id is tracing data. A client sets it with `X-Correlation-Id`, so never\
+         route, authorise or deduplicate by it.
+
+        ```java
+            @Override
+            public SagaId extractSagaId(EventEnvelope event) {
+                return sagaOf(((OrderPlaced) event.event()).orderId()).orElseThrow();
+            }
+
+            @Override
+            public Optional<SagaId> correlateByEventData(StreamId streamId,\
+         DomainEvent event) {
+                return event instanceof OrderCancelled e ? sagaOf(e.orderId())\
+         : Optional.empty();
+            }
+
+            private static Optional<SagaId> sagaOf(String orderId) {
+                String id = "order-saga-" + orderId;
+                return id.length() > SagaId.MAX_LENGTH
+                    ? Optional.empty() : Optional.of(new SagaId(id));
+            }
+        ```
+
+        ```java
+        // A listener keys its command by the causing event
+        commandBus.execute(command,
+            IdempotencyKey.of("capture:" + event.metadata().eventId().value()));
+        ```
+
+        ```java
+        // An audit lookup: no routing method, no saga id, no key
+        audit.findByCorrelationId(ctx.correlationId());
+        ```
+
+        | `correlationId` | `X-Correlation-Id`; generated when absent | yes |
+        | `sagaOrigin` | saga dispatch | no |
+        - `EventMetadata` on every envelope: `eventId`, `correlationId`, `causationId`.
+        - A saga is driven by `SagaRunner` as an `EventListener`.
+        - `EventMetadata` on every envelope: `traceId`, `spanId`, `correlationId`,
+          `causationId`, `userId` and `sagaOrigin`, which names the saga whose dispatch
+          caused the event.
+
+        For an event a saga caused, `EventMetadata.correlationId` holds the reserved form\
+         `streamrune:saga:<sagaId>`.
+
+        The audit row of a compensation shows `correlationId` next to the saga's\
+         commands.
+
+        A saga dispatch stores its `correlationId` in every event of the command.
+        """;
     assertFalse(flagsMarkdown(routedByData), "must not flag: " + routedByData);
     String derivedFromData =
-        "  /**\n   * Derive the saga id from the event's own data, never from its correlation id.\n"
-            + "   */\n  SagaId extractSagaId(EventEnvelope event);\n"
-            + "  /** The correlation id of the request: {@code ctx.correlationId()}. */\n"
-            + "  CorrelationId correlationId();\n"
-            + "  /** {@code SagaId.of(\"order-saga-\" + orderId)}; see {@code ctx.userId()}. */\n"
-            + "  SagaId sagaOf(String orderId);";
+        """
+          /**
+           * Derive the saga id from the event's own data, never from its correlation id.
+           */
+          SagaId extractSagaId(EventEnvelope event);
+          /** The correlation id of the request: {@code ctx.correlationId()}. */
+          CorrelationId correlationId();
+          /** {@code SagaId.of("order-saga-" + orderId)}; see {@code ctx.userId()}. */
+          SagaId sagaOf(String orderId);\
+        """;
     assertFalse(flagsJavadoc(derivedFromData), "must not flag: " + derivedFromData);
 
     // Unsafe, and out of the scan's reach.
@@ -1091,13 +1187,24 @@ class SagaProvenanceWriterRatchetTest {
     outOfReach.put(
         "a listener that picks its command's target by the correlation id: the value goes into a"
             + " command constructor like any other argument",
-        "```java\nEventListener pm = events -> {\n  for (EventEnvelope e : events) {\n"
-            + "    commandBus.execute(new CapturePayment(e.metadata().correlationId().value()));\n"
-            + "  }\n};\n```\n");
+        """
+        ```java
+        EventListener pm = events -> {
+          for (EventEnvelope e : events) {
+            commandBus.execute(new CapturePayment(e.metadata().correlationId().value()));
+          }
+        };
+        ```
+        """);
     outOfReach.put(
         "a helper that is not declared in the document",
-        "```java\npublic SagaId extractSagaId(EventEnvelope event) {\n"
-            + "    return SagaIds.fromMetadata(event);\n}\n```\n");
+        """
+        ```java
+        public SagaId extractSagaId(EventEnvelope event) {
+            return SagaIds.fromMetadata(event);
+        }
+        ```
+        """);
     outOfReach.put(
         "prose in other words",
         "A reply finds its saga through the correlation identifier of its metadata.\n");
@@ -1184,8 +1291,24 @@ class SagaProvenanceWriterRatchetTest {
   void aGuideIsCutIntoFencedBlocksAndBlocksOfProse() {
     List<Passage> passages =
         markdownPassages(
-            "# Title\n\nFirst paragraph,\nsecond line.\n\n```java\ncode();\n\nmore();\n```\n"
-                + "- bullet one\n  continued\n- bullet two\n\n| a | b |\n| c | d |\n");
+            """
+            # Title
+
+            First paragraph,
+            second line.
+
+            ```java
+            code();
+
+            more();
+            ```
+            - bullet one
+              continued
+            - bullet two
+
+            | a | b |
+            | c | d |
+            """);
     assertEquals(
         List.of(
             "# Title\n",
@@ -1406,7 +1529,7 @@ class SagaProvenanceWriterRatchetTest {
 
   private static String read(Path file) {
     try {
-      return Files.readString(file, StandardCharsets.UTF_8);
+      return Files.readString(file);
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }

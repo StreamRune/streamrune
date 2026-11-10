@@ -76,7 +76,7 @@ class SagaCompensateFaultedTest {
   /** {@link #forwardFaulted}, then the operator discards the fault's only entry. */
   static Harness stranded(StreamRuneMetrics meter) {
     var h = forwardFaulted(meter);
-    assertThat(h.replayer.discard(SAGA, h.entries().get(0).eventOffset())).isTrue();
+    assertThat(h.replayer.discard(SAGA, h.entries().getFirst().eventOffset())).isTrue();
     assertThat(h.entries()).isEmpty();
     return h;
   }
@@ -89,7 +89,7 @@ class SagaCompensateFaultedTest {
   void discardingTheLastEntryOfAForwardFault_namesTheRemedy_andCompensateFaultedTerminalizesIt() {
     var meter = new CompensateMeter();
     var h = forwardFaulted(meter);
-    var entry = h.entries().get(0);
+    var entry = h.entries().getFirst();
 
     List<String> warnings =
         warnings(() -> assertThat(h.replayer.discard(SAGA, entry.eventOffset())).isTrue());
@@ -449,7 +449,7 @@ class SagaCompensateFaultedTest {
   @Test
   void discardingAForwardFaultsEntry_whileAHeldEventRemains_namesNothing_andTheDrainResumesIt() {
     var h = forwardFaulted(StreamRuneMetrics.NOOP);
-    var poison = h.entries().get(0);
+    var poison = h.entries().getFirst();
     EventEnvelope held = h.advance();
     h.deliver(held);
     assertThat(h.entries()).hasSize(2);
@@ -511,7 +511,7 @@ class SagaCompensateFaultedTest {
   @Test
   void aStrandCheckThatCannotReadTheBacklog_stillReportsTheDiscard() {
     var h = forwardFaulted(StreamRuneMetrics.NOOP);
-    var entry = h.entries().get(0);
+    var entry = h.entries().getFirst();
     h.dlq.findBySagaFailure = new IllegalStateException("connection reset");
 
     List<String> warnings =

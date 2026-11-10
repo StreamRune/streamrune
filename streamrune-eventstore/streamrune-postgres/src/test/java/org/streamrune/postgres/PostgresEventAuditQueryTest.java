@@ -1,6 +1,11 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.List;
@@ -82,7 +87,7 @@ class PostgresEventAuditQueryTest {
     List<EventAuditEntry> results = query.findByCorrelationId(CorrelationId.of("corr-A"));
 
     assertEquals(2, results.size());
-    assertEquals("e1", results.get(0).eventId().value());
+    assertEquals("e1", results.getFirst().eventId().value());
     assertEquals("e2", results.get(1).eventId().value());
   }
 
@@ -105,7 +110,7 @@ class PostgresEventAuditQueryTest {
     List<EventAuditEntry> results = query.findByCommandId(CommandId.of("cmd-X"));
 
     assertEquals(2, results.size());
-    assertEquals("e10", results.get(0).eventId().value());
+    assertEquals("e10", results.getFirst().eventId().value());
     assertEquals("e11", results.get(1).eventId().value());
   }
 
@@ -123,7 +128,7 @@ class PostgresEventAuditQueryTest {
     List<EventAuditEntry> results = query.findByCausationId(CausationId.of("e20"));
 
     assertEquals(2, results.size());
-    assertEquals("e21", results.get(0).eventId().value());
+    assertEquals("e21", results.getFirst().eventId().value());
     assertEquals("e22", results.get(1).eventId().value());
   }
 
@@ -146,7 +151,7 @@ class PostgresEventAuditQueryTest {
     List<EventAuditEntry> results = query.findByStreamId(TestStreams.stream("stream-1"), t2, t3);
 
     assertEquals(2, results.size());
-    assertEquals("e31", results.get(0).eventId().value());
+    assertEquals("e31", results.getFirst().eventId().value());
     assertEquals("e32", results.get(1).eventId().value());
   }
 
@@ -207,7 +212,7 @@ class PostgresEventAuditQueryTest {
     var entries = query.findByCommandId(CommandId.of("cmd-full"));
 
     assertEquals(1, entries.size());
-    assertEquals(id, entries.get(0).streamId().aggregateId().value());
+    assertEquals(id, entries.getFirst().streamId().aggregateId().value());
   }
 
   @Test
@@ -284,7 +289,7 @@ class PostgresEventAuditQueryTest {
     List<EventAuditEntry> results = query.findByUserId(UserId.of("alice"), t1, t2);
 
     assertEquals(2, results.size());
-    assertEquals("e40", results.get(0).eventId().value());
+    assertEquals("e40", results.getFirst().eventId().value());
     assertEquals("e41", results.get(1).eventId().value());
     // bob's entry at t2 is excluded — different user
   }
@@ -304,7 +309,7 @@ class PostgresEventAuditQueryTest {
     List<EventAuditEntry> chain = query.traceFullCausationChain(EventId.of("e1"));
 
     assertEquals(4, chain.size());
-    assertEquals("e1", chain.get(0).eventId().value());
+    assertEquals("e1", chain.getFirst().eventId().value());
     assertEquals("e2", chain.get(1).eventId().value());
     assertEquals("e3", chain.get(2).eventId().value());
     assertEquals("e4", chain.get(3).eventId().value());
@@ -324,7 +329,7 @@ class PostgresEventAuditQueryTest {
     List<EventAuditEntry> chain = query.traceFullCausationChain(EventId.of("c1"));
 
     assertEquals(2, chain.size());
-    assertEquals("c1", chain.get(0).eventId().value());
+    assertEquals("c1", chain.getFirst().eventId().value());
     assertEquals("c2", chain.get(1).eventId().value());
   }
 
@@ -336,7 +341,7 @@ class PostgresEventAuditQueryTest {
     List<EventAuditEntry> chain = query.traceFullCausationChain(EventId.of("self-1"));
 
     assertEquals(1, chain.size());
-    assertEquals("self-1", chain.get(0).eventId().value());
+    assertEquals("self-1", chain.getFirst().eventId().value());
   }
 
   @Test
@@ -352,7 +357,7 @@ class PostgresEventAuditQueryTest {
     List<EventAuditEntry> chain = query.traceFullCausationChain(EventId.of("leaf-1"));
 
     assertEquals(1, chain.size());
-    assertEquals("leaf-1", chain.get(0).eventId().value());
+    assertEquals("leaf-1", chain.getFirst().eventId().value());
   }
 
   private static EventAuditEntry typedEntry(

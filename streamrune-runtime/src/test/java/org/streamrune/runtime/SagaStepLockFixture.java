@@ -560,8 +560,8 @@ final class SagaStepLockFixture implements AutoCloseable {
                         Instant.now()))),
             Version.initial());
     return eventStore
-        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-        .get(0);
+        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+        .getFirst();
   }
 
   void deliver(EventEnvelope event) {
@@ -588,7 +588,7 @@ final class SagaStepLockFixture implements AutoCloseable {
   /** The stored forward and compensation events of one order, in global order. */
   List<String> storedOrder(String orderId) {
     return eventStore.readGlobalStream(GlobalOffset.initial(), 100_000).stream()
-        .map(e -> (DomainEvent) e.event())
+        .map(EventEnvelope::event)
         .filter(e -> orderId.equals(orderOf(e)))
         .map(e -> e.getClass().getSimpleName())
         .toList();

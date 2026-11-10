@@ -1,13 +1,13 @@
 package org.streamrune.runtime.health;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -49,7 +49,7 @@ class RelayComponentNamesDocLintTest {
     Set<String> names = componentNames();
     List<String> listed = new ArrayList<>();
     for (List<String> row : rows("| Relay component | Present when |")) {
-      Matcher name = BACKTICKED.matcher(row.get(0));
+      Matcher name = BACKTICKED.matcher(row.getFirst());
       while (name.find()) {
         listed.add(name.group(1));
       }
@@ -77,7 +77,7 @@ class RelayComponentNamesDocLintTest {
   void theCheckNameTableStatesTheNameEachIntegrationGivesItsCheck() {
     Map<String, String> documented = new LinkedHashMap<>();
     for (List<String> row : rows("| Framework | Endpoint | Check name | Class |")) {
-      documented.put(row.get(0), row.get(2).replace("`", ""));
+      documented.put(row.getFirst(), row.get(2).replace("`", ""));
     }
     Map<String, String> fromCode = new LinkedHashMap<>();
     fromCode.put(
@@ -136,7 +136,7 @@ class RelayComponentNamesDocLintTest {
       }
       rows.add(cells);
     }
-    assertTrue(!rows.isEmpty(), "the table " + header + " has no rows");
+    assertFalse(rows.isEmpty(), "the table " + header + " has no rows");
     return rows;
   }
 
@@ -153,7 +153,7 @@ class RelayComponentNamesDocLintTest {
 
   private static List<String> read(String relative) {
     try {
-      return Files.readAllLines(root().resolve(relative), StandardCharsets.UTF_8);
+      return Files.readAllLines(root().resolve(relative));
     } catch (IOException e) {
       throw new IllegalStateException("cannot read " + relative, e);
     }

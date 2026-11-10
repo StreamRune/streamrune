@@ -224,7 +224,7 @@ public class SseController {
   }
 
   private static Duration positiveOrNull(Duration d) {
-    return (d == null || d.isZero() || d.isNegative()) ? null : d;
+    return d == null || d.isZero() || d.isNegative() ? null : d;
   }
 
   /**

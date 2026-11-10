@@ -137,10 +137,10 @@ class SagaRunnerTerminalizationTest {
     }
 
     /** If set, throw on the next execute() call for this command type; clear after first throw. */
-    Class<?> failCommandType = null;
+    Class<?> failCommandType;
 
     /** All future calls to execute will always throw (for testing total failure). */
-    boolean alwaysFail = false;
+    boolean alwaysFail;
 
     void failNextOfType(Class<?> type) {
       this.failCommandType = type;
@@ -247,7 +247,7 @@ class SagaRunnerTerminalizationTest {
             .orElseThrow();
     assertThat(loaded.status()).isEqualTo(SagaStatus.COMPENSATED);
     // Undo must have been dispatched
-    assertThat(bus.executed).hasSize(1).allMatch(c -> c instanceof Undo);
+    assertThat(bus.executed).hasSize(1).allMatch(Undo.class::isInstance);
   }
 
   /**
@@ -324,6 +324,6 @@ class SagaRunnerTerminalizationTest {
     // The orchestrator's evolve sets RUNNING after Start; handle emits DoWork which succeeds.
     // Persisted status must match state.status() == RUNNING.
     assertThat(loaded.status()).isEqualTo(SagaStatus.RUNNING);
-    assertThat(bus.executed).hasSize(1).allMatch(c -> c instanceof DoWork);
+    assertThat(bus.executed).hasSize(1).allMatch(DoWork.class::isInstance);
   }
 }

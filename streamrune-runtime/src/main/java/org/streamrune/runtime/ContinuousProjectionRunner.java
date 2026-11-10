@@ -1663,7 +1663,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     @Override
     public SubscriptionLifecycleState state() {
       ProjectionState current = state.get();
-      return (current == ProjectionState.STOPPED || current == ProjectionState.ERROR)
+      return current == ProjectionState.STOPPED || current == ProjectionState.ERROR
           ? SubscriptionLifecycleState.STOPPED
           : SubscriptionLifecycleState.RUNNING;
     }

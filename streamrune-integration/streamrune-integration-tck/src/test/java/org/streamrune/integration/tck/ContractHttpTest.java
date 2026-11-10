@@ -90,7 +90,7 @@ class ContractHttpTest {
   }
 
   @Test
-  void anEventStreamIsReadUpToItsHeaders() throws InterruptedException {
+  void anEventStreamIsReadUpToItsHeaders() throws Exception {
     HttpResponse response =
         ContractHttp.send(server.getAddress().getPort(), "GET", "/stream", Map.of(), null);
     assertEquals(200, response.status());
@@ -99,7 +99,7 @@ class ContractHttpTest {
   }
 
   @Test
-  void aServerThatCannotBeReachedFailsTheRequest() throws IOException {
+  void aServerThatCannotBeReachedFailsTheRequest() throws Exception {
     int port;
     try (ServerSocket socket = new ServerSocket(0)) {
       port = socket.getLocalPort();

@@ -50,7 +50,7 @@ public class SagaStateCryptoValidator implements ApplicationEventListener<Startu
               + "could be persisted as PLAINTEXT. Found: "
               + cryptoEngines);
     }
-    CryptoEngine engine = cryptoEngines.isEmpty() ? null : cryptoEngines.get(0);
+    CryptoEngine engine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
     SagaStateCryptoValidation.validate(sagaRunners, engine);
   }
 }

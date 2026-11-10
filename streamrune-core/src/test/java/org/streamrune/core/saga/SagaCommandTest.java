@@ -25,8 +25,7 @@ class SagaCommandTest {
 
   @Test
   void rejects_null_aggregate_id() {
-    assertThrows(
-        NullPointerException.class, () -> SagaCommand.of(new MyCommand("cmd"), (AggregateId) null));
+    assertThrows(NullPointerException.class, () -> SagaCommand.of(new MyCommand("cmd"), null));
   }
 
   @Test

@@ -1,6 +1,9 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -201,14 +204,14 @@ class PgNotificationListenerLivenessTest {
 
   private static long probes(Statement stmt) {
     return mockingDetails(stmt).getInvocations().stream()
-        .filter(i -> i.getMethod().getName().equals("execute"))
+        .filter(i -> "execute".equals(i.getMethod().getName()))
         .filter(i -> "SELECT 1".equals(i.getArgument(0)))
         .count();
   }
 
   private static long rollbacks(Connection conn) {
     return mockingDetails(conn).getInvocations().stream()
-        .filter(i -> i.getMethod().getName().equals("rollback"))
+        .filter(i -> "rollback".equals(i.getMethod().getName()))
         .count();
   }
 

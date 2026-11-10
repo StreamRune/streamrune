@@ -7,7 +7,6 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -106,7 +105,7 @@ public final class ConfigurationDocs {
    */
   public static List<String> otherPages(Path root) {
     try {
-      return Files.readAllLines(root.resolve(OTHER_PAGES_LIST), StandardCharsets.UTF_8).stream()
+      return Files.readAllLines(root.resolve(OTHER_PAGES_LIST)).stream()
           .map(String::strip)
           .filter(line -> !line.isEmpty() && !line.startsWith("#"))
           .toList();
@@ -124,15 +123,15 @@ public final class ConfigurationDocs {
     Set<String> referenceFiles = new TreeSet<>();
     try (Stream<Path> guides = Files.walk(root.resolve("docs/guide"))) {
       for (Path guide : guides.filter(p -> p.toString().endsWith(".md")).sorted().toList()) {
-        files.put(relative(root, guide), Files.readAllLines(guide, StandardCharsets.UTF_8));
+        files.put(relative(root, guide), Files.readAllLines(guide));
         referenceFiles.add(relative(root, guide));
       }
       for (String file : moreFiles) {
-        files.put(file, Files.readAllLines(root.resolve(file), StandardCharsets.UTF_8));
+        files.put(file, Files.readAllLines(root.resolve(file)));
         referenceFiles.add(file);
       }
       for (String page : otherPages(root)) {
-        files.put(page, Files.readAllLines(root.resolve(page), StandardCharsets.UTF_8));
+        files.put(page, Files.readAllLines(root.resolve(page)));
       }
     } catch (IOException e) {
       throw new UncheckedIOException(e);
@@ -282,7 +281,7 @@ public final class ConfigurationDocs {
     List<String> problems = new ArrayList<>();
     try (Stream<Path> sources = Files.walk(sourceRoot)) {
       for (Path source : sources.filter(p -> p.toString().endsWith(".java")).sorted().toList()) {
-        List<String> lines = Files.readAllLines(source, StandardCharsets.UTF_8);
+        List<String> lines = Files.readAllLines(source);
         for (int i = 0; i < lines.size(); i++) {
           String code = lines.get(i).strip();
           if (code.startsWith("//") || code.startsWith("/*") || code.startsWith("*")) {

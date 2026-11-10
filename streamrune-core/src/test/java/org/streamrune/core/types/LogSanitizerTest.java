@@ -38,8 +38,10 @@ class LogSanitizerTest {
     // like a genuine log line, so the forged line is indistinguishable from a real one once
     // interpolated by a pattern layout ("%d %level %logger - %msg%n").
     String payload =
-        "x\n2026-08-07 10:00:00 WARN o.s.ScopedValueFilter - X-User-Id header 'admin' matches"
-            + " authenticated principal 'admin'; authorizing as admin";
+        """
+        x
+        2026-08-07 10:00:00 WARN o.s.ScopedValueFilter - X-User-Id header 'admin' matches\
+         authenticated principal 'admin'; authorizing as admin""";
     String sanitized = LogSanitizer.sanitizeForLog(payload);
     assertFalse(sanitized.contains("\n"), "no LF must survive sanitization");
     assertFalse(sanitized.contains("\r"), "no CR must survive sanitization");

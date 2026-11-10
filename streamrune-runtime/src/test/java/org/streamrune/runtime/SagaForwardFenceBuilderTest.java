@@ -348,7 +348,7 @@ class SagaForwardFenceBuilderTest {
     runner.asEventListener().onEvents(List.of(opened("2", 2)));
 
     assertThat(bus.of(Reserve.class)).hasSize(2);
-    assertThat(bus.of(Reserve.class).get(0).marker()).as("built fenced").isNotNull();
+    assertThat(bus.of(Reserve.class).getFirst().marker()).as("built fenced").isNotNull();
     assertThat(bus.of(Reserve.class).get(1).marker()).as("the default, from then on").isNull();
   }
 

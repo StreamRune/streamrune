@@ -144,8 +144,7 @@ class PostgresCryptoForgetSignalIntegrationTest {
     broken.setConnectTimeout(1);
     var channel = new PostgresCryptoForgetSignal(broken);
     try (channel) {
-      channel.publish("some-opaque-token"); // must swallow the connection failure, not throw
-      assertTrue(true);
+      channel.publish("some-opaque-token");
     }
   }
 

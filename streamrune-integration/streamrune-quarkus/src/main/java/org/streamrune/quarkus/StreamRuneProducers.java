@@ -1397,7 +1397,7 @@ public class StreamRuneProducers {
       LOG.warn(
           "OutboxPoller enabled (streamrune.outbox.enabled=true) but {} bean missing — poller will"
               + " not run",
-          !store.isResolvable() ? "OutboxStore" : "OutboxPublisher");
+          store.isResolvable() ? "OutboxPublisher" : "OutboxStore");
       return null;
     }
     // Wire the metrics bean so streamrune.outbox.delivery_failed fires on a terminal FAILED entry

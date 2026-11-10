@@ -248,7 +248,9 @@ public final class InMemoryOutboxStore implements OutboxStore {
    */
   @Override
   public List<OutboxEntry> loadPending(int limit) {
-    if (limit < 1) throw new IllegalArgumentException("limit must be >= 1");
+    if (limit < 1) {
+      throw new IllegalArgumentException("limit must be >= 1");
+    }
     synchronized (lock) {
       var now = clock.instant();
       reclaimExpired(now);
@@ -531,7 +533,9 @@ public final class InMemoryOutboxStore implements OutboxStore {
   @Override
   public List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
     Objects.requireNonNull(status, "status is required");
-    if (limit < 1) throw new IllegalArgumentException("limit must be >= 1");
+    if (limit < 1) {
+      throw new IllegalArgumentException("limit must be >= 1");
+    }
     synchronized (lock) {
       List<OutboxEntry> matching = new ArrayList<>();
       for (OutboxEntry e : store.values()) {

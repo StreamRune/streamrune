@@ -1,6 +1,14 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -100,7 +108,9 @@ class PostgresNotificationSubscriptionTest {
 
   @AfterAll
   static void closePool() {
-    if (eventDataSource != null) eventDataSource.close();
+    if (eventDataSource != null) {
+      eventDataSource.close();
+    }
   }
 
   @BeforeEach
@@ -207,7 +217,7 @@ class PostgresNotificationSubscriptionTest {
       }
       assertEquals(
           1, received.size(), "catch-up poll on start must deliver the pre-start warm-up event");
-      assertEquals(TestStreams.stream("cart-notify-warmup"), received.get(0).streamId());
+      assertEquals(TestStreams.stream("cart-notify-warmup"), received.getFirst().streamId());
 
       // Now append the asserted event, strictly AFTER the catch-up poll has completed. Its only
       // possible delivery path is the server-side pg_notify('streamrune_events', …) from the
@@ -275,7 +285,7 @@ class PostgresNotificationSubscriptionTest {
         Thread.sleep(50);
       }
       assertEquals(1, received.size(), "the in-process notifyNewEvents() shortcut must deliver");
-      assertEquals(TestStreams.stream("cart-shortcut-1"), received.get(0).streamId());
+      assertEquals(TestStreams.stream("cart-shortcut-1"), received.getFirst().streamId());
     } finally {
       sub.close();
     }
@@ -308,7 +318,7 @@ class PostgresNotificationSubscriptionTest {
         Thread.sleep(50);
       }
       assertEquals(1, received.size(), "catch-up poll on start should deliver the missed event");
-      assertEquals(TestStreams.stream("cart-catchup-1"), received.get(0).streamId());
+      assertEquals(TestStreams.stream("cart-catchup-1"), received.getFirst().streamId());
     } finally {
       sub.close();
     }

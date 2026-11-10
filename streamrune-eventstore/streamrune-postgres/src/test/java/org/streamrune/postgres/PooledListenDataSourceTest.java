@@ -11,7 +11,6 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.sql.Connection;
 import java.sql.Driver;
-import java.sql.SQLException;
 import java.util.logging.Logger;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
@@ -23,7 +22,7 @@ class PooledListenDataSourceTest {
   private final PooledListenDataSource listen = new PooledListenDataSource(pool);
 
   @Test
-  void theConnectionsComeFromThePool() throws SQLException {
+  void theConnectionsComeFromThePool() throws Exception {
     Connection first = mock(Connection.class);
     Connection second = mock(Connection.class);
     when(pool.getConnection()).thenReturn(first);
@@ -52,7 +51,7 @@ class PooledListenDataSourceTest {
   }
 
   @Test
-  void unwrapHandsOutItselfThePoolOrWhatThePoolWraps() throws SQLException {
+  void unwrapHandsOutItselfThePoolOrWhatThePoolWraps() throws Exception {
     Driver driver = mock(Driver.class);
     when(pool.unwrap(Driver.class)).thenReturn(driver);
     when(pool.isWrapperFor(Driver.class)).thenReturn(true);

@@ -223,8 +223,8 @@ class EventStoreFixtureTest {
     assertSame(underlying, store);
     var history = underlying.load(s);
     assertEquals(1, history.events().size());
-    assertInstanceOf(Added.class, history.events().get(0).event());
-    assertEquals("X", ((Added) history.events().get(0).event()).sku());
+    assertInstanceOf(Added.class, history.events().getFirst().event());
+    assertEquals("X", ((Added) history.events().getFirst().event()).sku());
   }
 
   // Mirrors the class javadoc examples.

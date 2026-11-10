@@ -400,7 +400,7 @@ public abstract class CommandBusProvenanceContract {
     InMemoryEventStore eventStore = new InMemoryEventStore();
     CommandBus bus = newBus(eventStore);
     try {
-      ScopedValue.where(StreamRuneContext.CURRENT, (StreamRuneContext.RequestContext) null)
+      ScopedValue.where(StreamRuneContext.CURRENT, null)
           .run(() -> bus.execute(new Mark(AGGREGATE_ID)));
 
       List<EventEnvelope> stored = eventStore.readGlobalStream(GlobalOffset.initial(), 10);

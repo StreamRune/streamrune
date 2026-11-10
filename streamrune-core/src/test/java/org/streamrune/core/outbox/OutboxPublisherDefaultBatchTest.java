@@ -1,6 +1,11 @@
 package org.streamrune.core.outbox;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.List;
@@ -277,7 +282,7 @@ class OutboxPublisherDefaultBatchTest {
             OutboxEntryId.of("d"));
     OutboxPublisher publisher =
         entry -> {
-          if (entry.id().value().equals("b") || entry.id().value().equals("d")) {
+          if ("b".equals(entry.id().value()) || "d".equals(entry.id().value())) {
             throw new RuntimeException("odd ones out");
           }
         };

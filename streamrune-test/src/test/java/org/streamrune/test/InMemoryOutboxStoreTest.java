@@ -1,6 +1,11 @@
 package org.streamrune.test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -56,9 +61,9 @@ class InMemoryOutboxStoreTest {
     // loadPending claims, so inspect the single returned batch (a second call would see nothing).
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals("id-1", pending.get(0).id().value());
+    assertEquals("id-1", pending.getFirst().id().value());
     // The claim moved the entry to IN_PROGRESS — mirrors PostgresOutboxStore.
-    assertEquals(OutboxStatus.IN_PROGRESS, pending.get(0).status());
+    assertEquals(OutboxStatus.IN_PROGRESS, pending.getFirst().status());
   }
 
   @Test
@@ -68,7 +73,7 @@ class InMemoryOutboxStoreTest {
     store.save(OutboxEntry.pending(id, "{\"a\":2}", "Event")); // second save ignored
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals("{\"a\":1}", pending.get(0).payload());
+    assertEquals("{\"a\":1}", pending.getFirst().payload());
   }
 
   @Test
@@ -112,7 +117,7 @@ class InMemoryOutboxStoreTest {
 
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals("pend", pending.get(0).id().value());
+    assertEquals("pend", pending.getFirst().id().value());
   }
 
   @Test
@@ -124,13 +129,13 @@ class InMemoryOutboxStoreTest {
   }
 
   @Test
-  void loadPending_returns_entries_ordered_by_created_at() throws InterruptedException {
+  void loadPending_returns_entries_ordered_by_created_at() throws Exception {
     store.save(OutboxEntry.pending(OutboxEntryId.of("first"), "{}", "Event"));
     Thread.sleep(5); // ensure different createdAt
     store.save(OutboxEntry.pending(OutboxEntryId.of("second"), "{}", "Event"));
 
     var pending = store.loadPending(10);
-    assertEquals("first", pending.get(0).id().value());
+    assertEquals("first", pending.getFirst().id().value());
     assertEquals("second", pending.get(1).id().value());
   }
 
@@ -202,7 +207,7 @@ class InMemoryOutboxStoreTest {
 
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals("past-retry", pending.get(0).id().value());
+    assertEquals("past-retry", pending.getFirst().id().value());
   }
 
   @Test
@@ -250,7 +255,7 @@ class InMemoryOutboxStoreTest {
 
     var firstPoll = store.loadPending(10);
     assertEquals(1, firstPoll.size());
-    assertEquals(OutboxStatus.IN_PROGRESS, firstPoll.get(0).status());
+    assertEquals(OutboxStatus.IN_PROGRESS, firstPoll.getFirst().status());
 
     assertTrue(store.loadPending(10).isEmpty(), "claimed entry must not be claimed twice");
 
@@ -275,7 +280,7 @@ class InMemoryOutboxStoreTest {
 
     var reclaimed = s.loadPending(10);
     assertEquals(1, reclaimed.size(), "expired claim must be reclaimable");
-    assertEquals(id.value(), reclaimed.get(0).id().value());
+    assertEquals(id.value(), reclaimed.getFirst().id().value());
   }
 
   @Test
@@ -326,7 +331,7 @@ class InMemoryOutboxStoreTest {
     // clears the OutboxPoller.build() guard instead of throwing. The shipped Kafka horizon is now
     // max.block.ms (60s) + delivery.timeout.ms (120s) = 180s, which the previous 3-minute default
     // merely EQUALLED — and the guard demands a STRICT excess.
-    assertEquals(Duration.ofMinutes(4), InMemoryOutboxStore.DEFAULT_CLAIM_LEASE);
+    assertEquals(InMemoryOutboxStore.DEFAULT_CLAIM_LEASE, Duration.ofMinutes(4));
     assertEquals(Duration.ofMinutes(4), new InMemoryOutboxStore().claimLease());
   }
 

@@ -395,7 +395,7 @@ class LeaseBasedLeadershipTest {
                 DataSource.class.getClassLoader(),
                 new Class<?>[] {DataSource.class},
                 (proxy, method, args) -> {
-                  if (method.getName().equals("getConnection")) {
+                  if ("getConnection".equals(method.getName())) {
                     // In flight: the caller was interrupted after the acquire began.
                     Thread.currentThread().interrupt();
                     throw new SQLException("Closed by interrupt");

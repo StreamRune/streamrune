@@ -418,11 +418,15 @@ public final class PostgresOutboxStore implements OutboxStore {
    */
   public PostgresOutboxStore(
       DataSource dataSource, Duration claimLease, OutboxOrderingMode orderingMode) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     if (claimLease == null || claimLease.isZero() || claimLease.isNegative()) {
       throw new IllegalArgumentException("claimLease must be positive");
     }
-    if (orderingMode == null) throw new IllegalArgumentException("orderingMode is required");
+    if (orderingMode == null) {
+      throw new IllegalArgumentException("orderingMode is required");
+    }
     this.dataSource = dataSource;
     this.claimLease = claimLease;
     this.orderingMode = orderingMode;
@@ -444,7 +448,9 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public void save(OutboxEntry entry) {
-    if (entry == null) throw new IllegalArgumentException("entry is required");
+    if (entry == null) {
+      throw new IllegalArgumentException("entry is required");
+    }
     requireStreamIfStrict(entry); // strict-mode stream check, before the try: surfaces unwrapped
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(INSERT)) {
@@ -472,8 +478,12 @@ public final class PostgresOutboxStore implements OutboxStore {
    *     caller's transaction is untouched and the exception surfaces unwrapped
    */
   void saveAll(List<OutboxEntry> entries, Connection conn) {
-    if (entries == null) throw new IllegalArgumentException("entries is required");
-    if (conn == null) throw new IllegalArgumentException("conn is required");
+    if (entries == null) {
+      throw new IllegalArgumentException("entries is required");
+    }
+    if (conn == null) {
+      throw new IllegalArgumentException("conn is required");
+    }
     if (entries.isEmpty()) {
       return;
     }
@@ -505,7 +515,9 @@ public final class PostgresOutboxStore implements OutboxStore {
    */
   @Override
   public List<OutboxEntry> loadPending(int limit) {
-    if (limit < 1) throw new IllegalArgumentException("limit must be >= 1");
+    if (limit < 1) {
+      throw new IllegalArgumentException("limit must be >= 1");
+    }
     try (Connection conn = dataSource.getConnection()) {
       return PostgresTransactions.commitIfManual(
           conn,
@@ -608,7 +620,9 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public boolean markDelivered(OutboxEntryId id, String claimedBy) {
-    if (id == null) throw new IllegalArgumentException("id is required");
+    if (id == null) {
+      throw new IllegalArgumentException("id is required");
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(MARK_DELIVERED)) {
       ps.setString(1, id.value());
@@ -625,7 +639,9 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public boolean markFailed(OutboxEntryId id, int attempts, String error, String claimedBy) {
-    if (id == null) throw new IllegalArgumentException("id is required");
+    if (id == null) {
+      throw new IllegalArgumentException("id is required");
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(MARK_FAILED)) {
       ps.setInt(1, attempts);
@@ -649,7 +665,9 @@ public final class PostgresOutboxStore implements OutboxStore {
    */
   @Override
   public void delete(OutboxEntryId id) {
-    if (id == null) throw new IllegalArgumentException("id is required");
+    if (id == null) {
+      throw new IllegalArgumentException("id is required");
+    }
     try (Connection conn = dataSource.getConnection()) {
       try (PreparedStatement ps = conn.prepareStatement(DELETE_NON_FAILED)) {
         ps.setString(1, id.value());
@@ -684,8 +702,12 @@ public final class PostgresOutboxStore implements OutboxStore {
   @Override
   public boolean markRetry(
       OutboxEntryId id, int attempts, String error, Duration backoff, String claimedBy) {
-    if (id == null) throw new IllegalArgumentException("id is required");
-    if (backoff == null) throw new IllegalArgumentException("backoff is required");
+    if (id == null) {
+      throw new IllegalArgumentException("id is required");
+    }
+    if (backoff == null) {
+      throw new IllegalArgumentException("backoff is required");
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(MARK_RETRY)) {
       ps.setInt(1, attempts);
@@ -705,7 +727,9 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public int markDeliveredAll(java.util.Collection<OutboxEntryId> ids, String claimedBy) {
-    if (ids.isEmpty()) return 0;
+    if (ids.isEmpty()) {
+      return 0;
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(MARK_DELIVERED_ALL)) {
       String[] arr = ids.stream().map(OutboxEntryId::value).toArray(String[]::new);
@@ -733,7 +757,9 @@ public final class PostgresOutboxStore implements OutboxStore {
    */
   @Override
   public int releaseClaims(java.util.Collection<OutboxEntry> entries, String claimedBy) {
-    if (entries.isEmpty()) return 0;
+    if (entries.isEmpty()) {
+      return 0;
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(RELEASE_CLAIMS)) {
       String[] arr = entries.stream().map(e -> e.id().value()).toArray(String[]::new);
@@ -774,8 +800,12 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
-    if (status == null) throw new IllegalArgumentException("status is required");
-    if (limit < 1) throw new IllegalArgumentException("limit must be >= 1");
+    if (status == null) {
+      throw new IllegalArgumentException("status is required");
+    }
+    if (limit < 1) {
+      throw new IllegalArgumentException("limit must be >= 1");
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(FIND_BY_STATUS)) {
       ps.setString(1, status.name());
@@ -829,7 +859,9 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public long countByStatus(OutboxStatus status) {
-    if (status == null) throw new IllegalArgumentException("status is required");
+    if (status == null) {
+      throw new IllegalArgumentException("status is required");
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(COUNT_BY_STATUS)) {
       ps.setString(1, status.name());
@@ -844,7 +876,9 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public boolean resetFailedToPending(OutboxEntryId id) {
-    if (id == null) throw new IllegalArgumentException("id is required");
+    if (id == null) {
+      throw new IllegalArgumentException("id is required");
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(RESET_FAILED_TO_PENDING)) {
       ps.setString(1, id.value());
@@ -861,7 +895,9 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public Optional<OutboxEntry> findById(OutboxEntryId id) {
-    if (id == null) throw new IllegalArgumentException("id is required");
+    if (id == null) {
+      throw new IllegalArgumentException("id is required");
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(FIND_BY_ID)) {
       ps.setString(1, id.value());
@@ -876,9 +912,15 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
-    if (id == null) throw new IllegalArgumentException("id is required");
-    if (skippedBy == null) throw new IllegalArgumentException("skippedBy is required");
-    if (reason == null) throw new IllegalArgumentException("reason is required");
+    if (id == null) {
+      throw new IllegalArgumentException("id is required");
+    }
+    if (skippedBy == null) {
+      throw new IllegalArgumentException("skippedBy is required");
+    }
+    if (reason == null) {
+      throw new IllegalArgumentException("reason is required");
+    }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SKIP_FAILED)) {
       ps.setString(1, skippedBy);
@@ -909,7 +951,9 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public int deleteSkipped(Instant cutoff) {
-    if (cutoff == null) throw new IllegalArgumentException("cutoff is required");
+    if (cutoff == null) {
+      throw new IllegalArgumentException("cutoff is required");
+    }
     int total = 0;
     int batch;
     do {

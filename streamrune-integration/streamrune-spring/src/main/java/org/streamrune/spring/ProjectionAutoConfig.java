@@ -332,7 +332,9 @@ public class ProjectionAutoConfig {
     for (var entry : beans.entrySet()) {
       Projection bean = entry.getValue();
       ProjectionConfig pc = AnnotationUtils.findAnnotation(bean.getClass(), ProjectionConfig.class);
-      if (pc == null) continue;
+      if (pc == null) {
+        continue;
+      }
 
       String name = pc.name();
       if (!seen.add(name)) {
@@ -343,10 +345,14 @@ public class ProjectionAutoConfig {
       boolean enabled =
           org.streamrune.integration.RelaxedBoolean.parse(
               env.getProperty(prefix + "enabled"), true);
-      if (!enabled) continue;
+      if (!enabled) {
+        continue;
+      }
 
       ProjectionConfig.Mode effectiveMode = pc.mode();
-      if (effectiveMode != mode) continue;
+      if (effectiveMode != mode) {
+        continue;
+      }
 
       if (mode != ProjectionConfig.Mode.INLINE) {
         requireNotACglibProxiedBaseProjection(entry.getKey(), bean);
@@ -393,7 +399,9 @@ public class ProjectionAutoConfig {
 
   private static ProjectionErrorStrategy parseStrategy(
       String prop, ProjectionErrorStrategy fallback, String name) {
-    if (prop == null || prop.isBlank()) return fallback;
+    if (prop == null || prop.isBlank()) {
+      return fallback;
+    }
     try {
       return ProjectionErrorStrategy.valueOf(prop.trim().toUpperCase());
     } catch (IllegalArgumentException e) {

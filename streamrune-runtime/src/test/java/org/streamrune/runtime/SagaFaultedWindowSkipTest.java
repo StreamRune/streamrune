@@ -137,10 +137,10 @@ class SagaFaultedWindowSkipTest {
   }
 
   static final class CountingMetrics implements StreamRuneMetrics {
-    int quarantined = 0;
-    int skippedWhileFaulted = 0;
-    int faulted = 0;
-    int eventHeld = 0;
+    int quarantined;
+    int skippedWhileFaulted;
+    int faulted;
+    int eventHeld;
     final List<String> skippedTags = new ArrayList<>();
     final List<String> holdReasons = new ArrayList<>();
 
@@ -294,7 +294,7 @@ class SagaFaultedWindowSkipTest {
     var payment = correlated(new PaymentCaptured("order-1"), 140L);
     runner.asEventListener().onEvents(List.of(payment));
 
-    var entry = dlq.findBySaga(SAGA).get(0);
+    var entry = dlq.findBySaga(SAGA).getFirst();
     assertThat(entry.errorType()).isEqualTo(SagaSkippedWhileFaultedException.class.getName());
     assertThat(entry.errorMessage()).contains("FAULTED");
     assertThat(entry.eventType()).isEqualTo(payment.eventType());

@@ -1,6 +1,11 @@
 package org.streamrune.crypto.aws;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -149,7 +154,7 @@ class AwsKmsCryptoEngineIntegrationTest {
     for (int i = 0; i < 3; i++) {
       blobs.add(writer.encrypt(subject, value(5_000 + i)));
     }
-    assertArrayEquals(value(5_000), reader.decrypt(subject, blobs.get(0))); // reader caches too
+    assertArrayEquals(value(5_000), reader.decrypt(subject, blobs.getFirst())); // reader caches too
     byte[] kept = writer.encrypt(bystander, value(10));
 
     writer.deleteKey(subject);

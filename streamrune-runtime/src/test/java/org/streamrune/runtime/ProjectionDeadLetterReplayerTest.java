@@ -1,6 +1,9 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.TRANSACTIONAL_LOCAL;
 
@@ -109,7 +112,7 @@ class ProjectionDeadLetterReplayerTest {
     var result = replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10);
 
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(2, 0, 0), result);
-    assertEquals(List.of(2L), offsets(processed.get(0)));
+    assertEquals(List.of(2L), offsets(processed.getFirst()));
     assertEquals(List.of(4L), offsets(processed.get(1)));
   }
 
@@ -364,7 +367,7 @@ class ProjectionDeadLetterReplayerTest {
     assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
     assertEquals(List.of(2L, 3L), offsets(processed));
     assertEquals(1, invalidated.size(), "one applied batch, one invalidation");
-    assertEquals(List.of(2L, 3L), offsets(invalidated.get(0)));
+    assertEquals(List.of(2L, 3L), offsets(invalidated.getFirst()));
     assertTrue(dlqStore.all().isEmpty());
   }
 
@@ -408,7 +411,7 @@ class ProjectionDeadLetterReplayerTest {
     Projection noop = batch -> {};
     assertThrows(
         IllegalArgumentException.class,
-        () -> replayer.replay((ProjectionName) null, noop, AT_LEAST_ONCE_IDEMPOTENT, 1));
+        () -> replayer.replay(null, noop, AT_LEAST_ONCE_IDEMPOTENT, 1));
     // A blank projection name never reaches replay: ProjectionName rejects it first.
     assertThrows(IllegalArgumentException.class, () -> ProjectionName.of("  "));
     assertThrows(

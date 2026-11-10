@@ -73,7 +73,7 @@ class HttpOutboxPublisherTest {
     HttpOutboxPublisher.of(webhookUri()).publish(entry);
 
     assertEquals(1, receivedBodies.size());
-    assertEquals("{\"order\":\"1\"}", receivedBodies.get(0));
+    assertEquals("{\"order\":\"1\"}", receivedBodies.getFirst());
   }
 
   @Test
@@ -81,7 +81,7 @@ class HttpOutboxPublisherTest {
     var entry = OutboxEntry.pending(OutboxEntryId.of("entry-42"), "{}", "Event");
     HttpOutboxPublisher.of(webhookUri()).publish(entry);
 
-    assertEquals("entry-42", receivedEntryIds.get(0));
+    assertEquals("entry-42", receivedEntryIds.getFirst());
   }
 
   @Test
@@ -89,7 +89,7 @@ class HttpOutboxPublisherTest {
     var entry = OutboxEntry.pending(OutboxEntryId.of("id-1"), "{}", "OrderShipped");
     HttpOutboxPublisher.of(webhookUri()).publish(entry);
 
-    assertEquals("OrderShipped", receivedPayloadTypes.get(0));
+    assertEquals("OrderShipped", receivedPayloadTypes.getFirst());
   }
 
   @Test
@@ -97,7 +97,7 @@ class HttpOutboxPublisherTest {
     var entry = OutboxEntry.pending(OutboxEntryId.of("id-ct"), "{}", "Event");
     HttpOutboxPublisher.of(webhookUri()).publish(entry);
 
-    assertEquals("application/json", receivedContentTypes.get(0));
+    assertEquals("application/json", receivedContentTypes.getFirst());
   }
 
   @Test

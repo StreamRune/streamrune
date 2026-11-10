@@ -128,13 +128,7 @@ class FaultScheduleTest {
     List<String> seen = new ArrayList<>();
     var failure =
         assertThrows(
-            InjectedFaultException.class,
-            () ->
-                schedule.run(
-                    "append",
-                    () -> {
-                      seen.add("append");
-                    }));
+            InjectedFaultException.class, () -> schedule.run("append", () -> seen.add("append")));
 
     assertEquals(List.of("append"), seen, "the delegate ran: the write happened");
     assertTrue(failure.getMessage().contains("after the delegate"), failure.getMessage());

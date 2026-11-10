@@ -1,6 +1,11 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.mock;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.TRANSACTIONAL_LOCAL;
@@ -68,7 +73,7 @@ class PollingProjectionRunnerTest {
 
     // With batchSize=3: first batch [1,2,3], second batch [4,5]
     assertEquals(2, collected.size());
-    assertEquals(3, collected.get(0).size());
+    assertEquals(3, collected.getFirst().size());
     assertEquals(2, collected.get(1).size());
 
     // Offset should be at 5 (last event)
@@ -149,8 +154,8 @@ class PollingProjectionRunnerTest {
 
     // Only event 3 should be processed
     assertEquals(1, collected.size());
-    assertEquals(1, collected.get(0).size());
-    assertEquals(3, collected.get(0).getFirst().globalOffset().value());
+    assertEquals(1, collected.getFirst().size());
+    assertEquals(3, collected.getFirst().getFirst().globalOffset().value());
     assertEquals(GlobalOffset.of(3), offsetStore.getLastOffset(ProjectionName.of("test-proj")));
   }
 
@@ -249,7 +254,7 @@ class PollingProjectionRunnerTest {
     // Second run replays everything
     runner.run(ProjectionName.of("first-proj"), collected::add, AT_LEAST_ONCE_IDEMPOTENT);
     assertEquals(1, collected.size());
-    assertEquals(2, collected.get(0).size());
+    assertEquals(2, collected.getFirst().size());
   }
 
   @Test

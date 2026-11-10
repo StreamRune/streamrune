@@ -1,6 +1,14 @@
 package org.streamrune.crypto.aws;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -139,8 +147,8 @@ class AwsKmsCryptoEngineTest {
       blobs.add(engine.encrypt(subject, bytes("same value")));
     }
     verify(kmsClient, times(1)).generateDataKey(any(GenerateDataKeyRequest.class));
-    assertArrayEquals(wrappedKey(blobs.get(0)), wrappedKey(blobs.get(49)), "one data key");
-    assertFalse(Arrays.equals(blobs.get(0), blobs.get(1)), "a fresh nonce per value");
+    assertArrayEquals(wrappedKey(blobs.getFirst()), wrappedKey(blobs.get(49)), "one data key");
+    assertFalse(Arrays.equals(blobs.getFirst(), blobs.get(1)), "a fresh nonce per value");
 
     // The encrypting engine already holds the key: decrypt needs no KMS call.
     for (byte[] blob : blobs) {
@@ -233,7 +241,7 @@ class AwsKmsCryptoEngineTest {
       blobs.add(budgeted.encrypt(subject, bytes("v" + i)));
     }
     verify(kmsClient, times(3)).generateDataKey(any(GenerateDataKeyRequest.class));
-    assertArrayEquals(wrappedKey(blobs.get(0)), wrappedKey(blobs.get(2)));
+    assertArrayEquals(wrappedKey(blobs.getFirst()), wrappedKey(blobs.get(2)));
     assertFalse(Arrays.equals(wrappedKey(blobs.get(2)), wrappedKey(blobs.get(3))));
     assertArrayEquals(wrappedKey(blobs.get(3)), wrappedKey(blobs.get(5)));
     assertFalse(Arrays.equals(wrappedKey(blobs.get(5)), wrappedKey(blobs.get(6))));
@@ -828,7 +836,7 @@ class AwsKmsCryptoEngineTest {
     // Envelope: 7-byte header + up to 65,535 wrapped-key bytes + 12-byte nonce + 16-byte tag, in
     // an array no longer than Integer.MAX_VALUE - 8.
     assertEquals(
-        Integer.MAX_VALUE - 8 - 7 - 65_535 - 12 - 16, AwsKmsCryptoEngine.MAX_PLAINTEXT_LENGTH);
+        AwsKmsCryptoEngine.MAX_PLAINTEXT_LENGTH, Integer.MAX_VALUE - 8 - 7 - 65_535 - 12 - 16);
   }
 
   @Test
@@ -1056,8 +1064,8 @@ class AwsKmsCryptoEngineTest {
     assertThrows(IllegalArgumentException.class, () -> builder.nanoClock(null));
     assertEquals(1_000, AwsKmsCryptoEngine.DEFAULT_DATA_KEY_CACHE_MAXIMUM_SIZE);
     assertEquals(
-        Duration.ofMinutes(5), AwsKmsCryptoEngine.DEFAULT_DATA_KEY_CACHE_EXPIRE_AFTER_WRITE);
-    assertEquals(1L << 24, AwsKmsCryptoEngine.MAX_ENCRYPTIONS_PER_DATA_KEY);
+        AwsKmsCryptoEngine.DEFAULT_DATA_KEY_CACHE_EXPIRE_AFTER_WRITE, Duration.ofMinutes(5));
+    assertEquals(AwsKmsCryptoEngine.MAX_ENCRYPTIONS_PER_DATA_KEY, 1L << 24);
   }
 
   @Test

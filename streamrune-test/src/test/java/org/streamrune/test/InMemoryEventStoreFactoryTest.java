@@ -1,6 +1,7 @@
 package org.streamrune.test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +12,6 @@ class InMemoryEventStoreFactoryTest {
     var factory = InMemoryEventStoreFactory.builder().build();
     var store = factory.create();
     assertNotNull(store);
-    assertTrue(store instanceof InMemoryEventStore);
+    assertInstanceOf(InMemoryEventStore.class, store);
   }
 }

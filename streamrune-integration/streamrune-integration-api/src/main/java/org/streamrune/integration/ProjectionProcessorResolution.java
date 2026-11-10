@@ -74,7 +74,7 @@ public final class ProjectionProcessorResolution {
               + ") but a runner has exactly one processor. Keep one bean, or move the second"
               + " repository's TRANSACTIONAL_LOCAL projections to a runner of their own.");
     }
-    return candidates.get(0);
+    return candidates.getFirst();
   }
 
   /**

@@ -471,7 +471,7 @@ final class SagaFenceNodes {
               } catch (InvocationTargetException e) {
                 throw e.getCause();
               }
-              if (method.getName().equals("claimCompensating")) {
+              if ("claimCompensating".equals(method.getName())) {
                 Runnable once = afterTheNextClaim.getAndSet(null);
                 if (once != null) {
                   once.run();
@@ -569,8 +569,8 @@ final class SagaFenceNodes {
                         Instant.now()))),
             Version.initial());
     return probe
-        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-        .get(0);
+        .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+        .getFirst();
   }
 
   Optional<LoadedSaga<State>> row(String orderId) {

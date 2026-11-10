@@ -1,6 +1,10 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.List;
@@ -245,7 +249,7 @@ class HybridEventSubscriptionTest {
   }
 
   @Test
-  void subscriptionNameIsUsedAsOffsetKey() throws InterruptedException {
+  void subscriptionNameIsUsedAsOffsetKey() throws Exception {
     var offsetStore = new RecordingOffsetStore();
     var subscription =
         HybridEventSubscription.builder()
@@ -269,8 +273,7 @@ class HybridEventSubscriptionTest {
   }
 
   @Test
-  void onNotification_swallowsPollException_soListenLoopIsNeverTornDown()
-      throws InterruptedException {
+  void onNotification_swallowsPollException_soListenLoopIsNeverTornDown() throws Exception {
     // A wrapped-listener/read exception on the notify path must NOT propagate out of the
     // notification callback — otherwise it reaches PgNotificationListener's listen loop, which
     // treats it as a LISTEN-connection failure (closes the healthy LISTEN connection + bumps the

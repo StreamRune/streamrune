@@ -557,11 +557,11 @@ public final class SagaDeadLetterReplayer {
       }
     } catch (RuntimeException checkFailed) {
       LOG.warn(
-          "discard: the entry was removed, but whether saga "
-              + id
-              + " is left FAULTED with no dead-letter entry could not be checked. If"
+          "discard: the entry was removed, but whether saga {} is left FAULTED with no dead-letter"
+              + " entry could not be checked. If"
               + " SagaStore.findByStatus lists it FAULTED with no entry, compensateFaulted(sagaId)"
               + " recovers a forward fault and resumeFaulted(sagaId) a compensation fault.",
+          id,
           checkFailed);
     }
   }
@@ -667,10 +667,10 @@ public final class SagaDeadLetterReplayer {
       return recordResume(ResumeOutcome.STALE_COMPENSATION_BLOCKED);
     } catch (SagaPoisonException unwritable) {
       LOG.warn(
-          "resumeFaulted for saga "
-              + LogSanitizer.sanitizeForLog(sagaId.value())
-              + ": the resumed episode's terminal write cannot convert the saga state; the row"
+          "resumeFaulted for saga {}: the resumed episode's terminal write cannot convert the saga"
+              + " state; the row"
               + " stays FAULTED. Fix the state conversion, then resume again.",
+          LogSanitizer.sanitizeForLog(sagaId.value()),
           unwritable.getCause());
       return recordResume(ResumeOutcome.STILL_POISON);
     }
@@ -743,14 +743,14 @@ public final class SagaDeadLetterReplayer {
       compensated = sagaRunner.compensateForwardFault(sagaId);
     } catch (SagaPoisonException unwritable) {
       LOG.warn(
-          "compensateFaulted for saga "
-              + LogSanitizer.sanitizeForLog(sagaId.value())
-              + ": the saga state cannot be converted. Either the claim could not write it —"
+          "compensateFaulted for saga {}: the saga state cannot be converted. Either the claim"
+              + " could not write it —"
               + " nothing was written and the row stays FAULTED — or the claim committed and the"
               + " state it wrote cannot be read back — the row is then COMPENSATING with no"
               + " compensation command dispatched. Fix the state conversion and read the row: a"
               + " FAULTED row takes this call again; a COMPENSATING row is completed by the"
               + " compensation-retry sweeper, the timeout runner or the saga's next event.",
+          LogSanitizer.sanitizeForLog(sagaId.value()),
           unwritable.getCause());
       return recordCompensate(CompensateOutcome.POISON);
     }
@@ -1111,9 +1111,9 @@ public final class SagaDeadLetterReplayer {
     } catch (SagaPoisonException routerPoison) {
       sagaRunner.recordPoison(entrySagaId, event.get(), routerPoison.getCause());
       LOG.warn(
-          "Saga dead-letter replay at offset "
-              + offset.value()
-              + ": the orchestrator's router still throws; the entry was refreshed",
+          "Saga dead-letter replay at offset {}: the orchestrator's router still throws; the entry"
+              + " was refreshed",
+          offset.value(),
           routerPoison.getCause());
       return new Drained(record(ReplayOutcome.STILL_POISON), false, null);
     }
@@ -1357,12 +1357,12 @@ public final class SagaDeadLetterReplayer {
       sagaDeadLetterStore.clearShieldIfDrained(sagaId, sagaType());
     } catch (UnsupportedOperationException storeCannot) {
       LOG.warn(
-          "Saga dead-letter drain for saga "
-              + LogSanitizer.sanitizeForLog(sagaId.value())
-              + ": this SagaDeadLetterStore does not implement clearShieldIfDrained, so the saga's"
+          "Saga dead-letter drain for saga {}: this SagaDeadLetterStore does not implement"
+              + " clearShieldIfDrained, so the saga's"
               + " dead_letter_pending shield is never cleared by this replayer (a store that"
               + " cannot answer never clears) and its live correlated events stay held. Implement"
               + " it (see PostgresSagaDeadLetterStore / InMemorySagaDeadLetterStore).",
+          LogSanitizer.sanitizeForLog(sagaId.value()),
           storeCannot);
     }
   }
@@ -1382,10 +1382,10 @@ public final class SagaDeadLetterReplayer {
 
   private Optional<EventEnvelope> readEvent(GlobalOffset offset) {
     List<EventEnvelope> read = eventStore.readGlobalStream(GlobalOffset.of(offset.value() - 1), 1);
-    if (read.isEmpty() || !read.get(0).globalOffset().equals(offset)) {
+    if (read.isEmpty() || !read.getFirst().globalOffset().equals(offset)) {
       return Optional.empty();
     }
-    return Optional.of(read.get(0));
+    return Optional.of(read.getFirst());
   }
 
   private void logDrainStopped(SagaId sagaId, DrainItem item, ReplayOutcome outcome, int left) {
@@ -1432,13 +1432,12 @@ public final class SagaDeadLetterReplayer {
           sagaDeadLetterStore.findNullSagaEntriesByResolvedTarget(sagaType(), sagaId));
     } catch (UnsupportedOperationException storeCannot) {
       LOG.warn(
-          "Saga dead-letter drain for saga "
-              + LogSanitizer.sanitizeForLog(sagaId.value())
-              + ": this SagaDeadLetterStore does not implement"
+          "Saga dead-letter drain for saga {}: this SagaDeadLetterStore does not implement"
               + " findNullSagaEntriesByResolvedTarget, so null-saga entries resolved to this saga"
               + " cannot be folded in at their causal position and the saga's"
               + " shield is never cleared by this replayer. Implement it (see"
               + " PostgresSagaDeadLetterStore / InMemorySagaDeadLetterStore).",
+          LogSanitizer.sanitizeForLog(sagaId.value()),
           storeCannot);
       return Optional.empty();
     }

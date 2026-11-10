@@ -99,7 +99,7 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
   private final Map<Class<?>, Function<?, AggregateId>> idExtractors = new HashMap<>();
   private final Map<Class<?>, AggregateType> aggregateTypes = new HashMap<>();
   private final List<DeciderRegistrations.Registration> accepted = new ArrayList<>();
-  private boolean closed = false;
+  private boolean closed;
 
   private InMemoryCommandBus(EventStore eventStore) {
     this.eventStore = eventStore;

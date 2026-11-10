@@ -47,8 +47,8 @@ class WindowedProjectionLateDataTest {
     // closed (300<=240 false); [240,360) NOT closed.
     // Emissions: [0,120) state=1 (only 90s); [60,180) state=1 (only 90s).
     assertThat(emissions).hasSize(2);
-    assertThat(emissions.get(0).window().start()).isEqualTo(T0);
-    assertThat(emissions.get(0).state()).isEqualTo(1);
+    assertThat(emissions.getFirst().window().start()).isEqualTo(T0);
+    assertThat(emissions.getFirst().state()).isEqualTo(1);
     assertThat(emissions.get(1).window().start()).isEqualTo(T0.plusSeconds(60));
     assertThat(emissions.get(1).state()).isEqualTo(1);
   }
@@ -113,7 +113,7 @@ class WindowedProjectionLateDataTest {
     // First batch closes window [T0,T0+1m): event at 30s, then event at 80s closes it.
     w.process(List.of(evt(T0.plusSeconds(30)), evt(T0.plusSeconds(80))));
     assertThat(emissions).hasSize(1);
-    assertThat(emissions.get(0).state()).isEqualTo(1);
+    assertThat(emissions.getFirst().state()).isEqualTo(1);
 
     // Second batch: late event at 40s, should be dropped (DROP policy). No new emission.
     w.process(List.of(evt(T0.plusSeconds(40))));
@@ -137,8 +137,8 @@ class WindowedProjectionLateDataTest {
     // Close window [T0,T0+1m): event at 30s, watermark jumps to 80s (>= 60+10=70).
     w.process(List.of(evt(T0.plusSeconds(30)), evt(T0.plusSeconds(80))));
     assertThat(emissions).hasSize(1);
-    assertThat(emissions.get(0).isFinal()).isTrue();
-    assertThat(emissions.get(0).state()).isEqualTo(1);
+    assertThat(emissions.getFirst().isFinal()).isTrue();
+    assertThat(emissions.getFirst().state()).isEqualTo(1);
 
     // Late event at 40s — past grace, REOPEN re-emits with isFinal=false.
     w.process(List.of(evt(T0.plusSeconds(40))));

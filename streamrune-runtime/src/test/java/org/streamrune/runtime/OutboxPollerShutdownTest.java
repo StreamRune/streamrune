@@ -113,7 +113,7 @@ class OutboxPollerShutdownTest {
           @Override
           public void publish(OutboxEntry entry) throws Exception {
             attempted.add(entry.id().value());
-            if (entry.id().value().equals("e3")) {
+            if ("e3".equals(entry.id().value())) {
               // Handed to the transport, now waiting for its acknowledgement when close() comes.
               parked.countDown();
               new CountDownLatch(1).await();

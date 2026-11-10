@@ -65,14 +65,20 @@ public final class InMemoryCryptoEngine implements CryptoEngine {
 
   @Override
   public byte[] encrypt(SubjectId subjectId, byte[] plaintext) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
-    if (plaintext == null) throw new IllegalArgumentException("plaintext must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
+    if (plaintext == null) {
+      throw new IllegalArgumentException("plaintext must not be null");
+    }
 
     VersionedKey key =
         keys.compute(
             subjectId.value(),
             (k, existing) -> {
-              if (existing != null) return existing;
+              if (existing != null) {
+                return existing;
+              }
               // No key: either brand new, or crypto-shredded. Terminal erasure refuses to mint a
               // fresh key for a forgotten subject; reinstate(subjectId) is the only way to lift
               // that.
@@ -110,8 +116,12 @@ public final class InMemoryCryptoEngine implements CryptoEngine {
 
   @Override
   public byte[] decrypt(SubjectId subjectId, byte[] ciphertext) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
-    if (ciphertext == null) throw new IllegalArgumentException("ciphertext must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
+    if (ciphertext == null) {
+      throw new IllegalArgumentException("ciphertext must not be null");
+    }
 
     VersionedKey key = keys.get(subjectId.value());
     if (key == null) {
@@ -182,7 +192,9 @@ public final class InMemoryCryptoEngine implements CryptoEngine {
 
   @Override
   public void deleteKey(SubjectId subjectId) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     // Record the tombstone first, then drop the key: the reverse order would briefly leave a
     // forgotten subject with no key and no tombstone, allowing a racing encrypt to resurrect it.
     forgotten.put(subjectId.value(), Boolean.TRUE);
@@ -196,7 +208,9 @@ public final class InMemoryCryptoEngine implements CryptoEngine {
 
   @Override
   public void reinstate(SubjectId subjectId) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     // Lifting the tombstone lets the next encrypt mint a fresh key. The old key is gone; only
     // future writes are re-enabled. Idempotent: reinstating a never-forgotten subject is a no-op.
     // The erased-generations record deleteKey wrote deliberately survives, keeping generations
@@ -207,7 +221,9 @@ public final class InMemoryCryptoEngine implements CryptoEngine {
 
   @Override
   public boolean isKeyAvailable(SubjectId subjectId) {
-    if (subjectId == null) throw new IllegalArgumentException("subjectId must not be null");
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     return keys.containsKey(subjectId.value());
   }
 

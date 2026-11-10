@@ -175,8 +175,12 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   }
 
   public JdbcProjectionRepository(DataSource dataSource, ObjectMapper objectMapper) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
-    if (objectMapper == null) throw new IllegalArgumentException("objectMapper is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
+    if (objectMapper == null) {
+      throw new IllegalArgumentException("objectMapper is required");
+    }
     this.dataSource = dataSource;
     this.objectMapper = objectMapper;
   }

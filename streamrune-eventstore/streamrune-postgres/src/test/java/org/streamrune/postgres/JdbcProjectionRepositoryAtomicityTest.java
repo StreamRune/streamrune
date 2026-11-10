@@ -1,6 +1,8 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.PrintWriter;
 import java.lang.reflect.InvocationTargetException;
@@ -1093,7 +1095,7 @@ class JdbcProjectionRepositoryAtomicityTest {
               Connection.class.getClassLoader(),
               new Class<?>[] {Connection.class},
               (proxy, method, args) -> {
-                if (method.getName().equals("close")) {
+                if ("close".equals(method.getName())) {
                   active.decrementAndGet();
                 }
                 try {

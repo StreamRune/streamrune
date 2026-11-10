@@ -1,6 +1,12 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -141,15 +147,15 @@ class PostgresOutboxStoreTest {
 
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals("pg-id-1", pending.get(0).id().value());
+    assertEquals("pg-id-1", pending.getFirst().id().value());
     // JSONB normalises the stored JSON (adds spaces after colons)
-    assertEquals("{\"order\": \"1\"}", pending.get(0).payload());
-    assertEquals("OrderCreated", pending.get(0).payloadType());
+    assertEquals("{\"order\": \"1\"}", pending.getFirst().payload());
+    assertEquals("OrderCreated", pending.getFirst().payloadType());
     // loadPending claims the entry: status moves PENDING -> IN_PROGRESS
-    assertEquals(OutboxStatus.IN_PROGRESS, pending.get(0).status());
-    assertEquals(0, pending.get(0).attempts());
-    assertNull(pending.get(0).lastError());
-    assertNotNull(pending.get(0).createdAt());
+    assertEquals(OutboxStatus.IN_PROGRESS, pending.getFirst().status());
+    assertEquals(0, pending.getFirst().attempts());
+    assertNull(pending.getFirst().lastError());
+    assertNotNull(pending.getFirst().createdAt());
   }
 
   @Test
@@ -195,7 +201,7 @@ class PostgresOutboxStoreTest {
 
     var reclaimed = store.loadPending(10);
     assertEquals(1, reclaimed.size(), "expired claim should be reclaimable");
-    assertEquals(id.value(), reclaimed.get(0).id().value());
+    assertEquals(id.value(), reclaimed.getFirst().id().value());
   }
 
   @Test
@@ -289,7 +295,7 @@ class PostgresOutboxStoreTest {
 
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals(TestStreams.stream("order-42"), pending.get(0).streamId());
+    assertEquals(TestStreams.stream("order-42"), pending.getFirst().streamId());
   }
 
   /**
@@ -308,17 +314,17 @@ class PostgresOutboxStoreTest {
 
     var found = store.findByStatus(OutboxStatus.PENDING, 10);
     assertEquals(1, found.size());
-    assertEquals(TestStreams.stream(raw), found.get(0).streamId());
+    assertEquals(TestStreams.stream(raw), found.getFirst().streamId());
 
     var claimed = store.loadPending(10);
     assertEquals(1, claimed.size());
-    assertEquals(TestStreams.stream(raw), claimed.get(0).streamId());
+    assertEquals(TestStreams.stream(raw), claimed.getFirst().streamId());
   }
 
   @Test
   void loadPending_returns_null_aggregate_id_for_entries_without_one() {
     store.save(OutboxEntry.pending(OutboxEntryId.of("pg-agg-null"), "{}", "Event"));
-    assertNull(store.loadPending(10).get(0).streamId());
+    assertNull(store.loadPending(10).getFirst().streamId());
   }
 
   @Test
@@ -413,14 +419,14 @@ class PostgresOutboxStoreTest {
   }
 
   @Test
-  void loadPending_respects_limit_and_returns_oldest_first() throws InterruptedException {
+  void loadPending_respects_limit_and_returns_oldest_first() throws Exception {
     store.save(OutboxEntry.pending(OutboxEntryId.of("old"), "{}", "Event"));
     Thread.sleep(10);
     store.save(OutboxEntry.pending(OutboxEntryId.of("new"), "{}", "Event"));
 
     var result = store.loadPending(1);
     assertEquals(1, result.size());
-    assertEquals("old", result.get(0).id().value());
+    assertEquals("old", result.getFirst().id().value());
   }
 
   @Test
@@ -530,9 +536,9 @@ class PostgresOutboxStoreTest {
 
     var pending = store.loadPending(10);
     assertEquals(1, pending.size());
-    assertEquals("pg-past", pending.get(0).id().value());
-    assertEquals(1, pending.get(0).attempts());
-    assertEquals("err", pending.get(0).lastError());
+    assertEquals("pg-past", pending.getFirst().id().value());
+    assertEquals(1, pending.getFirst().attempts());
+    assertEquals("err", pending.getFirst().lastError());
   }
 
   @Test
@@ -872,7 +878,7 @@ class PostgresOutboxStoreTest {
     assertTrue(store.markRetry(a, 4, "earlier nack", java.time.Duration.ZERO, store.claimedBy()));
     var reclaimed = store.loadPending(10);
     assertEquals(1, reclaimed.size(), "only the released entry is claimable again");
-    var beforeA = reclaimed.get(0);
+    var beforeA = reclaimed.getFirst();
     assertEquals(a, beforeA.id());
     assertEquals(4, beforeA.attempts());
 

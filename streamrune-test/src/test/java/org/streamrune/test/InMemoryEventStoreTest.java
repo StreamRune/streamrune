@@ -1,6 +1,13 @@
 package org.streamrune.test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -240,7 +247,7 @@ class InMemoryEventStoreTest {
 
     List<EventEnvelope> all = store.readGlobalStream(GlobalOffset.initial(), 100);
     assertEquals(3, all.size());
-    assertEquals(1, all.get(0).globalOffset().value());
+    assertEquals(1, all.getFirst().globalOffset().value());
     assertEquals(3, all.get(2).globalOffset().value());
   }
 

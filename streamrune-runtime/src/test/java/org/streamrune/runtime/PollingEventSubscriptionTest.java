@@ -1,6 +1,10 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -218,7 +222,7 @@ class PollingEventSubscriptionTest {
   }
 
   @Test
-  void startAndCloseToggleRunningFlag() throws InterruptedException {
+  void startAndCloseToggleRunningFlag() throws Exception {
     var store = new InMemoryEventStore();
     var sub =
         new PollingEventSubscription(
@@ -259,7 +263,7 @@ class PollingEventSubscriptionTest {
   }
 
   @Test
-  void closeWaitsForInFlightBatch() throws InterruptedException {
+  void closeWaitsForInFlightBatch() throws Exception {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("close-wait"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
@@ -340,7 +344,7 @@ class PollingEventSubscriptionTest {
   }
 
   @Test
-  void backgroundPollLoopDeliversEvents() throws InterruptedException {
+  void backgroundPollLoopDeliversEvents() throws Exception {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-bg"));
     store.append(s, List.of(envelope(s, 1), envelope(s, 2)), Version.initial());
@@ -365,7 +369,7 @@ class PollingEventSubscriptionTest {
   }
 
   @Test
-  void backgroundPollLoopSurvivesListenerExceptionAndRecovers() throws InterruptedException {
+  void backgroundPollLoopSurvivesListenerExceptionAndRecovers() throws Exception {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-err"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
@@ -407,7 +411,7 @@ class PollingEventSubscriptionTest {
   }
 
   @Test
-  void pollThreadDyingOnUncaughtErrorFlipsIsRunningFalse() throws InterruptedException {
+  void pollThreadDyingOnUncaughtErrorFlipsIsRunningFalse() throws Exception {
     // ResilientPollLoop retries only RuntimeException; a java.lang.Error (AssertionError,
     // NoClassDefFoundError/LinkageError, StackOverflowError) escapes it and kills the virtual poll
     // thread. Without a finally on runPollLoop() the lifecycle stays RUNNING, so isRunning() keeps
@@ -457,7 +461,7 @@ class PollingEventSubscriptionTest {
   }
 
   @Test
-  void consecutiveFailuresReportedWhileListenerKeepsFailing() throws InterruptedException {
+  void consecutiveFailuresReportedWhileListenerKeepsFailing() throws Exception {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-degraded"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());

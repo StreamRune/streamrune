@@ -1,5 +1,6 @@
 package org.streamrune.core;
 
+import java.io.Serial;
 import org.streamrune.core.types.IdConstraints;
 
 /**
@@ -38,7 +39,7 @@ import org.streamrune.core.types.IdConstraints;
  */
 public final class ReservedCorrelationIdException extends RuntimeException {
 
-  private static final long serialVersionUID = 1L;
+  @Serial private static final long serialVersionUID = 1L;
 
   /** Creates the refusal with its one fixed message. */
   public ReservedCorrelationIdException() {

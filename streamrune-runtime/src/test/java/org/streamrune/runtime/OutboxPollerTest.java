@@ -1,6 +1,13 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -197,42 +204,53 @@ class OutboxPollerTest {
     // does not trip the guard.
     var optOutStore =
         new org.streamrune.core.outbox.OutboxStore() {
+          @Override
           public String claimedBy() {
             return "test";
           }
 
+          @Override
           public void save(OutboxEntry e) {}
 
+          @Override
           public List<OutboxEntry> loadPending(int limit) {
             return List.of();
           }
 
+          @Override
           public boolean markDelivered(OutboxEntryId id, String c) {
             return true;
           }
 
+          @Override
           public boolean markFailed(OutboxEntryId id, int a, String e, String c) {
             return true;
           }
 
+          @Override
           public boolean markRetry(OutboxEntryId id, int a, String e, Duration n, String c) {
             return true;
           }
 
+          @Override
           public void delete(OutboxEntryId id) {}
 
+          @Override
           public List<OutboxEntry> findByStatus(OutboxStatus s, int limit) {
             return List.of();
           }
 
+          @Override
           public boolean resetFailedToPending(OutboxEntryId id) {
             return false;
           }
 
+          @Override
           public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
             return java.util.Optional.empty();
           }
 
+          @Override
           public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
             return false;
           }
@@ -268,42 +286,53 @@ class OutboxPollerTest {
     // not actually honour (which would produce duplicate + out-of-aggregate-order deliveries).
     var noLeaseStore =
         new org.streamrune.core.outbox.OutboxStore() {
+          @Override
           public String claimedBy() {
             return "test";
           }
 
+          @Override
           public void save(OutboxEntry e) {}
 
+          @Override
           public List<OutboxEntry> loadPending(int limit) {
             return List.of();
           }
 
+          @Override
           public boolean markDelivered(OutboxEntryId id, String c) {
             return true;
           }
 
+          @Override
           public boolean markFailed(OutboxEntryId id, int a, String e, String c) {
             return true;
           }
 
+          @Override
           public boolean markRetry(OutboxEntryId id, int a, String e, Duration n, String c) {
             return true;
           }
 
+          @Override
           public void delete(OutboxEntryId id) {}
 
+          @Override
           public List<OutboxEntry> findByStatus(OutboxStatus s, int limit) {
             return List.of();
           }
 
+          @Override
           public boolean resetFailedToPending(OutboxEntryId id) {
             return false;
           }
 
+          @Override
           public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
             return java.util.Optional.empty();
           }
 
+          @Override
           public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
             return false;
           }
@@ -436,11 +465,11 @@ class OutboxPollerTest {
     assertEquals(1, entries.size());
     assertEquals(
         OutboxStatus.IN_PROGRESS,
-        entries.get(0).status(),
+        entries.getFirst().status(),
         "an in-flight/unconfirmed failure must leave the entry IN_PROGRESS (claimed) for"
             + " lease-reclaim, not release it to PENDING for immediate re-claim (which would reorder)");
     assertEquals(
-        0, entries.get(0).attempts(), "an in-flight failure must not burn a retry attempt");
+        0, entries.getFirst().attempts(), "an in-flight failure must not burn a retry attempt");
     assertTrue(
         store.loadPending(10).isEmpty(),
         "the in-flight entry must not be immediately re-claimable by another relay");
@@ -494,10 +523,10 @@ class OutboxPollerTest {
     assertEquals(1, entries.size());
     assertEquals(
         OutboxStatus.IN_PROGRESS,
-        entries.get(0).status(),
+        entries.getFirst().status(),
         "fail SAFE: the claim is held for the full lease (as if horizon == lease) — releasing it"
             + " early would let a second relay re-publish a possibly-still-in-flight entry");
-    assertEquals(0, entries.get(0).attempts(), "the violation must not burn a retry attempt");
+    assertEquals(0, entries.getFirst().attempts(), "the violation must not burn a retry attempt");
     assertEquals(
         1,
         metrics.inFlightHorizonViolations,
@@ -536,7 +565,8 @@ class OutboxPollerTest {
 
     poller.processBatch();
 
-    assertEquals(OutboxStatus.IN_PROGRESS, store.all().get(0).status(), "claim held as designed");
+    assertEquals(
+        OutboxStatus.IN_PROGRESS, store.all().getFirst().status(), "claim held as designed");
     assertEquals(
         0,
         metrics.inFlightHorizonViolations,
@@ -550,9 +580,9 @@ class OutboxPollerTest {
     pollerWithDefaults(entry -> published.add(entry)).processBatch();
 
     assertEquals(1, published.size());
-    assertEquals("e1", published.get(0).id().value());
+    assertEquals("e1", published.getFirst().id().value());
     assertTrue(store.loadPending(10).isEmpty());
-    assertEquals(OutboxStatus.DELIVERED, store.all().get(0).status());
+    assertEquals(OutboxStatus.DELIVERED, store.all().getFirst().status());
   }
 
   @Test
@@ -580,11 +610,11 @@ class OutboxPollerTest {
 
     var entries = store.all();
     assertEquals(1, entries.size());
-    assertEquals(OutboxStatus.PENDING, entries.get(0).status());
-    assertEquals(1, entries.get(0).attempts());
-    assertEquals("delivery failed", entries.get(0).lastError());
+    assertEquals(OutboxStatus.PENDING, entries.getFirst().status());
+    assertEquals(1, entries.getFirst().attempts());
+    assertEquals("delivery failed", entries.getFirst().lastError());
     assertTrue(
-        entries.get(0).nextRetryAt().isAfter(Instant.now()),
+        entries.getFirst().nextRetryAt().isAfter(Instant.now()),
         "nextRetryAt must be in the future after a failed delivery");
   }
 
@@ -607,12 +637,12 @@ class OutboxPollerTest {
 
     var entries = store.all();
     assertEquals(1, entries.size());
-    assertEquals(LogSanitizer.sanitizeFreeText(raw), entries.get(0).lastError());
-    assertFalse(entries.get(0).lastError().chars().anyMatch(Character::isISOControl));
+    assertEquals(LogSanitizer.sanitizeFreeText(raw), entries.getFirst().lastError());
+    assertFalse(entries.getFirst().lastError().chars().anyMatch(Character::isISOControl));
   }
 
   @Test
-  void processBatch_marks_failed_after_maxAttempts_exhausted() throws InterruptedException {
+  void processBatch_marks_failed_after_maxAttempts_exhausted() throws Exception {
     // The poller passes a Duration backoff and the store DB-stamps next_retry_at from its own clock
     // (here the real-clock InMemory store): a 1ms backoff releases the entry to PENDING with
     // next_retry_at ~1ms out, a short sleep makes it eligible again, and the poller RE-CLAIMS it
@@ -930,13 +960,13 @@ class OutboxPollerTest {
     assertEquals(2, published.size(), "both entries must be published");
     assertEquals(0, deliveredSingleIds.size(), "markDelivered(id) must NOT be called per-entry");
     assertEquals(1, deliveredAllCollections.size(), "markDeliveredAll must be called exactly once");
-    var deliveredIds = deliveredAllCollections.get(0);
+    var deliveredIds = deliveredAllCollections.getFirst();
     assertEquals(2, deliveredIds.size(), "markDeliveredAll must include both ids");
     assertTrue(
-        deliveredIds.stream().anyMatch(id -> id.value().equals("batch1")),
+        deliveredIds.stream().anyMatch(id -> "batch1".equals(id.value())),
         "batch1 must be in the delivered-all collection");
     assertTrue(
-        deliveredIds.stream().anyMatch(id -> id.value().equals("batch2")),
+        deliveredIds.stream().anyMatch(id -> "batch2".equals(id.value())),
         "batch2 must be in the delivered-all collection");
   }
 
@@ -1021,7 +1051,7 @@ class OutboxPollerTest {
             var confirmed = new java.util.LinkedHashSet<OutboxEntryId>();
             var failed = new java.util.LinkedHashMap<OutboxEntryId, Exception>();
             for (OutboxEntry e : entries) {
-              if (e.id().value().equals("ok")) {
+              if ("ok".equals(e.id().value())) {
                 confirmed.add(e.id());
               } else {
                 failed.put(e.id(), new RuntimeException("broker nack"));
@@ -1034,9 +1064,9 @@ class OutboxPollerTest {
     pollerWithDefaults(partialPublisher).processBatch();
 
     var all = store.all();
-    var okEntry = all.stream().filter(e -> e.id().value().equals("ok")).findFirst().orElseThrow();
+    var okEntry = all.stream().filter(e -> "ok".equals(e.id().value())).findFirst().orElseThrow();
     var failEntry =
-        all.stream().filter(e -> e.id().value().equals("fail")).findFirst().orElseThrow();
+        all.stream().filter(e -> "fail".equals(e.id().value())).findFirst().orElseThrow();
 
     assertEquals(OutboxStatus.DELIVERED, okEntry.status(), "'ok' entry must be DELIVERED");
     assertEquals(OutboxStatus.PENDING, failEntry.status(), "'fail' entry must remain PENDING");
@@ -1089,8 +1119,8 @@ class OutboxPollerTest {
             + " of "
             + total
             + ")");
-    assertTrue(
-        publishedIds.size() >= 1, "at least the first entry is attempted before the deadline");
+    assertFalse(
+        publishedIds.isEmpty(), "at least the first entry is attempted before the deadline");
 
     long delivered = store.all().stream().filter(e -> e.status() == OutboxStatus.DELIVERED).count();
     long stillClaimed =
@@ -1560,7 +1590,7 @@ class OutboxPollerTest {
       clock.advance(Duration.ofMinutes(2)); // elapse the (capped) backoff so it is re-claimed
     }
 
-    var entry = store.all().get(0);
+    var entry = store.all().getFirst();
     assertEquals(
         OutboxStatus.PENDING,
         entry.status(),
@@ -1619,7 +1649,7 @@ class OutboxPollerTest {
       clock.advance(Duration.ofMinutes(2)); // elapse the (capped) backoff so it is re-claimed
     }
 
-    var entry = store.all().get(0);
+    var entry = store.all().getFirst();
     assertEquals(
         OutboxStatus.PENDING,
         entry.status(),
@@ -1678,7 +1708,7 @@ class OutboxPollerTest {
       poller.processBatch();
       clock.advance(Duration.ofMinutes(2)); // elapse the capped backoff so it is re-claimed
     }
-    var afterOutage = store.all().get(0);
+    var afterOutage = store.all().getFirst();
     assertEquals(
         OutboxStatus.PENDING, afterOutage.status(), "a transport outage never terminal-FAILs");
     assertEquals(
@@ -1690,7 +1720,7 @@ class OutboxPollerTest {
     // failure must NOT terminal-FAIL — the outage did not pre-burn the ladder.
     publisher.kind = org.streamrune.core.outbox.OutboxPublisher.FailureKind.ENTRY;
     poller.processBatch();
-    var afterFirstEntry = store.all().get(0);
+    var afterFirstEntry = store.all().getFirst();
     assertEquals(
         OutboxStatus.PENDING,
         afterFirstEntry.status(),
@@ -1703,7 +1733,7 @@ class OutboxPollerTest {
     poller.processBatch(); // ENTRY attempt 2
     clock.advance(Duration.ofMinutes(2));
     poller.processBatch(); // ENTRY attempt 3 → terminal
-    var terminal = store.all().get(0);
+    var terminal = store.all().getFirst();
     assertEquals(OutboxStatus.FAILED, terminal.status());
     assertEquals(3, terminal.attempts());
     assertEquals(1, metrics.deliveryFailed);
@@ -1736,7 +1766,7 @@ class OutboxPollerTest {
       clock.advance(Duration.ofMinutes(2));
     }
 
-    var entry = store.all().get(0);
+    var entry = store.all().getFirst();
     assertEquals(
         OutboxStatus.FAILED,
         entry.status(),
@@ -1773,7 +1803,7 @@ class OutboxPollerTest {
       poller.processBatch();
     }
 
-    var entry = store.all().get(0);
+    var entry = store.all().getFirst();
     // The clock was NOT advanced after the last markRetry, so clock.now() is that markRetry instant
     // and next_retry_at = clock.now() + backoff. The scheduled backoff must be <= the 60s cap,
     // proving it did not grow to initialDelay * 2^n.
@@ -1850,10 +1880,10 @@ class OutboxPollerTest {
 
     assertEquals(
         Duration.ofSeconds(1),
-        stamped.get(0),
+        stamped.getFirst(),
         "the FIRST transport retry must still fire at initialDelay (fast re-probe): " + stamped);
     assertTrue(
-        stamped.get(1).compareTo(stamped.get(0)) > 0,
+        stamped.get(1).compareTo(stamped.getFirst()) > 0,
         "the retry cadence must ESCALATE across the cycles of a sustained outage, not stay pinned at"
             + " initialDelay every cycle: "
             + stamped);
@@ -1868,11 +1898,11 @@ class OutboxPollerTest {
     }
     assertEquals(
         Duration.ofSeconds(60),
-        stamped.get(stamped.size() - 1),
+        stamped.getLast(),
         "a sustained outage must saturate at the 60s cap: " + stamped);
 
     // Pin: the escalating cadence must NOT be bought by counting attempts.
-    var entry = store.all().get(0);
+    var entry = store.all().getFirst();
     assertEquals(
         OutboxStatus.PENDING, entry.status(), "a transport outage never terminal-FAILs the entry");
     assertEquals(
@@ -1934,7 +1964,7 @@ class OutboxPollerTest {
     // Escalation is unambiguous across the ramp even at the worst jitter draw: the 6th rung's floor
     // (32s * 0.5 = 16s) is far above the 1st rung's ceiling (1s * 1.5 = 1.5s).
     assertTrue(
-        stamped.get(5).compareTo(stamped.get(0)) > 0,
+        stamped.get(5).compareTo(stamped.getFirst()) > 0,
         "the jittered cadence must still escalate across the outage: " + stamped);
   }
 
@@ -1974,7 +2004,7 @@ class OutboxPollerTest {
     assertEquals(
         OutboxStatus.DELIVERED,
         store.all().stream()
-            .filter(e -> e.id().value().equals("recover-a"))
+            .filter(e -> "recover-a".equals(e.id().value()))
             .findFirst()
             .orElseThrow()
             .status(),
@@ -2021,7 +2051,7 @@ class OutboxPollerTest {
     }
     var inflight =
         store.all().stream()
-            .filter(e -> e.id().value().equals("inflight-a"))
+            .filter(e -> "inflight-a".equals(e.id().value()))
             .findFirst()
             .orElseThrow();
     assertEquals(
@@ -2071,7 +2101,7 @@ class OutboxPollerTest {
 
     var entry =
         store.all().stream()
-            .filter(e -> e.id().value().equals("mixed-1"))
+            .filter(e -> "mixed-1".equals(e.id().value()))
             .findFirst()
             .orElseThrow();
     assertEquals(1, entry.attempts(), "the first ENTRY rejection burns ladder attempt 1");
@@ -2144,10 +2174,10 @@ class OutboxPollerTest {
 
     assertEquals(
         Duration.ofSeconds(1),
-        stamped.get(0),
+        stamped.getFirst(),
         "the FIRST transport retry must still fire at initialDelay (fast re-probe): " + stamped);
     assertTrue(
-        stamped.get(1).compareTo(stamped.get(0)) > 0,
+        stamped.get(1).compareTo(stamped.getFirst()) > 0,
         "a repeatedly transport-failing ENTRY must escalate its cadence even while other traffic"
             + " confirms — healthy confirms must not pin the poisoned head at initialDelay forever"
             + ": "
@@ -2162,13 +2192,13 @@ class OutboxPollerTest {
     }
     assertEquals(
         Duration.ofSeconds(60),
-        stamped.get(stamped.size() - 1),
+        stamped.getLast(),
         "a persistently poisoned entry must saturate at the 60s cap: " + stamped);
 
     // Pin: the per-entry escalation is relay-local, never bought by counting attempts.
     var poison =
         store.all().stream()
-            .filter(e -> e.id().value().equals("poison-1"))
+            .filter(e -> "poison-1".equals(e.id().value()))
             .findFirst()
             .orElseThrow();
     assertEquals(OutboxStatus.PENDING, poison.status(), "TRANSPORT never terminal-FAILs");
@@ -2314,7 +2344,7 @@ class OutboxPollerTest {
 
       var warns = transportWarnLines(appender);
       assertEquals(1, warns.size(), "exactly one aggregated transport WARN per cycle: " + warns);
-      String warn = warns.get(0);
+      String warn = warns.getFirst();
       assertTrue(
           warn.contains("poison-1"),
           "the aggregated transport WARN must name a representative failing entry so the operator"
@@ -2358,7 +2388,7 @@ class OutboxPollerTest {
 
       var warns = transportWarnLines(appender);
       assertEquals(1, warns.size(), "exactly one aggregated transport WARN per cycle: " + warns);
-      String warn = warns.get(0);
+      String warn = warns.getFirst();
       assertTrue(
           warn.contains("a broker-wide TRANSPORT failure"),
           "when every claimed entry failed transport, the broker-wide claim is honest and must"
@@ -2440,7 +2470,7 @@ class OutboxPollerTest {
 
       var warns = transportWarnLines(appender);
       assertEquals(1, warns.size(), "exactly one aggregated transport WARN per cycle: " + warns);
-      String warn = warns.get(0);
+      String warn = warns.getFirst();
       assertTrue(
           warn.contains("a broker-wide TRANSPORT failure"),
           "every entry the cycle actually resolved failed transport — the truncated"
@@ -2477,7 +2507,7 @@ class OutboxPollerTest {
 
       var warns = transportWarnLines(appender);
       assertEquals(1, warns.size(), "exactly one aggregated transport WARN per cycle: " + warns);
-      String warn = warns.get(0);
+      String warn = warns.getFirst();
       assertFalse(
           warn.contains("a broker-wide TRANSPORT failure"),
           "a single resolved entry is not evidence of a broker-wide outage — the relay never saw"
@@ -2528,7 +2558,7 @@ class OutboxPollerTest {
               .filter(m -> m.contains("Outbox delivery failed for entry"))
               .toList();
       assertEquals(1, warns.size(), "exactly one ENTRY-retry WARN: " + warns);
-      String warn = warns.get(0);
+      String warn = warns.getFirst();
       assertFalse(
           warn.contains("\nERROR forged log line"),
           "the injected newline must be stripped before this entry id reaches the log sink —"
@@ -2602,13 +2632,13 @@ class OutboxPollerTest {
 
     for (int cycle = 0; cycle < 6; cycle++) { // twice the 3-attempt ladder
       poller.processBatch();
-      if (store.all().get(0).status() != OutboxStatus.PENDING) {
+      if (store.all().getFirst().status() != OutboxStatus.PENDING) {
         break; // terminal — the assertions below report the regression
       }
       clock.advance(stampedBackoff(store, clock, "nullerr-1").plusMillis(1));
     }
 
-    var entry = store.all().get(0);
+    var entry = store.all().getFirst();
     assertEquals(
         OutboxStatus.PENDING,
         entry.status(),
@@ -2750,7 +2780,7 @@ class OutboxPollerTest {
   /** Records recordOutboxDeliveryFailed() calls; all other methods are no-ops. */
   private static final class DeliveryFailedMetrics
       implements org.streamrune.core.StreamRuneMetrics {
-    int deliveryFailed = 0;
+    int deliveryFailed;
 
     @Override
     public void recordOutboxDeliveryFailed() {
@@ -2812,7 +2842,8 @@ class OutboxPollerTest {
 
     poller.processBatch();
     assertEquals(0, metrics.deliveryFailed, "a scheduled retry must not emit the terminal metric");
-    assertEquals(OutboxStatus.PENDING, store.all().get(0).status(), "entry is retrying (PENDING)");
+    assertEquals(
+        OutboxStatus.PENDING, store.all().getFirst().status(), "entry is retrying (PENDING)");
   }
 
   // ── At-least-once crash window: publish SUCCEEDS then the process dies BEFORE markDelivered ──
@@ -2827,7 +2858,7 @@ class OutboxPollerTest {
   private static final class CrashBeforeDeliveredStore
       implements org.streamrune.core.outbox.OutboxStore {
     private final org.streamrune.core.outbox.OutboxStore inner;
-    private boolean crashed = false;
+    private boolean crashed;
 
     CrashBeforeDeliveredStore(org.streamrune.core.outbox.OutboxStore inner) {
       this.inner = inner;
@@ -2938,7 +2969,7 @@ class OutboxPollerTest {
     // The entry was published exactly once so far, but its outcome was NEVER recorded: it is not
     // DELIVERED, not FAILED — it stays IN_PROGRESS (a live, now-orphaned claim), i.e. NOT LOST.
     assertEquals(1, delivered.size(), "relay #1 published the entry once before crashing");
-    var afterCrash = innerStore.all().get(0);
+    var afterCrash = innerStore.all().getFirst();
     assertEquals(
         OutboxStatus.IN_PROGRESS,
         afterCrash.status(),
@@ -2968,11 +2999,11 @@ class OutboxPollerTest {
         delivered.size(),
         "the entry must be REDELIVERED after the crash — at-least-once, so the receiver sees the "
             + "duplicate");
-    assertEquals(OutboxEntryId.of("crash-1"), delivered.get(0));
+    assertEquals(OutboxEntryId.of("crash-1"), delivered.getFirst());
     assertEquals(OutboxEntryId.of("crash-1"), delivered.get(1), "same entry delivered twice");
     assertEquals(
         OutboxStatus.DELIVERED,
-        innerStore.all().get(0).status(),
+        innerStore.all().getFirst().status(),
         "after the recovering relay records the outcome the entry is finally DELIVERED");
   }
 
@@ -2980,12 +3011,12 @@ class OutboxPollerTest {
 
   /** Recording {@link org.streamrune.core.StreamRuneMetrics} double for the observability tests. */
   static final class RecordingMetrics implements org.streamrune.core.StreamRuneMetrics {
-    int deliveryFailed = 0;
-    int inFlightHorizonViolations = 0;
+    int deliveryFailed;
+    int inFlightHorizonViolations;
     long lastBacklog = -1;
     long lastInFlight = -1;
     volatile long lastRelayDegradation = -1;
-    volatile int relayDegradationSamples = 0;
+    volatile int relayDegradationSamples;
     volatile long lastBlockedAggregates = -1;
     volatile long lastBlockageAge = -1;
 
@@ -3041,7 +3072,7 @@ class OutboxPollerTest {
   }
 
   @Test
-  void processBatch_emits_deliveryFailed_metric_on_terminal_failure() throws InterruptedException {
+  void processBatch_emits_deliveryFailed_metric_on_terminal_failure() throws Exception {
     // The documented alert metric streamrune.outbox.delivery_failed must actually fire when an
     // entry exhausts its retry ladder and reaches terminal FAILED — this is what the auto-configs
     // silently never wired.
@@ -3064,7 +3095,7 @@ class OutboxPollerTest {
 
     assertEquals(
         OutboxStatus.FAILED,
-        store.all().get(0).status(),
+        store.all().getFirst().status(),
         "entry must reach terminal FAILED after exhausting attempts");
     assertEquals(
         1, metrics.deliveryFailed, "streamrune.outbox.delivery_failed must fire exactly once");
@@ -3156,7 +3187,7 @@ class OutboxPollerTest {
   }
 
   @Test
-  void relay_degradation_gauge_rises_under_sustained_store_failure() throws InterruptedException {
+  void relay_degradation_gauge_rises_under_sustained_store_failure() throws Exception {
     // End-to-end: a relay whose store keeps throwing stays alive and retries with backoff;
     // consecutiveFailures() climbs and is surfaced on the degradation gauge (previously log-only).
     var metrics = new RecordingMetrics();
@@ -3256,7 +3287,7 @@ class OutboxPollerTest {
 
     assertEquals(
         OutboxStatus.FAILED,
-        store.all().get(0).status(),
+        store.all().getFirst().status(),
         "the entry must still reach terminal FAILED despite the metrics throw");
   }
 
@@ -3287,7 +3318,7 @@ class OutboxPollerTest {
 
     assertEquals(
         OutboxStatus.IN_PROGRESS,
-        store.all().get(0).status(),
+        store.all().getFirst().status(),
         "fail SAFE: the claim must still be held for the full lease despite the metrics throw");
   }
 
@@ -3471,10 +3502,11 @@ class OutboxPollerTest {
       poller.processBatch(); // attempt 1 of 1 → terminal FAILED
       var errors = linesAt(appender, ch.qos.logback.classic.Level.ERROR);
       assertEquals(1, errors.size(), errors.toString());
-      assertTrue(errors.get(0).contains("of stream agg:agg-x"), errors.get(0));
-      assertTrue(errors.get(0).contains("stream BLOCKED"), errors.get(0));
+      assertTrue(errors.getFirst().contains("of stream agg:agg-x"), errors.getFirst());
+      assertTrue(errors.getFirst().contains("stream BLOCKED"), errors.getFirst());
       assertTrue(
-          errors.get(0).contains("replayed or skipped (OutboxFailedReplayer)"), errors.get(0));
+          errors.getFirst().contains("replayed or skipped (OutboxFailedReplayer)"),
+          errors.getFirst());
       assertTrue(
           strict.loadPending(10).isEmpty(), "and the aggregate really is blocked for the relay");
     } finally {
@@ -3503,9 +3535,10 @@ class OutboxPollerTest {
       var errors = linesAt(appender, ch.qos.logback.classic.Level.ERROR);
       assertEquals(1, errors.size(), errors.toString());
       assertTrue(
-          errors.get(0).contains("later entries of stream agg:agg-y continue"), errors.get(0));
-      assertTrue(errors.get(0).contains("gap until replay"), errors.get(0));
-      assertFalse(errors.get(0).contains("BLOCKED"), errors.get(0));
+          errors.getFirst().contains("later entries of stream agg:agg-y continue"),
+          errors.getFirst());
+      assertTrue(errors.getFirst().contains("gap until replay"), errors.getFirst());
+      assertFalse(errors.getFirst().contains("BLOCKED"), errors.getFirst());
     } finally {
       detachFromOutboxPollerLogger(appender);
     }
@@ -3576,8 +3609,8 @@ class OutboxPollerTest {
               .filter(l -> l.contains("sampleBlockage"))
               .toList();
       assertEquals(1, warns.size(), "WARN once, not DEBUG, not every cycle: " + warns);
-      assertTrue(warns.get(0).contains("blockage alerts will NOT fire"), warns.get(0));
-      assertTrue(warns.get(0).contains("AVAILABILITY_FIRST channel"), warns.get(0));
+      assertTrue(warns.getFirst().contains("blockage alerts will NOT fire"), warns.getFirst());
+      assertTrue(warns.getFirst().contains("AVAILABILITY_FIRST channel"), warns.getFirst());
       assertEquals(1, calls.get(), "the second cycle does not call the store again");
       assertEquals(-1, metrics.lastBlockedAggregates, "gauges disabled");
       assertEquals(0, metrics.lastBacklog, "the backlog gauges are unaffected");
@@ -3617,8 +3650,9 @@ class OutboxPollerTest {
               .filter(l -> l.contains("FAILED entries with no aggregate_id"))
               .toList();
       assertEquals(1, warns.size(), warns.toString());
-      assertTrue(warns.get(0).startsWith("Strict outbox channel holds 1 FAILED"), warns.get(0));
-      assertTrue(warns.get(0).contains("not heads, never block"), warns.get(0));
+      assertTrue(
+          warns.getFirst().startsWith("Strict outbox channel holds 1 FAILED"), warns.getFirst());
+      assertTrue(warns.getFirst().contains("not heads, never block"), warns.getFirst());
     } finally {
       detachFromOutboxPollerLogger(appender);
     }
@@ -3674,7 +3708,7 @@ class OutboxPollerTest {
       assertEquals(2, calls.get(), "retried once, then armed");
       var warns = linesAt(appender, ch.qos.logback.classic.Level.WARN);
       assertEquals(1, warns.size(), warns.toString());
-      assertTrue(warns.get(0).contains("retrying next cycle"), warns.get(0));
+      assertTrue(warns.getFirst().contains("retrying next cycle"), warns.getFirst());
     } finally {
       detachFromOutboxPollerLogger(appender);
     }

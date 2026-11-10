@@ -1,6 +1,8 @@
 package org.streamrune.runtime;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 
@@ -185,8 +187,8 @@ class MetricsWiringTest {
   /** Mutable in-memory store that can be configured to always conflict (to force retries/DLQ). */
   static final class MutableStore implements EventStore {
     private final Map<String, List<EventEnvelope>> streams = new HashMap<>();
-    private long global = 0;
-    boolean alwaysConflict = false;
+    private long global;
+    boolean alwaysConflict;
 
     @Override
     public AggregateHistory load(StreamId streamId) {

@@ -1,6 +1,7 @@
 package org.streamrune.core.outbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -17,44 +18,55 @@ class OutboxStoreDefaultMethodsTest {
     List<OutboxEntryId> marked = new ArrayList<>();
     OutboxStore store =
         new OutboxStore() {
+          @Override
           public String claimedBy() {
             return "test";
           }
 
+          @Override
           public void save(OutboxEntry e) {}
 
+          @Override
           public List<OutboxEntry> loadPending(int limit) {
             return List.of();
           }
 
+          @Override
           public boolean markDelivered(OutboxEntryId id, String claimedBy) {
             marked.add(id);
             return true; // every per-id call transitions
           }
 
+          @Override
           public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markRetry(
               OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
             return true;
           }
 
+          @Override
           public void delete(OutboxEntryId id) {}
 
+          @Override
           public List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
             return List.of();
           }
 
+          @Override
           public boolean resetFailedToPending(OutboxEntryId id) {
             return false;
           }
 
+          @Override
           public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
             return java.util.Optional.empty();
           }
 
+          @Override
           public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
             return false;
           }
@@ -69,44 +81,55 @@ class OutboxStoreDefaultMethodsTest {
   void markDeliveredAll_default_countsOnlyTransitionedRows() {
     OutboxStore store =
         new OutboxStore() {
+          @Override
           public String claimedBy() {
             return "test";
           }
 
+          @Override
           public void save(OutboxEntry e) {}
 
+          @Override
           public List<OutboxEntry> loadPending(int limit) {
             return List.of();
           }
 
+          @Override
           public boolean markDelivered(OutboxEntryId id, String claimedBy) {
             // Only "a" still holds the lease; "b" was stolen — a benign no-op.
-            return id.value().equals("a");
+            return "a".equals(id.value());
           }
 
+          @Override
           public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markRetry(
               OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
             return true;
           }
 
+          @Override
           public void delete(OutboxEntryId id) {}
 
+          @Override
           public List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
             return List.of();
           }
 
+          @Override
           public boolean resetFailedToPending(OutboxEntryId id) {
             return false;
           }
 
+          @Override
           public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
             return java.util.Optional.empty();
           }
 
+          @Override
           public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
             return false;
           }
@@ -126,98 +149,118 @@ class OutboxStoreDefaultMethodsTest {
     // runs without deadline-bounding overrides claimLease() to return a non-positive Duration.
     OutboxStore store =
         new OutboxStore() {
+          @Override
           public String claimedBy() {
             return "test";
           }
 
+          @Override
           public void save(OutboxEntry e) {}
 
+          @Override
           public List<OutboxEntry> loadPending(int limit) {
             return List.of();
           }
 
+          @Override
           public boolean markDelivered(OutboxEntryId id, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markRetry(
               OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
             return true;
           }
 
+          @Override
           public void delete(OutboxEntryId id) {}
 
+          @Override
           public List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
             return List.of();
           }
 
+          @Override
           public boolean resetFailedToPending(OutboxEntryId id) {
             return false;
           }
 
+          @Override
           public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
             return java.util.Optional.empty();
           }
 
+          @Override
           public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
             return false;
           }
         };
-    org.junit.jupiter.api.Assertions.assertThrows(
-        UnsupportedOperationException.class, store::claimLease);
+    assertThrows(UnsupportedOperationException.class, store::claimLease);
   }
 
   @Test
   void deleteDelivered_default_throwsUnsupported() {
     OutboxStore store =
         new OutboxStore() {
+          @Override
           public String claimedBy() {
             return "test";
           }
 
+          @Override
           public void save(OutboxEntry e) {}
 
+          @Override
           public List<OutboxEntry> loadPending(int limit) {
             return List.of();
           }
 
+          @Override
           public boolean markDelivered(OutboxEntryId id, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
             return true;
           }
 
+          @Override
           public boolean markRetry(
               OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
             return true;
           }
 
+          @Override
           public void delete(OutboxEntryId id) {}
 
+          @Override
           public List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
             return List.of();
           }
 
+          @Override
           public boolean resetFailedToPending(OutboxEntryId id) {
             return false;
           }
 
+          @Override
           public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
             return java.util.Optional.empty();
           }
 
+          @Override
           public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
             return false;
           }
         };
-    org.junit.jupiter.api.Assertions.assertThrows(
-        UnsupportedOperationException.class, () -> store.deleteDelivered(Instant.now()));
+    assertThrows(UnsupportedOperationException.class, () -> store.deleteDelivered(Instant.now()));
   }
 
   @Test
@@ -225,65 +268,72 @@ class OutboxStoreDefaultMethodsTest {
     // A store that does not say which ordering it enforces cannot be trusted to enforce it
     // (claimLease precedent). OutboxPoller.build() reads this before the first poll.
     OutboxStore store = minimalStore();
-    var ex =
-        org.junit.jupiter.api.Assertions.assertThrows(
-            UnsupportedOperationException.class, store::orderingMode);
+    var ex = assertThrows(UnsupportedOperationException.class, store::orderingMode);
     assertThat(ex.getMessage()).contains("orderingMode").contains("STRICT_PER_AGGREGATE");
   }
 
   @Test
   void sampleBlockage_default_throwsUnsupported() {
     OutboxStore store = minimalStore();
-    org.junit.jupiter.api.Assertions.assertThrows(
-        UnsupportedOperationException.class, store::sampleBlockage);
+    assertThrows(UnsupportedOperationException.class, store::sampleBlockage);
   }
 
   @Test
   void deleteSkipped_default_throwsUnsupported() {
     OutboxStore store = minimalStore();
-    org.junit.jupiter.api.Assertions.assertThrows(
-        UnsupportedOperationException.class, () -> store.deleteSkipped(Instant.now()));
+    assertThrows(UnsupportedOperationException.class, () -> store.deleteSkipped(Instant.now()));
   }
 
   /** The least an OutboxStore can be: every abstract method, no default overridden. */
   private static OutboxStore minimalStore() {
     return new OutboxStore() {
+      @Override
       public String claimedBy() {
         return "test";
       }
 
+      @Override
       public void save(OutboxEntry e) {}
 
+      @Override
       public List<OutboxEntry> loadPending(int limit) {
         return List.of();
       }
 
+      @Override
       public boolean markDelivered(OutboxEntryId id, String claimedBy) {
         return true;
       }
 
+      @Override
       public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
         return true;
       }
 
+      @Override
       public boolean markRetry(OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
         return true;
       }
 
+      @Override
       public void delete(OutboxEntryId id) {}
 
+      @Override
       public List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
         return List.of();
       }
 
+      @Override
       public boolean resetFailedToPending(OutboxEntryId id) {
         return false;
       }
 
+      @Override
       public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
         return java.util.Optional.empty();
       }
 
+      @Override
       public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
         return false;
       }
@@ -298,43 +348,54 @@ class OutboxStoreDefaultMethodsTest {
   private static OutboxStore retryRecordingStore(
       List<RetryCall> calls, java.util.Set<String> held) {
     return new OutboxStore() {
+      @Override
       public String claimedBy() {
         return "test";
       }
 
+      @Override
       public void save(OutboxEntry e) {}
 
+      @Override
       public List<OutboxEntry> loadPending(int limit) {
         return List.of();
       }
 
+      @Override
       public boolean markDelivered(OutboxEntryId id, String claimedBy) {
         return true;
       }
 
+      @Override
       public boolean markFailed(OutboxEntryId id, int a, String e, String claimedBy) {
         return true;
       }
 
+      @Override
       public boolean markRetry(OutboxEntryId id, int a, String e, Duration n, String claimedBy) {
         calls.add(new RetryCall(id, a, e, n, claimedBy));
         return held.contains(id.value());
       }
 
+      @Override
       public void delete(OutboxEntryId id) {}
 
+      @Override
       public List<OutboxEntry> findByStatus(OutboxStatus status, int limit) {
         return List.of();
       }
 
+      @Override
       public boolean resetFailedToPending(OutboxEntryId id) {
         return false;
       }
 
+      @Override
       public java.util.Optional<OutboxEntry> findById(OutboxEntryId id) {
         return java.util.Optional.empty();
       }
 
+      @Override
       public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
         return false;
       }

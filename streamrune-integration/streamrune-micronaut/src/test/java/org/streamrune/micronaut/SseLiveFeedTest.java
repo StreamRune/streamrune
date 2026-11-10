@@ -311,7 +311,7 @@ class SseLiveFeedTest {
   void theFeedIsReportedByTheRelayHealthContributor() {
     try (ApplicationContext context = ApplicationContext.run(sseEnabled())) {
       assertThat(context.getBean(BackgroundRelayHealthContributor.class).components())
-          .filteredOn(component -> component.name().equals("sse-event-feed"))
+          .filteredOn(component -> "sse-event-feed".equals(component.name()))
           .singleElement()
           .satisfies(
               feed -> {
@@ -358,7 +358,7 @@ class SseLiveFeedTest {
                       .isFalse());
       assertThat(context.getBean(SseEventFeedLifecycle.class).isRunning()).isFalse();
       assertThat(context.getBean(BackgroundRelayHealthContributor.class).components())
-          .noneMatch(component -> component.name().equals("sse-event-feed"));
+          .noneMatch(component -> "sse-event-feed".equals(component.name()));
     }
   }
 

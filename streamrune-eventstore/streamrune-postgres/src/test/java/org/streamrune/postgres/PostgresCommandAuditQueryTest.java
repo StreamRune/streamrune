@@ -1,6 +1,9 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -290,7 +293,7 @@ class PostgresCommandAuditQueryTest {
             PageRequest.of(0, 10));
 
     assertEquals(1, page.totalElements());
-    AuditEntry entry = page.content().get(0);
+    AuditEntry entry = page.content().getFirst();
     assertNull(entry.commandId());
     assertNull(entry.aggregateId(), "a query-origin entry has no aggregate: NULL reads back null");
     assertEquals(CorrelationId.of("corr-Q"), entry.correlationId());
@@ -311,12 +314,12 @@ class PostgresCommandAuditQueryTest {
     assertEquals(3, page.totalElements());
     assertEquals(2, page.totalPages());
     assertEquals(2, page.content().size());
-    assertEquals("cmd-a", page.content().get(0).commandId().value());
+    assertEquals("cmd-a", page.content().getFirst().commandId().value());
     assertEquals("cmd-b", page.content().get(1).commandId().value());
 
     Page<AuditEntry> page2 = query.findByUserId(UserId.of("alice"), t1, t3, PageRequest.of(1, 2));
     assertEquals(1, page2.content().size());
-    assertEquals("cmd-d", page2.content().get(0).commandId().value());
+    assertEquals("cmd-d", page2.content().getFirst().commandId().value());
   }
 
   @Test
@@ -331,7 +334,7 @@ class PostgresCommandAuditQueryTest {
     Page<AuditEntry> page = query.findByUserId(UserId.of("carol"), t1, t2, PageRequest.of(0, 10));
 
     assertEquals(2, page.totalElements());
-    assertEquals("cmd-w1", page.content().get(0).commandId().value());
+    assertEquals("cmd-w1", page.content().getFirst().commandId().value());
     assertEquals("cmd-w2", page.content().get(1).commandId().value());
   }
 
@@ -368,8 +371,8 @@ class PostgresCommandAuditQueryTest {
         query.findByOutcome(AuditOutcome.FAILURE, t1, t2.plusSeconds(1), PageRequest.of(0, 10));
 
     assertEquals(1, failures.totalElements());
-    assertEquals("fail-1", failures.content().get(0).commandId().value());
-    assertEquals("denied", failures.content().get(0).errorMessage());
+    assertEquals("fail-1", failures.content().getFirst().commandId().value());
+    assertEquals("denied", failures.content().getFirst().errorMessage());
   }
 
   @Test
@@ -383,7 +386,7 @@ class PostgresCommandAuditQueryTest {
         query.findByCommandType("PlaceOrder", t1, t2.plusSeconds(1), PageRequest.of(0, 10));
 
     assertEquals(1, page.totalElements());
-    assertEquals("p1", page.content().get(0).commandId().value());
+    assertEquals("p1", page.content().getFirst().commandId().value());
   }
 
   @Test

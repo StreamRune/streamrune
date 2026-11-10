@@ -72,7 +72,9 @@ public final class AuditCommandInterceptor implements CommandInterceptor {
       ThreadLocal.withInitial(java.util.ArrayDeque::new);
 
   public AuditCommandInterceptor(AuditStore store) {
-    if (store == null) throw new IllegalArgumentException("store is required");
+    if (store == null) {
+      throw new IllegalArgumentException("store is required");
+    }
     this.store = store;
   }
 

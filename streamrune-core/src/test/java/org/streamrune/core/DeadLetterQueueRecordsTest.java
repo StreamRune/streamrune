@@ -1,6 +1,9 @@
 package org.streamrune.core;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.Arrays;
@@ -509,7 +512,7 @@ class DeadLetterQueueRecordsTest {
             DeadLetterQueue.DeadLetterEntry.class)) {
       assertTrue(
           Arrays.stream(type.getRecordComponents())
-              .noneMatch(c -> c.getName().equals("aggregateId")),
+              .noneMatch(c -> "aggregateId".equals(c.getName())),
           type.getSimpleName() + " stores the id once, inside streamId");
     }
   }

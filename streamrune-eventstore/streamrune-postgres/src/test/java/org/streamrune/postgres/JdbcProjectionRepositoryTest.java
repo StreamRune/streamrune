@@ -1,6 +1,12 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
@@ -258,7 +264,7 @@ class JdbcProjectionRepositoryTest {
         repo.findAll(
             ProjectionName.of("sorted"), TestView.class, PageRequest.of(0, 10, Sort.by("id")));
     assertEquals(3, page.content().size());
-    assertEquals("a", page.content().get(0).id());
+    assertEquals("a", page.content().getFirst().id());
     assertEquals("b", page.content().get(1).id());
     assertEquals("c", page.content().get(2).id());
   }
@@ -274,7 +280,7 @@ class JdbcProjectionRepositoryTest {
             ProjectionName.of("json_sorted"),
             TestView.class,
             PageRequest.of(0, 10, Sort.by("data", SortDirection.ASC)));
-    assertEquals("apple", page.content().get(0).data());
+    assertEquals("apple", page.content().getFirst().data());
     assertEquals("banana", page.content().get(1).data());
     assertEquals("cherry", page.content().get(2).data());
   }
@@ -290,7 +296,7 @@ class JdbcProjectionRepositoryTest {
             ProjectionName.of("desc_sorted"),
             TestView.class,
             PageRequest.of(0, 10, Sort.by("id", SortDirection.DESC)));
-    assertEquals("c", page.content().get(0).id());
+    assertEquals("c", page.content().getFirst().id());
     assertEquals("b", page.content().get(1).id());
     assertEquals("a", page.content().get(2).id());
   }
@@ -529,7 +535,7 @@ class JdbcProjectionRepositoryTest {
   @Test
   void everyEntryPointRejectsANameOutsideTheRule_d11() {
     var pn = ProjectionName.of("order-summary");
-    var jdbc = (JdbcProjectionRepository) repo;
+    var jdbc = repo;
     var view = new TestView("id-1", "x");
     assertThrows(IllegalArgumentException.class, () -> repo.save(pn, "id-1", view));
     assertThrows(IllegalArgumentException.class, () -> repo.save(pn, "id-1", view, 0L));
@@ -604,7 +610,7 @@ class JdbcProjectionRepositoryTest {
    */
   @Test
   void checkProjectionName_acceptsAValidName_rejectsAnyOther_d11() {
-    var jdbc = (JdbcProjectionRepository) repo;
+    var jdbc = repo;
     jdbc.checkProjectionName(ProjectionName.of("order_summary"));
     jdbc.checkProjectionName(ProjectionName.of("_orders2"));
     var ex =

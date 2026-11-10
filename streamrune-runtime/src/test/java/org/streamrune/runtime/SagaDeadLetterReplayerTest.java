@@ -400,14 +400,14 @@ class SagaDeadLetterReplayerTest {
     Instant firstAttempt = h.clock.instant();
 
     assertThat(h.replayer.replay(SAGA, start.globalOffset())).isEqualTo(ReplayOutcome.STILL_POISON);
-    assertThat(h.entries().get(0).firstReplayStartedAt()).isEqualTo(firstAttempt);
+    assertThat(h.entries().getFirst().firstReplayStartedAt()).isEqualTo(firstAttempt);
 
     h.clock.advance(WINDOW.plusHours(1));
     h.orchestrator.evolvePoison.clear();
     assertThat(h.replayer.replay(SAGA, start.globalOffset()))
         .isEqualTo(ReplayOutcome.STALE_REDRIVE_BLOCKED);
     assertThat(h.bus.count("step-1")).isZero();
-    assertThat(h.entries().get(0).firstReplayStartedAt())
+    assertThat(h.entries().getFirst().firstReplayStartedAt())
         .as("immutable anchor")
         .isEqualTo(firstAttempt);
 
@@ -516,7 +516,7 @@ class SagaDeadLetterReplayerTest {
     h.deliver(start);
     h.orchestrator.evolvePoison.add(h.offset(corr));
     h.deliver(corr);
-    Instant before = h.entries().get(0).faultedAt();
+    Instant before = h.entries().getFirst().faultedAt();
     long versionBefore = h.row().version();
     h.clock.advance(Duration.ofMinutes(1));
 
@@ -527,7 +527,7 @@ class SagaDeadLetterReplayerTest {
     assertThat(row.version())
         .as("the refresh fault bumps the version; nothing was un-faulted")
         .isEqualTo(versionBefore + 1);
-    assertThat(h.entries().get(0).faultedAt()).isAfter(before);
+    assertThat(h.entries().getFirst().faultedAt()).isAfter(before);
   }
 
   @Test
@@ -1282,7 +1282,7 @@ class SagaDeadLetterReplayerTest {
     assertThat(catchThrowable(() -> h.replayer.replayAll(SAGA)))
         .isInstanceOf(ForwardingSagaStore.SimulatedCrash.class);
     assertThat(h.orchestrator.consumed).as("nothing was fed").containsExactly(h.offset(start));
-    assertThat(h.entries().get(0).firstReplayStartedAt()).isEqualTo(anchor);
+    assertThat(h.entries().getFirst().firstReplayStartedAt()).isEqualTo(anchor);
     assertThat(h.row().status()).isEqualTo(SagaStatus.FAULTED);
 
     h.clock.advance(Duration.ofHours(1));

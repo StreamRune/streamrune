@@ -259,8 +259,8 @@ class SagaCompensationUnderForwardStepSignalTest {
                           Instant.now()))),
               Version.initial());
       return eventStore
-          .readGlobalStream(GlobalOffset.of(appended.globalOffsets().get(0).value() - 1), 1)
-          .get(0);
+          .readGlobalStream(GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 1)
+          .getFirst();
     }
 
     void deliver(EventEnvelope event) {
@@ -284,7 +284,7 @@ class SagaCompensationUnderForwardStepSignalTest {
     /** The simple names of the stored forward and compensation events, in global order. */
     List<String> storedOrder() {
       return eventStore.readGlobalStream(GlobalOffset.initial(), 1_000).stream()
-          .map(e -> (DomainEvent) e.event())
+          .map(EventEnvelope::event)
           .filter(
               e ->
                   e instanceof Reserved

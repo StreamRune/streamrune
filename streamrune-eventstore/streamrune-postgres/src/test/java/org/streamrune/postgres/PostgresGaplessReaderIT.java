@@ -193,8 +193,8 @@ class PostgresGaplessReaderIT {
         batch.stream().map(e -> e.globalOffset().value()).toList(),
         "a checkpoint below the stream start must deliver from the first available offset, not"
             + " stall");
-    assertEquals(41L, r1.globalOffsets().get(0).value());
-    assertEquals(42L, r2.globalOffsets().get(0).value());
+    assertEquals(41L, r1.globalOffsets().getFirst().value());
+    assertEquals(42L, r2.globalOffsets().getFirst().value());
   }
 
   @Test
@@ -330,7 +330,7 @@ class PostgresGaplessReaderIT {
           "E1,E2 must be delivered immediately despite the unrelated open transaction — no added"
               + " latency, no withholding");
       assertTrue(
-          r1.globalOffsets().get(0).value() == 1 && r2.globalOffsets().get(0).value() == 2,
+          r1.globalOffsets().getFirst().value() == 1 && r2.globalOffsets().getFirst().value() == 2,
           "sanity: the two appends took offsets 1 and 2");
 
       longConn.rollback();

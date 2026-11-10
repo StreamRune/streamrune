@@ -75,7 +75,8 @@ class SagaTimeoutRunnerPollLoopTest {
     runner.start();
     try {
       awaitTrue(() -> attemptNanos.size() >= 3, "three poll attempts");
-      long firstGapMs = TimeUnit.NANOSECONDS.toMillis(attemptNanos.get(1) - attemptNanos.get(0));
+      long firstGapMs =
+          TimeUnit.NANOSECONDS.toMillis(attemptNanos.get(1) - attemptNanos.getFirst());
       long secondGapMs = TimeUnit.NANOSECONDS.toMillis(attemptNanos.get(2) - attemptNanos.get(1));
       assertTrue(
           firstGapMs >= 150,

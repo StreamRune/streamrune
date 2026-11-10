@@ -558,7 +558,7 @@ class ProjectionRunnerLeadershipTest {
     var chunk2FailedOnce = new AtomicBoolean(false);
     Projection p =
         batch -> {
-          long off = batch.get(0).globalOffset().value();
+          long off = batch.getFirst().globalOffset().value();
           if (off == 1L) {
             throw new RuntimeException("chunk1 stuck transient"); // never recovers
           }
@@ -651,7 +651,7 @@ class ProjectionRunnerLeadershipTest {
     var chunk2Failures = new java.util.concurrent.atomic.AtomicInteger(0);
     Projection p =
         batch -> {
-          long off = batch.get(0).globalOffset().value();
+          long off = batch.getFirst().globalOffset().value();
           if (off == 1L) {
             throw new RuntimeException("chunk1 stuck transient"); // never recovers
           }

@@ -235,8 +235,8 @@ class SagaEventPathStaleEpisodeTest {
             "the refusal has a triggering event, unlike the sweeper/timeout siblings — record it"
                 + " rather than dropping it (event path)")
         .hasSize(1);
-    assertThat(entries.get(0).eventOffset().value()).isEqualTo(140L);
-    assertThat(entries.get(0).errorType())
+    assertThat(entries.getFirst().eventOffset().value()).isEqualTo(140L);
+    assertThat(entries.getFirst().errorType())
         .isEqualTo(SagaStaleCompensationEpisodeException.class.getName());
     assertThat(
             sagaStore

@@ -1,7 +1,15 @@
 package org.streamrune.spring;
 
 import static org.awaitility.Awaitility.await;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -252,7 +260,7 @@ class SseControllerTest {
         (caller, streamId) -> {
           seenPrincipal.set(caller.userId());
           seenStream.set(streamId);
-          return caller.userId() != null && caller.userId().value().equals("bob");
+          return caller.userId() != null && "bob".equals(caller.userId().value());
         };
     var controller =
         new SseController(publisher, authorizer, RequestIdentityPolicy.of(resolver, false));
@@ -533,7 +541,8 @@ class SseControllerTest {
       var ex =
           assertThrows(
               ResponseStatusException.class,
-              () -> controller.stream(bad.get(0), bad.get(1), List.of(), SseCallers.anonymous()));
+              () ->
+                  controller.stream(bad.getFirst(), bad.get(1), List.of(), SseCallers.anonymous()));
       assertEquals(400, ex.getStatusCode().value());
     }
     assertEquals(0, authorizerCalls.get());

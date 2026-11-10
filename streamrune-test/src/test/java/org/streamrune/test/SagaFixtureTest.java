@@ -3,6 +3,7 @@ package org.streamrune.test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -287,7 +288,7 @@ class SagaFixtureTest {
     fixture.given(own).when(ORDER_1, new OrderCancelled("1"));
 
     List<EventEnvelope> delivered = fixture.delivered();
-    assertEquals(GlobalOffset.of(40), delivered.get(0).globalOffset());
+    assertEquals(GlobalOffset.of(40), delivered.getFirst().globalOffset());
     assertEquals(GlobalOffset.of(41), delivered.get(1).globalOffset());
   }
 
@@ -307,7 +308,7 @@ class SagaFixtureTest {
     fixture.given(own).when(ORDER_1, new OrderCancelled("1"));
 
     List<EventEnvelope> delivered = fixture.delivered();
-    assertEquals(new Version(3), delivered.get(0).version());
+    assertEquals(new Version(3), delivered.getFirst().version());
     assertEquals(GlobalOffset.of(8), delivered.get(1).globalOffset());
     assertEquals(new Version(4), delivered.get(1).version());
   }
@@ -320,7 +321,7 @@ class SagaFixtureTest {
     EventEnvelope event = fixture.event(ORDER_1, new OrderPlaced("1"));
     EventEnvelope reply = fixture.reply(SAGA_1, ORDER_1, new StockReserved("1"));
 
-    assertEquals(null, event.metadata().sagaOrigin());
+    assertNull(event.metadata().sagaOrigin());
     assertEquals(SagaFixture.START.plusSeconds(5), event.metadata().timestamp());
     assertEquals(SAGA_1, reply.metadata().sagaOrigin().sagaId());
     assertEquals(GlobalOffset.initial(), event.globalOffset(), "a step gives it its offset");

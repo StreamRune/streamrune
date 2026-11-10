@@ -1,6 +1,9 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -229,7 +232,7 @@ class DeadLetterQueueMigrationTest {
     assertDoesNotThrow(() -> dlq.publish(req));
     var entries = dlq.read(10);
     assertTrue(
-        entries.stream().anyMatch(e -> e.commandType().equals("MigrationProbeCommand")),
+        entries.stream().anyMatch(e -> "MigrationProbeCommand".equals(e.commandType())),
         "published entry should be readable back from the migration-provisioned table");
 
     dlq.discard(org.streamrune.core.types.CommandId.of("mig-probe-0000000000001"));

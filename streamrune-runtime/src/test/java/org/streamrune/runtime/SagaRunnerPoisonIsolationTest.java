@@ -78,13 +78,13 @@ class SagaRunnerPoisonIsolationTest {
   static class FakeOrchestrator implements SagaOrchestrator<FakeState> {
 
     /** If non-null, handle() throws for this saga id. */
-    SagaId handleThrowsFor = null;
+    SagaId handleThrowsFor;
 
     /** If non-null, initialState() throws for this saga id. */
-    SagaId initialStateThrowsFor = null;
+    SagaId initialStateThrowsFor;
 
     /** If true, correlateByEventData() throws for any Stray event. */
-    boolean hookThrows = false;
+    boolean hookThrows;
 
     @Override
     public Class<FakeState> stateType() {
@@ -483,7 +483,7 @@ class SagaRunnerPoisonIsolationTest {
     runner.asEventListener().onEvents(List.of(strayEvent));
 
     assertThat(sagaDlq.findAll(10)).hasSize(1);
-    assertThat(sagaDlq.findAll(10).get(0).sagaId()).isNull();
+    assertThat(sagaDlq.findAll(10).getFirst().sagaId()).isNull();
   }
 
   /**
@@ -512,7 +512,7 @@ class SagaRunnerPoisonIsolationTest {
 
           @Override
           public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
-            if (command instanceof DoWork dw && dw.id().equals("A")) {
+            if (command instanceof DoWork dw && "A".equals(dw.id())) {
               throw new RuntimeException("primary command failed for A");
             }
             // B succeeds

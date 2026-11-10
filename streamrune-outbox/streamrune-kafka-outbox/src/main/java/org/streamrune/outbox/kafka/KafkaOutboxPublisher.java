@@ -120,7 +120,7 @@ public final class KafkaOutboxPublisher implements OutboxPublisher {
       return fallback;
     }
     long millis =
-        (value instanceof Number number)
+        value instanceof Number number
             ? number.longValue()
             : Long.parseLong(value.toString().trim());
     return Duration.ofMillis(millis);
@@ -150,7 +150,7 @@ public final class KafkaOutboxPublisher implements OutboxPublisher {
       Thread.currentThread().interrupt();
       throw e;
     } catch (ExecutionException e) {
-      throw (e.getCause() instanceof Exception ex) ? ex : new RuntimeException(e.getCause());
+      throw e.getCause() instanceof Exception ex ? ex : new RuntimeException(e.getCause());
     }
   }
 

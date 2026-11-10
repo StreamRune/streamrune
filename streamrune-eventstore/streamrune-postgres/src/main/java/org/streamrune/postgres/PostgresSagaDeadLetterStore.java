@@ -295,7 +295,9 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    * PostgresSagaStore#ROW_WRITE_TIMEOUT}.
    */
   PostgresSagaDeadLetterStore(DataSource dataSource, Duration rowWriteTimeout) {
-    if (dataSource == null) throw new IllegalArgumentException("dataSource is required");
+    if (dataSource == null) {
+      throw new IllegalArgumentException("dataSource is required");
+    }
     this.dataSource = dataSource;
     this.rowWriteTimeout = StatementTimeout.of(rowWriteTimeout);
   }
@@ -312,7 +314,9 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    */
   @Override
   public void publish(SagaDeadLetterEntry entry) {
-    if (entry == null) throw new IllegalArgumentException("entry must not be null");
+    if (entry == null) {
+      throw new IllegalArgumentException("entry must not be null");
+    }
     if (entry.sagaId() == null) {
       publishNullSaga(entry);
     } else {
@@ -345,8 +349,12 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    */
   @Override
   public void publishShielded(SagaDeadLetterEntry entry) {
-    if (entry == null) throw new IllegalArgumentException("entry must not be null");
-    if (entry.sagaId() == null) throw new IllegalArgumentException("sagaId is required");
+    if (entry == null) {
+      throw new IllegalArgumentException("entry must not be null");
+    }
+    if (entry.sagaId() == null) {
+      throw new IllegalArgumentException("sagaId is required");
+    }
     try (var conn = dataSource.getConnection()) {
       inTransaction(
           conn,
@@ -528,9 +536,15 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   @Override
   public void establishFirstReplayAnchor(
       SagaId sagaId, SagaType sagaType, GlobalOffset eventOffset, Instant anchorIfAbsent) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
-    if (eventOffset == null) throw new IllegalArgumentException("eventOffset is required");
-    if (anchorIfAbsent == null) throw new IllegalArgumentException("anchorIfAbsent is required");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
+    if (eventOffset == null) {
+      throw new IllegalArgumentException("eventOffset is required");
+    }
+    if (anchorIfAbsent == null) {
+      throw new IllegalArgumentException("anchorIfAbsent is required");
+    }
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(ESTABLISH_FIRST_REPLAY_ANCHOR)) {
       ps.setTimestamp(1, Timestamp.from(anchorIfAbsent));
@@ -556,9 +570,15 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    */
   @Override
   public void setResolvedTarget(SagaType sagaType, GlobalOffset eventOffset, SagaId targetSagaId) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
-    if (eventOffset == null) throw new IllegalArgumentException("eventOffset is required");
-    if (targetSagaId == null) throw new IllegalArgumentException("targetSagaId is required");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
+    if (eventOffset == null) {
+      throw new IllegalArgumentException("eventOffset is required");
+    }
+    if (targetSagaId == null) {
+      throw new IllegalArgumentException("targetSagaId is required");
+    }
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SET_RESOLVED_TARGET)) {
       ps.setString(1, targetSagaId.value());
@@ -584,7 +604,9 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
 
   @Override
   public List<SagaDeadLetterEntry> findBySaga(SagaId sagaId) {
-    if (sagaId == null) throw new IllegalArgumentException("sagaId is required");
+    if (sagaId == null) {
+      throw new IllegalArgumentException("sagaId is required");
+    }
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_BY_SAGA)) {
       ps.setString(1, sagaId.value());
@@ -621,8 +643,12 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   @Override
   public Optional<SagaDeadLetterEntry> findNullSagaEntry(
       SagaType sagaType, GlobalOffset eventOffset) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
-    if (eventOffset == null) throw new IllegalArgumentException("eventOffset is required");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
+    if (eventOffset == null) {
+      throw new IllegalArgumentException("eventOffset is required");
+    }
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_NULL_SAGA_AT_OFFSET)) {
       ps.setLong(1, eventOffset.value());
@@ -646,8 +672,12 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   @Override
   public List<SagaDeadLetterEntry> findNullSagaEntriesByResolvedTarget(
       SagaType sagaType, SagaId targetSagaId) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
-    if (targetSagaId == null) throw new IllegalArgumentException("targetSagaId is required");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
+    if (targetSagaId == null) {
+      throw new IllegalArgumentException("targetSagaId is required");
+    }
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_NULL_SAGA_BY_RESOLVED_TARGET)) {
       ps.setString(1, targetSagaId.value());
@@ -670,8 +700,12 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    */
   @Override
   public boolean discard(SagaId sagaId, SagaType sagaType, GlobalOffset eventOffset) {
-    if (sagaType == null) throw new IllegalArgumentException("sagaType must not be null");
-    if (eventOffset == null) throw new IllegalArgumentException("eventOffset is required");
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType must not be null");
+    }
+    if (eventOffset == null) {
+      throw new IllegalArgumentException("eventOffset is required");
+    }
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(DISCARD)) {
       if (sagaId == null) {
@@ -700,8 +734,12 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    */
   @Override
   public boolean clearShieldIfDrained(SagaId sagaId, SagaType sagaType) {
-    if (sagaId == null) throw new IllegalArgumentException("sagaId is required");
-    if (sagaType == null) throw new IllegalArgumentException("sagaType is required");
+    if (sagaId == null) {
+      throw new IllegalArgumentException("sagaId is required");
+    }
+    if (sagaType == null) {
+      throw new IllegalArgumentException("sagaType is required");
+    }
     try (var conn = dataSource.getConnection()) {
       return inTransaction(
           conn,
@@ -734,7 +772,9 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
 
   @Override
   public int deleteOlderThan(Instant cutoff) {
-    if (cutoff == null) throw new IllegalArgumentException("cutoff is required");
+    if (cutoff == null) {
+      throw new IllegalArgumentException("cutoff is required");
+    }
     int total = 0;
     int batch;
     do {

@@ -264,7 +264,7 @@ class SseLiveFeedTest {
       Thread.ofVirtual().start(() -> collectFrames(response.body(), frames));
 
       await().atMost(OPENS_WITHIN).until(() -> frames.size() >= 2);
-      assertThat(frames.get(0))
+      assertThat(frames.getFirst())
           .as("the event delivered during the registration is the first frame")
           .anyMatch(line -> line.contains("delivered-during-the-registration"));
       assertThat(frames.get(1)).as("the opening comment follows it").containsExactly(": keepalive");

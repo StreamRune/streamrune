@@ -152,7 +152,8 @@ class MetricsWiringAutoConfigurationTest {
               ctx.getBean(org.streamrune.runtime.SimpleQueryBus.class);
           bus.register(
               EchoQuery.class,
-              (org.streamrune.core.QueryHandler<EchoQuery, String>) q -> q.value());
+              (org.streamrune.core.QueryHandler<EchoQuery, String>)
+                  MetricsWiringAutoConfigurationTest.EchoQuery::value);
           String result = bus.dispatch(new EchoQuery("hi"));
           assertThat(result).isEqualTo("hi");
 
@@ -185,7 +186,8 @@ class MetricsWiringAutoConfigurationTest {
                   ctx.getBean(org.streamrune.runtime.CachingQueryBus.class);
               bus.register(
                   CachedEchoQuery.class,
-                  (org.streamrune.core.QueryHandler<CachedEchoQuery, String>) q -> q.value());
+                  (org.streamrune.core.QueryHandler<CachedEchoQuery, String>)
+                      MetricsWiringAutoConfigurationTest.CachedEchoQuery::value);
               bus.dispatch(new CachedEchoQuery("a")); // miss
               bus.dispatch(new CachedEchoQuery("a")); // hit
 

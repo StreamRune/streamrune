@@ -421,7 +421,7 @@ class RequestIdentityFailClosedTest {
         MockMvcBuilders.standaloneSetup(ctx.getBean(SseController.class))
             .addFilters(ctx.getBean(ScopedValueFilter.class))
             .build();
-    mvc.perform(get("/api/sse/order/order-1").header("X-User-Id", (Object[]) headers))
+    mvc.perform(get("/api/sse/order/order-1").header("X-User-Id", headers))
         .andExpect(status().isForbidden());
     assertThat(authorizer.asked).as("the SSE authorizer must be consulted").hasSize(1);
     return authorizer.asked.getFirst();

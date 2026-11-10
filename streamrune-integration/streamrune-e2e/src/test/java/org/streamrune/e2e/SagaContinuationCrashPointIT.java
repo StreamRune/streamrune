@@ -1510,7 +1510,7 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
         .isEqualTo(the(order, OrderPlaced.class).metadata().eventId());
     assertThat(names(order))
         .as("every forward command ran; nothing is compensated yet")
-        .filteredOn(name -> !name.equals("CustomerPinged"))
+        .filteredOn(name -> !"CustomerPinged".equals(name))
         .containsExactly("OrderPlaced", "StockReserved", "OrderShipped");
   }
 

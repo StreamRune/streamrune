@@ -1,6 +1,10 @@
 package org.streamrune.postgres;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import org.junit.jupiter.api.BeforeAll;
@@ -102,7 +106,7 @@ class PostgresProjectionDeadLetterStoreTest {
 
     var results = store.read(ProjectionName.of("OrderView"), 10);
     assertEquals(1, results.size());
-    var e = results.get(0);
+    var e = results.getFirst();
     assertEquals(ProjectionName.of("OrderView"), e.projectionName());
     assertEquals(GlobalOffset.of(1), e.fromOffset());
     assertEquals(GlobalOffset.of(10), e.toOffset());
@@ -164,14 +168,14 @@ class PostgresProjectionDeadLetterStoreTest {
     // Read a page smaller than the backlog: must be the OLDEST 2, not the newest.
     var page1 = store.read(ProjectionName.of("OrderView"), 2);
     assertEquals(2, page1.size());
-    assertEquals(GlobalOffset.of(1), page1.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(1), page1.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(2), page1.get(1).fromOffset());
 
     // Repeated replay-and-discard passes drain toward the newest.
-    store.discard(ProjectionName.of("OrderView"), page1.get(0).fromOffset());
+    store.discard(ProjectionName.of("OrderView"), page1.getFirst().fromOffset());
     store.discard(ProjectionName.of("OrderView"), page1.get(1).fromOffset());
     var page2 = store.read(ProjectionName.of("OrderView"), 2);
-    assertEquals(GlobalOffset.of(3), page2.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(3), page2.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(4), page2.get(1).fromOffset());
   }
 
@@ -184,7 +188,7 @@ class PostgresProjectionDeadLetterStoreTest {
 
     var page1 = store.readAll(2);
     assertEquals(2, page1.size());
-    assertEquals(GlobalOffset.of(1), page1.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(1), page1.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(2), page1.get(1).fromOffset());
   }
 
@@ -197,7 +201,7 @@ class PostgresProjectionDeadLetterStoreTest {
 
     var results = store.read(ProjectionName.of("OrderView"), 10);
     assertEquals(3, results.size());
-    assertEquals(GlobalOffset.of(1), results.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(1), results.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(3), results.get(1).fromOffset());
     assertEquals(GlobalOffset.of(5), results.get(2).fromOffset());
   }
@@ -211,7 +215,7 @@ class PostgresProjectionDeadLetterStoreTest {
 
     var results = store.readAll(10);
     assertEquals(3, results.size());
-    assertEquals(GlobalOffset.of(1), results.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(1), results.getFirst().fromOffset());
     assertEquals(GlobalOffset.of(3), results.get(1).fromOffset());
     assertEquals(GlobalOffset.of(5), results.get(2).fromOffset());
   }
@@ -225,7 +229,7 @@ class PostgresProjectionDeadLetterStoreTest {
 
     var results = store.read(ProjectionName.of("OrderView"), 10);
     assertEquals(1, results.size());
-    assertEquals(GlobalOffset.of(11), results.get(0).fromOffset());
+    assertEquals(GlobalOffset.of(11), results.getFirst().fromOffset());
   }
 
   @Test
@@ -255,7 +259,7 @@ class PostgresProjectionDeadLetterStoreTest {
 
     var results = store.read(ProjectionName.of("OrderView"), 10);
     assertEquals(1, results.size());
-    var e = results.get(0);
+    var e = results.getFirst();
     assertEquals("java.lang.IllegalStateException", e.errorType());
     assertEquals("still broken", e.errorMessage());
     assertEquals(4, e.attempts());
@@ -266,7 +270,7 @@ class PostgresProjectionDeadLetterStoreTest {
     store.save(entry("OrderView", 1, 10)); // attempts = 3
     store.save(entry("OrderView", 1, 10)); // caller repeats attempts = 3
 
-    var e = store.read(ProjectionName.of("OrderView"), 10).get(0);
+    var e = store.read(ProjectionName.of("OrderView"), 10).getFirst();
     assertEquals(4, e.attempts(), "attempts must stay monotonic on repeat failure");
   }
 
@@ -288,9 +292,7 @@ class PostgresProjectionDeadLetterStoreTest {
 
   @Test
   void discard_rejects_null_projectionName() {
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> store.discard((ProjectionName) null, GlobalOffset.of(1)));
+    assertThrows(IllegalArgumentException.class, () -> store.discard(null, GlobalOffset.of(1)));
   }
 
   @Test
