@@ -7,6 +7,8 @@ package org.streamrune.core.tracing;
  * StreamRuneTracing#start}; it runs once, on the thread that started the scope. Scopes close in the
  * reverse order of their start, as {@code try}-with-resources closes them.
  *
+ * <p>No method of a scope may throw: tracing must never fail the work it traces.
+ *
  * <p>A value known only when the work ends (a count, an outcome) is set with {@code setAttribute}.
  * {@link #recordSuccess()} and {@link #recordError(Throwable)} set the span's status; a span closed
  * with neither keeps the unset status.

@@ -42,7 +42,8 @@ import org.streamrune.core.tracing.TracingArea;
  * <p>An error a scope records ({@link TraceScope#recordError}) becomes the event {@code exception}
  * with the exception's type, its own message and its stack trace, in which a cause or a suppressed
  * exception is named by its type and frames alone: a nested message can quote the data the failing
- * code was handling. The span's status is ERROR, with the exception's own message.
+ * code was handling. The span's status is ERROR, with the exception's own message. A message that
+ * is the cause's {@code toString()}, as the cause-only constructors make it, counts as absent.
  *
  * <p>This is the class of the seam that references OpenTelemetry, and the {@code opentelemetry-api}
  * dependency is optional: an application without it never loads this class as long as it passes
@@ -181,7 +182,7 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
    */
   static String stackTraceWithoutCauseMessages(Throwable error) {
     StringBuilder trace = new StringBuilder();
-    String message = error.getMessage();
+    String message = ownMessage(error);
     trace.append(error.getClass().getName());
     if (message != null) {
       trace.append(": ").append(message);
@@ -191,6 +192,21 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
     seen.add(error);
     appendFrames(trace, error, "", seen, 0);
     return trace.toString();
+  }
+
+  /**
+   * The message of {@code error} itself, or {@code null}: an exception made with the cause-only
+   * constructor ({@code new RuntimeException(cause)}, {@code UncheckedIOException}, {@code
+   * CompletionException}) has its cause's {@code toString()} as its message, which quotes the
+   * cause's message, so such a message counts as absent.
+   */
+  static String ownMessage(Throwable error) {
+    String message = error.getMessage();
+    Throwable cause = error.getCause();
+    if (message != null && cause != null && message.equals(cause.toString())) {
+      return null;
+    }
+    return message;
   }
 
   private static void appendFrames(
@@ -253,7 +269,7 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
 
     @Override
     public void recordError(Throwable error) {
-      String message = error.getMessage();
+      String message = ownMessage(error);
       AttributesBuilder event =
           Attributes.builder()
               .put(EXCEPTION_TYPE, error.getClass().getName())

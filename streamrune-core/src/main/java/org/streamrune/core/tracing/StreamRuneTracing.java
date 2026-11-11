@@ -24,7 +24,9 @@ import java.util.Map;
  * <p>An implementation answers {@link #enabled(TracingArea)} the same way for its whole lifetime: a
  * component may read the answer once, when it is built, and a component that starts a span in one
  * call and ends it in another relies on both calls seeing the same answer. Implementations are
- * thread-safe.
+ * thread-safe, and they must not throw: neither {@code start} nor any method of the scopes it
+ * returns may fail the work it traces. The outbox relay guards itself against an implementation
+ * that throws all the same, so tracing can never change a delivery.
  */
 public interface StreamRuneTracing {
 

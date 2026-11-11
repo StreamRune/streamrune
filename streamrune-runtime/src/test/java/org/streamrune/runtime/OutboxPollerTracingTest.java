@@ -217,6 +217,113 @@ class OutboxPollerTracingTest {
     assertThat(otelTesting.getSpans()).isEmpty();
   }
 
+  /** A tracing that throws from {@code start}, or whose scopes throw from every method. */
+  private static StreamRuneTracing throwingTracing(boolean fromStart) {
+    TraceScope throwingScope =
+        new TraceScope() {
+          @Override
+          public void setAttribute(String key, String value) {
+            throw new IllegalStateException("setAttribute");
+          }
+
+          @Override
+          public void setAttribute(String key, long value) {
+            throw new IllegalStateException("setAttribute");
+          }
+
+          @Override
+          public void setAttribute(String key, boolean value) {
+            throw new IllegalStateException("setAttribute");
+          }
+
+          @Override
+          public void recordSuccess() {
+            throw new IllegalStateException("recordSuccess");
+          }
+
+          @Override
+          public void recordError(Throwable error) {
+            throw new IllegalStateException("recordError");
+          }
+
+          @Override
+          public void close() {
+            throw new IllegalStateException("close");
+          }
+        };
+    return new StreamRuneTracing() {
+      @Override
+      public boolean enabled(TracingArea area) {
+        return true;
+      }
+
+      @Override
+      public TraceScope start(
+          TracingArea area,
+          String spanName,
+          org.streamrune.core.tracing.SpanKind kind,
+          org.streamrune.core.tracing.SpanAttributes attributes,
+          org.streamrune.core.tracing.SpanLink link,
+          Map<String, String> baggage) {
+        if (fromStart) {
+          throw new IllegalStateException("start");
+        }
+        return throwingScope;
+      }
+    };
+  }
+
+  /** A publisher with a batch path of its own: one span per hand-off, as the RabbitMQ one. */
+  private static OutboxPublisher pipelining(List<OutboxEntry> published) {
+    return new OutboxPublisher() {
+      @Override
+      public void publish(OutboxEntry entry) {
+        throw new AssertionError("the batch path publishes");
+      }
+
+      @Override
+      public BatchResult publishBatch(
+          List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
+        var confirmed = new LinkedHashSet<OutboxEntryId>();
+        for (OutboxEntry entry : entries) {
+          try (TraceScope hand = spans.start(entry)) {
+            published.add(entry);
+            hand.recordSuccess();
+          }
+          confirmed.add(entry.id());
+        }
+        return new BatchResult(confirmed, Map.of());
+      }
+    };
+  }
+
+  @Test
+  void aTracingThatThrows_neverStopsADelivery() {
+    for (boolean fromStart : List.of(true, false)) {
+      for (boolean ownBatchPath : List.of(false, true)) {
+        save("a-" + fromStart + ownBatchPath);
+        save("b-" + fromStart + ownBatchPath);
+        save("c-" + fromStart + ownBatchPath);
+        List<OutboxEntry> published = new ArrayList<>();
+        OutboxPublisher publisher =
+            ownBatchPath
+                ? pipelining(published)
+                : entry -> {
+                  published.add(entry);
+                  if (entry.id().value().startsWith("b-")) {
+                    throw new IllegalStateException("refused");
+                  }
+                };
+
+        poller(publisher, throwingTracing(fromStart)).processBatch();
+
+        assertThat(published)
+            .as("start throws: %s, own batch path: %s", fromStart, ownBatchPath)
+            .hasSize(3);
+      }
+    }
+  }
+
   @Test
   void withTheOutboxAreaOff_orNoop_noSpanStarts() {
     for (StreamRuneTracing off :

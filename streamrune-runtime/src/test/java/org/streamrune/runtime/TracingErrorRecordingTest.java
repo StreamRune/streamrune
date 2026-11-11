@@ -87,6 +87,39 @@ class TracingErrorRecordingTest {
   }
 
   @Test
+  void aMessageTheCauseOnlyConstructorMade_isLeftOut_atEveryLevel() {
+    for (Throwable failure :
+        List.<Throwable>of(
+            new RuntimeException(new IOException(MARKER)),
+            new IllegalStateException(
+                "the publish failed", new RuntimeException(new IOException(MARKER))),
+            new java.util.concurrent.CompletionException(
+                new java.io.UncheckedIOException(new IOException(MARKER))))) {
+      otelTesting.clearSpans();
+      try (TraceScope scope =
+          tracing()
+              .start(
+                  TracingArea.OUTBOX,
+                  "outbox/publish",
+                  SpanKind.PRODUCER,
+                  SpanAttributes.empty())) {
+        scope.recordError(failure);
+      }
+
+      SpanData span = otelTesting.getSpans().getFirst();
+      EventData event = exceptionEvent(span);
+      assertThat(span.toString()).as(failure.getClass().getName()).doesNotContain(MARKER);
+      assertThat(event.getAttributes().get(AttributeKey.stringKey("exception.stacktrace")))
+          .startsWith(failure.getClass().getName())
+          .doesNotContain(MARKER);
+    }
+    assertThat(OpenTelemetryTracing.ownMessage(new RuntimeException(new IOException(MARKER))))
+        .isNull();
+    assertThat(OpenTelemetryTracing.ownMessage(new RuntimeException("own", new IOException("x"))))
+        .isEqualTo("own");
+  }
+
+  @Test
   void aCyclicCauseChain_endsTheStackTrace() {
     var first = new IllegalStateException("first");
     var second = new IllegalStateException("second " + MARKER, first);

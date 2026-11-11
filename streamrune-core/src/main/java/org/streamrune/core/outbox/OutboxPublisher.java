@@ -48,7 +48,11 @@ public interface OutboxPublisher {
    * batch afterwards is not part of the entry's span. {@link OutboxEntrySpans#NONE} starts nothing.
    * A publisher that delegates to another passes {@code spans} on, so each entry gets one span. The
    * spans never change what is delivered: an implementation publishes the same way whatever {@code
-   * spans} it is given.
+   * spans} it is given. Each entry's scope is started and closed on the publishing thread, one
+   * entry at a time, and closed before the next {@code start}; it makes its span current on that
+   * thread. Success on the scope means the transport accepted the hand-off; a nack or a confirm
+   * timeout the transport reports later for the batch shows in the relay span's {@code
+   * streamrune.outbox.failed} count, not on the entry's span (see {@link OutboxEntrySpans}).
    *
    * <p>The {@code OutboxPoller} passes a deadline strictly earlier than the store's claim lease so
    * a live-but-slow relay's publish cycle can never outlive its claim — which would let a second

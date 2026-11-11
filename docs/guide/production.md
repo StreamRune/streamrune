@@ -459,8 +459,13 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   publisher, a publisher of your own), the RabbitMQ publisher around each `basicPublish`, before it
   awaits the batch's confirms. A publisher that wraps another passes the `spans` on. With the outbox
   area off the poller passes `OutboxEntrySpans.NONE`, and the publisher delivers exactly as with
-  tracing on. `outbox/publish` carries no link to the trace of the command that wrote the entry
+  tracing on. The status of `outbox/publish` is that of the hand-off: a RabbitMQ nack or confirm
+  timeout that arrives later counts in `streamrune.outbox.failed` of `outbox/relay`.
+  `outbox/publish` carries no link to the trace of the command that wrote the entry
   yet: the outbox entry does not store it.
+- With OpenTelemetry present and the sampler dropping a trace, StreamRune still creates its spans,
+  non-recording ones at about 0.2 µs each and roughly six per command; switching an area off
+  removes that cost.
 - The in-memory `InMemoryEventStore` starts the event-store spans in its serializing mode only; a
   by-reference store serializes nothing and does no I/O.
 - The command interceptor is auto-registered when an `OpenTelemetry` bean is present; the

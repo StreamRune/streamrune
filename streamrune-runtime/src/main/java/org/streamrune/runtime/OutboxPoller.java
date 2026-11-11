@@ -322,6 +322,9 @@ public final class OutboxPoller implements AutoCloseable {
    */
   private final OutboxEntrySpans entrySpans;
 
+  /** Whether a failure of {@link #tracing} was logged; it is logged once. */
+  private final AtomicBoolean tracingFailureLogged = new AtomicBoolean();
+
   private OutboxPoller(Builder builder) {
     this.closeJoinTimeoutMs = builder.closeJoinTimeoutMs;
     this.store = builder.store;
@@ -421,8 +424,7 @@ public final class OutboxPoller implements AutoCloseable {
       return;
     }
     TraceScope scope =
-        tracing.start(
-            TracingArea.OUTBOX,
+        guardedStart(
             TraceAttributes.OUTBOX_RELAY,
             SpanKind.INTERNAL,
             SpanAttributes.builder()
@@ -470,14 +472,102 @@ public final class OutboxPoller implements AutoCloseable {
    * {@code PRODUCER}, so the spans of the broker client's own instrumentation nest under it.
    */
   private TraceScope startPublishSpan(OutboxEntry entry) {
-    return tracing.start(
-        TracingArea.OUTBOX,
+    return guardedStart(
         TraceAttributes.OUTBOX_PUBLISH,
         SpanKind.PRODUCER,
         SpanAttributes.builder()
             .put(TraceAttributes.OUTBOX_ENTRY_ID, LogSanitizer.sanitizeForTrace(entry.id().value()))
             .put(TraceAttributes.OUTBOX_PAYLOAD_TYPE, entry.payloadType())
             .build());
+  }
+
+  /**
+   * Starts an outbox span so that the tracing can never change a delivery: a {@code start} that
+   * throws gives {@link TraceScope#NOOP}, and the returned scope swallows what its own methods
+   * throw. A {@link StreamRuneTracing} must not throw; one that does is reported once, with one
+   * WARN, and the relay delivers every entry as it would untraced.
+   */
+  private TraceScope guardedStart(String spanName, SpanKind kind, SpanAttributes attributes) {
+    TraceScope scope;
+    try {
+      scope = tracing.start(TracingArea.OUTBOX, spanName, kind, attributes);
+    } catch (RuntimeException e) {
+      tracingFailed(e);
+      return TraceScope.NOOP;
+    }
+    return scope == null || scope == TraceScope.NOOP ? TraceScope.NOOP : new GuardedScope(scope);
+  }
+
+  private void tracingFailed(RuntimeException failure) {
+    if (tracingFailureLogged.compareAndSet(false, true)) {
+      LOG.warn(
+          "The tracing of the outbox relay threw; the relay delivers without the span. A"
+              + " StreamRuneTracing must not throw. Later failures of the tracing are not logged.",
+          failure);
+    }
+  }
+
+  /** A scope whose failures are reported once and never reach the relay or the publisher. */
+  private final class GuardedScope implements TraceScope {
+    private final TraceScope delegate;
+
+    GuardedScope(TraceScope delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override
+    public void setAttribute(String key, String value) {
+      try {
+        delegate.setAttribute(key, value);
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
+
+    @Override
+    public void setAttribute(String key, long value) {
+      try {
+        delegate.setAttribute(key, value);
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
+
+    @Override
+    public void setAttribute(String key, boolean value) {
+      try {
+        delegate.setAttribute(key, value);
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
+
+    @Override
+    public void recordSuccess() {
+      try {
+        delegate.recordSuccess();
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
+
+    @Override
+    public void recordError(Throwable error) {
+      try {
+        delegate.recordError(error);
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
+
+    @Override
+    public void close() {
+      try {
+        delegate.close();
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
   }
 
   /**
