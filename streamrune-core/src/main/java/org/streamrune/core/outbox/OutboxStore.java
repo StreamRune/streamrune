@@ -170,9 +170,9 @@ public interface OutboxStore {
    * <p><b>Only for provably un-attempted entries.</b> The {@code OutboxPoller} calls this for the
    * entries a deadline-truncated (or interrupt-truncated) publish cycle left in <em>neither</em>
    * bucket of {@link OutboxPublisher.BatchResult} — see {@link OutboxPublisher#publishBatch(List,
-   * java.time.Instant)}, whose contract is that such an entry was never passed to {@code publish}.
-   * Nothing exists at the transport for them, so re-arming cannot duplicate. Never call this for an
-   * entry whose delivery outcome is merely <em>unknown</em>: that is the {@link
+   * java.time.Instant, OutboxEntrySpans)}, whose contract is that such an entry was never passed to
+   * {@code publish}. Nothing exists at the transport for them, so re-arming cannot duplicate. Never
+   * call this for an entry whose delivery outcome is merely <em>unknown</em>: that is the {@link
    * OutboxPublisher.FailureKind#IN_FLIGHT} case, where the claim must be held until the lease
    * expires so a second relay cannot re-publish into a delivery still resolving.
    *

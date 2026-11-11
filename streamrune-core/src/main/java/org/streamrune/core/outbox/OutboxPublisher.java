@@ -6,6 +6,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.streamrune.core.tracing.TraceScope;
 
 /**
  * Pluggable delivery strategy for outbox entries.
@@ -14,11 +15,10 @@ import java.util.Set;
  * Throw any {@link Exception} to signal delivery failure; the OutboxPoller will retry up to the
  * configured {@code maxAttempts}.
  *
- * <p>The default {@link #publishBatch} implementation calls {@link #publish} per entry, preserving
- * today's per-entry semantics for transports that do not provide native batch confirms (HTTP,
- * Kafka, etc.). Transport-specific implementations (e.g. RabbitMQ) may override {@link
- * #publishBatch} to publish all entries first and then await a single round of broker confirms,
- * reducing round-trips from O(N) to O(1).
+ * <p>The default {@link #publishBatch} implementation calls {@link #publish} per entry, for
+ * transports that do not provide native batch confirms (HTTP, Kafka, etc.). Transport-specific
+ * implementations (e.g. RabbitMQ) may override {@link #publishBatch} to publish all entries first
+ * and then await a single round of broker confirms, reducing round-trips from O(N) to O(1).
  */
 @FunctionalInterface
 public interface OutboxPublisher {
@@ -31,26 +31,24 @@ public interface OutboxPublisher {
   void publish(OutboxEntry entry) throws Exception;
 
   /**
-   * Delivers a batch of entries and returns the per-entry outcome.
+   * Delivers a batch of entries under an optional publish {@code deadline} and returns the
+   * per-entry outcome, starting the span of each entry's hand-off through {@code spans}.
    *
    * <p>The default implementation calls {@link #publish} for each entry in order, collecting
-   * confirmed ids (publish succeeded) and failed ids with their cause (publish threw). Every input
-   * entry appears in exactly one of {@link BatchResult#confirmed()} or {@link
-   * BatchResult#failed()}.
+   * confirmed ids (publish succeeded) and failed ids with their cause (publish threw). Each {@code
+   * publish} runs inside the scope {@code spans.start(entry)} returns: a successful publish records
+   * success on it, a failed one records the error, and the scope is closed before the next entry.
+   * Transport-specific implementations may override this method to publish all entries first and
+   * then await a single confirmation round-trip (e.g. RabbitMQ publisher confirms, reducing
+   * round-trips from O(N) to O(1)).
    *
-   * <p>Transport-specific implementations may override this method to publish all entries first and
-   * then await a single confirmation round-trip (e.g. RabbitMQ publisher confirms).
-   *
-   * @param entries the entries to deliver; must not be null; may be empty
-   * @return the per-entry outcome; never null
-   */
-  default BatchResult publishBatch(List<OutboxEntry> entries) {
-    return publishSequentially(entries, null);
-  }
-
-  /**
-   * Delivers a batch of entries under an optional publish {@code deadline} and returns the
-   * per-entry outcome.
+   * <p><b>The span of each entry.</b> An implementation calls {@code spans.start(entry)} right
+   * before it hands the entry to its transport and closes the returned scope once the hand-off
+   * returns, recording the error on it when the hand-off throws; a confirm awaited for the whole
+   * batch afterwards is not part of the entry's span. {@link OutboxEntrySpans#NONE} starts nothing.
+   * A publisher that delegates to another passes {@code spans} on, so each entry gets one span. The
+   * spans never change what is delivered: an implementation publishes the same way whatever {@code
+   * spans} it is given.
    *
    * <p>The {@code OutboxPoller} passes a deadline strictly earlier than the store's claim lease so
    * a live-but-slow relay's publish cycle can never outlive its claim — which would let a second
@@ -60,7 +58,8 @@ public interface OutboxPublisher {
    * {@link BatchResult#confirmed()} nor {@link BatchResult#failed()}. The poller returns those
    * entries to {@code PENDING} at the end of the cycle (nothing for them reached the transport),
    * rather than recording a failure that would burn a retry attempt on an entry that was never
-   * attempted.
+   * attempted. A batch publisher bounds its confirm wait by the deadline instead of looping per
+   * entry.
    *
    * <p>A shutdown interrupt stops the default implementation the same way. When the calling thread
    * is already interrupted before an entry's turn, that entry and the rest are left in neither
@@ -71,29 +70,19 @@ public interface OutboxPublisher {
    * (the {@code OutboxPoller} keeps such an entry claimed until its lease expires), the batch
    * stops, and the interrupt flag is left set.
    *
-   * <p>A {@code null} deadline delegates to {@link #publishBatch(List)}, so a publisher that
-   * overrides only the single-arg method keeps its batch semantics on the no-deadline path. A
-   * single in-flight {@link #publish} can still run past the deadline — bound each {@code publish}
-   * with its own per-entry timeout (see {@code KafkaOutboxPublisher} send timeout, the HTTP request
-   * timeout) so the deadline check is reached within a bounded overrun.
-   *
-   * <p><b>Batch publishers that override {@link #publishBatch(List)} for a single confirm
-   * round-trip (e.g. RabbitMQ) MUST override THIS method too</b> to participate in deadline
-   * bounding — bounding their confirm wait by the deadline rather than looping per entry. A
-   * publisher that overrides only the single-arg method falls back to per-entry {@link #publish}
-   * once a non-null deadline is present.
+   * <p>A single in-flight {@link #publish} can still run past the deadline — bound each {@code
+   * publish} with its own per-entry timeout (see {@code KafkaOutboxPublisher} send timeout, the
+   * HTTP request timeout) so the deadline check is reached within a bounded overrun.
    *
    * @param entries the entries to deliver; must not be null; may be empty
    * @param deadline the instant by which publishing must stop; {@code null} for no deadline
+   * @param spans starts the span of each entry's hand-off; {@link OutboxEntrySpans#NONE} for none
    * @return the per-entry outcome; never null. With a non-null deadline, entries not attempted
    *     before it appear in neither bucket; so do entries not attempted because of an interrupt.
    */
-  default BatchResult publishBatch(List<OutboxEntry> entries, java.time.Instant deadline) {
-    if (deadline == null) {
-      // Honor a single-arg override (custom batch publishers) on the no-deadline path.
-      return publishBatch(entries);
-    }
-    return publishSequentially(entries, deadline);
+  default BatchResult publishBatch(
+      List<OutboxEntry> entries, java.time.Instant deadline, OutboxEntrySpans spans) {
+    return publishSequentially(entries, deadline, spans);
   }
 
   /**
@@ -102,7 +91,8 @@ public interface OutboxPublisher {
    * appear in neither bucket; an entry whose publish was interrupted is failed with the
    * interruption. A {@code null} deadline attempts every entry.
    */
-  private BatchResult publishSequentially(List<OutboxEntry> entries, java.time.Instant deadline) {
+  private BatchResult publishSequentially(
+      List<OutboxEntry> entries, java.time.Instant deadline, OutboxEntrySpans spans) {
     var confirmed = new LinkedHashSet<OutboxEntryId>();
     var failed = new LinkedHashMap<OutboxEntryId, Exception>();
     for (OutboxEntry e : entries) {
@@ -118,10 +108,13 @@ public interface OutboxPublisher {
         // them IN_PROGRESS for lease-reclaim), never recorded as failures.
         break;
       }
+      TraceScope scope = spans.start(e);
       try {
         publish(e);
+        scope.recordSuccess();
         confirmed.add(e.id());
       } catch (Exception ex) {
+        scope.recordError(ex);
         if (isInterruption(ex) || Thread.currentThread().isInterrupted()) {
           // The publish was interrupted (shutdown) after it started, not rejected by the broker.
           // It may already be with the transport — a Kafka record in the producer buffer, an HTTP
@@ -136,6 +129,8 @@ public interface OutboxPublisher {
           break;
         }
         failed.put(e.id(), ex);
+      } finally {
+        scope.close();
       }
     }
     return new BatchResult(confirmed, failed);
@@ -182,10 +177,10 @@ public interface OutboxPublisher {
    *
    * <p>Invariant: every entry id passed to {@code publishBatch} appears in exactly one of {@link
    * #confirmed()} or {@link #failed()} — <em>unless</em> a non-null publish deadline or a shutdown
-   * interrupt stopped the batch early (see {@link #publishBatch(List, java.time.Instant)}), in
-   * which case entries not attempted appear in neither. The {@code OutboxPoller} returns those to
-   * {@code PENDING} at once, so an entry may be left out only when nothing for it reached the
-   * transport.
+   * interrupt stopped the batch early (see {@link #publishBatch(List, java.time.Instant,
+   * OutboxEntrySpans)}), in which case entries not attempted appear in neither. The {@code
+   * OutboxPoller} returns those to {@code PENDING} at once, so an entry may be left out only when
+   * nothing for it reached the transport.
    *
    * @param confirmed ids whose delivery was acknowledged by the target (broker-confirmed, HTTP 2xx,
    *     etc.)

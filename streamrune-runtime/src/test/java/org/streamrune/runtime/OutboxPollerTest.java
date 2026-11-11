@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEntrySpans;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -1043,7 +1044,9 @@ class OutboxPollerTest {
 
           @Override
           public org.streamrune.core.outbox.OutboxPublisher.BatchResult publishBatch(
-              java.util.List<OutboxEntry> entries, java.time.Instant deadline) {
+              java.util.List<OutboxEntry> entries,
+              java.time.Instant deadline,
+              OutboxEntrySpans spans) {
             var confirmed = new java.util.LinkedHashSet<OutboxEntryId>();
             var failed = new java.util.LinkedHashMap<OutboxEntryId, Exception>();
             for (OutboxEntry e : entries) {
@@ -1164,7 +1167,8 @@ class OutboxPollerTest {
     }
 
     @Override
-    public BatchResult publishBatch(List<OutboxEntry> entries, Instant deadline) {
+    public BatchResult publishBatch(
+        List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
       var confirmed = new java.util.LinkedHashSet<OutboxEntryId>();
       for (int i = 0; i < Math.min(attemptLimit, entries.size()); i++) {
         attempted.add(entries.get(i).id());
@@ -1361,7 +1365,8 @@ class OutboxPollerTest {
           public void publish(OutboxEntry entry) {}
 
           @Override
-          public BatchResult publishBatch(List<OutboxEntry> entries, Instant deadline) {
+          public BatchResult publishBatch(
+              List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
             capturedDeadline.set(deadline);
             var confirmed = new java.util.LinkedHashSet<OutboxEntryId>();
             for (OutboxEntry e : entries) {
@@ -1410,7 +1415,8 @@ class OutboxPollerTest {
       }
 
       @Override
-      public BatchResult publishBatch(List<OutboxEntry> entries, Instant deadline) {
+      public BatchResult publishBatch(
+          List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
         deadlineSink.set(deadline);
         var confirmed = new java.util.LinkedHashSet<OutboxEntryId>();
         for (OutboxEntry e : entries) {
@@ -1544,8 +1550,9 @@ class OutboxPollerTest {
       }
 
       @Override
-      public BatchResult publishBatch(List<OutboxEntry> entries, Instant deadline) {
-        return delegate.publishBatch(entries, deadline);
+      public BatchResult publishBatch(
+          List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
+        return delegate.publishBatch(entries, deadline, OutboxEntrySpans.NONE);
       }
 
       @Override
@@ -2425,7 +2432,8 @@ class OutboxPollerTest {
     }
 
     @Override
-    public BatchResult publishBatch(List<OutboxEntry> entries, Instant deadline) {
+    public BatchResult publishBatch(
+        List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
       var failed = new java.util.LinkedHashMap<OutboxEntryId, Exception>();
       for (int i = 0; i < Math.min(failLimit, entries.size()); i++) {
         failed.put(entries.get(i).id(), new RuntimeException("connect timed out"));
@@ -2587,7 +2595,8 @@ class OutboxPollerTest {
     }
 
     @Override
-    public BatchResult publishBatch(List<OutboxEntry> entries, java.time.Instant deadline) {
+    public BatchResult publishBatch(
+        List<OutboxEntry> entries, java.time.Instant deadline, OutboxEntrySpans spans) {
       var failed = new java.util.LinkedHashMap<OutboxEntryId, Exception>();
       for (OutboxEntry e : entries) {
         failed.put(e.id(), null);

@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Timeout;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEntrySpans;
 import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
@@ -200,7 +201,8 @@ class OutboxPollerShutdownTest {
           public void publish(OutboxEntry entry) {}
 
           @Override
-          public BatchResult publishBatch(List<OutboxEntry> entries, Instant deadline) {
+          public BatchResult publishBatch(
+              List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
             // A custom batch publisher reporting its own shutdown interruption for e1.
             return new BatchResult(
                 Set.of(OutboxEntryId.of("e2")),
@@ -256,7 +258,8 @@ class OutboxPollerShutdownTest {
           }
 
           @Override
-          public BatchResult publishBatch(List<OutboxEntry> entries, Instant deadline) {
+          public BatchResult publishBatch(
+              List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
             // A batch publisher that does not look at the interrupt flag itself.
             entries.forEach(this::publish);
             return new BatchResult(

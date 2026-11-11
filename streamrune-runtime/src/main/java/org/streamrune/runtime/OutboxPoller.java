@@ -19,6 +19,7 @@ import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEntrySpans;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStatus;
@@ -316,12 +317,10 @@ public final class OutboxPoller implements AutoCloseable {
   private final boolean traced;
 
   /**
-   * What a traced relay batch publishes through: a publisher whose {@code publish} starts the span
-   * {@value TraceAttributes#OUTBOX_PUBLISH} around {@link #publisher}'s, when {@link #publisher}
-   * publishes one entry at a time (it keeps {@link OutboxPublisher}'s own {@code publishBatch});
-   * {@link #publisher} itself otherwise.
+   * Starts the span {@value TraceAttributes#OUTBOX_PUBLISH} of each entry's hand-off, which the
+   * publisher calls; {@link OutboxEntrySpans#NONE} when the outbox area is not traced.
    */
-  private final OutboxPublisher batchPublisher;
+  private final OutboxEntrySpans entrySpans;
 
   private OutboxPoller(Builder builder) {
     this.closeJoinTimeoutMs = builder.closeJoinTimeoutMs;
@@ -329,8 +328,7 @@ public final class OutboxPoller implements AutoCloseable {
     this.publisher = builder.publisher;
     this.tracing = builder.tracing;
     this.traced = tracing.enabled(TracingArea.OUTBOX);
-    this.batchPublisher =
-        traced && publishesOneAtATime(builder.publisher) ? this::publishTraced : builder.publisher;
+    this.entrySpans = traced ? this::startPublishSpan : OutboxEntrySpans.NONE;
     this.maxInFlightHorizon = normalizeHorizon(builder.publisher.inFlightHorizon());
     this.retryPolicy = builder.retryPolicy;
     this.batchSize = builder.batchSize;
@@ -454,7 +452,7 @@ public final class OutboxPoller implements AutoCloseable {
     var result =
         Thread.currentThread().isInterrupted()
             ? NOTHING_ATTEMPTED
-            : batchPublisher.publishBatch(pending, publishDeadline);
+            : publisher.publishBatch(pending, publishDeadline, entrySpans);
     // Record the outcome with close()'s interrupt held back: on a virtual thread every JDBC call
     // made with the flag set fails at the socket, which would lose the deliveries the transport
     // has already confirmed. A stop requested meanwhile is delivered once the outcome is stored.
@@ -468,49 +466,18 @@ public final class OutboxPoller implements AutoCloseable {
   }
 
   /**
-   * Publishes {@code entry} through {@link #publisher} inside the span {@value
-   * TraceAttributes#OUTBOX_PUBLISH}, of kind {@code PRODUCER}, so the spans of the broker client's
-   * own instrumentation nest under it. A failed publish records the exception.
+   * Starts the span {@value TraceAttributes#OUTBOX_PUBLISH} of {@code entry}'s hand-off, of kind
+   * {@code PRODUCER}, so the spans of the broker client's own instrumentation nest under it.
    */
-  private void publishTraced(OutboxEntry entry) throws Exception {
-    TraceScope scope =
-        tracing.start(
-            TracingArea.OUTBOX,
-            TraceAttributes.OUTBOX_PUBLISH,
-            SpanKind.PRODUCER,
-            SpanAttributes.builder()
-                .put(
-                    TraceAttributes.OUTBOX_ENTRY_ID,
-                    LogSanitizer.sanitizeForTrace(entry.id().value()))
-                .put(TraceAttributes.OUTBOX_PAYLOAD_TYPE, entry.payloadType())
-                .build());
-    try {
-      publisher.publish(entry);
-      scope.recordSuccess();
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
-  }
-
-  /**
-   * Whether {@code publisher} keeps both of {@link OutboxPublisher}'s own {@code publishBatch}
-   * methods, which publish the entries one at a time through {@code publish}: then a traced relay
-   * publishes through {@link #publishTraced}, with the same batch semantics. A publisher with a
-   * batch path of its own (one that pipelines the entries and awaits their confirms together) is
-   * kept as it is, and its entries get no span of their own.
-   */
-  static boolean publishesOneAtATime(OutboxPublisher publisher) {
-    try {
-      Class<?> type = publisher.getClass();
-      return type.getMethod("publishBatch", List.class).getDeclaringClass() == OutboxPublisher.class
-          && type.getMethod("publishBatch", List.class, Instant.class).getDeclaringClass()
-              == OutboxPublisher.class;
-    } catch (NoSuchMethodException e) {
-      return false;
-    }
+  private TraceScope startPublishSpan(OutboxEntry entry) {
+    return tracing.start(
+        TracingArea.OUTBOX,
+        TraceAttributes.OUTBOX_PUBLISH,
+        SpanKind.PRODUCER,
+        SpanAttributes.builder()
+            .put(TraceAttributes.OUTBOX_ENTRY_ID, LogSanitizer.sanitizeForTrace(entry.id().value()))
+            .put(TraceAttributes.OUTBOX_PAYLOAD_TYPE, entry.payloadType())
+            .build());
   }
 
   /**
@@ -1372,11 +1339,10 @@ public final class OutboxPoller implements AutoCloseable {
      * The tracing the relay starts its spans through when its {@link TracingArea#OUTBOX} area is
      * on: {@value TraceAttributes#OUTBOX_RELAY} for each batch that claimed at least one entry (an
      * empty poll starts none), and under it {@value TraceAttributes#OUTBOX_PUBLISH}, of kind {@code
-     * PRODUCER}, for each entry, when the publisher publishes one entry at a time (it keeps {@link
-     * OutboxPublisher}'s own {@code publishBatch}). A publisher with a batch path of its own, such
-     * as one that pipelines a batch and awaits its confirms together, keeps that path, and its
-     * entries get no span of their own. Optional; defaults to {@link StreamRuneTracing#NOOP}, which
-     * traces nothing.
+     * PRODUCER}, for each entry's hand-off, which the publisher starts through the {@link
+     * OutboxEntrySpans} the poller passes to {@link OutboxPublisher#publishBatch}. Tracing never
+     * changes how the publisher delivers. Optional; defaults to {@link StreamRuneTracing#NOOP},
+     * which traces nothing.
      *
      * @param tracing the tracing; not {@code null}
      * @return this builder

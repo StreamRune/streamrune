@@ -443,11 +443,14 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   `streamrune.saga.step.outcome` is one of `ADVANCED`, `COMPLETED`, `COMPENSATING`,
   `COMPENSATED`, `FAILED`, `FAULTED`, `SKIPPED` and `DEFERRED`; it is absent when the step failed
   and the event is delivered again.
-- `outbox/publish` wraps each entry's `OutboxPublisher.publish`, so a publisher that keeps the
-  interface's own `publishBatch` (the Kafka publisher, a publisher of your own) gets one span per
-  entry. A publisher with a batch path of its own, such as the RabbitMQ publisher, which pipelines
-  a batch and awaits its confirms together, keeps that path, and its entries show only in
-  `outbox/relay`.
+- `outbox/publish` covers one entry's hand-off to its transport. The poller passes an
+  `OutboxEntrySpans` to `OutboxPublisher.publishBatch(entries, deadline, spans)`, and the publisher
+  starts each entry's span through it: the default batch path around each `publish` (the Kafka
+  publisher, a publisher of your own), the RabbitMQ publisher around each `basicPublish`, before it
+  awaits the batch's confirms. A publisher that wraps another passes the `spans` on. With the outbox
+  area off the poller passes `OutboxEntrySpans.NONE`, and the publisher delivers exactly as with
+  tracing on. `outbox/publish` carries no link to the trace of the command that wrote the entry
+  yet: the outbox entry does not store it.
 - The in-memory `InMemoryEventStore` starts the event-store spans in its serializing mode only; a
   by-reference store serializes nothing and does no I/O.
 - The command interceptor is auto-registered when an `OpenTelemetry` bean is present; the

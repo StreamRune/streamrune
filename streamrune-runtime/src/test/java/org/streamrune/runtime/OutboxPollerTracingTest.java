@@ -18,18 +18,20 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEntrySpans;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.test.InMemoryOutboxStore;
 
 /**
  * The outbox spans of {@link OutboxPoller}, recorded through {@link OpenTelemetryTracing}: one
  * {@code outbox/relay} per batch that claimed entries, with an {@code outbox/publish} of kind
- * {@code PRODUCER} under it per entry of a publisher that publishes one entry at a time; none for a
- * poll that claims nothing, and none with the area off or NOOP.
+ * {@code PRODUCER} under it per entry's hand-off, through the {@link OutboxEntrySpans} the poller
+ * hands the publisher; none for a poll that claims nothing, and none with the area off or NOOP.
  */
 class OutboxPollerTracingTest {
 
@@ -139,8 +141,9 @@ class OutboxPollerTracingTest {
   }
 
   @Test
-  void aPublisherWithABatchPathOfItsOwn_keepsIt_andGetsTheRelaySpanAlone() {
+  void aPublisherWithABatchPathOfItsOwn_startsTheSpanOfEachHandOff() {
     save("e-1");
+    save("e-2");
     List<List<OutboxEntry>> batches = new ArrayList<>();
     OutboxPublisher pipelining =
         new OutboxPublisher() {
@@ -150,15 +153,16 @@ class OutboxPollerTracingTest {
           }
 
           @Override
-          public BatchResult publishBatch(List<OutboxEntry> entries) {
-            return publishBatch(entries, null);
-          }
-
-          @Override
-          public BatchResult publishBatch(List<OutboxEntry> entries, Instant deadline) {
+          public BatchResult publishBatch(
+              List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
             batches.add(entries);
             var confirmed = new LinkedHashSet<OutboxEntryId>();
-            entries.forEach(e -> confirmed.add(e.id()));
+            for (OutboxEntry entry : entries) {
+              try (TraceScope hand = spans.start(entry)) {
+                hand.recordSuccess();
+              }
+              confirmed.add(entry.id());
+            }
             return new BatchResult(confirmed, Map.of());
           }
         };
@@ -166,11 +170,51 @@ class OutboxPollerTracingTest {
     poller(pipelining, tracing()).processBatch();
 
     assertThat(batches).hasSize(1);
-    assertThat(otelTesting.getSpans())
-        .extracting(SpanData::getName)
-        .containsExactly(TraceAttributes.OUTBOX_RELAY);
-    assertThat(OutboxPoller.publishesOneAtATime(pipelining)).isFalse();
-    assertThat(OutboxPoller.publishesOneAtATime(entry -> {})).isTrue();
+    SpanData relay = spans(TraceAttributes.OUTBOX_RELAY).getFirst();
+    assertThat(spans(TraceAttributes.OUTBOX_PUBLISH))
+        .hasSize(2)
+        .allSatisfy(publish -> assertThat(publish.getParentSpanId()).isEqualTo(relay.getSpanId()));
+  }
+
+  @Test
+  void aPublisherThatDelegates_passesTheSpansOn_andEachEntryGetsOneSpan() {
+    save("e-1");
+    save("e-2");
+    List<OutboxEntry> published = new ArrayList<>();
+    OutboxPublisher inner = published::add;
+    OutboxPublisher wrapper =
+        new OutboxPublisher() {
+          @Override
+          public void publish(OutboxEntry entry) throws Exception {
+            inner.publish(entry);
+          }
+
+          @Override
+          public BatchResult publishBatch(
+              List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
+            return inner.publishBatch(entries, deadline, spans);
+          }
+        };
+
+    poller(wrapper, tracing()).processBatch();
+
+    assertThat(published).hasSize(2);
+    assertThat(spans(TraceAttributes.OUTBOX_PUBLISH)).hasSize(2);
+  }
+
+  @Test
+  void none_startsNothing_andTheDefaultBatchPublishesTheSame() {
+    save("e-1");
+    OutboxEntry entry = store.loadPending(10).getFirst();
+    List<OutboxEntry> published = new ArrayList<>();
+    OutboxPublisher publisher = published::add;
+
+    assertThat(OutboxEntrySpans.NONE.start(entry)).isSameAs(TraceScope.NOOP);
+    var result = publisher.publishBatch(List.of(entry), null, OutboxEntrySpans.NONE);
+
+    assertThat(result.confirmed()).containsExactly(entry.id());
+    assertThat(published).containsExactly(entry);
+    assertThat(otelTesting.getSpans()).isEmpty();
   }
 
   @Test
