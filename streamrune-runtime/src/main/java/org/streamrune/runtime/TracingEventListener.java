@@ -72,9 +72,11 @@ public final class TracingEventListener implements EventListener {
   /**
    * The listener a subscription delivers to under {@code tracing}: {@code listener} wrapped in a
    * {@code TracingEventListener} when the {@link TracingArea#SUBSCRIPTION} area is on, else {@code
-   * listener} itself. A listener that already is a {@code TracingEventListener}, or a {@code null}
-   * listener or name, is returned as it is, so a subscription never traces a delivery twice and its
-   * own checks still report a missing argument.
+   * listener} itself. A listener that already is a {@code TracingEventListener}, or a {@link
+   * HealthTrackingEventListener} around one (the health tracking a subscription with a health
+   * contributor adds around the application's listener), or a {@code null} listener or name, is
+   * returned as it is, so a subscription never traces a delivery twice and its own checks still
+   * report a missing argument.
    *
    * @param listener the listener, or {@code null}
    * @param tracing the tracing; {@code null} traces nothing
@@ -87,10 +89,17 @@ public final class TracingEventListener implements EventListener {
         || subscriptionName == null
         || tracing == null
         || !tracing.enabled(TracingArea.SUBSCRIPTION)
-        || listener instanceof TracingEventListener) {
+        || isTraced(listener)) {
       return listener;
     }
     return new TracingEventListener(listener, tracing, subscriptionName);
+  }
+
+  /** Whether {@code listener} already traces: it is a tracing listener, or tracks health of one. */
+  private static boolean isTraced(EventListener listener) {
+    return listener instanceof TracingEventListener
+        || (listener instanceof HealthTrackingEventListener tracking
+            && tracking.delegate() instanceof TracingEventListener);
   }
 
   @Override

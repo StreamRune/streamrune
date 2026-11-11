@@ -261,6 +261,50 @@ class TracingBuildersTest {
   }
 
   @Test
+  void pollingSubscription_withAHealthContributor_tracesTheApplicationsTracingListenerOnce() {
+    StreamId stream = StreamId.of(TYPE, AggregateId.of("l-h"));
+    var store = storeWithTwoEvents(stream);
+    var offsets = new InMemoryOffsetStore();
+    EventListener own =
+        new TracingEventListener(events -> {}, tracing(), SubscriptionName.of("lights"));
+
+    var sub =
+        PollingEventSubscription.builder()
+            .subscriptionName(SubscriptionName.of("lights"))
+            .eventStore(store)
+            .offsetStore(offsets)
+            .listener(own)
+            .config(fastConfig())
+            .healthContributor(new SubscriptionHealthContributor(store, offsets))
+            .tracing(tracing())
+            .build();
+
+    assertThat(sub.pollOnce()).isEqualTo(2);
+    assertThat(spanNames()).containsExactly("subscription/lights/deliver");
+  }
+
+  @Test
+  void pollingSubscription_withAHealthContributor_tracesAPlainListenerOnce() {
+    StreamId stream = StreamId.of(TYPE, AggregateId.of("l-p"));
+    var store = storeWithTwoEvents(stream);
+    var offsets = new InMemoryOffsetStore();
+
+    var sub =
+        PollingEventSubscription.builder()
+            .subscriptionName(SubscriptionName.of("lights"))
+            .eventStore(store)
+            .offsetStore(offsets)
+            .listener(events -> {})
+            .config(fastConfig())
+            .healthContributor(new SubscriptionHealthContributor(store, offsets))
+            .tracing(tracing())
+            .build();
+
+    assertThat(sub.pollOnce()).isEqualTo(2);
+    assertThat(spanNames()).containsExactly("subscription/lights/deliver");
+  }
+
+  @Test
   void streamSubscription_tracesEachDelivery_andNotWithTheAreaOff() {
     StreamId stream = StreamId.of(TYPE, AggregateId.of("l-2"));
     for (StreamRuneTracing tracing : List.of(tracingWithout(TracingArea.SUBSCRIPTION), tracing())) {

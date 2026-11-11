@@ -382,11 +382,12 @@ returns one series per command type.
 
 ### Tracing
 
-Every span name and attribute key below is a constant in `org.streamrune.core.tracing.TraceAttributes`,
-plain strings with no OpenTelemetry type, and the emitters' tests assert the emitted name and the
-**exact** attribute-key set against those constants — the span-side equivalent of the `MetricNames`
-guard, so this table cannot drift from what is actually exported. All StreamRune span attributes carry the `streamrune.` prefix. Span
-names are path-shaped (`command/PlaceOrder`, not `command.PlaceOrder`).
+Every span name and attribute key below is a constant or a name helper of
+`org.streamrune.core.tracing.TraceAttributes`, plain strings with no OpenTelemetry type. The
+emitters' tests assert the emitted name and the **exact** attribute-key set against them, and a
+doc-lint test holds this table to them — the span-side equivalent of the `MetricNames` guard, so
+this table cannot drift from what is actually exported. All StreamRune span attributes carry the
+`streamrune.` prefix. Span names are path-shaped (`command/PlaceOrder`, not `command.PlaceOrder`).
 
 | Emitter | Span name | Kind | Attributes |
 | --- | --- | --- | --- |
@@ -399,7 +400,8 @@ names are path-shaped (`command/PlaceOrder`, not `command.PlaceOrder`).
 - `streamrune.aggregate.type` and `streamrune.aggregate.id` are the two parts of that stream; both
   are absent for a command with no aggregate id.
 - An attribute that holds an id passes `LogSanitizer.sanitizeForTrace`, which removes control,
-  separator and format characters and cuts the value at 256 characters; an ordinary id is unchanged.
+  separator and format characters and cuts a longer value to its first 256 characters followed by
+  `...`, 259 characters in all; an ordinary id is unchanged.
 - The `streamrune.` prefix is reserved for the framework. A module of your own, such as an event
   store for another database, emits the standard spans with these constants through
   `StreamRuneTracing`, and adds attributes of its own under a prefix of its own.

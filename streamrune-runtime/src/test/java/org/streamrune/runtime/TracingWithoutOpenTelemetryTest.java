@@ -15,6 +15,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -172,6 +175,94 @@ class TracingWithoutOpenTelemetryTest {
     }
   }
 
+  /**
+   * The subscription and projection runner builders call the {@code traced(...)} factories; with
+   * {@code NOOP} a polling subscription delivers and a continuous runner processes without loading
+   * an OpenTelemetry class.
+   */
+  @Test
+  void noopTracing_subscriptionAndRunnerBuildersNeedNoOpenTelemetryClass() throws Exception {
+    try (URLClassLoader loader = loaderWithoutOpenTelemetry()) {
+      Class<?> tracingType = load(loader, "org.streamrune.core.tracing.StreamRuneTracing");
+      Object noop = tracingType.getField("NOOP").get(null);
+      Class<?> storeType = load(loader, "org.streamrune.core.EventStore");
+      Class<?> offsetStoreType = load(loader, "org.streamrune.core.projection.OffsetStore");
+      Object store =
+          load(loader, "org.streamrune.test.InMemoryEventStore").getConstructor().newInstance();
+
+      Class<?> listenerType = load(loader, "org.streamrune.core.subscription.EventListener");
+      Class<?> subscriptionName = load(loader, "org.streamrune.core.types.SubscriptionName");
+      Class<?> pollingType = load(loader, "org.streamrune.runtime.PollingEventSubscription");
+      Object polling = pollingType.getMethod("builder").invoke(null);
+      Class<?> pollingBuilder = polling.getClass();
+      pollingBuilder
+          .getMethod("subscriptionName", subscriptionName)
+          .invoke(polling, subscriptionName.getMethod("of", String.class).invoke(null, "s"));
+      pollingBuilder.getMethod("eventStore", storeType).invoke(polling, store);
+      pollingBuilder
+          .getMethod("offsetStore", offsetStoreType)
+          .invoke(polling, newOffsetStore(loader));
+      pollingBuilder
+          .getMethod("listener", listenerType)
+          .invoke(polling, proxy(loader, listenerType));
+      pollingBuilder.getMethod("tracing", tracingType).invoke(polling, noop);
+      Object subscription = pollingBuilder.getMethod("build").invoke(polling);
+      Method pollOnce = pollingType.getDeclaredMethod("pollOnce");
+      pollOnce.setAccessible(true);
+      assertThat(pollOnce.invoke(subscription)).isEqualTo(0);
+
+      Class<?> runnerType = load(loader, "org.streamrune.runtime.ContinuousProjectionRunner");
+      Class<?> processorType = load(loader, "org.streamrune.core.projection.AtomicBatchProcessor");
+      Object runnerBuilder = runnerType.getMethod("builder").invoke(null);
+      Class<?> runnerBuilderType = runnerBuilder.getClass();
+      runnerBuilderType.getMethod("eventStore", storeType).invoke(runnerBuilder, store);
+      runnerBuilderType
+          .getMethod("offsetStore", offsetStoreType)
+          .invoke(runnerBuilder, newOffsetStore(loader));
+      runnerBuilderType
+          .getMethod("atomicProcessor", processorType)
+          .invoke(runnerBuilder, processorType.getMethod("nonAtomicAtLeastOnce").invoke(null));
+      runnerBuilderType.getMethod("tracing", tracingType).invoke(runnerBuilder, noop);
+      Object runner = runnerBuilderType.getMethod("build").invoke(runnerBuilder);
+
+      Class<?> projectionType = load(loader, "org.streamrune.core.projection.Projection");
+      Class<?> projectionName = load(loader, "org.streamrune.core.types.ProjectionName");
+      Class<?> modeType = load(loader, "org.streamrune.core.projection.ProjectionDeliveryMode");
+      Method run = runnerType.getMethod("run", projectionName, projectionType, modeType);
+      Object name = projectionName.getMethod("of", String.class).invoke(null, "p");
+      Object projection = proxy(loader, projectionType);
+      Object mode = modeType.getField("AT_LEAST_ONCE_IDEMPOTENT").get(null);
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      Thread thread =
+          Thread.ofVirtual()
+              .start(
+                  () -> {
+                    try {
+                      run.invoke(runner, name, projection, mode);
+                    } catch (ReflectiveOperationException e) {
+                      failure.set(e.getCause() != null ? e.getCause() : e);
+                    }
+                  });
+      // The empty store has nothing to catch up on: the run reaches its live phase and waits.
+      Method state = runnerType.getMethod("state");
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (!"LIVE".equals(String.valueOf(state.invoke(runner)))
+          && thread.isAlive()
+          && System.nanoTime() < deadline) {
+        Thread.sleep(10);
+      }
+      assertThat(String.valueOf(state.invoke(runner))).isEqualTo("LIVE");
+      ((AutoCloseable) runner).close();
+      thread.join(TimeUnit.SECONDS.toMillis(5));
+      assertThat(failure.get()).isNull();
+      assertThat(thread.isAlive()).isFalse();
+    }
+  }
+
+  private static Object newOffsetStore(ClassLoader loader) throws ReflectiveOperationException {
+    return load(loader, "org.streamrune.test.InMemoryOffsetStore").getConstructor().newInstance();
+  }
+
   private static Class<?> load(ClassLoader loader, String name) throws ClassNotFoundException {
     return Class.forName(name, true, loader);
   }
@@ -185,6 +276,8 @@ class TracingWithoutOpenTelemetryTest {
               case "hashCode" -> System.identityHashCode(self);
               case "equals" -> self == args[0];
               case "toString" -> type.getSimpleName();
+              case "writesThroughRepository" -> false;
+              case "writeTarget" -> Optional.empty();
               default -> null;
             });
   }

@@ -109,9 +109,10 @@ public final class LogSanitizer {
 
   /**
    * Maximum length of an identifier sanitized for a span attribute ({@link
-   * #sanitizeForTrace(String)}) before truncation (an ellipsis is appended beyond it). Above {@link
-   * IdConstraints#MAX_LENGTH}, so an identifier the ingress door accepts reaches a trace whole: a
-   * trace is searched by id, where a log line is only read.
+   * #sanitizeForTrace(String)}) before truncation: a longer value keeps its first 256 characters
+   * followed by {@code ...}, 259 characters in all. Above {@link IdConstraints#MAX_LENGTH}, so an
+   * identifier the ingress door accepts reaches a trace whole: a trace is searched by id, where a
+   * log line is only read.
    */
   public static final int MAX_TRACE_LENGTH = 256;
 
@@ -131,9 +132,10 @@ public final class LogSanitizer {
   }
 
   /**
-   * Strips the same code points as {@link #sanitizeForLog(String)} and truncates to {@value
-   * #MAX_TRACE_LENGTH} characters, for an identifier written into a span attribute. A trace backend
-   * renders attribute values in its UI and exports them as JSON, where a control or format
+   * Strips the same code points as {@link #sanitizeForLog(String)} and cuts a value longer than
+   * {@value #MAX_TRACE_LENGTH} characters to its first {@value #MAX_TRACE_LENGTH} followed by
+   * {@code ...} (259 characters in all), for an identifier written into a span attribute. A trace
+   * backend renders attribute values in its UI and exports them as JSON, where a control or format
    * character does the damage it does in a log line. An identifier without such a character, of at
    * most the cap's length, is returned unchanged.
    *

@@ -25,8 +25,9 @@ import org.streamrune.core.types.SubscriptionName;
  *
  * <p><b>Identifiers.</b> An attribute that holds an identifier (a command id, an aggregate id, a
  * stream id) passes {@link LogSanitizer#sanitizeForTrace(String)}: control, separator and format
- * characters are removed and the value is cut at {@value LogSanitizer#MAX_TRACE_LENGTH} characters.
- * An ordinary identifier is unchanged. Attributes never carry event payloads, metadata values,
+ * characters are removed, and a longer value is cut to its first {@value
+ * LogSanitizer#MAX_TRACE_LENGTH} characters followed by {@code ...}, 259 characters in all. An
+ * ordinary identifier is unchanged. Attributes never carry event payloads, metadata values,
  * baggage, encrypted values, crypto subject ids, user ids, roles or SQL.
  *
  * <p><b>Span names</b> are path-shaped ({@code command/PlaceOrder}, {@code
