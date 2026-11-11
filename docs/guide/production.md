@@ -394,6 +394,19 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 | `OpenTelemetryCommandInterceptor` | `command/{CommandType}` | `INTERNAL` | `streamrune.command.type`, `streamrune.command.id`, `streamrune.aggregate.type`, `streamrune.aggregate.id`, `streamrune.stream.id` |
 | `TracingEventListener` | `subscription/{name}/deliver` | `CONSUMER` | `streamrune.subscription.name`, `streamrune.batch.size` |
 | `TracingProjectionDecorator` | `projection/{name}/process` | `INTERNAL` | `streamrune.projection.name`, `streamrune.batch.size` |
+| `PostgresEventStore`, `InMemoryEventStore` | `eventstore/append` | `INTERNAL` | `streamrune.stream.id`, `streamrune.aggregate.type`, `streamrune.event.count`, `streamrune.expected.version`, `streamrune.outbox.entry.count`, `streamrune.append.outcome` |
+| `PostgresEventStore`, `InMemoryEventStore` | `eventstore/append/serialize` | `INTERNAL` | `streamrune.event.count` |
+| `PostgresEventStore`, `InMemoryEventStore` | `eventstore/load` | `INTERNAL` | `streamrune.stream.id`, `streamrune.aggregate.type`, `streamrune.event.count`, `streamrune.snapshot.used` |
+| `PostgresEventStore`, `InMemoryEventStore` | `eventstore/load/deserialize` | `INTERNAL` | `streamrune.event.count`, `streamrune.upcast.count` |
+| `PostgresEventStore`, `InMemoryEventStore` | `eventstore/snapshot/load` | `INTERNAL` | `streamrune.stream.id`, `streamrune.snapshot.version`, `streamrune.snapshot.outcome` |
+| `PostgresEventStore`, `InMemoryEventStore` | `eventstore/snapshot/save` | `INTERNAL` | `streamrune.stream.id`, `streamrune.snapshot.version`, `streamrune.snapshot.outcome` |
+| `PostgresEventStore`, `InMemoryEventStore` | `eventstore/read` | `INTERNAL` | `streamrune.event.count`, `streamrune.read.kind` |
+| `PgAdvisoryLocker`, `LocalStripedLocker` | `lock/acquire` | `INTERNAL` | `streamrune.stream.id`, `streamrune.lock.outcome` |
+| `OutboxPoller` | `outbox/relay` | `INTERNAL` | `streamrune.batch.size`, `streamrune.outbox.published`, `streamrune.outbox.failed` |
+| `OutboxPoller` | `outbox/publish` | `PRODUCER` | `streamrune.outbox.entry.id`, `streamrune.outbox.payload.type` |
+| `SagaRunner` | `saga/{SagaType}/step` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id`, `streamrune.saga.step.outcome` |
+| `SagaRunner`, `SagaTimeoutRunner` | `saga/{SagaType}/compensate` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id`, `streamrune.saga.compensation.index` |
+| `SagaTimeoutRunner` | `saga/{SagaType}/timeout` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id` |
 
 - `streamrune.stream.id` (`<type>:<id>`, for example `order:ord-42`) is set when the span starts,
   so a command that fails before committing carries its stream too.
@@ -406,7 +419,37 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   store for another database, emits the standard spans with these constants through
   `StreamRuneTracing`, and adds attributes of its own under a prefix of its own.
 - `TracingEventListener` links its span back to the originating command trace when the first
-  event's metadata carries a `traceId`/`spanId`.
+  event's metadata carries a `traceId`/`spanId`; `saga/{SagaType}/step` links to the span that
+  wrote the event it handles the same way.
+- Inside a command the spans nest: `command/{CommandType}` holds `lock/acquire`, then
+  `eventstore/load` (with `eventstore/snapshot/load` when the load reads the snapshot, and
+  `eventstore/load/deserialize`), then `eventstore/append` (with `eventstore/append/serialize`).
+  The spans of a JDBC or broker client instrumentation nest under the store's and the outbox's
+  spans. A command a saga step or a compensation dispatches runs on the saga's thread, so its
+  `command/…` span nests under the saga's.
+- Background work with nothing to do starts no span: an `eventstore/read` that returns no event
+  (an idle subscription's poll), an outbox poll that claims no entry and a saga timeout poll that
+  finds no saga past its deadline add no trace. `outbox/relay` covers one batch that claimed
+  entries, and `saga/{SagaType}/timeout` one saga the timeout runner acts on.
+- An expected outcome is an attribute value, and the span is not marked as failed: a lock held
+  past the timeout (`streamrune.lock.outcome` `TIMEOUT`, or `INTERRUPTED`), an append that lost
+  its optimistic-lock check (`streamrune.append.outcome` `CONFLICT`; `DUPLICATE` for a keyed
+  append whose key was already recorded), a saga event held for later
+  (`streamrune.saga.step.outcome` `DEFERRED`). A failure records the exception and the `ERROR`
+  status.
+- `streamrune.snapshot.outcome` is `HIT`, `MISS` or `DISCARDED` on a load (a discarded snapshot
+  replays the stream from its start, and `streamrune.snapshot.version` is then `0`) and `SAVED` or
+  `SKIPPED` on a save (a GDPR purge of the stream's snapshot intervened).
+  `streamrune.saga.step.outcome` is one of `ADVANCED`, `COMPLETED`, `COMPENSATING`,
+  `COMPENSATED`, `FAILED`, `FAULTED`, `SKIPPED` and `DEFERRED`; it is absent when the step failed
+  and the event is delivered again.
+- `outbox/publish` wraps each entry's `OutboxPublisher.publish`, so a publisher that keeps the
+  interface's own `publishBatch` (the Kafka publisher, a publisher of your own) gets one span per
+  entry. A publisher with a batch path of its own, such as the RabbitMQ publisher, which pipelines
+  a batch and awaits its confirms together, keeps that path, and its entries show only in
+  `outbox/relay`.
+- The in-memory `InMemoryEventStore` starts the event-store spans in its serializing mode only; a
+  by-reference store serializes nothing and does no I/O.
 - The command interceptor is auto-registered when an `OpenTelemetry` bean is present; the
   subscription and projection decorators are opt-in wrappers.
 
@@ -420,8 +463,12 @@ unless the chain already holds one; on the subscription builders
 (`PollingEventSubscription`, `StreamEventSubscription`, `HybridEventSubscription`,
 `PostgresNotificationSubscription`) it wraps the listener, and on the projection runner builders
 (`ContinuousProjectionRunner`, `MultiProjectionRunner`, `ScheduledProjectionRunner`) it decorates
-the projection, never twice. `StreamRune.Builder` passes it to the command bus and decorates the
-projections it registers. The default, `StreamRuneTracing.NOOP`, traces nothing and loads no
+the projection, never twice. `StreamRune.Builder` passes it to the command bus, whose default
+`LocalStripedLocker` traces through it too, and decorates the projections it registers. The
+components an application builds take it on their own: `tracing(StreamRuneTracing)` on
+`PostgresEventStore.Builder`, `PostgresEventStoreFactory`, `OutboxPoller.Builder`,
+`SagaRunner.Builder` and `SagaTimeoutRunner.Builder`, and `withTracing(StreamRuneTracing)` on
+`PgAdvisoryLocker`, `LocalStripedLocker` and `InMemoryEventStore`. The default, `StreamRuneTracing.NOOP`, traces nothing and loads no
 OpenTelemetry class. `OpenTelemetryTracing.of` is the one method that takes an `OpenTelemetry`: the
 emitters' constructors and their `traced(...)` factories take a `StreamRuneTracing`, so a module of
 your own compiles and runs without the `opentelemetry-api` dependency.

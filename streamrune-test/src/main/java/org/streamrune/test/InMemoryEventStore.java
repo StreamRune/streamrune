@@ -15,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.AggregateHistory;
@@ -36,6 +37,12 @@ import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
@@ -105,6 +112,17 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * (or a {@code @Encrypted} field with no resolvable subject) fails at append; an unregistered or
  * shape-incompatible event type, and a crypto-shredded field, surface at read.
  *
+ * <p><b>Tracing.</b> In serializing mode a store given a tracing ({@link
+ * #withTracing(StreamRuneTracing)}) starts the event-store spans {@code PostgresEventStore} starts,
+ * with the same names, attributes and nesting: {@value TraceAttributes#EVENT_STORE_APPEND} with
+ * {@value TraceAttributes#EVENT_STORE_APPEND_SERIALIZE}, {@value TraceAttributes#EVENT_STORE_LOAD}
+ * with {@value TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD} and {@value
+ * TraceAttributes#EVENT_STORE_LOAD_DESERIALIZE}, {@value
+ * TraceAttributes#EVENT_STORE_SNAPSHOT_SAVE}, and {@value TraceAttributes#EVENT_STORE_READ} for a
+ * read that returns events. Its outbox entry count is always {@code 0}: this store writes no
+ * outbox. In by-reference mode it starts no span: it neither serializes nor does any I/O, so a span
+ * would time nothing a deployment has.
+ *
  * <p>Thread-safe: appends are serialized by a single lock, reads operate on copy-on-write lists.
  */
 public final class InMemoryEventStore implements EventStore {
@@ -158,6 +176,9 @@ public final class InMemoryEventStore implements EventStore {
    * appending under an empty/older chain and reading under a chain with a higher current version.
    */
   private volatile UpcasterChain upcasterChain;
+
+  /** The tracing of the serializing mode's spans; set by {@link #withTracing}. */
+  private volatile StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
   /** Both null in by-reference mode, both set in serializing mode. */
   private final ObjectMapper objectMapper;
@@ -281,6 +302,134 @@ public final class InMemoryEventStore implements EventStore {
   }
 
   /**
+   * Starts the event-store spans through {@code tracing} when its {@link TracingArea#EVENT_STORE}
+   * area is on, in serializing mode; see the class javadoc. A by-reference store starts none.
+   *
+   * @param tracing the tracing; {@link StreamRuneTracing#NOOP} traces nothing
+   * @return this store, for chaining
+   */
+  public InMemoryEventStore withTracing(StreamRuneTracing tracing) {
+    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+    return this;
+  }
+
+  /** Whether this store starts its spans: serializing mode, with the event-store area on. */
+  private boolean traced() {
+    return objectMapper != null && tracing.enabled(TracingArea.EVENT_STORE);
+  }
+
+  /**
+   * Runs {@code work} inside the event-store span {@code spanName}; {@code work} sets the
+   * attributes known at its end on the scope it is handed.
+   */
+  private <T> T inSpan(String spanName, SpanAttributes attributes, Function<TraceScope, T> work) {
+    TraceScope scope =
+        tracing.start(TracingArea.EVENT_STORE, spanName, SpanKind.INTERNAL, attributes);
+    try {
+      T result = work.apply(scope);
+      scope.recordSuccess();
+      return result;
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
+    } finally {
+      scope.close();
+    }
+  }
+
+  /** The attributes {@code stream.id} and {@code aggregate.type} of a span about one stream. */
+  private static SpanAttributes streamAttributes(StreamId streamId) {
+    return SpanAttributes.builder()
+        .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
+        .put(TraceAttributes.AGGREGATE_TYPE, streamId.aggregateType().value())
+        .build();
+  }
+
+  /**
+   * Runs {@code append} inside the span {@value TraceAttributes#EVENT_STORE_APPEND}; a version
+   * conflict is its outcome {@code CONFLICT}, not an error.
+   */
+  private <T> T tracedAppend(
+      StreamId streamId,
+      int eventCount,
+      Version expectedVersion,
+      java.util.function.Supplier<T> append,
+      Function<T, String> outcome) {
+    TraceScope scope =
+        tracing.start(
+            TracingArea.EVENT_STORE,
+            TraceAttributes.EVENT_STORE_APPEND,
+            SpanKind.INTERNAL,
+            SpanAttributes.builder()
+                .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
+                .put(TraceAttributes.AGGREGATE_TYPE, streamId.aggregateType().value())
+                .put(TraceAttributes.EVENT_COUNT, (long) eventCount)
+                .put(TraceAttributes.EXPECTED_VERSION, expectedVersion.value())
+                .put(TraceAttributes.OUTBOX_ENTRY_COUNT, 0L)
+                .build());
+    try {
+      T result = append.get();
+      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, outcome.apply(result));
+      scope.recordSuccess();
+      return result;
+    } catch (OptimisticLockException conflict) {
+      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "CONFLICT");
+      throw conflict;
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
+    } finally {
+      scope.close();
+    }
+  }
+
+  /** {@link #toEnvelope} over {@code stored}, inside the load's deserialize span when traced. */
+  private List<EventEnvelope> deserialize(List<StoredEvent> stored) {
+    if (!traced()) {
+      return stored.stream().map(this::toEnvelope).toList();
+    }
+    UpcasterChain chain = upcasterChain;
+    long upcasts =
+        chain == null
+            ? 0
+            : stored.stream()
+                .filter(e -> e.schemaVersion() < chain.currentVersion(e.eventType()))
+                .count();
+    return inSpan(
+        TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE,
+        SpanAttributes.builder()
+            .put(TraceAttributes.EVENT_COUNT, (long) stored.size())
+            .put(TraceAttributes.UPCAST_COUNT, upcasts)
+            .build(),
+        scope -> stored.stream().map(this::toEnvelope).toList());
+  }
+
+  /** {@link #toEnvelope} over a read's {@code stored}, inside the read span when there are any. */
+  private List<EventEnvelope> readEvents(List<StoredEvent> stored, String readKind) {
+    if (stored.isEmpty() || !traced()) {
+      return stored.stream().map(this::toEnvelope).toList();
+    }
+    return inSpan(
+        TraceAttributes.EVENT_STORE_READ,
+        SpanAttributes.builder()
+            .put(TraceAttributes.EVENT_COUNT, (long) stored.size())
+            .put(TraceAttributes.READ_KIND, readKind)
+            .build(),
+        scope -> stored.stream().map(this::toEnvelope).toList());
+  }
+
+  /** {@link #prepareForAppend}, inside the append's serialize span when traced. */
+  private List<StoredEvent> serialize(StreamId streamId, List<EventEnvelope> events) {
+    if (!traced()) {
+      return prepareForAppend(streamId, events);
+    }
+    return inSpan(
+        TraceAttributes.EVENT_STORE_APPEND_SERIALIZE,
+        SpanAttributes.builder().put(TraceAttributes.EVENT_COUNT, (long) events.size()).build(),
+        scope -> prepareForAppend(streamId, events));
+  }
+
+  /**
    * Registers a listener notified after each successful append. Used by {@link
    * InMemoryEventSubscription}; tests may register their own to observe append activity.
    */
@@ -303,7 +452,21 @@ public final class InMemoryEventStore implements EventStore {
   @Override
   public AggregateHistory load(StreamId streamId, int expectedSnapshotVersion) {
     Objects.requireNonNull(streamId, "streamId is required");
+    if (!traced()) {
+      return loadHistory(streamId, expectedSnapshotVersion);
+    }
+    return inSpan(
+        TraceAttributes.EVENT_STORE_LOAD,
+        streamAttributes(streamId),
+        scope -> {
+          AggregateHistory history = loadHistory(streamId, expectedSnapshotVersion);
+          scope.setAttribute(TraceAttributes.EVENT_COUNT, (long) history.events().size());
+          scope.setAttribute(TraceAttributes.SNAPSHOT_USED, history.snapshotState() != null);
+          return history;
+        });
+  }
 
+  private AggregateHistory loadHistory(StreamId streamId, int expectedSnapshotVersion) {
     AggregateState state = null;
     Version snapshotVersion = Version.initial();
 
@@ -315,22 +478,23 @@ public final class InMemoryEventStore implements EventStore {
     // tests.)
     Snapshot snapshot =
         expectedSnapshotVersion == EventStore.IGNORE_SNAPSHOT ? null : snapshots.get(streamId);
-    if (snapshot != null) {
+    if (snapshot != null || (expectedSnapshotVersion != EventStore.IGNORE_SNAPSHOT && traced())) {
       // Deserialize (decrypt, resolve, migrate) the stored snapshot on READ — mirroring
       // PostgresEventStore. A crypto-shredded @Encrypted field yields [REDACTED]; a retired stored
       // type is discarded (full replay); a version mismatch is migrated up or discarded.
-      ResolvedSnapshot resolved = resolveSnapshot(snapshot, expectedSnapshotVersion);
+      ResolvedSnapshot resolved =
+          resolveSnapshotTraced(streamId, snapshot, expectedSnapshotVersion);
       state = resolved.state();
       snapshotVersion = resolved.version();
     }
 
     long afterVersion = snapshotVersion.value();
     List<EventEnvelope> events =
-        streams.getOrDefault(streamId, List.<StoredEvent>of()).stream()
-            .filter(e -> e.version().value() > afterVersion)
-            .sorted(Comparator.comparingLong(e -> e.version().value()))
-            .map(this::toEnvelope)
-            .toList();
+        deserialize(
+            streams.getOrDefault(streamId, List.<StoredEvent>of()).stream()
+                .filter(e -> e.version().value() > afterVersion)
+                .sorted(Comparator.comparingLong(e -> e.version().value()))
+                .toList());
 
     Version version = events.isEmpty() ? snapshotVersion : events.getLast().version();
     return new AggregateHistory(state, events, version, snapshotVersion);
@@ -355,10 +519,22 @@ public final class InMemoryEventStore implements EventStore {
     if (events.isEmpty()) {
       return new AppendResult(List.of(), expectedVersion);
     }
+    if (!traced()) {
+      return appendEvents(streamId, events, expectedVersion);
+    }
+    return tracedAppend(
+        streamId,
+        events.size(),
+        expectedVersion,
+        () -> appendEvents(streamId, events, expectedVersion),
+        result -> "APPENDED");
+  }
 
+  private AppendResult appendEvents(
+      StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
     // In serializing mode, serialize payloads BEFORE touching any state: a Jackson failure on the
     // third event must leave nothing appended, mirroring Postgres' transaction rollback.
-    List<StoredEvent> toAppend = prepareForAppend(streamId, events);
+    List<StoredEvent> toAppend = serialize(streamId, events);
 
     AppendResult result;
     // Serialize appends across ALL streams so events become visible in strict global_offset
@@ -492,10 +668,31 @@ public final class InMemoryEventStore implements EventStore {
       throw new UnsupportedOperationException(
           "No InMemorySagaStore wired; call withSagaStore(...)");
     }
+    if (events.isEmpty() || !traced()) {
+      return appendEventsWithKey(
+          streamId, events, expectedVersion, idempotencyKey, commandType, forwardOf, rows);
+    }
+    return tracedAppend(
+        streamId,
+        events.size(),
+        expectedVersion,
+        () ->
+            appendEventsWithKey(
+                streamId, events, expectedVersion, idempotencyKey, commandType, forwardOf, rows),
+        result -> result.alreadyApplied() ? "DUPLICATE" : "APPENDED");
+  }
 
+  private IdempotentAppendResult appendEventsWithKey(
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      IdempotencyKey idempotencyKey,
+      String commandType,
+      SagaOrigin forwardOf,
+      InMemorySagaStore rows) {
     // In serializing mode, serialize payloads BEFORE taking the lock (same as append):
     // a Jackson failure on the third event must leave nothing appended.
-    List<StoredEvent> toAppend = prepareForAppend(streamId, events);
+    List<StoredEvent> toAppend = serialize(streamId, events);
 
     AppendResult result;
     appendLock.lock();
@@ -744,6 +941,25 @@ public final class InMemoryEventStore implements EventStore {
       snapshots.put(streamId, new Snapshot(version, snapshotVersion, state, null, null));
       return true;
     }
+    if (!traced() || version == null) {
+      return writeSnapshot(streamId, version, state, snapshotVersion);
+    }
+    return inSpan(
+        TraceAttributes.EVENT_STORE_SNAPSHOT_SAVE,
+        SpanAttributes.builder()
+            .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
+            .put(TraceAttributes.SNAPSHOT_VERSION, version.value())
+            .build(),
+        scope -> {
+          boolean saved = writeSnapshot(streamId, version, state, snapshotVersion);
+          scope.setAttribute(TraceAttributes.SNAPSHOT_OUTCOME, saved ? "SAVED" : "SKIPPED");
+          return saved;
+        });
+  }
+
+  /** The serializing mode's snapshot write. */
+  private boolean writeSnapshot(
+      StreamId streamId, Version version, AggregateState state, int snapshotVersion) {
     // Serializing mode: validate the simple-name registry contract and store the SERIALIZED form
     // (JSON / ciphertext), exactly like PostgresEventStore.saveSnapshot. Deserialization —
     // including @Encrypted decryption and retired-type resolution — is deferred to load().
@@ -782,6 +998,37 @@ public final class InMemoryEventStore implements EventStore {
     }
     snapshots.put(streamId, new Snapshot(version, snapshotVersion, null, stateJson, stateType));
     return true;
+  }
+
+  /**
+   * {@link #resolveSnapshot} of the stream's {@code snapshot} ({@code null} when it has none),
+   * inside the span {@value TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD} when traced, with the
+   * outcome {@code HIT}, {@code MISS} or {@code DISCARDED}.
+   */
+  private ResolvedSnapshot resolveSnapshotTraced(
+      StreamId streamId, Snapshot snapshot, int expectedSnapshotVersion) {
+    if (!traced()) {
+      return snapshot == null
+          ? new ResolvedSnapshot(null, Version.initial())
+          : resolveSnapshot(snapshot, expectedSnapshotVersion);
+    }
+    return inSpan(
+        TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD,
+        SpanAttributes.builder()
+            .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
+            .build(),
+        scope -> {
+          ResolvedSnapshot resolved =
+              snapshot == null
+                  ? new ResolvedSnapshot(null, Version.initial())
+                  : resolveSnapshot(snapshot, expectedSnapshotVersion);
+          boolean hit = resolved.state() != null;
+          scope.setAttribute(
+              TraceAttributes.SNAPSHOT_OUTCOME,
+              hit ? "HIT" : snapshot != null ? "DISCARDED" : "MISS");
+          scope.setAttribute(TraceAttributes.SNAPSHOT_VERSION, resolved.version().value());
+          return resolved;
+        });
   }
 
   /**
@@ -974,22 +1221,24 @@ public final class InMemoryEventStore implements EventStore {
 
   @Override
   public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
-    return globalStream.stream()
-        .filter(e -> e.globalOffset().value() > afterOffset.value())
-        .sorted(Comparator.comparingLong(e -> e.globalOffset().value()))
-        .limit(maxCount)
-        .map(this::toEnvelope)
-        .toList();
+    return readEvents(
+        globalStream.stream()
+            .filter(e -> e.globalOffset().value() > afterOffset.value())
+            .sorted(Comparator.comparingLong(e -> e.globalOffset().value()))
+            .limit(maxCount)
+            .toList(),
+        "GLOBAL");
   }
 
   @Override
   public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
-    return streams.getOrDefault(streamId, List.<StoredEvent>of()).stream()
-        .filter(e -> e.version().value() > afterVersion.value())
-        .sorted(Comparator.comparingLong(e -> e.version().value()))
-        .limit(maxCount)
-        .map(this::toEnvelope)
-        .toList();
+    return readEvents(
+        streams.getOrDefault(streamId, List.<StoredEvent>of()).stream()
+            .filter(e -> e.version().value() > afterVersion.value())
+            .sorted(Comparator.comparingLong(e -> e.version().value()))
+            .limit(maxCount)
+            .toList(),
+        "STREAM");
   }
 
   /** Whether this store serializes its events: it has an {@link EventTypeRegistry} to read with. */

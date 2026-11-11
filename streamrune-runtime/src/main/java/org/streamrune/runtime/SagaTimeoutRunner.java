@@ -26,6 +26,12 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaTimeoutException;
 import org.streamrune.core.saga.SagaUnstampedCompensationEpisodeException;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
 
@@ -249,6 +255,11 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
   /** Serializes {@link #close()}. */
   private final ReentrantLock closeLock = new ReentrantLock();
 
+  private final StreamRuneTracing tracing;
+
+  /** Whether {@link #tracing} records the saga area, read once. */
+  private final boolean traced;
+
   private SagaTimeoutRunner(
       SagaDecider<S> decider,
       SagaStore sagaStore,
@@ -263,7 +274,10 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       SagaStepLock stepLock,
       SagaRunner<?> boundRunner,
       Duration claimWait,
-      Duration anchorGrace) {
+      Duration anchorGrace,
+      StreamRuneTracing tracing) {
+    this.tracing = tracing;
+    this.traced = tracing.enabled(TracingArea.SAGA);
     this.stepLock = stepLock;
     this.boundRunner = boundRunner;
     this.claimWait = claimWait;
@@ -295,7 +309,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
             : inboxRetentionMaxAge;
     this.executor =
         new SagaStepExecutor<>(
-            SagaDeciderAdapter.compensationOnly(decider), sagaStore, commandBus, metrics);
+            SagaDeciderAdapter.compensationOnly(decider), sagaStore, commandBus, metrics, tracing);
     Duration maxBackoff =
         pollInterval.compareTo(MAX_FAILURE_BACKOFF) > 0 ? pollInterval : MAX_FAILURE_BACKOFF;
     this.pollLoop =
@@ -609,18 +623,49 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       if (selected.isEmpty() || selected.get().status().isHalted()) {
         return false;
       }
-      SagaTimeoutException cause =
-          new SagaTimeoutException(sagaId, decider.timeout().orElse(Duration.ZERO));
-      if (selected.get().status() == SagaStatus.COMPENSATING) {
-        resumeClaimedEpisode(sagaId, selected.get(), cause);
-        return false;
+      if (!traced) {
+        return timeOut(sagaId, selected.get());
       }
-      return claimAtTheDeadline(sagaId, cause);
+      TraceScope scope =
+          tracing.start(
+              TracingArea.SAGA,
+              TraceAttributes.sagaTimeoutSpanName(sagaType),
+              SpanKind.INTERNAL,
+              SpanAttributes.builder()
+                  .put(TraceAttributes.SAGA_TYPE, sagaType.value())
+                  .put(TraceAttributes.SAGA_ID, LogSanitizer.sanitizeForTrace(sagaId.value()))
+                  .build());
+      try {
+        boolean deferred = timeOut(sagaId, selected.get());
+        scope.recordSuccess();
+        return deferred;
+      } catch (Throwable t) {
+        scope.recordError(t);
+        throw t;
+      } finally {
+        scope.close();
+      }
     } catch (Exception e) {
       LOG.warn(
           "Failed to process timed-out saga: {}", LogSanitizer.sanitizeForLog(sagaId.value()), e);
       return false;
     }
+  }
+
+  /**
+   * Times out {@code sagaId}, which {@code selected} shows to be live: resumes its episode when it
+   * is compensating, claims it at its deadline otherwise.
+   *
+   * @return {@code true} when the claim was deferred
+   */
+  private boolean timeOut(SagaId sagaId, LoadedSaga<S> selected) {
+    SagaTimeoutException cause =
+        new SagaTimeoutException(sagaId, decider.timeout().orElse(Duration.ZERO));
+    if (selected.status() == SagaStatus.COMPENSATING) {
+      resumeClaimedEpisode(sagaId, selected, cause);
+      return false;
+    }
+    return claimAtTheDeadline(sagaId, cause);
   }
 
   /**
@@ -908,6 +953,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
     private Duration inboxRetentionMaxAge;
     private SagaRunner<?> sagaRunner;
     private SagaStepLock stepLock;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
     private Duration claimWait = DEFAULT_CLAIM_WAIT;
     private Duration anchorGrace = LeaseFollower.DEFAULT_ANCHOR_GRACE;
 
@@ -962,6 +1008,21 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
      */
     public Builder<S> clock(Clock clock) {
       this.clock = clock;
+      return this;
+    }
+
+    /**
+     * The tracing the runner starts its spans through when its {@link TracingArea#SAGA} area is on:
+     * {@code saga/{SagaType}/timeout} for each saga it acts on past its deadline (a poll that finds
+     * none starts no span), and under it {@code saga/{SagaType}/compensate} for each compensation
+     * command it dispatches. Optional; defaults to {@link StreamRuneTracing#NOOP}, which traces
+     * nothing.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder<S> tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
       return this;
     }
 
@@ -1191,7 +1252,8 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
           claimLock,
           sagaRunner,
           claimWait,
-          anchorGrace);
+          anchorGrace,
+          tracing);
     }
   }
 }

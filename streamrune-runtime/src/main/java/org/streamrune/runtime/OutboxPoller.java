@@ -23,6 +23,12 @@ import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 
 /**
@@ -304,10 +310,27 @@ public final class OutboxPoller implements AutoCloseable {
   // compared with the instant the store stamped it with. The builder's clock, or the system's.
   private final TimeSource time;
 
+  private final StreamRuneTracing tracing;
+
+  /** Whether {@link #tracing} records the outbox area, read once. */
+  private final boolean traced;
+
+  /**
+   * What a traced relay batch publishes through: a publisher whose {@code publish} starts the span
+   * {@value TraceAttributes#OUTBOX_PUBLISH} around {@link #publisher}'s, when {@link #publisher}
+   * publishes one entry at a time (it keeps {@link OutboxPublisher}'s own {@code publishBatch});
+   * {@link #publisher} itself otherwise.
+   */
+  private final OutboxPublisher batchPublisher;
+
   private OutboxPoller(Builder builder) {
     this.closeJoinTimeoutMs = builder.closeJoinTimeoutMs;
     this.store = builder.store;
     this.publisher = builder.publisher;
+    this.tracing = builder.tracing;
+    this.traced = tracing.enabled(TracingArea.OUTBOX);
+    this.batchPublisher =
+        traced && publishesOneAtATime(builder.publisher) ? this::publishTraced : builder.publisher;
     this.maxInFlightHorizon = normalizeHorizon(builder.publisher.inFlightHorizon());
     this.retryPolicy = builder.retryPolicy;
     this.batchSize = builder.batchSize;
@@ -395,6 +418,34 @@ public final class OutboxPoller implements AutoCloseable {
     if (pending.isEmpty()) {
       return;
     }
+    if (!traced) {
+      publishAndRecord(pending, claimBase, lease, interrupts);
+      return;
+    }
+    TraceScope scope =
+        tracing.start(
+            TracingArea.OUTBOX,
+            TraceAttributes.OUTBOX_RELAY,
+            SpanKind.INTERNAL,
+            SpanAttributes.builder()
+                .put(TraceAttributes.BATCH_SIZE, (long) pending.size())
+                .build());
+    try {
+      OutboxPublisher.BatchResult result = publishAndRecord(pending, claimBase, lease, interrupts);
+      scope.setAttribute(TraceAttributes.OUTBOX_PUBLISHED, (long) result.confirmed().size());
+      scope.setAttribute(TraceAttributes.OUTBOX_FAILED, (long) result.failed().size());
+      scope.recordSuccess();
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
+    } finally {
+      scope.close();
+    }
+  }
+
+  /** Publishes one claimed, non-empty batch and stores its outcome; returns the publish result. */
+  private OutboxPublisher.BatchResult publishAndRecord(
+      List<OutboxEntry> pending, Instant claimBase, Duration lease, InterruptDeferral interrupts) {
     // Bound this publish cycle to a deadline strictly below the claim lease. The publisher
     // stops attempting entries once the deadline passes; the never-attempted ones are released at
     // the end of the cycle — never left for a second relay racing this one past the lease.
@@ -403,7 +454,7 @@ public final class OutboxPoller implements AutoCloseable {
     var result =
         Thread.currentThread().isInterrupted()
             ? NOTHING_ATTEMPTED
-            : publisher.publishBatch(pending, publishDeadline);
+            : batchPublisher.publishBatch(pending, publishDeadline);
     // Record the outcome with close()'s interrupt held back: on a virtual thread every JDBC call
     // made with the flag set fails at the socket, which would lose the deliveries the transport
     // has already confirmed. A stop requested meanwhile is delivered once the outcome is stored.
@@ -412,6 +463,53 @@ public final class OutboxPoller implements AutoCloseable {
       recordOutcome(pending, result, claimBase, publishDeadline, lease, stopping);
     } finally {
       interrupts.resume();
+    }
+    return result;
+  }
+
+  /**
+   * Publishes {@code entry} through {@link #publisher} inside the span {@value
+   * TraceAttributes#OUTBOX_PUBLISH}, of kind {@code PRODUCER}, so the spans of the broker client's
+   * own instrumentation nest under it. A failed publish records the exception.
+   */
+  private void publishTraced(OutboxEntry entry) throws Exception {
+    TraceScope scope =
+        tracing.start(
+            TracingArea.OUTBOX,
+            TraceAttributes.OUTBOX_PUBLISH,
+            SpanKind.PRODUCER,
+            SpanAttributes.builder()
+                .put(
+                    TraceAttributes.OUTBOX_ENTRY_ID,
+                    LogSanitizer.sanitizeForTrace(entry.id().value()))
+                .put(TraceAttributes.OUTBOX_PAYLOAD_TYPE, entry.payloadType())
+                .build());
+    try {
+      publisher.publish(entry);
+      scope.recordSuccess();
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
+    } finally {
+      scope.close();
+    }
+  }
+
+  /**
+   * Whether {@code publisher} keeps both of {@link OutboxPublisher}'s own {@code publishBatch}
+   * methods, which publish the entries one at a time through {@code publish}: then a traced relay
+   * publishes through {@link #publishTraced}, with the same batch semantics. A publisher with a
+   * batch path of its own (one that pipelines the entries and awaits their confirms together) is
+   * kept as it is, and its entries get no span of their own.
+   */
+  static boolean publishesOneAtATime(OutboxPublisher publisher) {
+    try {
+      Class<?> type = publisher.getClass();
+      return type.getMethod("publishBatch", List.class).getDeclaringClass() == OutboxPublisher.class
+          && type.getMethod("publishBatch", List.class, Instant.class).getDeclaringClass()
+              == OutboxPublisher.class;
+    } catch (NoSuchMethodException e) {
+      return false;
     }
   }
 
@@ -1248,6 +1346,7 @@ public final class OutboxPoller implements AutoCloseable {
     // Read once from the store in build(), alongside the mode: the lease the guard validates is the
     // lease the poller bounds every publish deadline by.
     private Duration claimLease;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     public Builder outboxStore(OutboxStore store) {
       this.store = store;
@@ -1266,6 +1365,24 @@ public final class OutboxPoller implements AutoCloseable {
 
     public Builder publisher(OutboxPublisher publisher) {
       this.publisher = publisher;
+      return this;
+    }
+
+    /**
+     * The tracing the relay starts its spans through when its {@link TracingArea#OUTBOX} area is
+     * on: {@value TraceAttributes#OUTBOX_RELAY} for each batch that claimed at least one entry (an
+     * empty poll starts none), and under it {@value TraceAttributes#OUTBOX_PUBLISH}, of kind {@code
+     * PRODUCER}, for each entry, when the publisher publishes one entry at a time (it keeps {@link
+     * OutboxPublisher}'s own {@code publishBatch}). A publisher with a batch path of its own, such
+     * as one that pipelines a batch and awaits its confirms together, keeps that path, and its
+     * entries get no span of their own. Optional; defaults to {@link StreamRuneTracing#NOOP}, which
+     * traces nothing.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
       return this;
     }
 

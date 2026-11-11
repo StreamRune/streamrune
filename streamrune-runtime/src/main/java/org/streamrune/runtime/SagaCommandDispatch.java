@@ -27,6 +27,12 @@ import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.IdempotencyKey;
@@ -561,13 +567,32 @@ final class SagaCommandDispatch {
       EventId causingEvent,
       IntFunction<IdempotencyKey> keyForIndex,
       Logger log) {
+    return compensateAndClassify(
+        compensations, commandBus, origin, causingEvent, keyForIndex, log, StreamRuneTracing.NOOP);
+  }
+
+  /**
+   * {@link #compensateAndClassify(List, CommandBus, SagaOrigin, EventId, IntFunction, Logger)},
+   * with each compensation command dispatched inside the span {@code saga/{SagaType}/compensate}
+   * when {@code tracing} records the saga area. A command that fails records its exception there.
+   */
+  static CompensationOutcome compensateAndClassify(
+      List<SagaCommand> compensations,
+      CommandBus commandBus,
+      SagaOrigin origin,
+      EventId causingEvent,
+      IntFunction<IdempotencyKey> keyForIndex,
+      Logger log,
+      StreamRuneTracing tracing) {
     if (compensations.isEmpty()) {
       return CompensationOutcome.FAILED;
     }
     boolean hadTransientFailure = false;
     boolean hadPermanentFailure = false;
     boolean hadAttemptedTransientFailure = false;
+    boolean traced = tracing.enabled(TracingArea.SAGA);
     for (int i = 0; i < compensations.size(); i++) {
+      TraceScope scope = traced ? startCompensation(tracing, origin, i) : TraceScope.NOOP;
       try {
         // A compensation command is never fenced: it is the command the fence makes room for.
         dispatch(
@@ -577,7 +602,9 @@ final class SagaCommandDispatch {
             compensations.get(i).command(),
             keyForIndex.apply(i),
             /* forwardFenced= */ false);
+        scope.recordSuccess();
       } catch (Exception e) {
+        scope.recordError(e);
         // Reuse the bus's DLQ-eligibility split: a business rejection
         // (DomainException/IllegalArgumentException) is deterministic and can never succeed on
         // retry, so it terminalizes FAILED; everything else (EventStoreException, a connection/pool
@@ -634,6 +661,8 @@ final class SagaCommandDispatch {
                   + " FAILED",
               e);
         }
+      } finally {
+        scope.close();
       }
     }
     if (!hadTransientFailure && !hadPermanentFailure) {
@@ -645,6 +674,20 @@ final class SagaCommandDispatch {
     return hadAttemptedTransientFailure
         ? CompensationOutcome.RETRY
         : CompensationOutcome.RETRY_REFUSED;
+  }
+
+  /** Starts the span of the compensation command at {@code index} of {@code origin}'s saga. */
+  private static TraceScope startCompensation(
+      StreamRuneTracing tracing, SagaOrigin origin, int index) {
+    return tracing.start(
+        TracingArea.SAGA,
+        TraceAttributes.sagaCompensateSpanName(origin.sagaType()),
+        SpanKind.INTERNAL,
+        SpanAttributes.builder()
+            .put(TraceAttributes.SAGA_TYPE, origin.sagaType().value())
+            .put(TraceAttributes.SAGA_ID, LogSanitizer.sanitizeForTrace(origin.sagaId().value()))
+            .put(TraceAttributes.SAGA_COMPENSATION_INDEX, (long) index)
+            .build());
   }
 
   /**
