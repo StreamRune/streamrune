@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -19,6 +20,8 @@ import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.EventSubscription;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.SubscriptionName;
@@ -27,6 +30,7 @@ import org.streamrune.runtime.ReadPoisonAware;
 import org.streamrune.runtime.ReadPoisonClassifier;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SubscriptionLease;
+import org.streamrune.runtime.TracingEventListener;
 
 /**
  * PostgreSQL-backed {@link EventSubscription} that uses {@code LISTEN}/{@code NOTIFY} for
@@ -203,7 +207,8 @@ public final class PostgresNotificationSubscription implements EventSubscription
     this.listenDataSource = builder.listenDataSource;
     this.eventStore = builder.eventStore;
     this.offsetStore = builder.offsetStore;
-    this.listener = resolvedListener;
+    this.listener =
+        TracingEventListener.traced(resolvedListener, builder.tracing, subscriptionName);
     this.lease = builder.resolvedLease();
     this.config = builder.config;
     this.fetchSize = builder.fetchSize;
@@ -242,6 +247,7 @@ public final class PostgresNotificationSubscription implements EventSubscription
     private SubscriptionLease lease;
     private SubscriptionLeadership leadership;
     private SagaRunner<?> sagaRunner;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     private Builder(SubscriptionName subscriptionName) {
       this.subscriptionName = subscriptionName;
@@ -344,6 +350,20 @@ public final class PostgresNotificationSubscription implements EventSubscription
      */
     public Builder sagaRunner(SagaRunner<?> sagaRunner) {
       this.sagaRunner = sagaRunner;
+      return this;
+    }
+
+    /**
+     * The tracing each delivery batch is traced through, as the span {@code
+     * subscription/{name}/deliver} (default {@link StreamRuneTracing#NOOP}, which traces nothing).
+     * When its {@link TracingArea#SUBSCRIPTION} area is on, the subscription wraps its listener in
+     * a {@link TracingEventListener}; a listener that already is one is not wrapped again.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
       return this;
     }
 

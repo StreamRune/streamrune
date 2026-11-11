@@ -20,6 +20,8 @@ import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.SubscriptionName;
@@ -228,10 +230,7 @@ public final class PollingEventSubscription
         null);
   }
 
-  /**
-   * Full constructor: as above, and the clock that times the deliveries ({@code null} = {@link
-   * System#nanoTime()}). Package-private: the builder resolves it.
-   */
+  /** As below, without tracing. Package-private: the builder resolves the clock and the tracing. */
   PollingEventSubscription(
       SubscriptionName subscriptionName,
       EventStore eventStore,
@@ -244,6 +243,39 @@ public final class PollingEventSubscription
       SubscriptionLease lease,
       SubscriptionHealthContributor healthContributor,
       Clock clock) {
+    this(
+        subscriptionName,
+        eventStore,
+        offsetStore,
+        listener,
+        config,
+        fetchSize,
+        metrics,
+        readPoisonBound,
+        lease,
+        healthContributor,
+        clock,
+        StreamRuneTracing.NOOP);
+  }
+
+  /**
+   * Full constructor: as above, the clock that times the deliveries ({@code null} = {@link
+   * System#nanoTime()}) and the tracing each delivery is traced through. Package-private: the
+   * builder resolves it.
+   */
+  PollingEventSubscription(
+      SubscriptionName subscriptionName,
+      EventStore eventStore,
+      OffsetStore offsetStore,
+      EventListener listener,
+      SubscriptionConfig config,
+      int fetchSize,
+      StreamRuneMetrics metrics,
+      int readPoisonBound,
+      SubscriptionLease lease,
+      SubscriptionHealthContributor healthContributor,
+      Clock clock,
+      StreamRuneTracing tracing) {
     if (subscriptionName == null) {
       throw new IllegalArgumentException("subscriptionName is required");
     }
@@ -271,8 +303,13 @@ public final class PollingEventSubscription
     this.subscriptionName = subscriptionName;
     this.eventStore = eventStore;
     this.offsetStore = offsetStore;
+    // The span covers the health tracking, so a listener that already tracks health for this
+    // contributor and name is still recognized by tracking() and counted once.
     this.listener =
-        HealthTrackingEventListener.tracking(listener, healthContributor, subscriptionName);
+        TracingEventListener.traced(
+            HealthTrackingEventListener.tracking(listener, healthContributor, subscriptionName),
+            tracing,
+            subscriptionName);
     this.config = config;
     this.fetchSize = fetchSize;
     this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
@@ -822,6 +859,7 @@ public final class PollingEventSubscription
     private SagaRunner<?> sagaRunner;
     private SubscriptionHealthContributor healthContributor;
     private Clock clock;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     /** Sets the unique subscription name (required). */
     public Builder subscriptionName(SubscriptionName name) {
@@ -954,6 +992,20 @@ public final class PollingEventSubscription
     }
 
     /**
+     * The tracing each delivery batch is traced through, as the span {@code
+     * subscription/{name}/deliver} (default {@link StreamRuneTracing#NOOP}, which traces nothing).
+     * When its {@link TracingArea#SUBSCRIPTION} area is on, the subscription wraps its listener in
+     * a {@link TracingEventListener}; a listener that already is one is not wrapped again.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+      return this;
+    }
+
+    /**
      * Builds the {@link PollingEventSubscription}. Requires {@code subscriptionName}, {@code
      * eventStore}, {@code offsetStore}, and {@code listener} or {@code sagaRunner}.
      *
@@ -975,7 +1027,8 @@ public final class PollingEventSubscription
           readPoisonBound,
           resolvedLease(),
           healthContributor,
-          clock);
+          clock,
+          tracing);
     }
 
     /** Refuses one setting named twice: a saga runner sets the listener and the lease. */

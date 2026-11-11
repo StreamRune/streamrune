@@ -16,6 +16,8 @@ import org.springframework.context.annotation.Configuration;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+import org.streamrune.runtime.OpenTelemetryTracing;
+import org.streamrune.runtime.TracingSettings;
 
 class OpenTelemetryAutoConfigurationTest {
 
@@ -46,7 +48,10 @@ class OpenTelemetryAutoConfigurationTest {
         .withBean(
             "openTelemetryCommandInterceptor",
             OpenTelemetryCommandInterceptor.class,
-            () -> new OpenTelemetryCommandInterceptor(otelTesting.getOpenTelemetry()))
+            () ->
+                new OpenTelemetryCommandInterceptor(
+                    OpenTelemetryTracing.of(
+                        otelTesting.getOpenTelemetry(), TracingSettings.allEnabled())))
         .run(ctx -> assertThat(ctx).hasSingleBean(OpenTelemetryCommandInterceptor.class));
   }
 

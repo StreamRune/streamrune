@@ -24,6 +24,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.streamrune.core.metrics.MetricNames;
+import org.streamrune.core.tracing.TraceAttributes;
 
 /**
  * The configuration keys a set of markdown files names, and the defaults its tables state: what
@@ -33,7 +34,7 @@ import org.streamrune.core.metrics.MetricNames;
  * <p>A key is named where its dotted form appears ({@code streamrune.outbox.enabled}, in prose, in
  * a table or in a properties listing) or where a YAML listing nests it ({@code streamrune:} then
  * {@code outbox:} then {@code enabled:}). A placeholder segment such as {@code <name>} is part of
- * the key. Meter names ({@link MetricNames}) and span attribute names ({@code TraceAttributes}),
+ * the key. Meter names ({@link MetricNames}) and span attribute names ({@link TraceAttributes}),
  * which share the {@code streamrune.} prefix, are not keys.
  *
  * <p>A table states a default when its header has a {@code Default} column; the keys of a row are
@@ -418,7 +419,7 @@ public final class ConfigurationDocs {
 
   /**
    * The {@code streamrune.} names that are not configuration keys: every meter of {@link
-   * MetricNames} and every span attribute of {@code TraceAttributes}.
+   * MetricNames} and every span attribute of {@link TraceAttributes}.
    */
   static Set<String> nonConfigurationNames() {
     Set<String> names = new TreeSet<>();
@@ -427,10 +428,9 @@ public final class ConfigurationDocs {
         names.add((String) staticValue(field));
       }
     }
-    for (Field field : org.streamrune.runtime.TraceAttributes.class.getFields()) {
-      if (Modifier.isStatic(field.getModifiers())
-          && field.getType() == io.opentelemetry.api.common.AttributeKey.class) {
-        names.add(((io.opentelemetry.api.common.AttributeKey<?>) staticValue(field)).getKey());
+    for (Field field : TraceAttributes.class.getFields()) {
+      if (Modifier.isStatic(field.getModifiers()) && field.getType() == String.class) {
+        names.add((String) staticValue(field));
       }
     }
     return names;

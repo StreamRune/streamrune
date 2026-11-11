@@ -243,4 +243,16 @@ class LogSanitizerTest {
     String once = LogSanitizer.sanitizeFreeText("x\r\n\u0000y\u202Ez\u2028 w");
     assertEquals(once, LogSanitizer.sanitizeFreeText(once));
   }
+
+  @Test
+  void sanitizeForTrace_stripsLikeTheLogSanitizer_andCutsAtTheTraceCap() {
+    assertNull(LogSanitizer.sanitizeForTrace(null));
+    assertEquals("cmd_42", LogSanitizer.sanitizeForTrace("cmd_42"));
+    assertEquals("abéc", LogSanitizer.sanitizeForTrace("a\nb\u202E\u00e9\u2028c"));
+    String fits = "x".repeat(LogSanitizer.MAX_TRACE_LENGTH);
+    assertEquals(fits, LogSanitizer.sanitizeForTrace(fits));
+    assertEquals(fits + "...", LogSanitizer.sanitizeForTrace(fits + "y"));
+    String ingressMaximum = "z".repeat(IdConstraints.MAX_LENGTH);
+    assertEquals(ingressMaximum, LogSanitizer.sanitizeForTrace(ingressMaximum));
+  }
 }

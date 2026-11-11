@@ -1319,10 +1319,17 @@ it, so always write the unit):
   - crypto and GDPR: `crypto.subject_redacted`, `crypto.keystore_systemic_failure`,
     `crypto.encrypt_self_check_failed`, `crypto.decrypt_retried{outcome}`,
     `gdpr.purge_failed{purger}`
-- OpenTelemetry spans, names and attribute keys defined in `org.streamrune.runtime.TraceAttributes`:
-  `command/{CommandType}` (`OpenTelemetryCommandInterceptor`), `subscription/{name}/deliver`
-  (`TracingEventListener`), `projection/{name}/process` (`TracingProjectionDecorator`); attributes
-  are `streamrune.`-prefixed. Trace and span ids propagate into `EventMetadata`.
+- OpenTelemetry spans, names and attribute keys defined in `org.streamrune.core.tracing.TraceAttributes`
+  (plain strings, no OpenTelemetry type): `command/{CommandType}` (`OpenTelemetryCommandInterceptor`),
+  `subscription/{name}/deliver` (`TracingEventListener`), `projection/{name}/process`
+  (`TracingProjectionDecorator`); attributes are `streamrune.`-prefixed, and ids in them pass
+  `LogSanitizer.sanitizeForTrace` (cut at 256 characters followed by `...`). Trace and span ids
+  propagate into `EventMetadata`.
+- Tracing goes through the `org.streamrune.core.tracing.StreamRuneTracing` seam, `NOOP` by default.
+  `OpenTelemetryTracing.of(OpenTelemetry, TracingSettings)` is the only method that takes an
+  `OpenTelemetry`; `TracingSettings` switches tracing off as a whole or per area, and the builders
+  of the command bus, the subscriptions, the projection runners and `StreamRune` take it through
+  `tracing(...)`. A module without `opentelemetry-api` compiles and runs against all of it.
 - Every production log line goes through SLF4J; bring the binding of your choice.
 - The dedicated advisory-lock pool reports HikariCP's `hikaricp.connections.*` meters, tagged with
   its pool name `streamrune-advisory-lock`, when `PgAdvisoryLocker.withDedicatedPool` is given a

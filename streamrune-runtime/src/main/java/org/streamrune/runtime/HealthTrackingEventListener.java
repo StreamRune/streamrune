@@ -31,6 +31,14 @@ public final class HealthTrackingEventListener implements EventListener {
     this.subscriptionName = subscriptionName;
   }
 
+  /**
+   * The listener this one delivers to; {@link TracingEventListener#traced} reads it, so a traced
+   * listener inside the health tracking a subscription adds is not traced again.
+   */
+  EventListener delegate() {
+    return delegate;
+  }
+
   @Override
   public void onEvents(List<EventEnvelope> events) {
     try {

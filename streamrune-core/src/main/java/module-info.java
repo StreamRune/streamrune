@@ -13,6 +13,7 @@ open module org.streamrune.core {
   exports org.streamrune.core.projection;
   exports org.streamrune.core.saga;
   exports org.streamrune.core.subscription;
+  exports org.streamrune.core.tracing;
   exports org.streamrune.core.types;
   exports org.streamrune.core.upcasting;
 }

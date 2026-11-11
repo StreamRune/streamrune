@@ -3,9 +3,8 @@ description =
         "to hold the three to one contract. Not published."
 
 // Test infrastructure for the integrations' own test source sets (each declares it as
-// testImplementation); nothing here ships. The configuration oracle reads the meter names of
-// streamrune-core and the span attribute names of streamrune-runtime, and the OpenTelemetry API
-// those names are declared with comes from the integration that runs it.
+// testImplementation); nothing here ships. The configuration oracle reads the meter names and the
+// span attribute names of streamrune-core.
 dependencies {
     api(project(":streamrune-core"))
     api(project(":streamrune-runtime"))
@@ -13,8 +12,6 @@ dependencies {
     api(project(":streamrune-test"))
     api(platform(libs.junit.bom))
     api("org.junit.jupiter:junit-jupiter-api")
-    compileOnly(libs.opentelemetry.api)
-    testImplementation(libs.opentelemetry.api)
     // The reference application keeps the warning the dead-letter retry runner logs when it is
     // built, as an integration's start logs it: a binding whose events it can capture.
     testImplementation(libs.logback.classic)

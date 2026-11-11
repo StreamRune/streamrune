@@ -33,7 +33,7 @@ import org.streamrune.core.IdGenerator;
  * apples-to-apples comparison. These exercise the underlying JDK/Jackson mechanism (not the full
  * production object graph) so they need no database and are reproducible on a laptop.
  *
- * <p>Run: {@code ./gradlew :streamrune-runtime:jmh -Pjmh.include=PerfCandidatesBenchmark}
+ * <p>Run: {@code ./gradlew :streamrune-runtime:jmh -PjmhIncludes=PerfCandidatesBenchmark}
  */
 public class PerfCandidatesBenchmark {
 

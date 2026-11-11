@@ -318,6 +318,36 @@ class PostgresNotificationSubscriptionTest {
     }
   }
 
+  @Test
+  void tracing_tracesEachDeliveryAsTheSubscription() throws Exception {
+    StreamId s = TestStreams.stream("cart-traced-1");
+    store.append(s, List.of(envelope(s, 1)), Version.initial());
+
+    HikariDataSource listenDs = PostgresNotificationSubscription.createListenPool(eventDataSource);
+    var received = new CopyOnWriteArrayList<EventEnvelope>();
+    var tracing = new RecordingTracing();
+    var sub =
+        PostgresNotificationSubscription.builder(SubscriptionName.of("traced-sub"))
+            .listenDataSource(listenDs)
+            .eventStore(store)
+            .offsetStore(new InMemoryOffsetStore())
+            .listener(received::addAll)
+            .config(FAST_CONFIG)
+            .fetchSize(10)
+            .tracing(tracing)
+            .build();
+
+    sub.start();
+    try (sub) {
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      while (received.isEmpty() && System.nanoTime() < deadline) {
+        Thread.sleep(50);
+      }
+    }
+    assertEquals(1, received.size());
+    assertEquals(List.of("subscription/traced-sub/deliver"), tracing.started);
+  }
+
   /**
    * One append of N &gt; fetchSize events fires exactly ONE {@code pg_notify}. The subscription
    * must DRAIN the whole backlog on that single notification, not deliver only the first {@code

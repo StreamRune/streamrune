@@ -359,6 +359,19 @@ val dockerFreeModules =
         ":streamrune-integration:streamrune-integration-api",
         ":streamrune-integration:streamrune-integration-tck")
 
+// ── JMH benchmarks ───────────────────────────────────────────────────────────────────────────
+//
+// The modules with JMH benchmarks in src/jmh, in the order their `jmh` tasks run when one build
+// runs more than one: a benchmark never shares the machine with another. The nightly benchmark
+// workflow (.github/workflows/benchmark.yml) runs exactly these; their shared setup is in
+// `subprojects` below, and a module that applies the JMH plugin without being listed here fails the
+// configuration.
+val jmhModules =
+    listOf(
+        ":streamrune-runtime",
+        ":streamrune-eventstore:streamrune-postgres",
+        ":streamrune-crypto:streamrune-filesystem-crypto")
+
 // ── Doc-lint tests ───────────────────────────────────────────────────────────────────────────
 //
 // A doc-lint test (a test class named `*DocLintTest`) holds a guide, a README or a metadata file
@@ -612,6 +625,93 @@ subprojects {
     // both store the configuration cache cleanly, so `check` keeps its cache.
     tasks.named("check") {
         dependsOn(tasks.withType<JavaCompile>())
+    }
+
+    // ── JMH benchmarks ────────────────────────────────────────────────────────────────────────
+    //
+    // The modules of jmhModules apply the JMH plugin in their build files and share this setup:
+    //
+    //   - `jmh` writes its results as JSON to build/results/jmh/results.json, the file the nightly
+    //     benchmark workflow (.github/workflows/benchmark.yml) collects, and fails on a benchmark
+    //     that throws instead of leaving it out of the results.
+    //   - `-PbenchCi` forces one mode and unit on every benchmark, average time in microseconds, so
+    //     that every result the workflow records is a time per operation where smaller is better,
+    //     and the short settings below (two forks, three warmup and five measurement iterations of
+    //     one second). It also leaves out the A/B evidence of PerfCandidatesBenchmark, which is no
+    //     regression baseline. Without the property every benchmark runs with its own annotations.
+    //   - `-PjmhIncludes=<regex>` runs only the benchmarks whose name matches, for example
+    //     `./gradlew :streamrune-runtime:jmh -PjmhIncludes=ProjectionRunnerBenchmark`.
+    //   - `jmhSmokeTest`, part of `check`, runs the JUnit smoke tests in src/jmh: each invokes the
+    //     benchmark methods twice against a real @Setup state, outside the harness, to catch a
+    //     benchmark that compiles but throws or measures a degenerate state. Its JaCoCo agent data
+    //     is in no report (the coverage gate reads `test` only), so only the summary finalizes it,
+    //     as for docLintTest.
+    //   - The `jmh` tasks of the modules run one after another, in the order of jmhModules.
+    //   - `jmhJar` holds a Project reference in a task action and cannot be stored in the
+    //     configuration cache. Declared incompatible, a `jmh` invocation runs without the
+    //     configuration cache instead of failing; `check` compiles src/jmh through
+    //     `compileJmhJava` (above), which stores cleanly, so `check` keeps its cache.
+    pluginManager.withPlugin("me.champeau.jmh") {
+        if (project.path !in jmhModules) {
+            throw GradleException("${project.path} applies the JMH plugin but is not in jmhModules")
+        }
+        val benchCi = providers.gradleProperty("benchCi").isPresent
+        val jmhIncludes = providers.gradleProperty("jmhIncludes").orNull
+        extensions.configure<me.champeau.jmh.JmhParameters>("jmh") {
+            resultFormat.set("JSON")
+            resultsFile.set(layout.buildDirectory.file("results/jmh/results.json"))
+            failOnError.set(true)
+            if (jmhIncludes != null) {
+                includes.set(listOf(jmhIncludes))
+            }
+            if (benchCi) {
+                benchmarkMode.set(listOf("avgt"))
+                timeUnit.set("us")
+                fork.set(2)
+                warmupIterations.set(3)
+                warmup.set("1s")
+                iterations.set(5)
+                timeOnIteration.set("1s")
+                excludes.set(listOf("PerfCandidatesBenchmark"))
+            }
+        }
+
+        val catalog = rootProject.the<VersionCatalogsExtension>().named("libs")
+        dependencies {
+            "jmhImplementation"(catalog.findLibrary("jmh-core").get())
+            "jmhAnnotationProcessor"(catalog.findLibrary("jmh-generator-annprocess").get())
+            "jmhImplementation"(platform(catalog.findLibrary("junit-bom").get()))
+            "jmhImplementation"("org.junit.jupiter:junit-jupiter")
+            "jmhImplementation"(catalog.findLibrary("assertj-core").get())
+            "jmhRuntimeOnly"("org.junit.platform:junit-platform-launcher")
+        }
+
+        tasks.named("jmhJar") {
+            notCompatibleWithConfigurationCache(
+                "me.champeau.jmh's jmhJar holds a Project reference; benchmarks are an on-demand task")
+        }
+
+        // The JMH source set compiles against the test classes (the plugin's includeTests), and the
+        // `jmh` task runs with them, but its runtime classpath does not carry them: the smoke tests
+        // add them, so a benchmark can use what the module's tests share, such as PostgresTestImage.
+        val sourceSets = the<SourceSetContainer>()
+        val jmhSourceSet = sourceSets["jmh"]
+        val testOutput = sourceSets["test"].output
+        val jmhSmokeTest =
+            tasks.register<Test>("jmhSmokeTest") {
+                description =
+                    "Runs each JMH benchmark method twice outside the JMH harness (the smoke tests " +
+                        "in src/jmh) to catch a benchmark that compiles but breaks on a real invocation."
+                group = "verification"
+                testClassesDirs = jmhSourceSet.output.classesDirs
+                classpath = jmhSourceSet.runtimeClasspath + testOutput
+                useJUnitPlatform()
+                setFinalizedBy(listOf(":testSummary"))
+            }
+        tasks.named("check") { dependsOn(jmhSmokeTest) }
+
+        val earlierJmhModules = jmhModules.takeWhile { it != project.path }
+        tasks.named("jmh") { mustRunAfter(earlierJmhModules.map { "$it:jmh" }) }
     }
 
     repositories {

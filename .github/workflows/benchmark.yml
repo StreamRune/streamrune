@@ -1,0 +1,218 @@
+name: Benchmarks
+
+# Runs the JMH benchmarks every night and keeps their results as a history, so a change that makes a
+# hot path slower shows up within a day of landing on main. Two jobs:
+#
+#   benchmark  Builds the benchmark jars, then runs the `jmh` tasks of the three modules with
+#              benchmarks, one after another (jmhModules in the root build.gradle.kts):
+#              streamrune-runtime (command bus, in-memory event store, decider, outbox mapping,
+#              projection runner, event deserialization and upcasting without a database),
+#              streamrune-postgres (PostgresEventStore append, load and load
+#              through an upcaster chain, against the PostgreSQL 18 service below) and
+#              streamrune-filesystem-crypto (crypto-shredding serialization on the AES-GCM engine).
+#              -PbenchCi gives every benchmark one mode and unit, average time per operation in
+#              microseconds, two forks of three warmup and five measurement iterations of a second,
+#              and leaves out PerfCandidatesBenchmark, whose A/B pairs are no regression baseline.
+#              The per-module JSON results are merged into one file, kept for 90 days as the
+#              `jmh-results` artifact of the run. Its token reads the repository and nothing more.
+#   record     Hands the merged file to github-action-benchmark, which appends it to the history
+#              in dev/bench/data.js on the gh-pages branch and compares it with the previous run.
+#              It needs contents: write, to push gh-pages and to comment on the commit.
+#
+# Where the results go. Only a run on main records: a run started by hand on another branch is
+# compared with the history and commented on, and its commit on gh-pages is not pushed. The first
+# run on main creates the gh-pages branch, empty, before the action writes to it. Each data point
+# and each alert belongs to the commit the run benchmarked (github.sha), not to the tip of main when
+# the run records. A run whose commit is already the last one in the history (a night without a
+# push to main, or a second run on the same commit) records nothing and comments nothing: the
+# history gets one point per commit, and an unchanged main does not repeat its alert every night. Once GitHub Pages
+# serves gh-pages, the chart is at https://streamrune.github.io/streamrune/dev/bench/: one chart per
+# benchmark (and parameter set), one point per recorded run, the commit of each point on hover.
+# Every value is a time per operation, so lower is better throughout.
+#
+# The alert. When a benchmark takes more than 130% of its time in the previous recorded run, the
+# action comments on the commit with a table of the benchmarks over the threshold; it mentions no
+# one, and the run does not fail. Shared GitHub runners vary by roughly 10-20% from one run to the
+# next (other tenants, CPU model, turbo), which is why the threshold is 130%: these runs catch large
+# regressions, and a smaller change is a trend to read over several points of the chart, not a
+# verdict from one. Confirm an alert by running the benchmark locally on both commits, for example
+# `./gradlew :streamrune-runtime:jmh -PjmhIncludes=ProjectionRunnerBenchmark`; src/jmh/README.md
+# of each module describes its benchmarks.
+#
+# 01:30 UTC keeps the runner clear of the Broker E2E Tests at 03:00. The concurrency group runs one
+# run of this workflow at a time, so two runs never write gh-pages at once: a second run waits for
+# the first, and at most one run waits; a third run queued behind it cancels the waiting one.
+
+on:
+  schedule:
+    - cron: '30 1 * * *'  # nightly 01:30 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    services:
+      postgres:
+        # The default of PostgresTestImage, the newest supported server.
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: streamrune
+          POSTGRES_PASSWORD: streamrune
+          POSTGRES_DB: streamrune_bench
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U streamrune -d streamrune_bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      # The benchmarks never push, so the checkout keeps no token in the repository's git config.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+
+      # Everything the benchmarks need is compiled and packaged here, so the next step runs the
+      # benchmarks and nothing else: no compilation competes with a measurement.
+      - name: Build the benchmark jars
+        run: >-
+          ./gradlew
+          :streamrune-runtime:jmhJar
+          :streamrune-eventstore:streamrune-postgres:jmhJar
+          :streamrune-crypto:streamrune-filesystem-crypto:jmhJar
+          -PbenchCi --no-daemon --console=plain
+
+      # The PostgreSQL benchmarks connect to the service through these variables instead of
+      # starting a container; each trial recreates the schema streamrune_bench in it.
+      - name: Run the benchmarks
+        env:
+          STREAMRUNE_BENCH_JDBC_URL: jdbc:postgresql://localhost:5432/streamrune_bench
+          STREAMRUNE_BENCH_JDBC_USER: streamrune
+          STREAMRUNE_BENCH_JDBC_PASSWORD: streamrune
+        run: >-
+          ./gradlew
+          :streamrune-runtime:jmh
+          :streamrune-eventstore:streamrune-postgres:jmh
+          :streamrune-crypto:streamrune-filesystem-crypto:jmh
+          -PbenchCi --no-daemon --console=plain
+
+      # Each module writes a JSON array of its results; the history takes one array.
+      - name: Merge the results
+        run: |
+          jq -s 'add' \
+            streamrune-runtime/build/results/jmh/results.json \
+            streamrune-eventstore/streamrune-postgres/build/results/jmh/results.json \
+            streamrune-crypto/streamrune-filesystem-crypto/build/results/jmh/results.json \
+            > jmh-results.json
+          count=$(jq 'length' jmh-results.json)
+          echo "### $count benchmark results" >> "$GITHUB_STEP_SUMMARY"
+          echo "Merged $count benchmark results into jmh-results.json."
+
+      - name: Upload the results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: jmh-results
+          path: jmh-results.json
+          if-no-files-found: error
+          retention-days: 90
+
+  record:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # push gh-pages, comment on the commit when a benchmark is over the threshold
+    env:
+      BENCHMARK_NAME: StreamRune JMH
+    steps:
+      # The action switches this checkout to gh-pages, commits the new data point and pushes it; the
+      # checkout keeps the token, which the first run's push of gh-pages below needs as well.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch the results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: jmh-results
+          path: ${{ runner.temp }}/jmh-results
+
+      # The action fetches gh-pages before it writes and fails without it. On main the first run
+      # creates it, as one empty commit; another branch records nothing until main has. When the
+      # last data point of the history is this run's commit, nothing is recorded either. A history
+      # without dev/bench/data.js (the first run) has no last point.
+      - name: Decide whether to record
+        id: pages
+        env:
+          ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          set +e
+          git ls-remote --exit-code --heads origin gh-pages > /dev/null
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+            echo "::error::Could not list the branches of origin (git ls-remote exited with $status)."
+            exit "$status"
+          fi
+          if [ "$status" -eq 2 ]; then
+            if [ "$ON_MAIN" != true ]; then
+              echo "::notice::gh-pages does not exist yet; a run on main creates it. Nothing is recorded."
+              echo "record=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            tree=$(git hash-object -t tree /dev/null)
+            commit=$(git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit-tree "$tree" -m 'Benchmark history')
+            git push origin "$commit:refs/heads/gh-pages"
+            echo "record=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags origin gh-pages
+          last=""
+          if data=$(git show FETCH_HEAD:dev/bench/data.js 2> /dev/null); then
+            last=$(printf '%s' "${data#window.BENCHMARK_DATA = }" \
+              | jq -r --arg name "$BENCHMARK_NAME" '.entries[$name][-1].commit.id // empty' \
+              2> /dev/null) || last=""
+          fi
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "::notice::The history already ends with $GITHUB_SHA. Nothing is recorded."
+            echo "record=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "record=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # tool: jmh reads the JSON of `-rf json` and treats every value as smaller-is-better, which
+      # is what the average times of -PbenchCi are.
+      - name: Record the results and compare them with the previous run
+        if: steps.pages.outputs.record == 'true'
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
+        with:
+          name: ${{ env.BENCHMARK_NAME }}
+          tool: jmh
+          output-file-path: ${{ runner.temp }}/jmh-results/jmh-results.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Schedule and dispatch events carry no head commit: without ref the action would take
+          # the commit github.ref points to when this job runs, not the one benchmarked.
+          ref: ${{ github.sha }}
+          auto-push: ${{ github.ref == 'refs/heads/main' }}
+          alert-threshold: '130%'
+          comment-on-alert: true
+          fail-on-alert: false

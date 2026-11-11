@@ -70,3 +70,19 @@ A test never names a PostgreSQL image itself: it starts
 on a hard-coded image, or on a module outside the PostgreSQL-backed list in the root
 `build.gradle.kts` (`postgresBackedModules`) that starts a PostgreSQL container — add the module
 there, and `.github/workflows/build.yml`'s `postgres-17` job picks it up through `postgresTest`.
+
+### Benchmarks
+
+Three modules have JMH benchmarks in `src/jmh`: `streamrune-runtime`, `streamrune-postgres` and
+`streamrune-filesystem-crypto`. Run a module's benchmarks with, for example:
+
+    ./gradlew :streamrune-runtime:jmh -PjmhIncludes=ProjectionRunnerBenchmark
+
+`check` compiles every benchmark and invokes each benchmark method twice outside the JMH harness
+(`jmhSmokeTest`). The `Benchmarks` workflow (`.github/workflows/benchmark.yml`) runs all of them
+every night and records the results on the `gh-pages` branch, which GitHub Pages shows as a chart
+per benchmark at <https://streamrune.github.io/streamrune/dev/bench/>; a benchmark more than 30%
+slower than in the previous recorded run gets a comment on its commit. A change to a hot path is
+worth a run of the benchmarks that cover it, on the change and on its base, on one machine.
+`streamrune-runtime/src/jmh/README.md` describes the benchmarks, the nightly settings
+(`-PbenchCi`) and how to read the history.
