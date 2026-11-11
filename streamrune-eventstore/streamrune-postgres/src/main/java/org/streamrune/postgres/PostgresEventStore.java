@@ -1432,14 +1432,14 @@ public final class PostgresEventStore implements EventStore {
         || events.isEmpty()
         || expectedVersion == null
         || outboxEntries == null) {
-      return appendEvents(streamId, events, expectedVersion, outboxEntries);
+      return appendEvents(streamId, events, expectedVersion, outboxEntries, false);
     }
     return tracedAppend(
         streamId,
         events.size(),
         expectedVersion,
         outboxEntries.size(),
-        () -> appendEvents(streamId, events, expectedVersion, outboxEntries),
+        () -> appendEvents(streamId, events, expectedVersion, outboxEntries, true),
         result -> "APPENDED");
   }
 
@@ -1485,10 +1485,11 @@ public final class PostgresEventStore implements EventStore {
 
   /**
    * Serializes the events of an append through {@link #serializeRows}, inside the span {@value
-   * TraceAttributes#EVENT_STORE_APPEND_SERIALIZE} when the event-store area is traced.
+   * TraceAttributes#EVENT_STORE_APPEND_SERIALIZE} when {@code traced}: the append runs inside its
+   * own span.
    */
   private List<EventRow> serialize(
-      StreamId streamId, List<EventEnvelope> events, Version expectedVersion)
+      StreamId streamId, List<EventEnvelope> events, Version expectedVersion, boolean traced)
       throws JsonProcessingException {
     if (!traced) {
       return serializeRows(streamId, events, expectedVersion);
@@ -1513,11 +1514,17 @@ public final class PostgresEventStore implements EventStore {
     }
   }
 
+  /**
+   * The append.
+   *
+   * @param traced whether the append runs inside its span, so its serialization starts a child
+   */
   private AppendResult appendEvents(
       StreamId streamId,
       List<EventEnvelope> events,
       Version expectedVersion,
-      List<OutboxEntry> outboxEntries) {
+      List<OutboxEntry> outboxEntries,
+      boolean traced) {
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
     Objects.requireNonNull(outboxEntries, "outboxEntries is required");
@@ -1549,7 +1556,7 @@ public final class PostgresEventStore implements EventStore {
     // the pool could otherwise hand to another caller.
     List<EventRow> rows;
     try {
-      rows = serialize(streamId, events, expectedVersion);
+      rows = serialize(streamId, events, expectedVersion, traced);
     } catch (JsonProcessingException e) {
       throw new EventStoreException("Failed to serialize event for stream: " + shownStream, e);
     }
@@ -1734,7 +1741,7 @@ public final class PostgresEventStore implements EventStore {
         || events.isEmpty()
         || expectedVersion == null) {
       return appendEventsWithKey(
-          streamId, events, expectedVersion, idempotencyKey, commandType, forwardOf, null);
+          streamId, events, expectedVersion, idempotencyKey, commandType, forwardOf, null, false);
     }
     List<OutboxEntry> outboxEntries = outboxEntriesOf(events);
     return tracedAppend(
@@ -1750,7 +1757,8 @@ public final class PostgresEventStore implements EventStore {
                 idempotencyKey,
                 commandType,
                 forwardOf,
-                outboxEntries),
+                outboxEntries,
+                true),
         result -> result.alreadyApplied() ? "DUPLICATE" : "APPENDED");
   }
 
@@ -1766,6 +1774,7 @@ public final class PostgresEventStore implements EventStore {
    *
    * @param mappedOutboxEntries the outbox entries of {@code events}, or {@code null} to derive them
    *     here
+   * @param traced whether the append runs inside its span, so its serialization starts a child
    */
   private IdempotentAppendResult appendEventsWithKey(
       StreamId streamId,
@@ -1774,7 +1783,8 @@ public final class PostgresEventStore implements EventStore {
       IdempotencyKey idempotencyKey,
       String commandType,
       SagaOrigin forwardOf,
-      List<OutboxEntry> mappedOutboxEntries) {
+      List<OutboxEntry> mappedOutboxEntries,
+      boolean traced) {
     if (commandInbox == null) {
       throw new UnsupportedOperationException(
           "This PostgresEventStore was built without a command inbox");
@@ -1790,7 +1800,7 @@ public final class PostgresEventStore implements EventStore {
     // the pool could otherwise hand to another caller.
     List<EventRow> rows;
     try {
-      rows = serialize(streamId, events, expectedVersion);
+      rows = serialize(streamId, events, expectedVersion, traced);
     } catch (JsonProcessingException e) {
       throw new EventStoreException("Failed to serialize event for stream: " + shownStream, e);
     }

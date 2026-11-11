@@ -176,7 +176,9 @@ class EventStoreTracingTest {
 
   @Test
   void anEmptyAppend_startsNoSpan() {
-    store(tracing()).append(STREAM, List.of(), new Version(0));
+    InMemoryEventStore store = store(tracing()).withCommandInbox(new InMemoryCommandInbox());
+    store.append(STREAM, List.of(), new Version(0));
+    store.appendWithKey(STREAM, List.of(), new Version(0), IdempotencyKey.of("k"), "Switch");
 
     assertThat(otelTesting.getSpans()).isEmpty();
   }

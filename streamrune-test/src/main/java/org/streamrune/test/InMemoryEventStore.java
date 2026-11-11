@@ -418,9 +418,13 @@ public final class InMemoryEventStore implements EventStore {
         scope -> stored.stream().map(this::toEnvelope).toList());
   }
 
-  /** {@link #prepareForAppend}, inside the append's serialize span when traced. */
-  private List<StoredEvent> serialize(StreamId streamId, List<EventEnvelope> events) {
-    if (!traced()) {
+  /**
+   * {@link #prepareForAppend}, inside the append's serialize span when {@code traced}: the append
+   * runs inside its own span.
+   */
+  private List<StoredEvent> serialize(
+      StreamId streamId, List<EventEnvelope> events, boolean traced) {
+    if (!traced) {
       return prepareForAppend(streamId, events);
     }
     return inSpan(
@@ -520,21 +524,21 @@ public final class InMemoryEventStore implements EventStore {
       return new AppendResult(List.of(), expectedVersion);
     }
     if (!traced()) {
-      return appendEvents(streamId, events, expectedVersion);
+      return appendEvents(streamId, events, expectedVersion, false);
     }
     return tracedAppend(
         streamId,
         events.size(),
         expectedVersion,
-        () -> appendEvents(streamId, events, expectedVersion),
+        () -> appendEvents(streamId, events, expectedVersion, true),
         result -> "APPENDED");
   }
 
   private AppendResult appendEvents(
-      StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
+      StreamId streamId, List<EventEnvelope> events, Version expectedVersion, boolean traced) {
     // In serializing mode, serialize payloads BEFORE touching any state: a Jackson failure on the
     // third event must leave nothing appended, mirroring Postgres' transaction rollback.
-    List<StoredEvent> toAppend = serialize(streamId, events);
+    List<StoredEvent> toAppend = serialize(streamId, events, traced);
 
     AppendResult result;
     // Serialize appends across ALL streams so events become visible in strict global_offset
@@ -670,7 +674,7 @@ public final class InMemoryEventStore implements EventStore {
     }
     if (events.isEmpty() || !traced()) {
       return appendEventsWithKey(
-          streamId, events, expectedVersion, idempotencyKey, commandType, forwardOf, rows);
+          streamId, events, expectedVersion, idempotencyKey, commandType, forwardOf, rows, false);
     }
     return tracedAppend(
         streamId,
@@ -678,7 +682,14 @@ public final class InMemoryEventStore implements EventStore {
         expectedVersion,
         () ->
             appendEventsWithKey(
-                streamId, events, expectedVersion, idempotencyKey, commandType, forwardOf, rows),
+                streamId,
+                events,
+                expectedVersion,
+                idempotencyKey,
+                commandType,
+                forwardOf,
+                rows,
+                true),
         result -> result.alreadyApplied() ? "DUPLICATE" : "APPENDED");
   }
 
@@ -689,10 +700,11 @@ public final class InMemoryEventStore implements EventStore {
       IdempotencyKey idempotencyKey,
       String commandType,
       SagaOrigin forwardOf,
-      InMemorySagaStore rows) {
+      InMemorySagaStore rows,
+      boolean traced) {
     // In serializing mode, serialize payloads BEFORE taking the lock (same as append):
     // a Jackson failure on the third event must leave nothing appended.
-    List<StoredEvent> toAppend = serialize(streamId, events);
+    List<StoredEvent> toAppend = serialize(streamId, events, traced);
 
     AppendResult result;
     appendLock.lock();
