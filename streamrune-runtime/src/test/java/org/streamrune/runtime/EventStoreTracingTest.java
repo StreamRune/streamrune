@@ -25,6 +25,9 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.saga.SagaForwardFencedException;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TracingArea;
@@ -36,6 +39,7 @@ import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
@@ -43,6 +47,7 @@ import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
+import org.streamrune.test.InMemorySagaStore;
 
 /**
  * The event-store spans of {@link InMemoryEventStore} in its serializing mode, recorded through
@@ -231,6 +236,8 @@ class EventStoreTracingTest {
   void load_startsTheLoadSpan_withTheSnapshotAndDeserializeSpansUnderIt() {
     InMemoryEventStore store = store(tracing());
     store.append(STREAM, List.of(switched("on"), switched("off")), new Version(0));
+    store.saveSnapshot(STREAM, new Version(1), new LampState(1), 1, 0);
+    store.append(STREAM, List.of(switched("on")), new Version(2));
     otelTesting.clearSpans();
 
     store.load(STREAM, 1);
@@ -246,16 +253,16 @@ class EventStoreTracingTest {
             TraceAttributes.EVENT_COUNT,
             TraceAttributes.SNAPSHOT_USED);
     assertThat(number(load, TraceAttributes.EVENT_COUNT)).isEqualTo(2L);
-    assertThat(flag(load, TraceAttributes.SNAPSHOT_USED)).isFalse();
+    assertThat(flag(load, TraceAttributes.SNAPSHOT_USED)).isTrue();
 
     assertThat(snapshot.getKind()).isEqualTo(SpanKind.INTERNAL);
     assertThat(keys(snapshot))
         .containsExactlyInAnyOrder(
             TraceAttributes.STREAM_ID,
-            TraceAttributes.SNAPSHOT_VERSION,
+            TraceAttributes.STREAM_VERSION,
             TraceAttributes.SNAPSHOT_OUTCOME);
-    assertThat(string(snapshot, TraceAttributes.SNAPSHOT_OUTCOME)).isEqualTo("MISS");
-    assertThat(number(snapshot, TraceAttributes.SNAPSHOT_VERSION)).isZero();
+    assertThat(string(snapshot, TraceAttributes.SNAPSHOT_OUTCOME)).isEqualTo("HIT");
+    assertThat(number(snapshot, TraceAttributes.STREAM_VERSION)).isEqualTo(1L);
     assertThat(snapshot.getParentSpanId()).isEqualTo(load.getSpanId());
 
     assertThat(deserialize.getKind()).isEqualTo(SpanKind.INTERNAL);
@@ -264,6 +271,62 @@ class EventStoreTracingTest {
     assertThat(number(deserialize, TraceAttributes.EVENT_COUNT)).isEqualTo(2L);
     assertThat(number(deserialize, TraceAttributes.UPCAST_COUNT)).isZero();
     assertThat(deserialize.getParentSpanId()).isEqualTo(load.getSpanId());
+  }
+
+  @Test
+  void aStreamWithoutAStoredSnapshot_startsNoSnapshotSpan() {
+    InMemoryEventStore store = store(tracing());
+    store.append(STREAM, List.of(switched("on")), new Version(0));
+    otelTesting.clearSpans();
+
+    store.load(STREAM, 1);
+
+    assertThat(names())
+        .containsExactlyInAnyOrder(
+            TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE, TraceAttributes.EVENT_STORE_LOAD);
+    assertThat(flag(span(TraceAttributes.EVENT_STORE_LOAD), TraceAttributes.SNAPSHOT_USED))
+        .isFalse();
+  }
+
+  @Test
+  void aForwardCommandTheFenceRefuses_isTheOutcomeFenced_notAnError() {
+    InMemoryEventStore store =
+        store(tracing())
+            .withCommandInbox(new InMemoryCommandInbox())
+            .withSagaStore(new InMemorySagaStore());
+    // No saga row: the fence refuses the forward command of a saga that is not in its forward
+    // phase.
+    SagaOrigin forwardOf = SagaOrigin.dispatchedBy(SagaType.of("order-saga"), SagaId.of("saga-1"));
+
+    assertThatThrownBy(
+            () ->
+                store.appendWithKey(
+                    STREAM,
+                    List.of(switched("on")),
+                    new Version(0),
+                    IdempotencyKey.of("k-fenced"),
+                    "Switch",
+                    forwardOf))
+        .isInstanceOf(SagaForwardFencedException.class);
+
+    SpanData append = span(TraceAttributes.EVENT_STORE_APPEND);
+    assertThat(string(append, TraceAttributes.APPEND_OUTCOME)).isEqualTo("FENCED");
+    assertThat(append.getStatus().getStatusCode()).isEqualTo(StatusCode.UNSET);
+    assertThat(append.getEvents()).isEmpty();
+  }
+
+  @Test
+  void aReadSpan_startsWhenTheReadStarted() {
+    InMemoryEventStore store = store(tracing());
+    store.append(STREAM, List.of(switched("on")), new Version(0));
+    otelTesting.clearSpans();
+    long before = System.currentTimeMillis() * 1_000_000L;
+
+    store.readGlobalStream(GlobalOffset.initial(), 10);
+
+    SpanData read = span(TraceAttributes.EVENT_STORE_READ);
+    assertThat(read.getStartEpochNanos()).isGreaterThanOrEqualTo(before - 1_000_000L);
+    assertThat(read.getStartEpochNanos()).isLessThanOrEqualTo(read.getEndEpochNanos());
   }
 
   @Test
@@ -290,7 +353,7 @@ class EventStoreTracingTest {
 
     SpanData hit = span(TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD);
     assertThat(string(hit, TraceAttributes.SNAPSHOT_OUTCOME)).isEqualTo("HIT");
-    assertThat(number(hit, TraceAttributes.SNAPSHOT_VERSION)).isEqualTo(1L);
+    assertThat(number(hit, TraceAttributes.STREAM_VERSION)).isEqualTo(1L);
     assertThat(flag(span(TraceAttributes.EVENT_STORE_LOAD), TraceAttributes.SNAPSHOT_USED))
         .isTrue();
     assertThat(
@@ -303,7 +366,7 @@ class EventStoreTracingTest {
 
     SpanData discarded = span(TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD);
     assertThat(string(discarded, TraceAttributes.SNAPSHOT_OUTCOME)).isEqualTo("DISCARDED");
-    assertThat(number(discarded, TraceAttributes.SNAPSHOT_VERSION)).isZero();
+    assertThat(number(discarded, TraceAttributes.STREAM_VERSION)).isZero();
     assertThat(flag(span(TraceAttributes.EVENT_STORE_LOAD), TraceAttributes.SNAPSHOT_USED))
         .isFalse();
     assertThat(
@@ -324,9 +387,9 @@ class EventStoreTracingTest {
     assertThat(keys(save))
         .containsExactlyInAnyOrder(
             TraceAttributes.STREAM_ID,
-            TraceAttributes.SNAPSHOT_VERSION,
+            TraceAttributes.STREAM_VERSION,
             TraceAttributes.SNAPSHOT_OUTCOME);
-    assertThat(number(save, TraceAttributes.SNAPSHOT_VERSION)).isEqualTo(1L);
+    assertThat(number(save, TraceAttributes.STREAM_VERSION)).isEqualTo(1L);
     assertThat(string(save, TraceAttributes.SNAPSHOT_OUTCOME)).isEqualTo("SAVED");
   }
 

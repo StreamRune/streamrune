@@ -564,41 +564,53 @@ public final class SagaRunner<S extends SagaState> {
   }
 
   /**
-   * {@link #deliver}, inside the span {@code saga/{SagaType}/step} when the saga area is traced.
-   * The span links to the span that wrote the event, when its metadata names one, and carries the
-   * step's outcome. A poison event records its exception with the outcome {@code FAULTED}; any
-   * other failure, after which the event is delivered again, records its exception alone.
+   * {@link #deliver}, inside the span {@code saga/{SagaType}/step} when the saga area is traced
+   * ({@link #startStepSpan}). A poison event records its exception with the outcome {@code
+   * FAULTED}. A step that waited past the step bound for another step of the saga ({@link
+   * SagaStepLockException}) is the outcome {@code DEFERRED}, not an error: nothing was read, and
+   * the event is delivered again. Any other failure, after which the event is delivered again — a
+   * conflict that survived the last compare-and-swap attempt, a store or command failure — records
+   * its exception alone.
    */
   private void deliverTraced(ReplayTarget target, EventEnvelope event) {
     if (!traced) {
       deliver(target, event);
       return;
     }
-    TraceScope scope =
-        tracing.start(
-            TracingArea.SAGA,
-            TraceAttributes.sagaStepSpanName(sagaType),
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.SAGA_TYPE, sagaType.value())
-                .put(
-                    TraceAttributes.SAGA_ID, LogSanitizer.sanitizeForTrace(target.sagaId().value()))
-                .build(),
-            SpanLink.ofNullable(event.metadata().traceId(), event.metadata().spanId()),
-            null);
+    TraceScope scope = startStepSpan(target.sagaId(), event);
     try {
       scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, deliver(target, event));
       scope.recordSuccess();
     } catch (SagaPoisonException poison) {
-      scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, "FAULTED");
+      scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, FAULTED);
       scope.recordError(poison.getCause() != null ? poison.getCause() : poison);
       throw poison;
+    } catch (SagaStepLockException notNow) {
+      scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, DEFERRED);
+      throw notNow;
     } catch (Throwable t) {
       scope.recordError(t);
       throw t;
     } finally {
       scope.close();
     }
+  }
+
+  /**
+   * Starts the span {@code saga/{SagaType}/step} of one event the saga {@code sagaId} handles,
+   * linked to the span that wrote the event when its metadata names one.
+   */
+  private TraceScope startStepSpan(SagaId sagaId, EventEnvelope event) {
+    return tracing.start(
+        TracingArea.SAGA,
+        TraceAttributes.sagaStepSpanName(sagaType),
+        SpanKind.INTERNAL,
+        SpanAttributes.builder()
+            .put(TraceAttributes.SAGA_TYPE, sagaType.value())
+            .put(TraceAttributes.SAGA_ID, LogSanitizer.sanitizeForTrace(sagaId.value()))
+            .build(),
+        SpanLink.ofNullable(event.metadata().traceId(), event.metadata().spanId()),
+        null);
   }
 
   /**
@@ -676,6 +688,30 @@ public final class SagaRunner<S extends SagaState> {
   StepOutcome feedReplay(
       SagaId sagaId, EventEnvelope event, boolean startPath, boolean operatorForced) {
     Objects.requireNonNull(sagaId, SAGA_ID_REQUIRED);
+    if (!traced) {
+      return feedReplayStep(sagaId, event, startPath, operatorForced);
+    }
+    // The replayer's feed is a step of its saga like a live delivery: the same span, whose
+    // outcome is FAULTED where the poison handler swallows the event's poison.
+    TraceScope scope = startStepSpan(sagaId, event);
+    try {
+      StepOutcome outcome = feedReplayStep(sagaId, event, startPath, operatorForced);
+      scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, stepOutcome(outcome));
+      scope.recordSuccess();
+      return outcome;
+    } catch (SagaStepLockException notNow) {
+      scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, DEFERRED);
+      throw notNow;
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
+    } finally {
+      scope.close();
+    }
+  }
+
+  private StepOutcome feedReplayStep(
+      SagaId sagaId, EventEnvelope event, boolean startPath, boolean operatorForced) {
     try (SagaStepLock.Hold _ = stepLock.enterStep(sagaType, sagaId)) {
       for (int attempt = 1; ; attempt++) {
         try {
@@ -835,8 +871,11 @@ public final class SagaRunner<S extends SagaState> {
     return stepOutcome(outcome);
   }
 
-  /** The step outcome of an event held for later. */
+  /** The step outcome of an event held for later, or of a step that will run again. */
   private static final String DEFERRED = "DEFERRED";
+
+  /** The step outcome of a poison event. */
+  private static final String FAULTED = "FAULTED";
 
   /** The step outcome of an event with nothing to do. */
   private static final String SKIPPED = "SKIPPED";

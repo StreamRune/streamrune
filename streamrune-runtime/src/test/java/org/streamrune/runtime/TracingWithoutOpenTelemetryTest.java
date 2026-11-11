@@ -366,6 +366,8 @@ class TracingWithoutOpenTelemetryTest {
         public class NewEmitters {
           public record Switched(String to) implements DomainEvent {}
 
+          public record LampState(int on) implements org.streamrune.core.AggregateState {}
+
           public record OrderState(SagaStatus status) implements SagaState {}
 
           public record CancelOrder() implements org.streamrune.core.Command {}
@@ -397,13 +399,13 @@ class TracingWithoutOpenTelemetryTest {
                       }
                     };
             StreamId stream = StreamId.of(AggregateType.of("lamp"), AggregateId.of("l-1"));
-            new LocalStripedLocker(1).withTracing(tracing)
+            new LocalStripedLocker(1).traced(tracing)
                 .acquireLock(stream, Duration.ofSeconds(1)).close();
 
             InMemoryEventStore store =
                 InMemoryEventStore.serializing(
                         SimpleEventTypeRegistry.builder().registerEvent("Switched", Switched.class)
-                            .build(),
+                            .registerState("LampState", LampState.class).build(),
                         null)
                     .withTracing(tracing);
             EventMetadata metadata = new EventMetadata(EventId.of("e-1"), CommandId.of("c-1"),
@@ -411,6 +413,7 @@ class TracingWithoutOpenTelemetryTest {
             store.append(stream, List.of(new EventEnvelope(GlobalOffset.initial(), stream,
                 Version.initial(), EventType.of("Switched"), new Switched("on"), metadata)),
                 Version.initial());
+            store.saveSnapshot(stream, new Version(1), new LampState(1), 1, 0);
             store.load(stream, 1);
             store.readGlobalStream(GlobalOffset.initial(), 10);
 
@@ -460,6 +463,7 @@ class TracingWithoutOpenTelemetryTest {
               "eventstore/append",
               "eventstore/append/serialize",
               "eventstore/load",
+              "eventstore/snapshot/save",
               "eventstore/snapshot/load",
               "eventstore/load/deserialize",
               "eventstore/read",

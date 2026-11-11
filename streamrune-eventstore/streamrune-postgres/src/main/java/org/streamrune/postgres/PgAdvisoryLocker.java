@@ -71,7 +71,7 @@ import org.streamrune.core.types.StreamId;
  * closed} to release it. A locker built from a caller-supplied {@link DataSource} does not own that
  * pool, so {@link #close()} is a no-op.
  *
- * <p>{@link #withTracing(StreamRuneTracing)} returns the locker that starts the span {@value
+ * <p>{@link #traced(StreamRuneTracing)} returns the locker that starts the span {@value
  * TraceAttributes#LOCK_ACQUIRE} around each acquisition when the {@link TracingArea#LOCK} area is
  * on.
  */
@@ -97,7 +97,7 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    */
   private final AutoCloseable ownedPool;
 
-  /** Whether the owned pool was closed; shared with the lockers {@link #withTracing} returns. */
+  /** Whether the owned pool was closed; shared with the lockers {@link #traced} returns. */
   private final AtomicBoolean closed;
 
   private final StreamRuneTracing tracing;
@@ -140,14 +140,14 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    *
    * <pre>{@code
    * PgAdvisoryLocker locker =
-   *     PgAdvisoryLocker.withDedicatedPool(jdbcUrl, user, password, 20).withTracing(tracing);
+   *     PgAdvisoryLocker.withDedicatedPool(jdbcUrl, user, password, 20).traced(tracing);
    * }</pre>
    *
    * @param tracing the tracing; {@link StreamRuneTracing#NOOP} traces nothing
    * @return a locker that traces through {@code tracing}
    * @throws NullPointerException if {@code tracing} is {@code null}
    */
-  public PgAdvisoryLocker withTracing(StreamRuneTracing tracing) {
+  public PgAdvisoryLocker traced(StreamRuneTracing tracing) {
     Objects.requireNonNull(tracing, "tracing is required");
     return new PgAdvisoryLocker(dataSource, ownedPool, closed, tracing);
   }

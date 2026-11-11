@@ -37,6 +37,7 @@ import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
+import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
@@ -351,7 +352,8 @@ public final class InMemoryEventStore implements EventStore {
 
   /**
    * Runs {@code append} inside the span {@value TraceAttributes#EVENT_STORE_APPEND}; a version
-   * conflict is its outcome {@code CONFLICT}, not an error.
+   * conflict is its outcome {@code CONFLICT}, a refusal of the saga forward fence its outcome
+   * {@code FENCED}, neither an error.
    */
   private <T> T tracedAppend(
       StreamId streamId,
@@ -379,6 +381,9 @@ public final class InMemoryEventStore implements EventStore {
     } catch (OptimisticLockException conflict) {
       scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "CONFLICT");
       throw conflict;
+    } catch (SagaForwardFencedException fenced) {
+      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "FENCED");
+      throw fenced;
     } catch (Throwable t) {
       scope.recordError(t);
       throw t;
@@ -388,8 +393,8 @@ public final class InMemoryEventStore implements EventStore {
   }
 
   /** {@link #toEnvelope} over {@code events}, inside the load's deserialize span when traced. */
-  private List<EventEnvelope> deserialize(Stream<StoredEvent> events) {
-    if (!traced()) {
+  private List<EventEnvelope> deserialize(Stream<StoredEvent> events, boolean traced) {
+    if (!traced) {
       return events.map(this::toEnvelope).toList();
     }
     List<StoredEvent> stored = events.toList();
@@ -409,22 +414,39 @@ public final class InMemoryEventStore implements EventStore {
         scope -> stored.stream().map(this::toEnvelope).toList());
   }
 
-  /** {@link #toEnvelope} over a read's {@code events}, inside the read span when there are any. */
-  private List<EventEnvelope> readEvents(Stream<StoredEvent> events, String readKind) {
-    if (!traced()) {
+  /**
+   * {@link #toEnvelope} over a read's {@code events}, inside the read span when {@code traced} and
+   * there are any; the span starts at {@code started}, when the read started.
+   */
+  private List<EventEnvelope> readEvents(
+      Stream<StoredEvent> events, String readKind, boolean traced, Instant started) {
+    if (!traced) {
       return events.map(this::toEnvelope).toList();
     }
     List<StoredEvent> stored = events.toList();
     if (stored.isEmpty()) {
       return List.of();
     }
-    return inSpan(
-        TraceAttributes.EVENT_STORE_READ,
-        SpanAttributes.builder()
-            .put(TraceAttributes.EVENT_COUNT, (long) stored.size())
-            .put(TraceAttributes.READ_KIND, readKind)
-            .build(),
-        scope -> stored.stream().map(this::toEnvelope).toList());
+    TraceScope scope =
+        tracing.start(
+            TracingArea.EVENT_STORE,
+            TraceAttributes.EVENT_STORE_READ,
+            SpanKind.INTERNAL,
+            SpanAttributes.builder()
+                .put(TraceAttributes.EVENT_COUNT, (long) stored.size())
+                .put(TraceAttributes.READ_KIND, readKind)
+                .build(),
+            started);
+    try {
+      List<EventEnvelope> read = stored.stream().map(this::toEnvelope).toList();
+      scope.recordSuccess();
+      return read;
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
+    } finally {
+      scope.close();
+    }
   }
 
   /**
@@ -466,20 +488,25 @@ public final class InMemoryEventStore implements EventStore {
   public AggregateHistory load(StreamId streamId, int expectedSnapshotVersion) {
     Objects.requireNonNull(streamId, "streamId is required");
     if (!traced()) {
-      return loadHistory(streamId, expectedSnapshotVersion);
+      return loadHistory(streamId, expectedSnapshotVersion, false);
     }
     return inSpan(
         TraceAttributes.EVENT_STORE_LOAD,
         streamAttributes(streamId),
         scope -> {
-          AggregateHistory history = loadHistory(streamId, expectedSnapshotVersion);
+          AggregateHistory history = loadHistory(streamId, expectedSnapshotVersion, true);
           scope.setAttribute(TraceAttributes.EVENT_COUNT, (long) history.events().size());
           scope.setAttribute(TraceAttributes.SNAPSHOT_USED, history.snapshotState() != null);
           return history;
         });
   }
 
-  private AggregateHistory loadHistory(StreamId streamId, int expectedSnapshotVersion) {
+  /**
+   * The load; {@code traced} says whether it runs inside its span, so it starts the snapshot and
+   * deserialize spans under it.
+   */
+  private AggregateHistory loadHistory(
+      StreamId streamId, int expectedSnapshotVersion, boolean traced) {
     AggregateState state = null;
     Version snapshotVersion = Version.initial();
 
@@ -491,12 +518,14 @@ public final class InMemoryEventStore implements EventStore {
     // tests.)
     Snapshot snapshot =
         expectedSnapshotVersion == EventStore.IGNORE_SNAPSHOT ? null : snapshots.get(streamId);
-    if (snapshot != null || (expectedSnapshotVersion != EventStore.IGNORE_SNAPSHOT && traced())) {
+    if (snapshot != null) {
       // Deserialize (decrypt, resolve, migrate) the stored snapshot on READ — mirroring
       // PostgresEventStore. A crypto-shredded @Encrypted field yields [REDACTED]; a retired stored
       // type is discarded (full replay); a version mismatch is migrated up or discarded.
       ResolvedSnapshot resolved =
-          resolveSnapshotTraced(streamId, snapshot, expectedSnapshotVersion);
+          traced
+              ? resolveSnapshotTraced(streamId, snapshot, expectedSnapshotVersion)
+              : resolveSnapshot(snapshot, expectedSnapshotVersion);
       state = resolved.state();
       snapshotVersion = resolved.version();
     }
@@ -506,7 +535,8 @@ public final class InMemoryEventStore implements EventStore {
         deserialize(
             streams.getOrDefault(streamId, List.<StoredEvent>of()).stream()
                 .filter(e -> e.version().value() > afterVersion)
-                .sorted(Comparator.comparingLong(e -> e.version().value())));
+                .sorted(Comparator.comparingLong(e -> e.version().value())),
+            traced);
 
     Version version = events.isEmpty() ? snapshotVersion : events.getLast().version();
     return new AggregateHistory(state, events, version, snapshotVersion);
@@ -968,7 +998,7 @@ public final class InMemoryEventStore implements EventStore {
         TraceAttributes.EVENT_STORE_SNAPSHOT_SAVE,
         SpanAttributes.builder()
             .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
-            .put(TraceAttributes.SNAPSHOT_VERSION, version.value())
+            .put(TraceAttributes.STREAM_VERSION, version.value())
             .build(),
         scope -> {
           boolean saved = writeSnapshot(streamId, version, state, snapshotVersion);
@@ -1021,32 +1051,21 @@ public final class InMemoryEventStore implements EventStore {
   }
 
   /**
-   * {@link #resolveSnapshot} of the stream's {@code snapshot} ({@code null} when it has none),
-   * inside the span {@value TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD} when traced, with the
-   * outcome {@code HIT}, {@code MISS} or {@code DISCARDED}.
+   * {@link #resolveSnapshot} of the stream's stored {@code snapshot}, inside the span {@value
+   * TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD}, with the outcome {@code HIT} or {@code DISCARDED}.
    */
   private ResolvedSnapshot resolveSnapshotTraced(
       StreamId streamId, Snapshot snapshot, int expectedSnapshotVersion) {
-    if (!traced()) {
-      return snapshot == null
-          ? new ResolvedSnapshot(null, Version.initial())
-          : resolveSnapshot(snapshot, expectedSnapshotVersion);
-    }
     return inSpan(
         TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD,
         SpanAttributes.builder()
             .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
             .build(),
         scope -> {
-          ResolvedSnapshot resolved =
-              snapshot == null
-                  ? new ResolvedSnapshot(null, Version.initial())
-                  : resolveSnapshot(snapshot, expectedSnapshotVersion);
-          boolean hit = resolved.state() != null;
+          ResolvedSnapshot resolved = resolveSnapshot(snapshot, expectedSnapshotVersion);
           scope.setAttribute(
-              TraceAttributes.SNAPSHOT_OUTCOME,
-              hit ? "HIT" : snapshot != null ? "DISCARDED" : "MISS");
-          scope.setAttribute(TraceAttributes.SNAPSHOT_VERSION, resolved.version().value());
+              TraceAttributes.SNAPSHOT_OUTCOME, resolved.state() != null ? "HIT" : "DISCARDED");
+          scope.setAttribute(TraceAttributes.STREAM_VERSION, resolved.version().value());
           return resolved;
         });
   }
@@ -1241,22 +1260,30 @@ public final class InMemoryEventStore implements EventStore {
 
   @Override
   public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
+    boolean traced = traced();
+    Instant started = traced ? Instant.now() : null;
     return readEvents(
         globalStream.stream()
             .filter(e -> e.globalOffset().value() > afterOffset.value())
             .sorted(Comparator.comparingLong(e -> e.globalOffset().value()))
             .limit(maxCount),
-        "GLOBAL");
+        "GLOBAL",
+        traced,
+        started);
   }
 
   @Override
   public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
+    boolean traced = traced();
+    Instant started = traced ? Instant.now() : null;
     return readEvents(
         streams.getOrDefault(streamId, List.<StoredEvent>of()).stream()
             .filter(e -> e.version().value() > afterVersion.value())
             .sorted(Comparator.comparingLong(e -> e.version().value()))
             .limit(maxCount),
-        "STREAM");
+        "STREAM",
+        traced,
+        started);
   }
 
   /** Whether this store serializes its events: it has an {@link EventTypeRegistry} to read with. */

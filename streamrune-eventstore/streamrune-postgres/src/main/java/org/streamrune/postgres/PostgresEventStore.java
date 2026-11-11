@@ -10,6 +10,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -159,11 +160,12 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * on ({@link Builder#tracing}), an append starts {@value TraceAttributes#EVENT_STORE_APPEND} with
  * the child {@value TraceAttributes#EVENT_STORE_APPEND_SERIALIZE}; a load starts {@value
  * TraceAttributes#EVENT_STORE_LOAD} with the children {@value
- * TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD} (when it reads the snapshot) and {@value
+ * TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD} (when the stream has a stored snapshot) and {@value
  * TraceAttributes#EVENT_STORE_LOAD_DESERIALIZE}; a snapshot write starts {@value
  * TraceAttributes#EVENT_STORE_SNAPSHOT_SAVE}; and a global or stream read that returns events
- * starts {@value TraceAttributes#EVENT_STORE_READ} around their deserialization. A read that
- * returns nothing starts no span, so an idle subscription's polling adds no trace.
+ * starts {@value TraceAttributes#EVENT_STORE_READ}, which covers its query and the events'
+ * deserialization. A read that returns nothing starts no span, so an idle subscription's polling
+ * adds no trace.
  *
  * <p><b>The saga forward fence.</b> {@link #appendWithKey(StreamId, List, Version, IdempotencyKey,
  * String, SagaOrigin)} with a saga origin takes the saga's shared fence lock in the append
@@ -812,7 +814,8 @@ public final class PostgresEventStore implements EventStore {
     int migrateFromVersion = -1;
     // The purge generation of the stream's snapshot row, read with the row; 0 when there is none.
     long purgeGeneration = 0;
-    // Whether the stream has a stored snapshot, usable or not: the snapshot span's MISS outcome.
+    // Whether the stream has a stored snapshot, usable or not: only then does a traced load start
+    // the snapshot span.
     boolean snapshotStored = false;
     List<RawEventRow> rawRows;
 
@@ -917,16 +920,22 @@ public final class PostgresEventStore implements EventStore {
     // Deserialize (and decrypt, if any field is @Encrypted) AFTER the connection is released.
     // toEnvelope() wraps its own IOExceptions in EventStoreException (unchecked), matching the
     // exception type thrown for the snapshot state below.
-    ResolvedSnapshot resolved =
-        resolveSnapshotTraced(
-            streamId,
-            snapshotStored,
-            snapshotStateJson,
-            snapshotStateClass,
-            migrateFromVersion,
-            expectedSnapshotVersion,
-            snapshotVersion);
-    if (resolved.discarded()) {
+    Object snapshotState =
+        snapshotStored && traced
+            ? resolveSnapshotTraced(
+                streamId,
+                snapshotStateJson,
+                snapshotStateClass,
+                migrateFromVersion,
+                expectedSnapshotVersion,
+                snapshotVersion)
+            : resolveSnapshot(
+                streamId,
+                snapshotStateJson,
+                snapshotStateClass,
+                migrateFromVersion,
+                expectedSnapshotVersion);
+    if (snapshotState == DISCARDED_SNAPSHOT) {
       // The stored snapshot — a DERIVED CACHE, never the source of truth — was discarded after the
       // event read, which was narrowed to versions AFTER the snapshot, so RE-READ the whole stream
       // from the beginning — nulling the state alone would silently drop the pre-snapshot events.
@@ -936,7 +945,6 @@ public final class PostgresEventStore implements EventStore {
       return new AggregateHistory(
           null, replayEvents, replayLast, Version.initial(), purgeGeneration);
     }
-    Object snapshotState = resolved.state();
     List<EventEnvelope> events = deserialize(rawRows);
     warnIfNonContiguous(streamId, snapshotVersion, events);
     Version lastVersion = events.isEmpty() ? snapshotVersion : events.getLast().version();
@@ -945,27 +953,18 @@ public final class PostgresEventStore implements EventStore {
   }
 
   /**
-   * {@link #resolveSnapshot} inside the span {@value TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD}
-   * when the event-store area is traced: its outcome is {@code HIT} when the load starts from the
-   * snapshot, {@code MISS} when the stream has none, {@code DISCARDED} when it has one the load
-   * cannot use.
+   * {@link #resolveSnapshot} inside the span {@value TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD},
+   * for a stream that has a stored snapshot: its outcome is {@code HIT} when the load starts from
+   * the snapshot and {@code DISCARDED} when the load cannot use it. A stream without one starts no
+   * snapshot span; its load span says {@code snapshot.used = false}.
    */
-  private ResolvedSnapshot resolveSnapshotTraced(
+  private Object resolveSnapshotTraced(
       StreamId streamId,
-      boolean snapshotStored,
       String snapshotStateJson,
       Class<?> snapshotStateClass,
       int migrateFromVersion,
       int expectedSnapshotVersion,
       Version snapshotVersion) {
-    if (!traced) {
-      return resolveSnapshot(
-          streamId,
-          snapshotStateJson,
-          snapshotStateClass,
-          migrateFromVersion,
-          expectedSnapshotVersion);
-    }
     TraceScope scope =
         tracing.start(
             TracingArea.EVENT_STORE,
@@ -975,19 +974,18 @@ public final class PostgresEventStore implements EventStore {
                 .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
                 .build());
     try {
-      ResolvedSnapshot resolved =
+      Object state =
           resolveSnapshot(
               streamId,
               snapshotStateJson,
               snapshotStateClass,
               migrateFromVersion,
               expectedSnapshotVersion);
-      boolean hit = snapshotStateJson != null && !resolved.discarded();
-      scope.setAttribute(
-          TraceAttributes.SNAPSHOT_OUTCOME, hit ? "HIT" : snapshotStored ? "DISCARDED" : "MISS");
-      scope.setAttribute(TraceAttributes.SNAPSHOT_VERSION, hit ? snapshotVersion.value() : 0L);
+      boolean hit = snapshotStateJson != null && state != DISCARDED_SNAPSHOT;
+      scope.setAttribute(TraceAttributes.SNAPSHOT_OUTCOME, hit ? "HIT" : "DISCARDED");
+      scope.setAttribute(TraceAttributes.STREAM_VERSION, hit ? snapshotVersion.value() : 0L);
       scope.recordSuccess();
-      return resolved;
+      return state;
     } catch (Throwable t) {
       scope.recordError(t);
       throw t;
@@ -999,18 +997,18 @@ public final class PostgresEventStore implements EventStore {
   /**
    * The state of the snapshot a load read, deserialized (which may decrypt {@code @Encrypted}
    * fields) after the connection is released, and migrated to {@code expectedSnapshotVersion} when
-   * {@code migrateFromVersion} is set. {@link ResolvedSnapshot#NONE} when the load read no usable
-   * snapshot, {@link ResolvedSnapshot#DISCARDED} when the stored snapshot cannot be used and the
-   * stream must be replayed from its start.
+   * {@code migrateFromVersion} is set. {@code null} when the load read no usable snapshot, {@link
+   * #DISCARDED_SNAPSHOT} when the stored snapshot cannot be used and the stream must be replayed
+   * from its start.
    */
-  private ResolvedSnapshot resolveSnapshot(
+  private Object resolveSnapshot(
       StreamId streamId,
       String snapshotStateJson,
       Class<?> snapshotStateClass,
       int migrateFromVersion,
       int expectedSnapshotVersion) {
     if (snapshotStateJson == null) {
-      return ResolvedSnapshot.NONE;
+      return null;
     }
     Object snapshotState;
     // Deserialize against snapshotStateClass — the STORED state_type's class, which is the OLD
@@ -1069,7 +1067,7 @@ public final class PostgresEventStore implements EventStore {
           e.toString(),
           e);
       recordSnapshotDiscarded("deserialize_failure", streamId);
-      return ResolvedSnapshot.DISCARDED;
+      return DISCARDED_SNAPSHOT;
     }
     if (migrateFromVersion >= 0) {
       final int from = migrateFromVersion; // effectively-final capture for the lambda below
@@ -1121,7 +1119,7 @@ public final class PostgresEventStore implements EventStore {
             e.toString(),
             e);
         recordSnapshotDiscarded("migration_failure", streamId);
-        return ResolvedSnapshot.DISCARDED;
+        return DISCARDED_SNAPSHOT;
       }
       // canReach(migrateFromVersion, expected) already held inside the connection, so this must
       // resolve; the guard turns any inconsistency into a clear error instead of silently
@@ -1142,17 +1140,14 @@ public final class PostgresEventStore implements EventStore {
     } else {
       snapshotState = deserialized;
     }
-    return new ResolvedSnapshot(snapshotState, false);
+    return snapshotState;
   }
 
   /**
-   * The snapshot state a load starts from: {@code state} is {@code null} when there is none, and
-   * {@code discarded} says that the stored snapshot was discarded and the whole stream replays.
+   * What {@link #resolveSnapshot} returns for a stored snapshot the load discards: the whole stream
+   * replays from its start.
    */
-  private record ResolvedSnapshot(Object state, boolean discarded) {
-    static final ResolvedSnapshot NONE = new ResolvedSnapshot(null, false);
-    static final ResolvedSnapshot DISCARDED = new ResolvedSnapshot(null, true);
-  }
+  private static final Object DISCARDED_SNAPSHOT = new Object();
 
   /**
    * Emits the snapshot-discard counter, logging and swallowing any {@link RuntimeException} from
@@ -1223,10 +1218,11 @@ public final class PostgresEventStore implements EventStore {
   /**
    * The events of a global or stream read, deserialized from {@code rows}; inside the span {@value
    * TraceAttributes#EVENT_STORE_READ} when the event-store area is traced and the read returned at
-   * least one row. A read that returned none starts no span: an idle subscription polls without
-   * adding a trace.
+   * least one row. The span starts at {@code started}, when the read's query started, so it covers
+   * the query and the deserialization; a read that returned no row starts none, and an idle
+   * subscription polls without adding a trace.
    */
-  private List<EventEnvelope> readEvents(List<RawEventRow> rows, String readKind) {
+  private List<EventEnvelope> readEvents(List<RawEventRow> rows, String readKind, Instant started) {
     if (!traced || rows.isEmpty()) {
       return toEnvelopes(rows);
     }
@@ -1238,7 +1234,8 @@ public final class PostgresEventStore implements EventStore {
             SpanAttributes.builder()
                 .put(TraceAttributes.EVENT_COUNT, (long) rows.size())
                 .put(TraceAttributes.READ_KIND, readKind)
-                .build());
+                .build(),
+            started);
     try {
       List<EventEnvelope> events = toEnvelopes(rows);
       scope.recordSuccess();
@@ -1445,8 +1442,9 @@ public final class PostgresEventStore implements EventStore {
 
   /**
    * Runs {@code append} inside the span {@value TraceAttributes#EVENT_STORE_APPEND}. A version
-   * conflict ({@link OptimisticLockException}) is the outcome {@code CONFLICT}, not an error; the
-   * caller retries it.
+   * conflict ({@link OptimisticLockException}) is the outcome {@code CONFLICT}, and a saga's
+   * forward command the fence refuses ({@link SagaForwardFencedException}) the outcome {@code
+   * FENCED}; neither is an error.
    */
   private <R> R tracedAppend(
       StreamId streamId,
@@ -1475,6 +1473,9 @@ public final class PostgresEventStore implements EventStore {
     } catch (OptimisticLockException conflict) {
       scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "CONFLICT");
       throw conflict;
+    } catch (SagaForwardFencedException fenced) {
+      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "FENCED");
+      throw fenced;
     } catch (Throwable t) {
       scope.recordError(t);
       throw t;
@@ -2366,7 +2367,7 @@ public final class PostgresEventStore implements EventStore {
             SpanKind.INTERNAL,
             SpanAttributes.builder()
                 .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
-                .put(TraceAttributes.SNAPSHOT_VERSION, version.value())
+                .put(TraceAttributes.STREAM_VERSION, version.value())
                 .build());
     try {
       boolean saved =
@@ -2466,6 +2467,7 @@ public final class PostgresEventStore implements EventStore {
    */
   @Override
   public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
+    Instant started = traced ? Instant.now() : null;
     List<RawEventRow> rawRows;
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(READ_GLOBAL)) {
@@ -2509,7 +2511,7 @@ public final class PostgresEventStore implements EventStore {
       throw new EventStoreException("Failed to read global stream from offset: " + afterOffset, e);
     }
     // Deserialize (and decrypt, if any field is @Encrypted) AFTER the connection is released.
-    return readEvents(rawRows, "GLOBAL");
+    return readEvents(rawRows, "GLOBAL", started);
   }
 
   private static final String LAST_GLOBAL_OFFSET =
@@ -2547,6 +2549,7 @@ public final class PostgresEventStore implements EventStore {
   @Override
   public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
     Objects.requireNonNull(streamId, "streamId is required");
+    Instant started = traced ? Instant.now() : null;
     List<RawEventRow> rawRows;
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(READ_STREAM)) {
@@ -2564,7 +2567,7 @@ public final class PostgresEventStore implements EventStore {
       throw new EventStoreException("Failed to read stream: " + streamText(streamId), e);
     }
     // Deserialize (and decrypt, if any field is @Encrypted) AFTER the connection is released.
-    return readEvents(rawRows, "STREAM");
+    return readEvents(rawRows, "STREAM", started);
   }
 
   /**

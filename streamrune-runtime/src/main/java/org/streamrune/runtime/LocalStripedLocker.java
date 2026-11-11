@@ -21,7 +21,7 @@ import org.streamrune.core.types.StreamId;
  * share a stripe (including two aggregate types with the same id value); they then contend, as any
  * two streams on one stripe do.
  *
- * <p>{@link #withTracing(StreamRuneTracing)} returns the locker that starts the span {@value
+ * <p>{@link #traced(StreamRuneTracing)} returns the locker that starts the span {@value
  * TraceAttributes#LOCK_ACQUIRE} around each acquisition when the {@link TracingArea#LOCK} area is
  * on.
  */
@@ -79,7 +79,7 @@ public final class LocalStripedLocker implements AggregateLocker {
    * @return a locker that traces through {@code tracing}
    * @throws NullPointerException if {@code tracing} is {@code null}
    */
-  public LocalStripedLocker withTracing(StreamRuneTracing tracing) {
+  public LocalStripedLocker traced(StreamRuneTracing tracing) {
     return new LocalStripedLocker(stripes, Objects.requireNonNull(tracing, "tracing is required"));
   }
 

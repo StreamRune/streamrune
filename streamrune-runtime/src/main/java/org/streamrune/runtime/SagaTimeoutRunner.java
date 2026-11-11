@@ -623,28 +623,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       if (selected.isEmpty() || selected.get().status().isHalted()) {
         return false;
       }
-      if (!traced) {
-        return timeOut(sagaId, selected.get());
-      }
-      TraceScope scope =
-          tracing.start(
-              TracingArea.SAGA,
-              TraceAttributes.sagaTimeoutSpanName(sagaType),
-              SpanKind.INTERNAL,
-              SpanAttributes.builder()
-                  .put(TraceAttributes.SAGA_TYPE, sagaType.value())
-                  .put(TraceAttributes.SAGA_ID, LogSanitizer.sanitizeForTrace(sagaId.value()))
-                  .build());
-      try {
-        boolean deferred = timeOut(sagaId, selected.get());
-        scope.recordSuccess();
-        return deferred;
-      } catch (Throwable t) {
-        scope.recordError(t);
-        throw t;
-      } finally {
-        scope.close();
-      }
+      return timeOut(sagaId, selected.get());
     } catch (Exception e) {
       LOG.warn(
           "Failed to process timed-out saga: {}", LogSanitizer.sanitizeForLog(sagaId.value()), e);
@@ -662,10 +641,38 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
     SagaTimeoutException cause =
         new SagaTimeoutException(sagaId, decider.timeout().orElse(Duration.ZERO));
     if (selected.status() == SagaStatus.COMPENSATING) {
-      resumeClaimedEpisode(sagaId, selected, cause);
+      TraceScope scope = startTimeoutSpan(sagaId);
+      try {
+        resumeClaimedEpisode(sagaId, selected, cause);
+        scope.recordSuccess();
+      } catch (Throwable t) {
+        scope.recordError(t);
+        throw t;
+      } finally {
+        scope.close();
+      }
       return false;
     }
     return claimAtTheDeadline(sagaId, cause);
+  }
+
+  /**
+   * Starts the span {@code saga/{SagaType}/timeout} of the saga this runner acts on, when the saga
+   * area is traced. It starts only once the runner acts: a claim deferred because a step of the
+   * saga is in flight writes nothing and starts no span.
+   */
+  private TraceScope startTimeoutSpan(SagaId sagaId) {
+    if (!traced) {
+      return TraceScope.NOOP;
+    }
+    return tracing.start(
+        TracingArea.SAGA,
+        TraceAttributes.sagaTimeoutSpanName(sagaType),
+        SpanKind.INTERNAL,
+        SpanAttributes.builder()
+            .put(TraceAttributes.SAGA_TYPE, sagaType.value())
+            .put(TraceAttributes.SAGA_ID, LogSanitizer.sanitizeForTrace(sagaId.value()))
+            .build());
   }
 
   /**
@@ -716,26 +723,46 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
         claimDeferred(sagaId, wait);
         return true;
       }
-      claimUnderneathTheStep(sagaId, passedOver, cause);
+      TraceScope scope = startTimeoutSpan(sagaId);
+      try {
+        claimUnderneathTheStep(sagaId, passedOver, cause);
+        scope.recordSuccess();
+      } catch (Throwable t) {
+        scope.recordError(t);
+        throw t;
+      } finally {
+        scope.close();
+      }
       return false;
     }
-    LoadedSaga<S> claimedByAStep;
+    TraceScope scope = startTimeoutSpan(sagaId);
     try {
-      deferredClaims.remove(sagaId);
-      Optional<LoadedSaga<S>> current = sagaStore.load(sagaId, sagaType, decider.stateType());
-      if (current.isEmpty() || current.get().status().isHalted()) {
-        return false;
+      LoadedSaga<S> claimedByAStep;
+      try {
+        deferredClaims.remove(sagaId);
+        Optional<LoadedSaga<S>> current = sagaStore.load(sagaId, sagaType, decider.stateType());
+        if (current.isEmpty() || current.get().status().isHalted()) {
+          scope.recordSuccess();
+          return false;
+        }
+        if (current.get().status() != SagaStatus.COMPENSATING) {
+          executor.execute(sagaId, current, new SagaTrigger.ClaimTimeout(cause, claimHold));
+          scope.recordSuccess();
+          return false;
+        }
+        claimedByAStep = current.get();
+      } finally {
+        claimHold.close(); // every exit on which the executor did not reach its claim
       }
-      if (current.get().status() != SagaStatus.COMPENSATING) {
-        executor.execute(sagaId, current, new SagaTrigger.ClaimTimeout(cause, claimHold));
-        return false;
-      }
-      claimedByAStep = current.get();
+      resumeClaimedEpisode(sagaId, claimedByAStep, cause);
+      scope.recordSuccess();
+      return false;
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
     } finally {
-      claimHold.close(); // every exit on which the executor did not reach its claim
+      scope.close();
     }
-    resumeClaimedEpisode(sagaId, claimedByAStep, cause);
-    return false;
   }
 
   /**

@@ -800,7 +800,7 @@ public final class StreamRune implements CommandBus, AutoCloseable {
      * ProjectionRunnerFactory} builds, takes the tracing on its own builder; a runner given the
      * same tracing does not decorate a projection twice. So do an event store, a locker, an outbox
      * poller and a saga runner the application builds: {@code PostgresEventStoreFactory.tracing},
-     * {@code PgAdvisoryLocker.withTracing}, {@link OutboxPoller.Builder#tracing}, {@link
+     * {@code PgAdvisoryLocker.traced}, {@link OutboxPoller.Builder#tracing}, {@link
      * SagaRunner.Builder#tracing}.
      *
      * @param tracing the tracing; not {@code null}

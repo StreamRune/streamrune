@@ -2,6 +2,7 @@ package org.streamrune.postgres;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.Deque;
@@ -65,11 +66,32 @@ final class RecordingTracing implements StreamRuneTracing {
       SpanAttributes attributes,
       SpanLink link,
       Map<String, String> baggage) {
+    return record(area, spanName, kind, attributes, link, null);
+  }
+
+  @Override
+  public TraceScope start(
+      TracingArea area,
+      String spanName,
+      SpanKind kind,
+      SpanAttributes attributes,
+      Instant startTime) {
+    return record(area, spanName, kind, attributes, null, startTime);
+  }
+
+  private TraceScope record(
+      TracingArea area,
+      String spanName,
+      SpanKind kind,
+      SpanAttributes attributes,
+      SpanLink link,
+      Instant startTime) {
     if (!areas.contains(area)) {
       return TraceScope.NOOP;
     }
     started.add(spanName);
-    RecordedSpan span = new RecordedSpan(spanName, kind, attributes, link, open.get().peek());
+    RecordedSpan span =
+        new RecordedSpan(spanName, kind, attributes, link, open.get().peek(), startTime);
     spans.add(span);
     open.get().push(span);
     return span;
@@ -97,6 +119,10 @@ final class RecordingTracing implements StreamRuneTracing {
     final SpanKind kind;
     final SpanLink link;
     final RecordedSpan parent;
+
+    /** The start time the emitter gave, or {@code null} when the span started when it was made. */
+    final Instant startTime;
+
     private final Map<String, Object> attributes =
         Collections.synchronizedMap(new LinkedHashMap<>());
     volatile boolean ok;
@@ -104,7 +130,13 @@ final class RecordingTracing implements StreamRuneTracing {
     volatile boolean closed;
 
     private RecordedSpan(
-        String name, SpanKind kind, SpanAttributes initial, SpanLink link, RecordedSpan parent) {
+        String name,
+        SpanKind kind,
+        SpanAttributes initial,
+        SpanLink link,
+        RecordedSpan parent,
+        Instant startTime) {
+      this.startTime = startTime;
       this.name = name;
       this.kind = kind;
       this.link = link;

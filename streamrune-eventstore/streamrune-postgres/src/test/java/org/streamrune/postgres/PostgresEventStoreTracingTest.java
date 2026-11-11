@@ -24,6 +24,9 @@ import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.LockException;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SnapshotPolicy;
+import org.streamrune.core.saga.SagaForwardFencedException;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
@@ -36,6 +39,7 @@ import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.EventUpcaster;
@@ -214,6 +218,31 @@ class PostgresEventStoreTracingTest {
   }
 
   @Test
+  void aForwardCommandTheFenceRefuses_isTheOutcomeFenced_notAnError() {
+    var tracing = new RecordingTracing();
+    PostgresEventStore store = store(tracing);
+    // No saga_state row: the fence refuses the forward command of a saga not in its forward phase.
+    SagaOrigin forwardOf =
+        SagaOrigin.dispatchedBy(SagaType.of("order-saga"), SagaId.of("saga-fenced"));
+
+    assertThatThrownBy(
+            () ->
+                store.appendWithKey(
+                    STREAM,
+                    List.of(switched()),
+                    Version.initial(),
+                    IdempotencyKey.of("k-fenced"),
+                    "Switch",
+                    forwardOf))
+        .isInstanceOf(SagaForwardFencedException.class);
+
+    var append = tracing.only(TraceAttributes.EVENT_STORE_APPEND);
+    assertThat(append.attribute(TraceAttributes.APPEND_OUTCOME)).isEqualTo("FENCED");
+    assertThat(append.error).isNull();
+    assertThat(append.closed).isTrue();
+  }
+
+  @Test
   void load_startsTheLoadSpan_withTheSnapshotAndDeserializeSpansUnderIt_andAnOutcomePerSnapshot() {
     var tracing = new RecordingTracing();
     PostgresEventStore store = store(tracing);
@@ -222,8 +251,8 @@ class PostgresEventStoreTracingTest {
 
     store.load(STREAM, 1);
 
+    // No stored snapshot: no snapshot span, and the load says it used none.
     var load = tracing.only(TraceAttributes.EVENT_STORE_LOAD);
-    var snapshot = tracing.only(TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD);
     var deserialize = tracing.only(TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE);
     assertThat(load.attributes())
         .containsExactlyInAnyOrderEntriesOf(
@@ -236,29 +265,26 @@ class PostgresEventStoreTracingTest {
                 2L,
                 TraceAttributes.SNAPSHOT_USED,
                 false));
-    assertThat(snapshot.attributes())
-        .containsExactlyInAnyOrderEntriesOf(
-            Map.of(
-                TraceAttributes.STREAM_ID, "lamp:l-1",
-                TraceAttributes.SNAPSHOT_VERSION, 0L,
-                TraceAttributes.SNAPSHOT_OUTCOME, "MISS"));
     assertThat(deserialize.attributes())
         .containsExactlyInAnyOrderEntriesOf(
             Map.of(TraceAttributes.EVENT_COUNT, 2L, TraceAttributes.UPCAST_COUNT, 0L));
-    assertThat(snapshot.parent).isSameAs(load);
     assertThat(deserialize.parent).isSameAs(load);
     assertThat(tracing.names())
         .containsExactly(
-            TraceAttributes.EVENT_STORE_LOAD,
-            TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD,
-            TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE);
+            TraceAttributes.EVENT_STORE_LOAD, TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE);
 
     store.saveSnapshot(STREAM, new Version(1), new LampState(1), 1, 0);
     tracing.clear();
     store.load(STREAM, 1);
     var hit = tracing.only(TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD);
-    assertThat(hit.attribute(TraceAttributes.SNAPSHOT_OUTCOME)).isEqualTo("HIT");
-    assertThat(hit.attribute(TraceAttributes.SNAPSHOT_VERSION)).isEqualTo(1L);
+    assertThat(hit.kind).isEqualTo(SpanKind.INTERNAL);
+    assertThat(hit.attributes())
+        .containsExactlyInAnyOrderEntriesOf(
+            Map.of(
+                TraceAttributes.STREAM_ID, "lamp:l-1",
+                TraceAttributes.STREAM_VERSION, 1L,
+                TraceAttributes.SNAPSHOT_OUTCOME, "HIT"));
+    assertThat(hit.parent).isSameAs(tracing.only(TraceAttributes.EVENT_STORE_LOAD));
     assertThat(
             tracing.only(TraceAttributes.EVENT_STORE_LOAD).attribute(TraceAttributes.SNAPSHOT_USED))
         .isEqualTo(true);
@@ -273,7 +299,7 @@ class PostgresEventStoreTracingTest {
     store.load(STREAM, 2);
     var discarded = tracing.only(TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD);
     assertThat(discarded.attribute(TraceAttributes.SNAPSHOT_OUTCOME)).isEqualTo("DISCARDED");
-    assertThat(discarded.attribute(TraceAttributes.SNAPSHOT_VERSION)).isEqualTo(0L);
+    assertThat(discarded.attribute(TraceAttributes.STREAM_VERSION)).isEqualTo(0L);
   }
 
   @Test
@@ -393,7 +419,7 @@ class PostgresEventStoreTracingTest {
         .containsExactlyInAnyOrderEntriesOf(
             Map.of(
                 TraceAttributes.STREAM_ID, "lamp:l-1",
-                TraceAttributes.SNAPSHOT_VERSION, 1L,
+                TraceAttributes.STREAM_VERSION, 1L,
                 TraceAttributes.SNAPSHOT_OUTCOME, "SAVED"));
     tracing.clear();
 
@@ -424,8 +450,14 @@ class PostgresEventStoreTracingTest {
     assertThat(store.readStream(STREAM, new Version(2), 10)).isEmpty();
     assertThat(tracing.names()).isEmpty();
 
+    Instant before = Instant.now();
     store.readGlobalStream(GlobalOffset.initial(), 10);
     var global = tracing.only(TraceAttributes.EVENT_STORE_READ);
+    // The span starts when the query started, before the events were known to exist.
+    assertThat(global.startTime)
+        .isNotNull()
+        .isAfterOrEqualTo(before)
+        .isBeforeOrEqualTo(Instant.now());
     assertThat(global.kind).isEqualTo(SpanKind.INTERNAL);
     assertThat(global.attributes())
         .containsExactlyInAnyOrderEntriesOf(
@@ -433,6 +465,7 @@ class PostgresEventStoreTracingTest {
     tracing.clear();
 
     store.readStream(STREAM, new Version(1), 10);
+    assertThat(tracing.only(TraceAttributes.EVENT_STORE_READ).startTime).isNotNull();
     assertThat(tracing.only(TraceAttributes.EVENT_STORE_READ).attributes())
         .containsExactlyInAnyOrderEntriesOf(
             Map.of(TraceAttributes.EVENT_COUNT, 1L, TraceAttributes.READ_KIND, "STREAM"));
@@ -538,7 +571,7 @@ class PostgresEventStoreTracingTest {
     try (var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store(tracing))
-            .locker(new PgAdvisoryLocker(dataSource).withTracing(tracing))
+            .locker(new PgAdvisoryLocker(dataSource).traced(tracing))
             .snapshotPolicy(SnapshotPolicy.everyNEvents(100))
             .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
             .tracing(tracing)
@@ -562,7 +595,6 @@ class PostgresEventStoreTracingTest {
             "command/Switch",
             TraceAttributes.LOCK_ACQUIRE,
             TraceAttributes.EVENT_STORE_LOAD,
-            TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD,
             TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE,
             TraceAttributes.EVENT_STORE_APPEND,
             TraceAttributes.EVENT_STORE_APPEND_SERIALIZE);
@@ -570,7 +602,6 @@ class PostgresEventStoreTracingTest {
     assertThat(lock.parent).isSameAs(command);
     assertThat(load.parent).isSameAs(command);
     assertThat(append.parent).isSameAs(command);
-    assertThat(tracing.only(TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD).parent).isSameAs(load);
     assertThat(tracing.only(TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE).parent).isSameAs(load);
     assertThat(tracing.only(TraceAttributes.EVENT_STORE_APPEND_SERIALIZE).parent).isSameAs(append);
     assertThat(tracing.spans).allMatch(s -> s.closed && s.ok);
@@ -598,7 +629,7 @@ class PostgresEventStoreTracingTest {
       throws Exception {
     var tracing = new RecordingTracing();
     PgAdvisoryLocker untraced = new PgAdvisoryLocker(dataSource);
-    PgAdvisoryLocker locker = untraced.withTracing(tracing);
+    PgAdvisoryLocker locker = untraced.traced(tracing);
 
     try (AutoCloseable held = locker.acquireLock(STREAM, Duration.ofSeconds(5))) {
       var acquired = tracing.only(TraceAttributes.LOCK_ACQUIRE);
@@ -629,7 +660,7 @@ class PostgresEventStoreTracingTest {
     PGSimpleDataSource unreachable = new PGSimpleDataSource();
     unreachable.setUrl("jdbc:postgresql://127.0.0.1:1/none");
     unreachable.setConnectTimeout(1);
-    PgAdvisoryLocker locker = new PgAdvisoryLocker(unreachable).withTracing(tracing);
+    PgAdvisoryLocker locker = new PgAdvisoryLocker(unreachable).traced(tracing);
 
     assertThatThrownBy(() -> locker.acquireLock(STREAM, Duration.ofSeconds(1)))
         .isInstanceOf(LockException.class);
@@ -644,16 +675,15 @@ class PostgresEventStoreTracingTest {
     var off = RecordingTracing.without(TracingArea.LOCK);
     for (StreamRuneTracing tracing : List.of(off, StreamRuneTracing.NOOP)) {
       new PgAdvisoryLocker(dataSource)
-          .withTracing(tracing)
+          .traced(tracing)
           .acquireLock(STREAM, Duration.ofSeconds(1))
           .close();
     }
     assertThat(off.names()).isEmpty();
-    assertThatThrownBy(() -> new PgAdvisoryLocker(dataSource).withTracing(null))
+    assertThatThrownBy(() -> new PgAdvisoryLocker(dataSource).traced(null))
         .isInstanceOf(NullPointerException.class);
     assertThatThrownBy(
-            () ->
-                new PgAdvisoryLocker(dataSource).withTracing(off).acquireLock(null, Duration.ZERO))
+            () -> new PgAdvisoryLocker(dataSource).traced(off).acquireLock(null, Duration.ZERO))
         .isInstanceOf(NullPointerException.class);
   }
 
@@ -662,7 +692,7 @@ class PostgresEventStoreTracingTest {
     var closes = new java.util.concurrent.atomic.AtomicInteger();
     var pool = new ClosingDataSource(dataSource, closes);
     PgAdvisoryLocker owner = PgAdvisoryLocker.withDedicatedPool(pool);
-    PgAdvisoryLocker traced = owner.withTracing(new RecordingTracing());
+    PgAdvisoryLocker traced = owner.traced(new RecordingTracing());
 
     traced.acquireLock(STREAM, Duration.ofSeconds(1)).close();
     traced.close();

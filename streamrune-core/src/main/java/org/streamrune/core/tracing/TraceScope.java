@@ -45,7 +45,9 @@ public interface TraceScope extends AutoCloseable {
 
   /**
    * Records {@code error} on the span and marks the span as failed. An expected outcome, such as a
-   * lock timeout the caller handles, is an attribute value and not an error.
+   * lock timeout the caller handles, is an attribute value and not an error. An implementation
+   * records the exception's type and its own message, never the messages of its causes or of its
+   * suppressed exceptions, which can quote the data the failing code was handling.
    *
    * @param error the failure
    */

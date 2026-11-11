@@ -310,6 +310,120 @@ class SagaTracingTest {
     assertThat(otelTesting.getSpans()).isEmpty();
   }
 
+  /** {@code event} as stored at {@code offset}. */
+  private static EventEnvelope at(long offset, EventEnvelope event) {
+    return new EventEnvelope(
+        GlobalOffset.of(offset),
+        event.streamId(),
+        new org.streamrune.core.types.Version(1),
+        event.eventType(),
+        event.event(),
+        event.metadata());
+  }
+
+  /** A step lock held on another thread; {@link #release} lets it go and waits until it has. */
+  private record HeldStep(java.util.concurrent.CountDownLatch latch, Thread holder) {
+    void release() throws InterruptedException {
+      latch.countDown();
+      holder.join();
+    }
+  }
+
+  /** Holds the step lock of {@code sagaId} on another thread until it is released. */
+  private static HeldStep holdStep(SagaStepLock lock, SagaId sagaId) throws InterruptedException {
+    var held = new java.util.concurrent.CountDownLatch(1);
+    var release = new java.util.concurrent.CountDownLatch(1);
+    Thread holder =
+        Thread.ofVirtual()
+            .start(
+                () -> {
+                  try (SagaStepLock.Hold _ = lock.enterStep(TYPE, sagaId)) {
+                    held.countDown();
+                    release.await();
+                  } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                  }
+                });
+    assertThat(held.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+    return new HeldStep(release, holder);
+  }
+
+  @Test
+  void aStepThatWaitsForAnotherStepOfItsSaga_isTheOutcomeDeferred_notAnError()
+      throws InterruptedException {
+    var lock = new SagaStepLock(Duration.ofMillis(50));
+    SagaFixture<OrderState> fixture =
+        SagaFixture.of(OrderState.class, builder -> routed(builder, tracing()).stepLock(lock));
+    var release = holdStep(lock, SAGA_1);
+    try {
+      assertThatThrownBy(() -> fixture.when(ORDER_1, new OrderPlaced("o-1")))
+          .isInstanceOf(SagaStepLockException.class);
+    } finally {
+      release.release();
+    }
+
+    SpanData step = only(TraceAttributes.sagaStepSpanName(TYPE));
+    assertThat(EventStoreTracingTest.string(step, TraceAttributes.SAGA_STEP_OUTCOME))
+        .isEqualTo("DEFERRED");
+    assertThat(step.getStatus().getStatusCode()).isEqualTo(StatusCode.UNSET);
+    assertThat(step.getEvents()).isEmpty();
+  }
+
+  @Test
+  void aTimeoutClaimDeferredWhileAStepIsInFlight_startsNoSpan() throws InterruptedException {
+    var lock = new SagaStepLock(Duration.ofSeconds(5));
+    SagaFixture<OrderState> fixture =
+        SagaFixture.of(OrderState.class, builder -> routed(builder, tracing()).stepLock(lock))
+            .withTimeouts(builder -> builder.decider(new OrderSaga()).tracing(tracing()));
+    fixture.when(ORDER_1, new OrderPlaced("o-1")).advance(Duration.ofMinutes(6));
+    otelTesting.clearSpans();
+
+    var release = holdStep(lock, SAGA_1);
+    try {
+      fixture.runTimeouts().expectNoCommands();
+    } finally {
+      release.release();
+    }
+    assertThat(otelTesting.getSpans()).isEmpty();
+
+    fixture.runTimeouts().expectCommands(new CancelOrder("o-1"));
+    assertThat(spans(TraceAttributes.sagaTimeoutSpanName(TYPE))).hasSize(1);
+  }
+
+  @Test
+  void theReplayFeed_tracesItsStep_withTheOutcomeFaultedForAPoisonItSwallows() {
+    SagaFixture<OrderState> fixture = fixture(tracing());
+
+    StepOutcome advanced =
+        fixture
+            .runner()
+            .feedReplay(SAGA_1, at(10, placedUnderTheWritersSpan(fixture, "o-1")), true, false);
+
+    assertThat(advanced).isEqualTo(StepOutcome.FORWARD_PROGRESSED);
+    SpanData step = only(TraceAttributes.sagaStepSpanName(TYPE));
+    assertThat(EventStoreTracingTest.string(step, TraceAttributes.SAGA_STEP_OUTCOME))
+        .isEqualTo("ADVANCED");
+    assertThat(step.getLinks()).hasSize(1);
+    otelTesting.clearSpans();
+
+    StepOutcome poisoned =
+        fixture
+            .runner()
+            .feedReplay(
+                SagaId.of("order-poison"),
+                at(
+                    11,
+                    fixture.event(
+                        StreamId.of(ORDER, AggregateId.of("poison")), new OrderPlaced("poison"))),
+                true,
+                false);
+
+    assertThat(poisoned).isEqualTo(StepOutcome.FAULTED);
+    SpanData faulted = only(TraceAttributes.sagaStepSpanName(TYPE));
+    assertThat(EventStoreTracingTest.string(faulted, TraceAttributes.SAGA_STEP_OUTCOME))
+        .isEqualTo("FAULTED");
+  }
+
   // ==================== With a real command bus ====================
 
   record StockState() implements AggregateState {}

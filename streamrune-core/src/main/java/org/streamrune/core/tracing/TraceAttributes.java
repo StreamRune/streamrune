@@ -37,8 +37,9 @@ import org.streamrune.core.types.SubscriptionName;
  * is an attribute key.
  *
  * <p><b>Outcomes.</b> An expected outcome — a lock not acquired in time, an append that lost its
- * optimistic-lock check, a saga event held for later — is an attribute value, and the span keeps an
- * unset or OK status. A failure records the exception and the ERROR status.
+ * optimistic-lock check or that the saga forward fence refused, a saga event held for later, a saga
+ * step that waits for another step of its saga — is an attribute value, and the span keeps an unset
+ * or OK status. A failure records the exception type and message and the ERROR status.
  */
 public final class TraceAttributes {
 
@@ -124,15 +125,18 @@ public final class TraceAttributes {
    */
   public static final String EVENT_STORE_LOAD_DESERIALIZE = "eventstore/load/deserialize";
 
-  /** Span name for resolving the stored snapshot of a load, child of the load span. */
+  /**
+   * Span name for resolving the stored snapshot of a load (deserialize, decrypt, migrate), child of
+   * the load span; started only when the stream has a stored snapshot.
+   */
   public static final String EVENT_STORE_SNAPSHOT_LOAD = "eventstore/snapshot/load";
 
   /** Span name for one snapshot write. */
   public static final String EVENT_STORE_SNAPSHOT_SAVE = "eventstore/snapshot/save";
 
   /**
-   * Span name for one global or stream read that returns at least one event; a read that returns
-   * none starts no span.
+   * Span name for one global or stream read that returns at least one event, from the start of its
+   * query to the end of its deserialization; a read that returns none starts no span.
    */
   public static final String EVENT_STORE_READ = "eventstore/read";
 
@@ -147,7 +151,8 @@ public final class TraceAttributes {
 
   /**
    * How an append ended: {@code APPENDED}, {@code CONFLICT} (the stream was not at the expected
-   * version) or {@code DUPLICATE} (a keyed append whose key was already recorded). Absent when the
+   * version), {@code DUPLICATE} (a keyed append whose key was already recorded) or {@code FENCED}
+   * (a saga's forward command refused because the saga has left its forward phase). Absent when the
    * append failed.
    */
   public static final String APPEND_OUTCOME = "streamrune.append.outcome";
@@ -162,15 +167,16 @@ public final class TraceAttributes {
   public static final String UPCAST_COUNT = "streamrune.upcast.count";
 
   /**
-   * The stream version of the snapshot, a {@code long}: on a snapshot load, the version the load
-   * starts from ({@code 0} when it uses no snapshot); on a snapshot save, the version saved.
+   * The stream version a snapshot holds the state at, a {@code long}: on a snapshot load, the
+   * version the load starts from ({@code 0} when it discards the snapshot); on a snapshot save, the
+   * version saved. Not the snapshot's schema version.
    */
-  public static final String SNAPSHOT_VERSION = "streamrune.snapshot.version";
+  public static final String STREAM_VERSION = "streamrune.stream.version";
 
   /**
-   * What became of a snapshot: on a load {@code HIT} (used), {@code MISS} (none stored) or {@code
-   * DISCARDED} (stored but unusable, and the stream replays from its start); on a save {@code
-   * SAVED} or {@code SKIPPED} (a purge of the stream's snapshot intervened).
+   * What became of a snapshot: on a load {@code HIT} (used) or {@code DISCARDED} (stored but
+   * unusable, and the stream replays from its start); on a save {@code SAVED} or {@code SKIPPED} (a
+   * purge of the stream's snapshot intervened).
    */
   public static final String SNAPSHOT_OUTCOME = "streamrune.snapshot.outcome";
 

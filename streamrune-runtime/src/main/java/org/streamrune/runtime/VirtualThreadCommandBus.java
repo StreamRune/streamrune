@@ -2428,8 +2428,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * ahead of every framework interceptor. A chain that already holds an {@code
      * OpenTelemetryCommandInterceptor} the application added keeps that one alone. The default
      * {@link LocalStripedLocker} the bus builds when no {@link #locker} is set traces its
-     * acquisitions through it too ({@link LocalStripedLocker#withTracing}); a locker the
-     * application sets takes the tracing on its own.
+     * acquisitions through it too ({@link LocalStripedLocker#traced}); a locker the application
+     * sets takes the tracing on its own.
      *
      * @param tracing the tracing; not {@code null}
      * @return this builder
@@ -2636,7 +2636,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         throw new IllegalStateException("eventStore is required");
       }
       if (locker == null) {
-        locker = new LocalStripedLocker(stripeCount).withTracing(tracing);
+        locker = new LocalStripedLocker(stripeCount).traced(tracing);
       }
       if (deadLetterQueue != null && objectMapper == null) {
         throw new IllegalArgumentException(

@@ -81,12 +81,29 @@ class CommandSpanTreeTest {
     try (var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store)
-            .snapshotPolicy(SnapshotPolicy.everyNEvents(100))
+            .snapshotPolicy(SnapshotPolicy.everyNEvents(1))
             .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
             .tracing(tracing)
             .build()) {
+      // The first command writes the stream's first snapshot; the second loads from it.
+      bus.execute(new Switch("l-1"));
       bus.execute(new Switch("l-1"));
     }
+  }
+
+  /** The spans of the second command's trace, the one that loads from the snapshot. */
+  private static List<SpanData> secondCommand() {
+    List<SpanData> commands =
+        otelTesting.getSpans().stream().filter(s -> s.getName().equals("command/Switch")).toList();
+    assertThat(commands).hasSize(2);
+    String traceId = commands.get(1).getTraceId();
+    return otelTesting.getSpans().stream().filter(s -> s.getTraceId().equals(traceId)).toList();
+  }
+
+  private static SpanData in(List<SpanData> spans, String name) {
+    List<SpanData> named = spans.stream().filter(s -> s.getName().equals(name)).toList();
+    assertThat(named).as("spans named %s", name).hasSize(1);
+    return named.getFirst();
   }
 
   private static SpanData span(String name) {
@@ -104,34 +121,47 @@ class CommandSpanTreeTest {
   void aCommand_nestsTheLockTheLoadAndTheAppendSpans() {
     runCommand(tracing(TracingSettings.allEnabled()));
 
-    SpanData command = span("command/Switch");
-    SpanData lock = span(TraceAttributes.LOCK_ACQUIRE);
-    SpanData load = span(TraceAttributes.EVENT_STORE_LOAD);
-    SpanData snapshot = span(TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD);
-    SpanData deserialize = span(TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE);
-    SpanData append = span(TraceAttributes.EVENT_STORE_APPEND);
-    SpanData serialize = span(TraceAttributes.EVENT_STORE_APPEND_SERIALIZE);
+    List<SpanData> trace = secondCommand();
+    SpanData command = in(trace, "command/Switch");
+    SpanData lock = in(trace, TraceAttributes.LOCK_ACQUIRE);
+    SpanData load = in(trace, TraceAttributes.EVENT_STORE_LOAD);
+    SpanData snapshot = in(trace, TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD);
+    SpanData deserialize = in(trace, TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE);
+    SpanData append = in(trace, TraceAttributes.EVENT_STORE_APPEND);
+    SpanData serialize = in(trace, TraceAttributes.EVENT_STORE_APPEND_SERIALIZE);
+    SpanData save = in(trace, TraceAttributes.EVENT_STORE_SNAPSHOT_SAVE);
 
-    assertThat(names()).hasSize(7);
+    assertThat(trace).hasSize(8);
     assertThat(command.getParentSpanContext().isValid()).isFalse();
-    for (SpanData child : List.of(lock, load, append)) {
+    for (SpanData child : List.of(lock, load, append, save)) {
       assertThat(child.getParentSpanId()).as(child.getName()).isEqualTo(command.getSpanId());
-      assertThat(child.getTraceId()).isEqualTo(command.getTraceId());
     }
     assertThat(snapshot.getParentSpanId()).isEqualTo(load.getSpanId());
     assertThat(deserialize.getParentSpanId()).isEqualTo(load.getSpanId());
     assertThat(serialize.getParentSpanId()).isEqualTo(append.getSpanId());
-    // In order: the lock, then the load, then the append.
+    assertThat(EventStoreTracingTest.string(snapshot, TraceAttributes.SNAPSHOT_OUTCOME))
+        .isEqualTo("HIT");
+    // In order: the lock, then the load, then the append, then the snapshot.
     assertThat(lock.getEndEpochNanos()).isLessThanOrEqualTo(load.getStartEpochNanos());
     assertThat(load.getEndEpochNanos()).isLessThanOrEqualTo(append.getStartEpochNanos());
+    assertThat(append.getEndEpochNanos()).isLessThanOrEqualTo(save.getStartEpochNanos());
     assertThat(EventStoreTracingTest.string(lock, TraceAttributes.LOCK_OUTCOME))
         .isEqualTo("ACQUIRED");
+
+    // The first command's stream had no snapshot yet: its load starts no snapshot span.
+    assertThat(names().stream().filter(TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD::equals))
+        .hasSize(1);
   }
 
   @Test
   void eachAreaSwitchedOff_removesItsSpansAlone() {
     runCommand(tracing(TracingSettings.builder().area(TracingArea.EVENT_STORE, false).build()));
-    assertThat(names()).containsExactlyInAnyOrder(TraceAttributes.LOCK_ACQUIRE, "command/Switch");
+    assertThat(names())
+        .containsExactlyInAnyOrder(
+            TraceAttributes.LOCK_ACQUIRE,
+            "command/Switch",
+            TraceAttributes.LOCK_ACQUIRE,
+            "command/Switch");
     otelTesting.clearSpans();
 
     runCommand(tracing(TracingSettings.builder().area(TracingArea.LOCK, false).build()));
@@ -158,7 +188,7 @@ class CommandSpanTreeTest {
   @Test
   void lockAcquire_carriesTheStreamAndTheOutcome() throws Exception {
     LocalStripedLocker locker =
-        new LocalStripedLocker(1).withTracing(tracing(TracingSettings.allEnabled()));
+        new LocalStripedLocker(1).traced(tracing(TracingSettings.allEnabled()));
 
     try (AutoCloseable lock = locker.acquireLock(STREAM, Duration.ofSeconds(1))) {
       SpanData acquired = span(TraceAttributes.LOCK_ACQUIRE);
@@ -177,7 +207,7 @@ class CommandSpanTreeTest {
   void aLockHeldElsewhere_isTheOutcomeTimeout_andAnInterruptedWaitTheOutcomeInterrupted()
       throws Exception {
     LocalStripedLocker untraced = new LocalStripedLocker(1);
-    LocalStripedLocker locker = untraced.withTracing(tracing(TracingSettings.allEnabled()));
+    LocalStripedLocker locker = untraced.traced(tracing(TracingSettings.allEnabled()));
     CountDownLatch held = new CountDownLatch(1);
     CountDownLatch release = new CountDownLatch(1);
     Thread holder =
@@ -219,7 +249,7 @@ class CommandSpanTreeTest {
   @Test
   void anInvalidTimeout_marksTheLockSpanFailed_withoutAnOutcome() {
     LocalStripedLocker locker =
-        new LocalStripedLocker(1).withTracing(tracing(TracingSettings.allEnabled()));
+        new LocalStripedLocker(1).traced(tracing(TracingSettings.allEnabled()));
 
     assertThatThrownBy(() -> locker.acquireLock(STREAM, Duration.ofMillis(-1)))
         .isInstanceOf(IllegalArgumentException.class);
@@ -234,15 +264,15 @@ class CommandSpanTreeTest {
     for (LocalStripedLocker locker :
         List.of(
             new LocalStripedLocker(4),
-            new LocalStripedLocker(4).withTracing(StreamRuneTracing.NOOP),
+            new LocalStripedLocker(4).traced(StreamRuneTracing.NOOP),
             new LocalStripedLocker(4)
-                .withTracing(
+                .traced(
                     tracing(TracingSettings.builder().area(TracingArea.LOCK, false).build())))) {
       locker.acquireLock(STREAM, Duration.ofSeconds(1)).close();
     }
 
     assertThat(otelTesting.getSpans()).isEmpty();
-    assertThatThrownBy(() -> new LocalStripedLocker(1).withTracing(null))
+    assertThatThrownBy(() -> new LocalStripedLocker(1).traced(null))
         .isInstanceOf(NullPointerException.class);
   }
 }
