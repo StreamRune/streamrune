@@ -169,7 +169,9 @@ class ProjectionDeliveryPolicyTest {
     var other = new InMemoryProjectionRepository();
     Projection decorated =
         new TracingProjectionDecorator(
-            ProjectionName.of("orders"), over(other), OpenTelemetry.noop());
+            ProjectionName.of("orders"),
+            over(other),
+            OpenTelemetryTracing.of(OpenTelemetry.noop(), TracingSettings.allEnabled()));
     assertThatThrownBy(() -> require(decorated, TRANSACTIONAL_LOCAL, processor))
         .hasMessageContaining("writes to");
     Projection decoratedOk =

@@ -135,7 +135,9 @@ class TracingBuildersTest {
 
   @Test
   void commandBus_keepsAnInterceptorTheApplicationAdded_andTracesOnce() {
-    var own = new OpenTelemetryCommandInterceptor(otelTesting.getOpenTelemetry());
+    var own =
+        new OpenTelemetryCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     try (var bus = bus(tracing()).interceptors(own).build()) {
       bus.execute(new Switch("l-1"));
       assertThat(bus.interceptors()).containsExactly(own);

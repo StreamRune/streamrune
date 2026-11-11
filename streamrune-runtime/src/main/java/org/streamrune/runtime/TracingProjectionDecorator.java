@@ -1,6 +1,5 @@
 package org.streamrune.runtime;
 
-import io.opentelemetry.api.OpenTelemetry;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -24,14 +23,16 @@ import org.streamrune.core.types.ProjectionName;
  * they are given a tracing. An application can also decorate a projection itself:
  *
  * <pre>{@code
+ * StreamRuneTracing tracing = OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled());
  * Projection tracedProjection = new TracingProjectionDecorator(
- *     ProjectionName.of("OrdersProjection"), rawProjection, openTelemetry);
+ *     ProjectionName.of("OrdersProjection"), rawProjection, tracing);
  * projectionRunner.run(
  *     ProjectionName.of("orders"), tracedProjection, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT);
  * }</pre>
  *
- * <p>The {@link OpenTelemetry} constructor needs the {@code opentelemetry-api} dependency on the
- * classpath and traces with every area on.
+ * <p>No signature of this class names an OpenTelemetry type, so code that creates it compiles
+ * without the {@code opentelemetry-api} dependency; {@link OpenTelemetryTracing#of} is where
+ * OpenTelemetry comes in.
  */
 public final class TracingProjectionDecorator implements Projection {
 
@@ -39,22 +40,6 @@ public final class TracingProjectionDecorator implements Projection {
   private final Projection delegate;
   private final StreamRuneTracing tracing;
   private final boolean traced;
-
-  /**
-   * Creates a tracing decorator that traces through {@code openTelemetry}, as {@code
-   * OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled())} does.
-   *
-   * @param projectionName the projection name, used in the span name
-   * @param delegate the real projection to delegate to
-   * @param openTelemetry the OTel SDK instance
-   */
-  public TracingProjectionDecorator(
-      ProjectionName projectionName, Projection delegate, OpenTelemetry openTelemetry) {
-    this(
-        projectionName,
-        delegate,
-        OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled()));
-  }
 
   /**
    * Creates a tracing decorator that traces through {@code tracing}, when its {@link

@@ -1,6 +1,5 @@
 package org.streamrune.runtime;
 
-import io.opentelemetry.api.OpenTelemetry;
 import java.util.ArrayDeque;
 import java.util.Objects;
 import org.streamrune.core.CommandInterceptor;
@@ -20,16 +19,17 @@ import org.streamrune.core.types.LogSanitizer;
  * application can also register it itself:
  *
  * <pre>{@code
- * var interceptor = new OpenTelemetryCommandInterceptor(openTelemetry);
+ * StreamRuneTracing tracing = OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled());
+ * var interceptor = new OpenTelemetryCommandInterceptor(tracing);
  * var bus = VirtualThreadCommandBus.builder()
  *     .interceptors(interceptor)
  *     .build();
  * }</pre>
  *
- * <p>The {@link OpenTelemetry} constructor needs the {@code opentelemetry-api} dependency on the
- * classpath; it traces through {@link OpenTelemetryTracing} with every area on. The {@link
- * StreamRuneTracing} constructor follows the tracing's command switch: with the area off, {@code
- * before()} and {@code after()} return at once.
+ * <p>The interceptor follows the tracing's command switch: with the area off, {@code before()} and
+ * {@code after()} return at once. No signature of this class names an OpenTelemetry type, so code
+ * that creates it compiles without the {@code opentelemetry-api} dependency; {@link
+ * OpenTelemetryTracing#of} is where OpenTelemetry comes in.
  *
  * <p>The span name and attribute keys are those of {@link TraceAttributes}. The command id, the
  * aggregate id and the stream id pass {@link LogSanitizer#sanitizeForTrace(String)}.
@@ -59,16 +59,6 @@ public final class OpenTelemetryCommandInterceptor implements CommandInterceptor
   // but a nested execution on that thread must push and pop rather than clobber the outer frame.
   private final ThreadLocal<ArrayDeque<TraceScope>> stack =
       ThreadLocal.withInitial(ArrayDeque::new);
-
-  /**
-   * Creates an interceptor that traces through {@code openTelemetry}, as {@code
-   * OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled())} does.
-   *
-   * @param openTelemetry the OpenTelemetry instance
-   */
-  public OpenTelemetryCommandInterceptor(OpenTelemetry openTelemetry) {
-    this(OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled()));
-  }
 
   /**
    * Creates an interceptor that traces through {@code tracing}, when its {@link

@@ -422,7 +422,9 @@ unless the chain already holds one; on the subscription builders
 (`ContinuousProjectionRunner`, `MultiProjectionRunner`, `ScheduledProjectionRunner`) it decorates
 the projection, never twice. `StreamRune.Builder` passes it to the command bus and decorates the
 projections it registers. The default, `StreamRuneTracing.NOOP`, traces nothing and loads no
-OpenTelemetry class.
+OpenTelemetry class. `OpenTelemetryTracing.of` is the one method that takes an `OpenTelemetry`: the
+emitters' constructors and their `traced(...)` factories take a `StreamRuneTracing`, so a module of
+your own compiles and runs without the `opentelemetry-api` dependency.
 
 ```java
 StreamRuneTracing tracing = OpenTelemetryTracing.of(openTelemetry,

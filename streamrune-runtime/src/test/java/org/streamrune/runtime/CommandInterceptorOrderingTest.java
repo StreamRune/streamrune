@@ -30,7 +30,9 @@ import org.streamrune.core.types.ProjectionName;
 class CommandInterceptorOrderingTest {
 
   private static final OpenTelemetryCommandInterceptor OTEL =
-      new OpenTelemetryCommandInterceptor(io.opentelemetry.api.OpenTelemetry.noop());
+      new OpenTelemetryCommandInterceptor(
+          OpenTelemetryTracing.of(
+              io.opentelemetry.api.OpenTelemetry.noop(), TracingSettings.allEnabled()));
   private static final AuditCommandInterceptor AUDIT =
       new AuditCommandInterceptor((AuditStore) entry -> {});
   private static final AuthorizationCommandInterceptor AUTHZ =

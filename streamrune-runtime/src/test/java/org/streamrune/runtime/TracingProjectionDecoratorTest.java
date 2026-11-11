@@ -31,7 +31,9 @@ class TracingProjectionDecoratorTest {
     Projection delegate = mock(Projection.class);
     var decorator =
         new TracingProjectionDecorator(
-            ProjectionName.of("OrdersProjection"), delegate, otelTesting.getOpenTelemetry());
+            ProjectionName.of("OrdersProjection"),
+            delegate,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     decorator.process(List.of());
 
@@ -59,7 +61,9 @@ class TracingProjectionDecoratorTest {
     doThrow(new RuntimeException("DB error")).when(delegate).process(any());
     var decorator =
         new TracingProjectionDecorator(
-            ProjectionName.of("OrdersProjection"), delegate, otelTesting.getOpenTelemetry());
+            ProjectionName.of("OrdersProjection"),
+            delegate,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     assertThrows(RuntimeException.class, () -> decorator.process(List.of()));
 
@@ -80,14 +84,18 @@ class TracingProjectionDecoratorTest {
     when(delegateTrue.writesThroughRepository()).thenReturn(true);
     var tracedTrue =
         new TracingProjectionDecorator(
-            ProjectionName.of("A"), delegateTrue, otelTesting.getOpenTelemetry());
+            ProjectionName.of("A"),
+            delegateTrue,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     assertTrue(tracedTrue.writesThroughRepository());
 
     Projection delegateFalse = mock(Projection.class);
     when(delegateFalse.writesThroughRepository()).thenReturn(false);
     var tracedFalse =
         new TracingProjectionDecorator(
-            ProjectionName.of("B"), delegateFalse, otelTesting.getOpenTelemetry());
+            ProjectionName.of("B"),
+            delegateFalse,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     assertFalse(tracedFalse.writesThroughRepository());
   }
 
@@ -101,13 +109,17 @@ class TracingProjectionDecoratorTest {
         };
     var traced =
         new TracingProjectionDecorator(
-            ProjectionName.of("orders"), writeThrough, otelTesting.getOpenTelemetry());
+            ProjectionName.of("orders"),
+            writeThrough,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     assertThat(traced.writeTarget()).containsSame(repo);
 
     Projection lambda = batch -> {};
     var tracedLambda =
         new TracingProjectionDecorator(
-            ProjectionName.of("audit"), lambda, otelTesting.getOpenTelemetry());
+            ProjectionName.of("audit"),
+            lambda,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     assertThat(tracedLambda.writeTarget()).isEmpty();
   }
 }

@@ -1,6 +1,5 @@
 package org.streamrune.runtime;
 
-import io.opentelemetry.api.OpenTelemetry;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -25,8 +24,10 @@ import org.streamrune.core.types.SubscriptionName;
  * baggage while the delegate runs.
  *
  * <p>The subscription builders wrap their listener through {@link #traced} when they are given a
- * tracing. An application can also wrap a listener itself; the {@link OpenTelemetry} constructor
- * needs the {@code opentelemetry-api} dependency on the classpath and traces with every area on.
+ * tracing. An application can also wrap a listener itself, with {@link #traced} or the constructor.
+ * No signature of this class names an OpenTelemetry type, so code that creates it compiles without
+ * the {@code opentelemetry-api} dependency; {@link OpenTelemetryTracing#of} is where OpenTelemetry
+ * comes in.
  */
 public final class TracingEventListener implements EventListener {
 
@@ -34,22 +35,6 @@ public final class TracingEventListener implements EventListener {
   private final StreamRuneTracing tracing;
   private final SubscriptionName subscriptionName;
   private final boolean traced;
-
-  /**
-   * Creates a tracing event listener decorator that traces through {@code openTelemetry}, as {@code
-   * OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled())} does.
-   *
-   * @param delegate the real event listener to delegate to
-   * @param openTelemetry the OTel SDK instance
-   * @param subscriptionName the subscription name, used in the span name
-   */
-  public TracingEventListener(
-      EventListener delegate, OpenTelemetry openTelemetry, SubscriptionName subscriptionName) {
-    this(
-        delegate,
-        OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled()),
-        subscriptionName);
-  }
 
   /**
    * Creates a tracing event listener decorator that traces through {@code tracing}, when its {@link

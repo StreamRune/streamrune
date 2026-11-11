@@ -31,7 +31,9 @@ class CommandSpanIdSanitizationTest {
   static final OpenTelemetryExtension otelTesting = OpenTelemetryExtension.create();
 
   private SpanData spanFor(CommandId commandId, AggregateId aggregateId) {
-    var interceptor = new OpenTelemetryCommandInterceptor(otelTesting.getOpenTelemetry());
+    var interceptor =
+        new OpenTelemetryCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     var ctx =
         new CommandInterceptor.CommandContext(
             new Ship(), "Ship", commandId, TYPE, aggregateId, null, Instant.now());

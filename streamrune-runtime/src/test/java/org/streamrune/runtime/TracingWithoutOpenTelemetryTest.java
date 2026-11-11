@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -11,14 +12,25 @@ import java.lang.reflect.RecordComponent;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.ToolProvider;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * {@code opentelemetry-api} is an optional dependency of this module. With {@code
@@ -257,6 +269,91 @@ class TracingWithoutOpenTelemetryTest {
       assertThat(failure.get()).isNull();
       assertThat(thread.isAlive()).isFalse();
     }
+  }
+
+  /**
+   * Code that creates the three emitters through their {@code StreamRuneTracing} constructors and
+   * factories compiles without {@code opentelemetry-api}: no signature javac reads to resolve them
+   * names an OpenTelemetry type. The control source shows that the compile classpath holds no
+   * OpenTelemetry type.
+   */
+  @Test
+  void theEmittersCompileWithoutOpenTelemetry(@TempDir Path dir) throws IOException {
+    String classpath = classpathWithoutOpenTelemetry();
+    String emitters =
+        """
+        import org.streamrune.core.tracing.StreamRuneTracing;
+        import org.streamrune.core.types.ProjectionName;
+        import org.streamrune.core.types.SubscriptionName;
+        import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+        import org.streamrune.runtime.TracingEventListener;
+        import org.streamrune.runtime.TracingProjectionDecorator;
+        import org.streamrune.runtime.VirtualThreadCommandBus;
+
+        class Emitters {
+          static void create(StreamRuneTracing tracing) {
+            new OpenTelemetryCommandInterceptor(tracing);
+            new TracingEventListener(events -> {}, tracing, SubscriptionName.of("s"));
+            new TracingProjectionDecorator(ProjectionName.of("p"), batch -> {}, tracing);
+            TracingEventListener.traced(events -> {}, tracing, SubscriptionName.of("s"));
+            TracingProjectionDecorator.traced(ProjectionName.of("p"), batch -> {}, tracing);
+            VirtualThreadCommandBus.builder().tracing(tracing);
+          }
+        }
+        """;
+    String control =
+        """
+        class Control {
+          io.opentelemetry.api.OpenTelemetry openTelemetry;
+        }
+        """;
+
+    assertThat(compile(dir.resolve("emitters"), "Emitters", emitters, classpath)).isEmpty();
+    assertThat(compile(dir.resolve("control"), "Control", control, classpath))
+        .contains("io.opentelemetry.api");
+  }
+
+  /** Compiles one source file and returns javac's error messages, empty when it compiles. */
+  private static String compile(Path dir, String className, String source, String classpath)
+      throws IOException {
+    Path sources = Files.createDirectories(dir.resolve("src"));
+    Path classes = Files.createDirectories(dir.resolve("classes"));
+    Path file = Files.writeString(sources.resolve(className + ".java"), source);
+    JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+    DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+    try (StandardJavaFileManager files =
+        compiler.getStandardFileManager(diagnostics, null, StandardCharsets.UTF_8)) {
+      boolean compiled =
+          compiler
+              .getTask(
+                  null,
+                  files,
+                  diagnostics,
+                  List.of("-proc:none", "-classpath", classpath, "-d", classes.toString()),
+                  null,
+                  files.getJavaFileObjects(file))
+              .call();
+      if (compiled) {
+        return "";
+      }
+    }
+    StringBuilder errors = new StringBuilder();
+    for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
+      if (diagnostic.getKind() == Diagnostic.Kind.ERROR) {
+        errors.append(diagnostic.getMessage(Locale.ROOT)).append('\n');
+      }
+    }
+    return errors.isEmpty() ? "compilation failed without an error message" : errors.toString();
+  }
+
+  private static String classpathWithoutOpenTelemetry() {
+    List<String> entries = new ArrayList<>();
+    for (String entry : System.getProperty("java.class.path").split(File.pathSeparator)) {
+      if (!entry.isBlank() && !entry.contains("opentelemetry")) {
+        entries.add(entry);
+      }
+    }
+    return String.join(File.pathSeparator, entries);
   }
 
   private static Object newOffsetStore(ClassLoader loader) throws ReflectiveOperationException {

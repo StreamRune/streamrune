@@ -65,7 +65,9 @@ class OpenTelemetryCommandInterceptorTest {
 
   @Test
   void shouldCreateSpanForSuccessfulCommand() {
-    var interceptor = new OpenTelemetryCommandInterceptor(otelTesting.getOpenTelemetry());
+    var interceptor =
+        new OpenTelemetryCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     var ctx = ctx("PlaceOrder");
     interceptor.before(ctx);
@@ -97,7 +99,9 @@ class OpenTelemetryCommandInterceptorTest {
    */
   @Test
   void spanNameAndAttributeKeysMatchThePublishedContract() {
-    var interceptor = new OpenTelemetryCommandInterceptor(otelTesting.getOpenTelemetry());
+    var interceptor =
+        new OpenTelemetryCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     interceptor.before(ctx("PlaceOrder"));
     interceptor.after(ctxWithResult("PlaceOrder"));
@@ -136,7 +140,9 @@ class OpenTelemetryCommandInterceptorTest {
 
   @Test
   void shouldSetErrorStatusOnException() {
-    var interceptor = new OpenTelemetryCommandInterceptor(otelTesting.getOpenTelemetry());
+    var interceptor =
+        new OpenTelemetryCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     var ctx = ctx("PlaceOrder");
     interceptor.before(ctx);
@@ -160,7 +166,9 @@ class OpenTelemetryCommandInterceptorTest {
 
   @Test
   void aContextWithoutAStream_carriesNeitherTypeNorStreamAttribute() {
-    var interceptor = new OpenTelemetryCommandInterceptor(otelTesting.getOpenTelemetry());
+    var interceptor =
+        new OpenTelemetryCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     var ctx =
         new CommandInterceptor.CommandContext(
             new TestCommand(),
@@ -182,7 +190,9 @@ class OpenTelemetryCommandInterceptorTest {
 
   @Test
   void beforeShouldReturnTrue() {
-    var interceptor = new OpenTelemetryCommandInterceptor(otelTesting.getOpenTelemetry());
+    var interceptor =
+        new OpenTelemetryCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     boolean result = interceptor.before(ctx("PlaceOrder"));
     assertTrue(result);
     // clean up span
