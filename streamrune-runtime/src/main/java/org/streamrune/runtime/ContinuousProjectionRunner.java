@@ -39,6 +39,8 @@ import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
@@ -74,6 +76,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
   private final SubscriptionLeadership leadership;
   private final ProjectionErrorClassifier classifier;
   private final SubscriptionHealthContributor healthContributor;
+  private final StreamRuneTracing tracing;
   // Read-path retry tunables — production defaults below; package-private builder overrides keep
   // the read-poison test fast without slowing production backoff.
   private final Duration readRetryInitialBackoff;
@@ -167,7 +170,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       Duration readRetryInitialBackoff,
       Duration readRetryMaxBackoff,
       int maxReadPoisonRetries,
-      Clock clock) {
+      Clock clock,
+      StreamRuneTracing tracing) {
     if (eventStore == null) {
       throw new IllegalArgumentException("eventStore is required");
     }
@@ -197,6 +201,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
     this.classifier = classifier != null ? classifier : ProjectionErrorClassifier.DEFAULT;
     this.healthContributor = healthContributor;
+    this.tracing = tracing != null ? tracing : StreamRuneTracing.NOOP;
     this.readRetryInitialBackoff =
         readRetryInitialBackoff != null ? readRetryInitialBackoff : READ_RETRY_INITIAL_BACKOFF;
     this.readRetryMaxBackoff =
@@ -210,6 +215,9 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
   @Override
   public void run(
       ProjectionName projectionName, Projection projection, ProjectionDeliveryMode mode) {
+    // Every batch of this run, catch-up and live, is processed inside the projection's span when
+    // the tracing traces projections.
+    projection = TracingProjectionDecorator.traced(projectionName, projection, tracing);
     // A name the processor cannot store read models under (the JDBC repository's table-name
     // rule) fails here, before a single event is read — not on the first batch.
     atomicProcessor.checkProjectionName(projectionName);
@@ -2232,6 +2240,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     private Duration readRetryMaxBackoff = READ_RETRY_MAX_BACKOFF;
     private int maxReadPoisonRetries = DEFAULT_MAX_READ_POISON_RETRIES;
     private Clock clock;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     /**
      * Test-only: overrides the catch-up read-retry backoff bounds. Production uses {@link
@@ -2376,6 +2385,21 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       return this;
     }
 
+    /**
+     * The tracing each batch is traced through, as the span {@code projection/{name}/process}
+     * (default {@link StreamRuneTracing#NOOP}, which traces nothing). When its {@link
+     * TracingArea#PROJECTION} area is on, {@link ContinuousProjectionRunner#run} decorates the
+     * projection with a {@link TracingProjectionDecorator}; a projection that already is one is not
+     * decorated again. The live subscription the runner builds is not traced as a subscription.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+      return this;
+    }
+
     public ContinuousProjectionRunner build() {
       if (errorStrategy == ProjectionErrorStrategy.DLQ && deadLetterStore == null) {
         throw new IllegalArgumentException("deadLetterStore is required when errorStrategy is DLQ");
@@ -2410,7 +2434,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           readRetryInitialBackoff,
           readRetryMaxBackoff,
           maxReadPoisonRetries,
-          clock);
+          clock,
+          tracing);
     }
   }
 }

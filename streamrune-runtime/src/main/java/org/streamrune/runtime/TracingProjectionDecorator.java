@@ -1,23 +1,26 @@
 package org.streamrune.runtime;
 
 import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.api.common.Attributes;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.api.trace.Tracer;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionRepository;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.ProjectionName;
 
 /**
- * Decorates a {@link Projection} to create an OpenTelemetry span for each batch processed.
+ * Decorates a {@link Projection} to start the span {@code projection/{name}/process} for each batch
+ * processed, through a {@link StreamRuneTracing} (area {@link TracingArea#PROJECTION}).
  *
- * <p>Usage:
+ * <p>The projection runner builders decorate every projection they run through {@link #traced} when
+ * they are given a tracing. An application can also decorate a projection itself:
  *
  * <pre>{@code
  * Projection tracedProjection = new TracingProjectionDecorator(
@@ -26,18 +29,19 @@ import org.streamrune.core.types.ProjectionName;
  *     ProjectionName.of("orders"), tracedProjection, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT);
  * }</pre>
  *
- * <p>This class is opt-in — the {@code opentelemetry-api} dependency must be on the classpath.
+ * <p>The {@link OpenTelemetry} constructor needs the {@code opentelemetry-api} dependency on the
+ * classpath and traces with every area on.
  */
 public final class TracingProjectionDecorator implements Projection {
 
-  private static final String INSTRUMENTATION_SCOPE = "org.streamrune";
-
   private final ProjectionName projectionName;
   private final Projection delegate;
-  private final Tracer tracer;
+  private final StreamRuneTracing tracing;
+  private final boolean traced;
 
   /**
-   * Creates a tracing decorator.
+   * Creates a tracing decorator that traces through {@code openTelemetry}, as {@code
+   * OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled())} does.
    *
    * @param projectionName the projection name, used in the span name
    * @param delegate the real projection to delegate to
@@ -45,14 +49,60 @@ public final class TracingProjectionDecorator implements Projection {
    */
   public TracingProjectionDecorator(
       ProjectionName projectionName, Projection delegate, OpenTelemetry openTelemetry) {
-    this.projectionName = projectionName;
-    this.delegate = delegate;
-    this.tracer = openTelemetry.getTracer(INSTRUMENTATION_SCOPE);
+    this(
+        projectionName,
+        delegate,
+        OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled()));
+  }
+
+  /**
+   * Creates a tracing decorator that traces through {@code tracing}, when its {@link
+   * TracingArea#PROJECTION} area is on; with the area off it only delegates.
+   *
+   * @param projectionName the projection name, used in the span name
+   * @param delegate the real projection to delegate to
+   * @param tracing the tracing
+   * @throws NullPointerException if an argument is {@code null}
+   */
+  public TracingProjectionDecorator(
+      ProjectionName projectionName, Projection delegate, StreamRuneTracing tracing) {
+    this.projectionName = Objects.requireNonNull(projectionName, "projectionName is required");
+    this.delegate = Objects.requireNonNull(delegate, "delegate is required");
+    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+    this.traced = tracing.enabled(TracingArea.PROJECTION);
+  }
+
+  /**
+   * The projection a runner processes under {@code tracing}: {@code projection} decorated with a
+   * {@code TracingProjectionDecorator} when the {@link TracingArea#PROJECTION} area is on, else
+   * {@code projection} itself. A projection that already is a {@code TracingProjectionDecorator},
+   * or a {@code null} projection or name, is returned as it is, so a batch is never traced twice
+   * and the runner's own checks still report a missing argument.
+   *
+   * @param projectionName the projection name, or {@code null}
+   * @param projection the projection, or {@code null}
+   * @param tracing the tracing; {@code null} traces nothing
+   * @return the projection to process batches with
+   */
+  public static Projection traced(
+      ProjectionName projectionName, Projection projection, StreamRuneTracing tracing) {
+    if (projection == null
+        || projectionName == null
+        || tracing == null
+        || !tracing.enabled(TracingArea.PROJECTION)
+        || projection instanceof TracingProjectionDecorator) {
+      return projection;
+    }
+    return new TracingProjectionDecorator(projectionName, projection, tracing);
   }
 
   @Override
   public void process(List<EventEnvelope> batch) {
-    traced(
+    if (!traced) {
+      delegate.process(batch);
+      return;
+    }
+    inSpan(
         batch,
         () -> {
           delegate.process(batch);
@@ -62,7 +112,11 @@ public final class TracingProjectionDecorator implements Projection {
 
   @Override
   public void process(List<EventEnvelope> batch, ProjectionRepository repository) {
-    traced(
+    if (!traced) {
+      delegate.process(batch, repository);
+      return;
+    }
+    inSpan(
         batch,
         () -> {
           delegate.process(batch, repository);
@@ -81,7 +135,10 @@ public final class TracingProjectionDecorator implements Projection {
   @Override
   public boolean processDeadLetterReplay(
       List<EventEnvelope> batch, ProjectionRepository repository) {
-    return traced(batch, () -> delegate.processDeadLetterReplay(batch, repository));
+    if (!traced) {
+      return delegate.processDeadLetterReplay(batch, repository);
+    }
+    return inSpan(batch, () -> delegate.processDeadLetterReplay(batch, repository));
   }
 
   /**
@@ -101,24 +158,27 @@ public final class TracingProjectionDecorator implements Projection {
     return delegate.writeTarget();
   }
 
-  private <T> T traced(List<EventEnvelope> batch, Supplier<T> call) {
-    Span span =
-        tracer
-            .spanBuilder(TraceAttributes.projectionProcessSpanName(projectionName))
-            .setSpanKind(SpanKind.INTERNAL)
-            .setAttribute(TraceAttributes.PROJECTION_NAME, projectionName.value())
-            .setAttribute(TraceAttributes.BATCH_SIZE, (long) batch.size())
-            .startSpan();
-    try (var _ = span.makeCurrent()) {
+  private <T> T inSpan(List<EventEnvelope> batch, Supplier<T> call) {
+    SpanAttributes attributes =
+        SpanAttributes.builder()
+            .put(TraceNames.PROJECTION_NAME, projectionName.value())
+            .put(TraceNames.BATCH_SIZE, (long) batch.size())
+            .build();
+    TraceScope scope =
+        tracing.start(
+            TracingArea.PROJECTION,
+            TraceNames.projectionProcessSpanName(projectionName),
+            SpanKind.INTERNAL,
+            attributes);
+    try {
       T result = call.get();
-      span.setStatus(StatusCode.OK);
+      scope.recordSuccess();
       return result;
     } catch (Exception e) {
-      span.recordException(e, Attributes.empty());
-      span.setStatus(StatusCode.ERROR, e.getMessage());
+      scope.recordError(e);
       throw e;
     } finally {
-      span.end();
+      scope.close();
     }
   }
 }

@@ -1,40 +1,42 @@
 package org.streamrune.runtime;
 
 import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.api.baggage.Baggage;
-import io.opentelemetry.api.baggage.BaggageBuilder;
-import io.opentelemetry.api.common.Attributes;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanBuilder;
-import io.opentelemetry.api.trace.SpanContext;
-import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.api.trace.TraceFlags;
-import io.opentelemetry.api.trace.TraceState;
-import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.context.Context;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.subscription.EventListener;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.SubscriptionName;
 
 /**
- * Decorates an {@link EventListener} to create an OpenTelemetry span for each event delivery batch.
+ * Decorates an {@link EventListener} to start the span {@code subscription/{name}/deliver} for each
+ * delivery batch, through a {@link StreamRuneTracing} (area {@link TracingArea#SUBSCRIPTION}).
  *
- * <p>When the first event's {@link EventMetadata} carries a non-null {@code traceId} and {@code
- * spanId}, the span includes a link back to the originating command trace.
+ * <p>When the first event's {@link EventMetadata} carries a {@code traceId} and a {@code spanId},
+ * the span links back to the originating command trace. The first event's baggage is the current
+ * baggage while the delegate runs.
+ *
+ * <p>The subscription builders wrap their listener through {@link #traced} when they are given a
+ * tracing. An application can also wrap a listener itself; the {@link OpenTelemetry} constructor
+ * needs the {@code opentelemetry-api} dependency on the classpath and traces with every area on.
  */
 public final class TracingEventListener implements EventListener {
 
-  private static final String INSTRUMENTATION_SCOPE = "org.streamrune";
-
   private final EventListener delegate;
-  private final Tracer tracer;
+  private final StreamRuneTracing tracing;
   private final SubscriptionName subscriptionName;
+  private final boolean traced;
 
   /**
-   * Creates a tracing event listener decorator.
+   * Creates a tracing event listener decorator that traces through {@code openTelemetry}, as {@code
+   * OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled())} does.
    *
    * @param delegate the real event listener to delegate to
    * @param openTelemetry the OTel SDK instance
@@ -42,50 +44,87 @@ public final class TracingEventListener implements EventListener {
    */
   public TracingEventListener(
       EventListener delegate, OpenTelemetry openTelemetry, SubscriptionName subscriptionName) {
-    this.delegate = delegate;
-    this.tracer = openTelemetry.getTracer(INSTRUMENTATION_SCOPE);
-    this.subscriptionName = subscriptionName;
+    this(
+        delegate,
+        OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled()),
+        subscriptionName);
+  }
+
+  /**
+   * Creates a tracing event listener decorator that traces through {@code tracing}, when its {@link
+   * TracingArea#SUBSCRIPTION} area is on; with the area off it only delegates.
+   *
+   * @param delegate the real event listener to delegate to
+   * @param tracing the tracing
+   * @param subscriptionName the subscription name, used in the span name
+   * @throws NullPointerException if an argument is {@code null}
+   */
+  public TracingEventListener(
+      EventListener delegate, StreamRuneTracing tracing, SubscriptionName subscriptionName) {
+    this.delegate = Objects.requireNonNull(delegate, "delegate is required");
+    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+    this.subscriptionName =
+        Objects.requireNonNull(subscriptionName, "subscriptionName is required");
+    this.traced = tracing.enabled(TracingArea.SUBSCRIPTION);
+  }
+
+  /**
+   * The listener a subscription delivers to under {@code tracing}: {@code listener} wrapped in a
+   * {@code TracingEventListener} when the {@link TracingArea#SUBSCRIPTION} area is on, else {@code
+   * listener} itself. A listener that already is a {@code TracingEventListener}, or a {@code null}
+   * listener or name, is returned as it is, so a subscription never traces a delivery twice and its
+   * own checks still report a missing argument.
+   *
+   * @param listener the listener, or {@code null}
+   * @param tracing the tracing; {@code null} traces nothing
+   * @param subscriptionName the subscription name, or {@code null}
+   * @return the listener to deliver to
+   */
+  public static EventListener traced(
+      EventListener listener, StreamRuneTracing tracing, SubscriptionName subscriptionName) {
+    if (listener == null
+        || subscriptionName == null
+        || tracing == null
+        || !tracing.enabled(TracingArea.SUBSCRIPTION)
+        || listener instanceof TracingEventListener) {
+      return listener;
+    }
+    return new TracingEventListener(listener, tracing, subscriptionName);
   }
 
   @Override
   public void onEvents(List<EventEnvelope> events) {
-    SpanBuilder builder =
-        tracer
-            .spanBuilder(TraceAttributes.subscriptionDeliverSpanName(subscriptionName))
-            .setSpanKind(SpanKind.CONSUMER)
-            .setAttribute(TraceAttributes.SUBSCRIPTION_NAME, subscriptionName.value())
-            .setAttribute(TraceAttributes.BATCH_SIZE, (long) events.size());
-
+    if (!traced) {
+      delegate.onEvents(events);
+      return;
+    }
+    SpanAttributes attributes =
+        SpanAttributes.builder()
+            .put(TraceNames.SUBSCRIPTION_NAME, subscriptionName.value())
+            .put(TraceNames.BATCH_SIZE, (long) events.size())
+            .build();
+    SpanLink link = null;
+    Map<String, String> baggage = Map.of();
     if (!events.isEmpty()) {
       EventMetadata metadata = events.getFirst().metadata();
-      if (metadata.traceId() != null && metadata.spanId() != null) {
-        SpanContext origin =
-            SpanContext.createFromRemoteParent(
-                metadata.traceId().value(),
-                metadata.spanId().value(),
-                TraceFlags.getSampled(),
-                TraceState.getDefault());
-        builder.addLink(origin);
-      }
+      link = SpanLink.ofNullable(metadata.traceId(), metadata.spanId());
+      baggage = metadata.baggage();
     }
-
-    Span span = builder.startSpan();
-
-    // Build baggage from event metadata
-    BaggageBuilder baggageBuilder = Baggage.builder();
-    if (!events.isEmpty()) {
-      events.getFirst().metadata().baggage().forEach(baggageBuilder::put);
-    }
-    Context context = Context.current().with(span).with(baggageBuilder.build());
-
-    try (var _ = context.makeCurrent()) {
+    TraceScope scope =
+        tracing.start(
+            TracingArea.SUBSCRIPTION,
+            TraceNames.subscriptionDeliverSpanName(subscriptionName),
+            SpanKind.CONSUMER,
+            attributes,
+            link,
+            baggage);
+    try {
       delegate.onEvents(events);
     } catch (Throwable t) {
-      span.recordException(t, Attributes.empty());
-      span.setStatus(StatusCode.ERROR, t.getMessage());
+      scope.recordError(t);
       throw t;
     } finally {
-      span.end();
+      scope.close();
     }
   }
 }

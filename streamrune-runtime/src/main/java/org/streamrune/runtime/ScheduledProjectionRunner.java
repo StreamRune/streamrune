@@ -38,6 +38,8 @@ import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
@@ -125,7 +127,19 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
   private volatile boolean deadLetterBacklogSamplingSupported = true;
 
   private ScheduledProjectionRunner(Builder b) {
-    this.registrations = List.copyOf(b.registrations);
+    // Each projection is decorated once, here, so every drain processes it inside its span when the
+    // tracing traces projections.
+    this.registrations =
+        b.registrations.stream()
+            .map(
+                reg ->
+                    new ScheduledProjectionRegistration(
+                        reg.name(),
+                        TracingProjectionDecorator.traced(reg.name(), reg.projection(), b.tracing),
+                        reg.cron(),
+                        reg.errorStrategy(),
+                        reg.deliveryMode()))
+            .toList();
     this.eventStore = b.eventStore;
     this.offsetStore = b.offsetStore;
     this.fetchSize = b.fetchSize;
@@ -1396,6 +1410,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     private int maxReadPoisonRetries = DEFAULT_MAX_READ_POISON_RETRIES;
     private long stopTimeoutMs = STOP_TIMEOUT_MS;
     private Clock clock;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
     private final List<ScheduledProjectionRegistration> registrations = new ArrayList<>();
 
     /**
@@ -1558,6 +1573,21 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
      */
     public Builder clock(Clock clock) {
       this.clock = Objects.requireNonNull(clock, "clock is required");
+      return this;
+    }
+
+    /**
+     * The tracing each drain's batches are traced through, as the span {@code
+     * projection/{name}/process} (default {@link StreamRuneTracing#NOOP}, which traces nothing).
+     * When its {@link TracingArea#PROJECTION} area is on, the runner decorates every registered
+     * projection with a {@link TracingProjectionDecorator}; a projection that already is one is not
+     * decorated again.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
       return this;
     }
 

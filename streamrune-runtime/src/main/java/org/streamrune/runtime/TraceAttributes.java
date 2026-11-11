@@ -27,6 +27,10 @@ import org.streamrune.core.types.SubscriptionName;
  *
  * <p>Span names are path-shaped ({@code command/PlaceOrder}, {@code subscription/orders/deliver},
  * {@code projection/orders/process}) and consistent across all three emitters.
+ *
+ * <p>The emitters start their spans through a {@link org.streamrune.core.tracing.StreamRuneTracing}
+ * and read the same names and keys as plain strings, so an emitter does not initialize this class
+ * and its OpenTelemetry types.
  */
 public final class TraceAttributes {
 
@@ -36,54 +40,53 @@ public final class TraceAttributes {
 
   /** Simple class name of the executing command. */
   public static final AttributeKey<String> COMMAND_TYPE =
-      AttributeKey.stringKey("streamrune.command.type");
+      AttributeKey.stringKey(TraceNames.COMMAND_TYPE);
 
   /** The id assigned to this command execution. */
   public static final AttributeKey<String> COMMAND_ID =
-      AttributeKey.stringKey("streamrune.command.id");
+      AttributeKey.stringKey(TraceNames.COMMAND_ID);
 
   /** The aggregate the command targets. */
   public static final AttributeKey<String> AGGREGATE_ID =
-      AttributeKey.stringKey("streamrune.aggregate.id");
+      AttributeKey.stringKey(TraceNames.AGGREGATE_ID);
 
   /** The aggregate type of the stream the command targets. */
   public static final AttributeKey<String> AGGREGATE_TYPE =
-      AttributeKey.stringKey("streamrune.aggregate.type");
+      AttributeKey.stringKey(TraceNames.AGGREGATE_TYPE);
 
   /**
    * The event stream the command targets, {@code <aggregateType>:<aggregateId>}. Set when the span
    * starts: the command bus composes the stream before any interceptor runs.
    */
-  public static final AttributeKey<String> STREAM_ID =
-      AttributeKey.stringKey("streamrune.stream.id");
+  public static final AttributeKey<String> STREAM_ID = AttributeKey.stringKey(TraceNames.STREAM_ID);
 
   /** Span name for one command execution. */
   public static String commandSpanName(String commandType) {
-    return "command/" + commandType;
+    return TraceNames.commandSpanName(commandType);
   }
 
   // ==================== Subscription span (TracingEventListener) ====================
 
   /** The subscription the batch was delivered to. */
   public static final AttributeKey<String> SUBSCRIPTION_NAME =
-      AttributeKey.stringKey("streamrune.subscription.name");
+      AttributeKey.stringKey(TraceNames.SUBSCRIPTION_NAME);
 
   /** Number of events in the delivered/processed batch. */
-  public static final AttributeKey<Long> BATCH_SIZE = AttributeKey.longKey("streamrune.batch.size");
+  public static final AttributeKey<Long> BATCH_SIZE = AttributeKey.longKey(TraceNames.BATCH_SIZE);
 
   /** Span name for one subscription delivery batch. */
   public static String subscriptionDeliverSpanName(SubscriptionName subscriptionName) {
-    return "subscription/" + subscriptionName.value() + "/deliver";
+    return TraceNames.subscriptionDeliverSpanName(subscriptionName);
   }
 
   // ==================== Projection span (TracingProjectionDecorator) ====================
 
   /** The projection that processed the batch. */
   public static final AttributeKey<String> PROJECTION_NAME =
-      AttributeKey.stringKey("streamrune.projection.name");
+      AttributeKey.stringKey(TraceNames.PROJECTION_NAME);
 
   /** Span name for one projection batch. */
   public static String projectionProcessSpanName(ProjectionName projectionName) {
-    return "projection/" + projectionName.value() + "/process";
+    return TraceNames.projectionProcessSpanName(projectionName);
   }
 }

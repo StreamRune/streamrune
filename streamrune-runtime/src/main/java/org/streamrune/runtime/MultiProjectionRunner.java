@@ -22,6 +22,7 @@ import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.ProjectionName;
 
 /**
@@ -49,6 +50,8 @@ public final class MultiProjectionRunner implements AutoCloseable {
   private final SubscriptionHealthContributor healthContributor;
   // The clock the builder was given, handed to every per-registration runner; null: none.
   private final Clock clock;
+  // The tracing handed to every per-registration runner.
+  private final StreamRuneTracing tracing;
 
   private final ConcurrentHashMap<ProjectionName, ContinuousProjectionRunner> runners =
       new ConcurrentHashMap<>();
@@ -69,7 +72,8 @@ public final class MultiProjectionRunner implements AutoCloseable {
       SubscriptionLeadership leadership,
       org.streamrune.core.projection.ProjectionErrorClassifier classifier,
       SubscriptionHealthContributor healthContributor,
-      Clock clock) {
+      Clock clock,
+      StreamRuneTracing tracing) {
     this.registrations = List.copyOf(registrations);
     this.eventStore = eventStore;
     this.offsetStore = offsetStore;
@@ -87,6 +91,7 @@ public final class MultiProjectionRunner implements AutoCloseable {
             : org.streamrune.core.projection.ProjectionErrorClassifier.DEFAULT;
     this.healthContributor = healthContributor;
     this.clock = clock;
+    this.tracing = tracing != null ? tracing : StreamRuneTracing.NOOP;
   }
 
   /**
@@ -124,7 +129,8 @@ public final class MultiProjectionRunner implements AutoCloseable {
               // Same health contributor threaded into every per-registration runner so each
               // projection's live subscription registers itself and reports delivery health; null
               // (no contributor) makes health tracking a no-op.
-              .healthContributor(healthContributor);
+              .healthContributor(healthContributor)
+              .tracing(tracing);
       if (clock != null) {
         builder.clock(clock);
       }
@@ -246,6 +252,7 @@ public final class MultiProjectionRunner implements AutoCloseable {
         org.streamrune.core.projection.ProjectionErrorClassifier.DEFAULT;
     private SubscriptionHealthContributor healthContributor;
     private Clock clock;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
     private final List<ProjectionRegistration> registrations = new ArrayList<>();
 
     public Builder eventStore(EventStore store) {
@@ -360,6 +367,20 @@ public final class MultiProjectionRunner implements AutoCloseable {
       return this;
     }
 
+    /**
+     * The tracing every registered projection's batches are traced through, as the span {@code
+     * projection/{name}/process} (default {@link StreamRuneTracing#NOOP}, which traces nothing). It
+     * is handed to the {@link ContinuousProjectionRunner} of each registration; see {@link
+     * ContinuousProjectionRunner.Builder#tracing}.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+      return this;
+    }
+
     /** Registers a projection with the default HALT error strategy and its delivery mode. */
     public Builder register(
         ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
@@ -457,7 +478,8 @@ public final class MultiProjectionRunner implements AutoCloseable {
           leadership,
           classifier,
           healthContributor,
-          clock);
+          clock,
+          tracing);
     }
   }
 }

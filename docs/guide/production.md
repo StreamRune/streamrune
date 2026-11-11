@@ -403,6 +403,29 @@ names are path-shaped (`command/PlaceOrder`, not `command.PlaceOrder`).
 - The command interceptor is auto-registered when an `OpenTelemetry` bean is present; the
   subscription and projection decorators are opt-in wrappers.
 
+Without an integration, the builders take the tracing as one value.
+`OpenTelemetryTracing.of(openTelemetry, settings)` returns a `StreamRuneTracing` (package
+`org.streamrune.core.tracing`), and the settings hold its master switch and its switch per area:
+`TracingSettings.builder().enabled(boolean).area(TracingArea, boolean).build()`,
+`TracingSettings.allEnabled()` or `TracingSettings.disabled()`. `tracing(StreamRuneTracing)` on
+`VirtualThreadCommandBus.Builder` adds the command interceptor ahead of every framework interceptor,
+unless the chain already holds one; on the subscription builders
+(`PollingEventSubscription`, `StreamEventSubscription`, `HybridEventSubscription`,
+`PostgresNotificationSubscription`) it wraps the listener, and on the projection runner builders
+(`ContinuousProjectionRunner`, `MultiProjectionRunner`, `ScheduledProjectionRunner`) it decorates
+the projection, never twice. `StreamRune.Builder` passes it to the command bus and decorates the
+projections it registers. The default, `StreamRuneTracing.NOOP`, traces nothing and loads no
+OpenTelemetry class.
+
+```java
+StreamRuneTracing tracing = OpenTelemetryTracing.of(openTelemetry,
+    TracingSettings.builder().area(TracingArea.PROJECTION, false).build());
+VirtualThreadCommandBus bus = VirtualThreadCommandBus.builder()
+    .eventStore(eventStore)
+    .tracing(tracing)
+    .build();
+```
+
 ```properties
 otel.exporter.otlp.endpoint=http://collector:4317
 otel.service.name=my-streamrune-app

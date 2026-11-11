@@ -12,6 +12,8 @@ import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycle;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.runtime.HealthTrackingEventListener;
 import org.streamrune.runtime.LeaseRoleAware;
@@ -22,6 +24,7 @@ import org.streamrune.runtime.ReadPoisonAware;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SubscriptionHealthContributor;
 import org.streamrune.runtime.SubscriptionLease;
+import org.streamrune.runtime.TracingEventListener;
 
 /**
  * Hybrid event subscription combining PostgreSQL LISTEN/NOTIFY for low-latency push with periodic
@@ -222,6 +225,40 @@ public final class HybridEventSubscription
       UnaryOperator<PgNotificationListener.Builder> listenerTuning,
       SubscriptionLease lease,
       SubscriptionHealthContributor healthContributor) {
+    this(
+        subscriptionName,
+        dataSource,
+        eventStore,
+        offsetStore,
+        listener,
+        config,
+        fetchSize,
+        metrics,
+        readPoisonBound,
+        listenerTuning,
+        lease,
+        healthContributor,
+        StreamRuneTracing.NOOP);
+  }
+
+  /**
+   * The full constructor plus the {@code tracing} each delivery batch of the polling subscription
+   * inside is traced through.
+   */
+  HybridEventSubscription(
+      SubscriptionName subscriptionName,
+      DataSource dataSource,
+      EventStore eventStore,
+      OffsetStore offsetStore,
+      EventListener listener,
+      SubscriptionConfig config,
+      int fetchSize,
+      StreamRuneMetrics metrics,
+      int readPoisonBound,
+      UnaryOperator<PgNotificationListener.Builder> listenerTuning,
+      SubscriptionLease lease,
+      SubscriptionHealthContributor healthContributor,
+      StreamRuneTracing tracing) {
 
     if (subscriptionName == null) {
       throw new IllegalArgumentException("subscriptionName is required");
@@ -261,6 +298,7 @@ public final class HybridEventSubscription
             // forever.
             .readPoisonBound(readPoisonBound)
             .lease(lease)
+            .tracing(tracing)
             .build();
 
     // Honor SubscriptionConfig.listenNotifyEnabled(). When LISTEN/NOTIFY is disabled
@@ -471,6 +509,7 @@ public final class HybridEventSubscription
     private SubscriptionLeadership leadership;
     private SagaRunner<?> sagaRunner;
     private SubscriptionHealthContributor healthContributor;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     /**
      * Sets the stable subscription name (required). The name is the durable offset key in the
@@ -593,6 +632,20 @@ public final class HybridEventSubscription
     }
 
     /**
+     * The tracing each delivery batch is traced through, as the span {@code
+     * subscription/{name}/deliver} (default {@link StreamRuneTracing#NOOP}, which traces nothing).
+     * When its {@link TracingArea#SUBSCRIPTION} area is on, the subscription wraps its listener in
+     * a {@link TracingEventListener}; a listener that already is one is not wrapped again.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+      return this;
+    }
+
+    /**
      * Builds the {@link HybridEventSubscription}. Requires {@code subscriptionName}, {@code
      * dataSource}, {@code eventStore}, {@code offsetStore}, and {@code listener} or {@code
      * sagaRunner}. A leased subscription's standby attempts are spaced by the polling interval of
@@ -622,7 +675,8 @@ public final class HybridEventSubscription
           readPoisonBound,
           UnaryOperator.identity(),
           resolvedLease(),
-          healthContributor);
+          healthContributor,
+          tracing);
     }
 
     /** Refuses one setting named twice: a saga runner sets the listener and the lease. */

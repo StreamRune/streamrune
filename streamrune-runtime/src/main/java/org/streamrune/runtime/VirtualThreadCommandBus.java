@@ -58,6 +58,8 @@ import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CausationId;
@@ -2139,8 +2141,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
-   * Returns the interceptor chain this bus runs, in {@code before()} order: exactly the
-   * interceptors handed to {@link Builder#interceptors}, in the order they were added. Startup
+   * Returns the interceptor chain this bus runs, in {@code before()} order: the interceptors handed
+   * to {@link Builder#interceptors}, in the order they were added, with the command span's {@link
+   * OpenTelemetryCommandInterceptor} in its slot when {@link Builder#tracing} added it. Startup
    * validators read it to check the chain a bus actually runs, which for a bus built by hand need
    * not match the interceptor beans of the container.
    *
@@ -2185,6 +2188,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     private DeadLetterQueue deadLetterQueue;
     private StreamRuneMetrics metrics;
     private final List<CommandInterceptor> interceptors = new ArrayList<>();
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
     private UnaryOperator<Runnable> asyncTaskWrapper;
     private Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
     private Boolean allowGraalJit;
@@ -2416,6 +2420,23 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
+     * The tracing the bus starts the span {@code command/{CommandType}} through (default {@link
+     * StreamRuneTracing#NOOP}, which traces nothing). When its {@link TracingArea#COMMAND} area is
+     * on, {@link #build()} adds an {@link OpenTelemetryCommandInterceptor} over it to the chain, in
+     * the slot {@link CommandInterceptorOrdering#ORDER_OPEN_TELEMETRY} reserves: before the first
+     * interceptor whose {@linkplain CommandInterceptorOrdering#orderOf order} comes after it, so
+     * ahead of every framework interceptor. A chain that already holds an {@code
+     * OpenTelemetryCommandInterceptor} the application added keeps that one alone.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+      return this;
+    }
+
+    /**
      * Sets a wrapper applied to the task that {@link #executeAsync} runs on its new virtual thread.
      * The wrapper is invoked on the submitting thread for each async command, so it can capture
      * thread-bound caller context that does not cross {@code Thread.start()} — for example the
@@ -2553,6 +2574,33 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
 
     /**
+     * The chain the bus runs: the interceptors as added, plus the command span's interceptor in its
+     * slot when {@link #tracing} traces commands and the application added none of its own.
+     */
+    List<CommandInterceptor> tracedInterceptors() {
+      if (!tracing.enabled(TracingArea.COMMAND)) {
+        return interceptors;
+      }
+      for (CommandInterceptor interceptor : interceptors) {
+        if (interceptor instanceof OpenTelemetryCommandInterceptor) {
+          return interceptors;
+        }
+      }
+      List<CommandInterceptor> chain = new ArrayList<>(interceptors.size() + 1);
+      chain.addAll(interceptors);
+      int slot = chain.size();
+      for (int i = 0; i < chain.size(); i++) {
+        if (CommandInterceptorOrdering.orderOf(chain.get(i))
+            > CommandInterceptorOrdering.ORDER_OPEN_TELEMETRY) {
+          slot = i;
+          break;
+        }
+      }
+      chain.add(slot, new OpenTelemetryCommandInterceptor(tracing));
+      return chain;
+    }
+
+    /**
      * Builds the command bus. Requires {@link #eventStore}; a {@link #locker} left unset defaults
      * to an in-process {@link LocalStripedLocker} with {@link #stripeCount} stripes.
      *
@@ -2608,7 +2656,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           objectMapper,
           deadLetterQueue,
           metrics,
-          interceptors,
+          tracedInterceptors(),
           asyncTaskWrapper,
           unboundRequestContext,
           clock,
