@@ -11,6 +11,7 @@ import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.SubscriptionName;
@@ -100,8 +101,8 @@ public final class TracingEventListener implements EventListener {
     }
     SpanAttributes attributes =
         SpanAttributes.builder()
-            .put(TraceNames.SUBSCRIPTION_NAME, subscriptionName.value())
-            .put(TraceNames.BATCH_SIZE, (long) events.size())
+            .put(TraceAttributes.SUBSCRIPTION_NAME, subscriptionName.value())
+            .put(TraceAttributes.BATCH_SIZE, (long) events.size())
             .build();
     SpanLink link = null;
     Map<String, String> baggage = Map.of();
@@ -113,7 +114,7 @@ public final class TracingEventListener implements EventListener {
     TraceScope scope =
         tracing.start(
             TracingArea.SUBSCRIPTION,
-            TraceNames.subscriptionDeliverSpanName(subscriptionName),
+            TraceAttributes.subscriptionDeliverSpanName(subscriptionName),
             SpanKind.CONSUMER,
             attributes,
             link,

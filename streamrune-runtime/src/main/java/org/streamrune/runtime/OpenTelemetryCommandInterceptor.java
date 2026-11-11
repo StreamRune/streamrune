@@ -7,8 +7,10 @@ import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
+import org.streamrune.core.types.LogSanitizer;
 
 /**
  * The {@link CommandInterceptor} that starts the span {@code command/{CommandType}} for each
@@ -28,6 +30,9 @@ import org.streamrune.core.tracing.TracingArea;
  * classpath; it traces through {@link OpenTelemetryTracing} with every area on. The {@link
  * StreamRuneTracing} constructor follows the tracing's command switch: with the area off, {@code
  * before()} and {@code after()} return at once.
+ *
+ * <p>The span name and attribute keys are those of {@link TraceAttributes}. The command id, the
+ * aggregate id and the stream id pass {@link LogSanitizer#sanitizeForTrace(String)}.
  *
  * <p>For {@code executeAsync}: the command span is created on the spawned virtual thread, where no
  * caller context is current — the span would become an orphaned root. Configure {@code
@@ -84,22 +89,28 @@ public final class OpenTelemetryCommandInterceptor implements CommandInterceptor
     }
     SpanAttributes attributes =
         SpanAttributes.builder()
-            .put(TraceNames.COMMAND_TYPE, ctx.commandType())
-            .put(TraceNames.COMMAND_ID, ctx.commandId().value())
+            .put(TraceAttributes.COMMAND_TYPE, ctx.commandType())
+            .put(TraceAttributes.COMMAND_ID, LogSanitizer.sanitizeForTrace(ctx.commandId().value()))
             .put(
-                TraceNames.AGGREGATE_ID,
-                ctx.aggregateId() != null ? ctx.aggregateId().value() : null)
+                TraceAttributes.AGGREGATE_ID,
+                ctx.aggregateId() != null
+                    ? LogSanitizer.sanitizeForTrace(ctx.aggregateId().value())
+                    : null)
             .put(
-                TraceNames.AGGREGATE_TYPE,
+                TraceAttributes.AGGREGATE_TYPE,
                 ctx.aggregateType() != null ? ctx.aggregateType().value() : null)
-            .put(TraceNames.STREAM_ID, ctx.streamId() != null ? ctx.streamId().value() : null)
+            .put(
+                TraceAttributes.STREAM_ID,
+                ctx.streamId() != null
+                    ? LogSanitizer.sanitizeForTrace(ctx.streamId().value())
+                    : null)
             .build();
     stack
         .get()
         .push(
             tracing.start(
                 TracingArea.COMMAND,
-                TraceNames.commandSpanName(ctx.commandType()),
+                TraceAttributes.commandSpanName(ctx.commandType()),
                 SpanKind.INTERNAL,
                 attributes));
     return true;

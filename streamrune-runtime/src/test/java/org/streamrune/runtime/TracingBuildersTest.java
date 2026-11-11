@@ -29,6 +29,7 @@ import org.streamrune.core.projection.ProjectionRunner;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -109,7 +110,8 @@ class TracingBuildersTest {
 
     assertThat(spanNames()).containsExactly("command/Switch");
     SpanData span = otelTesting.getSpans().getFirst();
-    assertThat(span.getAttributes().get(TraceAttributes.STREAM_ID)).isEqualTo("lamp:l-1");
+    assertThat(span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.STREAM_ID)))
+        .isEqualTo("lamp:l-1");
   }
 
   @Test
@@ -229,7 +231,12 @@ class TracingBuildersTest {
 
     assertThat(received).hasSize(2);
     assertThat(spanNames()).containsExactly("subscription/lights/deliver");
-    assertThat(otelTesting.getSpans().getFirst().getAttributes().get(TraceAttributes.BATCH_SIZE))
+    assertThat(
+            otelTesting
+                .getSpans()
+                .getFirst()
+                .getAttributes()
+                .get(AttributeKey.longKey(TraceAttributes.BATCH_SIZE)))
         .isEqualTo(2L);
   }
 
@@ -328,7 +335,11 @@ class TracingBuildersTest {
 
     assertThat(spanNames()).isNotEmpty().allMatch("projection/lamps/process"::equals);
     assertThat(
-            otelTesting.getSpans().getFirst().getAttributes().get(TraceAttributes.PROJECTION_NAME))
+            otelTesting
+                .getSpans()
+                .getFirst()
+                .getAttributes()
+                .get(AttributeKey.stringKey(TraceAttributes.PROJECTION_NAME)))
         .isEqualTo("lamps");
   }
 

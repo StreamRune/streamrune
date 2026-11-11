@@ -20,6 +20,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.subscription.EventListener;
+import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -84,8 +85,11 @@ class TracingEventListenerTest {
     listener.onEvents(List.of(envelope(null, null), envelope(null, null)));
 
     SpanData span = otelTesting.getSpans().getFirst();
-    assertEquals("orders", span.getAttributes().get(TraceAttributes.SUBSCRIPTION_NAME));
-    assertEquals(2L, (long) span.getAttributes().get(TraceAttributes.BATCH_SIZE));
+    assertEquals(
+        "orders",
+        span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.SUBSCRIPTION_NAME)));
+    assertEquals(
+        2L, (long) span.getAttributes().get(AttributeKey.longKey(TraceAttributes.BATCH_SIZE)));
     // Drift guard: the subscription span is now a published contract too, so pin its
     // exact key set the same way the command span's is pinned.
     assertEquals(

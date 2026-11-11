@@ -11,6 +11,7 @@ import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.ProjectionName;
@@ -161,13 +162,13 @@ public final class TracingProjectionDecorator implements Projection {
   private <T> T inSpan(List<EventEnvelope> batch, Supplier<T> call) {
     SpanAttributes attributes =
         SpanAttributes.builder()
-            .put(TraceNames.PROJECTION_NAME, projectionName.value())
-            .put(TraceNames.BATCH_SIZE, (long) batch.size())
+            .put(TraceAttributes.PROJECTION_NAME, projectionName.value())
+            .put(TraceAttributes.BATCH_SIZE, (long) batch.size())
             .build();
     TraceScope scope =
         tracing.start(
             TracingArea.PROJECTION,
-            TraceNames.projectionProcessSpanName(projectionName),
+            TraceAttributes.projectionProcessSpanName(projectionName),
             SpanKind.INTERNAL,
             attributes);
     try {

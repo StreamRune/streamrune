@@ -1245,7 +1245,7 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
     `outbox.relay.consecutive_failures`
   - crypto and GDPR: `crypto.subject_redacted`, `crypto.keystore_systemic_failure`,
     `gdpr.purge_failed{purger}`
-- OpenTelemetry spans, names and attribute keys defined in `org.streamrune.runtime.TraceAttributes`:
+- OpenTelemetry spans, names and attribute keys defined in `org.streamrune.core.tracing.TraceAttributes`:
   `command/{CommandType}` (`OpenTelemetryCommandInterceptor`), `subscription/{name}/deliver`
   (`TracingEventListener`), `projection/{name}/process` (`TracingProjectionDecorator`); attributes
   are `streamrune.`-prefixed. Trace and span ids propagate into `EventMetadata`.

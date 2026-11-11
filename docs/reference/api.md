@@ -515,7 +515,7 @@ Built-in implementations provided by `streamrune-runtime` and integrations:
 - `AnnotationAuthorizationInterceptor` — enforces `@RequireRole` and `@RequirePermission` on the command type.
 - `BeanValidationInterceptor` — validates the command with JSR-380 Bean Validation before execution.
 - `CircuitBreakerCommandInterceptor` — opens the circuit after a configurable failure threshold.
-- `OpenTelemetryCommandInterceptor` — starts the span of each command; `VirtualThreadCommandBus.Builder.tracing(StreamRuneTracing)` adds it.
+- `OpenTelemetryCommandInterceptor` — starts the span of each command; `VirtualThreadCommandBus.Builder.tracing(StreamRuneTracing)` adds it. Its span name and attribute keys are constants of `org.streamrune.core.tracing.TraceAttributes`.
 
 ---
 

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.sdk.testing.junit5.OpenTelemetryExtension;
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.CommandInterceptor;
+import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -75,9 +77,14 @@ class OpenTelemetryCommandInterceptorTest {
     assertEquals(TraceAttributes.commandSpanName("PlaceOrder"), span.getName());
     assertEquals(SpanKind.INTERNAL, span.getKind());
     assertEquals(StatusCode.OK, span.getStatus().getStatusCode());
-    assertEquals("PlaceOrder", span.getAttributes().get(TraceAttributes.COMMAND_TYPE));
-    assertEquals("orders", span.getAttributes().get(TraceAttributes.AGGREGATE_TYPE));
-    assertEquals("orders:agg-1", span.getAttributes().get(TraceAttributes.STREAM_ID));
+    assertEquals(
+        "PlaceOrder",
+        span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.COMMAND_TYPE)));
+    assertEquals(
+        "orders", span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.AGGREGATE_TYPE)));
+    assertEquals(
+        "orders:agg-1",
+        span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.STREAM_ID)));
   }
 
   /**
@@ -140,8 +147,15 @@ class OpenTelemetryCommandInterceptorTest {
     assertEquals(StatusCode.ERROR, spans.getFirst().getStatus().getStatusCode());
     assertFalse(spans.getFirst().getEvents().isEmpty());
     // The stream is composed before any interceptor runs, so a failed command's span names it too.
-    assertEquals("orders", spans.getFirst().getAttributes().get(TraceAttributes.AGGREGATE_TYPE));
-    assertEquals("orders:agg-1", spans.getFirst().getAttributes().get(TraceAttributes.STREAM_ID));
+    assertEquals(
+        "orders",
+        spans
+            .getFirst()
+            .getAttributes()
+            .get(AttributeKey.stringKey(TraceAttributes.AGGREGATE_TYPE)));
+    assertEquals(
+        "orders:agg-1",
+        spans.getFirst().getAttributes().get(AttributeKey.stringKey(TraceAttributes.STREAM_ID)));
   }
 
   @Test
@@ -161,9 +175,9 @@ class OpenTelemetryCommandInterceptorTest {
     interceptor.onError(ctx, new RuntimeException("no stream"));
 
     SpanData span = otelTesting.getSpans().getFirst();
-    assertNull(span.getAttributes().get(TraceAttributes.AGGREGATE_TYPE));
-    assertNull(span.getAttributes().get(TraceAttributes.AGGREGATE_ID));
-    assertNull(span.getAttributes().get(TraceAttributes.STREAM_ID));
+    assertNull(span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.AGGREGATE_TYPE)));
+    assertNull(span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.AGGREGATE_ID)));
+    assertNull(span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.STREAM_ID)));
   }
 
   @Test
