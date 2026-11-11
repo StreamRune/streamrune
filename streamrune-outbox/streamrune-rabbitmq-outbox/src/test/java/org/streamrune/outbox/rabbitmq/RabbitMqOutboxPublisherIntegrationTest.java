@@ -32,6 +32,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEntrySpans;
 import org.streamrune.core.outbox.OutboxPublisher.FailureKind;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -191,7 +192,7 @@ class RabbitMqOutboxPublisherIntegrationTest {
             .build();
     var entry = OutboxEntry.pending(OutboxEntryId.of("unroutable-batch-1"), "{}", "Event");
 
-    var result = publisher.publishBatch(List.of(entry));
+    var result = publisher.publishBatch(List.of(entry), null, OutboxEntrySpans.NONE);
 
     assertTrue(
         result.confirmed().isEmpty(),
@@ -312,7 +313,7 @@ class RabbitMqOutboxPublisherIntegrationTest {
               OutboxEntryId.of("batch-" + i), "{\"index\":" + i + "}", "BatchEvent"));
     }
 
-    var result = publisher.publishBatch(entries);
+    var result = publisher.publishBatch(entries, null, OutboxEntrySpans.NONE);
 
     // All entries must be confirmed (broker acked)
     assertEquals(batchSize, result.confirmed().size(), "all entries must be broker-confirmed");
@@ -330,6 +331,64 @@ class RabbitMqOutboxPublisherIntegrationTest {
     }
     // Queue must now be empty
     assertNull(consumeChannel.basicGet(QUEUE, true), "queue must be empty after consuming all");
+  }
+
+  /**
+   * The batch path starts one span per entry through the {@code OutboxEntrySpans} it is given,
+   * around that entry's hand-off, and closes each with success; the entries publish and confirm as
+   * with {@code NONE}.
+   */
+  @Test
+  void publishBatch_startsOneSpanPerEntryHandOff() throws Exception {
+    var publisher =
+        RabbitMqOutboxPublisher.builder()
+            .channel(publishChannel)
+            .exchange(EXCHANGE)
+            .routingKey(ROUTING_KEY)
+            .build();
+    var entries = new ArrayList<OutboxEntry>();
+    for (int i = 0; i < 3; i++) {
+      entries.add(OutboxEntry.pending(OutboxEntryId.of("span-" + i), "{}", "SpanEvent"));
+    }
+    var started = new ArrayList<String>();
+    var succeeded = new java.util.concurrent.atomic.AtomicInteger();
+    var closed = new java.util.concurrent.atomic.AtomicInteger();
+    OutboxEntrySpans spans =
+        entry -> {
+          started.add(entry.id().value());
+          return new org.streamrune.core.tracing.TraceScope() {
+            @Override
+            public void setAttribute(String key, String value) {}
+
+            @Override
+            public void setAttribute(String key, long value) {}
+
+            @Override
+            public void setAttribute(String key, boolean value) {}
+
+            @Override
+            public void recordSuccess() {
+              succeeded.incrementAndGet();
+            }
+
+            @Override
+            public void recordError(Throwable error) {
+              throw new AssertionError("hand-off failed", error);
+            }
+
+            @Override
+            public void close() {
+              closed.incrementAndGet();
+            }
+          };
+        };
+
+    var result = publisher.publishBatch(entries, null, spans);
+
+    assertEquals(3, result.confirmed().size());
+    assertEquals(List.of("span-0", "span-1", "span-2"), started);
+    assertEquals(3, succeeded.get());
+    assertEquals(3, closed.get());
   }
 
   /**
@@ -357,7 +416,7 @@ class RabbitMqOutboxPublisherIntegrationTest {
                 OutboxEntryId.of("stress-" + run + "-" + i), "{\"i\":" + i + "}", "StressEvent"));
       }
 
-      var result = publisher.publishBatch(entries);
+      var result = publisher.publishBatch(entries, null, OutboxEntrySpans.NONE);
 
       assertTrue(
           result.failed().isEmpty(),
@@ -389,7 +448,7 @@ class RabbitMqOutboxPublisherIntegrationTest {
             OutboxEntry.pending(OutboxEntryId.of("hdr-batch-1"), "{}", "TypeA"),
             OutboxEntry.pending(OutboxEntryId.of("hdr-batch-2"), "{}", "TypeB"));
 
-    var result = publisher.publishBatch(entries);
+    var result = publisher.publishBatch(entries, null, OutboxEntrySpans.NONE);
 
     assertEquals(2, result.confirmed().size());
     assertTrue(result.failed().isEmpty());

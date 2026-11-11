@@ -2426,7 +2426,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * the slot {@link CommandInterceptorOrdering#ORDER_OPEN_TELEMETRY} reserves: before the first
      * interceptor whose {@linkplain CommandInterceptorOrdering#orderOf order} comes after it, so
      * ahead of every framework interceptor. A chain that already holds an {@code
-     * OpenTelemetryCommandInterceptor} the application added keeps that one alone.
+     * OpenTelemetryCommandInterceptor} the application added keeps that one alone. The default
+     * {@link LocalStripedLocker} the bus builds when no {@link #locker} is set traces its
+     * acquisitions through it too ({@link LocalStripedLocker#traced}); a locker the application
+     * sets takes the tracing on its own.
      *
      * @param tracing the tracing; not {@code null}
      * @return this builder
@@ -2602,7 +2605,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
     /**
      * Builds the command bus. Requires {@link #eventStore}; a {@link #locker} left unset defaults
-     * to an in-process {@link LocalStripedLocker} with {@link #stripeCount} stripes.
+     * to an in-process {@link LocalStripedLocker} with {@link #stripeCount} stripes, traced through
+     * the {@link #tracing}.
      *
      * <p>A registered command type that declares {@code @RequireRole}/{@code @RequirePermission} —
      * on itself, a supertype, or a permitted subtype of a sealed registered type — must be enforced
@@ -2632,7 +2636,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         throw new IllegalStateException("eventStore is required");
       }
       if (locker == null) {
-        locker = new LocalStripedLocker(stripeCount);
+        locker = new LocalStripedLocker(stripeCount).traced(tracing);
       }
       if (deadLetterQueue != null && objectMapper == null) {
         throw new IllegalArgumentException(

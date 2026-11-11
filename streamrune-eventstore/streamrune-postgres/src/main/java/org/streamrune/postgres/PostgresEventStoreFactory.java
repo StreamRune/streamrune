@@ -2,6 +2,7 @@ package org.streamrune.postgres;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
@@ -15,6 +16,8 @@ import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.outbox.OutboxEventMapper;
 import org.streamrune.core.projection.ProjectionRepository;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.upcasting.EventUpcaster;
 
@@ -85,6 +88,7 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
   private boolean autoInitializeSchema = true;
   private boolean validateSchema = true;
   private Duration statementTimeout = StatementTimeout.DEFAULT;
+  private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
   /**
    * Creates a new factory.
@@ -297,6 +301,19 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
     return this;
   }
 
+  /**
+   * The tracing the store starts its spans through when its {@link TracingArea#EVENT_STORE} area is
+   * on (see {@link PostgresEventStore.Builder#tracing(StreamRuneTracing)}). Optional; defaults to
+   * {@link StreamRuneTracing#NOOP}, which traces nothing.
+   *
+   * @param tracing the tracing; not {@code null}
+   * @return this factory for method chaining
+   */
+  public PostgresEventStoreFactory tracing(StreamRuneTracing tracing) {
+    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+    return this;
+  }
+
   /** Sets the crypto engine for encryption (optional). */
   public PostgresEventStoreFactory cryptoEngine(CryptoEngine cryptoEngine) {
     this.cryptoEngine = cryptoEngine;
@@ -434,6 +451,7 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
         .outboxEventMapper(outboxEventMapper)
         .commandInbox(commandInbox)
         .statementTimeout(statementTimeout)
+        .tracing(tracing)
         .buildAfterCryptoCheck();
   }
 

@@ -108,8 +108,14 @@ class TracingBuildersTest {
       bus.execute(new Switch("l-1"));
     }
 
-    assertThat(spanNames()).containsExactly("command/Switch");
-    SpanData span = otelTesting.getSpans().getFirst();
+    // The bus's default locker traces its acquisition too, under the command span.
+    assertThat(spanNames())
+        .containsExactlyInAnyOrder("command/Switch", TraceAttributes.LOCK_ACQUIRE);
+    SpanData span =
+        otelTesting.getSpans().stream()
+            .filter(s -> s.getName().equals("command/Switch"))
+            .findFirst()
+            .orElseThrow();
     assertThat(span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.STREAM_ID)))
         .isEqualTo("lamp:l-1");
   }
@@ -122,7 +128,8 @@ class TracingBuildersTest {
       assertThat(bus.interceptors()).containsExactly(userInterceptor);
     }
 
-    assertThat(otelTesting.getSpans()).isEmpty();
+    // Only the default locker's span: the lock area is still on.
+    assertThat(spanNames()).containsExactly(TraceAttributes.LOCK_ACQUIRE);
   }
 
   @Test
@@ -143,7 +150,8 @@ class TracingBuildersTest {
       assertThat(bus.interceptors()).containsExactly(own);
     }
 
-    assertThat(spanNames()).containsExactly("command/Switch");
+    assertThat(spanNames())
+        .containsExactlyInAnyOrder("command/Switch", TraceAttributes.LOCK_ACQUIRE);
   }
 
   @Test
@@ -497,7 +505,9 @@ class TracingBuildersTest {
     Projection handed = runner.handed.get();
     assertThat(handed).isInstanceOf(TracingProjectionDecorator.class);
     handed.process(List.of());
-    assertThat(spanNames()).containsExactly("command/Switch", "projection/facade/process");
+    assertThat(spanNames())
+        .containsExactlyInAnyOrder(
+            "command/Switch", TraceAttributes.LOCK_ACQUIRE, "projection/facade/process");
   }
 
   @Test

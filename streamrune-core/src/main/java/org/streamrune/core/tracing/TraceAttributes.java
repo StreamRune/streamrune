@@ -2,6 +2,7 @@ package org.streamrune.core.tracing;
 
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.SubscriptionName;
 
 /**
@@ -24,15 +25,21 @@ import org.streamrune.core.types.SubscriptionName;
  * the prefix; a span attribute has no such carrier.)
  *
  * <p><b>Identifiers.</b> An attribute that holds an identifier (a command id, an aggregate id, a
- * stream id) passes {@link LogSanitizer#sanitizeForTrace(String)}: control, separator and format
- * characters are removed, and a longer value is cut to its first {@value
- * LogSanitizer#MAX_TRACE_LENGTH} characters followed by {@code ...}, 259 characters in all. An
- * ordinary identifier is unchanged. Attributes never carry event payloads, metadata values,
+ * stream id, a saga id, an outbox entry id) passes {@link LogSanitizer#sanitizeForTrace(String)}:
+ * control, separator and format characters are removed, and a longer value is cut to its first
+ * {@value LogSanitizer#MAX_TRACE_LENGTH} characters followed by {@code ...}, 259 characters in all.
+ * An ordinary identifier is unchanged. Attributes never carry event payloads, metadata values,
  * baggage, encrypted values, crypto subject ids, user ids, roles or SQL.
  *
  * <p><b>Span names</b> are path-shaped ({@code command/PlaceOrder}, {@code
  * subscription/orders/deliver}, {@code projection/orders/process}) and hold types and configured
- * names, never ids.
+ * names, never ids. A constant whose value holds a {@code /} is a span name; every other constant
+ * is an attribute key.
+ *
+ * <p><b>Outcomes.</b> An expected outcome — a lock not acquired in time, an append that lost its
+ * optimistic-lock check or that the saga forward fence refused, a saga event held for later, a saga
+ * step that waits for another step of its saga — is an attribute value, and the span keeps an unset
+ * or OK status. A failure records the exception type and message and the ERROR status.
  */
 public final class TraceAttributes {
 
@@ -99,5 +106,160 @@ public final class TraceAttributes {
    */
   public static String projectionProcessSpanName(ProjectionName projectionName) {
     return "projection/" + projectionName.value() + "/process";
+  }
+
+  // ==================== Event store spans (EventStore implementations) ====================
+
+  /** Span name for one append of events to a stream. */
+  public static final String EVENT_STORE_APPEND = "eventstore/append";
+
+  /** Span name for serializing the events of an append, child of the append span. */
+  public static final String EVENT_STORE_APPEND_SERIALIZE = "eventstore/append/serialize";
+
+  /** Span name for one load of an aggregate's history. */
+  public static final String EVENT_STORE_LOAD = "eventstore/load";
+
+  /**
+   * Span name for deserializing the events of a load (decrypt, upcast, bind), child of the load
+   * span.
+   */
+  public static final String EVENT_STORE_LOAD_DESERIALIZE = "eventstore/load/deserialize";
+
+  /**
+   * Span name for resolving the stored snapshot of a load (deserialize, decrypt, migrate), child of
+   * the load span; started only when the stream has a stored snapshot.
+   */
+  public static final String EVENT_STORE_SNAPSHOT_LOAD = "eventstore/snapshot/load";
+
+  /** Span name for one snapshot write. */
+  public static final String EVENT_STORE_SNAPSHOT_SAVE = "eventstore/snapshot/save";
+
+  /**
+   * Span name for one global or stream read that returns at least one event, from the start of its
+   * query to the end of its deserialization; a read that returns none starts no span.
+   */
+  public static final String EVENT_STORE_READ = "eventstore/read";
+
+  /** Number of events appended, loaded or read, a {@code long}. */
+  public static final String EVENT_COUNT = "streamrune.event.count";
+
+  /** The stream version an append expects the stream to be at, a {@code long}. */
+  public static final String EXPECTED_VERSION = "streamrune.expected.version";
+
+  /** Number of outbox entries an append writes in its transaction, a {@code long}. */
+  public static final String OUTBOX_ENTRY_COUNT = "streamrune.outbox.entry.count";
+
+  /**
+   * How an append ended: {@code APPENDED}, {@code CONFLICT} (the stream was not at the expected
+   * version), {@code DUPLICATE} (a keyed append whose key was already recorded) or {@code FENCED}
+   * (a saga's forward command refused because the saga has left its forward phase). Absent when the
+   * append failed.
+   */
+  public static final String APPEND_OUTCOME = "streamrune.append.outcome";
+
+  /** Whether a load started from a snapshot, a {@code boolean}. */
+  public static final String SNAPSHOT_USED = "streamrune.snapshot.used";
+
+  /**
+   * Number of loaded events stored below the current schema version of their type, which the
+   * upcaster chain upcast, a {@code long}.
+   */
+  public static final String UPCAST_COUNT = "streamrune.upcast.count";
+
+  /**
+   * The stream version a snapshot holds the state at, a {@code long}: on a snapshot load, the
+   * version the load starts from ({@code 0} when it discards the snapshot); on a snapshot save, the
+   * version saved. Not the snapshot's schema version.
+   */
+  public static final String STREAM_VERSION = "streamrune.stream.version";
+
+  /**
+   * What became of a snapshot: on a load {@code HIT} (used) or {@code DISCARDED} (stored but
+   * unusable, and the stream replays from its start); on a save {@code SAVED} or {@code SKIPPED} (a
+   * purge of the stream's snapshot intervened).
+   */
+  public static final String SNAPSHOT_OUTCOME = "streamrune.snapshot.outcome";
+
+  /** Which read returned the events: {@code GLOBAL} or {@code STREAM}. */
+  public static final String READ_KIND = "streamrune.read.kind";
+
+  // ==================== Lock span (AggregateLocker implementations) ====================
+
+  /** Span name for one acquisition of an aggregate lock. */
+  public static final String LOCK_ACQUIRE = "lock/acquire";
+
+  /**
+   * How a lock acquisition ended: {@code ACQUIRED}, {@code TIMEOUT} (held elsewhere past the
+   * timeout) or {@code INTERRUPTED}. Absent when the acquisition failed otherwise.
+   */
+  public static final String LOCK_OUTCOME = "streamrune.lock.outcome";
+
+  // ==================== Outbox spans (OutboxPoller) ====================
+
+  /** Span name for one relay batch that claimed at least one outbox entry. */
+  public static final String OUTBOX_RELAY = "outbox/relay";
+
+  /** Span name for the publish of one outbox entry, child of the relay span. */
+  public static final String OUTBOX_PUBLISH = "outbox/publish";
+
+  /** Number of entries of a relay batch the publisher confirmed, a {@code long}. */
+  public static final String OUTBOX_PUBLISHED = "streamrune.outbox.published";
+
+  /** Number of entries of a relay batch whose publish failed, a {@code long}. */
+  public static final String OUTBOX_FAILED = "streamrune.outbox.failed";
+
+  /** The outbox entry being published; an identifier. */
+  public static final String OUTBOX_ENTRY_ID = "streamrune.outbox.entry.id";
+
+  /** The payload type of the outbox entry being published. */
+  public static final String OUTBOX_PAYLOAD_TYPE = "streamrune.outbox.payload.type";
+
+  // ==================== Saga spans (SagaRunner, SagaTimeoutRunner) ====================
+
+  /** The saga type. */
+  public static final String SAGA_TYPE = "streamrune.saga.type";
+
+  /** The saga instance; an identifier. */
+  public static final String SAGA_ID = "streamrune.saga.id";
+
+  /**
+   * How a saga step ended: {@code ADVANCED}, {@code COMPLETED}, {@code COMPENSATING}, {@code
+   * COMPENSATED}, {@code FAILED}, {@code FAULTED}, {@code SKIPPED} (nothing to do: a redelivery, a
+   * saga that has ended, an event for no saga) or {@code DEFERRED} (the event is held for later).
+   * Absent when the step failed and the event is delivered again.
+   */
+  public static final String SAGA_STEP_OUTCOME = "streamrune.saga.step.outcome";
+
+  /** The position of a compensation command in the list the saga returned, a {@code long}. */
+  public static final String SAGA_COMPENSATION_INDEX = "streamrune.saga.compensation.index";
+
+  /**
+   * Span name for one event a saga handles.
+   *
+   * @param sagaType the saga type
+   * @return {@code saga/{sagaType}/step}
+   */
+  public static String sagaStepSpanName(SagaType sagaType) {
+    return "saga/" + sagaType.value() + "/step";
+  }
+
+  /**
+   * Span name for one compensation command a saga dispatches.
+   *
+   * @param sagaType the saga type
+   * @return {@code saga/{sagaType}/compensate}
+   */
+  public static String sagaCompensateSpanName(SagaType sagaType) {
+    return "saga/" + sagaType.value() + "/compensate";
+  }
+
+  /**
+   * Span name for one saga the timeout runner acts on past its deadline.
+   *
+   * @param sagaType the saga type
+   * @return {@code saga/{sagaType}/timeout}
+   */
+  public static String sagaTimeoutSpanName(SagaType sagaType) {
+    return "saga/" + sagaType.value() + "/timeout";
   }
 }

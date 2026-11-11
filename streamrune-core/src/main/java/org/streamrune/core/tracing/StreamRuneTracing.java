@@ -24,7 +24,9 @@ import java.util.Map;
  * <p>An implementation answers {@link #enabled(TracingArea)} the same way for its whole lifetime: a
  * component may read the answer once, when it is built, and a component that starts a span in one
  * call and ends it in another relies on both calls seeing the same answer. Implementations are
- * thread-safe.
+ * thread-safe, and they must not throw: neither {@code start} nor any method of the scopes it
+ * returns may fail the work it traces. The outbox relay guards itself against an implementation
+ * that throws all the same, so tracing can never change a delivery.
  */
 public interface StreamRuneTracing {
 
@@ -55,6 +57,32 @@ public interface StreamRuneTracing {
   default TraceScope start(
       TracingArea area, String spanName, SpanKind kind, SpanAttributes attributes) {
     return start(area, spanName, kind, attributes, null, null);
+  }
+
+  /**
+   * Starts a span whose start time is {@code startTime}, earlier than now, and makes it current on
+   * this thread until the returned scope is closed. For work that starts a span only once it knows
+   * there is something to trace: a read that turned out to return events starts its span with the
+   * instant its query started. Returns {@link TraceScope#NOOP} when {@code area} is not {@linkplain
+   * #enabled(TracingArea) enabled}.
+   *
+   * <p>The default starts the span now, through {@link #start(TracingArea, String, SpanKind,
+   * SpanAttributes)}: an implementation that can set a start time overrides it.
+   *
+   * @param area the area the span belongs to
+   * @param spanName the span name; it holds types and configured names, never ids
+   * @param kind the span kind
+   * @param attributes the attributes the span starts with
+   * @param startTime when the work the span covers started
+   * @return the scope to close when the work ends
+   */
+  default TraceScope start(
+      TracingArea area,
+      String spanName,
+      SpanKind kind,
+      SpanAttributes attributes,
+      java.time.Instant startTime) {
+    return start(area, spanName, kind, attributes);
   }
 
   /**

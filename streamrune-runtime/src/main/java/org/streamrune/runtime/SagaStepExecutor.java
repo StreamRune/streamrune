@@ -23,6 +23,7 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaStore.AppliedEvent;
 import org.streamrune.core.saga.SagaUnstampedCompensationEpisodeException;
+import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
@@ -216,6 +217,9 @@ final class SagaStepExecutor<S extends SagaState> {
 
   private final Clock clock;
 
+  /** The tracing each compensation command's span starts through. */
+  private final StreamRuneTracing tracing;
+
   /**
    * Whether this executor's forward commands are fenced at their commit: {@link
    * SagaCommandDispatch#dispatch} binds the saga as the forward command's {@code SagaForward}, and
@@ -237,7 +241,19 @@ final class SagaStepExecutor<S extends SagaState> {
       SagaStore sagaStore,
       CommandBus commandBus,
       StreamRuneMetrics metrics) {
-    this(orchestrator, sagaStore, commandBus, metrics, null, Clock.systemUTC());
+    this(orchestrator, sagaStore, commandBus, metrics, StreamRuneTracing.NOOP);
+  }
+
+  /**
+   * The constructor of the timeout runner, with the tracing its compensation spans start through.
+   */
+  SagaStepExecutor(
+      SagaOrchestrator<S> orchestrator,
+      SagaStore sagaStore,
+      CommandBus commandBus,
+      StreamRuneMetrics metrics,
+      StreamRuneTracing tracing) {
+    this(orchestrator, sagaStore, commandBus, metrics, null, Clock.systemUTC(), tracing);
   }
 
   SagaStepExecutor(
@@ -247,6 +263,25 @@ final class SagaStepExecutor<S extends SagaState> {
       StreamRuneMetrics metrics,
       Duration inboxRetentionMaxAge,
       Clock clock) {
+    this(
+        orchestrator,
+        sagaStore,
+        commandBus,
+        metrics,
+        inboxRetentionMaxAge,
+        clock,
+        StreamRuneTracing.NOOP);
+  }
+
+  SagaStepExecutor(
+      SagaOrchestrator<S> orchestrator,
+      SagaStore sagaStore,
+      CommandBus commandBus,
+      StreamRuneMetrics metrics,
+      Duration inboxRetentionMaxAge,
+      Clock clock,
+      StreamRuneTracing tracing) {
+    this.tracing = tracing;
     this.orchestrator = orchestrator;
     this.sagaStore = sagaStore;
     this.commandBus = commandBus;
@@ -1395,7 +1430,8 @@ final class SagaStepExecutor<S extends SagaState> {
             origin,
             episode.causeEventId(),
             i -> SagaCommandDispatch.episodeCompensationKey(sagaId, episode.version(), i),
-            LOG);
+            LOG,
+            tracing);
     recordCompensation(outcome.name());
     if (!outcome.isTerminal()) {
       LOG.warn(

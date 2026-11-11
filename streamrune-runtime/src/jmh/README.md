@@ -4,7 +4,7 @@ Micro-benchmarks for the framework's hot paths. Three modules have them, each in
 
 | Module | Benchmarks | Needs |
 | --- | --- | --- |
-| `streamrune-runtime` (this directory) | `StreamRuneBenchmark`, `OutboxEventMapperBenchmark`, `ProjectionRunnerBenchmark`, `EventSerializationBenchmark`, `PerfCandidatesBenchmark` | nothing |
+| `streamrune-runtime` (this directory) | `StreamRuneBenchmark`, `TracingBenchmark`, `OutboxEventMapperBenchmark`, `ProjectionRunnerBenchmark`, `EventSerializationBenchmark`, `PerfCandidatesBenchmark` | nothing |
 | `streamrune-eventstore/streamrune-postgres` | `PostgresEventStoreBenchmark`: append, load, load through an upcaster chain | PostgreSQL: Docker, or a server named in `STREAMRUNE_BENCH_JDBC_URL` |
 | `streamrune-crypto/streamrune-filesystem-crypto` | `CryptoShreddingBenchmark`: serialization of `@Encrypted` fields on the AES-GCM engine | nothing |
 
@@ -56,7 +56,8 @@ Benchmarks are **not** run under the JMH harness by `check` or `build` — they 
 slow. What `check` does enforce is that they still **compile** (`compileJmhJava`, wired in by
 the root `build.gradle.kts`) and that every benchmark method still **runs**: the `jmhSmokeTest` task
 of each module executes the JUnit smoke tests beside its benchmarks (`StreamRuneBenchmarkSmokeTest`,
-`ProjectionRunnerBenchmarkSmokeTest` and `EventSerializationBenchmarkSmokeTest` here), which invoke
+`TracingBenchmarkSmokeTest`, `ProjectionRunnerBenchmarkSmokeTest` and
+`EventSerializationBenchmarkSmokeTest` here), which invoke
 each method twice against a real `@Setup` state, outside the harness, to catch a benchmark that
 compiles but throws or measures a degenerate state. The compile gate makes an API change that breaks a benchmark fail `check`: nothing
 else in the default task graph compiles this source set. The PostgreSQL smoke test starts a
@@ -104,6 +105,16 @@ every append, including for events that produce no outbox entry at all.
 Broad throughput/latency baselines rather than A/B comparisons: `VirtualThreadCommandBus.execute`
 throughput, `EventStore` append/load over batch sizes 1/10/100, and `Decider.decide` over state
 sizes 0/10/100. No landed change traces to these; they exist as a regression baseline.
+
+### `TracingBenchmark`
+
+What tracing adds to one command: `VirtualThreadCommandBus.execute` on the serializing
+`InMemoryEventStore`, with the bus, its default locker and the store traced, for three values of the
+`tracing` parameter. `NOOP` traces nothing (the default of every builder). `SAMPLER_OFF` is
+`OpenTelemetryTracing` over an SDK whose sampler drops every trace, so the spans start but are not
+recorded. `SAMPLER_ON` records the six spans of the command and hands them to a batch span processor
+whose exporter discards them. Compare `SAMPLER_OFF` and `SAMPLER_ON` with `NOOP`, not with
+`StreamRuneBenchmark.commandBusThroughput`, whose store keeps its events by reference.
 
 ### `ProjectionRunnerBenchmark`
 

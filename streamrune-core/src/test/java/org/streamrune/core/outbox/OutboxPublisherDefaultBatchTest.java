@@ -27,6 +27,72 @@ class OutboxPublisherDefaultBatchTest {
     assertEquals(Duration.ZERO, publisher.inFlightHorizon());
   }
 
+  /**
+   * The default wraps each publish in the scope of its entry: a publish that returns records
+   * success, one that throws records the error, and each scope closes before the next entry.
+   */
+  @Test
+  void publishBatch_wrapsEachPublishInTheSpanOfItsEntry() {
+    var events = new java.util.ArrayList<String>();
+    OutboxEntrySpans spans =
+        entry ->
+            new org.streamrune.core.tracing.TraceScope() {
+              {
+                events.add("start " + entry.id().value());
+              }
+
+              @Override
+              public void setAttribute(String key, String value) {}
+
+              @Override
+              public void setAttribute(String key, long value) {}
+
+              @Override
+              public void setAttribute(String key, boolean value) {}
+
+              @Override
+              public void recordSuccess() {
+                events.add("ok " + entry.id().value());
+              }
+
+              @Override
+              public void recordError(Throwable error) {
+                events.add("error " + entry.id().value() + " " + error.getMessage());
+              }
+
+              @Override
+              public void close() {
+                events.add("close " + entry.id().value());
+              }
+            };
+    OutboxPublisher publisher =
+        entry -> {
+          events.add("publish " + entry.id().value());
+          if (entry.id().value().equals("e2")) {
+            throw new IllegalStateException("refused");
+          }
+        };
+
+    publisher.publishBatch(
+        List.of(
+            OutboxEntry.pending(OutboxEntryId.of("e1"), "{}", "Event"),
+            OutboxEntry.pending(OutboxEntryId.of("e2"), "{}", "Event")),
+        null,
+        spans);
+
+    assertEquals(
+        List.of(
+            "start e1",
+            "publish e1",
+            "ok e1",
+            "close e1",
+            "start e2",
+            "publish e2",
+            "error e2 refused",
+            "close e2"),
+        events);
+  }
+
   @Test
   void publishBatch_all_succeed_all_confirmed() throws Exception {
     OutboxPublisher publisher = entry -> {}; // no-op
@@ -35,7 +101,7 @@ class OutboxPublisherDefaultBatchTest {
     var e2 = OutboxEntry.pending(OutboxEntryId.of("e2"), "{}", "Event");
     var e3 = OutboxEntry.pending(OutboxEntryId.of("e3"), "{}", "Event");
 
-    var result = publisher.publishBatch(List.of(e1, e2, e3));
+    var result = publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE);
 
     assertEquals(3, result.confirmed().size());
     assertTrue(result.confirmed().contains(OutboxEntryId.of("e1")));
@@ -59,7 +125,7 @@ class OutboxPublisherDefaultBatchTest {
     var e2 = OutboxEntry.pending(failId, "{}", "Event");
     var e3 = OutboxEntry.pending(OutboxEntryId.of("e3"), "{}", "Event");
 
-    var result = publisher.publishBatch(List.of(e1, e2, e3));
+    var result = publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE);
 
     assertEquals(2, result.confirmed().size());
     assertTrue(result.confirmed().contains(OutboxEntryId.of("e1")));
@@ -81,7 +147,7 @@ class OutboxPublisherDefaultBatchTest {
     var e1 = OutboxEntry.pending(OutboxEntryId.of("e1"), "{}", "Event");
     var e2 = OutboxEntry.pending(OutboxEntryId.of("e2"), "{}", "Event");
 
-    var result = publisher.publishBatch(List.of(e1, e2));
+    var result = publisher.publishBatch(List.of(e1, e2), null, OutboxEntrySpans.NONE);
 
     assertTrue(result.confirmed().isEmpty());
     assertEquals(2, result.failed().size());
@@ -91,7 +157,7 @@ class OutboxPublisherDefaultBatchTest {
   void publishBatch_empty_list_returns_empty_result() {
     OutboxPublisher publisher = entry -> {};
 
-    var result = publisher.publishBatch(List.of());
+    var result = publisher.publishBatch(List.of(), null, OutboxEntrySpans.NONE);
 
     assertTrue(result.confirmed().isEmpty());
     assertTrue(result.failed().isEmpty());
@@ -110,7 +176,9 @@ class OutboxPublisherDefaultBatchTest {
 
     var result =
         publisher.publishBatch(
-            List.of(e1, e2), java.time.Instant.now().minusSeconds(1)); // deadline already passed
+            List.of(e1, e2),
+            java.time.Instant.now().minusSeconds(1),
+            OutboxEntrySpans.NONE); // deadline already passed
 
     assertTrue(attempted.isEmpty(), "no entry may be published once the deadline has passed");
     assertTrue(result.confirmed().isEmpty());
@@ -145,7 +213,9 @@ class OutboxPublisherDefaultBatchTest {
     var e1 = OutboxEntry.pending(OutboxEntryId.of("e1"), "{}", "Event");
     var e2 = OutboxEntry.pending(OutboxEntryId.of("e2"), "{}", "Event");
 
-    var result = publisher.publishBatch(List.of(e1, e2), java.time.Instant.now().plusSeconds(3600));
+    var result =
+        publisher.publishBatch(
+            List.of(e1, e2), java.time.Instant.now().plusSeconds(3600), OutboxEntrySpans.NONE);
 
     assertEquals(2, result.confirmed().size());
     assertTrue(result.failed().isEmpty());
@@ -175,7 +245,7 @@ class OutboxPublisherDefaultBatchTest {
     OutboxPublisher.BatchResult result;
     boolean interrupted;
     try {
-      result = publisher.publishBatch(List.of(e1, e2, e3));
+      result = publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE);
     } finally {
       interrupted = Thread.interrupted(); // read AND clear so we do not pollute other tests
     }
@@ -202,7 +272,7 @@ class OutboxPublisherDefaultBatchTest {
     boolean stillInterrupted;
     Thread.currentThread().interrupt();
     try {
-      result = publisher.publishBatch(List.of(e1, e2));
+      result = publisher.publishBatch(List.of(e1, e2), null, OutboxEntrySpans.NONE);
     } finally {
       stillInterrupted = Thread.interrupted(); // read + clear
     }
@@ -230,7 +300,7 @@ class OutboxPublisherDefaultBatchTest {
     OutboxPublisher.BatchResult result;
     boolean interrupted;
     try {
-      result = publisher.publishBatch(List.of(e1, e2));
+      result = publisher.publishBatch(List.of(e1, e2), null, OutboxEntrySpans.NONE);
     } finally {
       interrupted = Thread.interrupted();
     }
@@ -260,7 +330,7 @@ class OutboxPublisherDefaultBatchTest {
     OutboxPublisher.BatchResult result;
     boolean interrupted;
     try {
-      result = publisher.publishBatch(List.of(e1, e2));
+      result = publisher.publishBatch(List.of(e1, e2), null, OutboxEntrySpans.NONE);
     } finally {
       interrupted = Thread.interrupted();
     }
@@ -288,7 +358,7 @@ class OutboxPublisherDefaultBatchTest {
         };
 
     var entries = ids.stream().map(id -> OutboxEntry.pending(id, "{}", "Event")).toList();
-    var result = publisher.publishBatch(entries);
+    var result = publisher.publishBatch(entries, null, OutboxEntrySpans.NONE);
 
     // Confirmed + failed must equal the full input set (no overlap, no gaps)
     for (var id : ids) {
@@ -334,7 +404,7 @@ class OutboxPublisherDefaultBatchTest {
     assertTimeoutPreemptively(
         Duration.ofSeconds(2),
         () -> {
-          var result = publisher.publishBatch(List.of(entry));
+          var result = publisher.publishBatch(List.of(entry), null, OutboxEntrySpans.NONE);
           assertTrue(
               result.failed().containsKey(failId),
               "no InterruptedException in the cycle — must be a counting failure, not swallowed"

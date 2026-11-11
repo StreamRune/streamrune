@@ -9,10 +9,17 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.sql.DataSource;
 import org.streamrune.core.AggregateLocker;
 import org.streamrune.core.LockException;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.StreamId;
 
@@ -63,6 +70,10 @@ import org.streamrune.core.types.StreamId;
  * <p>A locker built with {@link #withDedicatedPool} owns its pool and must be {@link #close()
  * closed} to release it. A locker built from a caller-supplied {@link DataSource} does not own that
  * pool, so {@link #close()} is a no-op.
+ *
+ * <p>{@link #traced(StreamRuneTracing)} returns the locker that starts the span {@value
+ * TraceAttributes#LOCK_ACQUIRE} around each acquisition when the {@link TracingArea#LOCK} area is
+ * on.
  */
 public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
 
@@ -86,18 +97,59 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    */
   private final AutoCloseable ownedPool;
 
-  private final AtomicBoolean closed = new AtomicBoolean();
+  /** Whether the owned pool was closed; shared with the lockers {@link #traced} returns. */
+  private final AtomicBoolean closed;
+
+  private final StreamRuneTracing tracing;
+
+  /** Whether {@link #tracing} records the lock area, read once. */
+  private final boolean traced;
 
   public PgAdvisoryLocker(DataSource dataSource) {
     this(dataSource, null);
   }
 
   private PgAdvisoryLocker(DataSource dataSource, AutoCloseable ownedPool) {
+    this(dataSource, ownedPool, new AtomicBoolean(), StreamRuneTracing.NOOP);
+  }
+
+  private PgAdvisoryLocker(
+      DataSource dataSource,
+      AutoCloseable ownedPool,
+      AtomicBoolean closed,
+      StreamRuneTracing tracing) {
     if (dataSource == null) {
       throw new IllegalArgumentException("dataSource is required");
     }
     this.dataSource = dataSource;
     this.ownedPool = ownedPool;
+    this.closed = closed;
+    this.tracing = tracing;
+    this.traced = tracing.enabled(TracingArea.LOCK);
+  }
+
+  /**
+   * A locker on the same connections that starts the span {@value TraceAttributes#LOCK_ACQUIRE}
+   * around each acquisition through {@code tracing}, when its {@link TracingArea#LOCK} area is on.
+   * The span carries the stream and the outcome: {@code ACQUIRED}, or {@code TIMEOUT} when another
+   * session holds the lock past the timeout (an expected outcome, not an error). Any other failure
+   * records the exception.
+   *
+   * <p>The returned locker shares this locker's pool: it owns the pool when this one does, and
+   * closing either of the two closes it once. Use the returned locker in place of this one:
+   *
+   * <pre>{@code
+   * PgAdvisoryLocker locker =
+   *     PgAdvisoryLocker.withDedicatedPool(jdbcUrl, user, password, 20).traced(tracing);
+   * }</pre>
+   *
+   * @param tracing the tracing; {@link StreamRuneTracing#NOOP} traces nothing
+   * @return a locker that traces through {@code tracing}
+   * @throws NullPointerException if {@code tracing} is {@code null}
+   */
+  public PgAdvisoryLocker traced(StreamRuneTracing tracing) {
+    Objects.requireNonNull(tracing, "tracing is required");
+    return new PgAdvisoryLocker(dataSource, ownedPool, closed, tracing);
   }
 
   /**
@@ -259,6 +311,40 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    */
   @Override
   public AutoCloseable acquireLock(StreamId streamId, Duration timeout) {
+    if (!traced || streamId == null) {
+      return acquire(streamId, timeout, null);
+    }
+    TraceScope scope =
+        tracing.start(
+            TracingArea.LOCK,
+            TraceAttributes.LOCK_ACQUIRE,
+            SpanKind.INTERNAL,
+            SpanAttributes.builder()
+                .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
+                .build());
+    boolean[] timedOut = new boolean[1];
+    try {
+      AutoCloseable lock = acquire(streamId, timeout, timedOut);
+      scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "ACQUIRED");
+      scope.recordSuccess();
+      return lock;
+    } catch (Throwable t) {
+      if (timedOut[0]) {
+        scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "TIMEOUT");
+      } else {
+        scope.recordError(t);
+      }
+      throw t;
+    } finally {
+      scope.close();
+    }
+  }
+
+  /**
+   * The acquisition. {@code timedOut}, when given, is set when the lock was not acquired because
+   * another session holds it past the timeout.
+   */
+  private AutoCloseable acquire(StreamId streamId, Duration timeout, boolean[] timedOut) {
     if (timeout == null) {
       timeout = DEFAULT_TIMEOUT;
     }
@@ -293,6 +379,7 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
         if (timeout.isZero()) {
           // Single non-blocking attempt — Duration.ZERO means "do not wait at all".
           if (!tryAcquireLock(conn, hash)) {
+            markTimedOut(timedOut);
             throw new LockException(
                 "Advisory lock for stream: " + sanitized + " is held by another session");
           }
@@ -301,6 +388,7 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
         }
       } catch (SQLException e) {
         if (LOCK_NOT_AVAILABLE.equals(e.getSQLState())) {
+          markTimedOut(timedOut);
           throw new LockException(
               "Failed to acquire advisory lock for stream: "
                   + sanitized
@@ -323,6 +411,12 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
         conn.close();
       }
     };
+  }
+
+  private static void markTimedOut(boolean[] timedOut) {
+    if (timedOut != null) {
+      timedOut[0] = true;
+    }
   }
 
   /**
