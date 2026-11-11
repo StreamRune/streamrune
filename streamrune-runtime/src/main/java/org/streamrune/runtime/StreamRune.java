@@ -31,6 +31,8 @@ import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRunner;
 import org.streamrune.core.subscription.SubscriptionConfig;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.IdempotencyKey;
@@ -483,6 +485,7 @@ public final class StreamRune implements CommandBus, AutoCloseable {
     private EventStoreFactory eventStoreFactory;
     private ConfiguredEventStoreFactory configuredEventStoreFactory;
     private ConfiguredEventStoreFactoryProvider configuredEventStoreFactoryProvider;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     Builder() {}
 
@@ -788,6 +791,25 @@ public final class StreamRune implements CommandBus, AutoCloseable {
     }
 
     /**
+     * The tracing StreamRune emits its spans through (default {@link StreamRuneTracing#NOOP}, which
+     * traces nothing). It reaches everything this builder builds: the command bus starts the span
+     * {@code command/{CommandType}} (see {@link VirtualThreadCommandBus.Builder#tracing}), and
+     * every projection registered with {@link #registerProjection} is decorated with a {@link
+     * TracingProjectionDecorator} when the {@link TracingArea#PROJECTION} area is on. A projection
+     * runner the application builds, or its {@link ProjectionRunnerFactory} builds, takes the
+     * tracing on its own builder; a runner given the same tracing does not decorate a projection
+     * twice.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+      busBuilder.tracing(tracing);
+      return this;
+    }
+
+    /**
      * Sets a wrapper applied to tasks spawned by {@code executeAsync} on the underlying command
      * bus. Invoked on the submitting thread, so it can capture thread-bound caller context (e.g.
      * the current OpenTelemetry context) that does not cross {@code Thread.start()}. See {@link
@@ -832,10 +854,22 @@ public final class StreamRune implements CommandBus, AutoCloseable {
       ResolvedProjectionRunners runners = resolveProjectionRunners(eventStore);
       return new StreamRune(
           busBuilder.build(),
-          List.copyOf(projections),
+          tracedProjections(),
           runners.shared(),
           runners.perRegistration(),
           resolvedEventStore.retainedFactory());
+    }
+
+    /** The registered projections, each decorated with the projection span when traced. */
+    private List<ProjectionRegistration> tracedProjections() {
+      return projections.stream()
+          .map(
+              reg ->
+                  new ProjectionRegistration(
+                      reg.name(),
+                      TracingProjectionDecorator.traced(reg.name(), reg.projection(), tracing),
+                      reg.deliveryMode()))
+          .toList();
     }
 
     /**

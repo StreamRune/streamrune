@@ -58,10 +58,12 @@ import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.InboxRetentionSweeper;
 import org.streamrune.runtime.LocalStripedLocker;
 import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+import org.streamrune.runtime.OpenTelemetryTracing;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.OutboxRetentionSweeper;
 import org.streamrune.runtime.SimpleQueryBus;
 import org.streamrune.runtime.SseEventPublisher;
+import org.streamrune.runtime.TracingSettings;
 import org.streamrune.runtime.UnboundRequestContextQueryBus;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.runtime.gdpr.ExportSubjectDataService;
@@ -485,7 +487,8 @@ public class StreamRuneProducers {
     if (openTelemetry.isUnsatisfied()) {
       return null;
     }
-    return new OpenTelemetryCommandInterceptor(openTelemetry.get());
+    return new OpenTelemetryCommandInterceptor(
+        OpenTelemetryTracing.of(openTelemetry.get(), TracingSettings.allEnabled()));
   }
 
   /**

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.sdk.testing.junit5.OpenTelemetryExtension;
 import io.opentelemetry.sdk.trace.data.SpanData;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.Projection;
+import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.test.InMemoryProjectionRepository;
 
@@ -29,7 +31,9 @@ class TracingProjectionDecoratorTest {
     Projection delegate = mock(Projection.class);
     var decorator =
         new TracingProjectionDecorator(
-            ProjectionName.of("OrdersProjection"), delegate, otelTesting.getOpenTelemetry());
+            ProjectionName.of("OrdersProjection"),
+            delegate,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     decorator.process(List.of());
 
@@ -38,7 +42,8 @@ class TracingProjectionDecoratorTest {
     SpanData span = spans.getFirst();
     assertEquals("projection/OrdersProjection/process", span.getName());
     assertEquals(StatusCode.OK, span.getStatus().getStatusCode());
-    assertEquals(0L, (long) span.getAttributes().get(TraceAttributes.BATCH_SIZE));
+    assertEquals(
+        0L, (long) span.getAttributes().get(AttributeKey.longKey(TraceAttributes.BATCH_SIZE)));
     // Drift guard: pin the projection span's exact key set alongside the command and
     // subscription spans, so all three tracing emitters stay on the same published contract.
     assertEquals(
@@ -56,7 +61,9 @@ class TracingProjectionDecoratorTest {
     doThrow(new RuntimeException("DB error")).when(delegate).process(any());
     var decorator =
         new TracingProjectionDecorator(
-            ProjectionName.of("OrdersProjection"), delegate, otelTesting.getOpenTelemetry());
+            ProjectionName.of("OrdersProjection"),
+            delegate,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     assertThrows(RuntimeException.class, () -> decorator.process(List.of()));
 
@@ -77,14 +84,18 @@ class TracingProjectionDecoratorTest {
     when(delegateTrue.writesThroughRepository()).thenReturn(true);
     var tracedTrue =
         new TracingProjectionDecorator(
-            ProjectionName.of("A"), delegateTrue, otelTesting.getOpenTelemetry());
+            ProjectionName.of("A"),
+            delegateTrue,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     assertTrue(tracedTrue.writesThroughRepository());
 
     Projection delegateFalse = mock(Projection.class);
     when(delegateFalse.writesThroughRepository()).thenReturn(false);
     var tracedFalse =
         new TracingProjectionDecorator(
-            ProjectionName.of("B"), delegateFalse, otelTesting.getOpenTelemetry());
+            ProjectionName.of("B"),
+            delegateFalse,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     assertFalse(tracedFalse.writesThroughRepository());
   }
 
@@ -98,13 +109,17 @@ class TracingProjectionDecoratorTest {
         };
     var traced =
         new TracingProjectionDecorator(
-            ProjectionName.of("orders"), writeThrough, otelTesting.getOpenTelemetry());
+            ProjectionName.of("orders"),
+            writeThrough,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     assertThat(traced.writeTarget()).containsSame(repo);
 
     Projection lambda = batch -> {};
     var tracedLambda =
         new TracingProjectionDecorator(
-            ProjectionName.of("audit"), lambda, otelTesting.getOpenTelemetry());
+            ProjectionName.of("audit"),
+            lambda,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     assertThat(tracedLambda.writeTarget()).isEmpty();
   }
 }

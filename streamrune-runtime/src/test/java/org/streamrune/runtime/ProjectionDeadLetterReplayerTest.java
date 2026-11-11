@@ -305,7 +305,11 @@ class ProjectionDeadLetterReplayerTest {
                 "tracing",
                 p ->
                     new TracingProjectionDecorator(
-                        PROJ, p, io.opentelemetry.api.OpenTelemetry.noop())),
+                        PROJ,
+                        p,
+                        OpenTelemetryTracing.of(
+                            io.opentelemetry.api.OpenTelemetry.noop(),
+                            TracingSettings.allEnabled()))),
             new Decorator(
                 "validating",
                 p ->

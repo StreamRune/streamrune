@@ -40,6 +40,9 @@ import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CausationId;
@@ -153,5 +156,9 @@ import org.streamrune.core.types.Version;
       ProjectionDeliveryMode.class,
       LoadedSaga.class,
       SagaStatus.class,
+      // Top-level core enums/records of the tracing seam (3)
+      SpanKind.class,
+      SpanLink.class,
+      TracingArea.class,
     })
 public final class StreamRuneReflectionConfig {}

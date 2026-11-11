@@ -107,6 +107,15 @@ public final class LogSanitizer {
    */
   static final int MAX_TEXT_LENGTH = 2048;
 
+  /**
+   * Maximum length of an identifier sanitized for a span attribute ({@link
+   * #sanitizeForTrace(String)}) before truncation: a longer value keeps its first 256 characters
+   * followed by {@code ...}, 259 characters in all. Above {@link IdConstraints#MAX_LENGTH}, so an
+   * identifier the ingress door accepts reaches a trace whole: a trace is searched by id, where a
+   * log line is only read.
+   */
+  public static final int MAX_TRACE_LENGTH = 256;
+
   private LogSanitizer() {}
 
   /**
@@ -119,10 +128,32 @@ public final class LogSanitizer {
    *     {@code null}
    */
   public static String sanitizeForLog(String value) {
+    return strip(value, MAX_LENGTH);
+  }
+
+  /**
+   * Strips the same code points as {@link #sanitizeForLog(String)} and cuts a value longer than
+   * {@value #MAX_TRACE_LENGTH} characters to its first {@value #MAX_TRACE_LENGTH} followed by
+   * {@code ...} (259 characters in all), for an identifier written into a span attribute. A trace
+   * backend renders attribute values in its UI and exports them as JSON, where a control or format
+   * character does the damage it does in a log line. An identifier without such a character, of at
+   * most the cap's length, is returned unchanged.
+   *
+   * @param value the identifier about to become a span attribute value; {@code null} is passed
+   *     through, so the attribute stays absent
+   * @return a value safe to render as an attribute value, or {@code null} if {@code value} was
+   *     {@code null}
+   */
+  public static String sanitizeForTrace(String value) {
+    return strip(value, MAX_TRACE_LENGTH);
+  }
+
+  /** Removes the code points unsafe for a rendered line and truncates past {@code cap}. */
+  private static String strip(String value, int cap) {
     if (value == null) {
       return null;
     }
-    StringBuilder stripped = new StringBuilder(Math.min(value.length(), MAX_LENGTH));
+    StringBuilder stripped = new StringBuilder(Math.min(value.length(), cap));
     boolean truncated = false;
     int i = 0;
     while (i < value.length()) {
@@ -132,10 +163,10 @@ public final class LogSanitizer {
       if (isUnsafeForALogLine(codePoint)) {
         continue;
       }
-      // Reserve room for the WHOLE code point. Checking `length() >= MAX_LENGTH`
-      // after the fact would let a surrogate pair straddle the cap and leave the record ending in
-      // half a character.
-      if (stripped.length() + width > MAX_LENGTH) {
+      // Reserve room for the WHOLE code point. Checking `length() >= cap` after the fact
+      // would let a surrogate pair straddle the cap and leave the record ending in half a
+      // character.
+      if (stripped.length() + width > cap) {
         truncated = true;
         break;
       }

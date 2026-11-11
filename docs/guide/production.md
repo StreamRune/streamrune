@@ -382,11 +382,12 @@ returns one series per command type.
 
 ### Tracing
 
-Every span name and attribute key below is a constant in `org.streamrune.runtime.TraceAttributes`,
-and the emitters' tests assert the emitted name and the **exact** attribute-key set against those
-constants — the span-side equivalent of the `MetricNames` guard, so this table cannot drift from
-what is actually exported. All StreamRune span attributes carry the `streamrune.` prefix. Span
-names are path-shaped (`command/PlaceOrder`, not `command.PlaceOrder`).
+Every span name and attribute key below is a constant or a name helper of
+`org.streamrune.core.tracing.TraceAttributes`, plain strings with no OpenTelemetry type. The
+emitters' tests assert the emitted name and the **exact** attribute-key set against them, and a
+doc-lint test holds this table to them — the span-side equivalent of the `MetricNames` guard, so
+this table cannot drift from what is actually exported. All StreamRune span attributes carry the
+`streamrune.` prefix. Span names are path-shaped (`command/PlaceOrder`, not `command.PlaceOrder`).
 
 | Emitter | Span name | Kind | Attributes |
 | --- | --- | --- | --- |
@@ -398,10 +399,41 @@ names are path-shaped (`command/PlaceOrder`, not `command.PlaceOrder`).
   so a command that fails before committing carries its stream too.
 - `streamrune.aggregate.type` and `streamrune.aggregate.id` are the two parts of that stream; both
   are absent for a command with no aggregate id.
+- An attribute that holds an id passes `LogSanitizer.sanitizeForTrace`, which removes control,
+  separator and format characters and cuts a longer value to its first 256 characters followed by
+  `...`, 259 characters in all; an ordinary id is unchanged.
+- The `streamrune.` prefix is reserved for the framework. A module of your own, such as an event
+  store for another database, emits the standard spans with these constants through
+  `StreamRuneTracing`, and adds attributes of its own under a prefix of its own.
 - `TracingEventListener` links its span back to the originating command trace when the first
   event's metadata carries a `traceId`/`spanId`.
 - The command interceptor is auto-registered when an `OpenTelemetry` bean is present; the
   subscription and projection decorators are opt-in wrappers.
+
+Without an integration, the builders take the tracing as one value.
+`OpenTelemetryTracing.of(openTelemetry, settings)` returns a `StreamRuneTracing` (package
+`org.streamrune.core.tracing`), and the settings hold its master switch and its switch per area:
+`TracingSettings.builder().enabled(boolean).area(TracingArea, boolean).build()`,
+`TracingSettings.allEnabled()` or `TracingSettings.disabled()`. `tracing(StreamRuneTracing)` on
+`VirtualThreadCommandBus.Builder` adds the command interceptor ahead of every framework interceptor,
+unless the chain already holds one; on the subscription builders
+(`PollingEventSubscription`, `StreamEventSubscription`, `HybridEventSubscription`,
+`PostgresNotificationSubscription`) it wraps the listener, and on the projection runner builders
+(`ContinuousProjectionRunner`, `MultiProjectionRunner`, `ScheduledProjectionRunner`) it decorates
+the projection, never twice. `StreamRune.Builder` passes it to the command bus and decorates the
+projections it registers. The default, `StreamRuneTracing.NOOP`, traces nothing and loads no
+OpenTelemetry class. `OpenTelemetryTracing.of` is the one method that takes an `OpenTelemetry`: the
+emitters' constructors and their `traced(...)` factories take a `StreamRuneTracing`, so a module of
+your own compiles and runs without the `opentelemetry-api` dependency.
+
+```java
+StreamRuneTracing tracing = OpenTelemetryTracing.of(openTelemetry,
+    TracingSettings.builder().area(TracingArea.PROJECTION, false).build());
+VirtualThreadCommandBus bus = VirtualThreadCommandBus.builder()
+    .eventStore(eventStore)
+    .tracing(tracing)
+    .build();
+```
 
 ```properties
 otel.exporter.otlp.endpoint=http://collector:4317

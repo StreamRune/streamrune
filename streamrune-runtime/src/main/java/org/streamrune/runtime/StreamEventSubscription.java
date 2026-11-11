@@ -16,6 +16,8 @@ import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.StreamSubscription;
 import org.streamrune.core.subscription.SubscriptionConfig;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
@@ -582,6 +584,7 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
     private long closeJoinTimeoutMs = DEFAULT_CLOSE_JOIN_TIMEOUT_MS;
     private int readPoisonBound = DEFAULT_READ_POISON_BOUND;
     private Clock clock;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     /**
      * Unique checkpoint name for this subscription. Shares the {@link OffsetStore} namespace with
@@ -670,6 +673,20 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
       return this;
     }
 
+    /**
+     * The tracing each delivery batch is traced through, as the span {@code
+     * subscription/{name}/deliver} (default {@link StreamRuneTracing#NOOP}, which traces nothing).
+     * When its {@link TracingArea#SUBSCRIPTION} area is on, the subscription wraps its listener in
+     * a {@link TracingEventListener}; a listener that already is one is not wrapped again.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+      return this;
+    }
+
     /** Builds the subscription. Requires {@code subscriptionName}. */
     public StreamEventSubscription build() {
       return new StreamEventSubscription(
@@ -677,7 +694,7 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
           streamId,
           eventStore,
           offsetStore,
-          listener,
+          TracingEventListener.traced(listener, tracing, subscriptionName),
           config,
           fetchSize,
           metrics,
