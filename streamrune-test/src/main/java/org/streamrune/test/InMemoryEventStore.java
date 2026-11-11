@@ -16,6 +16,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.AggregateHistory;
@@ -180,6 +181,9 @@ public final class InMemoryEventStore implements EventStore {
   /** The tracing of the serializing mode's spans; set by {@link #withTracing}. */
   private volatile StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
+  /** Whether this store starts its spans: serializing mode, with the event-store area on. */
+  private volatile boolean traced;
+
   /** Both null in by-reference mode, both set in serializing mode. */
   private final ObjectMapper objectMapper;
 
@@ -310,12 +314,12 @@ public final class InMemoryEventStore implements EventStore {
    */
   public InMemoryEventStore withTracing(StreamRuneTracing tracing) {
     this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+    this.traced = objectMapper != null && tracing.enabled(TracingArea.EVENT_STORE);
     return this;
   }
 
-  /** Whether this store starts its spans: serializing mode, with the event-store area on. */
   private boolean traced() {
-    return objectMapper != null && tracing.enabled(TracingArea.EVENT_STORE);
+    return traced;
   }
 
   /**
@@ -383,11 +387,12 @@ public final class InMemoryEventStore implements EventStore {
     }
   }
 
-  /** {@link #toEnvelope} over {@code stored}, inside the load's deserialize span when traced. */
-  private List<EventEnvelope> deserialize(List<StoredEvent> stored) {
+  /** {@link #toEnvelope} over {@code events}, inside the load's deserialize span when traced. */
+  private List<EventEnvelope> deserialize(Stream<StoredEvent> events) {
     if (!traced()) {
-      return stored.stream().map(this::toEnvelope).toList();
+      return events.map(this::toEnvelope).toList();
     }
+    List<StoredEvent> stored = events.toList();
     UpcasterChain chain = upcasterChain;
     long upcasts =
         chain == null
@@ -404,10 +409,14 @@ public final class InMemoryEventStore implements EventStore {
         scope -> stored.stream().map(this::toEnvelope).toList());
   }
 
-  /** {@link #toEnvelope} over a read's {@code stored}, inside the read span when there are any. */
-  private List<EventEnvelope> readEvents(List<StoredEvent> stored, String readKind) {
-    if (stored.isEmpty() || !traced()) {
-      return stored.stream().map(this::toEnvelope).toList();
+  /** {@link #toEnvelope} over a read's {@code events}, inside the read span when there are any. */
+  private List<EventEnvelope> readEvents(Stream<StoredEvent> events, String readKind) {
+    if (!traced()) {
+      return events.map(this::toEnvelope).toList();
+    }
+    List<StoredEvent> stored = events.toList();
+    if (stored.isEmpty()) {
+      return List.of();
     }
     return inSpan(
         TraceAttributes.EVENT_STORE_READ,
@@ -497,8 +506,7 @@ public final class InMemoryEventStore implements EventStore {
         deserialize(
             streams.getOrDefault(streamId, List.<StoredEvent>of()).stream()
                 .filter(e -> e.version().value() > afterVersion)
-                .sorted(Comparator.comparingLong(e -> e.version().value()))
-                .toList());
+                .sorted(Comparator.comparingLong(e -> e.version().value())));
 
     Version version = events.isEmpty() ? snapshotVersion : events.getLast().version();
     return new AggregateHistory(state, events, version, snapshotVersion);
@@ -1237,8 +1245,7 @@ public final class InMemoryEventStore implements EventStore {
         globalStream.stream()
             .filter(e -> e.globalOffset().value() > afterOffset.value())
             .sorted(Comparator.comparingLong(e -> e.globalOffset().value()))
-            .limit(maxCount)
-            .toList(),
+            .limit(maxCount),
         "GLOBAL");
   }
 
@@ -1248,8 +1255,7 @@ public final class InMemoryEventStore implements EventStore {
         streams.getOrDefault(streamId, List.<StoredEvent>of()).stream()
             .filter(e -> e.version().value() > afterVersion.value())
             .sorted(Comparator.comparingLong(e -> e.version().value()))
-            .limit(maxCount)
-            .toList(),
+            .limit(maxCount),
         "STREAM");
   }
 
