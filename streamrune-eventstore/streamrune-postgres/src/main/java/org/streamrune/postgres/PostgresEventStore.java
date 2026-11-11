@@ -1056,10 +1056,10 @@ public final class PostgresEventStore implements EventStore {
       // never the source of truth — is unreadable, most often because an aggregate-state field
       // was renamed/removed WITHOUT bumping the snapshot version. Crashing here wedges the
       // aggregate permanently (every command load() fails, the bus dead-letters it, replays fail
-      // identically). Instead discard the snapshot and rebuild from events; the caller re-reads the
-      // read was narrowed to versions AFTER the snapshot, so RE-READ the whole stream from the
-      // beginning — nulling the state alone would silently drop the pre-snapshot events. Mirrors
-      // the retired-state_type and unmigratable-version discard branches above.
+      // identically). Instead discard the snapshot and rebuild from events: the caller re-reads
+      // the whole stream from the beginning, because the event read was narrowed to versions AFTER
+      // the snapshot — nulling the state alone would silently drop the pre-snapshot events. Mirrors
+      // the retired-state_type and unmigratable-version discard branches of the load.
       log.error(
           "Snapshot for stream {} is undeserializable ({}); discarding the derived snapshot cache"
               + " and replaying all events from the beginning. This usually means an"
