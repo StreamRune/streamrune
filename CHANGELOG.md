@@ -165,13 +165,15 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - `PostgresEventStore.create(...)` and `PostgresEventStore.builder().build()` refuse, before touching
   the database, a registered type with an `@Encrypted` component when no `CryptoEngine` is
   configured.
-- `EventMetadata` on every envelope: `eventId`, `commandId`, `traceId`, `spanId`, `correlationId`,
+- `EventMetadata` on every envelope: `eventId`, `commandId`, `traceId`, `correlationId`,
   `causationId`, `userId`, `timestamp`, allow-listed W3C baggage and `sagaOrigin`, built by the
   command bus from the bound `StreamRuneContext`. `sagaOrigin` (`SagaOrigin`: saga type, saga id,
   hop) names the saga whose dispatch caused the event and is `null` on every other event;
   `causationId` names the event the command reacted to and is `null` on a causation root. The bus
   copies both from the dispatch cause (`StreamRuneContext.CAUSE`) that saga dispatch and
   `StreamRuneContext.continuing` bind, never from a request header or a baggage entry.
+  `EventMetadata` has no `spanId` component; a read ignores a `spanId` key in stored metadata, and
+  every other key the record does not define is refused.
 - `StreamRuneContext.continuing(EventEnvelope)` returns the bindings for commands a listener
   dispatches in reaction to a stored event (a process manager):
   `StreamRuneContext.continuing(event).run(() -> commandBus.execute(command, key))`. The events of

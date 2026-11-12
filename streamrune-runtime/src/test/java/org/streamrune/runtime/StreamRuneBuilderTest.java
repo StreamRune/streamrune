@@ -646,7 +646,6 @@ class StreamRuneBuilderTest {
         org.streamrune.core.IdGenerator.generateEventId(),
         org.streamrune.core.IdGenerator.generateCommandId(),
         null,
-        null,
         org.streamrune.core.types.CorrelationId.of("corr-1"),
         null,
         null,

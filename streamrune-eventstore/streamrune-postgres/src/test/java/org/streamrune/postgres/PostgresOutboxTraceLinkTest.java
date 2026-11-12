@@ -159,7 +159,6 @@ class PostgresOutboxTraceLinkTest {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             clientTraceId == null ? null : TraceId.of(clientTraceId),
-            null,
             CorrelationId.of("trace-link"),
             null,
             null,

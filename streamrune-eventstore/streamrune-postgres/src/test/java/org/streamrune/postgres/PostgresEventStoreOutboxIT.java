@@ -123,7 +123,6 @@ class PostgresEventStoreOutboxIT {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("outbox-it"),
             null,
             null,

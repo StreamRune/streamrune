@@ -254,7 +254,6 @@ class PollingEventSubscriptionHealthErrorsTest {
                     EventId.of("evt_1"),
                     CommandId.of("cmd_1"),
                     null,
-                    null,
                     CorrelationId.of("corr"),
                     null,
                     null,

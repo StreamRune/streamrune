@@ -609,7 +609,6 @@ class SagaStepExecutorTest {
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-1"),
             null,
-            null,
             CorrelationId.of("unrelated-correlation"),
             null,
             null,

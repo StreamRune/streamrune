@@ -175,7 +175,6 @@ class OutboxAutoConfigIT {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("corr-outbox-it"),
             null,
             null,

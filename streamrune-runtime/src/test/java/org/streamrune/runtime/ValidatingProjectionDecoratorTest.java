@@ -49,7 +49,6 @@ class ValidatingProjectionDecoratorTest {
             new EventId("evt-1"),
             new CommandId("cmd-1"),
             null,
-            null,
             new CorrelationId("corr-1"),
             null,
             null,

@@ -227,7 +227,6 @@ class PostgresCryptoConnectionIT {
             EventId.of("evt-" + streamId.value()),
             CommandId.of("cmd-" + streamId.value()),
             null,
-            null,
             CorrelationId.of("corr-" + streamId.value()),
             null,
             null,

@@ -449,7 +449,6 @@ class PostgresEventStoreGlobalOffsetDesyncIT {
             EventId.of("evt-" + streamId.value() + "-" + version),
             CommandId.of("cmd-" + streamId.value() + "-" + version),
             null,
-            null,
             CorrelationId.of("corr-1"),
             null,
             null,

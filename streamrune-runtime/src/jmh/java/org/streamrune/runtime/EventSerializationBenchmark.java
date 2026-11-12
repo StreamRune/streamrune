@@ -166,7 +166,6 @@ public class EventSerializationBenchmark {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("bench-correlation"),
             null,
             null,

@@ -553,7 +553,6 @@ final class SagaStepLockFixture implements AutoCloseable {
                         EventId.of("evt-" + triggerIds.incrementAndGet()),
                         CommandId.of("cmd-" + UUID.randomUUID()),
                         null,
-                        null,
                         CorrelationId.of("request-" + UUID.randomUUID()),
                         null,
                         null,

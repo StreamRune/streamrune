@@ -153,7 +153,6 @@ class SagaTracingTest {
             m.eventId(),
             m.commandId(),
             m.traceId(),
-            m.spanId(),
             m.correlationId(),
             m.causationId(),
             m.userId(),

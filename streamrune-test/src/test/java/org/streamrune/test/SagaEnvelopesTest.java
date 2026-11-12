@@ -53,7 +53,6 @@ class SagaEnvelopesTest {
     assertNotNull(metadata.commandId());
     assertNotNull(metadata.timestamp());
     assertNull(metadata.traceId());
-    assertNull(metadata.spanId());
     assertNull(metadata.userId());
     assertNull(metadata.causationId());
     assertTrue(metadata.baggage().isEmpty());
@@ -117,7 +116,6 @@ class SagaEnvelopesTest {
     assertEquals(stored.traceId(), built.traceId());
     assertEquals(stored.userId(), built.userId());
     assertEquals(stored.baggage(), built.baggage());
-    assertEquals(stored.spanId(), built.spanId());
   }
 
   @Test
@@ -157,7 +155,6 @@ class SagaEnvelopesTest {
                 IdGenerator.generateEventId(),
                 IdGenerator.generateCommandId(),
                 TraceId.of("trace-1"),
-                null,
                 CorrelationId.of("client-chosen"),
                 null,
                 UserId.of("alice"),

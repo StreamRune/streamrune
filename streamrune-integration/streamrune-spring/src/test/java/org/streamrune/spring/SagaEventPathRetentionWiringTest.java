@@ -596,7 +596,6 @@ class SagaEventPathRetentionWiringTest {
         IdGenerator.generateEventId(),
         IdGenerator.generateCommandId(),
         null,
-        null,
         CorrelationId.of("x"),
         null,
         null,

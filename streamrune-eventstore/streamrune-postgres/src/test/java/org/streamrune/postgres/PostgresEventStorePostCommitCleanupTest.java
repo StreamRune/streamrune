@@ -116,7 +116,6 @@ class PostgresEventStorePostCommitCleanupTest {
             EventId.of("evt-v" + version),
             CommandId.of("cmd-v" + version),
             null,
-            null,
             CorrelationId.of("corr-1"),
             null,
             null,

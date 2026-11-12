@@ -295,7 +295,6 @@ class PostgresEventStoreReadClassificationTest {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("corr-1"),
             null,
             null,

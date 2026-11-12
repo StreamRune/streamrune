@@ -285,7 +285,6 @@ public class PostgresEventStoreBenchmark {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("bench-correlation"),
             null,
             null,

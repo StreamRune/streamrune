@@ -284,7 +284,6 @@ public class StreamRuneBenchmark {
         org.streamrune.core.types.EventId.of("test-id"),
         org.streamrune.core.types.CommandId.of("test-command"),
         null,
-        null,
         org.streamrune.core.types.CorrelationId.of("test-correlation"),
         null,
         null,

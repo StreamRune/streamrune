@@ -294,7 +294,6 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
           eventId,
           commandId,
           ctx.traceId(),
-          null,
           correlationId,
           causation,
           ctx.userId(),
@@ -303,16 +302,7 @@ public final class InMemoryCommandBus implements CommandBus, AutoCloseable {
           origin);
     }
     return new EventMetadata(
-        eventId,
-        commandId,
-        null,
-        null,
-        correlationId,
-        causation,
-        null,
-        Instant.now(),
-        null,
-        origin);
+        eventId, commandId, null, correlationId, causation, null, Instant.now(), null, origin);
   }
 
   @Override

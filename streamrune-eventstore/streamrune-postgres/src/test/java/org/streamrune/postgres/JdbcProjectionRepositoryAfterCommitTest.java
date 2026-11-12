@@ -101,7 +101,6 @@ class JdbcProjectionRepositoryAfterCommitTest {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("corr-" + orderId),
             null,
             null,

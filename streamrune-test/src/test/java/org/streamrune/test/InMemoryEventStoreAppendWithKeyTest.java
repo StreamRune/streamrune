@@ -52,7 +52,6 @@ class InMemoryEventStoreAppendWithKeyTest {
             EventId.of("evt-" + id),
             CommandId.of("cmd-" + id),
             null,
-            null,
             CorrelationId.of("corr-" + id),
             null,
             null,

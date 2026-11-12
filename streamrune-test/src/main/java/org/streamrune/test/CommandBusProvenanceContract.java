@@ -488,7 +488,6 @@ public abstract class CommandBusProvenanceContract {
                 IdGenerator.generateEventId(),
                 IdGenerator.generateCommandId(),
                 null,
-                null,
                 ORIGIN.correlationId(),
                 null,
                 null,

@@ -205,7 +205,6 @@ class SagaGuideQuickExampleTest {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of(named.value()),
             null,
             null,

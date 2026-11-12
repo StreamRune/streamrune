@@ -74,7 +74,6 @@ class InMemoryEventStoreSerializingTest {
         EventId.of("evt_" + v),
         CommandId.of("cmd_" + v),
         null,
-        null,
         CorrelationId.of("corr"),
         null,
         null,

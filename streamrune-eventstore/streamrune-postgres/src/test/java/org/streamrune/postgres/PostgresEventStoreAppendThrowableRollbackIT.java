@@ -281,7 +281,6 @@ class PostgresEventStoreAppendThrowableRollbackIT {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("esint1-it"),
             null,
             null,

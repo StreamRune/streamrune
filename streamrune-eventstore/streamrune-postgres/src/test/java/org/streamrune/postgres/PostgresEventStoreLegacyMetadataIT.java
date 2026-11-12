@@ -212,4 +212,20 @@ class PostgresEventStoreLegacyMetadataIT {
 
     assertThrows(EventStoreException.class, () -> store.load(streamId));
   }
+
+  @Test
+  void loadAndReadGlobalStream_readMetadataThatCarriesASpanIdKey() throws Exception {
+    StreamId streamId = TestStreams.stream("legacy-span-id");
+    insertLegacyRow(
+        streamId,
+        1L,
+        metadataWith("legacy-corr-span", null)
+            .replace("\"spanId\":null", "\"spanId\":\"b7ad6b7169203331\""));
+
+    var history = assertDoesNotThrow(() -> store.load(streamId));
+    var metadata = history.events().getFirst().metadata();
+    assertEquals("legacy-corr-span", metadata.correlationId().value());
+    assertEquals(org.streamrune.core.tracing.SpanLink.NONE, metadata.spanContext());
+    assertEquals(1, store.readGlobalStream(GlobalOffset.initial(), 10).size());
+  }
 }

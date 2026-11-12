@@ -55,7 +55,6 @@ class SseEventPublisherEvictionTest {
             EventId.of("evt-" + offset),
             CommandId.of("cmd-" + offset),
             null,
-            null,
             CorrelationId.of("corr"),
             null,
             null,

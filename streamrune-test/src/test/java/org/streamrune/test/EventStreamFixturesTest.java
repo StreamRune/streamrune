@@ -79,7 +79,6 @@ class EventStreamFixturesTest {
         EventId.of("event-" + n),
         CommandId.of("command-" + n),
         null,
-        null,
         CorrelationId.of("correlation-" + n),
         null,
         null,
@@ -421,5 +420,34 @@ class EventStreamFixturesTest {
 
     var failure = assertThrows(IOException.class, () -> EventStreamFixtures.read(file));
     assertTrue(failure.getMessage().contains("broken.json"), failure.getMessage());
+  }
+
+  @Test
+  void storedMetadataWithASpanIdKey_bindsInASerializingStore_andTheKeyIsDropped()
+      throws IOException {
+    var store = InMemoryEventStore.serializing(orders(), null);
+    String metadata =
+        "{\"eventId\":\"event-1\",\"commandId\":\"command-1\",\"traceId\":null,"
+            + "\"spanId\":\"b7ad6b7169203331\",\"correlationId\":\"correlation-1\","
+            + "\"causationId\":null,\"userId\":null,\"timestamp\":\"2026-01-01T00:00:01Z\","
+            + "\"baggage\":{},\"sagaOrigin\":null}";
+
+    EventEnvelope bound =
+        store.bindStoredForm(
+            ORDER_1,
+            new Version(1),
+            EventType.fromClass(OrderPlaced.class),
+            1,
+            "{\"orderId\":\"1\",\"quantity\":2}",
+            metadata);
+    store.append(ORDER_1, List.of(bound), new Version(0));
+
+    EventEnvelope read = store.readGlobalStream(GlobalOffset.initial(), 10).getFirst();
+    assertEquals(new OrderPlaced("1", 2), read.event());
+    assertEquals(EventId.of("event-1"), read.metadata().eventId());
+    assertEquals(CorrelationId.of("correlation-1"), read.metadata().correlationId());
+    assertTrue(
+        !store.objectMapper().writeValueAsString(read.metadata()).contains("spanId"),
+        "the metadata is written without spanId");
   }
 }

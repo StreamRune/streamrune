@@ -1307,7 +1307,6 @@ abstract class SagaRunnerHoldTest {
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-" + UUID.randomUUID()),
             null,
-            null,
             CorrelationId.of("saga-1"),
             null,
             null,

@@ -269,7 +269,6 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
                 eventId,
                 CommandId.of("cmd-" + UUID.randomUUID()),
                 null,
-                null,
                 CorrelationId.of("order-place-" + orderId),
                 null,
                 null,

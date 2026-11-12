@@ -132,7 +132,6 @@ class PostgresEventStoreTest {
         IdGenerator.generateEventId(),
         IdGenerator.generateCommandId(),
         null,
-        null,
         CorrelationId.of("corr-1"),
         null,
         null,
@@ -1058,7 +1057,6 @@ class PostgresEventStoreTest {
         new EventMetadata(
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
-            null,
             null,
             CorrelationId.of("corr-audit-1"),
             org.streamrune.core.types.CausationId.of("cmd-audit-1"),

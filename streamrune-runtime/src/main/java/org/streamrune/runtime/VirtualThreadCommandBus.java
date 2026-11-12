@@ -2015,7 +2015,6 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           eventId,
           commandId,
           ctx.traceId(),
-          null,
           provenance.correlationId(),
           provenance.causationId(),
           ctx.userId(),
@@ -2027,7 +2026,6 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     return new EventMetadata(
         eventId,
         commandId,
-        null,
         null,
         provenance.correlationId(),
         provenance.causationId(),

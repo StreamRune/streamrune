@@ -252,20 +252,21 @@ and is used as the sentinel value before append. You encounter `GlobalOffset` in
 
 ### EventMetadata
 
-`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, SpanId spanId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin, SpanLink spanContext)`
+`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin, SpanLink spanContext)`
 
 Causal metadata attached to every persisted event. Built automatically by
 `VirtualThreadCommandBus`, which copies the caller's trace id (the `X-Trace-Id` header) and user
 ID from `StreamRuneContext` when a request context is bound, and writes `spanContext` from its own
 `command/{CommandType}` span: `SpanLink.NONE` when the command was not traced. The spans that later
 handle the event link to `spanContext` only (`SpanLink.of(metadata)`); the caller-supplied
-`traceId` and `spanId` are correlation data and never build a link. You encounter this inside
+`traceId` is correlation data and never builds a link. You encounter this inside
 `EventEnvelope.metadata()` when writing projections or building audit trails.
 
 The PostgreSQL event store keeps it as JSON in the `event_stream.metadata` column and binds it back
 to this record on every read. `eventId`, `commandId`, `correlationId` and `timestamp` are required, the other components
 are optional (`baggage` defaults to an empty map, a missing `sagaOrigin` key reads as `null`), and a
-key the record does not define is refused.
+key the record does not define is refused, except `spanId`: stored metadata can carry that key, and
+a read ignores it.
 A row written outside the framework — a hand-written `INSERT`, a data migration — with metadata
 that does not bind fails every read of its stream and of the global stream.
 

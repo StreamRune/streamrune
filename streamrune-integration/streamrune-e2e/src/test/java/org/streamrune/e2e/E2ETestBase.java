@@ -184,7 +184,6 @@ abstract class E2ETestBase {
         IdGenerator.generateEventId(),
         IdGenerator.generateCommandId(),
         null,
-        null,
         CorrelationId.of("e2e-corr-" + n),
         null,
         null,

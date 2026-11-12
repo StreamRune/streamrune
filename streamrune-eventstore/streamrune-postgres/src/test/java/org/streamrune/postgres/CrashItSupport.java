@@ -146,7 +146,6 @@ final class CrashItSupport {
                   IdGenerator.generateEventId(),
                   IdGenerator.generateCommandId(),
                   null,
-                  null,
                   CorrelationId.of("crash-it"),
                   null,
                   null,

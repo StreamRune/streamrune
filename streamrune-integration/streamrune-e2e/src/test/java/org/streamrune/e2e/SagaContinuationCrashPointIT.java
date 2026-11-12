@@ -826,7 +826,6 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
                 EventId.of("evt-" + UUID.randomUUID()),
                 CommandId.of("cmd-" + UUID.randomUUID()),
                 null,
-                null,
                 CorrelationId.of("request-" + event.orderId()),
                 null,
                 null,

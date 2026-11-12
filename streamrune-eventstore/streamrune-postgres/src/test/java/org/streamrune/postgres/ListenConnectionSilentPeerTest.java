@@ -303,7 +303,6 @@ class ListenConnectionSilentPeerTest {
                 EventId.of("evt_" + stream),
                 CommandId.of("cmd_" + stream),
                 null,
-                null,
                 CorrelationId.of("corr"),
                 null,
                 null,

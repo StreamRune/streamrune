@@ -40,7 +40,6 @@ final class WindowedProjectionTestSupport {
             new EventId("e-" + t.toEpochMilli()),
             new CommandId("c-1"),
             null,
-            null,
             new CorrelationId("corr-1"),
             null,
             null,

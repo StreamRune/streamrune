@@ -227,7 +227,6 @@ class ReservedCorrelationIdDeadLetterTest {
                 EventId.of("evt-request-1"),
                 CommandId.of("cmd-request-1"),
                 null,
-                null,
                 CorrelationId.of("client-corr-7"),
                 null,
                 null,

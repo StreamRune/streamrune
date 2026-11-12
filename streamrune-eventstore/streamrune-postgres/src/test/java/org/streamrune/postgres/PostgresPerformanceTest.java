@@ -211,7 +211,6 @@ class PostgresPerformanceTest {
             org.streamrune.core.types.EventId.of("id-" + version),
             org.streamrune.core.types.CommandId.of("cmd-" + version),
             null,
-            null,
             org.streamrune.core.types.CorrelationId.of("corr-" + version),
             null,
             null,
