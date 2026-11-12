@@ -17,18 +17,21 @@ import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxOrderingViolationException;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.SpanId;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.TraceId;
 
 /**
  * The ordering-mode contract every {@link OutboxStore} must honour. Run by {@code
  * InMemoryOutboxStoreContractTest} and {@code PostgresOutboxStoreContractTest}, so the two shipped
  * stores cannot diverge in outcome: every status transition, both modes' head rules, the delete
  * guard (delete refuses FAILED), retention (never deletes FAILED), the strict null-aggregate
- * rejection, position-preserving replay, the audited skip, the blockage sample and the read-only
- * lookups. Cases where the mode matters exist once per mode and share a helper, so a reader sees
- * both behaviours side by side.
+ * rejection, position-preserving replay, the audited skip, the blockage sample, the read-only
+ * lookups and the trace link an entry carries. Cases where the mode matters exist once per mode and
+ * share a helper, so a reader sees both behaviours side by side.
  */
 public abstract class OutboxStoreContract {
 
@@ -471,5 +474,70 @@ public abstract class OutboxStoreContract {
       assertTrue(skipped.stream().allMatch(e -> e.skip() != null));
       assertEquals(2, store.countByStatus(OutboxStatus.SKIPPED));
     }
+  }
+
+  // ── The link to the trace of the command that wrote the entry ─────────────────────────────────
+
+  /** A link with valid W3C ids. */
+  protected static final SpanLink TRACE_LINK =
+      new SpanLink(TraceId.of("4bf92f3577b34da6a3ce929d0e0e4736"), SpanId.of("00f067aa0ba902b7"));
+
+  @Test
+  public void traceLink_isReadBackByEveryLookup_andKeptByEveryTransition_bothModes() {
+    for (var mode : OutboxOrderingMode.values()) {
+      var store = newStore(mode);
+      store.save(pending("t1", A).withTraceLink(TRACE_LINK));
+      store.save(pending("t2", B).withTraceLink(TRACE_LINK));
+      store.save(pending("t3", A_OTHER_TYPE));
+
+      var claimed = store.loadPending(100);
+      assertEquals(List.of("t1", "t2", "t3"), claimed.stream().map(e -> e.id().value()).toList());
+      assertEquals(TRACE_LINK, claimed.getFirst().traceLink(), mode + ": the claim reads it");
+      assertNull(claimed.get(2).traceLink(), mode + ": an entry saved without a link has none");
+
+      assertTrue(
+          store.markRetry(
+              OutboxEntryId.of("t1"), 1, "blip", Duration.ofSeconds(-1), store.claimedBy()));
+      assertEquals(TRACE_LINK, linkOf(store, "t1"), mode + ": markRetry keeps it");
+      assertEquals(List.of("t1"), claimIds(store));
+      assertTrue(store.markFailed(OutboxEntryId.of("t1"), 10, "poison", store.claimedBy()));
+      assertEquals(
+          TRACE_LINK,
+          store.findByStatus(OutboxStatus.FAILED, 10).getFirst().traceLink(),
+          mode + ": findByStatus reads it");
+      assertTrue(store.resetFailedToPending(OutboxEntryId.of("t1")));
+      assertEquals(TRACE_LINK, linkOf(store, "t1"), mode + ": a replay keeps it");
+      assertEquals(1, store.releaseClaims(store.loadPending(100), store.claimedBy()));
+      assertEquals(TRACE_LINK, linkOf(store, "t1"), mode + ": releaseClaims keeps it");
+      assertEquals(List.of("t1"), claimIds(store));
+      assertTrue(store.markFailed(OutboxEntryId.of("t1"), 10, "poison", store.claimedBy()));
+      assertTrue(store.skipFailed(OutboxEntryId.of("t1"), "ops", "r"));
+      assertEquals(TRACE_LINK, linkOf(store, "t1"), mode + ": a skip keeps it");
+      assertTrue(store.markDelivered(OutboxEntryId.of("t2"), store.claimedBy()));
+      assertEquals(TRACE_LINK, linkOf(store, "t2"), mode + ": a delivery keeps it");
+      assertTrue(store.markDelivered(OutboxEntryId.of("t3"), store.claimedBy()));
+      assertNull(linkOf(store, "t3"), mode + ": no link appears on delivery");
+    }
+  }
+
+  @Test
+  public void
+      traceLink_withIdsThatAreNotW3cIds_isNotStored_andTheEntryIsStillDelivered_bothModes() {
+    for (var mode : OutboxOrderingMode.values()) {
+      var store = newStore(mode);
+      store.save(
+          pending("m1", A)
+              .withTraceLink(new SpanLink(TraceId.of("from-a-header"), SpanId.of("abc"))));
+
+      var claimed = store.loadPending(100);
+      assertEquals(List.of("m1"), claimed.stream().map(e -> e.id().value()).toList());
+      assertNull(claimed.getFirst().traceLink(), mode.name());
+      assertTrue(store.markDelivered(OutboxEntryId.of("m1"), store.claimedBy()));
+      assertNull(linkOf(store, "m1"), mode.name());
+    }
+  }
+
+  private static SpanLink linkOf(OutboxStore store, String id) {
+    return store.findById(OutboxEntryId.of(id)).orElseThrow().traceLink();
   }
 }

@@ -414,6 +414,7 @@ class OutboxStoreDefaultMethodsTest {
         Instant.now(),
         null,
         null,
+        null,
         null);
   }
 

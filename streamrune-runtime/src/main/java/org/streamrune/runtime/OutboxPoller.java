@@ -26,6 +26,7 @@ import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TraceScope;
@@ -427,9 +428,8 @@ public final class OutboxPoller implements AutoCloseable {
         guardedStart(
             TraceAttributes.OUTBOX_RELAY,
             SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.BATCH_SIZE, (long) pending.size())
-                .build());
+            SpanAttributes.builder().put(TraceAttributes.BATCH_SIZE, (long) pending.size()).build(),
+            null);
     try {
       OutboxPublisher.BatchResult result = publishAndRecord(pending, claimBase, lease, interrupts);
       scope.setAttribute(TraceAttributes.OUTBOX_PUBLISHED, (long) result.confirmed().size());
@@ -469,16 +469,21 @@ public final class OutboxPoller implements AutoCloseable {
 
   /**
    * Starts the span {@value TraceAttributes#OUTBOX_PUBLISH} of {@code entry}'s hand-off, of kind
-   * {@code PRODUCER}, so the spans of the broker client's own instrumentation nest under it.
+   * {@code PRODUCER}, so the spans of the broker client's own instrumentation nest under it. The
+   * span links to the trace of the command that wrote the entry when the entry carries a {@link
+   * OutboxEntry#traceLink() traceLink} with valid W3C ids; a store of another kind that hands back
+   * malformed ids gets a span without a link.
    */
   private TraceScope startPublishSpan(OutboxEntry entry) {
+    SpanLink link = entry.traceLink();
     return guardedStart(
         TraceAttributes.OUTBOX_PUBLISH,
         SpanKind.PRODUCER,
         SpanAttributes.builder()
             .put(TraceAttributes.OUTBOX_ENTRY_ID, LogSanitizer.sanitizeForTrace(entry.id().value()))
             .put(TraceAttributes.OUTBOX_PAYLOAD_TYPE, entry.payloadType())
-            .build());
+            .build(),
+        link != null && link.isW3c() ? link : null);
   }
 
   /**
@@ -487,10 +492,14 @@ public final class OutboxPoller implements AutoCloseable {
    * throw. A {@link StreamRuneTracing} must not throw; one that does is reported once, with one
    * WARN, and the relay delivers every entry as it would untraced.
    */
-  private TraceScope guardedStart(String spanName, SpanKind kind, SpanAttributes attributes) {
+  private TraceScope guardedStart(
+      String spanName, SpanKind kind, SpanAttributes attributes, SpanLink link) {
     TraceScope scope;
     try {
-      scope = tracing.start(TracingArea.OUTBOX, spanName, kind, attributes);
+      scope =
+          link == null
+              ? tracing.start(TracingArea.OUTBOX, spanName, kind, attributes)
+              : tracing.start(TracingArea.OUTBOX, spanName, kind, attributes, link, null);
     } catch (RuntimeException e) {
       tracingFailed(e);
       return TraceScope.NOOP;
@@ -1430,9 +1439,10 @@ public final class OutboxPoller implements AutoCloseable {
      * on: {@value TraceAttributes#OUTBOX_RELAY} for each batch that claimed at least one entry (an
      * empty poll starts none), and under it {@value TraceAttributes#OUTBOX_PUBLISH}, of kind {@code
      * PRODUCER}, for each entry's hand-off, which the publisher starts through the {@link
-     * OutboxEntrySpans} the poller passes to {@link OutboxPublisher#publishBatch}. Tracing never
-     * changes how the publisher delivers. Optional; defaults to {@link StreamRuneTracing#NOOP},
-     * which traces nothing.
+     * OutboxEntrySpans} the poller passes to {@link OutboxPublisher#publishBatch}. An entry's span
+     * links to the trace of the command that wrote it ({@link OutboxEntry#traceLink()}). Tracing
+     * never changes how the publisher delivers. Optional; defaults to {@link
+     * StreamRuneTracing#NOOP}, which traces nothing.
      *
      * @param tracing the tracing; not {@code null}
      * @return this builder

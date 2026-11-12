@@ -21,6 +21,7 @@ import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxOrderingViolationException;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.LogSanitizer;
 
 /**
@@ -106,8 +107,8 @@ public final class PostgresOutboxStore implements OutboxStore {
   // the database clock governs lease arithmetic (avoids clock-skew issues in distributed writers).
   private static final String INSERT =
       "INSERT INTO outbox_events (entry_id, payload, payload_type, aggregate_type, aggregate_id,"
-          + " status, attempts, last_error, created_at, processed_at) "
-          + "VALUES (?, ?::jsonb, ?, ?, ?, 'PENDING', 0, NULL, NOW(), NULL) "
+          + " trace_id, span_id, status, attempts, last_error, created_at, processed_at) "
+          + "VALUES (?, ?::jsonb, ?, ?, ?, ?, ?, 'PENDING', 0, NULL, NOW(), NULL) "
           + "ON CONFLICT (entry_id) DO NOTHING";
 
   // Per-stream claim, one statement per OutboxOrderingMode (claimPendingSql). Invariant: at any
@@ -186,7 +187,7 @@ public final class PostgresOutboxStore implements OutboxStore {
           + "  RETURNING entry_id, payload::text AS payload, payload_type, aggregate_type,"
           + "    aggregate_id, status,"
           + "    attempts, last_error, created_at, processed_at, next_retry_at,"
-          + "    skipped_at, skipped_by, skip_reason, seq"
+          + "    skipped_at, skipped_by, skip_reason, trace_id, span_id, seq"
           + ") SELECT * FROM claimed ORDER BY seq ASC";
 
   // STRICT_PER_AGGREGATE: differs from the availability-first statement in exactly two CTEs —
@@ -230,7 +231,7 @@ public final class PostgresOutboxStore implements OutboxStore {
           + "  RETURNING entry_id, payload::text AS payload, payload_type, aggregate_type,"
           + "    aggregate_id, status,"
           + "    attempts, last_error, created_at, processed_at, next_retry_at,"
-          + "    skipped_at, skipped_by, skip_reason, seq"
+          + "    skipped_at, skipped_by, skip_reason, trace_id, span_id, seq"
           + ") SELECT * FROM claimed ORDER BY seq ASC";
 
   /**
@@ -329,7 +330,7 @@ public final class PostgresOutboxStore implements OutboxStore {
       "entry_id, payload::text AS payload, payload_type, aggregate_type, aggregate_id, status,"
           + " attempts,"
           + " last_error, created_at, processed_at, next_retry_at, skipped_at, skipped_by,"
-          + " skip_reason, seq";
+          + " skip_reason, trace_id, span_id, seq";
 
   // Operator enumeration: oldest-first (seq ASC), read-only — claimed_by is NOT touched.
   private static final String FIND_BY_STATUS =
@@ -458,6 +459,7 @@ public final class PostgresOutboxStore implements OutboxStore {
       ps.setString(2, entry.payload());
       ps.setString(3, entry.payloadType());
       PostgresStreamKeys.bind(ps, 4, entry.streamId());
+      bindTraceLink(ps, 6, entry.traceLink());
       PostgresTransactions.commitIfManual(conn, "outbox save", c -> ps.executeUpdate());
     } catch (Exception e) {
       throw new EventStoreException(
@@ -497,6 +499,7 @@ public final class PostgresOutboxStore implements OutboxStore {
         ps.setString(2, entry.payload());
         ps.setString(3, entry.payloadType());
         PostgresStreamKeys.bind(ps, 4, entry.streamId());
+        bindTraceLink(ps, 6, entry.traceLink());
         ps.addBatch();
       }
       ps.executeBatch();
@@ -823,11 +826,25 @@ public final class PostgresOutboxStore implements OutboxStore {
   }
 
   /**
+   * Binds {@code link} to the {@code trace_id} and {@code span_id} parameters at {@code index} and
+   * {@code index + 1}: both ids when they are valid W3C ids, two {@code NULL}s when there is no
+   * link or its ids are not valid, so the column holds only ids a tracing library accepts.
+   */
+  private static void bindTraceLink(PreparedStatement ps, int index, SpanLink link)
+      throws SQLException {
+    boolean valid = link != null && link.isW3c();
+    ps.setString(index, valid ? link.traceId().value() : null);
+    ps.setString(index + 1, valid ? link.spanId().value() : null);
+  }
+
+  /**
    * The one row mapper for every outbox SELECT ({@code ENTRY_COLUMNS} and both claim statements'
    * {@code RETURNING} lists name the same columns). {@code claimed} rows report a {@code null}
    * {@code processedAt}: a claim leaves the column untouched, and a replayed row still carries the
    * stamp of its earlier {@code FAILED}, which is not this claim's outcome. The skip audit is read
-   * iff the row is {@code SKIPPED} (enforced by the {@link OutboxEntry} invariant).
+   * iff the row is {@code SKIPPED} (enforced by the {@link OutboxEntry} invariant). A stored trace
+   * id or span id that is not a valid W3C id gives no trace link rather than an exception, so a
+   * corrupt value never stops the entry's delivery.
    */
   private static OutboxEntry mapRow(ResultSet rs, boolean claimed) throws SQLException {
     var status = OutboxStatus.valueOf(rs.getString("status"));
@@ -854,7 +871,8 @@ public final class PostgresOutboxStore implements OutboxStore {
         rs.getTimestamp("created_at").toInstant(),
         processedAtTs != null ? processedAtTs.toInstant() : null,
         nextRetryAtTs != null ? nextRetryAtTs.toInstant() : null,
-        skip);
+        skip,
+        SpanLink.ofW3c(rs.getString("trace_id"), rs.getString("span_id")));
   }
 
   @Override

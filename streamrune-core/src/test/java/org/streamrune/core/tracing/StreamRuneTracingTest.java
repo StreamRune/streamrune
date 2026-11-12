@@ -103,4 +103,41 @@ class StreamRuneTracingTest {
     assertThat(SpanLink.ofNullable(trace, null)).isNull();
     assertThat(SpanLink.ofNullable(null, null)).isNull();
   }
+
+  private static final String TRACE = "0af7651916cd43dd8448eb211c80319c";
+  private static final String SPAN = "b7ad6b7169203331";
+
+  @Test
+  void spanLink_ofW3c_linksValidIds() {
+    assertThat(SpanLink.ofW3c(TRACE, SPAN))
+        .isEqualTo(new SpanLink(TraceId.of(TRACE), SpanId.of(SPAN)));
+    assertThat(new SpanLink(TraceId.of(TRACE), SpanId.of(SPAN)).isW3c()).isTrue();
+  }
+
+  @ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource(
+      nullValues = "NULL",
+      value = {
+        "NULL, b7ad6b7169203331",
+        "0af7651916cd43dd8448eb211c80319c, NULL",
+        "0af7651916cd43dd8448eb211c80319, b7ad6b7169203331",
+        "0af7651916cd43dd8448eb211c80319cc, b7ad6b7169203331",
+        "0af7651916cd43dd8448eb211c80319c, b7ad6b716920333",
+        "0af7651916cd43dd8448eb211c80319c, b7ad6b71692033311",
+        "0AF7651916CD43DD8448EB211C80319C, b7ad6b7169203331",
+        "0af7651916cd43dd8448eb211c80319c, B7AD6B7169203331",
+        "0af7651916cd43dd8448eb211c80319g, b7ad6b7169203331",
+        "0af7651916cd43dd8448eb211c80319c, b7ad6b716920333z",
+        "0af7651916cd43dd8448eb211c80319/, b7ad6b7169203331",
+        "0af7651916cd43dd8448eb211c80319c, b7ad6b716920333:",
+        "00000000000000000000000000000000, b7ad6b7169203331",
+        "0af7651916cd43dd8448eb211c80319c, 0000000000000000",
+        "'', ''"
+      })
+  void spanLink_ofW3c_givesNoLinkForMalformedIds(String traceId, String spanId) {
+    assertThat(SpanLink.ofW3c(traceId, spanId)).isNull();
+    if (traceId != null && !traceId.isBlank() && spanId != null && !spanId.isBlank()) {
+      assertThat(new SpanLink(TraceId.of(traceId), SpanId.of(spanId)).isW3c()).isFalse();
+    }
+  }
 }

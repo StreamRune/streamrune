@@ -2,6 +2,7 @@ package org.streamrune.core.outbox;
 
 import java.time.Instant;
 import java.util.Objects;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.StreamId;
 
 /**
@@ -21,6 +22,13 @@ import org.streamrune.core.types.StreamId;
  * <p>{@code lastError}, {@code processedAt}, and {@code nextRetryAt} are nullable — they are only
  * set after at least one delivery attempt. {@code skip} is the operator's audit record and is
  * non-null iff {@code status == SKIPPED}.
+ *
+ * <p>{@code traceLink} names the span of the command whose append wrote the entry, so the relay's
+ * {@code outbox/publish} span links to that command's trace. The event store fills it from the
+ * metadata of the event the entry was derived from ({@code traceId} and {@code spanId}) when it
+ * writes the entry in the append transaction, unless the entry already carries one; an {@link
+ * OutboxEventMapper} builds its entries without it. It is {@code null} when that metadata has no
+ * trace, and a store keeps only a link whose ids are valid W3C ids ({@link SpanLink#isW3c()}).
  */
 public record OutboxEntry(
     OutboxEntryId id,
@@ -33,7 +41,8 @@ public record OutboxEntry(
     Instant createdAt,
     Instant processedAt,
     Instant nextRetryAt,
-    SkipRecord skip) {
+    SkipRecord skip,
+    SpanLink traceLink) {
 
   /**
    * The audit of an operator skip: all three are set together in one statement and are non-null iff
@@ -62,7 +71,29 @@ public record OutboxEntry(
       throw new IllegalArgumentException(
           "skip record must be present iff status == SKIPPED (status=" + status + ")");
     }
-    // streamId, lastError, processedAt, and nextRetryAt are nullable
+    // streamId, lastError, processedAt, nextRetryAt and traceLink are nullable
+  }
+
+  /**
+   * The same entry with {@code traceLink} as its link to the trace of the command that wrote it.
+   *
+   * @param traceLink the link, or {@code null} for none
+   * @return the entry with that link
+   */
+  public OutboxEntry withTraceLink(SpanLink traceLink) {
+    return new OutboxEntry(
+        id,
+        payload,
+        payloadType,
+        streamId,
+        status,
+        attempts,
+        lastError,
+        createdAt,
+        processedAt,
+        nextRetryAt,
+        skip,
+        traceLink);
   }
 
   /**
@@ -76,8 +107,8 @@ public record OutboxEntry(
   }
 
   /**
-   * Creates a new {@code PENDING} entry with zero attempts, no error, and {@code createdAt} set to
-   * {@link Instant#now()}.
+   * Creates a new {@code PENDING} entry with zero attempts, no error, no trace link, and {@code
+   * createdAt} set to {@link Instant#now()}.
    *
    * @param streamId the stream whose delivery order the consumer depends on (also the partition key
    *     in partitioned transports); may be {@code null} only on an {@link
@@ -94,6 +125,7 @@ public record OutboxEntry(
         0,
         null,
         Instant.now(),
+        null,
         null,
         null,
         null);

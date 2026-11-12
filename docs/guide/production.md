@@ -420,7 +420,8 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   `StreamRuneTracing`, and adds attributes of its own under a prefix of its own.
 - `TracingEventListener` links its span back to the originating command trace when the first
   event's metadata carries a `traceId`/`spanId`; `saga/{SagaType}/step` links to the span that
-  wrote the event it handles the same way.
+  wrote the event it handles the same way, and `outbox/publish` to the span of the command whose
+  append wrote the entry.
 - Inside a command the spans nest: `command/{CommandType}` holds `lock/acquire`, then
   `eventstore/load` (with `eventstore/snapshot/load` when the stream has a stored snapshot, and
   `eventstore/load/deserialize`), then `eventstore/append` (with `eventstore/append/serialize`).
@@ -461,8 +462,15 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   area off the poller passes `OutboxEntrySpans.NONE`, and the publisher delivers exactly as with
   tracing on. The status of `outbox/publish` is that of the hand-off: a RabbitMQ nack or confirm
   timeout that arrives later counts in `streamrune.outbox.failed` of `outbox/relay`.
-  `outbox/publish` carries no link to the trace of the command that wrote the entry
-  yet: the outbox entry does not store it.
+- `outbox/publish` links to the command span through the entry. `PostgresEventStore` writes the
+  `traceId` and `spanId` of the source event's metadata with each entry in the append transaction,
+  in the `trace_id` and `span_id` columns of `outbox_events`, and the store reads them back as
+  `OutboxEntry.traceLink()`; an entry the mapper or the caller already linked keeps its link, and
+  an entry passed to `append(streamId, events, expectedVersion, outboxEntries)` takes the first
+  event's. The entry has no link when that metadata carries no trace or only one of the two ids,
+  and the store writes only valid W3C ids (32 and 16 lowercase hexadecimal characters, not all
+  zeros). A stored value that is not one gives a span without a link, and the entry is delivered
+  all the same.
 - With OpenTelemetry present and the sampler dropping a trace, StreamRune still creates its spans,
   non-recording ones at about 0.2 µs each and roughly six per command; switching an area off
   removes that cost.
