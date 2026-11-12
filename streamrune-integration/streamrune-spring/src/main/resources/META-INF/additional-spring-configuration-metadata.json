@@ -55,7 +55,7 @@
     { "name": "streamrune.tracing.command.enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether the command/{CommandType} spans are started." },
     { "name": "streamrune.tracing.subscription.enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether the subscription/{name}/deliver spans are started." },
     { "name": "streamrune.tracing.projection.enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether the projection/{name}/process spans are started." },
-    { "name": "streamrune.tracing.event-store.enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether the eventstore/..., snapshots included spans are started." },
+    { "name": "streamrune.tracing.event-store.enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether the eventstore/... spans, snapshots included, are started." },
     { "name": "streamrune.tracing.lock.enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether the lock/acquire spans are started." },
     { "name": "streamrune.tracing.outbox.enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether the outbox/relay and outbox/publish spans are started." },
     { "name": "streamrune.tracing.saga.enabled", "type": "java.lang.Boolean", "defaultValue": true, "description": "Whether the saga/{SagaType}/... spans are started." },

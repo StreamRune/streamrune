@@ -112,6 +112,7 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case ONE_COMMAND_INTERCEPTOR -> this::theApplicationsCommandInterceptorIsNotDoubled;
       case GLOBAL_OPENTELEMETRY -> this::withoutABeanTheGlobalOpenTelemetryTraces;
       case NOOP_WITHOUT_OPENTELEMETRY -> this::withoutOpenTelemetryTheTracingIsNoop;
+      case APPLICATION_LOCKER_TRACED -> this::anApplicationsLockerIsTracedOnItsOwnLocks;
     };
   }
 

@@ -19,6 +19,7 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 import javax.sql.DataSource;
+import org.streamrune.core.AggregateLocker;
 import org.streamrune.core.CommandInbox;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.DeadLetterQueue;
@@ -61,6 +62,7 @@ import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.GraalJitGuard;
 import org.streamrune.runtime.InlineProjectionInterceptor;
+import org.streamrune.runtime.LocalStripedLocker;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OpenTelemetryTracing;
@@ -103,7 +105,8 @@ final class ReferenceApplication implements Application {
     APPLICATION_TRACING_WINS,
     ONE_COMMAND_INTERCEPTOR,
     GLOBAL_OPENTELEMETRY,
-    NOOP_WITHOUT_OPENTELEMETRY
+    NOOP_WITHOUT_OPENTELEMETRY,
+    APPLICATION_LOCKER_TRACED
   }
 
   private final List<Object> beans;
@@ -286,6 +289,13 @@ final class ReferenceApplication implements Application {
    */
   private VirtualThreadCommandBus.Builder commandBusBuilder() {
     var bus = VirtualThreadCommandBus.builder().eventStore(eventStore).tracing(tracing);
+    for (AggregateLocker locker : beansOf(AggregateLocker.class)) {
+      // The application's locker replaces the default; the integration traces a framework one.
+      bus.locker(
+          keeps(Rule.APPLICATION_LOCKER_TRACED) && locker instanceof LocalStripedLocker local
+              ? local.traced(tracing)
+              : locker);
+    }
     if (keeps(Rule.JVM_CHECK_OPT_OUT_REACHES_THE_BUS)) {
       bus.allowGraalJit(Boolean.parseBoolean(properties.get(GraalJitGuard.ALLOW_PROPERTY)));
     }

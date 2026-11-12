@@ -497,10 +497,8 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 
 The Spring Boot, Quarkus and Micronaut integrations build one `StreamRuneTracing` bean and hand it
 to everything they build. Its settings are the master switch `streamrune.tracing.enabled` and one
-switch per area, `streamrune.tracing.command.enabled`, `streamrune.tracing.subscription.enabled`,
-`streamrune.tracing.projection.enabled`, `streamrune.tracing.event-store.enabled`,
-`streamrune.tracing.lock.enabled`, `streamrune.tracing.outbox.enabled` and
-`streamrune.tracing.saga.enabled`, all `true` by default; see the
+switch per area, `streamrune.tracing.<area>.enabled` (`command`, `subscription`, `projection`,
+`event-store`, `lock`, `outbox`, `saga`), all `true` by default; see the
 [configuration reference](configuration.md#tracing). On Quarkus they are runtime configuration, so
 a deployment switches an area without a rebuild.
 
@@ -512,12 +510,15 @@ a deployment switches an area without a rebuild.
   bean and no code. The integration reads the global instance once, while it starts, and
   OpenTelemetry fixes the global instance on its first read: an SDK the application registers
   globally itself is registered before the application context starts, or is an `OpenTelemetry`
-  bean.
+  bean; otherwise the application's own `GlobalOpenTelemetry.set` fails with
+  `GlobalOpenTelemetry.set has already been called`. Expose the SDK as an `OpenTelemetry` bean, or
+  register it before the context starts.
 - **Without OpenTelemetry the tracing is `StreamRuneTracing.NOOP`.** That is the bean when the
   OpenTelemetry found has no tracer provider of its own (no bean, and nothing registered
   globally), when `streamrune.tracing.enabled` is `false`, and, on Spring and Micronaut, when
-  `opentelemetry-api` is not on the classpath at all: those two declare it as an optional
-  dependency, and an application without it starts and runs. The Quarkus integration depends on
+  `opentelemetry-api` is not on the classpath at all: those two do not depend on it (it is a
+  compile-only dependency), and an application without it starts and runs. The Quarkus integration
+  depends on
   `opentelemetry-api`. With `NOOP` nothing is traced, the keys do nothing, and the cost is one
   branch per traced call.
 - **What the integration hands it to.** The event store it builds on the application's
@@ -531,18 +532,29 @@ a deployment switches an area without a rebuild.
 - **What the application keeps.** A `StreamRuneTracing` bean of the application replaces the
   integration's everywhere. An `OpenTelemetryCommandInterceptor` bean of the application is the
   one the integration's bus runs, never beside a second. A component the application builds
-  itself takes the bean on its builder: a `SagaRunner` and a `SagaTimeoutRunner`
-  (`tracing(tracing)`), a command bus of its own (`VirtualThreadCommandBus.Builder.tracing`, which
-  adds the interceptor even when the bus is given an explicit interceptor list), a subscription of
-  its own, an event store built from `StreamRune.EventStoreSettings` (`settings.tracing()`).
+  itself takes the bean on its builder:
+  - a `SagaRunner` and a `SagaTimeoutRunner` (`tracing(tracing)`);
+  - a command bus of its own (`VirtualThreadCommandBus.Builder.tracing`, which adds the
+    interceptor even when the bus is given an explicit interceptor list), and a `PgAdvisoryLocker`
+    it hands to that bus (`traced(tracing)`: the builder does not trace a locker it is given);
+  - a projection runner of its own (`MultiProjectionRunner.Builder.tracing`,
+    `ScheduledProjectionRunner.Builder.tracing`) and a subscription of its own;
+  - an `EventStoreFactory` bean of its own (`PostgresEventStoreFactory.tracing`), an event store
+    built from `StreamRune.EventStoreSettings` (`settings.tracing()`);
+  - an outbox poller of its own (`OutboxPoller.Builder.tracing`).
 
 ```java
 @Bean
-SagaRunner<OrderState> orderSaga(SagaStore sagaStore, CommandBus bus, StreamRuneTracing tracing) {
+SagaRunner<OrderState> orderSaga(
+    SagaStore sagaStore,
+    SagaDeadLetterStore sagaDeadLetterStore,
+    CommandBus bus,
+    StreamRuneTracing tracing) {
   return SagaRunner.<OrderState>builder()
       .orchestrator(new OrderOrchestrator())
       .sagaStore(sagaStore)
       .commandBus(bus)
+      .sagaDeadLetterStore(sagaDeadLetterStore)
       .tracing(tracing)
       .build();
 }

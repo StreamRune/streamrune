@@ -215,13 +215,26 @@ public final class ConfigurationDocs {
   }
 
   /**
-   * Whether {@code name} is one of {@code known} or a namespace of one, with or without {@code .*}.
+   * Whether {@code name} is one of {@code known} or a namespace of one, with or without {@code .*},
+   * or a name whose placeholder segments ({@code <area>}) stand for one segment each of a known key
+   * ({@code streamrune.tracing.<area>.enabled} for {@code streamrune.tracing.lock.enabled}).
    */
   private static boolean isKnown(String name, Set<String> known) {
     boolean wildcard = name.endsWith(".*");
     String stem = wildcard ? name.substring(0, name.length() - 2) : name;
-    return (!wildcard && known.contains(name))
-        || known.stream().anyMatch(k -> k.startsWith(stem + "."));
+    if ((!wildcard && known.contains(name))
+        || known.stream().anyMatch(k -> k.startsWith(stem + "."))) {
+      return true;
+    }
+    if (wildcard || !name.contains("<")) {
+      return false;
+    }
+    Pattern pattern =
+        Pattern.compile(
+            java.util.Arrays.stream(name.split("\\.", -1))
+                .map(s -> s.startsWith("<") ? "[^.<>]+" : Pattern.quote(s))
+                .collect(java.util.stream.Collectors.joining("\\.")));
+    return known.stream().anyMatch(k -> pattern.matcher(k).matches());
   }
 
   /**

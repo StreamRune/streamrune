@@ -279,7 +279,7 @@
     {
       "name": "streamrune.tracing.event-store.enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether the eventstore/..., snapshots included spans are started.",
+      "description": "Whether the eventstore/... spans, snapshots included, are started.",
       "defaultValue": true
     },
     {

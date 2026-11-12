@@ -46,6 +46,7 @@ import org.streamrune.integration.RequestIdentityPolicy;
 import org.streamrune.integration.SnapshotPurgeSetting;
 import org.streamrune.integration.tck.ContractBeans.AcceptingOutboxPublisher;
 import org.streamrune.integration.tck.ContractBeans.ApplicationCommandInterceptor;
+import org.streamrune.integration.tck.ContractBeans.ApplicationLocker;
 import org.streamrune.integration.tck.ContractBeans.ApplicationTracing;
 import org.streamrune.integration.tck.ContractBeans.CommandInboxBean;
 import org.streamrune.integration.tck.ContractBeans.ContractCommand;
@@ -796,6 +797,38 @@ public abstract class IntegrationWiringContract {
       List<String> names = spanNames();
       assertEquals(
           1, names.stream().filter(n -> n.startsWith("command/")).count(), names::toString);
+    }
+  }
+
+  /**
+   * An {@code AggregateLocker} the application declares in the place of the integration's default,
+   * a framework locker built without a tracing, is traced by the integration's command bus on its
+   * own locks: one command is one {@code lock/acquire} span, and {@code
+   * streamrune.tracing.lock.enabled=false} leaves none.
+   */
+  @Test
+  public void anApplicationsLockerIsTracedOnItsOwnLocks() {
+    for (boolean lockArea : List.of(true, false)) {
+      OpenTelemetryBean.reset();
+      Map<String, String> properties =
+          lockArea ? Map.of() : Map.of("streamrune.tracing.lock.enabled", "false");
+      try (Application application =
+          start(
+              null,
+              properties,
+              Set.of(
+                  OpenTelemetryBean.class,
+                  ApplicationLocker.class,
+                  ContractCommandRegistration.class))) {
+        assertStarted(application);
+        application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("locked-1"));
+
+        List<String> names = spanNames();
+        assertEquals(
+            lockArea ? 1 : 0,
+            names.stream().filter(TraceAttributes.LOCK_ACQUIRE::equals).count(),
+            () -> "lock area " + (lockArea ? "on" : "off") + ": " + names);
+      }
     }
   }
 

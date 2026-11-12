@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
+import org.streamrune.core.AggregateLocker;
 import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
@@ -52,6 +53,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.runtime.DeciderRegistration;
+import org.streamrune.runtime.LocalStripedLocker;
 import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OpenTelemetryTracing;
 import org.streamrune.runtime.SagaRunner;
@@ -406,6 +408,17 @@ public final class ContractBeans {
     public OpenTelemetryCommandInterceptor get() {
       return new OpenTelemetryCommandInterceptor(
           OpenTelemetryTracing.of(OpenTelemetryBean.view(), TracingSettings.allEnabled()));
+    }
+  }
+
+  /**
+   * The application's own {@code AggregateLocker}, which replaces the integration's default: an
+   * untraced {@code LocalStripedLocker} the integration's command bus traces on its own locks.
+   */
+  public static final class ApplicationLocker implements Supplier<AggregateLocker> {
+    @Override
+    public AggregateLocker get() {
+      return new LocalStripedLocker(16);
     }
   }
 
