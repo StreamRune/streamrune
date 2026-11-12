@@ -1,6 +1,9 @@
 package org.streamrune.integration.tck;
 
 import com.sun.net.httpserver.HttpServer;
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.trace.TracerProvider;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
@@ -17,18 +20,29 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 import javax.sql.DataSource;
 import org.streamrune.core.CommandInbox;
+import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.DeadLetterRetryPolicy;
+import org.streamrune.core.EventStore;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditOutcome;
 import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.OffsetStore;
+import org.streamrune.core.projection.ProjectionDeliveryMode;
+import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.integration.CommandDeadLetterRetentionValidator;
@@ -39,15 +53,25 @@ import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.integration.SubscriptionLeadershipResolution;
 import org.streamrune.integration.tck.ContractBeans.ContractCommand;
 import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
+import org.streamrune.integration.tck.ContractBeans.ContractInlineProjection;
 import org.streamrune.integration.tck.ContractBeans.ContractProjection;
 import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
 import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
 import org.streamrune.runtime.DeadLetterRetryRunner;
+import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.GraalJitGuard;
+import org.streamrune.runtime.InlineProjectionInterceptor;
+import org.streamrune.runtime.MultiProjectionRunner;
+import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+import org.streamrune.runtime.OpenTelemetryTracing;
+import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.TracingProjectionDecorator;
+import org.streamrune.runtime.TracingSettings;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.InMemoryOffsetStore;
 
 /**
  * An application that keeps every rule of {@link IntegrationWiringContract} with a few lines each,
@@ -71,7 +95,15 @@ final class ReferenceApplication implements Application {
     DOCUMENTED_DEFAULTS,
     ROUTE_CALLER_AUDITED,
     BUS_ANSWERS_BY_RUNNER_RULES,
-    JVM_CHECK_OPT_OUT_REACHES_THE_BUS
+    JVM_CHECK_OPT_OUT_REACHES_THE_BUS,
+    STORE_TRACED,
+    EVENT_STORE_SWITCH,
+    AREA_SWITCHES,
+    MASTER_SWITCH,
+    APPLICATION_TRACING_WINS,
+    ONE_COMMAND_INTERCEPTOR,
+    GLOBAL_OPENTELEMETRY,
+    NOOP_WITHOUT_OPENTELEMETRY
   }
 
   private final List<Object> beans;
@@ -83,6 +115,10 @@ final class ReferenceApplication implements Application {
   private HttpServer server;
   private Thread runner;
   private VirtualThreadCommandBus commandBus;
+  private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
+  private EventStore eventStore;
+  private MultiProjectionRunner projectionRunner;
+  private OutboxPoller outboxPoller;
 
   private ReferenceApplication(
       DataSource dataSource,
@@ -99,11 +135,17 @@ final class ReferenceApplication implements Application {
     String refusal = null;
     try {
       validate();
+      tracing = tracing();
+      if (beansOf(StreamRuneTracing.class).isEmpty()) {
+        beans.add(tracing);
+      }
+      eventStore = eventStore();
       buildDeadLetterRetry();
       if (commandBus == null) {
         commandBus = commandBusBuilder().build();
       }
       beans.add(commandBus);
+      startTracedRunners();
       startRunner();
       startServer();
     } catch (RuntimeException e) {
@@ -131,7 +173,8 @@ final class ReferenceApplication implements Application {
   private void validate() {
     if (keeps(Rule.OUTBOX_RELAY)
         && Boolean.parseBoolean(properties.get("streamrune.outbox.enabled"))
-        && !beansOf(OutboxStore.class).isEmpty()) {
+        && !beansOf(OutboxStore.class).isEmpty()
+        && beansOf(OutboxPublisher.class).isEmpty()) {
       throw new IllegalStateException(OutboxWiringMessages.noPublisher());
     }
     List<SubscriptionLeadership> leaderships = beansOf(SubscriptionLeadership.class);
@@ -166,16 +209,152 @@ final class ReferenceApplication implements Application {
   }
 
   /**
-   * The builder of the application's command bus, as an integration starts it: on an in-memory
-   * event store, with the opt-out of the JVM check that {@value GraalJitGuard#ALLOW_PROPERTY}
-   * configures, unless the rule is broken.
+   * The tracing an integration builds: the application's {@code StreamRuneTracing} bean, or the one
+   * over its {@code OpenTelemetry} bean or else the global OpenTelemetry, under the {@code
+   * streamrune.tracing.*} switches; {@code NOOP} with the master switch off or without a tracer
+   * provider.
+   */
+  private StreamRuneTracing tracing() {
+    List<StreamRuneTracing> own = beansOf(StreamRuneTracing.class);
+    if (keeps(Rule.APPLICATION_TRACING_WINS) && !own.isEmpty()) {
+      return own.getFirst();
+    }
+    TracingSettings settings = settings(keeps(Rule.AREA_SWITCHES));
+    if (keeps(Rule.MASTER_SWITCH) && !settings.enabled()) {
+      return StreamRuneTracing.NOOP;
+    }
+    List<OpenTelemetry> beansOfOpenTelemetry = beansOf(OpenTelemetry.class);
+    OpenTelemetry source =
+        !beansOfOpenTelemetry.isEmpty()
+            ? beansOfOpenTelemetry.getFirst()
+            : keeps(Rule.GLOBAL_OPENTELEMETRY) ? GlobalOpenTelemetry.get() : OpenTelemetry.noop();
+    if (keeps(Rule.NOOP_WITHOUT_OPENTELEMETRY)
+        && source.getTracerProvider() == TracerProvider.noop()) {
+      return StreamRuneTracing.NOOP;
+    }
+    return OpenTelemetryTracing.of(
+        source, keeps(Rule.MASTER_SWITCH) ? settings : settings(keeps(Rule.AREA_SWITCHES), true));
+  }
+
+  private TracingSettings settings(boolean areas) {
+    return settings(areas, !"false".equals(properties.get("streamrune.tracing.enabled")));
+  }
+
+  private TracingSettings settings(boolean areas, boolean enabled) {
+    var settings = TracingSettings.builder().enabled(enabled);
+    if (areas) {
+      for (TracingArea area : TracingArea.values()) {
+        settings.area(
+            area, !"false".equals(properties.get(IntegrationWiringContract.areaKey(area))));
+      }
+    }
+    return settings.build();
+  }
+
+  /**
+   * The event store: with a database, the store an integration builds on it, traced (a serializing
+   * in-memory store stands in for PostgreSQL); without one, the application's in-memory store,
+   * which the integration does not build and does not trace.
+   */
+  private EventStore eventStore() {
+    if (dataSource == null) {
+      return new InMemoryEventStore();
+    }
+    var store =
+        InMemoryEventStore.serializing(
+            SimpleEventTypeRegistry.builder()
+                .registerEvent(ContractBeans.ContractCommandExecuted.class)
+                .build(),
+            null);
+    if (!keeps(Rule.STORE_TRACED)) {
+      return store;
+    }
+    StreamRuneTracing storeTracing =
+        keeps(Rule.EVENT_STORE_SWITCH) || beansOf(OpenTelemetry.class).isEmpty()
+            ? tracing
+            : OpenTelemetryTracing.of(
+                beansOf(OpenTelemetry.class).getFirst(), TracingSettings.allEnabled());
+    return store.withTracing(storeTracing);
+  }
+
+  /**
+   * The builder of the application's command bus, as an integration starts it: on the event store,
+   * with the opt-out of the JVM check that {@value GraalJitGuard#ALLOW_PROPERTY} configures, unless
+   * the rule is broken, the application's command registrations and interceptors, the inline
+   * projections decorated, and the tracing, which adds the command interceptor unless the
+   * application declared one.
    */
   private VirtualThreadCommandBus.Builder commandBusBuilder() {
-    var bus = VirtualThreadCommandBus.builder().eventStore(new InMemoryEventStore());
+    var bus = VirtualThreadCommandBus.builder().eventStore(eventStore).tracing(tracing);
     if (keeps(Rule.JVM_CHECK_OPT_OUT_REACHES_THE_BUS)) {
       bus.allowGraalJit(Boolean.parseBoolean(properties.get(GraalJitGuard.ALLOW_PROPERTY)));
     }
+    List<CommandInterceptor> interceptors = new ArrayList<>(beansOf(CommandInterceptor.class));
+    if (!keeps(Rule.ONE_COMMAND_INTERCEPTOR) && !interceptors.isEmpty()) {
+      interceptors.addFirst(new OpenTelemetryCommandInterceptor(tracing));
+    }
+    for (ContractInlineProjection inline : beansOf(ContractInlineProjection.class)) {
+      ProjectionName name = ProjectionName.of(ContractInlineProjection.NAME);
+      interceptors.add(
+          InlineProjectionInterceptor.builder()
+              .register(name, TracingProjectionDecorator.traced(name, inline, tracing))
+              .build());
+    }
+    bus.interceptors(interceptors);
+    for (DeciderRegistration<?, ?, ?> registration : beansOf(DeciderRegistration.class)) {
+      register(bus, registration);
+    }
     return bus;
+  }
+
+  private static <
+          C extends org.streamrune.core.Command,
+          S extends org.streamrune.core.AggregateState,
+          E extends org.streamrune.core.DomainEvent>
+      void register(
+          VirtualThreadCommandBus.Builder bus, DeciderRegistration<C, S, E> registration) {
+    bus.register(
+        registration.aggregateType(),
+        registration.commandType(),
+        registration.idExtractor(),
+        registration.decider());
+  }
+
+  /**
+   * Without a database, the projection runner over the application's stores and the outbox relay
+   * with the outbox enabled, both traced, as an integration builds them.
+   */
+  private void startTracedRunners() {
+    if (dataSource == null && !beansOf(ContractProjection.class).isEmpty()) {
+      OffsetStore offsets = new InMemoryOffsetStore();
+      beans.add(offsets);
+      projectionRunner =
+          MultiProjectionRunner.builder()
+              .eventStore(eventStore)
+              .offsetStore(offsets)
+              .subscriptionConfig(
+                  new SubscriptionConfig(true, Duration.ofMillis(50), Duration.ofMillis(10)))
+              .tracing(tracing)
+              .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+              .register(
+                  ProjectionName.of(ContractProjection.NAME),
+                  beansOf(ContractProjection.class).getFirst(),
+                  ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+              .build();
+      projectionRunner.start();
+    }
+    if (Boolean.parseBoolean(properties.get("streamrune.outbox.enabled"))
+        && !beansOf(OutboxStore.class).isEmpty()
+        && !beansOf(OutboxPublisher.class).isEmpty()) {
+      outboxPoller =
+          OutboxPoller.builder()
+              .outboxStore(beansOf(OutboxStore.class).getFirst())
+              .publisher(beansOf(OutboxPublisher.class).getFirst())
+              .pollInterval(Duration.ofMillis(50))
+              .tracing(tracing)
+              .build();
+      outboxPoller.start();
+    }
   }
 
   /**
@@ -399,6 +578,12 @@ final class ReferenceApplication implements Application {
   public void close() {
     if (server != null) {
       server.stop(0);
+    }
+    if (outboxPoller != null) {
+      outboxPoller.close();
+    }
+    if (projectionRunner != null) {
+      projectionRunner.close();
     }
     if (commandBus != null) {
       commandBus.close();
