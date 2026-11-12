@@ -27,6 +27,14 @@ import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
@@ -314,9 +322,16 @@ public final class SagaRunner<S extends SagaState> {
   /** Set once the WARN of a gated listener delivering without its anchor has been written. */
   private final AtomicBoolean unanchoredDeliveryWarned = new AtomicBoolean();
 
+  private final StreamRuneTracing tracing;
+
+  /** Whether {@link #tracing} records the saga area, read once. */
+  private final boolean traced;
+
   private SagaRunner(Builder<S> builder) {
     this.orchestrator = builder.orchestrator;
     this.sagaType = SagaType.fromClass(builder.orchestrator.stateType());
+    this.tracing = builder.tracing;
+    this.traced = tracing.enabled(TracingArea.SAGA);
     this.sagaStore = builder.sagaStore;
     this.commandBus = builder.commandBus;
     this.sagaDeadLetterStore = builder.sagaDeadLetterStore;
@@ -331,7 +346,8 @@ public final class SagaRunner<S extends SagaState> {
             commandBus,
             metrics,
             builder.inboxRetentionMaxAge,
-            builder.clock);
+            builder.clock,
+            builder.tracing);
     this.forwardFenceConfigured = builder.forwardFence != null;
     this.executor.forwardFence(!Boolean.FALSE.equals(builder.forwardFence));
     this.lease =
@@ -514,7 +530,7 @@ public final class SagaRunner<S extends SagaState> {
       warnIfDeliveringWithoutAnAnchor();
       for (EventEnvelope event : events) {
         try {
-          resolveTarget(event).ifPresent(target -> deliver(target, event));
+          resolveTarget(event).ifPresent(target -> deliverTraced(target, event));
         } catch (SagaPoisonException poison) {
           SagaId poisonSagaId = poison.sagaId();
           recordPoison(poisonSagaId, event, poison.getCause());
@@ -549,6 +565,79 @@ public final class SagaRunner<S extends SagaState> {
   }
 
   /**
+   * {@link #deliver}, inside the span {@code saga/{SagaType}/step} when the saga area is traced
+   * ({@link #startStepSpan}). A poison event records its exception with the outcome {@code
+   * FAULTED}. A step that waited past the step bound for another step of the saga ({@link
+   * SagaStepLockException}) is the outcome {@code DEFERRED}, not an error: nothing was read, and
+   * the event is delivered again. Any other failure, after which the event is delivered again — a
+   * conflict that survived the last compare-and-swap attempt, a store or command failure — records
+   * its exception alone.
+   */
+  private void deliverTraced(ReplayTarget target, EventEnvelope event) {
+    if (!traced) {
+      deliver(target, event);
+      return;
+    }
+    TraceScope scope = startStepSpan(target.sagaId(), event);
+    try {
+      scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, deliver(target, event));
+      scope.recordSuccess();
+    } catch (SagaPoisonException poison) {
+      scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, FAULTED);
+      scope.recordError(poison.getCause() != null ? poison.getCause() : poison);
+      throw poison;
+    } catch (SagaStepLockException notNow) {
+      scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, DEFERRED);
+      throw notNow;
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
+    } finally {
+      scope.close();
+    }
+  }
+
+  /**
+   * Starts the span {@code saga/{SagaType}/step} of one event the saga {@code sagaId} handles,
+   * linked to the span that wrote the event when its metadata names one.
+   */
+  private TraceScope startStepSpan(SagaId sagaId, EventEnvelope event) {
+    return tracing.start(
+        TracingArea.SAGA,
+        TraceAttributes.sagaStepSpanName(sagaType),
+        SpanKind.INTERNAL,
+        SpanAttributes.builder()
+            .put(TraceAttributes.SAGA_TYPE, sagaType.value())
+            .put(TraceAttributes.SAGA_ID, LogSanitizer.sanitizeForTrace(sagaId.value()))
+            .build(),
+        SpanLink.of(event.metadata()),
+        SpanBaggage.KEEP);
+  }
+
+  /**
+   * The value of {@link TraceAttributes#SAGA_STEP_OUTCOME} for a step that ended in {@code
+   * outcome}.
+   */
+  static String stepOutcome(StepOutcome outcome) {
+    return switch (outcome) {
+      case FORWARD_PROGRESSED -> "ADVANCED";
+      case COMPLETED -> "COMPLETED";
+      case COMPENSATING_LEFT, COMPENSATING_REFUSED -> "COMPENSATING";
+      case COMPENSATED -> "COMPENSATED";
+      case FAILED -> "FAILED";
+      case FAULTED -> "FAULTED";
+      case CLAIM_LOST,
+          CLAIM_DEFERRED,
+          SKIPPED_HALTED,
+          SKIPPED_DEDUP,
+          SKIPPED_NO_ROW,
+          SKIPPED_GENESIS_PENDING,
+          NOT_COMPENSATING ->
+          "SKIPPED";
+    };
+  }
+
+  /**
    * One live delivery, as a step of its saga: the row is read, the event's commands are dispatched
    * and the row is written while this thread holds the saga's step lock, so within this process no
    * claim without an event lands between that read and that write, and no second step of the saga
@@ -565,16 +654,13 @@ public final class SagaRunner<S extends SagaState> {
    *     bound, or this thread is interrupted while it waits; nothing was read, and the failure
    *     leaves the listener so the event is delivered again
    */
-  private void deliver(ReplayTarget target, EventEnvelope event) {
+  private String deliver(ReplayTarget target, EventEnvelope event) {
     try (SagaStepLock.Hold _ = stepLock.enterStep(sagaType, target.sagaId())) {
       for (int attempt = 1; ; attempt++) {
         try {
-          if (target.startPath()) {
-            processStartEvent(target.sagaId(), event);
-          } else {
-            processCorrelatedEvent(target.sagaId(), event);
-          }
-          return;
+          return target.startPath()
+              ? processStartEvent(target.sagaId(), event)
+              : processCorrelatedEvent(target.sagaId(), event);
         } catch (SagaRowConflictException conflict) {
           rerunOrPropagate(target.sagaId(), event, attempt, conflict, /* replay= */ false);
         }
@@ -603,6 +689,30 @@ public final class SagaRunner<S extends SagaState> {
   StepOutcome feedReplay(
       SagaId sagaId, EventEnvelope event, boolean startPath, boolean operatorForced) {
     Objects.requireNonNull(sagaId, SAGA_ID_REQUIRED);
+    if (!traced) {
+      return feedReplayStep(sagaId, event, startPath, operatorForced);
+    }
+    // The replayer's feed is a step of its saga like a live delivery: the same span, whose
+    // outcome is FAULTED where the poison handler swallows the event's poison.
+    TraceScope scope = startStepSpan(sagaId, event);
+    try {
+      StepOutcome outcome = feedReplayStep(sagaId, event, startPath, operatorForced);
+      scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, stepOutcome(outcome));
+      scope.recordSuccess();
+      return outcome;
+    } catch (SagaStepLockException notNow) {
+      scope.setAttribute(TraceAttributes.SAGA_STEP_OUTCOME, DEFERRED);
+      throw notNow;
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
+    } finally {
+      scope.close();
+    }
+  }
+
+  private StepOutcome feedReplayStep(
+      SagaId sagaId, EventEnvelope event, boolean startPath, boolean operatorForced) {
     try (SagaStepLock.Hold _ = stepLock.enterStep(sagaType, sagaId)) {
       for (int attempt = 1; ; attempt++) {
         try {
@@ -685,7 +795,7 @@ public final class SagaRunner<S extends SagaState> {
    * shielded when the saga already owns a dead-letter record). {@code replayRedrive} is always
    * {@code false} here — {@link #feedReplay} is the replay channel.
    */
-  private void processStartEvent(SagaId sagaId, EventEnvelope event) {
+  private String processStartEvent(SagaId sagaId, EventEnvelope event) {
     var existing = loadForDelivery(sagaId); // INFRA load → propagates
     // A row the executor creates for an ABSENT saga must be born shielded
     // when the saga already owns dead-letter entries — the row-less residual and the
@@ -693,11 +803,16 @@ public final class SagaRunner<S extends SagaState> {
     // and retention prunes them. One indexed findBySaga per FRESH start (row absent), the same
     // lookup the ABSENT correlated branch already pays; a present row never pays it.
     boolean ownsRecord = existing.isEmpty() && hasOwnDeadLetterRecord(sagaId);
-    executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, true, false, ownsRecord));
+    return stepOutcome(
+        executor.execute(
+            sagaId, existing, new SagaTrigger.ForwardStep(event, true, false, ownsRecord)));
   }
 
-  /** The live hold rules; see the class javadoc for the state-by-state rationale. */
-  private void processCorrelatedEvent(SagaId sagaId, EventEnvelope event) {
+  /**
+   * The live hold rules; see the class javadoc for the state-by-state rationale. Returns the step's
+   * outcome for its span: {@code DEFERRED} for an event held, {@code SKIPPED} for one dropped.
+   */
+  private String processCorrelatedEvent(SagaId sagaId, EventEnvelope event) {
     var existing = loadForDelivery(sagaId); // INFRA load → propagates
     if (existing.isEmpty()) {
       // The row-less residual: only a saga whose initialState failed (threw, or
@@ -705,8 +820,9 @@ public final class SagaRunner<S extends SagaState> {
       // keeps the silent drop.
       if (hasOwnDeadLetterRecord(sagaId)) {
         hold(sagaId, event, SagaEventHeldException.HoldReason.BEFORE_START);
+        return DEFERRED;
       }
-      return;
+      return SKIPPED;
     }
     LoadedSaga<S> row = existing.get();
     if (row.status() != SagaStatus.COMPENSATING && isAppliedRedelivery(row, event)) {
@@ -725,35 +841,45 @@ public final class SagaRunner<S extends SagaState> {
           event.globalOffset().value(),
           LogSanitizer.sanitizeForLog(sagaId.value()),
           row.lastAppliedOffset());
-      return;
+      return SKIPPED;
     }
     if (row.status() == SagaStatus.FAULTED) {
       holdWhileFaulted(sagaId, event);
-      return;
+      return DEFERRED;
     }
     if (row.status().isTerminal()) {
-      return; // legitimately done: drop silently
+      return SKIPPED; // legitimately done: drop silently
     }
     if (row.status() == SagaStatus.COMPENSATING) {
       // A resume never consumes the event, so ordering cannot be violated; the executor resumes
       // the claimed episode whatever the genesis flag says.
-      executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, false, false));
-      return;
+      return stepOutcome(
+          executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, false, false)));
     }
     if (!row.genesisApplied()) {
       hold(sagaId, event, SagaEventHeldException.HoldReason.GENESIS_PENDING);
-      return;
+      return DEFERRED;
     }
     if (row.deadLetterPending()) {
       hold(sagaId, event, SagaEventHeldException.HoldReason.BACKLOG_PENDING);
-      return;
+      return DEFERRED;
     }
     StepOutcome outcome =
         executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, false, false));
-    if (outcome == StepOutcome.SKIPPED_HALTED) {
-      holdIfFaultedUnderTheStep(sagaId, event);
+    if (outcome == StepOutcome.SKIPPED_HALTED && holdIfFaultedUnderTheStep(sagaId, event)) {
+      return DEFERRED;
     }
+    return stepOutcome(outcome);
   }
+
+  /** The step outcome of an event held for later, or of a step that will run again. */
+  private static final String DEFERRED = "DEFERRED";
+
+  /** The step outcome of a poison event. */
+  private static final String FAULTED = "FAULTED";
+
+  /** The step outcome of an event with nothing to do. */
+  private static final String SKIPPED = "SKIPPED";
 
   /**
    * A live step over a forward row ends {@code SKIPPED_HALTED} only when one of its forward
@@ -763,11 +889,13 @@ public final class SagaRunner<S extends SagaState> {
    * A {@code FAULTED} saga holds it ({@link #holdWhileFaulted}), as the delivery of the event after
    * the fault would: the event is not applied, and it is not lost either.
    */
-  private void holdIfFaultedUnderTheStep(SagaId sagaId, EventEnvelope event) {
+  private boolean holdIfFaultedUnderTheStep(SagaId sagaId, EventEnvelope event) {
     Optional<LoadedSaga<S>> reread = loadForDelivery(sagaId);
     if (reread.isPresent() && reread.get().status() == SagaStatus.FAULTED) {
       holdWhileFaulted(sagaId, event);
+      return true;
     }
+    return false;
   }
 
   /**
@@ -1287,6 +1415,7 @@ public final class SagaRunner<S extends SagaState> {
     private Clock clock = Clock.systemUTC();
     private SagaStepLock stepLock;
     private SubscriptionLeadership leadership;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     /** {@code null}: not named, which {@link #build()} treats as on. */
     private Boolean forwardFence;
@@ -1358,6 +1487,22 @@ public final class SagaRunner<S extends SagaState> {
      */
     public Builder<S> metrics(StreamRuneMetrics metrics) {
       this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      return this;
+    }
+
+    /**
+     * The tracing the runner starts its spans through when its {@link TracingArea#SAGA} area is on:
+     * {@code saga/{SagaType}/step} for each event it delivers to a saga, linked to the span that
+     * wrote the event and carrying the step's outcome, and {@code saga/{SagaType}/compensate} for
+     * each compensation command it dispatches. The commands a step dispatches run on the delivering
+     * thread, so their spans nest under the step's. Optional; defaults to {@link
+     * StreamRuneTracing#NOOP}, which traces nothing.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder<S> tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
       return this;
     }
 

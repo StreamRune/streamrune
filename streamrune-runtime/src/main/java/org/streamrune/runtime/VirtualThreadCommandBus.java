@@ -58,6 +58,7 @@ import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
@@ -165,6 +166,15 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   private final DeadLetterQueue deadLetterQueue;
   private final StreamRuneMetrics metrics;
   private final List<CommandInterceptor> interceptors;
+
+  /**
+   * The interceptor whose {@code command/{CommandType}} span the events of a command link to, the
+   * first traced {@link OpenTelemetryCommandInterceptor} of the chain, whether {@link
+   * Builder#tracing} added it or the application registered it; {@code null} when the chain holds
+   * none. {@link #buildMetadata} reads the span of the executing command from it.
+   */
+  private final OpenTelemetryCommandInterceptor commandSpans;
+
   private final UnaryOperator<Runnable> asyncTaskWrapper;
   private final Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
 
@@ -224,6 +234,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     this.deadLetterQueue = deadLetterQueue;
     this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
     this.interceptors = List.copyOf(interceptors);
+    this.commandSpans = commandSpansOf(this.interceptors);
     this.asyncTaskWrapper = asyncTaskWrapper;
     this.unboundRequestContext = unboundRequestContext;
     this.clock = clock != null ? clock : Clock.systemUTC();
@@ -1983,14 +1994,19 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * request-creation instant gave every event of a request — and every event of a replayed or
    * re-dispatched request bound to the same context — the same stale timestamp, undermining audit
    * ordering. Each call reads the clock afresh, so events of one command, and successive commands
-   * under one bound context, receive distinct, monotonically-sensible timestamps. Trace and user
-   * identity are taken from the bound context; the saga origin, the causation id and the
-   * correlation id from {@code provenance}. The command's own id is recorded separately in {@link
-   * EventMetadata#commandId()}.
+   * under one bound context, receive distinct, monotonically-sensible timestamps. The caller's
+   * trace id and the user identity are taken from the bound context; the span context from this
+   * command's own {@code command/{CommandType}} span, which the {@link
+   * OpenTelemetryCommandInterceptor} of the chain started on this thread; the saga origin, the
+   * causation id and the correlation id from {@code provenance}. The command's own id is recorded
+   * separately in {@link EventMetadata#commandId()}.
    */
   private EventMetadata buildMetadata(EventProvenance provenance, CommandId commandId) {
     EventId eventId = IdGenerator.generateEventId();
     Instant now = clock.instant();
+    // The span of this command, from the interceptor that started it, and from nothing a client
+    // sends: the bound context's traceId below is caller-supplied correlation data.
+    SpanLink spanContext = commandSpans == null ? SpanLink.NONE : commandSpans.currentLink();
 
     // capture(): a context bound to null is no context.
     StreamRuneContext.RequestContext ctx = StreamRuneContext.capture();
@@ -2005,7 +2021,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           ctx.userId(),
           now,
           ctx.baggage(),
-          provenance.origin());
+          provenance.origin(),
+          spanContext);
     }
     return new EventMetadata(
         eventId,
@@ -2017,7 +2034,22 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         null,
         now,
         null,
-        provenance.origin());
+        provenance.origin(),
+        spanContext);
+  }
+
+  /**
+   * The first traced {@link OpenTelemetryCommandInterceptor} of {@code chain} (its command area
+   * on), or {@code null}.
+   */
+  private static OpenTelemetryCommandInterceptor commandSpansOf(List<CommandInterceptor> chain) {
+    for (CommandInterceptor interceptor : chain) {
+      if (interceptor instanceof OpenTelemetryCommandInterceptor commandSpans
+          && commandSpans.traced()) {
+        return commandSpans;
+      }
+    }
+    return null;
   }
 
   @SuppressWarnings("unchecked")
@@ -2426,7 +2458,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * the slot {@link CommandInterceptorOrdering#ORDER_OPEN_TELEMETRY} reserves: before the first
      * interceptor whose {@linkplain CommandInterceptorOrdering#orderOf order} comes after it, so
      * ahead of every framework interceptor. A chain that already holds an {@code
-     * OpenTelemetryCommandInterceptor} the application added keeps that one alone.
+     * OpenTelemetryCommandInterceptor} the application added keeps that one alone. The default
+     * {@link LocalStripedLocker} the bus builds when no {@link #locker} is set traces its
+     * acquisitions through it too ({@link LocalStripedLocker#traced}); a locker the application
+     * sets takes the tracing on its own.
      *
      * @param tracing the tracing; not {@code null}
      * @return this builder
@@ -2602,7 +2637,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
     /**
      * Builds the command bus. Requires {@link #eventStore}; a {@link #locker} left unset defaults
-     * to an in-process {@link LocalStripedLocker} with {@link #stripeCount} stripes.
+     * to an in-process {@link LocalStripedLocker} with {@link #stripeCount} stripes, traced through
+     * the {@link #tracing}.
      *
      * <p>A registered command type that declares {@code @RequireRole}/{@code @RequirePermission} —
      * on itself, a supertype, or a permitted subtype of a sealed registered type — must be enforced
@@ -2632,7 +2668,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         throw new IllegalStateException("eventStore is required");
       }
       if (locker == null) {
-        locker = new LocalStripedLocker(stripeCount);
+        locker = new LocalStripedLocker(stripeCount).traced(tracing);
       }
       if (deadLetterQueue != null && objectMapper == null) {
         throw new IllegalArgumentException(

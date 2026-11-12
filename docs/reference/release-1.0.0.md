@@ -912,6 +912,8 @@ license.
   left confirm mode is a transport failure, and an entry id or payload type longer than an AMQP short
   string — 255 UTF-8 bytes — is a per-entry failure). A custom `OutboxPublisher` that does not
   override `classifyFailure` treats every failure as transport and should override `inFlightHorizon()`.
+  A publisher that overrides `publishBatch(entries, deadline, spans)` starts and closes each entry's
+  `outbox/publish` scope through `spans`, on the publishing thread, one entry at a time.
 - `OutboxRetentionSweeper` (hourly in the integrations) prunes `DELIVERED` rows after
   `streamrune.outbox.retention-max-age` (7 days) and `SKIPPED` rows after
   `streamrune.outbox.skipped-retention-max-age` (30 days); `FAILED` is never pruned. Integration
@@ -1320,16 +1322,29 @@ it, so always write the unit):
     `crypto.encrypt_self_check_failed`, `crypto.decrypt_retried{outcome}`,
     `gdpr.purge_failed{purger}`
 - OpenTelemetry spans, names and attribute keys defined in `org.streamrune.core.tracing.TraceAttributes`
-  (plain strings, no OpenTelemetry type): `command/{CommandType}` (`OpenTelemetryCommandInterceptor`),
-  `subscription/{name}/deliver` (`TracingEventListener`), `projection/{name}/process`
-  (`TracingProjectionDecorator`); attributes are `streamrune.`-prefixed, and ids in them pass
-  `LogSanitizer.sanitizeForTrace` (cut at 256 characters followed by `...`). Trace and span ids
-  propagate into `EventMetadata`.
-- Tracing goes through the `org.streamrune.core.tracing.StreamRuneTracing` seam, `NOOP` by default.
+  (plain strings, no OpenTelemetry type, so a store module of your own emits the standard spans
+  without `opentelemetry-api`): `command/{CommandType}`, `subscription/{name}/deliver`,
+  `projection/{name}/process`, `eventstore/append` (→ `append/serialize`), `eventstore/load`
+  (→ `load/deserialize`, `snapshot/load`), `eventstore/snapshot/save`, `eventstore/read`,
+  `lock/acquire`, `outbox/relay`, `outbox/publish` and `saga/{type}/step`, `/compensate`,
+  `/timeout`. Attributes are `streamrune.`-prefixed; ids pass `LogSanitizer.sanitizeForTrace` (cut
+  at 256 characters followed by `...`). Expected outcomes are attributes, not errors
+  (`streamrune.append.outcome` `APPENDED`/`CONFLICT`/`DUPLICATE`/`FENCED`, a lock `TIMEOUT`, a saga
+  step `DEFERRED`), background work with nothing to do emits no span, and a recorded error carries
+  the exception's type and its own message only, never the messages of its causes.
+- Tracing goes through the `org.streamrune.core.tracing.StreamRuneTracing` seam, `NOOP` by default,
+  which takes no `null` (`SpanLink.NONE`, `SpanBaggage.KEEP`, `SpanAttributes.empty()`).
   `OpenTelemetryTracing.of(OpenTelemetry, TracingSettings)` is the only method that takes an
   `OpenTelemetry`; `TracingSettings` switches tracing off as a whole or per area, and the builders
-  of the command bus, the subscriptions, the projection runners and `StreamRune` take it through
-  `tracing(...)`. A module without `opentelemetry-api` compiles and runs against all of it.
+  of the command bus, the event store, the lockers (`traced(...)`), the subscriptions, the
+  projection runners, the outbox poller, the saga runners and `StreamRune` take it through
+  `tracing(...)`. With OpenTelemetry present and the sampler dropping a trace, each span still
+  costs about 0.2 µs; switching its area off removes that.
+- The command bus writes the span of each command into `EventMetadata.spanContext`, from nothing a
+  client sends (`traceId` is the caller's `X-Trace-Id`, correlation data only); the subscription,
+  saga step and outbox publish spans link to it. An `OutboxEntry` carries the command's link in
+  `traceLink()` (columns `trace_id`, `span_id` of `outbox_events`). A malformed stored span context
+  reads as no link, and `SpanLink.NONE` is left out of JSON.
 - Every production log line goes through SLF4J; bring the binding of your choice.
 - The dedicated advisory-lock pool reports HikariCP's `hikaricp.connections.*` meters, tagged with
   its pool name `streamrune-advisory-lock`, when `PgAdvisoryLocker.withDedicatedPool` is given a

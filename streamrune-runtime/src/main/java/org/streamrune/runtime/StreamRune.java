@@ -793,12 +793,15 @@ public final class StreamRune implements CommandBus, AutoCloseable {
     /**
      * The tracing StreamRune emits its spans through (default {@link StreamRuneTracing#NOOP}, which
      * traces nothing). It reaches everything this builder builds: the command bus starts the span
-     * {@code command/{CommandType}} (see {@link VirtualThreadCommandBus.Builder#tracing}), and
-     * every projection registered with {@link #registerProjection} is decorated with a {@link
-     * TracingProjectionDecorator} when the {@link TracingArea#PROJECTION} area is on. A projection
-     * runner the application builds, or its {@link ProjectionRunnerFactory} builds, takes the
-     * tracing on its own builder; a runner given the same tracing does not decorate a projection
-     * twice.
+     * {@code command/{CommandType}} and its default locker the span {@code lock/acquire} (see
+     * {@link VirtualThreadCommandBus.Builder#tracing}), and every projection registered with {@link
+     * #registerProjection} is decorated with a {@link TracingProjectionDecorator} when the {@link
+     * TracingArea#PROJECTION} area is on. A projection runner the application builds, or its {@link
+     * ProjectionRunnerFactory} builds, takes the tracing on its own builder; a runner given the
+     * same tracing does not decorate a projection twice. So do an event store, a locker, an outbox
+     * poller and a saga runner the application builds: {@code PostgresEventStoreFactory.tracing},
+     * {@code PgAdvisoryLocker.traced}, {@link OutboxPoller.Builder#tracing}, {@link
+     * SagaRunner.Builder#tracing}.
      *
      * @param tracing the tracing; not {@code null}
      * @return this builder

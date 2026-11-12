@@ -252,11 +252,14 @@ and is used as the sentinel value before append. You encounter `GlobalOffset` in
 
 ### EventMetadata
 
-`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, SpanId spanId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin)`
+`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, SpanId spanId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin, SpanLink spanContext)`
 
 Causal metadata attached to every persisted event. Built automatically by
-`VirtualThreadCommandBus`; propagates OpenTelemetry trace/span IDs and user ID from
-`StreamRuneContext` when a request context is bound. You encounter this inside
+`VirtualThreadCommandBus`, which copies the caller's trace id (the `X-Trace-Id` header) and user
+ID from `StreamRuneContext` when a request context is bound, and writes `spanContext` from its own
+`command/{CommandType}` span: `SpanLink.NONE` when the command was not traced. The spans that later
+handle the event link to `spanContext` only (`SpanLink.of(metadata)`); the caller-supplied
+`traceId` and `spanId` are correlation data and never build a link. You encounter this inside
 `EventEnvelope.metadata()` when writing projections or building audit trails.
 
 The PostgreSQL event store keeps it as JSON in the `event_stream.metadata` column and binds it back
@@ -515,7 +518,7 @@ Built-in implementations provided by `streamrune-runtime` and integrations:
 - `AnnotationAuthorizationInterceptor` — enforces `@RequireRole` and `@RequirePermission` on the command type.
 - `BeanValidationInterceptor` — validates the command with JSR-380 Bean Validation before execution.
 - `CircuitBreakerCommandInterceptor` — opens the circuit after a configurable failure threshold.
-- `OpenTelemetryCommandInterceptor` — starts the span of each command; `VirtualThreadCommandBus.Builder.tracing(StreamRuneTracing)` adds it. Its span name and attribute keys are constants of `org.streamrune.core.tracing.TraceAttributes`.
+- `OpenTelemetryCommandInterceptor` — starts the span of each command; `VirtualThreadCommandBus.Builder.tracing(StreamRuneTracing)` adds it. The bus reads the span of the executing command from the first traced `OpenTelemetryCommandInterceptor` of its chain, whether the builder added it or the application registered it with `interceptors(...)`, and writes it into `EventMetadata.spanContext`. Its span name and attribute keys are constants of `org.streamrune.core.tracing.TraceAttributes`.
 
 ---
 
@@ -717,7 +720,7 @@ an application that needs one of those options builds the bus and its runners di
 | `upcasters(List<EventUpcaster>)` | Event upcasters for schema evolution. Applied on read. | none |
 | `interceptors(List<CommandInterceptor>)` | Command interceptors for cross-cutting concerns. | none |
 | `interceptors(CommandInterceptor...)` | Varargs convenience form of `interceptors(List)`. | none |
-| `tracing(StreamRuneTracing)` | The tracing the command bus starts the `command/{CommandType}` span through, and that decorates each projection registered with `registerProjection` (see [Tracing](../guide/production.md#tracing)). | `StreamRuneTracing.NOOP` (traces nothing) |
+| `tracing(StreamRuneTracing)` | The tracing the command bus starts the `command/{CommandType}` span through, and its default locker the `lock/acquire` span, and that decorates each projection registered with `registerProjection` (see [Tracing](../guide/production.md#tracing)). | `StreamRuneTracing.NOOP` (traces nothing) |
 | `asyncTaskWrapper(UnaryOperator<Runnable>)` | Wraps each task `executeAsync` spawns. Runs on the submitting thread, so it can capture thread-bound caller context (such as the current OpenTelemetry context) that does not cross into the new virtual thread. | none |
 | `unboundRequestContext(Supplier<RequestContext>)` | Where a command dispatched on a thread with `StreamRuneContext.CURRENT` unbound takes its request context from. Asked once per dispatch on the dispatching thread (on entry to `execute`, at submission in `executeAsync`), never while `CURRENT` is bound; its answer is bound as `CURRENT` for the whole dispatch, so it is the identity the command is authorized and audited as. `null` answer: no context. The Spring, Micronaut and Quarkus integrations set it to the request's context (see their READMEs). | none |
 | `objectMapper(ObjectMapper)` | The Jackson `ObjectMapper` that writes a command as JSON when the bus dead-letters it. Required when `deadLetterQueue` is set. The retry runner rebuilds the command from that JSON on replay, so a command type must round-trip through Jackson (records do by default; see [Dead-letter queue](../guide/advanced/retry-and-resilience.md#dead-letter-queue)). `DeadLetterRetryRunner.createObjectMapper(cryptoEngine)` builds a mapper for both sides. | none (the framework integrations supply one) |

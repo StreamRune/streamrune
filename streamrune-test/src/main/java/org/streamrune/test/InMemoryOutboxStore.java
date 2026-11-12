@@ -21,6 +21,7 @@ import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxOrderingViolationException;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.StreamId;
 
@@ -219,7 +220,9 @@ public final class InMemoryOutboxStore implements OutboxStore {
   /**
    * Saves {@code entry} (idempotent per id). A {@link OutboxOrderingMode#STRICT_PER_AGGREGATE}
    * store rejects an entry with no {@code streamId} with {@link OutboxOrderingViolationException}
-   * before anything is written.
+   * before anything is written. The entry's {@link OutboxEntry#traceLink() traceLink} is kept when
+   * its ids are valid W3C ids and stored as {@link SpanLink#NONE} otherwise, as {@code
+   * PostgresOutboxStore} stores it.
    */
   @Override
   public void save(OutboxEntry entry) {
@@ -227,8 +230,13 @@ public final class InMemoryOutboxStore implements OutboxStore {
     if (orderingMode == OutboxOrderingMode.STRICT_PER_AGGREGATE && entry.streamId() == null) {
       throw new OutboxOrderingViolationException(entry.id(), entry.payloadType());
     }
+    // A link a tracing library would ignore is dropped; PostgresOutboxStore does not store one.
+    OutboxEntry stored =
+        !entry.traceLink().isPresent() || entry.traceLink().isW3c()
+            ? entry
+            : entry.withTraceLink(SpanLink.NONE);
     synchronized (lock) {
-      if (store.putIfAbsent(entry.id(), entry) == null) {
+      if (store.putIfAbsent(entry.id(), stored) == null) {
         seqs.put(entry.id(), seqCounter.incrementAndGet());
       }
     }
@@ -388,7 +396,8 @@ public final class InMemoryOutboxStore implements OutboxStore {
                   e.createdAt(),
                   clock.instant(),
                   null,
-                  null));
+                  null,
+                  e.traceLink()));
       return true;
     }
   }
@@ -416,7 +425,8 @@ public final class InMemoryOutboxStore implements OutboxStore {
                   e.createdAt(),
                   clock.instant(),
                   null,
-                  null));
+                  null,
+                  e.traceLink()));
       return true;
     }
   }
@@ -452,7 +462,8 @@ public final class InMemoryOutboxStore implements OutboxStore {
                   e.createdAt(),
                   e.processedAt(),
                   nextRetryAt,
-                  null));
+                  null,
+                  e.traceLink()));
       return true;
     }
   }
@@ -494,7 +505,8 @@ public final class InMemoryOutboxStore implements OutboxStore {
                     e.createdAt(),
                     e.processedAt(),
                     e.nextRetryAt(),
-                    null));
+                    null,
+                    e.traceLink()));
         released++;
       }
     }
@@ -603,7 +615,8 @@ public final class InMemoryOutboxStore implements OutboxStore {
               e.createdAt(),
               e.processedAt(),
               null,
-              null));
+              null,
+              e.traceLink()));
       return true;
     }
   }
@@ -638,7 +651,8 @@ public final class InMemoryOutboxStore implements OutboxStore {
               e.createdAt(),
               e.processedAt(),
               null,
-              new OutboxEntry.SkipRecord(clock.instant(), skippedBy, reason)));
+              new OutboxEntry.SkipRecord(clock.instant(), skippedBy, reason),
+              e.traceLink()));
       return true;
     }
   }
@@ -723,6 +737,7 @@ public final class InMemoryOutboxStore implements OutboxStore {
         e.createdAt(),
         e.processedAt(),
         e.nextRetryAt(),
-        null);
+        null,
+        e.traceLink());
   }
 }

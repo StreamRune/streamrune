@@ -6,6 +6,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import org.streamrune.core.AggregateLocker;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
+import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.StreamId;
 
 /**
@@ -13,10 +20,19 @@ import org.streamrune.core.types.StreamId;
  * reduce contention while preventing concurrent modification of the same stream. Two streams can
  * share a stripe (including two aggregate types with the same id value); they then contend, as any
  * two streams on one stripe do.
+ *
+ * <p>{@link #traced(StreamRuneTracing)} returns the locker that starts the span {@value
+ * TraceAttributes#LOCK_ACQUIRE} around each acquisition when the {@link TracingArea#LOCK} area is
+ * on.
  */
 public final class LocalStripedLocker implements AggregateLocker {
 
   private final Lock[] stripes;
+
+  private final StreamRuneTracing tracing;
+
+  /** Whether {@link #tracing} records the lock area, read once. */
+  private final boolean traced;
 
   /**
    * Creates a new striped locker with the given number of stripes using non-fair locking.
@@ -41,6 +57,30 @@ public final class LocalStripedLocker implements AggregateLocker {
     for (int i = 0; i < stripeCount; i++) {
       stripes[i] = new ReentrantLock(fair);
     }
+    this.tracing = StreamRuneTracing.NOOP;
+    this.traced = false;
+  }
+
+  private LocalStripedLocker(Lock[] stripes, StreamRuneTracing tracing) {
+    this.stripes = stripes;
+    this.tracing = tracing;
+    this.traced = tracing.enabled(TracingArea.LOCK);
+  }
+
+  /**
+   * A locker on the same stripes that starts the span {@value TraceAttributes#LOCK_ACQUIRE} around
+   * each acquisition through {@code tracing}, when its {@link TracingArea#LOCK} area is on. The
+   * span carries the stream and the outcome: {@code ACQUIRED}, {@code TIMEOUT} or {@code
+   * INTERRUPTED} (expected outcomes, not errors). Any other failure records the exception. The
+   * returned locker and this one share their locks, so a stream locked through one is locked for
+   * the other.
+   *
+   * @param tracing the tracing; {@link StreamRuneTracing#NOOP} traces nothing
+   * @return a locker that traces through {@code tracing}
+   * @throws NullPointerException if {@code tracing} is {@code null}
+   */
+  public LocalStripedLocker traced(StreamRuneTracing tracing) {
+    return new LocalStripedLocker(stripes, Objects.requireNonNull(tracing, "tracing is required"));
   }
 
   /**
@@ -62,6 +102,36 @@ public final class LocalStripedLocker implements AggregateLocker {
    */
   @Override
   public AutoCloseable acquireLock(StreamId streamId, Duration timeout) {
+    if (!traced || streamId == null) {
+      return acquire(streamId, timeout);
+    }
+    TraceScope scope =
+        tracing.start(
+            TracingArea.LOCK,
+            TraceAttributes.LOCK_ACQUIRE,
+            SpanKind.INTERNAL,
+            SpanAttributes.builder()
+                .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
+                .build());
+    try {
+      AutoCloseable lock = acquire(streamId, timeout);
+      scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "ACQUIRED");
+      scope.recordSuccess();
+      return lock;
+    } catch (LockAcquisitionException notAcquired) {
+      scope.setAttribute(
+          TraceAttributes.LOCK_OUTCOME,
+          notAcquired.getCause() instanceof InterruptedException ? "INTERRUPTED" : "TIMEOUT");
+      throw notAcquired;
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
+    } finally {
+      scope.close();
+    }
+  }
+
+  private AutoCloseable acquire(StreamId streamId, Duration timeout) {
     AggregateLocker.requireValidTimeout(timeout, "lock timeout");
     // Use improved hash distribution to avoid poor distribution with similar string prefixes
     int hash = Objects.hash(streamId.value());

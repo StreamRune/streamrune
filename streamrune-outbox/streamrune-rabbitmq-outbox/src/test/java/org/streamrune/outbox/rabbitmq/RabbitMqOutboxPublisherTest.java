@@ -36,6 +36,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEntrySpans;
 import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxPublisher.FailureKind;
 
@@ -536,7 +537,7 @@ class RabbitMqOutboxPublisherTest {
         .when(channel)
         .basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
 
-    var result = publisher.publishBatch(List.of(e1, e2, e3));
+    var result = publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE);
 
     assertEquals(3, result.confirmed().size());
     assertTrue(result.confirmed().contains(OutboxEntryId.of("b1")));
@@ -566,7 +567,7 @@ class RabbitMqOutboxPublisherTest {
         .when(channel)
         .basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
 
-    var result = publisher.publishBatch(List.of(e1, e2, e3));
+    var result = publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE);
 
     assertEquals(2, result.confirmed().size());
     assertTrue(result.confirmed().contains(OutboxEntryId.of("b1")));
@@ -617,7 +618,7 @@ class RabbitMqOutboxPublisherTest {
         .when(channel)
         .basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
 
-    var result = publisher.publishBatch(List.of(e1, e2, e3));
+    var result = publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE);
 
     assertTrue(result.confirmed().isEmpty(), "a multiple-nack confirms nothing");
     assertEquals(3, result.failed().size(), "every swept entry is reported failed");
@@ -669,7 +670,7 @@ class RabbitMqOutboxPublisherTest {
         .when(channel)
         .basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
 
-    var result = publisher.publishBatch(List.of(e1, e2, e3));
+    var result = publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE);
 
     // Should not throw — timeout is handled gracefully
     assertEquals(1, result.confirmed().size());
@@ -711,7 +712,7 @@ class RabbitMqOutboxPublisherTest {
             any(AMQP.BasicProperties.class),
             any(byte[].class));
 
-    var result = publisher.publishBatch(List.of(e1, e2, e3));
+    var result = publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE);
 
     // b1 was acked
     assertTrue(result.confirmed().contains(OutboxEntryId.of("b1")));
@@ -776,7 +777,9 @@ class RabbitMqOutboxPublisherTest {
             any(AMQP.BasicProperties.class),
             any(byte[].class));
 
-    var result = assertDoesNotThrow(() -> publisher.publishBatch(List.of(e1, e2, e3)));
+    var result =
+        assertDoesNotThrow(
+            () -> publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE));
     assertNull(connectionThreadFailure.get(), "confirm dispatch must not throw");
 
     assertTrue(result.confirmed().contains(OutboxEntryId.of("s1")), "e1 was published and acked");
@@ -810,7 +813,7 @@ class RabbitMqOutboxPublisherTest {
         .when(channel)
         .basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
 
-    var result = publisher.publishBatch(List.of(e1, e2));
+    var result = publisher.publishBatch(List.of(e1, e2), null, OutboxEntrySpans.NONE);
 
     assertTrue(result.confirmed().isEmpty());
     assertEquals(2, result.failed().size());
@@ -853,7 +856,8 @@ class RabbitMqOutboxPublisherTest {
         .when(channel)
         .basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
 
-    var result = publisher.publishBatch(List.of(nackedEarly, neverSettled));
+    var result =
+        publisher.publishBatch(List.of(nackedEarly, neverSettled), null, OutboxEntrySpans.NONE);
 
     assertTrue(result.confirmed().isEmpty());
     assertEquals(2, result.failed().size());
@@ -906,7 +910,7 @@ class RabbitMqOutboxPublisherTest {
 
     OutboxPublisher.BatchResult result;
     try {
-      result = publisher.publishBatch(List.of(acked, nacked, pending));
+      result = publisher.publishBatch(List.of(acked, nacked, pending), null, OutboxEntrySpans.NONE);
       assertTrue(
           Thread.currentThread().isInterrupted(),
           "interrupt flag must be restored even with mixed acked/nacked/pending entries");
@@ -944,7 +948,7 @@ class RabbitMqOutboxPublisherTest {
 
     OutboxPublisher.BatchResult result;
     try {
-      result = publisher.publishBatch(List.of(e1));
+      result = publisher.publishBatch(List.of(e1), null, OutboxEntrySpans.NONE);
       assertTrue(
           Thread.currentThread().isInterrupted(),
           "interrupt flag must be restored after publishBatch interrupt");
@@ -984,7 +988,7 @@ class RabbitMqOutboxPublisherTest {
         .when(channel)
         .basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
 
-    var result = publisher.publishBatch(List.of(e1));
+    var result = publisher.publishBatch(List.of(e1), null, OutboxEntrySpans.NONE);
 
     assertEquals(
         Set.of(OutboxEntryId.of("stale-ret-1")),
@@ -998,7 +1002,7 @@ class RabbitMqOutboxPublisherTest {
   void publishBatch_empty_list_returns_empty_result() throws Exception {
     var publisher = RabbitMqOutboxPublisher.builder().channel(channel).exchange("ex").build();
 
-    var result = publisher.publishBatch(List.of());
+    var result = publisher.publishBatch(List.of(), null, OutboxEntrySpans.NONE);
 
     assertTrue(result.confirmed().isEmpty());
     assertTrue(result.failed().isEmpty());
@@ -1355,7 +1359,8 @@ class RabbitMqOutboxPublisherTest {
     var e3 = OutboxEntry.pending(OutboxEntryId.of("dl-loop-3"), "{}", "Event");
 
     var result =
-        publisher.publishBatch(List.of(e1, e2, e3), java.time.Instant.now().minusMillis(1));
+        publisher.publishBatch(
+            List.of(e1, e2, e3), java.time.Instant.now().minusMillis(1), OutboxEntrySpans.NONE);
 
     assertTrue(result.confirmed().isEmpty(), "no entry may be confirmed past the deadline");
     assertTrue(
@@ -1383,7 +1388,9 @@ class RabbitMqOutboxPublisherTest {
     var e1 = OutboxEntry.pending(OutboxEntryId.of("dl-1"), "{}", "Event"); // never acked
 
     long start = System.nanoTime();
-    var result = publisher.publishBatch(List.of(e1), java.time.Instant.now().plusMillis(200));
+    var result =
+        publisher.publishBatch(
+            List.of(e1), java.time.Instant.now().plusMillis(200), OutboxEntrySpans.NONE);
     long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
     assertTrue(
@@ -1597,7 +1604,7 @@ class RabbitMqOutboxPublisherTest {
             any(AMQP.BasicProperties.class),
             any(byte[].class));
 
-    var result = publisher.publishBatch(List.of(entry));
+    var result = publisher.publishBatch(List.of(entry), null, OutboxEntrySpans.NONE);
 
     assertTrue(
         result.confirmed().contains(OutboxEntryId.of("race-1")),
@@ -1653,7 +1660,9 @@ class RabbitMqOutboxPublisherTest {
 
     // Timeout sweep must run for e2 without throwing — the sweep must not call
     // outstanding.remove(null).
-    var result = assertDoesNotThrow(() -> publisher.publishBatch(List.of(e1, e2)));
+    var result =
+        assertDoesNotThrow(
+            () -> publisher.publishBatch(List.of(e1, e2), null, OutboxEntrySpans.NONE));
 
     // e1 acked before timeout → confirmed; e2 never confirmed → failed (TimeoutException).
     assertTrue(result.confirmed().contains(OutboxEntryId.of("npe-1")));
@@ -1733,7 +1742,7 @@ class RabbitMqOutboxPublisherTest {
               any(AMQP.BasicProperties.class),
               any(byte[].class));
 
-      var result = publisher.publishBatch(entries);
+      var result = publisher.publishBatch(entries, null, OutboxEntrySpans.NONE);
 
       assertTrue(
           result.failed().isEmpty(),
@@ -1810,7 +1819,7 @@ class RabbitMqOutboxPublisherTest {
               OutboxEntry.pending(OutboxEntryId.of("race-" + iter + "-" + i), "{}", "Event"));
         }
 
-        var result = publisher.publishBatch(entries);
+        var result = publisher.publishBatch(entries, null, OutboxEntrySpans.NONE);
 
         assertTrue(
             result.failed().isEmpty(),
@@ -1840,7 +1849,7 @@ class RabbitMqOutboxPublisherTest {
         new Thread(
             () -> {
               try {
-                outcome.set(publisher.publishBatch(List.of(entry)));
+                outcome.set(publisher.publishBatch(List.of(entry), null, OutboxEntrySpans.NONE));
               } catch (Throwable t) {
                 outcome.set(t);
               }
@@ -1905,7 +1914,7 @@ class RabbitMqOutboxPublisherTest {
 
     abandonBatchLeavingSeqOutstanding(publisher, stale, stalePublished);
 
-    var result = publisher.publishBatch(List.of(fresh, never));
+    var result = publisher.publishBatch(List.of(fresh, never), null, OutboxEntrySpans.NONE);
 
     assertEquals(Set.of(OutboxEntryId.of("fresh-1")), result.confirmed());
     assertInstanceOf(
@@ -1960,7 +1969,7 @@ class RabbitMqOutboxPublisherTest {
 
     abandonBatchLeavingSeqOutstanding(publisher, retried, firstPublished);
 
-    var result = publisher.publishBatch(List.of(retried, never));
+    var result = publisher.publishBatch(List.of(retried, never), null, OutboxEntrySpans.NONE);
 
     assertEquals(Set.of(OutboxEntryId.of("retry-x")), result.confirmed());
     assertInstanceOf(
@@ -2013,7 +2022,7 @@ class RabbitMqOutboxPublisherTest {
 
     abandonBatchLeavingSeqOutstanding(publisher, retried, firstPublished);
 
-    var result = publisher.publishBatch(List.of(retried, other));
+    var result = publisher.publishBatch(List.of(retried, other), null, OutboxEntrySpans.NONE);
 
     assertEquals(Set.of(OutboxEntryId.of("nk-y")), result.confirmed());
     assertTrue(
@@ -2060,7 +2069,7 @@ class RabbitMqOutboxPublisherTest {
 
     abandonBatchLeavingSeqOutstanding(publisher, retried, firstPublished);
 
-    var result = publisher.publishBatch(List.of(retried));
+    var result = publisher.publishBatch(List.of(retried), null, OutboxEntrySpans.NONE);
 
     assertEquals(Set.of(OutboxEntryId.of("ak-x")), result.confirmed());
     assertTrue(result.failed().isEmpty(), "a stale nack must not overturn the recorded ack");
@@ -2099,7 +2108,7 @@ class RabbitMqOutboxPublisherTest {
             any(AMQP.BasicProperties.class),
             any(byte[].class));
 
-    var result = publisher.publishBatch(List.of(entry));
+    var result = publisher.publishBatch(List.of(entry), null, OutboxEntrySpans.NONE);
 
     assertEquals(Set.of(OutboxEntryId.of("after-noop")), result.confirmed());
     assertTrue(result.failed().isEmpty());
@@ -2152,7 +2161,7 @@ class RabbitMqOutboxPublisherTest {
 
     abandonBatchLeavingSeqOutstanding(publisher, retried, firstPublished);
 
-    var result = publisher.publishBatch(List.of(retried, never));
+    var result = publisher.publishBatch(List.of(retried, never), null, OutboxEntrySpans.NONE);
 
     assertTrue(result.failed().containsKey(OutboxEntryId.of("dup-nack-x")));
     assertInstanceOf(
@@ -2220,7 +2229,7 @@ class RabbitMqOutboxPublisherTest {
     t2.start();
 
     try {
-      var result = publisher.publishBatch(entries);
+      var result = publisher.publishBatch(entries, null, OutboxEntrySpans.NONE);
 
       assertTrue(
           result.failed().isEmpty(),
@@ -2265,7 +2274,7 @@ class RabbitMqOutboxPublisherTest {
     var e1 = OutboxEntry.pending(OutboxEntryId.of("ncm-1"), "{}", "Event");
     var e2 = OutboxEntry.pending(OutboxEntryId.of("ncm-2"), "{}", "Event");
 
-    var result = publisher.publishBatch(List.of(e1, e2));
+    var result = publisher.publishBatch(List.of(e1, e2), null, OutboxEntrySpans.NONE);
 
     verify(channel, never()).basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
     assertTrue(result.confirmed().isEmpty());
@@ -2325,7 +2334,7 @@ class RabbitMqOutboxPublisherTest {
     var e2 = OutboxEntry.pending(OutboxEntryId.of("mid-2"), "{}", "Event");
     var e3 = OutboxEntry.pending(OutboxEntryId.of("mid-3"), "{}", "Event");
 
-    var result = publisher.publishBatch(List.of(e1, e2, e3));
+    var result = publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE);
 
     verify(channel, times(1)).basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
     assertEquals(Set.of(e1.id()), result.confirmed());
@@ -2352,6 +2361,52 @@ class RabbitMqOutboxPublisherTest {
     verify(channel, never()).addConfirmListener(any(ConfirmListener.class));
   }
 
+  /**
+   * A hand-off that fails records its error on the entry's span; the entries after it are never
+   * handed off, so they start no span.
+   */
+  @Test
+  void publishBatch_aFailedHandOff_recordsTheErrorOnItsSpan() throws Exception {
+    var publisher = buildBatchPublisher();
+    var cause = new IllegalStateException("channel is closed");
+    doThrow(cause).when(channel).basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
+    var e1 = OutboxEntry.pending(OutboxEntryId.of("rt-1"), "{}", "Event");
+    var e2 = OutboxEntry.pending(OutboxEntryId.of("rt-2"), "{}", "Event");
+    var errors = new java.util.ArrayList<Throwable>();
+    var started = new java.util.ArrayList<String>();
+    OutboxEntrySpans spans =
+        entry -> {
+          started.add(entry.id().value());
+          return new org.streamrune.core.tracing.TraceScope() {
+            @Override
+            public void setAttribute(String key, String value) {}
+
+            @Override
+            public void setAttribute(String key, long value) {}
+
+            @Override
+            public void setAttribute(String key, boolean value) {}
+
+            @Override
+            public void recordSuccess() {}
+
+            @Override
+            public void recordError(Throwable error) {
+              errors.add(error);
+            }
+
+            @Override
+            public void close() {}
+          };
+        };
+
+    publisher.publishBatch(List.of(e1, e2), null, spans);
+
+    assertEquals(List.of("rt-1"), started);
+    assertEquals(1, errors.size());
+    assertSame(cause, errors.getFirst().getCause());
+  }
+
   @Test
   void publishBatch_uncheckedExceptionFromBasicPublish_isReturnedAsAFailure_notThrown()
       throws Exception {
@@ -2367,7 +2422,9 @@ class RabbitMqOutboxPublisherTest {
     var e2 = OutboxEntry.pending(OutboxEntryId.of("rt-2"), "{}", "Event");
     var e3 = OutboxEntry.pending(OutboxEntryId.of("rt-3"), "{}", "Event");
 
-    var result = assertDoesNotThrow(() -> publisher.publishBatch(List.of(e1, e2, e3)));
+    var result =
+        assertDoesNotThrow(
+            () -> publisher.publishBatch(List.of(e1, e2, e3), null, OutboxEntrySpans.NONE));
 
     verify(channel, times(1)).basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
     assertTrue(result.confirmed().isEmpty());
@@ -2396,7 +2453,9 @@ class RabbitMqOutboxPublisherTest {
     var e1 = OutboxEntry.pending(OutboxEntryId.of("rt-seq-1"), "{}", "Event");
     var e2 = OutboxEntry.pending(OutboxEntryId.of("rt-seq-2"), "{}", "Event");
 
-    var result = assertDoesNotThrow(() -> publisher.publishBatch(List.of(e1, e2)));
+    var result =
+        assertDoesNotThrow(
+            () -> publisher.publishBatch(List.of(e1, e2), null, OutboxEntrySpans.NONE));
 
     verify(channel, never()).basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
     for (var entry : List.of(e1, e2)) {
@@ -2462,7 +2521,7 @@ class RabbitMqOutboxPublisherTest {
     var tooLong = OutboxEntry.pending(OutboxEntryId.of("long-type"), "{}", repeat("é", 128));
     var fine = OutboxEntry.pending(OutboxEntryId.of("fine"), "{}", repeat("t", 255));
 
-    var result = publisher.publishBatch(List.of(tooLong, fine));
+    var result = publisher.publishBatch(List.of(tooLong, fine), null, OutboxEntrySpans.NONE);
 
     verify(channel, times(1)).basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
     assertEquals(Set.of(fine.id()), result.confirmed());

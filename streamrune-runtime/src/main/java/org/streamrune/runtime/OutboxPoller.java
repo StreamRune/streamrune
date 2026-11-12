@@ -19,10 +19,19 @@ import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEntrySpans;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 
 /**
@@ -304,10 +313,27 @@ public final class OutboxPoller implements AutoCloseable {
   // compared with the instant the store stamped it with. The builder's clock, or the system's.
   private final TimeSource time;
 
+  private final StreamRuneTracing tracing;
+
+  /** Whether {@link #tracing} records the outbox area, read once. */
+  private final boolean traced;
+
+  /**
+   * Starts the span {@value TraceAttributes#OUTBOX_PUBLISH} of each entry's hand-off, which the
+   * publisher calls; {@link OutboxEntrySpans#NONE} when the outbox area is not traced.
+   */
+  private final OutboxEntrySpans entrySpans;
+
+  /** Whether a failure of {@link #tracing} was logged; it is logged once. */
+  private final AtomicBoolean tracingFailureLogged = new AtomicBoolean();
+
   private OutboxPoller(Builder builder) {
     this.closeJoinTimeoutMs = builder.closeJoinTimeoutMs;
     this.store = builder.store;
     this.publisher = builder.publisher;
+    this.tracing = builder.tracing;
+    this.traced = tracing.enabled(TracingArea.OUTBOX);
+    this.entrySpans = traced ? this::startPublishSpan : OutboxEntrySpans.NONE;
     this.maxInFlightHorizon = normalizeHorizon(builder.publisher.inFlightHorizon());
     this.retryPolicy = builder.retryPolicy;
     this.batchSize = builder.batchSize;
@@ -395,6 +421,32 @@ public final class OutboxPoller implements AutoCloseable {
     if (pending.isEmpty()) {
       return;
     }
+    if (!traced) {
+      publishAndRecord(pending, claimBase, lease, interrupts);
+      return;
+    }
+    TraceScope scope =
+        guardedStart(
+            TraceAttributes.OUTBOX_RELAY,
+            SpanKind.INTERNAL,
+            SpanAttributes.builder().put(TraceAttributes.BATCH_SIZE, (long) pending.size()).build(),
+            SpanLink.NONE);
+    try {
+      OutboxPublisher.BatchResult result = publishAndRecord(pending, claimBase, lease, interrupts);
+      scope.setAttribute(TraceAttributes.OUTBOX_PUBLISHED, (long) result.confirmed().size());
+      scope.setAttribute(TraceAttributes.OUTBOX_FAILED, (long) result.failed().size());
+      scope.recordSuccess();
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
+    } finally {
+      scope.close();
+    }
+  }
+
+  /** Publishes one claimed, non-empty batch and stores its outcome; returns the publish result. */
+  private OutboxPublisher.BatchResult publishAndRecord(
+      List<OutboxEntry> pending, Instant claimBase, Duration lease, InterruptDeferral interrupts) {
     // Bound this publish cycle to a deadline strictly below the claim lease. The publisher
     // stops attempting entries once the deadline passes; the never-attempted ones are released at
     // the end of the cycle — never left for a second relay racing this one past the lease.
@@ -403,7 +455,7 @@ public final class OutboxPoller implements AutoCloseable {
     var result =
         Thread.currentThread().isInterrupted()
             ? NOTHING_ATTEMPTED
-            : publisher.publishBatch(pending, publishDeadline);
+            : publisher.publishBatch(pending, publishDeadline, entrySpans);
     // Record the outcome with close()'s interrupt held back: on a virtual thread every JDBC call
     // made with the flag set fails at the socket, which would lose the deliveries the transport
     // has already confirmed. A stop requested meanwhile is delivered once the outcome is stored.
@@ -412,6 +464,127 @@ public final class OutboxPoller implements AutoCloseable {
       recordOutcome(pending, result, claimBase, publishDeadline, lease, stopping);
     } finally {
       interrupts.resume();
+    }
+    return result;
+  }
+
+  /**
+   * Starts the span {@value TraceAttributes#OUTBOX_PUBLISH} of {@code entry}'s hand-off, of kind
+   * {@code PRODUCER}, so the spans of the broker client's own instrumentation nest under it. The
+   * span links to the trace of the command that wrote the entry when the entry carries a {@link
+   * OutboxEntry#traceLink() traceLink} with valid W3C ids; {@link SpanLink#NONE}, and a store of
+   * another kind that hands back malformed ids, give a span without a link.
+   */
+  private TraceScope startPublishSpan(OutboxEntry entry) {
+    SpanLink link = entry.traceLink();
+    return guardedStart(
+        TraceAttributes.OUTBOX_PUBLISH,
+        SpanKind.PRODUCER,
+        SpanAttributes.builder()
+            .put(TraceAttributes.OUTBOX_ENTRY_ID, LogSanitizer.sanitizeForTrace(entry.id().value()))
+            .put(TraceAttributes.OUTBOX_PAYLOAD_TYPE, entry.payloadType())
+            .build(),
+        link.isW3c() ? link : SpanLink.NONE);
+  }
+
+  /**
+   * Starts an outbox span so that the tracing can never change a delivery: a {@code start} that
+   * throws gives {@link TraceScope#NOOP}, and the returned scope swallows what its own methods
+   * throw. A {@link StreamRuneTracing} must not throw; one that does is reported once, with one
+   * WARN, and the relay delivers every entry as it would untraced.
+   */
+  private TraceScope guardedStart(
+      String spanName, SpanKind kind, SpanAttributes attributes, SpanLink link) {
+    TraceScope scope;
+    try {
+      scope = tracing.start(TracingArea.OUTBOX, spanName, kind, attributes, link, SpanBaggage.KEEP);
+    } catch (RuntimeException e) {
+      tracingFailed(e);
+      return TraceScope.NOOP;
+    }
+    return scope == null || scope == TraceScope.NOOP ? TraceScope.NOOP : new GuardedScope(scope);
+  }
+
+  private void tracingFailed(RuntimeException failure) {
+    if (tracingFailureLogged.compareAndSet(false, true)) {
+      LOG.warn(
+          "The tracing of the outbox relay threw; the relay delivers without the span. A"
+              + " StreamRuneTracing must not throw. Later failures of the tracing are not logged.",
+          failure);
+    }
+  }
+
+  /** A scope whose failures are reported once and never reach the relay or the publisher. */
+  private final class GuardedScope implements TraceScope {
+    private final TraceScope delegate;
+
+    GuardedScope(TraceScope delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override
+    public void setAttribute(String key, String value) {
+      try {
+        delegate.setAttribute(key, value);
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
+
+    @Override
+    public void setAttribute(String key, long value) {
+      try {
+        delegate.setAttribute(key, value);
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
+
+    @Override
+    public void setAttribute(String key, boolean value) {
+      try {
+        delegate.setAttribute(key, value);
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
+
+    @Override
+    public void recordSuccess() {
+      try {
+        delegate.recordSuccess();
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
+
+    @Override
+    public void recordError(Throwable error) {
+      try {
+        delegate.recordError(error);
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
+    }
+
+    @Override
+    public SpanLink link() {
+      try {
+        SpanLink link = delegate.link();
+        return link == null ? SpanLink.NONE : link;
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+        return SpanLink.NONE;
+      }
+    }
+
+    @Override
+    public void close() {
+      try {
+        delegate.close();
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+      }
     }
   }
 
@@ -1248,6 +1421,7 @@ public final class OutboxPoller implements AutoCloseable {
     // Read once from the store in build(), alongside the mode: the lease the guard validates is the
     // lease the poller bounds every publish deadline by.
     private Duration claimLease;
+    private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     public Builder outboxStore(OutboxStore store) {
       this.store = store;
@@ -1266,6 +1440,24 @@ public final class OutboxPoller implements AutoCloseable {
 
     public Builder publisher(OutboxPublisher publisher) {
       this.publisher = publisher;
+      return this;
+    }
+
+    /**
+     * The tracing the relay starts its spans through when its {@link TracingArea#OUTBOX} area is
+     * on: {@value TraceAttributes#OUTBOX_RELAY} for each batch that claimed at least one entry (an
+     * empty poll starts none), and under it {@value TraceAttributes#OUTBOX_PUBLISH}, of kind {@code
+     * PRODUCER}, for each entry's hand-off, which the publisher starts through the {@link
+     * OutboxEntrySpans} the poller passes to {@link OutboxPublisher#publishBatch}. An entry's span
+     * links to the trace of the command that wrote it ({@link OutboxEntry#traceLink()}). Tracing
+     * never changes how the publisher delivers. Optional; defaults to {@link
+     * StreamRuneTracing#NOOP}, which traces nothing.
+     *
+     * @param tracing the tracing; not {@code null}
+     * @return this builder
+     */
+    public Builder tracing(StreamRuneTracing tracing) {
+      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
       return this;
     }
 

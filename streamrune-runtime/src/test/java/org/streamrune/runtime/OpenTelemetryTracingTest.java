@@ -16,6 +16,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
@@ -133,7 +134,7 @@ class OpenTelemetryTracingTest {
             SpanAttributes.empty(),
             new SpanLink(
                 TraceId.of("0af7651916cd43dd8448eb211c80319c"), SpanId.of("b7ad6b7169203331")),
-            null)
+            SpanBaggage.KEEP)
         .close();
 
     SpanData span = onlySpan();
@@ -145,7 +146,95 @@ class OpenTelemetryTracingTest {
   }
 
   @Test
-  void baggage_replacesTheCurrentBaggage_andNullKeepsIt() {
+  void aSpanTheSamplerDrops_stillHasALink_whenItsContextIsValid() {
+    try (var provider =
+        io.opentelemetry.sdk.trace.SdkTracerProvider.builder()
+            .setSampler(io.opentelemetry.sdk.trace.samplers.Sampler.alwaysOff())
+            .build()) {
+      StreamRuneTracing dropped =
+          OpenTelemetryTracing.of(
+              io.opentelemetry.sdk.OpenTelemetrySdk.builder().setTracerProvider(provider).build(),
+              TracingSettings.allEnabled());
+      SpanLink link;
+      boolean recording;
+      try (TraceScope scope =
+          dropped.start(
+              TracingArea.COMMAND, "command/X", SpanKind.INTERNAL, SpanAttributes.empty())) {
+        link = scope.link();
+        recording = Span.current().isRecording();
+      }
+      assertThat(recording).isFalse();
+      assertThat(link.isPresent()).isTrue();
+      assertThat(link.isW3c()).isTrue();
+    }
+  }
+
+  @Test
+  void none_startsASpanWithNoLink() {
+    StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
+    tracing
+        .start(
+            TracingArea.SUBSCRIPTION,
+            "subscription/s/deliver",
+            SpanKind.CONSUMER,
+            SpanAttributes.empty(),
+            SpanLink.NONE,
+            SpanBaggage.KEEP)
+        .close();
+    tracing
+        .start(
+            TracingArea.SUBSCRIPTION,
+            "subscription/s/deliver",
+            SpanKind.CONSUMER,
+            SpanAttributes.empty(),
+            new SpanLink(TraceId.of("trace-from-a-header"), SpanId.of("span")),
+            SpanBaggage.KEEP)
+        .close();
+
+    assertThat(otelTesting.getSpans())
+        .hasSize(2)
+        .allSatisfy(span -> assertThat(span.getLinks()).isEmpty());
+  }
+
+  @Test
+  void aNullLinkOrBaggage_isRejected() {
+    StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
+    assertThatThrownBy(
+            () ->
+                tracing.start(
+                    TracingArea.SUBSCRIPTION,
+                    "s",
+                    SpanKind.CONSUMER,
+                    SpanAttributes.empty(),
+                    null,
+                    SpanBaggage.KEEP))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessageContaining("SpanLink.NONE");
+    assertThatThrownBy(
+            () ->
+                tracing.start(
+                    TracingArea.SUBSCRIPTION,
+                    "s",
+                    SpanKind.CONSUMER,
+                    SpanAttributes.empty(),
+                    SpanLink.NONE,
+                    null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessageContaining("SpanBaggage.KEEP");
+    assertThatThrownBy(
+            () ->
+                tracing.start(
+                    TracingArea.EVENT_STORE,
+                    "eventstore/read",
+                    SpanKind.INTERNAL,
+                    SpanAttributes.empty(),
+                    (java.time.Instant) null))
+        .isInstanceOf(NullPointerException.class);
+    assertThat(otelTesting.getSpans()).isEmpty();
+  }
+
+  @Test
+  void baggage_replacesTheCurrentBaggage_andKeepKeepsIt() {
     StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
     try (Scope _ = Baggage.builder().put("outer", "kept").build().makeCurrent()) {
       try (TraceScope _ =
@@ -154,8 +243,8 @@ class OpenTelemetryTracingTest {
               "s",
               SpanKind.CONSUMER,
               SpanAttributes.empty(),
-              null,
-              Map.of("tenant", "acme"))) {
+              SpanLink.NONE,
+              SpanBaggage.replace(Map.of("tenant", "acme")))) {
         assertThat(Baggage.current().getEntryValue("tenant")).isEqualTo("acme");
         assertThat(Baggage.current().getEntryValue("outer")).isNull();
       }
@@ -165,12 +254,22 @@ class OpenTelemetryTracingTest {
               "s",
               SpanKind.CONSUMER,
               SpanAttributes.empty(),
-              null,
-              Map.of())) {
+              SpanLink.NONE,
+              SpanBaggage.replace(Map.of()))) {
         assertThat(Baggage.current().isEmpty()).isTrue();
       }
       try (TraceScope _ =
           tracing.start(TracingArea.SUBSCRIPTION, "s", SpanKind.CONSUMER, SpanAttributes.empty())) {
+        assertThat(Baggage.current().getEntryValue("outer")).isEqualTo("kept");
+      }
+      try (TraceScope _ =
+          tracing.start(
+              TracingArea.SUBSCRIPTION,
+              "s",
+              SpanKind.CONSUMER,
+              SpanAttributes.empty(),
+              SpanLink.NONE,
+              SpanBaggage.KEEP)) {
         assertThat(Baggage.current().getEntryValue("outer")).isEqualTo("kept");
       }
       assertThat(Baggage.current().getEntryValue("outer")).isEqualTo("kept");

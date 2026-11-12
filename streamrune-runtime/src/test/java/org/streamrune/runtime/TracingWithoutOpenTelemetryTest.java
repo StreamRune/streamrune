@@ -313,6 +313,169 @@ class TracingWithoutOpenTelemetryTest {
         .contains("io.opentelemetry.api");
   }
 
+  /**
+   * The emitters of the event store, the locker, the outbox poller and the saga runners compile and
+   * run without {@code opentelemetry-api}: a source that calls their {@code tracing(...)} and
+   * {@code withTracing(...)} methods compiles against the classpath without any OpenTelemetry jar,
+   * and run in a class loader without one it starts no span with {@code NOOP} and every span with a
+   * tracing of its own.
+   */
+  @Test
+  void theNewEmittersCompileAndRunWithoutOpenTelemetry(@TempDir Path dir) throws Exception {
+    String source =
+        """
+        package org.streamrune.runtime;
+
+        import java.time.Duration;
+        import java.util.List;
+        import java.util.Map;
+        import java.util.Optional;
+        import java.util.concurrent.CopyOnWriteArrayList;
+        import org.streamrune.core.DomainEvent;
+        import org.streamrune.core.EventEnvelope;
+        import org.streamrune.core.EventMetadata;
+        import org.streamrune.core.RetryPolicy;
+        import org.streamrune.core.SimpleEventTypeRegistry;
+        import org.streamrune.core.outbox.OutboxEntry;
+        import org.streamrune.core.outbox.OutboxEntryId;
+        import org.streamrune.core.outbox.OutboxOrderingMode;
+        import org.streamrune.core.saga.SagaCommand;
+        import org.streamrune.core.saga.SagaDecider;
+        import org.streamrune.core.saga.SagaId;
+        import org.streamrune.core.saga.SagaState;
+        import org.streamrune.core.saga.SagaStatus;
+        import org.streamrune.core.tracing.SpanAttributes;
+        import org.streamrune.core.tracing.SpanKind;
+        import org.streamrune.core.tracing.SpanBaggage;
+        import org.streamrune.core.tracing.SpanLink;
+        import org.streamrune.core.tracing.StreamRuneTracing;
+        import org.streamrune.core.tracing.TraceScope;
+        import org.streamrune.core.tracing.TracingArea;
+        import org.streamrune.core.types.AggregateId;
+        import org.streamrune.core.types.AggregateType;
+        import org.streamrune.core.types.CommandId;
+        import org.streamrune.core.types.CorrelationId;
+        import org.streamrune.core.types.EventId;
+        import org.streamrune.core.types.EventType;
+        import org.streamrune.core.types.GlobalOffset;
+        import org.streamrune.core.types.StreamId;
+        import org.streamrune.core.types.Version;
+        import org.streamrune.test.InMemoryEventStore;
+        import org.streamrune.test.InMemoryOutboxStore;
+        import org.streamrune.test.SagaFixture;
+
+        public class NewEmitters {
+          public record Switched(String to) implements DomainEvent {}
+
+          public record LampState(int on) implements org.streamrune.core.AggregateState {}
+
+          public record OrderState(SagaStatus status) implements SagaState {}
+
+          public record CancelOrder() implements org.streamrune.core.Command {}
+
+          public static final class OrderSaga implements SagaDecider<OrderState> {
+            public Class<OrderState> stateType() { return OrderState.class; }
+            public OrderState initialState(SagaId id) { return new OrderState(SagaStatus.STARTED); }
+            public OrderState evolve(OrderState s, EventEnvelope e) {
+              return new OrderState(SagaStatus.RUNNING);
+            }
+            public List<SagaCommand> handle(OrderState s, EventEnvelope e) { return List.of(); }
+            public List<SagaCommand> compensate(OrderState s, Throwable f, SagaCommand c) {
+              return List.of(SagaCommand.of(new CancelOrder(), AggregateId.of("o-1")));
+            }
+            public Optional<Duration> timeout() { return Optional.of(Duration.ofMinutes(1)); }
+          }
+
+          public static List<String> run(boolean traced) throws Exception {
+            List<String> started = new CopyOnWriteArrayList<>();
+            StreamRuneTracing tracing =
+                !traced
+                    ? StreamRuneTracing.NOOP
+                    : new StreamRuneTracing() {
+                      public boolean enabled(TracingArea area) { return true; }
+                      public TraceScope start(TracingArea area, String name, SpanKind kind,
+                          SpanAttributes attributes, SpanLink link, SpanBaggage baggage) {
+                        started.add(name);
+                        return TraceScope.NOOP;
+                      }
+                    };
+            StreamId stream = StreamId.of(AggregateType.of("lamp"), AggregateId.of("l-1"));
+            new LocalStripedLocker(1).traced(tracing)
+                .acquireLock(stream, Duration.ofSeconds(1)).close();
+
+            InMemoryEventStore store =
+                InMemoryEventStore.serializing(
+                        SimpleEventTypeRegistry.builder().registerEvent("Switched", Switched.class)
+                            .registerState("LampState", LampState.class).build(),
+                        null)
+                    .withTracing(tracing);
+            EventMetadata metadata = new EventMetadata(EventId.of("e-1"), CommandId.of("c-1"),
+                null, null, CorrelationId.of("r-1"), null, null, java.time.Instant.now(), Map.of());
+            store.append(stream, List.of(new EventEnvelope(GlobalOffset.initial(), stream,
+                Version.initial(), EventType.of("Switched"), new Switched("on"), metadata)),
+                Version.initial());
+            store.saveSnapshot(stream, new Version(1), new LampState(1), 1, 0);
+            store.load(stream, 1);
+            store.readGlobalStream(GlobalOffset.initial(), 10);
+
+            InMemoryOutboxStore outbox = new InMemoryOutboxStore(java.time.Clock.systemUTC(),
+                InMemoryOutboxStore.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.AVAILABILITY_FIRST);
+            outbox.save(OutboxEntry.pending(OutboxEntryId.of("o-1"), "{}", "Switched"));
+            OutboxPoller.builder().outboxStore(outbox).publisher(entry -> {})
+                .retryPolicy(new RetryPolicy(3, Duration.ofMillis(50), 2.0, false))
+                .pollInterval(Duration.ofSeconds(60)).tracing(tracing).build().processBatch();
+
+            SagaFixture<OrderState> saga =
+                SagaFixture.of(OrderState.class, b -> b.decider(new OrderSaga())
+                        .startWhen(e -> e.event() instanceof Switched)
+                        .extractSagaId(e -> SagaId.of("saga-1"))
+                        .tracing(tracing))
+                    .withTimeouts(b -> b.decider(new OrderSaga()).tracing(tracing));
+            saga.when(stream, new Switched("on")).advance(Duration.ofMinutes(2)).runTimeouts();
+            return started;
+          }
+        }
+        """;
+    Path classes = dir.resolve("emitters").resolve("classes");
+    assertThat(
+            compile(
+                dir.resolve("emitters"), "NewEmitters", source, classpathWithoutOpenTelemetry()))
+        .isEmpty();
+
+    List<URL> urls = new ArrayList<>();
+    urls.add(classes.toUri().toURL());
+    try (URLClassLoader base = loaderWithoutOpenTelemetry()) {
+      urls.addAll(List.of(base.getURLs()));
+    }
+    try (URLClassLoader loader =
+        new URLClassLoader(urls.toArray(URL[]::new), ClassLoader.getPlatformClassLoader())) {
+      assertThatThrownBy(() -> Class.forName("io.opentelemetry.api.OpenTelemetry", false, loader))
+          .isInstanceOf(ClassNotFoundException.class);
+      Method run =
+          load(loader, "org.streamrune.runtime.NewEmitters").getMethod("run", boolean.class);
+
+      assertThat((List<?>) run.invoke(null, false)).isEmpty();
+      String sagaType = "org.streamrune.runtime.NewEmitters$OrderState";
+      List<String> traced =
+          ((List<?>) run.invoke(null, true)).stream().map(String::valueOf).toList();
+      assertThat(traced)
+          .contains(
+              "lock/acquire",
+              "eventstore/append",
+              "eventstore/append/serialize",
+              "eventstore/load",
+              "eventstore/snapshot/save",
+              "eventstore/snapshot/load",
+              "eventstore/load/deserialize",
+              "eventstore/read",
+              "outbox/relay",
+              "outbox/publish",
+              "saga/" + sagaType + "/step",
+              "saga/" + sagaType + "/timeout",
+              "saga/" + sagaType + "/compensate");
+    }
+  }
+
   /** Compiles one source file and returns javac's error messages, empty when it compiles. */
   private static String compile(Path dir, String className, String source, String classpath)
       throws IOException {

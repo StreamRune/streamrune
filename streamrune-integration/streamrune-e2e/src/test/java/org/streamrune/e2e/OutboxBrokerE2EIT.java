@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -28,9 +29,19 @@ import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxOrderingMode;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.SpanId;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.TraceId;
 import org.streamrune.outbox.kafka.KafkaOutboxPublisher;
 import org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher;
 import org.streamrune.postgres.PostgresOutboxStore;
@@ -88,18 +99,52 @@ class OutboxBrokerE2EIT extends E2ETestBase {
   // E2ETestBase#cleanDatabase (@BeforeEach) already truncates outbox_events before each test, so
   // each broker test starts from an empty outbox sharing the singleton Postgres container.
 
+  /** The span of the command that wrote the seeded entries. */
+  private static final SpanLink COMMAND =
+      new SpanLink(TraceId.of("4bf92f3577b34da6a3ce929d0e0e4736"), SpanId.of("00f067aa0ba902b7"));
+
   /**
    * Saves three PENDING entries for {@link #AGGREGATE_ID}, oldest first, each payload tagged with
-   * its sequence number so the consumer side can assert ordering. Returns the entry ids in order.
+   * its sequence number so the consumer side can assert ordering, and each linked to {@link
+   * #COMMAND}. Returns the entry ids in order.
    */
   private List<String> seedOrderedEntries(PostgresOutboxStore store) {
     var ids = new ArrayList<String>();
     for (int seq = 1; seq <= 3; seq++) {
       var id = OutboxEntryId.of("ord-" + seq + "-" + UUID.randomUUID());
-      store.save(OutboxEntry.pending(id, "{\"seq\":" + seq + "}", "OrderEvent", STREAM));
+      store.save(
+          OutboxEntry.pending(id, "{\"seq\":" + seq + "}", "OrderEvent", STREAM)
+              .withTraceLink(COMMAND));
       ids.add(id.value());
     }
     return ids;
+  }
+
+  /**
+   * Records the link of each {@code outbox/publish} span the relay starts, through the hook the
+   * publisher calls for each entry's hand-off.
+   */
+  private static final class PublishLinks implements StreamRuneTracing {
+    final List<SpanLink> links = new CopyOnWriteArrayList<>();
+
+    @Override
+    public boolean enabled(TracingArea area) {
+      return area == TracingArea.OUTBOX;
+    }
+
+    @Override
+    public TraceScope start(
+        TracingArea area,
+        String spanName,
+        SpanKind kind,
+        SpanAttributes attributes,
+        SpanLink link,
+        SpanBaggage baggage) {
+      if (spanName.equals(TraceAttributes.OUTBOX_PUBLISH)) {
+        links.add(link);
+      }
+      return TraceScope.NOOP;
+    }
   }
 
   // ---- Kafka ---------------------------------------------------------------------------------
@@ -125,12 +170,14 @@ class OutboxBrokerE2EIT extends E2ETestBase {
 
         // Real publisher, real relay loop: loadPending (claim) -> publish -> markDelivered.
         var publisher = KafkaOutboxPublisher.builder().producer(producer).topic(topic).build();
+        var tracing = new PublishLinks();
         var poller =
             OutboxPoller.builder()
                 .outboxStore(store)
                 .publisher(publisher)
                 .batchSize(10)
                 .pollInterval(Duration.ofMillis(100))
+                .tracing(tracing)
                 .build();
 
         poller.start();
@@ -164,6 +211,10 @@ class OutboxBrokerE2EIT extends E2ETestBase {
         assertThat(new PostgresOutboxStore(dataSource, Duration.ofMinutes(5)).loadPending(10))
             .as("delivered entries are not re-claimable")
             .isEmpty();
+        assertThat(tracing.links)
+            .as("each hand-off's span links to the command that wrote the entry")
+            .hasSizeGreaterThanOrEqualTo(3)
+            .containsOnly(COMMAND);
       }
     }
   }
@@ -228,12 +279,14 @@ class OutboxBrokerE2EIT extends E2ETestBase {
                 .exchange(exchange)
                 .routingKey(routingKey)
                 .build();
+        var tracing = new PublishLinks();
         var poller =
             OutboxPoller.builder()
                 .outboxStore(store)
                 .publisher(publisher)
                 .batchSize(10)
                 .pollInterval(Duration.ofMillis(100))
+                .tracing(tracing)
                 .build();
 
         poller.start();
@@ -270,6 +323,10 @@ class OutboxBrokerE2EIT extends E2ETestBase {
         assertThat(new PostgresOutboxStore(dataSource, Duration.ofMinutes(5)).loadPending(10))
             .as("delivered entries are not re-claimable")
             .isEmpty();
+        assertThat(tracing.links)
+            .as("each basicPublish hand-off's span links to the command that wrote the entry")
+            .hasSizeGreaterThanOrEqualTo(3)
+            .containsOnly(COMMAND);
       }
     }
   }

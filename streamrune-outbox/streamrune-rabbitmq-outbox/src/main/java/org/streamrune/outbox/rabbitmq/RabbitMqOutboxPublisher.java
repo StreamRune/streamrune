@@ -26,7 +26,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEntrySpans;
 import org.streamrune.core.outbox.OutboxPublisher;
+import org.streamrune.core.tracing.TraceScope;
 
 /**
  * {@link OutboxPublisher} that delivers outbox entries to a RabbitMQ exchange.
@@ -44,12 +46,12 @@ import org.streamrune.core.outbox.OutboxPublisher;
  * confirm mechanism:
  *
  * <ul>
- *   <li>{@link #publishBatch(List)} — batch path (override of the default). Publishes all entries
- *       first, then awaits a single async-confirm round for the whole batch. Only broker-confirmed
- *       AND routable entries are returned in {@link BatchResult#confirmed()}; nacked, timed-out,
- *       {@code basicPublish}-failed, and unroutable-(returned) entries are returned in {@link
- *       BatchResult#failed()} and will be retried. This reduces confirm round-trips from O(N) to
- *       O(1) for a batch of N entries.
+ *   <li>{@link #publishBatch(List, Instant, OutboxEntrySpans)} — batch path (override of the
+ *       default). Publishes all entries first, then awaits a single async-confirm round for the
+ *       whole batch. Only broker-confirmed AND routable entries are returned in {@link
+ *       BatchResult#confirmed()}; nacked, timed-out, {@code basicPublish}-failed, and
+ *       unroutable-(returned) entries are returned in {@link BatchResult#failed()} and will be
+ *       retried. This reduces confirm round-trips from O(N) to O(1) for a batch of N entries.
  *   <li>{@link #publish(OutboxEntry)} — single-entry path, implemented as a singleton batch. A
  *       nack, unroutable return, connection failure, or confirm timeout propagates as an exception
  *       (see the method javadoc for the exact exception-to-{@link FailureKind} mapping) so the
@@ -296,9 +298,9 @@ public final class RabbitMqOutboxPublisher implements OutboxPublisher {
   }
 
   /**
-   * Publishes one entry via the shared batch confirm path — {@link #publishBatch(List, Instant)}
-   * with a singleton list and no deadline — and maps the entry's outcome back onto this method's
-   * throw-to-retry contract:
+   * Publishes one entry via the shared batch confirm path — {@link #publishBatch(List, Instant,
+   * OutboxEntrySpans)} with a singleton list and no deadline — and maps the entry's outcome back
+   * onto this method's throw-to-retry contract:
    *
    * <ul>
    *   <li>broker-confirmed and routable — returns normally;
@@ -349,7 +351,7 @@ public final class RabbitMqOutboxPublisher implements OutboxPublisher {
   public void publish(OutboxEntry entry) throws Exception {
     // An interrupted confirm wait comes back as this entry failed with the InterruptedException
     // (flag restored by publishBatch), which the `throw failure` below surfaces unchanged.
-    BatchResult result = publishBatch(List.of(entry), null);
+    BatchResult result = publishBatch(List.of(entry), null, OutboxEntrySpans.NONE);
     if (result.confirmed().contains(entry.id())) {
       return;
     }
@@ -404,29 +406,25 @@ public final class RabbitMqOutboxPublisher implements OutboxPublisher {
    * claim until the lease expires. The interrupt flag is left set. Entries not yet published when
    * the interrupt was seen are in neither bucket.
    *
-   * @param entries the entries to deliver; must not be null; may be empty
-   * @return the per-entry outcome
-   */
-  @Override
-  public BatchResult publishBatch(List<OutboxEntry> entries) {
-    return publishBatch(entries, null);
-  }
-
-  /**
-   * Deadline-aware batch publish. Publishes all entries (the publish loop is fast — {@code
-   * basicPublish} buffers), then awaits confirms for at most {@code min(confirmTimeout, time until
-   * deadline)}. Bounding the confirm wait by the deadline keeps a slow broker from holding the
-   * claim past its lease: entries unconfirmed by the deadline are returned in {@link
+   * <p>The confirm wait is bounded by the deadline as well: at most {@code min(confirmTimeout, time
+   * until deadline)}. Bounding the confirm wait by the deadline keeps a slow broker from holding
+   * the claim past its lease: entries unconfirmed by the deadline are returned in {@link
    * BatchResult#failed()} (retried) exactly as on a confirm timeout, and — being already published
    * — are at-least-once safe. A {@code null} deadline preserves the full {@code confirmTimeout}
    * wait.
    *
+   * <p>Each entry's hand-off ({@code basicPublish}) runs inside the scope {@code
+   * spans.start(entry)} returns; a hand-off that fails records the error on it. The confirm wait is
+   * shared by the batch and is not part of any entry's span.
+   *
    * @param entries the entries to deliver; must not be null; may be empty
    * @param deadline the instant by which the confirm wait must end; {@code null} for no deadline
+   * @param spans starts the span of each entry's hand-off
    * @return the per-entry outcome
    */
   @Override
-  public BatchResult publishBatch(List<OutboxEntry> entries, Instant deadline) {
+  public BatchResult publishBatch(
+      List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
     if (entries.isEmpty()) {
       return new BatchResult(Set.of(), Map.of());
     }
@@ -483,7 +481,18 @@ public final class RabbitMqOutboxPublisher implements OutboxPublisher {
         latch.countDown(); // account for this entry in the latch
         continue;
       }
-      Exception failure = handOff(entry);
+      TraceScope scope = spans.start(entry);
+      Exception failure;
+      try {
+        failure = handOff(entry);
+        if (failure == null) {
+          scope.recordSuccess();
+        } else {
+          scope.recordError(failure);
+        }
+      } finally {
+        scope.close();
+      }
       if (failure == null) {
         published.add(entry);
         continue;

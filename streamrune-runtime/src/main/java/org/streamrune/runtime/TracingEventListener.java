@@ -7,6 +7,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
@@ -19,8 +20,10 @@ import org.streamrune.core.types.SubscriptionName;
  * Decorates an {@link EventListener} to start the span {@code subscription/{name}/deliver} for each
  * delivery batch, through a {@link StreamRuneTracing} (area {@link TracingArea#SUBSCRIPTION}).
  *
- * <p>When the first event's {@link EventMetadata} carries a {@code traceId} and a {@code spanId},
- * the span links back to the originating command trace. The first event's baggage is the current
+ * <p>When the first event's {@link EventMetadata} carries the span of the command that appended it
+ * ({@link EventMetadata#spanContext()}, which the command bus writes from its own command span),
+ * the span links back to that command ({@link SpanLink#of(EventMetadata)}). The caller-supplied
+ * {@code traceId} of the metadata never builds a link. The first event's baggage is the current
  * baggage while the delegate runs.
  *
  * <p>The subscription builders wrap their listener through {@link #traced} when they are given a
@@ -30,6 +33,9 @@ import org.streamrune.core.types.SubscriptionName;
  * comes in.
  */
 public final class TracingEventListener implements EventListener {
+
+  /** The baggage of an empty delivery: none, replacing the current baggage. */
+  private static final SpanBaggage NO_BAGGAGE = SpanBaggage.replace(Map.of());
 
   private final EventListener delegate;
   private final StreamRuneTracing tracing;
@@ -98,12 +104,12 @@ public final class TracingEventListener implements EventListener {
             .put(TraceAttributes.SUBSCRIPTION_NAME, subscriptionName.value())
             .put(TraceAttributes.BATCH_SIZE, (long) events.size())
             .build();
-    SpanLink link = null;
-    Map<String, String> baggage = Map.of();
+    SpanLink link = SpanLink.NONE;
+    SpanBaggage baggage = NO_BAGGAGE;
     if (!events.isEmpty()) {
       EventMetadata metadata = events.getFirst().metadata();
-      link = SpanLink.ofNullable(metadata.traceId(), metadata.spanId());
-      baggage = metadata.baggage();
+      link = SpanLink.of(metadata);
+      baggage = SpanBaggage.replace(metadata.baggage());
     }
     TraceScope scope =
         tracing.start(

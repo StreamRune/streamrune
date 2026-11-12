@@ -4,9 +4,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.SpanId;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.TraceId;
 
 class OutboxEntryTest {
 
@@ -43,7 +46,8 @@ class OutboxEntryTest {
                 Instant.now(),
                 null,
                 null,
-                null));
+                null,
+                SpanLink.NONE));
   }
 
   @Test
@@ -62,7 +66,8 @@ class OutboxEntryTest {
                 Instant.now(),
                 null,
                 null,
-                null));
+                null,
+                SpanLink.NONE));
   }
 
   @Test
@@ -81,7 +86,8 @@ class OutboxEntryTest {
                 Instant.now(),
                 null,
                 null,
-                null));
+                null,
+                SpanLink.NONE));
   }
 
   @Test
@@ -100,7 +106,8 @@ class OutboxEntryTest {
                 Instant.now(),
                 null,
                 null,
-                null));
+                null,
+                SpanLink.NONE));
   }
 
   @Test
@@ -119,7 +126,8 @@ class OutboxEntryTest {
                 Instant.now(),
                 null,
                 null,
-                null));
+                null,
+                SpanLink.NONE));
   }
 
   @Test
@@ -137,7 +145,8 @@ class OutboxEntryTest {
                 Instant.now(),
                 null,
                 null,
-                null));
+                null,
+                SpanLink.NONE));
   }
 
   @Test
@@ -173,7 +182,8 @@ class OutboxEntryTest {
             Instant.now(),
             null,
             null,
-            null);
+            null,
+            SpanLink.NONE);
     assertNull(entry.streamId());
   }
 
@@ -192,7 +202,8 @@ class OutboxEntryTest {
                 Instant.now(),
                 null,
                 null,
-                null));
+                null,
+                SpanLink.NONE));
   }
 
   @Test
@@ -222,6 +233,52 @@ class OutboxEntryTest {
   }
 
   @Test
+  void pending_factories_carryNoTraceLink() {
+    assertSame(
+        SpanLink.NONE, OutboxEntry.pending(OutboxEntryId.of("p"), "{}", "Event").traceLink());
+    assertSame(
+        SpanLink.NONE,
+        OutboxEntry.pending(OutboxEntryId.of("p2"), "{}", "Event", STREAM).traceLink());
+  }
+
+  @Test
+  void withTraceLink_setsTheLink_andKeepsEveryOtherComponent() {
+    var link =
+        new SpanLink(TraceId.of("0af7651916cd43dd8448eb211c80319c"), SpanId.of("b7ad6b7169203331"));
+    var skip = new OutboxEntry.SkipRecord(Instant.now(), "ops", "poison");
+    var entry = entryWith(OutboxStatus.SKIPPED, skip);
+
+    var linked = entry.withTraceLink(link);
+
+    assertEquals(link, linked.traceLink());
+    assertEquals(entry, linked.withTraceLink(SpanLink.NONE));
+    assertSame(SpanLink.NONE, linked.withTraceLink(SpanLink.NONE).traceLink());
+  }
+
+  @Test
+  void aNullTraceLink_readsAsNone() {
+    var entry = OutboxEntry.pending(OutboxEntryId.of("n"), "{}", "Event");
+    assertSame(SpanLink.NONE, entry.withTraceLink(null).traceLink());
+  }
+
+  @Test
+  void json_leavesOutNone_andWritesALinkAsItsTwoIds() throws Exception {
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+    var entry = OutboxEntry.pending(OutboxEntryId.of("j"), "{}", "Event", STREAM);
+    var link =
+        new SpanLink(TraceId.of("0af7651916cd43dd8448eb211c80319c"), SpanId.of("b7ad6b7169203331"));
+
+    var unlinked = mapper.readTree(mapper.writeValueAsString(entry));
+    var linked = mapper.readTree(mapper.writeValueAsString(entry.withTraceLink(link)));
+
+    assertFalse(unlinked.has("traceLink"), unlinked.toString());
+    assertFalse(unlinked.toString().contains("0000000000000000"), unlinked.toString());
+    assertEquals(
+        "0af7651916cd43dd8448eb211c80319c", linked.get("traceLink").get("traceId").asText());
+    assertEquals("b7ad6b7169203331", linked.get("traceLink").get("spanId").asText());
+  }
+
+  @Test
   void pending_factories_carryNoSkipRecord() {
     assertNull(OutboxEntry.pending(OutboxEntryId.of("p"), "{}", "Event").skip());
     assertNull(OutboxEntry.pending(OutboxEntryId.of("p2"), "{}", "Event", STREAM).skip());
@@ -239,6 +296,7 @@ class OutboxEntryTest {
         Instant.now(),
         status == OutboxStatus.PENDING ? null : Instant.now(),
         null,
-        skip);
+        skip,
+        SpanLink.NONE);
   }
 }

@@ -42,6 +42,11 @@ class TracingEventListenerTest {
   static final OpenTelemetryExtension otelTesting = OpenTelemetryExtension.create();
 
   private EventEnvelope envelope(TraceId traceId, SpanId spanId) {
+    return envelope(traceId, spanId, org.streamrune.core.tracing.SpanLink.NONE);
+  }
+
+  private EventEnvelope envelope(
+      TraceId traceId, SpanId spanId, org.streamrune.core.tracing.SpanLink spanContext) {
     return new EventEnvelope(
         GlobalOffset.of(1),
         StreamId.of(TYPE, AggregateId.of("stream-1")),
@@ -56,7 +61,10 @@ class TracingEventListenerTest {
             CorrelationId.of("corr-1"),
             null,
             null,
-            Instant.now()));
+            Instant.now(),
+            null,
+            null,
+            spanContext));
   }
 
   @Test
@@ -114,16 +122,34 @@ class TracingEventListenerTest {
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()),
             SubscriptionName.of("orders"));
 
-    var traceId = new TraceId("0af7651916cd43dd8448eb211c80319c");
-    var spanId = new SpanId("b7ad6b7169203331");
+    var commandSpan =
+        new org.streamrune.core.tracing.SpanLink(
+            new TraceId("0af7651916cd43dd8448eb211c80319c"), new SpanId("b7ad6b7169203331"));
 
-    listener.onEvents(List.of(envelope(traceId, spanId)));
+    listener.onEvents(List.of(envelope(null, null, commandSpan)));
 
     SpanData span = otelTesting.getSpans().getFirst();
     assertEquals(1, span.getLinks().size());
     var link = span.getLinks().getFirst();
     assertEquals("0af7651916cd43dd8448eb211c80319c", link.getSpanContext().getTraceId());
     assertEquals("b7ad6b7169203331", link.getSpanContext().getSpanId());
+  }
+
+  @Test
+  void theCallerSuppliedTraceIdAndSpanId_neverBuildALink() {
+    EventListener delegate = mock(EventListener.class);
+    var listener =
+        new TracingEventListener(
+            delegate,
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()),
+            SubscriptionName.of("orders"));
+
+    listener.onEvents(
+        List.of(
+            envelope(
+                new TraceId("0af7651916cd43dd8448eb211c80319c"), new SpanId("b7ad6b7169203331"))));
+
+    assertTrue(otelTesting.getSpans().getFirst().getLinks().isEmpty());
   }
 
   @Test
