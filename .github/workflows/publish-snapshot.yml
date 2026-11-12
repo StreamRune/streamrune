@@ -53,11 +53,23 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
-      # The snapshot repository answers 429 Too Many Requests when the modules upload in parallel
-      # (each module PUTs its jar, sources, javadoc, POM, module file and their checksums), so the
-      # upload runs one module at a time.
+      # The snapshot repository answers 429 Too Many Requests when uploads come too fast (each
+      # module PUTs its jar, sources, javadoc, POM, module file and their checksums). The upload
+      # runs one module at a time, and a rejected attempt is repeated after a pause, up to three
+      # attempts in all; each attempt publishes a complete new timestamped snapshot.
       - name: Publish the snapshot to the Central Portal snapshot repository
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-        run: ./gradlew publishToMavenCentral --no-parallel --max-workers=1 --no-daemon --console=plain
+        run: |
+          for attempt in 1 2 3; do
+            if ./gradlew publishToMavenCentral --no-parallel --max-workers=1 --no-daemon --console=plain; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Snapshot upload attempt $attempt failed; retrying in 180 seconds."
+              sleep 180
+            fi
+          done
+          echo "::error::The snapshot upload failed three times."
+          exit 1
