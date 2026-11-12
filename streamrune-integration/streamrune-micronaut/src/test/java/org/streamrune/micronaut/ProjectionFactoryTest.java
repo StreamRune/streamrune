@@ -141,7 +141,15 @@ class ProjectionFactoryTest {
             Duration.ofSeconds(1),
             "auto",
             "required",
-            "operator-only");
+            "operator-only",
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true);
 
     MultiProjectionRunner runner =
         factory.multiProjectionRunner(
@@ -155,7 +163,8 @@ class ProjectionFactoryTest {
             null,
             null,
             props,
-            defaultEnv());
+            defaultEnv(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var field = MultiProjectionRunner.class.getDeclaredField("subscriptionConfig");
     field.setAccessible(true);
@@ -183,7 +192,8 @@ class ProjectionFactoryTest {
             null,
             null,
             StreamRuneMicronautProperties.withDefaults(),
-            defaultEnv());
+            defaultEnv(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -206,7 +216,8 @@ class ProjectionFactoryTest {
             null,
             null,
             null,
-            defaultEnv());
+            defaultEnv(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -217,7 +228,11 @@ class ProjectionFactoryTest {
     var factory = new ProjectionFactory();
 
     InlineProjectionInterceptor interceptor =
-        factory.inlineProjectionInterceptor(List.of(new InlineProjection()), defaultEnv(), null);
+        factory.inlineProjectionInterceptor(
+            List.of(new InlineProjection()),
+            defaultEnv(),
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(interceptor);
   }
@@ -243,7 +258,10 @@ class ProjectionFactoryTest {
         assertDoesNotThrow(
             () ->
                 factory.inlineProjectionInterceptor(
-                    List.of(new InlineProjection()), defaultEnv(), null));
+                    List.of(new InlineProjection()),
+                    defaultEnv(),
+                    null,
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertNotNull(interceptor);
 
     String formatted =
@@ -278,7 +296,8 @@ class ProjectionFactoryTest {
                 null,
                 null,
                 StreamRuneMicronautProperties.withDefaults(),
-                defaultEnv()));
+                defaultEnv(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   // --- Fixtures: one per delivery-policy row the integration can reach ---
@@ -381,7 +400,8 @@ class ProjectionFactoryTest {
             null,
             null,
             StreamRuneMicronautProperties.withDefaults(),
-            defaultEnv());
+            defaultEnv(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
   }
 
   private static ScheduledProjectionRunner scheduled(
@@ -397,7 +417,8 @@ class ProjectionFactoryTest {
             null,
             null,
             null,
-            defaultEnv());
+            defaultEnv(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
   }
 
   private static InMemoryEventStore oneEvent() {
@@ -644,7 +665,10 @@ class ProjectionFactoryTest {
             () ->
                 new ProjectionFactory()
                     .inlineProjectionInterceptor(
-                        List.of(new InlineTlProjection()), defaultEnv(), null));
+                        List.of(new InlineTlProjection()),
+                        defaultEnv(),
+                        null,
+                        org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertEquals(
         "projection 'inline_tl' is INLINE and declares TRANSACTIONAL_LOCAL: INLINE runs post-commit on the"
             + " command thread with no checkpoint and no transaction of its own. Declare"
@@ -666,7 +690,11 @@ class ProjectionFactoryTest {
     try {
       assertNotNull(
           new ProjectionFactory()
-              .inlineProjectionInterceptor(List.of(new InlineProjection()), defaultEnv(), metrics));
+              .inlineProjectionInterceptor(
+                  List.of(new InlineProjection()),
+                  defaultEnv(),
+                  metrics,
+                  org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     } finally {
       logger.detachAppender(appender);
       logger.setLevel(null);
@@ -706,7 +734,8 @@ class ProjectionFactoryTest {
                         null,
                         null,
                         StreamRuneMicronautProperties.withDefaults(),
-                        env));
+                        env,
+                        org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(ex.getMessage().contains("does not write through"), ex.getMessage());
   }
 
@@ -759,7 +788,8 @@ class ProjectionFactoryTest {
                 null,
                 null,
                 null,
-                defaultEnv()));
+                defaultEnv(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   @Test
@@ -770,7 +800,11 @@ class ProjectionFactoryTest {
     assertThrows(
         IllegalStateException.class,
         () ->
-            factory.inlineProjectionInterceptor(List.of(new ContProjection()), defaultEnv(), null));
+            factory.inlineProjectionInterceptor(
+                List.of(new ContProjection()),
+                defaultEnv(),
+                null,
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   @Test
@@ -793,7 +827,8 @@ class ProjectionFactoryTest {
                 null,
                 null,
                 StreamRuneMicronautProperties.withDefaults(),
-                defaultEnv()));
+                defaultEnv(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   @Test
@@ -825,7 +860,8 @@ class ProjectionFactoryTest {
                 null,
                 null,
                 null,
-                defaultEnv()));
+                defaultEnv(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   @Test
@@ -858,7 +894,8 @@ class ProjectionFactoryTest {
                 null,
                 null,
                 StreamRuneMicronautProperties.withDefaults(),
-                defaultEnv()));
+                defaultEnv(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   @Test
@@ -886,7 +923,8 @@ class ProjectionFactoryTest {
                 null,
                 null,
                 StreamRuneMicronautProperties.withDefaults(),
-                env));
+                env,
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   /**
@@ -918,7 +956,8 @@ class ProjectionFactoryTest {
             null,
             null,
             StreamRuneMicronautProperties.withDefaults(),
-            env);
+            env,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -949,7 +988,8 @@ class ProjectionFactoryTest {
             null,
             null,
             StreamRuneMicronautProperties.withDefaults(),
-            env);
+            env,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -984,7 +1024,8 @@ class ProjectionFactoryTest {
                 null,
                 null,
                 StreamRuneMicronautProperties.withDefaults(),
-                defaultEnv()));
+                defaultEnv(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   // --- multiple ProjectionDeadLetterStore beans must fail loudly, not silently pick one ---
@@ -1030,7 +1071,8 @@ class ProjectionFactoryTest {
                     null,
                     null,
                     StreamRuneMicronautProperties.withDefaults(),
-                    defaultEnv()));
+                    defaultEnv(),
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(
         e.getMessage().contains("Multiple ProjectionDeadLetterStore"),
         "ambiguous DLQ beans must fail loudly, not silently pick dlqs.get(0)");
@@ -1056,7 +1098,8 @@ class ProjectionFactoryTest {
                     null,
                     null,
                     null,
-                    defaultEnv()));
+                    defaultEnv(),
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(e.getMessage().contains("Multiple ProjectionDeadLetterStore"));
   }
 
@@ -1077,7 +1120,8 @@ class ProjectionFactoryTest {
             null,
             null,
             StreamRuneMicronautProperties.withDefaults(),
-            defaultEnv());
+            defaultEnv(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(runner, "a single DLQ store must wire cleanly (size==1 path)");
     runner.close();
   }
@@ -1103,7 +1147,8 @@ class ProjectionFactoryTest {
             null,
             null,
             StreamRuneMicronautProperties.withDefaults(),
-            defaultEnv());
+            defaultEnv(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -1135,7 +1180,8 @@ class ProjectionFactoryTest {
                 null,
                 null,
                 StreamRuneMicronautProperties.withDefaults(),
-                env));
+                env,
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   // --- Tests: metrics wiring ---
@@ -1159,7 +1205,8 @@ class ProjectionFactoryTest {
             null,
             null,
             StreamRuneMicronautProperties.withDefaults(),
-            defaultEnv());
+            defaultEnv(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var field = MultiProjectionRunner.class.getDeclaredField("metrics");
     field.setAccessible(true);
@@ -1185,7 +1232,8 @@ class ProjectionFactoryTest {
             null,
             null,
             StreamRuneMicronautProperties.withDefaults(),
-            defaultEnv());
+            defaultEnv(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var field = MultiProjectionRunner.class.getDeclaredField("metrics");
     field.setAccessible(true);
@@ -1211,7 +1259,8 @@ class ProjectionFactoryTest {
             null,
             null,
             null,
-            defaultEnv());
+            defaultEnv(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var field = ScheduledProjectionRunner.class.getDeclaredField("metrics");
     field.setAccessible(true);

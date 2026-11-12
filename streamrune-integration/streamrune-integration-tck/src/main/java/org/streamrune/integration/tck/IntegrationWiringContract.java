@@ -26,6 +26,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
@@ -63,6 +64,7 @@ import org.streamrune.integration.tck.ContractBeans.SecondLeadership;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.GraalJitGuard;
+import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 
 /**
@@ -766,7 +768,16 @@ public abstract class IntegrationWiringContract {
                 ApplicationCommandInterceptor.class,
                 ContractCommandRegistration.class))) {
       assertStarted(application);
-      application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("once-1"));
+      VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
+      List<CommandInterceptor> tracingInterceptors =
+          bus.interceptors().stream()
+              .filter(OpenTelemetryCommandInterceptor.class::isInstance)
+              .toList();
+      assertEquals(
+          List.of(application.bean(OpenTelemetryCommandInterceptor.class)),
+          tracingInterceptors,
+          "the bus runs the application's interceptor, and no other");
+      bus.execute(new ContractCommand("once-1"));
 
       List<String> names = spanNames();
       assertEquals(
