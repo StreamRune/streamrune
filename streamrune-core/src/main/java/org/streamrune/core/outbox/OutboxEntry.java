@@ -24,11 +24,15 @@ import org.streamrune.core.types.StreamId;
  * non-null iff {@code status == SKIPPED}.
  *
  * <p>{@code traceLink} names the span of the command whose append wrote the entry, so the relay's
- * {@code outbox/publish} span links to that command's trace. The event store fills it from the
- * metadata of the event the entry was derived from ({@code traceId} and {@code spanId}) when it
- * writes the entry in the append transaction, unless the entry already carries one; an {@link
- * OutboxEventMapper} builds its entries without it. It is {@code null} when that metadata has no
- * trace, and a store keeps only a link whose ids are valid W3C ids ({@link SpanLink#isW3c()}).
+ * {@code outbox/publish} span links to that command's trace. It is never {@code null}: an entry
+ * without a link carries {@link SpanLink#NONE}, which the {@link #pending} factories set, and the
+ * span of such an entry has no link. The event store fills it from the metadata of the event the
+ * entry was derived from ({@code traceId} and {@code spanId}, through {@link
+ * SpanLink#of(org.streamrune.core.EventMetadata)}) when it writes the entry in the append
+ * transaction, unless the entry already carries one; an {@link OutboxEventMapper} builds its
+ * entries without it. It stays {@code NONE} when that metadata has no trace, and a store keeps only
+ * a link whose ids are valid W3C ids ({@link SpanLink#isW3c()}): a stored link that is not one, or
+ * none at all, reads back as {@code NONE}.
  */
 public record OutboxEntry(
     OutboxEntryId id,
@@ -63,6 +67,7 @@ public record OutboxEntry(
     Objects.requireNonNull(payloadType, "payloadType is required");
     Objects.requireNonNull(status, "status is required");
     Objects.requireNonNull(createdAt, "createdAt is required");
+    Objects.requireNonNull(traceLink, "traceLink is required; SpanLink.NONE for none");
     if (attempts < 0) {
       throw new IllegalArgumentException("attempts must be non-negative");
     }
@@ -71,14 +76,15 @@ public record OutboxEntry(
       throw new IllegalArgumentException(
           "skip record must be present iff status == SKIPPED (status=" + status + ")");
     }
-    // streamId, lastError, processedAt, nextRetryAt and traceLink are nullable
+    // streamId, lastError, processedAt and nextRetryAt are nullable
   }
 
   /**
    * The same entry with {@code traceLink} as its link to the trace of the command that wrote it.
    *
-   * @param traceLink the link, or {@code null} for none
+   * @param traceLink the link; {@link SpanLink#NONE} for none
    * @return the entry with that link
+   * @throws NullPointerException if {@code traceLink} is {@code null}
    */
   public OutboxEntry withTraceLink(SpanLink traceLink) {
     return new OutboxEntry(
@@ -107,8 +113,8 @@ public record OutboxEntry(
   }
 
   /**
-   * Creates a new {@code PENDING} entry with zero attempts, no error, no trace link, and {@code
-   * createdAt} set to {@link Instant#now()}.
+   * Creates a new {@code PENDING} entry with zero attempts, no error, no trace link ({@link
+   * SpanLink#NONE}), and {@code createdAt} set to {@link Instant#now()}.
    *
    * @param streamId the stream whose delivery order the consumer depends on (also the partition key
    *     in partitioned transports); may be {@code null} only on an {@link
@@ -128,6 +134,6 @@ public record OutboxEntry(
         null,
         null,
         null,
-        null);
+        SpanLink.NONE);
   }
 }

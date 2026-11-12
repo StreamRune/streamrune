@@ -415,7 +415,7 @@ class OutboxStoreDefaultMethodsTest {
         null,
         null,
         null,
-        null);
+        org.streamrune.core.tracing.SpanLink.NONE);
   }
 
   @Test

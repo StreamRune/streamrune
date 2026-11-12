@@ -827,12 +827,13 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   /**
    * Binds {@code link} to the {@code trace_id} and {@code span_id} parameters at {@code index} and
-   * {@code index + 1}: both ids when they are valid W3C ids, two {@code NULL}s when there is no
-   * link or its ids are not valid, so the column holds only ids a tracing library accepts.
+   * {@code index + 1}: both ids when they are valid W3C ids, two {@code NULL}s for {@link
+   * SpanLink#NONE} or ids that are not valid, so the columns hold only ids a tracing library
+   * accepts.
    */
   private static void bindTraceLink(PreparedStatement ps, int index, SpanLink link)
       throws SQLException {
-    boolean valid = link != null && link.isW3c();
+    boolean valid = link.isPresent() && link.isW3c();
     ps.setString(index, valid ? link.traceId().value() : null);
     ps.setString(index + 1, valid ? link.spanId().value() : null);
   }
@@ -842,9 +843,9 @@ public final class PostgresOutboxStore implements OutboxStore {
    * {@code RETURNING} lists name the same columns). {@code claimed} rows report a {@code null}
    * {@code processedAt}: a claim leaves the column untouched, and a replayed row still carries the
    * stamp of its earlier {@code FAILED}, which is not this claim's outcome. The skip audit is read
-   * iff the row is {@code SKIPPED} (enforced by the {@link OutboxEntry} invariant). A stored trace
-   * id or span id that is not a valid W3C id gives no trace link rather than an exception, so a
-   * corrupt value never stops the entry's delivery.
+   * iff the row is {@code SKIPPED} (enforced by the {@link OutboxEntry} invariant). {@code NULL}
+   * trace columns, or a stored trace id or span id that is not a valid W3C id, read back as {@link
+   * SpanLink#NONE} rather than an exception, so a corrupt value never stops the entry's delivery.
    */
   private static OutboxEntry mapRow(ResultSet rs, boolean claimed) throws SQLException {
     var status = OutboxStatus.valueOf(rs.getString("status"));

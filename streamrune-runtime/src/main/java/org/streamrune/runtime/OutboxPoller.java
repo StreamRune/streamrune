@@ -25,6 +25,7 @@ import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
@@ -429,7 +430,7 @@ public final class OutboxPoller implements AutoCloseable {
             TraceAttributes.OUTBOX_RELAY,
             SpanKind.INTERNAL,
             SpanAttributes.builder().put(TraceAttributes.BATCH_SIZE, (long) pending.size()).build(),
-            null);
+            SpanLink.NONE);
     try {
       OutboxPublisher.BatchResult result = publishAndRecord(pending, claimBase, lease, interrupts);
       scope.setAttribute(TraceAttributes.OUTBOX_PUBLISHED, (long) result.confirmed().size());
@@ -471,8 +472,8 @@ public final class OutboxPoller implements AutoCloseable {
    * Starts the span {@value TraceAttributes#OUTBOX_PUBLISH} of {@code entry}'s hand-off, of kind
    * {@code PRODUCER}, so the spans of the broker client's own instrumentation nest under it. The
    * span links to the trace of the command that wrote the entry when the entry carries a {@link
-   * OutboxEntry#traceLink() traceLink} with valid W3C ids; a store of another kind that hands back
-   * malformed ids gets a span without a link.
+   * OutboxEntry#traceLink() traceLink} with valid W3C ids; {@link SpanLink#NONE}, and a store of
+   * another kind that hands back malformed ids, give a span without a link.
    */
   private TraceScope startPublishSpan(OutboxEntry entry) {
     SpanLink link = entry.traceLink();
@@ -483,7 +484,7 @@ public final class OutboxPoller implements AutoCloseable {
             .put(TraceAttributes.OUTBOX_ENTRY_ID, LogSanitizer.sanitizeForTrace(entry.id().value()))
             .put(TraceAttributes.OUTBOX_PAYLOAD_TYPE, entry.payloadType())
             .build(),
-        link != null && link.isW3c() ? link : null);
+        link.isW3c() ? link : SpanLink.NONE);
   }
 
   /**
@@ -496,10 +497,7 @@ public final class OutboxPoller implements AutoCloseable {
       String spanName, SpanKind kind, SpanAttributes attributes, SpanLink link) {
     TraceScope scope;
     try {
-      scope =
-          link == null
-              ? tracing.start(TracingArea.OUTBOX, spanName, kind, attributes)
-              : tracing.start(TracingArea.OUTBOX, spanName, kind, attributes, link, null);
+      scope = tracing.start(TracingArea.OUTBOX, spanName, kind, attributes, link, SpanBaggage.KEEP);
     } catch (RuntimeException e) {
       tracingFailed(e);
       return TraceScope.NOOP;

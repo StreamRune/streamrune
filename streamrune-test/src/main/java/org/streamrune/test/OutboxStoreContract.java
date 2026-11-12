@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -493,7 +494,7 @@ public abstract class OutboxStoreContract {
       var claimed = store.loadPending(100);
       assertEquals(List.of("t1", "t2", "t3"), claimed.stream().map(e -> e.id().value()).toList());
       assertEquals(TRACE_LINK, claimed.getFirst().traceLink(), mode + ": the claim reads it");
-      assertNull(claimed.get(2).traceLink(), mode + ": an entry saved without a link has none");
+      assertSame(SpanLink.NONE, claimed.get(2).traceLink(), mode + ": an entry saved without one");
 
       assertTrue(
           store.markRetry(
@@ -516,7 +517,7 @@ public abstract class OutboxStoreContract {
       assertTrue(store.markDelivered(OutboxEntryId.of("t2"), store.claimedBy()));
       assertEquals(TRACE_LINK, linkOf(store, "t2"), mode + ": a delivery keeps it");
       assertTrue(store.markDelivered(OutboxEntryId.of("t3"), store.claimedBy()));
-      assertNull(linkOf(store, "t3"), mode + ": no link appears on delivery");
+      assertSame(SpanLink.NONE, linkOf(store, "t3"), mode + ": no link appears on delivery");
     }
   }
 
@@ -531,9 +532,9 @@ public abstract class OutboxStoreContract {
 
       var claimed = store.loadPending(100);
       assertEquals(List.of("m1"), claimed.stream().map(e -> e.id().value()).toList());
-      assertNull(claimed.getFirst().traceLink(), mode.name());
+      assertSame(SpanLink.NONE, claimed.getFirst().traceLink(), mode.name());
       assertTrue(store.markDelivered(OutboxEntryId.of("m1"), store.claimedBy()));
-      assertNull(linkOf(store, "m1"), mode.name());
+      assertSame(SpanLink.NONE, linkOf(store, "m1"), mode.name());
     }
   }
 

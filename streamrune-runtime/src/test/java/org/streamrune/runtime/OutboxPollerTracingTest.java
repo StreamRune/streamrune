@@ -25,6 +25,7 @@ import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
@@ -184,7 +185,9 @@ class OutboxPollerTracingTest {
 
     poller(published::add, tracing()).processBatch();
 
-    assertThat(published).extracting(OutboxEntry::traceLink).containsExactly(command, null);
+    assertThat(published)
+        .extracting(OutboxEntry::traceLink)
+        .containsExactly(command, SpanLink.NONE);
     SpanData commandSpan = only(TraceAttributes.commandSpanName("Switch"));
     assertThat(commandSpan.getTraceId()).isEqualTo(command.traceId().value());
     assertThat(commandSpan.getSpanId()).isEqualTo(command.spanId().value());
@@ -271,7 +274,7 @@ class OutboxPollerTracingTest {
               org.streamrune.core.tracing.SpanKind kind,
               SpanAttributes attributes,
               SpanLink link,
-              Map<String, String> baggage) {
+              SpanBaggage baggage) {
             if (spanName.equals(TraceAttributes.OUTBOX_PUBLISH)) {
               links.add(link);
             }
@@ -290,7 +293,7 @@ class OutboxPollerTracingTest {
         .processBatch();
 
     assertThat(published).extracting(e -> e.id().value()).containsExactly("e-1");
-    assertThat(links).containsExactly((SpanLink) null);
+    assertThat(links).containsExactly(SpanLink.NONE);
     assertThat(store.findById(OutboxEntryId.of("e-1")).orElseThrow().status())
         .isEqualTo(org.streamrune.core.outbox.OutboxStatus.DELIVERED);
     SpanData publish = publishSpanOf("e-1");
@@ -430,7 +433,7 @@ class OutboxPollerTracingTest {
           org.streamrune.core.tracing.SpanKind kind,
           org.streamrune.core.tracing.SpanAttributes attributes,
           org.streamrune.core.tracing.SpanLink link,
-          Map<String, String> baggage) {
+          SpanBaggage baggage) {
         if (fromStart) {
           throw new IllegalStateException("start");
         }

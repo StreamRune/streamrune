@@ -1797,25 +1797,24 @@ public final class PostgresEventStore implements EventStore {
 
   /**
    * The link to the trace of the command that wrote {@code event}: the {@code traceId} and {@code
-   * spanId} of its metadata, or {@code null} when it carries neither or only one.
+   * spanId} of its metadata when both are W3C ids, {@link SpanLink#NONE} otherwise.
    */
   private static SpanLink traceLinkOf(EventEnvelope event) {
-    EventMetadata metadata = event == null ? null : event.metadata();
-    return metadata == null ? null : SpanLink.ofNullable(metadata.traceId(), metadata.spanId());
+    return event == null ? SpanLink.NONE : SpanLink.of(event.metadata());
   }
 
   /**
-   * {@code entries} with {@code link} on each entry that carries none; an entry that already
-   * carries a link keeps it. {@code PostgresOutboxStore} stores a link only when its ids are valid
-   * W3C ids.
+   * {@code entries} with {@code link} on each entry that carries none ({@link SpanLink#NONE}); an
+   * entry that already carries a link keeps it. {@code PostgresOutboxStore} stores a link only when
+   * its ids are valid W3C ids.
    */
   private static List<OutboxEntry> withTraceLink(List<OutboxEntry> entries, SpanLink link) {
-    if (link == null || entries.isEmpty()) {
+    if (!link.isPresent() || entries.isEmpty()) {
       return entries;
     }
     List<OutboxEntry> linked = new ArrayList<>(entries.size());
     for (OutboxEntry entry : entries) {
-      linked.add(entry.traceLink() == null ? entry.withTraceLink(link) : entry);
+      linked.add(entry.traceLink().isPresent() ? entry : entry.withTraceLink(link));
     }
     return linked;
   }

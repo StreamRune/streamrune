@@ -1,6 +1,6 @@
 package org.streamrune.core.tracing;
 
-import java.util.Map;
+import java.util.Objects;
 
 /**
  * {@link StreamRuneTracing#NOOP}. It holds no static state, so initializing it never initializes
@@ -26,7 +26,9 @@ final class NoopTracing implements StreamRuneTracing {
       SpanKind kind,
       SpanAttributes attributes,
       SpanLink link,
-      Map<String, String> baggage) {
+      SpanBaggage baggage) {
+    Objects.requireNonNull(link, "link is required; SpanLink.NONE for none");
+    Objects.requireNonNull(baggage, "baggage is required; SpanBaggage.KEEP to keep it");
     return TraceScope.NOOP;
   }
 

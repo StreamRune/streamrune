@@ -30,6 +30,7 @@ import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
@@ -138,7 +139,7 @@ class OutboxBrokerE2EIT extends E2ETestBase {
         SpanKind kind,
         SpanAttributes attributes,
         SpanLink link,
-        Map<String, String> baggage) {
+        SpanBaggage baggage) {
       if (spanName.equals(TraceAttributes.OUTBOX_PUBLISH)) {
         links.add(link);
       }

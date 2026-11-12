@@ -17,10 +17,10 @@ import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import java.util.Collections;
 import java.util.IdentityHashMap;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
@@ -94,6 +94,7 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
       SpanKind kind,
       SpanAttributes attributes,
       java.time.Instant startTime) {
+    Objects.requireNonNull(startTime, "startTime is required");
     if (!enabled[area.ordinal()]) {
       return TraceScope.NOOP;
     }
@@ -111,13 +112,17 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
       SpanKind kind,
       SpanAttributes attributes,
       SpanLink link,
-      Map<String, String> baggage) {
+      SpanBaggage baggage) {
+    Objects.requireNonNull(link, "link is required; SpanLink.NONE for none");
+    Objects.requireNonNull(baggage, "baggage is required; SpanBaggage.KEEP to keep it");
     if (!enabled[area.ordinal()]) {
       return TraceScope.NOOP;
     }
     SpanBuilder builder = tracer.spanBuilder(spanName).setSpanKind(otelKind(kind));
     attributes.forEach((key, value) -> setAttribute(builder, key, value));
-    if (link != null) {
+    // NONE, and a link whose ids are not W3C ids, start the span without a link: OpenTelemetry
+    // never receives a link built from them.
+    if (link.isPresent() && link.isW3c()) {
       builder.addLink(
           SpanContext.createFromRemoteParent(
               link.traceId().value(),
@@ -127,9 +132,9 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
     }
     Span span = builder.startSpan();
     Context context = Context.current().with(span);
-    if (baggage != null) {
+    if (!baggage.keepsCurrent()) {
       BaggageBuilder baggageBuilder = Baggage.builder();
-      baggage.forEach(baggageBuilder::put);
+      baggage.entries().forEach(baggageBuilder::put);
       context = context.with(baggageBuilder.build());
     }
     return new OpenTelemetryScope(span, context.makeCurrent());

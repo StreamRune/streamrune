@@ -47,7 +47,7 @@ class OutboxEntryTest {
                 null,
                 null,
                 null,
-                null));
+                SpanLink.NONE));
   }
 
   @Test
@@ -67,7 +67,7 @@ class OutboxEntryTest {
                 null,
                 null,
                 null,
-                null));
+                SpanLink.NONE));
   }
 
   @Test
@@ -87,7 +87,7 @@ class OutboxEntryTest {
                 null,
                 null,
                 null,
-                null));
+                SpanLink.NONE));
   }
 
   @Test
@@ -107,7 +107,7 @@ class OutboxEntryTest {
                 null,
                 null,
                 null,
-                null));
+                SpanLink.NONE));
   }
 
   @Test
@@ -127,7 +127,7 @@ class OutboxEntryTest {
                 null,
                 null,
                 null,
-                null));
+                SpanLink.NONE));
   }
 
   @Test
@@ -146,7 +146,7 @@ class OutboxEntryTest {
                 null,
                 null,
                 null,
-                null));
+                SpanLink.NONE));
   }
 
   @Test
@@ -183,7 +183,7 @@ class OutboxEntryTest {
             null,
             null,
             null,
-            null);
+            SpanLink.NONE);
     assertNull(entry.streamId());
   }
 
@@ -203,7 +203,7 @@ class OutboxEntryTest {
                 null,
                 null,
                 null,
-                null));
+                SpanLink.NONE));
   }
 
   @Test
@@ -234,8 +234,11 @@ class OutboxEntryTest {
 
   @Test
   void pending_factories_carryNoTraceLink() {
-    assertNull(OutboxEntry.pending(OutboxEntryId.of("p"), "{}", "Event").traceLink());
-    assertNull(OutboxEntry.pending(OutboxEntryId.of("p2"), "{}", "Event", STREAM).traceLink());
+    assertSame(
+        SpanLink.NONE, OutboxEntry.pending(OutboxEntryId.of("p"), "{}", "Event").traceLink());
+    assertSame(
+        SpanLink.NONE,
+        OutboxEntry.pending(OutboxEntryId.of("p2"), "{}", "Event", STREAM).traceLink());
   }
 
   @Test
@@ -248,8 +251,14 @@ class OutboxEntryTest {
     var linked = entry.withTraceLink(link);
 
     assertEquals(link, linked.traceLink());
-    assertEquals(entry, linked.withTraceLink(null));
-    assertNull(linked.withTraceLink(null).traceLink());
+    assertEquals(entry, linked.withTraceLink(SpanLink.NONE));
+    assertSame(SpanLink.NONE, linked.withTraceLink(SpanLink.NONE).traceLink());
+  }
+
+  @Test
+  void aNullTraceLink_isRejected() {
+    var entry = OutboxEntry.pending(OutboxEntryId.of("n"), "{}", "Event");
+    assertThrows(NullPointerException.class, () -> entry.withTraceLink(null));
   }
 
   @Test
@@ -271,6 +280,6 @@ class OutboxEntryTest {
         status == OutboxStatus.PENDING ? null : Instant.now(),
         null,
         skip,
-        null);
+        SpanLink.NONE);
   }
 }

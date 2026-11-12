@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
@@ -65,7 +66,9 @@ final class RecordingTracing implements StreamRuneTracing {
       SpanKind kind,
       SpanAttributes attributes,
       SpanLink link,
-      Map<String, String> baggage) {
+      SpanBaggage baggage) {
+    java.util.Objects.requireNonNull(link, "link is required");
+    java.util.Objects.requireNonNull(baggage, "baggage is required");
     return record(area, spanName, kind, attributes, link, null);
   }
 
@@ -76,7 +79,7 @@ final class RecordingTracing implements StreamRuneTracing {
       SpanKind kind,
       SpanAttributes attributes,
       Instant startTime) {
-    return record(area, spanName, kind, attributes, null, startTime);
+    return record(area, spanName, kind, attributes, SpanLink.NONE, startTime);
   }
 
   private TraceScope record(

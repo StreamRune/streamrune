@@ -840,7 +840,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - An `OutboxEntry` carries `traceLink()`, the span of the command whose append wrote it, stored in
   the `trace_id` and `span_id` columns of `outbox_events`: `PostgresEventStore` copies it from the
   source event's metadata (`traceId`, `spanId`) when they are W3C ids, and the relay's
-  `outbox/publish` span links to it.
+  `outbox/publish` span links to it. An entry without a link carries `SpanLink.NONE`, never `null`.
 - Ordering modes (`OutboxOrderingMode`, a constructor argument of the store, logged at relay start):
   - `STRICT_PER_AGGREGATE` (**default**) — `OutboxEntry.streamId` is mandatory
     (`OutboxOrderingViolationException` otherwise); a terminal `FAILED` head blocks every later entry

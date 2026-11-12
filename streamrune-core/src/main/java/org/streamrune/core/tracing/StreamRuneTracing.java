@@ -1,7 +1,5 @@
 package org.streamrune.core.tracing;
 
-import java.util.Map;
-
 /**
  * Where StreamRune components start their spans: the seam between the framework and a tracing
  * library.
@@ -27,6 +25,12 @@ import java.util.Map;
  * thread-safe, and they must not throw: neither {@code start} nor any method of the scopes it
  * returns may fail the work it traces. The outbox relay guards itself against an implementation
  * that throws all the same, so tracing can never change a delivery.
+ *
+ * <p><b>No {@code null}s.</b> Every parameter of {@code start} is required: no attributes is {@link
+ * SpanAttributes#empty()}, no link is {@link SpanLink#NONE} and leaving the baggage alone is {@link
+ * SpanBaggage#KEEP}. An implementation rejects a {@code null} link or baggage with a {@link
+ * NullPointerException}, starts a span for {@code NONE} without any link, so {@code NONE} never
+ * reaches an exporter, and changes nothing for {@code KEEP}.
  */
 public interface StreamRuneTracing {
 
@@ -48,6 +52,9 @@ public interface StreamRuneTracing {
    * Starts a span and makes it current on this thread until the returned scope is closed. Returns
    * {@link TraceScope#NOOP} when {@code area} is not {@linkplain #enabled(TracingArea) enabled}.
    *
+   * <p>The span has no link ({@link SpanLink#NONE}) and keeps the current baggage ({@link
+   * SpanBaggage#KEEP}).
+   *
    * @param area the area the span belongs to
    * @param spanName the span name; it holds types and configured names, never ids
    * @param kind the span kind
@@ -56,7 +63,7 @@ public interface StreamRuneTracing {
    */
   default TraceScope start(
       TracingArea area, String spanName, SpanKind kind, SpanAttributes attributes) {
-    return start(area, spanName, kind, attributes, null, null);
+    return start(area, spanName, kind, attributes, SpanLink.NONE, SpanBaggage.KEEP);
   }
 
   /**
@@ -66,8 +73,9 @@ public interface StreamRuneTracing {
    * instant its query started. Returns {@link TraceScope#NOOP} when {@code area} is not {@linkplain
    * #enabled(TracingArea) enabled}.
    *
-   * <p>The default starts the span now, through {@link #start(TracingArea, String, SpanKind,
-   * SpanAttributes)}: an implementation that can set a start time overrides it.
+   * <p>The span has no link ({@link SpanLink#NONE}) and keeps the current baggage ({@link
+   * SpanBaggage#KEEP}). The default starts the span now, through {@link #start(TracingArea, String,
+   * SpanKind, SpanAttributes)}: an implementation that can set a start time overrides it.
    *
    * @param area the area the span belongs to
    * @param spanName the span name; it holds types and configured names, never ids
@@ -75,6 +83,7 @@ public interface StreamRuneTracing {
    * @param attributes the attributes the span starts with
    * @param startTime when the work the span covers started
    * @return the scope to close when the work ends
+   * @throws NullPointerException if {@code startTime} is {@code null}
    */
   default TraceScope start(
       TracingArea area,
@@ -82,6 +91,7 @@ public interface StreamRuneTracing {
       SpanKind kind,
       SpanAttributes attributes,
       java.time.Instant startTime) {
+    java.util.Objects.requireNonNull(startTime, "startTime is required");
     return start(area, spanName, kind, attributes);
   }
 
@@ -94,10 +104,13 @@ public interface StreamRuneTracing {
    * @param spanName the span name; it holds types and configured names, never ids
    * @param kind the span kind
    * @param attributes the attributes the span starts with
-   * @param link the span of another trace this span links to, or {@code null} for none
-   * @param baggage the baggage that replaces the current baggage while the scope is open (an empty
-   *     map clears it), or {@code null} to keep the current baggage
+   * @param link the span of another trace this span links to; {@link SpanLink#NONE} for none, which
+   *     starts the span without a link
+   * @param baggage what the span does with the current baggage while the scope is open: {@link
+   *     SpanBaggage#KEEP} keeps it, {@link SpanBaggage#replace(java.util.Map)} replaces it (an
+   *     empty map clears it)
    * @return the scope to close when the work ends
+   * @throws NullPointerException if {@code link} or {@code baggage} is {@code null}
    */
   TraceScope start(
       TracingArea area,
@@ -105,5 +118,5 @@ public interface StreamRuneTracing {
       SpanKind kind,
       SpanAttributes attributes,
       SpanLink link,
-      Map<String, String> baggage);
+      SpanBaggage baggage);
 }

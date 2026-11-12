@@ -297,10 +297,21 @@ class PostgresOutboxTraceLinkTest {
 
     assertThat(storedIds(idOf(none))).containsExactly(null, null);
     assertThat(storedIds(idOf(traceOnly))).containsExactly(null, null);
-    assertThat(linkOf(idOf(none))).isNull();
+    assertThat(linkOf(idOf(none))).isSameAs(SpanLink.NONE);
     assertThat(relay(List.of(idOf(none), idOf(traceOnly))))
         .hasSize(2)
-        .allSatisfy(s -> assertThat(s.link).isNull());
+        .allSatisfy(s -> assertThat(s.link).isSameAs(SpanLink.NONE));
+  }
+
+  @Test
+  void none_isStoredAsNullColumns_andReadBackAsNone() throws Exception {
+    outboxStore.save(
+        OutboxEntry.pending(OutboxEntryId.of("none-1"), "{}", "Switched", stream())
+            .withTraceLink(SpanLink.NONE));
+
+    assertThat(storedIds("none-1")).containsExactly(null, null);
+    assertThat(linkOf("none-1")).isSameAs(SpanLink.NONE);
+    assertThat(outboxStore.loadPending(10).getFirst().traceLink()).isSameAs(SpanLink.NONE);
   }
 
   @Test
@@ -338,15 +349,15 @@ class PostgresOutboxTraceLinkTest {
       ps.executeUpdate();
     }
 
-    assertThat(linkOf(idOf(badTrace))).isNull();
-    assertThat(linkOf(idOf(badSpan))).isNull();
-    assertThat(linkOf(idOf(halfLink))).isNull();
+    assertThat(linkOf(idOf(badTrace))).isSameAs(SpanLink.NONE);
+    assertThat(linkOf(idOf(badSpan))).isSameAs(SpanLink.NONE);
+    assertThat(linkOf(idOf(halfLink))).isSameAs(SpanLink.NONE);
     var publishes = relay(List.of(idOf(badTrace), idOf(badSpan), idOf(halfLink)));
     assertThat(publishes)
         .hasSize(3)
         .allSatisfy(
             s -> {
-              assertThat(s.link).isNull();
+              assertThat(s.link).isSameAs(SpanLink.NONE);
               assertThat(s.ok).isTrue();
             });
   }

@@ -28,6 +28,7 @@ import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
@@ -609,8 +610,8 @@ public final class SagaRunner<S extends SagaState> {
             .put(TraceAttributes.SAGA_TYPE, sagaType.value())
             .put(TraceAttributes.SAGA_ID, LogSanitizer.sanitizeForTrace(sagaId.value()))
             .build(),
-        SpanLink.ofNullable(event.metadata().traceId(), event.metadata().spanId()),
-        null);
+        SpanLink.of(event.metadata()),
+        SpanBaggage.KEEP);
   }
 
   /**

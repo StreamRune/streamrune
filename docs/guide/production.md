@@ -417,9 +417,13 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   `...`, 259 characters in all; an ordinary id is unchanged.
 - The `streamrune.` prefix is reserved for the framework. A module of your own, such as an event
   store for another database, emits the standard spans with these constants through
-  `StreamRuneTracing`, and adds attributes of its own under a prefix of its own.
+  `StreamRuneTracing`, and adds attributes of its own under a prefix of its own. The seam takes no
+  `null`: no attributes is `SpanAttributes.empty()`, no link is `SpanLink.NONE` (the span starts
+  without a link, so `NONE` never reaches an exporter) and leaving the baggage alone is
+  `SpanBaggage.KEEP`; `SpanBaggage.replace(map)` replaces it, and an empty map clears it.
 - `TracingEventListener` links its span back to the originating command trace when the first
-  event's metadata carries a `traceId`/`spanId`; `saga/{SagaType}/step` links to the span that
+  event's metadata carries a `traceId`/`spanId` that are W3C ids (`SpanLink.of(metadata)`, which
+  gives `SpanLink.NONE` otherwise); `saga/{SagaType}/step` links to the span that
   wrote the event it handles the same way, and `outbox/publish` to the span of the command whose
   append wrote the entry.
 - Inside a command the spans nest: `command/{CommandType}` holds `lock/acquire`, then
@@ -467,10 +471,11 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   in the `trace_id` and `span_id` columns of `outbox_events`, and the store reads them back as
   `OutboxEntry.traceLink()`; an entry the mapper or the caller already linked keeps its link, and
   an entry passed to `append(streamId, events, expectedVersion, outboxEntries)` takes the first
-  event's. The entry has no link when that metadata carries no trace or only one of the two ids,
-  and the store writes only valid W3C ids (32 and 16 lowercase hexadecimal characters, not all
-  zeros). A stored value that is not one gives a span without a link, and the entry is delivered
-  all the same.
+  event's. An entry without a link carries `SpanLink.NONE`, never `null`: when that metadata
+  carries no trace, only one of the two ids, or ids that are not W3C ids (32 and 16 lowercase
+  hexadecimal characters, not all zeros). The store writes `NONE` as two `NULL` columns and reads
+  `NULL`s, or a stored value that is not a W3C id, back as `NONE`: the span has no link, and the
+  entry is delivered all the same.
 - With OpenTelemetry present and the sampler dropping a trace, StreamRune still creates its spans,
   non-recording ones at about 0.2 µs each and roughly six per command; switching an area off
   removes that cost.
