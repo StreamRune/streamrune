@@ -17,16 +17,18 @@ name: Broker E2E Tests
 # poller, the claim lease, and per-aggregate ordering entirely.
 #
 # Three triggers:
-#   - push of a v* tag  — the release cut itself.
-#   - nightly cron      — catches a regression within a day of it landing on main.
-#   - workflow_dispatch — on demand, e.g. before opening a release PR.
+#   - push of a v* tag  — a tag pushed by hand. The tag release.yml pushes starts no run: GitHub
+#                         starts no workflow for a push made with a workflow's own token.
+#   - nightly cron      — catches a regression within a day of it landing on main, and gives the
+#                         tip of main the check a release needs.
+#   - workflow_dispatch — on demand, e.g. on main before a release when main moved since the
+#                         nightly run.
 #
-# Release gate: the tag-push trigger only STARTS this workflow; nothing here makes a
-# publish wait for or check its result. The actual gate is verifyReleaseChecks in the root
-# build.gradle.kts (a dependency of the Central upload task), which queries the GitHub Checks
-# API for THIS workflow's check-run (job name "broker-e2e") on the exact tagged commit and
-# REFUSES to publish unless it concluded `success` there — overridable only by an explicit,
-# loudly-logged `-PskipCiVerification=true`.
+# Release gate: no trigger here makes a publish wait for or check this workflow's result. The
+# actual gate is verifyReleaseChecks in the root build.gradle.kts (a dependency of the Central
+# upload task), which queries the GitHub Checks API for THIS workflow's check-run (job name
+# "broker-e2e") on the exact commit being released and REFUSES to publish unless it concluded
+# `success` there — overridable only by an explicit, loudly-logged `-PskipCiVerification=true`.
 
 on:
   workflow_dispatch:

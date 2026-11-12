@@ -17,5 +17,5 @@ Please give us reasonable time to release a fix before disclosing details public
 
 ## Supported versions
 
-StreamRune has not reached 1.0.0 yet. Only the latest preview build
-(`1.0.0-alpha-SNAPSHOT`, built from `main`) receives fixes.
+Only the latest release receives fixes. A fix lands on `main` first, so the preview build
+(`1.0.0-alpha-SNAPSHOT`, built from `main`) carries it before the next release does.

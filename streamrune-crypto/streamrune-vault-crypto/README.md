@@ -101,17 +101,18 @@ Transit key names are `subject-<SHA-256 hex of the subjectId's UTF-8 bytes>`. Th
 
 ```groovy
 // build.gradle
-implementation("org.streamrune:streamrune-vault-crypto:1.0.0-alpha-SNAPSHOT")
+implementation("org.streamrune:streamrune-vault-crypto:1.0.0")
 ```
 
 ```kotlin
 // build.gradle.kts
-implementation("org.streamrune:streamrune-vault-crypto:1.0.0-alpha-SNAPSHOT")
+implementation("org.streamrune:streamrune-vault-crypto:1.0.0")
 ```
 
-> `1.0.0-alpha-SNAPSHOT` is an unreleased preview, published only to the Maven Central snapshot
-> repository: add that repository as shown in [Preview builds](../../README.md#preview-builds). See
-> the [CHANGELOG](../../CHANGELOG.md) for what the preview contains.
+> A release resolves from `mavenCentral()`. The unsigned preview of the next release,
+> `1.0.0-alpha-SNAPSHOT`, needs the Maven Central snapshot repository: see
+> [Preview builds](../../README.md#preview-builds). The [CHANGELOG](../../CHANGELOG.md) says what
+> each release contains.
 
 ## Best Practices
 

@@ -9,7 +9,7 @@ body:
     id: version
     attributes:
       label: StreamRune version or commit
-      placeholder: 1.0.0-alpha-SNAPSHOT (date) or a commit SHA
+      placeholder: 1.0.0, 1.0.0-alpha-SNAPSHOT (date) or a commit SHA
     validations:
       required: true
   - type: dropdown

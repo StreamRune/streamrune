@@ -10,17 +10,18 @@ Provides `InMemoryEventStore` for unit tests, fixtures that simplify testing dec
 
 ```groovy
 // build.gradle
-testImplementation("org.streamrune:streamrune-test:1.0.0-alpha-SNAPSHOT")
+testImplementation("org.streamrune:streamrune-test:1.0.0")
 ```
 
 ```kotlin
 // build.gradle.kts
-testImplementation("org.streamrune:streamrune-test:1.0.0-alpha-SNAPSHOT")
+testImplementation("org.streamrune:streamrune-test:1.0.0")
 ```
 
-> `1.0.0-alpha-SNAPSHOT` is an unreleased preview, published only to the Maven Central snapshot
-> repository: add that repository as shown in [Preview builds](../README.md#preview-builds). See
-> the [CHANGELOG](../CHANGELOG.md) for what the preview contains.
+> A release resolves from `mavenCentral()`. The unsigned preview of the next release,
+> `1.0.0-alpha-SNAPSHOT`, needs the Maven Central snapshot repository: see
+> [Preview builds](../README.md#preview-builds). The [CHANGELOG](../CHANGELOG.md) says what
+> each release contains.
 
 ## InMemoryEventStore
 
