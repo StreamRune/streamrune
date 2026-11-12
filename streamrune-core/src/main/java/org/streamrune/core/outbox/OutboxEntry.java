@@ -1,7 +1,9 @@
 package org.streamrune.core.outbox;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
 import java.util.Objects;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.StreamId;
 
 /**
@@ -21,6 +23,19 @@ import org.streamrune.core.types.StreamId;
  * <p>{@code lastError}, {@code processedAt}, and {@code nextRetryAt} are nullable — they are only
  * set after at least one delivery attempt. {@code skip} is the operator's audit record and is
  * non-null iff {@code status == SKIPPED}.
+ *
+ * <p>{@code traceLink} names the span of the command whose append wrote the entry, so the relay's
+ * {@code outbox/publish} span links to that command's trace. It is never {@code null}: an entry
+ * without a link carries {@link SpanLink#NONE}, which the {@link #pending} factories set and a
+ * {@code null} argument reads as, and the span of such an entry has no link. The event store fills
+ * it from the metadata of the event the entry was derived from (its {@link
+ * org.streamrune.core.EventMetadata#spanContext() spanContext}, through {@link
+ * SpanLink#of(org.streamrune.core.EventMetadata)}) when it writes the entry in the append
+ * transaction, replacing any link a mapper or a caller set; an {@link OutboxEventMapper} builds its
+ * entries without it. A standalone {@link OutboxStore#save} stores the link the entry carries. It
+ * stays {@code NONE} when the command was not traced, and a store keeps only a link whose ids are
+ * valid W3C ids ({@link SpanLink#isW3c()}): a stored link that is not one, or none at all, reads
+ * back as {@code NONE}. In JSON the property is left out when it is {@code NONE}.
  */
 public record OutboxEntry(
     OutboxEntryId id,
@@ -33,7 +48,8 @@ public record OutboxEntry(
     Instant createdAt,
     Instant processedAt,
     Instant nextRetryAt,
-    SkipRecord skip) {
+    SkipRecord skip,
+    @JsonInclude(JsonInclude.Include.NON_EMPTY) SpanLink traceLink) {
 
   /**
    * The audit of an operator skip: all three are set together in one statement and are non-null iff
@@ -54,6 +70,7 @@ public record OutboxEntry(
     Objects.requireNonNull(payloadType, "payloadType is required");
     Objects.requireNonNull(status, "status is required");
     Objects.requireNonNull(createdAt, "createdAt is required");
+    traceLink = traceLink == null ? SpanLink.NONE : traceLink;
     if (attempts < 0) {
       throw new IllegalArgumentException("attempts must be non-negative");
     }
@@ -62,7 +79,29 @@ public record OutboxEntry(
       throw new IllegalArgumentException(
           "skip record must be present iff status == SKIPPED (status=" + status + ")");
     }
-    // streamId, lastError, processedAt, and nextRetryAt are nullable
+    // streamId, lastError, processedAt and nextRetryAt are nullable
+  }
+
+  /**
+   * The same entry with {@code traceLink} as its link to the trace of the command that wrote it.
+   *
+   * @param traceLink the link; {@link SpanLink#NONE} for none, as {@code null} reads
+   * @return the entry with that link
+   */
+  public OutboxEntry withTraceLink(SpanLink traceLink) {
+    return new OutboxEntry(
+        id,
+        payload,
+        payloadType,
+        streamId,
+        status,
+        attempts,
+        lastError,
+        createdAt,
+        processedAt,
+        nextRetryAt,
+        skip,
+        traceLink);
   }
 
   /**
@@ -76,8 +115,8 @@ public record OutboxEntry(
   }
 
   /**
-   * Creates a new {@code PENDING} entry with zero attempts, no error, and {@code createdAt} set to
-   * {@link Instant#now()}.
+   * Creates a new {@code PENDING} entry with zero attempts, no error, no trace link ({@link
+   * SpanLink#NONE}), and {@code createdAt} set to {@link Instant#now()}.
    *
    * @param streamId the stream whose delivery order the consumer depends on (also the partition key
    *     in partitioned transports); may be {@code null} only on an {@link
@@ -96,6 +135,7 @@ public record OutboxEntry(
         Instant.now(),
         null,
         null,
-        null);
+        null,
+        SpanLink.NONE);
   }
 }

@@ -257,6 +257,12 @@ CREATE TABLE outbox_events (
     skipped_at    TIMESTAMPTZ,   -- audited operator skip (FAILED -> SKIPPED): all three are set
     skipped_by    VARCHAR(255),  -- together in one statement and are non-null iff status = 'SKIPPED'
     skip_reason   TEXT,
+    -- The span of the command whose append wrote the entry, from the source event's metadata, so
+    -- the relay's outbox/publish span links to that command's trace. Both set (W3C ids: 32 and 16
+    -- lowercase hex characters) or both NULL; the store writes only valid ids and reads a malformed
+    -- value back as no link.
+    trace_id      VARCHAR(32),
+    span_id       VARCHAR(16),
     CONSTRAINT outbox_events_stream_both_or_neither CHECK ((aggregate_type IS NULL) = (aggregate_id IS NULL)),
     CONSTRAINT outbox_events_aggregate_type_syntax CHECK (aggregate_type ~ '^[a-z][a-z0-9_]{0,31}$')
 );

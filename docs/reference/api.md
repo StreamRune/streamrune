@@ -252,11 +252,14 @@ and is used as the sentinel value before append. You encounter `GlobalOffset` in
 
 ### EventMetadata
 
-`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, SpanId spanId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin)`
+`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, SpanId spanId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin, SpanLink spanContext)`
 
 Causal metadata attached to every persisted event. Built automatically by
-`VirtualThreadCommandBus`; propagates OpenTelemetry trace/span IDs and user ID from
-`StreamRuneContext` when a request context is bound. You encounter this inside
+`VirtualThreadCommandBus`, which copies the caller's trace id (the `X-Trace-Id` header) and user
+ID from `StreamRuneContext` when a request context is bound, and writes `spanContext` from its own
+`command/{CommandType}` span: `SpanLink.NONE` when the command was not traced. The spans that later
+handle the event link to `spanContext` only (`SpanLink.of(metadata)`); the caller-supplied
+`traceId` and `spanId` are correlation data and never build a link. You encounter this inside
 `EventEnvelope.metadata()` when writing projections or building audit trails.
 
 The PostgreSQL event store keeps it as JSON in the `event_stream.metadata` column and binds it back
@@ -515,7 +518,7 @@ Built-in implementations provided by `streamrune-runtime` and integrations:
 - `AnnotationAuthorizationInterceptor` — enforces `@RequireRole` and `@RequirePermission` on the command type.
 - `BeanValidationInterceptor` — validates the command with JSR-380 Bean Validation before execution.
 - `CircuitBreakerCommandInterceptor` — opens the circuit after a configurable failure threshold.
-- `OpenTelemetryCommandInterceptor` — starts the span of each command; `VirtualThreadCommandBus.Builder.tracing(StreamRuneTracing)` adds it. Its span name and attribute keys are constants of `org.streamrune.core.tracing.TraceAttributes`.
+- `OpenTelemetryCommandInterceptor` — starts the span of each command; `VirtualThreadCommandBus.Builder.tracing(StreamRuneTracing)` adds it. The bus reads the span of the executing command from the first traced `OpenTelemetryCommandInterceptor` of its chain, whether the builder added it or the application registered it with `interceptors(...)`, and writes it into `EventMetadata.spanContext`. Its span name and attribute keys are constants of `org.streamrune.core.tracing.TraceAttributes`.
 
 ---
 

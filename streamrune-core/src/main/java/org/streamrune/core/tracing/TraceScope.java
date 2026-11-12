@@ -55,6 +55,20 @@ public interface TraceScope extends AutoCloseable {
    */
   void recordError(Throwable error);
 
+  /**
+   * The link to the span this scope started: its trace id and span id, for a span of another trace
+   * to link to. The command bus writes it into the metadata of the events a command appends ({@link
+   * org.streamrune.core.EventMetadata#spanContext()}), so the spans that later handle those events
+   * link back to the command. {@link SpanLink#NONE} when no span was started: the {@link #NOOP}
+   * scope, a tracing that is off, an area that is off. A span the sampler does not record still has
+   * a link when its context is valid, so the links hold under a parent-based sampler.
+   *
+   * @return the link to this scope's span, or {@link SpanLink#NONE}
+   */
+  default SpanLink link() {
+    return SpanLink.NONE;
+  }
+
   /** Ends the span and restores the context that was current before it started. */
   @Override
   void close();

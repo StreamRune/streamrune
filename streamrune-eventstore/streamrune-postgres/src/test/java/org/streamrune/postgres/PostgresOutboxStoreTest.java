@@ -982,8 +982,9 @@ class PostgresOutboxStoreTest {
 
   // The availability-first claim statement, verbatim, as CLAIM_PENDING stood before the ordering
   // modes — the ONLY
-  // delta is the RETURNING list, which now carries the three skip columns every outbox SELECT
-  // reads. Pins that the mode switch left the availability-first claim logic untouched.
+  // delta is the RETURNING list, which carries the three skip columns and the two trace-link
+  // columns every outbox SELECT reads. Pins that the mode switch left the availability-first claim
+  // logic untouched.
   private static final String CLAIM_PENDING_TODAY =
       "WITH null_agg AS ("
           + "  SELECT entry_id, seq FROM outbox_events"
@@ -1019,7 +1020,7 @@ class PostgresOutboxStoreTest {
           + "  RETURNING entry_id, payload::text AS payload, payload_type, aggregate_type,"
           + "    aggregate_id, status,"
           + "    attempts, last_error, created_at, processed_at, next_retry_at,"
-          + "    skipped_at, skipped_by, skip_reason, seq"
+          + "    skipped_at, skipped_by, skip_reason, trace_id, span_id, seq"
           + ") SELECT * FROM claimed ORDER BY seq ASC";
 
   /**

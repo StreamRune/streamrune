@@ -97,7 +97,11 @@ public final class SchemaValidator {
                   // Ordering modes: the audited skip, read by every outbox SELECT.
                   "skipped_at",
                   "skipped_by",
-                  "skip_reason")),
+                  "skip_reason",
+                  // The link to the writing command's trace, read by every outbox SELECT and
+                  // written by every outbox INSERT.
+                  "trace_id",
+                  "span_id")),
           Map.entry(
               "audit_log",
               Set.of(

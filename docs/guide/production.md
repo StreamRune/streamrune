@@ -417,10 +417,23 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   `...`, 259 characters in all; an ordinary id is unchanged.
 - The `streamrune.` prefix is reserved for the framework. A module of your own, such as an event
   store for another database, emits the standard spans with these constants through
-  `StreamRuneTracing`, and adds attributes of its own under a prefix of its own.
-- `TracingEventListener` links its span back to the originating command trace when the first
-  event's metadata carries a `traceId`/`spanId`; `saga/{SagaType}/step` links to the span that
-  wrote the event it handles the same way.
+  `StreamRuneTracing`, and adds attributes of its own under a prefix of its own. The seam takes no
+  `null`: no attributes is `SpanAttributes.empty()`, no link is `SpanLink.NONE` (the span starts
+  without a link, so `NONE` never reaches an exporter) and leaving the baggage alone is
+  `SpanBaggage.KEEP`; `SpanBaggage.replace(map)` replaces it, and an empty map clears it.
+- The command bus writes the span of each command into the metadata of the events it appends,
+  `EventMetadata.spanContext` (`SpanLink.NONE` when the command was not traced: no tracing, the
+  command area off), and the spans that later handle those events link back to it through
+  `SpanLink.of(metadata)`. The bus takes it from its own `command/{CommandType}` span, a command
+  a saga or a continuation dispatches included, and never from a header, the request context or
+  baggage: the metadata's `traceId` is the caller's `X-Trace-Id` and never builds a link. The span
+  id of `spanContext` is the command span's own; its trace id follows the OpenTelemetry context of
+  the request, so a `traceparent` header that the server's instrumentation accepts chooses it. No
+  StreamRune header, baggage entry or request-context value is ever copied into it. A span the
+  sampler drops still has a valid context, so the links hold under a parent-based sampler.
+  `TracingEventListener` links its span to the command of the first event it delivers,
+  `saga/{SagaType}/step` to the command of the event it handles, and `outbox/publish` to the
+  command whose append wrote the entry.
 - Inside a command the spans nest: `command/{CommandType}` holds `lock/acquire`, then
   `eventstore/load` (with `eventstore/snapshot/load` when the stream has a stored snapshot, and
   `eventstore/load/deserialize`), then `eventstore/append` (with `eventstore/append/serialize`).
@@ -461,8 +474,17 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   area off the poller passes `OutboxEntrySpans.NONE`, and the publisher delivers exactly as with
   tracing on. The status of `outbox/publish` is that of the hand-off: a RabbitMQ nack or confirm
   timeout that arrives later counts in `streamrune.outbox.failed` of `outbox/relay`.
-  `outbox/publish` carries no link to the trace of the command that wrote the entry
-  yet: the outbox entry does not store it.
+- `outbox/publish` links to the command span through the entry. `PostgresEventStore` writes the
+  span context of the source event's metadata with each entry in the append transaction,
+  in the `trace_id` and `span_id` columns of `outbox_events`, and the store reads them back as
+  `OutboxEntry.traceLink()`. The store always sets it from the source event, replacing any link a
+  mapper or a caller set; an entry passed to `append(streamId, events, expectedVersion,
+  outboxEntries)` takes the first event's. An entry without a link carries `SpanLink.NONE`, never `null`: when the command was not
+  traced, or the ids are not W3C ids (32 and 16 lowercase hexadecimal characters, not all zeros).
+  In JSON, the admin endpoints that list entries included, `NONE` is left out: an entry without a
+  link has no `traceLink` property. The store writes `NONE` as two `NULL` columns and reads
+  `NULL`s, or a stored value that is not a W3C id, back as `NONE`: the span has no link, and the
+  entry is delivered all the same.
 - With OpenTelemetry present and the sampler dropping a trace, StreamRune still creates its spans,
   non-recording ones at about 0.2 µs each and roughly six per command; switching an area off
   removes that cost.
@@ -1574,6 +1596,7 @@ Every stored event carries an `EventMetadata` record in `event_stream.metadata`,
 | `correlationId` | the first value of the `X-Correlation-Id` header, kept as sent; generated when the header is absent or that value is blank; the reserved `streamrune:` form where the framework binds it (below) | **yes, in every identity mode**: any value of at most 255 characters without control characters that does not start with `streamrune:` |
 | `traceId` | the first value of the `X-Trace-Id` header, kept as sent; generated when the header is absent or that value is blank | **yes, in every identity mode**: any value of at most 255 characters without control characters |
 | `spanId` | always `null` | no |
+| `spanContext` | the command bus, from the span of the command that appended the event; `SpanLink.NONE`, left out of the JSON, when the command was not traced | The span id: no. The trace id follows the OpenTelemetry context of the request, so a `traceparent` header that the server's instrumentation accepts chooses it. No StreamRune header, baggage entry or request-context value is ever copied into it. |
 | `causationId` | the bound dispatch cause (below) | no |
 | `sagaOrigin` | the bound dispatch cause (below) | no |
 | `userId` | the authenticated principal; the `X-User-Id` header in the trusted-gateway mode; `null` for an anonymous request | only where the gateway lets a client's header through |

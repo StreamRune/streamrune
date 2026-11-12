@@ -2,6 +2,8 @@ package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.sdk.testing.junit5.OpenTelemetryExtension;
@@ -21,17 +23,25 @@ import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxEntrySpans;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxPublisher;
+import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
+import org.streamrune.core.types.SpanId;
+import org.streamrune.core.types.TraceId;
+import org.streamrune.test.ForwardingOutboxStore;
 import org.streamrune.test.InMemoryOutboxStore;
 
 /**
  * The outbox spans of {@link OutboxPoller}, recorded through {@link OpenTelemetryTracing}: one
  * {@code outbox/relay} per batch that claimed entries, with an {@code outbox/publish} of kind
  * {@code PRODUCER} under it per entry's hand-off, through the {@link OutboxEntrySpans} the poller
- * hands the publisher; none for a poll that claims nothing, and none with the area off or NOOP.
+ * hands the publisher; none for a poll that claims nothing, and none with the area off or NOOP. An
+ * entry's {@code outbox/publish} links to the command span whose ids the entry carries.
  */
 class OutboxPollerTracingTest {
 
@@ -138,6 +148,165 @@ class OutboxPollerTracingTest {
     poller(entry -> {}, tracing()).processBatch();
 
     assertThat(otelTesting.getSpans()).isEmpty();
+  }
+
+  /**
+   * Starts and ends a {@code command/Switch} span, the way the command bus does around a command,
+   * and returns the link the event store stores on the entries that command's append writes: the
+   * command span's own trace id and span id, which the events' metadata carries.
+   */
+  private static SpanLink commandSpan() {
+    StreamRuneTracing tracing = tracing();
+    try (TraceScope command =
+        tracing.start(
+            TracingArea.COMMAND,
+            TraceAttributes.commandSpanName("Switch"),
+            org.streamrune.core.tracing.SpanKind.INTERNAL,
+            SpanAttributes.empty())) {
+      SpanContext current = Span.current().getSpanContext();
+      command.recordSuccess();
+      return new SpanLink(TraceId.of(current.getTraceId()), SpanId.of(current.getSpanId()));
+    }
+  }
+
+  private static SpanData only(String name) {
+    List<SpanData> named = spans(name);
+    assertThat(named).hasSize(1);
+    return named.getFirst();
+  }
+
+  @Test
+  void anEntryWrittenUnderACommand_linksItsPublishSpanToTheCommandSpan() {
+    SpanLink command = commandSpan();
+    store.save(
+        OutboxEntry.pending(OutboxEntryId.of("e-1"), "{}", "LampSwitched").withTraceLink(command));
+    save("e-2");
+    List<OutboxEntry> published = new ArrayList<>();
+
+    poller(published::add, tracing()).processBatch();
+
+    assertThat(published)
+        .extracting(OutboxEntry::traceLink)
+        .containsExactly(command, SpanLink.NONE);
+    SpanData commandSpan = only(TraceAttributes.commandSpanName("Switch"));
+    assertThat(commandSpan.getTraceId()).isEqualTo(command.traceId().value());
+    assertThat(commandSpan.getSpanId()).isEqualTo(command.spanId().value());
+    SpanData relay = only(TraceAttributes.OUTBOX_RELAY);
+    assertThat(relay.getLinks()).isEmpty();
+    SpanData linked = publishSpanOf("e-1");
+    assertThat(linked.getTraceId())
+        .as("the relay runs in a trace of its own")
+        .isNotEqualTo(command.traceId().value());
+    assertThat(linked.getLinks())
+        .singleElement()
+        .satisfies(
+            link -> {
+              assertThat(link.getSpanContext().getTraceId()).isEqualTo(commandSpan.getTraceId());
+              assertThat(link.getSpanContext().getSpanId()).isEqualTo(commandSpan.getSpanId());
+            });
+    assertThat(publishSpanOf("e-2").getLinks()).as("an entry without a link").isEmpty();
+  }
+
+  @Test
+  void aBatchPublisher_startsTheLinkedSpanOfEachHandOffThroughTheHook() {
+    SpanLink command = commandSpan();
+    store.save(
+        OutboxEntry.pending(OutboxEntryId.of("e-1"), "{}", "LampSwitched").withTraceLink(command));
+    OutboxPublisher pipelining =
+        new OutboxPublisher() {
+          @Override
+          public void publish(OutboxEntry entry) {
+            throw new AssertionError("the batch path publishes");
+          }
+
+          @Override
+          public BatchResult publishBatch(
+              List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
+            var confirmed = new LinkedHashSet<OutboxEntryId>();
+            for (OutboxEntry entry : entries) {
+              try (TraceScope hand = spans.start(entry)) {
+                hand.recordSuccess();
+              }
+              confirmed.add(entry.id());
+            }
+            return new BatchResult(confirmed, Map.of());
+          }
+        };
+
+    poller(pipelining, tracing()).processBatch();
+
+    assertThat(publishSpanOf("e-1").getLinks())
+        .singleElement()
+        .satisfies(
+            link -> {
+              assertThat(link.getSpanContext().getTraceId()).isEqualTo(command.traceId().value());
+              assertThat(link.getSpanContext().getSpanId()).isEqualTo(command.spanId().value());
+            });
+  }
+
+  @Test
+  void anEntryWhoseStoreHandsBackIdsThatAreNotW3cIds_isDeliveredWithAnUnlinkedSpan() {
+    save("e-1");
+    SpanLink malformed = new SpanLink(TraceId.of("from-a-header"), SpanId.of("abc"));
+    OutboxStore corrupting =
+        new ForwardingOutboxStore(store) {
+          @Override
+          public List<OutboxEntry> loadPending(int limit) {
+            return super.loadPending(limit).stream().map(e -> e.withTraceLink(malformed)).toList();
+          }
+        };
+    List<OutboxEntry> published = new ArrayList<>();
+    // The links the poller hands the tracing: a tracing of the application's own sees no link
+    // whose ids are not W3C ids, whatever OpenTelemetry would make of one.
+    List<SpanLink> links = new java.util.concurrent.CopyOnWriteArrayList<>();
+    StreamRuneTracing otel = tracing();
+    StreamRuneTracing recording =
+        new StreamRuneTracing() {
+          @Override
+          public boolean enabled(TracingArea area) {
+            return otel.enabled(area);
+          }
+
+          @Override
+          public TraceScope start(
+              TracingArea area,
+              String spanName,
+              org.streamrune.core.tracing.SpanKind kind,
+              SpanAttributes attributes,
+              SpanLink link,
+              SpanBaggage baggage) {
+            if (spanName.equals(TraceAttributes.OUTBOX_PUBLISH)) {
+              links.add(link);
+            }
+            return otel.start(area, spanName, kind, attributes, link, baggage);
+          }
+        };
+
+    OutboxPoller.builder()
+        .outboxStore(corrupting)
+        .publisher(published::add)
+        .retryPolicy(new RetryPolicy(3, Duration.ofMillis(50), 2.0, false))
+        .batchSize(10)
+        .pollInterval(Duration.ofSeconds(60))
+        .tracing(recording)
+        .build()
+        .processBatch();
+
+    assertThat(published).extracting(e -> e.id().value()).containsExactly("e-1");
+    assertThat(links).containsExactly(SpanLink.NONE);
+    assertThat(store.findById(OutboxEntryId.of("e-1")).orElseThrow().status())
+        .isEqualTo(org.streamrune.core.outbox.OutboxStatus.DELIVERED);
+    SpanData publish = publishSpanOf("e-1");
+    assertThat(publish.getLinks()).isEmpty();
+    assertThat(publish.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+  }
+
+  private static SpanData publishSpanOf(String entryId) {
+    return spans(TraceAttributes.OUTBOX_PUBLISH).stream()
+        .filter(
+            s -> entryId.equals(EventStoreTracingTest.string(s, TraceAttributes.OUTBOX_ENTRY_ID)))
+        .findFirst()
+        .orElseThrow();
   }
 
   @Test
@@ -264,7 +433,7 @@ class OutboxPollerTracingTest {
           org.streamrune.core.tracing.SpanKind kind,
           org.streamrune.core.tracing.SpanAttributes attributes,
           org.streamrune.core.tracing.SpanLink link,
-          Map<String, String> baggage) {
+          SpanBaggage baggage) {
         if (fromStart) {
           throw new IllegalStateException("start");
         }

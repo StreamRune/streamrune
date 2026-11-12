@@ -407,6 +407,47 @@ class SchemaValidatorTest {
   }
 
   @Test
+  void missingTraceLinkColumnReportsError() throws Exception {
+    // trace_id and span_id are read by every outbox SELECT and written by every outbox INSERT, so
+    // they are runtime-required: a schema without one fails validation.
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute("CREATE SCHEMA IF NOT EXISTS missing_trace_col_schema");
+    }
+    var ds = new PGSimpleDataSource();
+    ds.setUrl(PG.getJdbcUrl() + "&currentSchema=missing_trace_col_schema");
+    ds.setUser(PG.getUsername());
+    ds.setPassword(PG.getPassword());
+
+    Flyway.configure()
+        .dataSource(ds)
+        .schemas("missing_trace_col_schema")
+        .locations("classpath:db/streamrune-migration")
+        .table("flyway_schema_history_streamrune")
+        .baselineOnMigrate(false)
+        .load()
+        .migrate();
+    assertTrue(SchemaValidator.validate(ds).isValid(), "the baseline has both columns");
+
+    try (var conn = ds.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute("ALTER TABLE outbox_events DROP COLUMN span_id");
+    }
+
+    var result = SchemaValidator.validate(ds);
+    assertFalse(
+        result.isValid(), () -> "Missing outbox_events.span_id must fail: " + result.issues());
+    assertTrue(
+        result.issues().stream()
+            .anyMatch(
+                i ->
+                    i.severity() == SchemaIssue.Severity.ERROR
+                        && "outbox_events".equals(i.table())
+                        && i.message().contains("span_id")),
+        () -> "Should report missing outbox_events.span_id column: " + result.issues());
+  }
+
+  @Test
   void missingSagaDeadLetterTypeColumnReportsError() throws Exception {
     // saga_dead_letters.saga_type scopes every PostgresSagaDeadLetterStore statement to the
     // entry's own saga type; without it every publish and read fails at runtime, so its absence

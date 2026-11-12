@@ -50,6 +50,7 @@ import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TraceScope;
@@ -1381,7 +1382,7 @@ public final class PostgresEventStore implements EventStore {
   @Override
   public AppendResult append(
       StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
-    return append(streamId, events, expectedVersion, outboxEntriesOf(events));
+    return appendWithOutbox(streamId, events, expectedVersion, outboxEntriesOf(events));
   }
 
   /**
@@ -1408,6 +1409,12 @@ public final class PostgresEventStore implements EventStore {
    * the caller exactly that weaker guarantee under a method that promises co-commit, with no way to
    * tell the difference.
    *
+   * <p><b>Trace link.</b> Every entry's {@link OutboxEntry#traceLink() traceLink} is the link of
+   * the first event's metadata, its {@code spanContext}, via {@link SpanLink#of}: the events of one
+   * append come from one command, so the relay's {@code outbox/publish} span links to that
+   * command's span. A link the caller set on an entry is replaced; {@link SpanLink#NONE} when the
+   * command was not traced.
+   *
    * @param streamId the stream to append to (required)
    * @param events the events to append (required)
    * @param expectedVersion the expected current stream version for optimistic locking (required)
@@ -1419,6 +1426,19 @@ public final class PostgresEventStore implements EventStore {
    * @throws IllegalArgumentException if outboxEntries is non-empty and events is empty
    */
   public AppendResult append(
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      List<OutboxEntry> outboxEntries) {
+    List<OutboxEntry> linked =
+        outboxEntries == null || outboxEntries.isEmpty() || events == null || events.isEmpty()
+            ? outboxEntries
+            : withTraceLink(outboxEntries, traceLinkOf(events.getFirst()));
+    return appendWithOutbox(streamId, events, expectedVersion, linked);
+  }
+
+  /** The append of {@code events} with {@code outboxEntries}, inside its span when traced. */
+  private AppendResult appendWithOutbox(
       StreamId streamId,
       List<EventEnvelope> events,
       Version expectedVersion,
@@ -1763,11 +1783,45 @@ public final class PostgresEventStore implements EventStore {
         result -> result.alreadyApplied() ? "DUPLICATE" : "APPENDED");
   }
 
-  /** The outbox entries the configured mapper derives from {@code events}; none without one. */
+  /**
+   * The outbox entries the configured mapper derives from {@code events}; none without one. Each
+   * entry's trace link is the link of the event it was derived from, whatever the mapper set (see
+   * {@link #withTraceLink}).
+   */
   private List<OutboxEntry> outboxEntriesOf(List<EventEnvelope> events) {
     return outboxStore != null && outboxEventMapper != null
-        ? events.stream().flatMap(e -> outboxEventMapper.toOutbox(e).stream()).toList()
+        ? events.stream()
+            .flatMap(e -> withTraceLink(outboxEventMapper.toOutbox(e), traceLinkOf(e)).stream())
+            .toList()
         : List.of();
+  }
+
+  /**
+   * The link to the span of the command that wrote {@code event}: its {@code spanContext}, via
+   * {@link SpanLink#of}; {@link SpanLink#NONE} when the command was not traced.
+   */
+  private static SpanLink traceLinkOf(EventEnvelope event) {
+    return event == null ? SpanLink.NONE : SpanLink.of(event.metadata());
+  }
+
+  /**
+   * {@code entries}, each with {@code link} as its trace link, replacing any link a mapper or a
+   * caller set, so every stored link is the span context of the source event. {@code entries}
+   * itself when every entry already carries {@code link}, the untraced case with no link set.
+   * {@code PostgresOutboxStore} stores a link only when its ids are valid W3C ids.
+   */
+  private static List<OutboxEntry> withTraceLink(List<OutboxEntry> entries, SpanLink link) {
+    List<OutboxEntry> linked = null;
+    for (int i = 0; i < entries.size(); i++) {
+      OutboxEntry entry = entries.get(i);
+      if (!entry.traceLink().equals(link)) {
+        if (linked == null) {
+          linked = new ArrayList<>(entries);
+        }
+        linked.set(i, entry.withTraceLink(link));
+      }
+    }
+    return linked == null ? entries : linked;
   }
 
   /**

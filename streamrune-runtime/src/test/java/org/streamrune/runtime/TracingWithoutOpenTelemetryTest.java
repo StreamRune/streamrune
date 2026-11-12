@@ -346,6 +346,7 @@ class TracingWithoutOpenTelemetryTest {
         import org.streamrune.core.saga.SagaStatus;
         import org.streamrune.core.tracing.SpanAttributes;
         import org.streamrune.core.tracing.SpanKind;
+        import org.streamrune.core.tracing.SpanBaggage;
         import org.streamrune.core.tracing.SpanLink;
         import org.streamrune.core.tracing.StreamRuneTracing;
         import org.streamrune.core.tracing.TraceScope;
@@ -393,7 +394,7 @@ class TracingWithoutOpenTelemetryTest {
                     : new StreamRuneTracing() {
                       public boolean enabled(TracingArea area) { return true; }
                       public TraceScope start(TracingArea area, String name, SpanKind kind,
-                          SpanAttributes attributes, SpanLink link, Map<String, String> baggage) {
+                          SpanAttributes attributes, SpanLink link, SpanBaggage baggage) {
                         started.add(name);
                         return TraceScope.NOOP;
                       }
