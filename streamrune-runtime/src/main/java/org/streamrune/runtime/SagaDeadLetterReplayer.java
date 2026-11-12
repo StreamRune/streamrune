@@ -1522,7 +1522,7 @@ public final class SagaDeadLetterReplayer {
 
     /** Sets the metrics collector. Optional; defaults to {@link StreamRuneMetrics#NOOP}. */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 

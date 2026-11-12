@@ -551,7 +551,7 @@ PollingEventSubscription subscription = PollingEventSubscription.builder()
     .build();
 ```
 
-Absent, `null` or `SubscriptionLeadership.NOOP`, the runner is ungated: every replica that runs its subscription delivers, as described under [Concurrency](#concurrency).
+Without `leadership(...)`, or with `SubscriptionLeadership.NOOP`, the runner is ungated: every replica that runs its subscription delivers, as described under [Concurrency](#concurrency).
 
 - **A standby reads nothing.** The subscription asks for the lease at the top of every drain, before it reads its checkpoint. A standby reads neither the checkpoint nor the stream and saves nothing; its poll loop sees an ordinary empty cycle — no failure, no backoff. It asks at most once per polling interval, however many notifications wake it. The gate is in the subscription, never in the listener: the checkpoint is shared, and a listener that skipped events on a standby would let the subscription save the checkpoint past events no replica processed.
 - **Taking and losing the lease is logged once.** The saga subscription's anchor writes one `INFO` line, from the logger `org.streamrune.runtime.SubscriptionLease`, each time this process takes the lease (`Lease 'saga:<type>': this process now leads it`) and each time a check finds it gone (`... has lost it`). A standby's polls, a leader's steady polls and a deliberate `pause()` or `close()` write none.

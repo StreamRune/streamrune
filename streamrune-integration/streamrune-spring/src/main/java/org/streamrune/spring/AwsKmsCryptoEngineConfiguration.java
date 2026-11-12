@@ -88,7 +88,7 @@ public class AwsKmsCryptoEngineConfiguration {
             .kmsClient(kmsClient.client())
             .kmsKeyId(kmsKeyId)
             // Counts discarded encryptions and retried decryptions; NOOP without a metrics bean.
-            .metrics(metrics)
+            .metrics(metrics != null ? metrics : StreamRuneMetrics.NOOP)
             .dataKeyCacheExpireAfterWrite(
                 requirePositive(
                     dataKeyCache.expireAfterWrite(),

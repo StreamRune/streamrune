@@ -106,7 +106,8 @@ public class PostgresEventStoreBenchmark {
       database = BenchmarkDatabase.open();
       store =
           database.eventStore(
-              SimpleEventTypeRegistry.builder().registerEvent(OrderPlaced.class).build(), null);
+              SimpleEventTypeRegistry.builder().registerEvent(OrderPlaced.class).build(),
+              List.of());
     }
 
     @Setup(Level.Iteration)
@@ -163,7 +164,8 @@ public class PostgresEventStoreBenchmark {
       database = BenchmarkDatabase.open();
       store =
           database.eventStore(
-              SimpleEventTypeRegistry.builder().registerEvent(OrderPlaced.class).build(), null);
+              SimpleEventTypeRegistry.builder().registerEvent(OrderPlaced.class).build(),
+              List.of());
       stream = StreamId.of(TYPE, AggregateId.of("order-load"));
       store.append(stream, orderEvents(stream, streamLength), Version.initial());
     }
@@ -205,7 +207,7 @@ public class PostgresEventStoreBenchmark {
               SimpleEventTypeRegistry.builder()
                   .registerEvent(ORDER_RECORDED, OrderRecordedV1.class)
                   .build(),
-              null);
+              List.of());
       stream = StreamId.of(TYPE, AggregateId.of("order-upcast"));
       var events = new ArrayList<EventEnvelope>(STREAM_LENGTH);
       for (int i = 0; i < STREAM_LENGTH; i++) {

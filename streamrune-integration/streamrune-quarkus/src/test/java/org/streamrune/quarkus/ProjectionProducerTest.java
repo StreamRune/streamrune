@@ -1484,8 +1484,7 @@ class ProjectionProducerTest {
 
     var field = MultiProjectionRunner.class.getDeclaredField("metrics");
     field.setAccessible(true);
-    // The builder leaves metrics null when absent; the runner falls back to NOOP per runner.
-    assertNull(field.get(runner));
+    assertSame(org.streamrune.core.StreamRuneMetrics.NOOP, field.get(runner));
     runner.close();
   }
 

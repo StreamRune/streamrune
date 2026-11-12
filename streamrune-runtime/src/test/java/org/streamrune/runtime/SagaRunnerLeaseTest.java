@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -64,11 +65,14 @@ class SagaRunnerLeaseTest {
   }
 
   @Test
-  void aRunnerGivenNullIsUngated() {
-    SagaRunner<State> runner = runner(b -> b.leadership(null));
+  void aRunnerGivenNoLeadershipIsUngated_andANullOneIsRefused() {
+    SagaRunner<State> runner = runner(b -> b);
 
     assertThat(runner.lease().isGated()).isFalse();
     assertThat(runner.lease().name()).isEqualTo(LEASE_NAME);
+    assertThatThrownBy(() -> SagaRunner.<State>builder().leadership(null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("leadership is required");
   }
 
   @Test

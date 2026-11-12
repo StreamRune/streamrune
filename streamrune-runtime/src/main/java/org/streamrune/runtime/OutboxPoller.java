@@ -1434,7 +1434,7 @@ public final class OutboxPoller implements AutoCloseable {
      * FAILED}.
      */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 

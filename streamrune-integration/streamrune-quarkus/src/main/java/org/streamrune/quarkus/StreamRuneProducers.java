@@ -152,8 +152,8 @@ public class StreamRuneProducers {
             .autoInitializeSchema(properties.eventStore().schema().autoInitialize())
             // Thread the metrics bean into the event store's CryptoShreddingModule so a
             // mass redaction on the replay/projection decrypt path emits subject_redacted; NOOP
-            // when absent (metrics(null) → NOOP), behavior unchanged.
-            .metrics(resolveMetricsOrNull(metricsInstance));
+            // when absent, behavior unchanged.
+            .metrics(resolveMetricsOrDefault(metricsInstance));
     // The store borrows from the Agroal DataSource as given and bounds its own statements per
     // transaction or per statement; the bound is the one knob it needs from configuration.
     try {
@@ -283,7 +283,7 @@ public class StreamRuneProducers {
     return new JdbcProjectionRepository(
         dataSource,
         JdbcProjectionRepository.createObjectMapper(
-            cryptoEngine, resolveMetricsOrNull(metricsInstance)));
+            cryptoEngine, resolveMetricsOrDefault(metricsInstance)));
   }
 
   /** Produces a {@link PostgresOffsetStore} as the default {@link OffsetStore}. */
@@ -321,7 +321,7 @@ public class StreamRuneProducers {
   @DefaultBean
   @Typed(SimpleQueryBus.class)
   public SimpleQueryBus simpleQueryBus(Instance<org.streamrune.core.StreamRuneMetrics> metrics) {
-    return new SimpleQueryBus(resolveMetricsOrNull(metrics));
+    return new SimpleQueryBus(resolveMetricsOrDefault(metrics));
   }
 
   /**
@@ -534,12 +534,9 @@ public class StreamRuneProducers {
     if (offsetStore == null) {
       offsetStore = INERT_OFFSET_STORE;
     }
-    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrNull(metricsInstance);
+    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrDefault(metricsInstance);
     return new org.streamrune.runtime.SubscriptionHealthContributor(
-        eventStore,
-        offsetStore,
-        lagThreshold,
-        metrics != null ? metrics : org.streamrune.core.StreamRuneMetrics.NOOP);
+        eventStore, offsetStore, lagThreshold, metrics);
   }
 
   /**
@@ -807,7 +804,7 @@ public class StreamRuneProducers {
     return new org.streamrune.postgres.PostgresSagaStore(
         dataSource,
         org.streamrune.postgres.PostgresSagaStore.createObjectMapper(
-            cryptoEngine, resolveMetricsOrNull(metricsInstance)));
+            cryptoEngine, resolveMetricsOrDefault(metricsInstance)));
   }
 
   /**
@@ -957,7 +954,7 @@ public class StreamRuneProducers {
       b.auditStore(auditStore.get());
     }
     // Wire metrics so a failed read-model purge increments streamrune.gdpr.purge_failed.
-    b.metrics(resolveMetricsOrNull(metricsInstance));
+    b.metrics(resolveMetricsOrDefault(metricsInstance));
     // A forget evicts the query cache after its last purger, so no cached answer taken before the
     // erasure is served after it. An ambiguous CachingQueryBus fails loud rather than leave one
     // un-evicted.
@@ -1027,10 +1024,7 @@ public class StreamRuneProducers {
       Instance<org.streamrune.core.StreamRuneMetrics> metrics,
       Instance<org.streamrune.core.QueryAuthorizer> authorizer) {
     var builder = CachingQueryBus.builder().delegate(delegate);
-    org.streamrune.core.StreamRuneMetrics m = resolveMetricsOrNull(metrics);
-    if (m != null) {
-      builder.metrics(m);
-    }
+    builder.metrics(resolveMetricsOrDefault(metrics));
     if (authorizer.isAmbiguous()) {
       throw new IllegalStateException(
           "Multiple QueryAuthorizer beans exist but none is resolvable as default — StreamRune"
@@ -1208,10 +1202,8 @@ public class StreamRuneProducers {
 
     // Wire the optional StreamRuneMetrics bean so command-bus meters are recorded (NOOP if absent),
     // mirroring Spring (StreamRuneAutoConfiguration) and the query bus on this framework.
-    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrNull(metricsInstance);
-    if (metrics != null) {
-      builder.metrics(metrics);
-    }
+    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrDefault(metricsInstance);
+    builder.metrics(metrics);
 
     // Wire the optional DeadLetterQueue bean so commands that exhaust retries are dead-lettered,
     // mirroring Spring. The DLQ publish mapper is ALWAYS the crypto-aware default — never an
@@ -1314,7 +1306,7 @@ public class StreamRuneProducers {
         cryptoEngineInstance.isUnsatisfied() ? null : cryptoEngineInstance.get();
     // Resolve the metrics bean once: it feeds BOTH the DLQ decrypt mapper's CryptoShreddingModule
     // (subject_redacted) and retry-exhaustion counters below; NOOP when absent.
-    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrNull(metricsInstance);
+    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrDefault(metricsInstance);
     com.fasterxml.jackson.databind.ObjectMapper resolvedMapper =
         org.streamrune.runtime.DeadLetterRetryRunner.createObjectMapper(cryptoEngine, metrics);
     var builder =
@@ -1341,16 +1333,11 @@ public class StreamRuneProducers {
     // de-dup.
     // Two leadership beans with none the default fail here, as the projection runners and the
     // saga sweepers do, instead of leaving this runner on NOOP.
-    var leadership = LeadershipInstances.resolve(leadershipInstance);
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    builder.leadership(LeadershipInstances.resolve(leadershipInstance));
 
     // Wire the optional StreamRuneMetrics bean (resolved above) so retry-exhaustion emits
     // streamrune.dlq.exhausted + a terminal ERROR log under the default policy; NOOP when absent.
-    if (metrics != null) {
-      builder.metrics(metrics);
-    }
+    builder.metrics(metrics);
 
     DeadLetterRetryRunner runner = builder.build();
     // Register for relay liveness health so /q/health/ready degrades if the thread dies.

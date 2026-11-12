@@ -166,11 +166,8 @@ public final class SagaCompensationRetryLifecycle implements SmartLifecycle {
             // possibly-pruned-key compensation (double refund).
             .inboxRetentionMaxAge(properties.inbox().retentionMaxAge())
             .clock(Clock.systemUTC())
-            .metrics(resolvedMetrics);
-    SubscriptionLeadership resolvedLeadership = LeadershipBeans.resolve(leadership);
-    if (resolvedLeadership != null) {
-      builder.leadership(resolvedLeadership);
-    }
+            .metrics(resolvedMetrics)
+            .leadership(LeadershipBeans.resolve(leadership));
     return builder.build();
   }
 

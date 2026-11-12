@@ -220,7 +220,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     // name — two saga-state classes may share a simple name across packages.
     this.sagaTypeName = sagaType.value();
     this.consumerName = SubscriptionName.of(CONSUMER_NAME_PREFIX + sagaType.value());
-    this.leadership = b.leadership != null ? b.leadership : SubscriptionLeadership.NOOP;
+    this.leadership = b.leadership;
     SubscriptionLease runnerLease = b.sagaRunner.lease();
     this.follower =
         runnerLease.isGated()
@@ -246,7 +246,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
             : b.inboxRetentionMaxAge;
     this.batchSize = b.batchSize;
     this.clock = b.clock;
-    this.metrics = b.metrics != null ? b.metrics : StreamRuneMetrics.NOOP;
+    this.metrics = b.metrics;
     Duration maxBackoff =
         retryInterval.compareTo(MAX_FAILURE_BACKOFF) > 0 ? retryInterval : MAX_FAILURE_BACKOFF;
     this.pollLoop =
@@ -790,7 +790,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
      * (always leader), which makes single- and multi-instance behavior identical.
      */
     public Builder<S> leadership(SubscriptionLeadership leadership) {
-      this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
+      this.leadership = Objects.requireNonNull(leadership, "leadership is required");
       return this;
     }
 
@@ -896,7 +896,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
 
     /** Metrics collector. Optional; defaults to {@link StreamRuneMetrics#NOOP}. */
     public Builder<S> metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 

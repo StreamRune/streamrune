@@ -232,7 +232,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     this.registry = Collections.unmodifiableMap(new LinkedHashMap<>(registry));
     this.objectMapper = objectMapper;
     this.deadLetterQueue = deadLetterQueue;
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
     this.interceptors = List.copyOf(interceptors);
     this.commandSpans = commandSpansOf(this.interceptors);
     this.asyncTaskWrapper = asyncTaskWrapper;
@@ -2218,7 +2218,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     private int maxInFlightAsyncCommands = DEFAULT_MAX_IN_FLIGHT_ASYNC_COMMANDS;
     private ObjectMapper objectMapper;
     private DeadLetterQueue deadLetterQueue;
-    private StreamRuneMetrics metrics;
+    private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private final List<CommandInterceptor> interceptors = new ArrayList<>();
     private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
     private UnaryOperator<Runnable> asyncTaskWrapper;
@@ -2422,9 +2422,15 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       return this;
     }
 
-    /** Sets the metrics collector. If not set, metrics are not recorded. */
+    /**
+     * Sets the metrics collector. Optional; the default {@link StreamRuneMetrics#NOOP} records
+     * nothing.
+     *
+     * @param metrics the metrics; not {@code null}
+     * @return this builder
+     */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 

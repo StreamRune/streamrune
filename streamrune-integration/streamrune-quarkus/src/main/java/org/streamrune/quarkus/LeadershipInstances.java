@@ -14,14 +14,14 @@ final class LeadershipInstances {
   private LeadershipInstances() {}
 
   /**
-   * The resolvable leadership bean, or {@code null} when there is none.
+   * The resolvable leadership bean, or {@link SubscriptionLeadership#NOOP} when there is none.
    *
    * @throws IllegalStateException with two or more leadership beans and none the default; the
    *     message names their bean classes (see {@code SubscriptionLeadershipResolution.ambiguous})
    */
   static SubscriptionLeadership resolve(Instance<SubscriptionLeadership> instance) {
     if (instance.isUnsatisfied()) {
-      return null;
+      return SubscriptionLeadership.NOOP;
     }
     if (instance.isAmbiguous()) {
       throw SubscriptionLeadershipResolution.ambiguous(

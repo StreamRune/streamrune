@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -84,12 +85,12 @@ class SagaLeaseWiringTest {
   }
 
   @Test
-  void saysNothingWithoutLeadership() {
+  void refusesANullLeadership_noLeadershipIsNoop() {
     SagaRunner<Alpha> ungated = runner(Alpha.class, Alpha::new, null);
 
-    int reported = SagaLeaseWiring.warnUngatedUnderLeadership(List.of(ungated), null);
-
-    assertThat(reported).isZero();
+    assertThatThrownBy(() -> SagaLeaseWiring.warnUngatedUnderLeadership(List.of(ungated), null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("leadership is required");
     assertThat(appender.list).isEmpty();
   }
 
@@ -149,7 +150,7 @@ class SagaLeaseWiringTest {
         .sagaStore(rows)
         .commandBus(bus)
         .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(rows))
-        .leadership(leadership)
+        .leadership(leadership == null ? SubscriptionLeadership.NOOP : leadership)
         .build();
   }
 }

@@ -807,7 +807,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   and retries its compensations; the others take over within one attempt interval of a clean stop and
   within the lease TTL of a crash. Correctness does not rest on it: the saga row's compare-and-swap,
   the command inbox and the forward fence hold during a handover overlap. A runner without
-  leadership (absent, `null` or `NOOP`) delivers on every replica. A follower whose lease no
+  leadership (absent or `NOOP`) delivers on every replica. A follower whose lease no
   subscription of its process anchored logs one INFO on its second unanchored poll within 15 s of
   its start and one WARN past it, and its relay health reads `DEGRADED`; a runner with a lease delivering through
   `listener(runner.asEventListener())` logs one WARN. A sweeper of a runner without a lease keeps its
@@ -1265,6 +1265,13 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
   baggage); attributes are `SpanAttributes.empty()` when there are none.
 - `TraceScope.link()`: the trace id and span id of the span a scope started, `SpanLink.NONE` for
   the no-op scope or an area that is off; a span the sampler drops still has one.
+- The optional collaborators of every builder and constructor take no `null`: `metrics(...)`,
+  `tracing(...)`, `leadership(...)`, `healthContributor(...)` and `upcasters(...)` default to
+  `StreamRuneMetrics.NOOP`, `StreamRuneTracing.NOOP`, `SubscriptionLeadership.NOOP`,
+  `SubscriptionHealthContributor.NOOP` and no upcasters, and a `null` argument throws
+  `NullPointerException` (`<name> is required`). `SubscriptionHealthContributor.NOOP` registers
+  nothing and reports no subscription; a subscription built with it delivers to its listener
+  unwrapped. The integrations pass the `NOOP` value when a bean is absent.
 - Every production log line goes through SLF4J; bring the binding of your choice.
 - `BackgroundRelayHealthContributor` for every background relay; a per-cycle aggregated WARN for
   transport and in-flight outbox outages.

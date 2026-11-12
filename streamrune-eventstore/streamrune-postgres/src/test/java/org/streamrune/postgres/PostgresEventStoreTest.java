@@ -1240,7 +1240,13 @@ class PostgresEventStoreTest {
     // them directly via the canonical 7-arg ctor (package-accessible within the module)
     var outboxEnabled =
         new PostgresEventStore(
-            dataSource, objectMapper, typeRegistry, null, null, outboxStore, null);
+            dataSource,
+            objectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            outboxStore,
+            null);
 
     StreamId streamId = TestStreams.stream("outbox-test");
     var entry =
@@ -1303,7 +1309,7 @@ class PostgresEventStoreTest {
             dataSource,
             objectMapper,
             typeRegistry,
-            null,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
             null,
             new PostgresOutboxStore(dataSource),
             null);

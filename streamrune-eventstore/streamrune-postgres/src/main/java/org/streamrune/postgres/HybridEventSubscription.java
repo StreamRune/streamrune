@@ -61,7 +61,7 @@ public final class HybridEventSubscription
   private final PollingEventSubscription pollingSubscription;
   private final PgNotificationListener notificationListener;
 
-  // The contributor this subscription registers itself with on start() and leaves on close(); null
+  // The contributor this subscription registers itself with on start() and leaves on close(); NOOP
   // registers nothing. The Hybrid registers itself, not the polling subscription inside it, so the
   // contributor reads the push-path health from the Hybrid.
   private final SubscriptionHealthContributor healthContributor;
@@ -88,8 +88,8 @@ public final class HybridEventSubscription
   /**
    * Constructor with metrics but no read-poison bound (unbounded live retry). The {@code metrics}
    * collector is wired into the LISTEN/NOTIFY listener so reconnects emit {@link
-   * org.streamrune.core.metrics.MetricNames#SUBSCRIPTIONS_LISTENER_RECONNECTS} ; {@code null} means
-   * {@link StreamRuneMetrics#NOOP} (behavior unchanged).
+   * org.streamrune.core.metrics.MetricNames#SUBSCRIPTIONS_LISTENER_RECONNECTS}; {@link
+   * StreamRuneMetrics#NOOP} records nothing, and {@code null} is rejected.
    */
   public HybridEventSubscription(
       SubscriptionName subscriptionName,
@@ -205,12 +205,13 @@ public final class HybridEventSubscription
         readPoisonBound,
         listenerTuning,
         lease,
-        null);
+        SubscriptionHealthContributor.NOOP);
   }
 
   /**
    * The full constructor plus the {@code healthContributor} this subscription registers itself with
-   * on {@link #start()} and leaves on {@link #close()} ({@code null} = none).
+   * on {@link #start()} and leaves on {@link #close()} ({@link SubscriptionHealthContributor#NOOP}
+   * = none).
    */
   HybridEventSubscription(
       SubscriptionName subscriptionName,
@@ -278,9 +279,11 @@ public final class HybridEventSubscription
     if (config == null) {
       throw new IllegalArgumentException("config is required");
     }
+    Objects.requireNonNull(metrics, "metrics is required");
 
     this.subscriptionName = subscriptionName;
-    this.healthContributor = healthContributor;
+    this.healthContributor =
+        Objects.requireNonNull(healthContributor, "healthContributor is required");
     this.pollingSubscription =
         PollingEventSubscription.builder()
             .subscriptionName(subscriptionName)
@@ -317,7 +320,7 @@ public final class HybridEventSubscription
                         // Default UNBOUNDED_RECONNECTS: the push path reconnects forever so a
                         // transient PG failover never permanently kills it. Reconnects emit the
                         // reconnect meter.
-                        .metrics(Objects.requireNonNullElse(metrics, StreamRuneMetrics.NOOP)))
+                        .metrics(metrics))
                 .build()
             : null;
   }
@@ -364,7 +367,7 @@ public final class HybridEventSubscription
     // Registered before the polling thread starts: its first page may fail at once, and a failure
     // recorded for a name that is not registered yet is dropped. A start of a subscription that
     // already started registers nothing (that would reset its errors) and rolls back nothing.
-    boolean registers = healthContributor != null && state() == SubscriptionLifecycleState.CREATED;
+    boolean registers = state() == SubscriptionLifecycleState.CREATED;
     if (registers) {
       healthContributor.register(subscriptionName, this);
     }
@@ -484,9 +487,7 @@ public final class HybridEventSubscription
         notificationListener.close();
       }
     } finally {
-      if (healthContributor != null) {
-        healthContributor.unregister(subscriptionName);
-      }
+      healthContributor.unregister(subscriptionName);
     }
   }
 
@@ -506,9 +507,9 @@ public final class HybridEventSubscription
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private int readPoisonBound = 0; // 0 = unbounded (standalone default)
     private SubscriptionLease lease;
-    private SubscriptionLeadership leadership;
+    private SubscriptionLeadership leadership = SubscriptionLeadership.NOOP;
     private SagaRunner<?> sagaRunner;
-    private SubscriptionHealthContributor healthContributor;
+    private SubscriptionHealthContributor healthContributor = SubscriptionHealthContributor.NOOP;
     private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     /**
@@ -559,10 +560,13 @@ public final class HybridEventSubscription
 
     /**
      * Sets the metrics collector wired into the LISTEN/NOTIFY listener so reconnects emit the
-     * reconnect meter. Optional; defaults to {@link StreamRuneMetrics#NOOP} (behavior unchanged).
+     * reconnect meter. Optional; defaults to {@link StreamRuneMetrics#NOOP}, which records nothing.
+     *
+     * @param metrics the metrics; not {@code null}
+     * @return this builder
      */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 
@@ -593,11 +597,15 @@ public final class HybridEventSubscription
     /**
      * Delivers under the lease named after this subscription over {@code leadership}: the same as
      * {@code lease(SubscriptionLease.of(leadership, subscriptionName))}. One replica then delivers
-     * this subscription's events; the others stand by and take over when it stops or dies. Not
-     * together with {@link #lease} or {@link #sagaRunner}.
+     * this subscription's events; the others stand by and take over when it stops or dies. {@link
+     * SubscriptionLeadership#NOOP}, the default, delivers everywhere. A leadership other than
+     * {@code NOOP} is not taken together with {@link #lease} or {@link #sagaRunner}.
+     *
+     * @param leadership the leadership; not {@code null}
+     * @return this builder
      */
     public Builder leadership(SubscriptionLeadership leadership) {
-      this.leadership = leadership;
+      this.leadership = Objects.requireNonNull(leadership, "leadership is required");
       return this;
     }
 
@@ -616,8 +624,8 @@ public final class HybridEventSubscription
     /**
      * Registers this subscription with {@code contributor} under its name on {@link #start()} and
      * unregisters it on {@link #close()}, so health reports its state, lag, errors, push path and
-     * lease role. Optional; {@code null} registers nothing. The integrations cannot find a
-     * subscription the application builds itself.
+     * lease role. Optional; the default {@link SubscriptionHealthContributor#NOOP} registers
+     * nothing. The integrations cannot find a subscription the application builds itself.
      *
      * <p>The registration precedes the first poll. The subscription records each page whose
      * listener throws as a delivery error, and clears the errors when a page is delivered, exactly
@@ -627,7 +635,7 @@ public final class HybridEventSubscription
      * but one wrapped inside another decorator would count twice.
      */
     public Builder healthContributor(SubscriptionHealthContributor contributor) {
-      this.healthContributor = contributor;
+      this.healthContributor = Objects.requireNonNull(contributor, "healthContributor is required");
       return this;
     }
 
@@ -693,13 +701,13 @@ public final class HybridEventSubscription
                 + ": sagaRunner(...) and lease(...) are both set — sagaRunner(runner) takes"
                 + " runner.lease(); name one of them");
       }
-      if (sagaRunner != null && leadership != null) {
+      if (sagaRunner != null && leadership != SubscriptionLeadership.NOOP) {
         throw new IllegalArgumentException(
             prefix
                 + ": sagaRunner(...) and leadership(...) are both set — sagaRunner(runner) takes"
                 + " runner.lease(); name one of them");
       }
-      if (lease != null && leadership != null) {
+      if (lease != null && leadership != SubscriptionLeadership.NOOP) {
         throw new IllegalArgumentException(
             prefix
                 + ": lease(...) and leadership(...) are both set — leadership(l) is"
@@ -715,7 +723,7 @@ public final class HybridEventSubscription
       if (lease != null) {
         return lease;
       }
-      if (leadership != null && subscriptionName != null) {
+      if (leadership != SubscriptionLeadership.NOOP && subscriptionName != null) {
         return SubscriptionLease.of(leadership, subscriptionName);
       }
       return SubscriptionLease.ungated();

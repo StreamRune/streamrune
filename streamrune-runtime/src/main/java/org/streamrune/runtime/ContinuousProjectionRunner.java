@@ -197,11 +197,12 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     this.atomicProcessor = atomicProcessor;
     this.errorStrategy = errorStrategy != null ? errorStrategy : ProjectionErrorStrategy.HALT;
     this.deadLetterStore = deadLetterStore;
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
-    this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
+    this.leadership = Objects.requireNonNull(leadership, "leadership is required");
     this.classifier = classifier != null ? classifier : ProjectionErrorClassifier.DEFAULT;
-    this.healthContributor = healthContributor;
-    this.tracing = tracing != null ? tracing : StreamRuneTracing.NOOP;
+    this.healthContributor =
+        Objects.requireNonNull(healthContributor, "healthContributor is required");
+    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
     this.readRetryInitialBackoff =
         readRetryInitialBackoff != null ? readRetryInitialBackoff : READ_RETRY_INITIAL_BACKOFF;
     this.readRetryMaxBackoff =
@@ -386,10 +387,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           // frozen one. This is the single unregistration point for every clean exit (an
           // unregistration in subscribeToLiveEvents would miss the stop-while-STANDBY and
           // stop-during-catch-up paths, which never reach it).
-          if (healthContributor != null) {
-            healthContributor.unregister(consumerName(projectionName));
-          }
-        } else if (healthContributor != null) {
+          healthContributor.unregister(consumerName(projectionName));
+        } else {
           // Permanent ERROR exit (HALT exhaustion, a live subscription that died, or any thrown
           // error): keep the subscription registered and force its health terminally DOWN so
           // overallStatus() — and thus the /health endpoint — stays DOWN while the read model is
@@ -1476,26 +1475,21 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
 
   /**
    * Feeds a genuinely clean batch — catch-up chunk or live batch — to the health contributor
-   * (resets the error count). No-op when no contributor is wired. Mirrors {@code
-   * ScheduledProjectionRunner.recordHealthSuccess}.
+   * (resets the error count). Mirrors {@code ScheduledProjectionRunner.recordHealthSuccess}.
    */
   private void recordHealthSuccess(ProjectionName projectionName) {
-    if (healthContributor != null) {
-      healthContributor.recordSuccess(consumerName(projectionName));
-    }
+    healthContributor.recordSuccess(consumerName(projectionName));
   }
 
   /**
    * Feeds a failed batch to the health contributor BEFORE the error strategy runs, so a
    * dead-lettered or skipped batch reads DEGRADED instead of being masked as a success by the
-   * strategy's normal return. No-op when no contributor is wired. Mirrors {@code
-   * ScheduledProjectionRunner.recordHealthError}. During catch-up the registered entry is the
-   * runner's standby view, so the error is visible there too: catch-up is not health-silent.
+   * strategy's normal return. Mirrors {@code ScheduledProjectionRunner.recordHealthError}. During
+   * catch-up the registered entry is the runner's standby view, so the error is visible there too:
+   * catch-up is not health-silent.
    */
   private void recordHealthError(ProjectionName projectionName) {
-    if (healthContributor != null) {
-      healthContributor.recordError(consumerName(projectionName));
-    }
+    healthContributor.recordError(consumerName(projectionName));
   }
 
   /**
@@ -1530,10 +1524,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
 
   /**
    * Registers a view of the live subscription ({@link LiveHealthView}: its state and push path,
-   * this runner's lease role) with the health contributor when one is wired and the subscription
-   * exposes lifecycle state. Replaces the runner's standby view for the duration of LIVE mode; when
-   * the subscription is not a {@link SubscriptionLifecycle} (a custom factory subscription) the
-   * standby view stays registered, so the projection is never invisible.
+   * this runner's lease role) with the health contributor when the subscription exposes lifecycle
+   * state. Replaces the runner's standby view for the duration of LIVE mode; when the subscription
+   * is not a {@link SubscriptionLifecycle} (a custom factory subscription) the standby view stays
+   * registered, so the projection is never invisible.
    *
    * <p>Uses {@link SubscriptionHealthContributor#replaceLifecycle} rather than {@code register} —
    * the standby view being replaced may have just accrued a catch-up error count (see {@link
@@ -1541,7 +1535,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * runner reported itself LIVE, even though no clean batch had run since.
    */
   private void registerHealth(ProjectionName projectionName, EventSubscription subscription) {
-    if (healthContributor == null || !(subscription instanceof SubscriptionLifecycle lifecycle)) {
+    if (!(subscription instanceof SubscriptionLifecycle lifecycle)) {
       return;
     }
     healthContributor.replaceLifecycle(
@@ -1585,8 +1579,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
 
   /**
    * Registers a FRESH runner read-only health view for {@code projectionName} — the always-present
-   * entry that keeps a STANDBY / CATCHING_UP replica visible to {@code /health}. No- op when no
-   * contributor is wired.
+   * entry that keeps a STANDBY / CATCHING_UP replica visible to {@code /health}.
    *
    * <p>Registration resets the entry's error counter and terminal-error flag — the correct
    * semantics ONLY for {@code run()}'s own initial registration, which starts a genuinely fresh
@@ -1597,9 +1590,6 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * terminally DOWN.
    */
   private void registerStandbyHealthView(ProjectionName projectionName) {
-    if (healthContributor == null) {
-      return;
-    }
     healthContributor.register(consumerName(projectionName), new RunnerHealthView(projectionName));
   }
 
@@ -1614,12 +1604,9 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * stood by, with no clean batch ever having run since. A replica that reports DEGRADED while
    * standing by, until it next processes a genuinely clean batch, is the truthful reading — the
    * read-model hole the departing leader observed is still there and this replica has no evidence
-   * it closed. No-op when no contributor is wired.
+   * it closed.
    */
   private void restoreStandbyHealthViewPreservingHealth(ProjectionName projectionName) {
-    if (healthContributor == null) {
-      return;
-    }
     healthContributor.replaceLifecycle(
         consumerName(projectionName), new RunnerHealthView(projectionName));
   }
@@ -2232,10 +2219,10 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     private AtomicBatchProcessor atomicProcessor;
     private ProjectionErrorStrategy errorStrategy = ProjectionErrorStrategy.HALT;
     private ProjectionDeadLetterStore deadLetterStore;
-    private StreamRuneMetrics metrics;
+    private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private SubscriptionLeadership leadership = SubscriptionLeadership.NOOP;
     private ProjectionErrorClassifier classifier = ProjectionErrorClassifier.DEFAULT;
-    private SubscriptionHealthContributor healthContributor;
+    private SubscriptionHealthContributor healthContributor = SubscriptionHealthContributor.NOOP;
     private Duration readRetryInitialBackoff = READ_RETRY_INITIAL_BACKOFF;
     private Duration readRetryMaxBackoff = READ_RETRY_MAX_BACKOFF;
     private int maxReadPoisonRetries = DEFAULT_MAX_READ_POISON_RETRIES;
@@ -2321,12 +2308,15 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     }
 
     /**
-     * Sets the metrics collector. Optional; when absent (or {@code null}) projection metrics are
-     * not recorded and behavior is unchanged. The runner records processed/failed counts and
-     * processing duration per batch, tagged with the projection name.
+     * Sets the metrics collector. Optional; the default {@link StreamRuneMetrics#NOOP} records
+     * nothing. The runner records processed/failed counts and processing duration per batch, tagged
+     * with the projection name.
+     *
+     * @param metrics the metrics; not {@code null}
+     * @return this builder
      */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 
@@ -2335,9 +2325,12 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
      * SubscriptionLeadership#NOOP} (always leader), which makes multi-instance and single-instance
      * behavior identical. When a real leadership is injected, only the leader for this projection's
      * name reads/processes/advances; non-leaders run as {@link ProjectionState#STANDBY}.
+     *
+     * @param leadership the leadership; not {@code null}
+     * @return this builder
      */
     public Builder leadership(SubscriptionLeadership leadership) {
-      this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
+      this.leadership = Objects.requireNonNull(leadership, "leadership is required");
       return this;
     }
 
@@ -2360,11 +2353,15 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
      * live batch — feeds the contributor's success/error counters: a clean batch records a success,
      * and any failed batch records an error BEFORE the error strategy runs, so a dead-lettered or
      * skipped batch reads DEGRADED instead of being masked as a success, mirroring {@link
-     * ScheduledProjectionRunner}. When absent (or {@code null}) health tracking is a no-op and
-     * behavior is unchanged — single-instance and no-health setups are not affected.
+     * ScheduledProjectionRunner}. The default {@link SubscriptionHealthContributor#NOOP} tracks
+     * nothing.
+     *
+     * @param healthContributor the contributor; not {@code null}
+     * @return this builder
      */
     public Builder healthContributor(SubscriptionHealthContributor healthContributor) {
-      this.healthContributor = healthContributor;
+      this.healthContributor =
+          Objects.requireNonNull(healthContributor, "healthContributor is required");
       return this;
     }
 

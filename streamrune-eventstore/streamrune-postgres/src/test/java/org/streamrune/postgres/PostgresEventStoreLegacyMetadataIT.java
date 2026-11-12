@@ -89,7 +89,14 @@ class PostgresEventStoreLegacyMetadataIT {
   void setUp() throws Exception {
     store =
         new PostgresEventStore(
-            dataSource, objectMapper, typeRegistry, null, null, null, null, null);
+            dataSource,
+            objectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            null);
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("DELETE FROM event_stream");

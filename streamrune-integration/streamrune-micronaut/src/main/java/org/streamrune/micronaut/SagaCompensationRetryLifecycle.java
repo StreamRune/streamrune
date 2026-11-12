@@ -81,7 +81,7 @@ public class SagaCompensationRetryLifecycle
           boolean compensationRetryEnabled) {
     this.sagaRunners = sagaRunners;
     this.sagaStore = sagaStore;
-    this.leadership = leadership;
+    this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
     this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
     this.relayHealth = relayHealth;
     this.retryInterval = retryInterval;
@@ -183,10 +183,8 @@ public class SagaCompensationRetryLifecycle
             // possibly-pruned-key compensation (double refund).
             .inboxRetentionMaxAge(inboxRetentionMaxAge)
             .clock(Clock.systemUTC())
-            .metrics(metrics);
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+            .metrics(metrics)
+            .leadership(leadership);
     return builder.build();
   }
 

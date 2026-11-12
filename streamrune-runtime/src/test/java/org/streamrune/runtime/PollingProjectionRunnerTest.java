@@ -24,6 +24,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
@@ -426,7 +427,9 @@ class PollingProjectionRunnerTest {
   void run_acceptsAPlainProjectionDeclaredAtLeastOnce_underAFencingProcessor() {
     StreamId s1 = StreamId.of(TYPE, AggregateId.of("s1"));
     eventStore.addEvents(envelope(GlobalOffset.of(1), s1, 1, new TestEvent("A")));
-    runner = new PollingProjectionRunner(eventStore, offsetStore, 100, 3, TRANSACTIONAL, null);
+    runner =
+        new PollingProjectionRunner(
+            eventStore, offsetStore, 100, 3, TRANSACTIONAL, StreamRuneMetrics.NOOP);
 
     var collected = new ArrayList<List<EventEnvelope>>();
     Projection nonWriteThrough = collected::add;

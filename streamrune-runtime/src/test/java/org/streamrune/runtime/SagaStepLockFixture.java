@@ -457,7 +457,7 @@ final class SagaStepLockFixture implements AutoCloseable {
    * @param forwardFence whether the runner fences its forward commands at their commit
    */
   SagaStepLockFixture(SagaStepLock lock, Duration claimWait, boolean forwardFence) {
-    this(lock, claimWait, forwardFence, null, Duration.ofSeconds(15));
+    this(lock, claimWait, forwardFence, SubscriptionLeadership.NOOP, Duration.ofSeconds(15));
   }
 
   /**

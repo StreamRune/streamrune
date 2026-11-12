@@ -150,7 +150,7 @@ abstract class E2ETestBase {
         source,
         MAPPER,
         TYPE_REGISTRY,
-        /* upcasterChain= */ null,
+        /* upcasterChain= */ org.streamrune.core.upcasting.UpcasterChain.empty(),
         /* auditStore= */ null,
         outboxStore,
         /* outboxEventMapper= */ null);

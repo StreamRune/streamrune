@@ -5,6 +5,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Ticker;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -83,7 +84,7 @@ public final class CachingQueryBus implements QueryBus {
       QueryBus delegate, Ticker ticker, StreamRuneMetrics metrics, QueryAuthorizer authorizer) {
     this.delegate = delegate;
     this.ticker = ticker;
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
     this.authorizer = authorizer;
   }
 

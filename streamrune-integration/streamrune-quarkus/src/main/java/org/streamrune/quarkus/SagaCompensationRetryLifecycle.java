@@ -204,10 +204,8 @@ public class SagaCompensationRetryLifecycle {
             // possibly-pruned-key compensation (double refund).
             .inboxRetentionMaxAge(properties.inbox().retentionMaxAge())
             .clock(Clock.systemUTC())
-            .metrics(metrics);
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+            .metrics(metrics)
+            .leadership(leadership);
     return builder.build();
   }
 

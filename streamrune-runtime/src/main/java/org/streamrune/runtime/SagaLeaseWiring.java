@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import java.util.Collection;
+import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.Internal;
@@ -20,18 +21,20 @@ public final class SagaLeaseWiring {
   private SagaLeaseWiring() {}
 
   /**
-   * Logs one WARN per saga runner that carries no lease while {@code leadership} is a real one
-   * (neither {@code null} nor {@link SubscriptionLeadership#NOOP}): its saga type is delivered on
-   * every replica. Correct-but-noisy wiring is reported, not refused.
+   * Logs one WARN per saga runner that carries no lease while {@code leadership} is a real one (not
+   * {@link SubscriptionLeadership#NOOP}): its saga type is delivered on every replica.
+   * Correct-but-noisy wiring is reported, not refused.
    *
+   * @param sagaRunners the application's saga runners; {@code null} or empty for none
+   * @param leadership the application's leadership; {@link SubscriptionLeadership#NOOP} when it has
+   *     none, not {@code null}
    * @return how many runners were reported; {@code 0} for no runners or no real leadership
+   * @throws NullPointerException if {@code leadership} is {@code null}
    */
   public static int warnUngatedUnderLeadership(
       Collection<? extends SagaRunner<?>> sagaRunners, SubscriptionLeadership leadership) {
-    if (sagaRunners == null
-        || sagaRunners.isEmpty()
-        || leadership == null
-        || leadership == SubscriptionLeadership.NOOP) {
+    Objects.requireNonNull(leadership, "leadership is required");
+    if (sagaRunners == null || sagaRunners.isEmpty() || leadership == SubscriptionLeadership.NOOP) {
       return 0;
     }
     int reported = 0;

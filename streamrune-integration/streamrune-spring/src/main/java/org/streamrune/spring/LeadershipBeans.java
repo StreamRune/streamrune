@@ -15,8 +15,8 @@ final class LeadershipBeans {
   private LeadershipBeans() {}
 
   /**
-   * The leadership bean: the only one, or the {@code @Primary} one of several; {@code null} when
-   * there is none.
+   * The leadership bean: the only one, or the {@code @Primary} one of several; {@link
+   * SubscriptionLeadership#NOOP} when there is none.
    *
    * @throws IllegalStateException with two or more leadership beans and none {@code @Primary}; the
    *     message names their classes (see {@code SubscriptionLeadershipResolution.ambiguous})
@@ -28,7 +28,7 @@ final class LeadershipBeans {
     }
     List<SubscriptionLeadership> candidates = provider.orderedStream().toList();
     if (candidates.isEmpty()) {
-      return null;
+      return SubscriptionLeadership.NOOP;
     }
     throw SubscriptionLeadershipResolution.ambiguous(
         candidates.stream().map(candidate -> candidate.getClass().getName()).toList(), "@Primary");

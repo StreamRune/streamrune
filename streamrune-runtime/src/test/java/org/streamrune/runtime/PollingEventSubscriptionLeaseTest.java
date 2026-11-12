@@ -40,6 +40,7 @@ import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.subscription.SubscriptionLifecycleState;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -441,10 +442,18 @@ class PollingEventSubscriptionLeaseTest {
   }
 
   @Test
-  void aNullLeaseOrLeadershipIsNoSource() {
-    PollingEventSubscription subscription = track(builder().lease(null).leadership(null).build());
+  void aNullLeaseOrANoopLeadershipIsNoSource() {
+    PollingEventSubscription subscription =
+        track(builder().lease(null).leadership(SubscriptionLeadership.NOOP).build());
 
     assertThat(subscription.lease().isGated()).isFalse();
+  }
+
+  @Test
+  void aNullLeadershipIsRefused() {
+    assertThatThrownBy(() -> builder().leadership(null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("leadership is required");
   }
 
   @Test

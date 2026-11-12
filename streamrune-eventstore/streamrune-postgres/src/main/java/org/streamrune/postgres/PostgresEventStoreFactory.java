@@ -79,7 +79,7 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
   private final EventTypeRegistry typeRegistry;
   private CryptoEngine cryptoEngine;
   private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
-  private List<EventUpcaster> upcasters;
+  private List<EventUpcaster> upcasters = List.of();
   private List<SnapshotMigration> snapshotMigrations;
   private PostgresEventAuditStore eventAuditStore;
   private PostgresOutboxStore outboxStore;
@@ -324,19 +324,24 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
    * Sets the {@link StreamRuneMetrics} collector threaded into the event store's {@code
    * CryptoShreddingModule}, so a mass crypto-redaction on the replay/projection decrypt path emits
    * {@code streamrune.crypto.subject_redacted} / systemic-failure signals instead of being silent.
-   * Optional; defaults to {@link StreamRuneMetrics#NOOP} (null → NOOP).
+   * Optional; defaults to {@link StreamRuneMetrics#NOOP}.
    *
-   * @param metrics the metrics collector, or {@code null} for {@link StreamRuneMetrics#NOOP}
+   * @param metrics the metrics collector; not {@code null}
    * @return this factory for method chaining
    */
   public PostgresEventStoreFactory metrics(StreamRuneMetrics metrics) {
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
     return this;
   }
 
-  /** Sets the event upcasters for schema evolution (optional). */
+  /**
+   * Sets the event upcasters for schema evolution. Optional; the default is none.
+   *
+   * @param upcasters the upcasters, empty for none; not {@code null}
+   * @return this factory for method chaining
+   */
   public PostgresEventStoreFactory upcasters(List<EventUpcaster> upcasters) {
-    this.upcasters = upcasters;
+    this.upcasters = Objects.requireNonNull(upcasters, "upcasters is required");
     return this;
   }
 

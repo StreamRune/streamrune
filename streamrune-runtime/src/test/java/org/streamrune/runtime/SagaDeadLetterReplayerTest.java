@@ -1360,10 +1360,12 @@ class SagaDeadLetterReplayerTest {
                 .sagaStore(h.sagaStore)
                 .eventStore(h.eventStore)
                 .sagaRunner(h.runner)
-                .metrics(null)
                 .clock(null)
                 .build())
         .isNotNull();
+    assertThat(catchThrowable(() -> SagaDeadLetterReplayer.builder().metrics(null)))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("metrics is required");
     assertThat(catchThrowable(() -> SagaDeadLetterReplayer.builder().build()))
         .isInstanceOf(NullPointerException.class);
     assertThat(

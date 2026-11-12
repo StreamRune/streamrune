@@ -106,7 +106,7 @@ public class StreamRuneCryptoProducers {
         StreamRuneQuarkusCryptoProperties props,
         Instance<StreamRuneMetrics> metrics) {
       return build.buildFileSystemCryptoEngine(
-          dataSource.isResolvable() ? dataSource.get() : null, props, resolvedOrNull(metrics));
+          dataSource.isResolvable() ? dataSource.get() : null, props, resolvedOrNoop(metrics));
     }
 
     /** Disposer for {@link #fileSystemCryptoEngine}. */
@@ -135,7 +135,7 @@ public class StreamRuneCryptoProducers {
         DataSource dataSource,
         StreamRuneQuarkusCryptoProperties props,
         Instance<StreamRuneMetrics> metrics) {
-      return build.buildPostgresCryptoEngine(dataSource, props, resolvedOrNull(metrics));
+      return build.buildPostgresCryptoEngine(dataSource, props, resolvedOrNoop(metrics));
     }
 
     /** Disposer for {@link #postgresCryptoEngine}. */
@@ -263,7 +263,7 @@ public class StreamRuneCryptoProducers {
           kmsClient.client(),
           dataSource.isResolvable() ? dataSource.get() : null,
           props,
-          resolvedOrNull(metrics));
+          resolvedOrNoop(metrics));
     }
 
     /** Disposer for {@link #awsKmsCryptoEngine}. */
@@ -495,11 +495,12 @@ public class StreamRuneCryptoProducers {
   }
 
   /**
-   * The application's metrics bean, or {@code null} without one; the engines count discarded
-   * encryptions and retried decryptions with it and fall back to NOOP on {@code null}.
+   * The application's metrics bean, or {@link StreamRuneMetrics#NOOP} without one; the engines
+   * count discarded encryptions and retried decryptions with it.
    */
-  static StreamRuneMetrics resolvedOrNull(Instance<StreamRuneMetrics> metrics) {
-    return metrics.isResolvable() ? metrics.get() : null;
+  static StreamRuneMetrics resolvedOrNoop(Instance<StreamRuneMetrics> metrics) {
+    StreamRuneMetrics resolved = metrics.isResolvable() ? metrics.get() : null;
+    return resolved != null ? resolved : StreamRuneMetrics.NOOP;
   }
 
   /**

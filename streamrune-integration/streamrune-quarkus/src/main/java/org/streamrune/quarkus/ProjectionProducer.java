@@ -159,9 +159,7 @@ public class ProjectionProducer {
     // Thread the single-active-consumer leadership bean (LeaseBasedLeadership when a
     // DataSource is present and the knob is on) into every per-projection runner; NOOP (always
     // leader) when absent.
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    builder.leadership(leadership);
 
     // Optional user-supplied poison-vs-transient classifier; DEFAULT when absent.
     ProjectionErrorClassifier classifier = resolveOrNull(classifierInstance);
@@ -242,9 +240,7 @@ public class ProjectionProducer {
     }
 
     // Only a leader drains on each tick; NOOP (always leader) when no leadership bean exists.
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    builder.leadership(leadership);
 
     // Optional user-supplied poison-vs-transient classifier; DEFAULT when absent.
     ProjectionErrorClassifier classifier = resolveOrNull(classifierInstance);

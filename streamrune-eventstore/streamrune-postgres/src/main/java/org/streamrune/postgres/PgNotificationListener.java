@@ -3,6 +3,7 @@ package org.streamrune.postgres;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
 import org.postgresql.PGConnection;
@@ -143,8 +144,8 @@ public final class PgNotificationListener implements AutoCloseable {
    *
    * @param maxReconnectAttempts consecutive reconnect failures tolerated before the listener stops,
    *     or {@link #UNBOUNDED_RECONNECTS} (the default) to reconnect forever
-   * @param metrics collector for the reconnect meter; {@code null} means {@link
-   *     StreamRuneMetrics#NOOP}
+   * @param metrics collector for the reconnect meter; {@link StreamRuneMetrics#NOOP} for none, not
+   *     {@code null}
    */
   public PgNotificationListener(
       DataSource dataSource,
@@ -216,7 +217,7 @@ public final class PgNotificationListener implements AutoCloseable {
     this.maxBackoffMs = maxBackoffMs;
     this.probe = new ListenConnectionProbe(livenessProbeIntervalMs, livenessProbeTimeoutMs);
     this.reconnectGraceNanos = reconnectGraceMs * 1_000_000L;
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
   }
 
   public void start() {
@@ -511,10 +512,13 @@ public final class PgNotificationListener implements AutoCloseable {
 
     /**
      * Sets the metrics collector for the reconnect meter. Optional; defaults to {@link
-     * StreamRuneMetrics#NOOP} (behavior unchanged).
+     * StreamRuneMetrics#NOOP}, which records nothing.
+     *
+     * @param metrics the metrics; not {@code null}
+     * @return this builder
      */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 

@@ -135,10 +135,8 @@ public class ProjectionAutoConfig {
     metricsProvider.ifAvailable(builder::metrics);
     // Thread the single-active-consumer leadership bean (LeaseBasedLeadership when a
     // DataSource is present and the knob is on; absent otherwise) into every per-projection runner;
-    // defaults to SubscriptionLeadership.NOOP (always leader) when no bean exists.
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    // SubscriptionLeadership.NOOP (always leader) when no bean exists.
+    builder.leadership(leadership);
     // Optional user-supplied poison-vs-transient classifier; defaults to
     // ProjectionErrorClassifier.DEFAULT when no bean exists.
     classifierProvider.ifAvailable(builder::classifier);
@@ -213,9 +211,7 @@ public class ProjectionAutoConfig {
     // absent collector leaves projection metrics unchanged.
     metricsProvider.ifAvailable(builder::metrics);
     // Only a leader drains on each tick; NOOP (always leader) when no leadership bean exists.
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    builder.leadership(leadership);
     // Optional user-supplied poison-vs-transient classifier; DEFAULT when absent.
     classifierProvider.ifAvailable(builder::classifier);
     // Wire the subscription health contributor so each scheduled projection registers itself and

@@ -361,7 +361,8 @@ public final class PostgresEventStore implements EventStore {
    * @param dataSource the JDBC data source (required)
    * @param objectMapper Jackson object mapper (required)
    * @param typeRegistry event/state type registry (required)
-   * @param upcasterChain upcaster chain for schema evolution, or null if not needed
+   * @param upcasterChain upcaster chain for schema evolution, {@link UpcasterChain#empty()} if not
+   *     needed
    * @param eventAuditStore event audit store for same-transaction audit writes, or null if not
    *     needed
    */
@@ -387,7 +388,8 @@ public final class PostgresEventStore implements EventStore {
    * @param dataSource the JDBC data source (required)
    * @param objectMapper Jackson object mapper (required)
    * @param typeRegistry event/state type registry (required)
-   * @param upcasterChain upcaster chain for schema evolution, or null if not needed
+   * @param upcasterChain upcaster chain for schema evolution, {@link UpcasterChain#empty()} if not
+   *     needed
    * @param eventAuditStore event audit store for same-transaction audit writes, or null if not
    *     needed
    * @param outboxStore outbox store for same-transaction outbox writes, or null if the outbox is
@@ -427,7 +429,8 @@ public final class PostgresEventStore implements EventStore {
    * @param dataSource the JDBC data source (required)
    * @param objectMapper Jackson object mapper (required)
    * @param typeRegistry event/state type registry (required)
-   * @param upcasterChain upcaster chain for schema evolution, or null if not needed
+   * @param upcasterChain upcaster chain for schema evolution, {@link UpcasterChain#empty()} if not
+   *     needed
    * @param eventAuditStore event audit store for same-transaction audit writes, or null if not
    *     needed
    * @param outboxStore outbox store for same-transaction outbox writes, or null if the outbox is
@@ -470,7 +473,7 @@ public final class PostgresEventStore implements EventStore {
    *
    * @param snapshotMigrations validated migration chain (never {@code null}; use {@code
    *     SnapshotMigrationChain.of(null)} for none)
-   * @param metrics metrics collector (null → {@link StreamRuneMetrics#NOOP})
+   * @param metrics metrics collector; {@link StreamRuneMetrics#NOOP} for none, not {@code null}
    */
   PostgresEventStore(
       DataSource dataSource,
@@ -534,7 +537,7 @@ public final class PostgresEventStore implements EventStore {
    * Full constructor plus the tracing the event-store spans start through. Package-private: {@link
    * Builder#tracing(StreamRuneTracing)} is the public entry point.
    *
-   * @param tracing the tracing; {@code null} traces nothing
+   * @param tracing the tracing; {@link StreamRuneTracing#NOOP} traces nothing, not {@code null}
    */
   PostgresEventStore(
       DataSource dataSource,
@@ -561,17 +564,17 @@ public final class PostgresEventStore implements EventStore {
     this.dataSource = dataSource;
     this.objectMapper = objectMapper;
     this.typeRegistry = typeRegistry;
-    this.upcasterChain = upcasterChain;
+    this.upcasterChain = Objects.requireNonNull(upcasterChain, "upcasterChain is required");
     this.eventAuditStore = eventAuditStore;
     this.outboxStore = outboxStore;
     this.outboxEventMapper = outboxEventMapper;
     this.commandInbox = commandInbox;
     this.snapshotMigrations =
         snapshotMigrations == null ? SnapshotMigrationChain.of(null) : snapshotMigrations;
-    this.metrics = metrics == null ? StreamRuneMetrics.NOOP : metrics;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
     this.statementTimeout =
         statementTimeout == null ? StatementTimeout.of(StatementTimeout.DEFAULT) : statementTimeout;
-    this.tracing = tracing == null ? StreamRuneTracing.NOOP : tracing;
+    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
     this.traced = this.tracing.enabled(TracingArea.EVENT_STORE);
   }
 
@@ -638,8 +641,8 @@ public final class PostgresEventStore implements EventStore {
    * @param cryptoEngine crypto engine for encryption; {@code null} only when no registered event or
    *     state type carries {@code @Encrypted}
    * @param upcasters list of upcasters for schema evolution (optional, can be null or empty)
-   * @param metrics the metrics collector for crypto-redaction observability (null → {@link
-   *     StreamRuneMetrics#NOOP})
+   * @param metrics the metrics collector for crypto-redaction observability; {@link
+   *     StreamRuneMetrics#NOOP} for none, not {@code null}
    * @return configured PostgresEventStore
    * @throws IllegalArgumentException if {@code typeRegistry} is {@code null}
    * @throws IllegalStateException if {@code cryptoEngine} is {@code null} and a registered event or
@@ -657,10 +660,7 @@ public final class PostgresEventStore implements EventStore {
     validateCryptoConfig(typeRegistry, cryptoEngine);
     PostgresServerVersion.requireSupported(dataSource);
 
-    UpcasterChain chain = null;
-    if (upcasters != null && !upcasters.isEmpty()) {
-      chain = new UpcasterChain(upcasters);
-    }
+    UpcasterChain chain = upcasters == null ? UpcasterChain.empty() : new UpcasterChain(upcasters);
 
     return new PostgresEventStore(
         dataSource,
@@ -672,7 +672,7 @@ public final class PostgresEventStore implements EventStore {
         null,
         null,
         SnapshotMigrationChain.of(null),
-        metrics == null ? StreamRuneMetrics.NOOP : metrics);
+        metrics);
   }
 
   /**
@@ -687,17 +687,17 @@ public final class PostgresEventStore implements EventStore {
    * event-store construction path is metrics-aware.
    *
    * @param cryptoEngine the crypto engine to wire in, or {@code null} for a crypto-blind mapper
-   * @param metrics the crypto-redaction metrics collector (null → {@link StreamRuneMetrics#NOOP})
+   * @param metrics the crypto-redaction metrics collector; {@link StreamRuneMetrics#NOOP} for none,
+   *     not {@code null}
    * @return a new {@link ObjectMapper}, independent from any other mapper instance
    */
   public static ObjectMapper createObjectMapper(
       CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
+    Objects.requireNonNull(metrics, "metrics is required");
     var mapper = new ObjectMapper();
     mapper.registerModule(new JavaTimeModule());
     if (cryptoEngine != null) {
-      mapper.registerModule(
-          new CryptoShreddingModule(
-              cryptoEngine, metrics == null ? StreamRuneMetrics.NOOP : metrics));
+      mapper.registerModule(new CryptoShreddingModule(cryptoEngine, metrics));
     }
     return mapper;
   }
@@ -1200,7 +1200,7 @@ public final class PostgresEventStore implements EventStore {
 
   /** The number of {@code rows} stored below their type's current schema version. */
   private long upcastCount(List<RawEventRow> rows) {
-    if (upcasterChain == null) {
+    if (upcasterChain.isEmpty()) {
       return 0;
     }
     long count = 0;
@@ -2064,8 +2064,7 @@ public final class PostgresEventStore implements EventStore {
     long version = expectedVersion.value();
     for (EventEnvelope envelope : events) {
       version++;
-      int schemaVersion =
-          upcasterChain != null ? upcasterChain.currentVersion(envelope.eventType()) : 1;
+      int schemaVersion = upcasterChain.currentVersion(envelope.eventType());
       String payloadJson = objectMapper.writeValueAsString(envelope.event());
       String metadataJson = objectMapper.writeValueAsString(envelope.metadata());
       requireNoNulCharacter(payloadJson, "event payload", shownStream);
@@ -2755,14 +2754,11 @@ public final class PostgresEventStore implements EventStore {
     Object event;
 
     try {
-      // A reader with NO upcaster chain understands only v1 — the
-      // write path stamps schema_version = 1 when chainless (see the append path) — so treat a null
-      // chain as currentVersion = 1 here too. The original guard branched only when the chain was
-      // non-null, so a chainless reader (a supported construction, built without .upcasters(...))
-      // skipped it entirely and a stored schema_version >= 2 fell through to a plain readValue,
-      // silently mis-binding a newer-shaped payload — the SAME durable corruption the guard closed
-      // on the chain-PRESENT path, left open on this null-chain sibling.
-      int currentVersion = upcasterChain != null ? upcasterChain.currentVersion(eventType) : 1;
+      // A reader with no upcasters understands only v1 — the write path stamps schema_version = 1
+      // with the empty chain (see the append path) — and the empty chain reports currentVersion =
+      // 1, so a stored schema_version >= 2 meets the guard below instead of falling through to a
+      // plain readValue that would silently mis-bind a newer-shaped payload.
+      int currentVersion = upcasterChain.currentVersion(eventType);
       if (schemaVersion > currentVersion) {
         // A stored version ABOVE the reader's current version means a newer writer stamped it: a
         // replica of the next release during a rolling deployment, or a store wired with upcasters
@@ -2780,7 +2776,7 @@ public final class PostgresEventStore implements EventStore {
             schemaVersion,
             currentVersion);
       }
-      if (upcasterChain != null && schemaVersion < currentVersion) {
+      if (schemaVersion < currentVersion) {
         // Deserialize to map, upcast, then bind to the target class. convertValue() binds the
         // already-parsed map directly — no intermediate JSON string (the write+re-read round-trip
         // measured ~3.6x slower than convertValue in the upcast hot path).
@@ -2863,7 +2859,7 @@ public final class PostgresEventStore implements EventStore {
     private DataSource dataSource;
     private EventTypeRegistry typeRegistry;
     private CryptoEngine cryptoEngine;
-    private List<EventUpcaster> upcasters;
+    private List<EventUpcaster> upcasters = List.of();
     private PostgresEventAuditStore eventAuditStore;
     private PostgresOutboxStore outboxStore;
     private OutboxEventMapper outboxEventMapper;
@@ -2894,9 +2890,14 @@ public final class PostgresEventStore implements EventStore {
       return this;
     }
 
-    /** Sets event upcasters for schema evolution (optional). */
+    /**
+     * Sets event upcasters for schema evolution. Optional; the default is none.
+     *
+     * @param upcasters the upcasters, empty for none; not {@code null}
+     * @return this builder
+     */
     public Builder upcasters(List<EventUpcaster> upcasters) {
-      this.upcasters = upcasters;
+      this.upcasters = Objects.requireNonNull(upcasters, "upcasters is required");
       return this;
     }
 
@@ -2950,10 +2951,13 @@ public final class PostgresEventStore implements EventStore {
     /**
      * Sets the metrics collector threaded into {@link CryptoShreddingModule} so the
      * crypto-redaction signals fire on this store's decrypt path (event replay / projection
-     * rebuild). Optional; defaults to {@link StreamRuneMetrics#NOOP} (null → NOOP).
+     * rebuild). Optional; defaults to {@link StreamRuneMetrics#NOOP}.
+     *
+     * @param metrics the metrics; not {@code null}
+     * @return this builder
      */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 
@@ -3041,10 +3045,7 @@ public final class PostgresEventStore implements EventStore {
         validateCryptoConfig(typeRegistry, cryptoEngine);
       }
       var mapper = createObjectMapper(cryptoEngine, metrics);
-      UpcasterChain chain = null;
-      if (upcasters != null && !upcasters.isEmpty()) {
-        chain = new UpcasterChain(upcasters);
-      }
+      UpcasterChain chain = new UpcasterChain(upcasters);
       // Validates the chain here, at build time (fail fast on a misconfigured migration set rather
       // than on the first load).
       SnapshotMigrationChain migrationChain = SnapshotMigrationChain.of(migrations);

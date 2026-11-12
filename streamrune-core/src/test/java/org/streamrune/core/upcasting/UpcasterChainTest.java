@@ -172,4 +172,23 @@ class UpcasterChainTest {
     assertEquals("USD", result.get("currency"));
     assertNull(result.get("amount"), "amount should have been renamed to totalAmount");
   }
+
+  @Test
+  void theEmptyChain_hasEveryTypeAtVersionOne_andUpcastsNothing() {
+    UpcasterChain empty = UpcasterChain.empty();
+    Map<String, Object> data = Map.of("amount", 1);
+
+    assertTrue(empty.isEmpty());
+    assertSame(empty, UpcasterChain.empty());
+    assertEquals(1, empty.currentVersion(new EventType("OrderCreated")));
+    assertSame(data, empty.upcast(new EventType("OrderCreated"), data, 1));
+    assertTrue(new UpcasterChain(List.of()).isEmpty());
+    assertFalse(new UpcasterChain(List.of(new OrderCreatedUpcaster())).isEmpty());
+  }
+
+  @Test
+  void aNullUpcasterList_isRefused() {
+    var refused = assertThrows(NullPointerException.class, () -> new UpcasterChain(null));
+    assertEquals("upcasters is required", refused.getMessage());
+  }
 }

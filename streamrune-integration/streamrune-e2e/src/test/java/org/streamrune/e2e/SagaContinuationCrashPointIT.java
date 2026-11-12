@@ -539,7 +539,15 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
     final ObjectMapper mapper = mapper();
     final PostgresCommandInbox inbox = new PostgresCommandInbox(dataSource);
     final PostgresEventStore store =
-        new PostgresEventStore(dataSource, mapper, REGISTRY, null, null, null, null, inbox);
+        new PostgresEventStore(
+            dataSource,
+            mapper,
+            REGISTRY,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            inbox);
     final PostgresSagaStore sagaStore = new PostgresSagaStore(dataSource, mapper);
     final PostgresSagaDeadLetterStore sagaDeadLetters = new PostgresSagaDeadLetterStore(dataSource);
     final PostgresOffsetStore offsets = new PostgresOffsetStore(dataSource);
@@ -772,7 +780,16 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
 
   @BeforeEach
   void probes() throws Exception {
-    probe = new PostgresEventStore(dataSource, mapper(), REGISTRY, null, null, null, null, null);
+    probe =
+        new PostgresEventStore(
+            dataSource,
+            mapper(),
+            REGISTRY,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            null);
     sagaProbe = new PostgresSagaStore(dataSource, mapper());
     fresh();
   }

@@ -98,7 +98,13 @@ class PostgresEventStoreOffsetReservationTest {
     when(headRs.getLong(1)).thenReturn(0L);
     // Append no longer takes any advisory lock (gap-freeness is a read-side watermark now), so the
     // only other 1-arg prepareStatement call in append is the post-commit NOTIFY.
-    store = new PostgresEventStore(dataSource, objectMapper, typeRegistry, null, null);
+    store =
+        new PostgresEventStore(
+            dataSource,
+            objectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null);
   }
 
   private static org.mockito.ArgumentMatcher<String> containsSql(String needle) {
