@@ -450,4 +450,26 @@ class EventStreamFixturesTest {
         !store.objectMapper().writeValueAsString(read.metadata()).contains("spanId"),
         "the metadata is written without spanId");
   }
+
+  @Test
+  void aStoreWithoutUpcasters_bindsAStoredFormBelowSchemaVersionOneDirectly() {
+    // No upcasters: the payload is bound as stored and no chain is asked to upcast from version 0,
+    // which an upcaster chain refuses.
+    var store = InMemoryEventStore.serializing(orders(), null);
+    String metadata =
+        "{\"eventId\":\"event-1\",\"commandId\":\"command-1\",\"traceId\":null,"
+            + "\"correlationId\":\"correlation-1\",\"causationId\":null,\"userId\":null,"
+            + "\"timestamp\":\"2026-01-01T00:00:01Z\",\"baggage\":{},\"sagaOrigin\":null}";
+
+    EventEnvelope bound =
+        store.bindStoredForm(
+            ORDER_1,
+            new Version(1),
+            EventType.fromClass(OrderPlaced.class),
+            0,
+            "{\"orderId\":\"1\",\"quantity\":2}",
+            metadata);
+
+    assertEquals(new OrderPlaced("1", 2), bound.event());
+  }
 }

@@ -80,6 +80,10 @@ class NullObjectDefaultsTest {
             () -> HealthTrackingEventListener.tracking(events -> {}, null, NAME)),
         refused(
             "healthContributor",
+            "HealthTrackingEventListener",
+            () -> new HealthTrackingEventListener(events -> {}, null, NAME)),
+        refused(
+            "healthContributor",
             "PollingEventSubscription.Builder",
             () -> PollingEventSubscription.builder().healthContributor(null)),
         refused(

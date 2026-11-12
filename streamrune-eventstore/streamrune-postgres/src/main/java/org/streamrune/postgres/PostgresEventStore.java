@@ -2776,7 +2776,8 @@ public final class PostgresEventStore implements EventStore {
             schemaVersion,
             currentVersion);
       }
-      if (schemaVersion < currentVersion) {
+      // A store without upcasters binds every row directly, a schema_version below 1 included.
+      if (!upcasterChain.isEmpty() && schemaVersion < currentVersion) {
         // Deserialize to map, upcast, then bind to the target class. convertValue() binds the
         // already-parsed map directly — no intermediate JSON string (the write+re-read round-trip
         // measured ~3.6x slower than convertValue in the upcast hot path).

@@ -28,7 +28,8 @@ public final class HealthTrackingEventListener implements EventListener {
       SubscriptionHealthContributor healthContributor,
       SubscriptionName subscriptionName) {
     this.delegate = delegate;
-    this.healthContributor = healthContributor;
+    this.healthContributor =
+        Objects.requireNonNull(healthContributor, "healthContributor is required");
     this.subscriptionName = subscriptionName;
   }
 

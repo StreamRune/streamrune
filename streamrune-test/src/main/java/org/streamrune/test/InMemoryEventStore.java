@@ -911,7 +911,8 @@ public final class InMemoryEventStore implements EventStore {
             stored.schemaVersion(),
             currentVersion);
       }
-      if (stored.schemaVersion() < currentVersion) {
+      // A store without upcasters binds every row directly, a schema_version below 1 included.
+      if (!upcasterChain.isEmpty() && stored.schemaVersion() < currentVersion) {
         // Deserialize to map, upcast, then bind to the target class. convertValue() binds the
         // already-parsed map directly — no intermediate JSON string — mirroring
         // PostgresEventStore.
