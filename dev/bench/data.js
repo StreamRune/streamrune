@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794338048635,
+  "lastUpdate": 1794473501632,
   "repoUrl": "https://github.com/StreamRune/streamrune",
   "entries": {
     "StreamRune JMH": [
@@ -212,6 +212,238 @@ window.BENCHMARK_DATA = {
           {
             "name": "org.streamrune.crypto.filesystem.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"5\"} )",
             "value": 109.27696725788,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Martin Bednář",
+            "username": "xxBedy",
+            "email": "martin.bednar@streamrune.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "a32ee27a8e22ede941fccbfcce02488c96772f86",
+          "message": "feat(tracing)!: events carry their command's span, outbox/publish links to it, and the tracing seam takes no nulls (#102)\n\n## What changed\n\nTrace links that work without application help, and a tracing seam without nulls.\n\n**Events carry the span of their command**\n- `EventMetadata` gains `spanContext` (a `SpanLink`, `SpanLink.NONE` by default, never null). The command bus writes the current command span into it. It reads that span from the first `OpenTelemetryCommandInterceptor` in the chain whose command area is on, whether the builder added the interceptor or the application registered it.\n- `TraceScope.link()` returns the ids of the span a scope started, or `NONE`. A span the sampler dropped still yields its link when its context is valid, so links hold under parent-based sampling.\n- Every link reads only `spanContext`, through `SpanLink.of(EventMetadata)`. This covers `subscription/{name}/deliver`, `saga/{type}/step` (live and replay), and the new `outbox/publish` link.\n- `traceId` (the caller's `X-Trace-Id`) is correlation data and never builds a link. Before this change the bus always wrote a null `spanId`, so no link ever formed with the shipped command bus.\n- What a client can influence is documented: the span id is always the server's. The trace id follows the request's OpenTelemetry context, so a `traceparent` header that the server's instrumentation accepts chooses it. No StreamRune header, baggage entry or request-context value is copied into it.\n\n**`outbox/publish` links to the command that wrote the entry**\n- `OutboxEntry` gains `traceLink()` (`NONE` by default). `outbox_events` gains nullable `trace_id` / `span_id` columns, added in the V001 baseline (pre-1.0).\n- In the append path the store always sets the entry's link from the source event's `spanContext`, so a mapper or caller cannot plant a link.\n- The relay passes the link to each entry's `outbox/publish` span.\n\n**The seam takes no nulls**\n- `SpanLink.NONE` (with `isPresent()`) replaces a null link everywhere.\n- The new `SpanBaggage` (`KEEP` / `replace(Map)`) replaces the nullable baggage parameter.\n- With `SpanAttributes.empty()`, those are the seam's empty values. `start(...)` rejects a null link, baggage or start time.\n- `NONE` and `KEEP` never reach OpenTelemetry. The output of the existing emitters is unchanged apart from the new links.\n\n**Robustness**\n- A malformed stored `spanContext` (a string, number, array, empty object, wrong types or invalid ids) reads back as `NONE`. Loading and replay never fail on it.\n- Only W3C ids are written, and `NONE` is left out of JSON entirely. The Spring and Quarkus admin outbox listings therefore show no `traceLink` for an unlinked entry.\n- A tracing whose `link()` throws yields `NONE` and never fails a command.\n\n**Docs:** `production.md` (the \"What a client controls\" table, links, the outbox link, the seam's empty values), `api.md`, `outbox.md`, the Javadoc of `EventMetadata` / `SpanLink` / `StreamRuneTracing` / `OutboxEntry`, and the CHANGELOG lines for every change above. The CHANGELOG also corrects the earlier claim that \"trace and span ids propagate into `EventMetadata`\".\n\n## Why\n\nThe subscription, saga and outbox links never formed with the framework's own command bus. A link built from the caller-supplied `traceId` would let a client attach its events to any trace. The null objects make the seam safe to implement and call before the 1.0 freeze.\n\n## How it was tested\n\n- `./gradlew build`: BUILD SUCCESSFUL, 9305 tests, 0 failed. `brokerTest`: 4/4, and every `outbox/publish` span carries its entry's link.\n- New tests, none of them with hand-built metadata:\n  - a command's events carry its span: through `.tracing(...)` and through `.interceptors(...)`; for a command dispatched from an interceptor's `after()` while the outer span is open; and for `executeAsync`;\n  - the subscription, saga step and outbox publish spans link to the command span;\n  - a client `X-Trace-Id` never reaches a link;\n  - NOOP or an area switched off gives `NONE`;\n  - a real bus against PostgreSQL stores the same link in `spanContext` and in the outbox columns;\n  - every malformed JSON shape reads back as `NONE`;\n  - a mapper- or caller-set outbox link is replaced.\n- Mutant checks (restored):\n  - a `peekLast()` in the hand-off fails the nested-command test;\n  - the old map-only JSON reader fails 8 malformed-value cases;\n  - a bus writing `NONE` fails 5 tests.\n- A review covered the security of the span context, the hand-off under nesting, retries, sagas, async and virtual threads, the null objects, persistence and JSON. Its findings are fixed.\n- The e-commerce demo builds and passes its tests against this branch, with no change needed.\n\n\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-12T06:01:48Z",
+          "url": "https://github.com/StreamRune/streamrune/commit/a32ee27a8e22ede941fccbfcce02488c96772f86"
+        },
+        "date": 1794473501098,
+        "tool": "jmh",
+        "benches": [
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"0\"} )",
+            "value": 109.1118015927248,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"1\"} )",
+            "value": 170.29923938976842,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"2\"} )",
+            "value": 171.7004615168467,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.OutboxEventMapperBenchmark.mapPublishedEvent",
+            "value": 0.17666903717202215,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.OutboxEventMapperBenchmark.mapSkippedEvent",
+            "value": 0.0009553135351049738,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.ProjectionRunnerBenchmark.processBatch ( {\"batchSize\":\"10\"} )",
+            "value": 1.9217162363797933,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.ProjectionRunnerBenchmark.processBatch ( {\"batchSize\":\"100\"} )",
+            "value": 7.418297826233294,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.commandBusThroughput",
+            "value": 10.975261645539645,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.deciderDecide ( {\"stateSize\":\"0\"} )",
+            "value": 0.03476003566039865,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.deciderDecide ( {\"stateSize\":\"10\"} )",
+            "value": 0.034197067649755615,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.deciderDecide ( {\"stateSize\":\"100\"} )",
+            "value": 0.03401627319040573,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"1\"} )",
+            "value": 9.420400169468072,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"10\"} )",
+            "value": 93.50110364002296,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"100\"} )",
+            "value": 970.0653930166831,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"1\"} )",
+            "value": 0.06398396848366064,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"10\"} )",
+            "value": 0.1700732902656616,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"100\"} )",
+            "value": 1.404824258910847,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"1\"} )",
+            "value": 0.11805474389743101,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"10\"} )",
+            "value": 0.12533837625909677,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"100\"} )",
+            "value": 0.18006766384350664,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"NOOP\"} )",
+            "value": 11.297839927101304,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"SAMPLER_OFF\"} )",
+            "value": 13.267126575464909,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"SAMPLER_ON\"} )",
+            "value": 13.552179844033711,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToExistingStream ( {\"batchSize\":\"1\"} )",
+            "value": 677.380825492323,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToExistingStream ( {\"batchSize\":\"10\"} )",
+            "value": 854.5946162115475,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToNewStream ( {\"batchSize\":\"1\"} )",
+            "value": 673.081705150651,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToNewStream ( {\"batchSize\":\"10\"} )",
+            "value": 862.900159689971,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.load ( {\"streamLength\":\"10\"} )",
+            "value": 293.33194262717575,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.load ( {\"streamLength\":\"100\"} )",
+            "value": 626.3421346550406,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"1\"} )",
+            "value": 684.9414524045743,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"2\"} )",
+            "value": 684.5770642314229,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.crypto.filesystem.CryptoShreddingBenchmark.deserializeDecrypting ( {\"encryptedFields\":\"1\"} )",
+            "value": 10.567850966095792,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.crypto.filesystem.CryptoShreddingBenchmark.deserializeDecrypting ( {\"encryptedFields\":\"5\"} )",
+            "value": 48.140160369656755,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.crypto.filesystem.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"1\"} )",
+            "value": 14.677704694584014,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.crypto.filesystem.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"5\"} )",
+            "value": 72.4339194825985,
             "unit": "us/op",
             "extra": "iterations: 5\nforks: 2\nthreads: 1"
           }
