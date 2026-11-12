@@ -1,5 +1,13 @@
 package org.streamrune.integration.tck;
 
+import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.trace.TracerProvider;
+import io.opentelemetry.context.propagation.ContextPropagators;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.data.SpanData;
+import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -20,6 +28,8 @@ import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.core.outbox.OutboxEntry;
+import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
@@ -29,13 +39,23 @@ import org.streamrune.core.saga.SagaOrchestrator;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.runtime.DeciderRegistration;
+import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+import org.streamrune.runtime.OpenTelemetryTracing;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.TracingSettings;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryCryptoEngine;
 import org.streamrune.test.InMemoryDeadLetterQueue;
@@ -254,6 +274,138 @@ public final class ContractBeans {
     @Override
     public OutboxStore get() {
       return new InMemoryOutboxStore();
+    }
+  }
+
+  /**
+   * The application's {@code OutboxPublisher}: it accepts every entry and keeps nothing, so the
+   * integration's outbox poller relays each entry the application's outbox store holds.
+   */
+  public static final class AcceptingOutboxPublisher implements OutboxPublisher {
+    @Override
+    public void publish(OutboxEntry entry) {}
+  }
+
+  /**
+   * The application's {@code OpenTelemetry} bean: an SDK whose spans {@link #spans()} returns.
+   * Every bean of every start is a view of the one SDK of the test JVM, a view that cannot be
+   * closed, so the container that closes its beans with the application leaves the SDK running for
+   * the next start.
+   */
+  public static final class OpenTelemetryBean implements Supplier<OpenTelemetry> {
+
+    private static final InMemorySpanExporter EXPORTER = InMemorySpanExporter.create();
+
+    private static final OpenTelemetrySdk SDK =
+        OpenTelemetrySdk.builder()
+            .setTracerProvider(
+                SdkTracerProvider.builder()
+                    .addSpanProcessor(SimpleSpanProcessor.create(EXPORTER))
+                    .build())
+            .build();
+
+    @Override
+    public OpenTelemetry get() {
+      return view();
+    }
+
+    /**
+     * A view of the SDK that cannot be closed: what the bean supplies, and what a test registers as
+     * the global OpenTelemetry.
+     *
+     * @return the view
+     */
+    public static OpenTelemetry view() {
+      return new OpenTelemetry() {
+        @Override
+        public TracerProvider getTracerProvider() {
+          return SDK.getTracerProvider();
+        }
+
+        @Override
+        public ContextPropagators getPropagators() {
+          return SDK.getPropagators();
+        }
+      };
+    }
+
+    /**
+     * The spans the SDK ended since the last {@link #reset()}, in the order they ended.
+     *
+     * @return the spans
+     */
+    public static List<SpanData> spans() {
+      return EXPORTER.getFinishedSpanItems();
+    }
+
+    /** Forgets the spans ended so far. */
+    public static void reset() {
+      EXPORTER.reset();
+    }
+  }
+
+  /**
+   * The application's own {@code StreamRuneTracing}: it traces every area and records the name of
+   * each span it starts, for {@link #spanNames()}. One record serves the test JVM; a test clears it
+   * with {@link #reset()}.
+   */
+  public static final class ApplicationTracing implements Supplier<StreamRuneTracing> {
+
+    private static final List<String> STARTED = new CopyOnWriteArrayList<>();
+
+    @Override
+    public StreamRuneTracing get() {
+      return new Recording();
+    }
+
+    /**
+     * The names of the spans started since the last {@link #reset()}, in the order they started.
+     *
+     * @return the span names
+     */
+    public static List<String> spanNames() {
+      return List.copyOf(STARTED);
+    }
+
+    /** Forgets the spans started so far. */
+    public static void reset() {
+      STARTED.clear();
+    }
+
+    /** The tracing the bean supplies. */
+    static final class Recording implements StreamRuneTracing {
+      @Override
+      public boolean enabled(TracingArea area) {
+        return true;
+      }
+
+      @Override
+      public TraceScope start(
+          TracingArea area,
+          String spanName,
+          SpanKind kind,
+          SpanAttributes attributes,
+          SpanLink link,
+          SpanBaggage baggage) {
+        java.util.Objects.requireNonNull(link, "link");
+        java.util.Objects.requireNonNull(baggage, "baggage");
+        STARTED.add(spanName);
+        return TraceScope.NOOP;
+      }
+    }
+  }
+
+  /**
+   * The application's own {@code OpenTelemetryCommandInterceptor}, over {@link OpenTelemetryBean}'s
+   * SDK with every area on: the integration's command bus runs it in the place of the interceptor
+   * it adds itself.
+   */
+  public static final class ApplicationCommandInterceptor
+      implements Supplier<OpenTelemetryCommandInterceptor> {
+    @Override
+    public OpenTelemetryCommandInterceptor get() {
+      return new OpenTelemetryCommandInterceptor(
+          OpenTelemetryTracing.of(OpenTelemetryBean.view(), TracingSettings.allEnabled()));
     }
   }
 

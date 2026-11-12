@@ -111,6 +111,24 @@ integration does not bind.
 | `streamrune.startup-log` | `true` | Whether the integration logs its banner at startup. |
 | `streamrune.jvm.allow-graal-jit` | `false` | `true` starts on a JVM the startup check refuses (one that runs the Graal JIT, or a GraalVM runtime whose options the check cannot read), with an `ERROR` line; see [Supported JVMs](production.md#supported-jvms). |
 
+## Tracing
+
+The switches of the spans StreamRune starts. They take effect when the application has
+OpenTelemetry: an `OpenTelemetry` bean, or else a registered global OpenTelemetry, such as the
+OpenTelemetry Java agent's. Without it nothing is traced and the switches do nothing. See
+[Tracing](production.md#tracing).
+
+| Property | Default | Meaning |
+|---|---|---|
+| `streamrune.tracing.enabled` | `true` | Master switch: `false` starts no StreamRune span at all. |
+| `streamrune.tracing.command.enabled` | `true` | Whether the `command/{CommandType}` spans are started. |
+| `streamrune.tracing.subscription.enabled` | `true` | Whether the `subscription/{name}/deliver` spans are started. |
+| `streamrune.tracing.projection.enabled` | `true` | Whether the `projection/{name}/process` spans are started. |
+| `streamrune.tracing.event-store.enabled` | `true` | Whether the `eventstore/…` spans, snapshots included, are started. |
+| `streamrune.tracing.lock.enabled` | `true` | Whether the `lock/acquire` spans are started. |
+| `streamrune.tracing.outbox.enabled` | `true` | Whether the `outbox/relay` and `outbox/publish` spans are started. |
+| `streamrune.tracing.saga.enabled` | `true` | Whether the `saga/{SagaType}/…` spans are started. |
+
 ## GDPR and encryption
 
 | Property | Default | Meaning |
