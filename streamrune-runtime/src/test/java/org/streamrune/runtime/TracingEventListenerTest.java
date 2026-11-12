@@ -41,12 +41,12 @@ class TracingEventListenerTest {
   @RegisterExtension
   static final OpenTelemetryExtension otelTesting = OpenTelemetryExtension.create();
 
-  private EventEnvelope envelope(TraceId traceId, SpanId spanId) {
-    return envelope(traceId, spanId, org.streamrune.core.tracing.SpanLink.NONE);
+  private EventEnvelope envelope(TraceId traceId) {
+    return envelope(traceId, org.streamrune.core.tracing.SpanLink.NONE);
   }
 
   private EventEnvelope envelope(
-      TraceId traceId, SpanId spanId, org.streamrune.core.tracing.SpanLink spanContext) {
+      TraceId traceId, org.streamrune.core.tracing.SpanLink spanContext) {
     return new EventEnvelope(
         GlobalOffset.of(1),
         StreamId.of(TYPE, AggregateId.of("stream-1")),
@@ -57,7 +57,6 @@ class TracingEventListenerTest {
             EventId.of("evt-1"),
             CommandId.of("cmd-1"),
             traceId,
-            spanId,
             CorrelationId.of("corr-1"),
             null,
             null,
@@ -76,7 +75,7 @@ class TracingEventListenerTest {
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()),
             SubscriptionName.of("orders"));
 
-    listener.onEvents(List.of(envelope(null, null)));
+    listener.onEvents(List.of(envelope(null)));
 
     List<SpanData> spans = otelTesting.getSpans();
     assertEquals(1, spans.size());
@@ -94,7 +93,7 @@ class TracingEventListenerTest {
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()),
             SubscriptionName.of("orders"));
 
-    listener.onEvents(List.of(envelope(null, null), envelope(null, null)));
+    listener.onEvents(List.of(envelope(null), envelope(null)));
 
     SpanData span = otelTesting.getSpans().getFirst();
     assertEquals(
@@ -126,7 +125,7 @@ class TracingEventListenerTest {
         new org.streamrune.core.tracing.SpanLink(
             new TraceId("0af7651916cd43dd8448eb211c80319c"), new SpanId("b7ad6b7169203331"));
 
-    listener.onEvents(List.of(envelope(null, null, commandSpan)));
+    listener.onEvents(List.of(envelope(null, commandSpan)));
 
     SpanData span = otelTesting.getSpans().getFirst();
     assertEquals(1, span.getLinks().size());
@@ -136,7 +135,7 @@ class TracingEventListenerTest {
   }
 
   @Test
-  void theCallerSuppliedTraceIdAndSpanId_neverBuildALink() {
+  void theCallerSuppliedTraceId_neverBuildsALink() {
     EventListener delegate = mock(EventListener.class);
     var listener =
         new TracingEventListener(
@@ -144,10 +143,7 @@ class TracingEventListenerTest {
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()),
             SubscriptionName.of("orders"));
 
-    listener.onEvents(
-        List.of(
-            envelope(
-                new TraceId("0af7651916cd43dd8448eb211c80319c"), new SpanId("b7ad6b7169203331"))));
+    listener.onEvents(List.of(envelope(new TraceId("0af7651916cd43dd8448eb211c80319c"))));
 
     assertTrue(otelTesting.getSpans().getFirst().getLinks().isEmpty());
   }
@@ -161,7 +157,7 @@ class TracingEventListenerTest {
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()),
             SubscriptionName.of("orders"));
 
-    listener.onEvents(List.of(envelope(null, null)));
+    listener.onEvents(List.of(envelope(null)));
 
     SpanData span = otelTesting.getSpans().getFirst();
     assertTrue(span.getLinks().isEmpty());
@@ -177,7 +173,7 @@ class TracingEventListenerTest {
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()),
             SubscriptionName.of("orders"));
 
-    assertThrows(RuntimeException.class, () -> listener.onEvents(List.of(envelope(null, null))));
+    assertThrows(RuntimeException.class, () -> listener.onEvents(List.of(envelope(null))));
 
     SpanData span = otelTesting.getSpans().getFirst();
     assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
@@ -194,7 +190,7 @@ class TracingEventListenerTest {
             delegate,
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()),
             SubscriptionName.of("orders"));
-    var events = List.of(envelope(null, null));
+    var events = List.of(envelope(null));
 
     listener.onEvents(events);
 
@@ -220,7 +216,6 @@ class TracingEventListenerTest {
             new EventMetadata(
                 EventId.of("evt-1"),
                 CommandId.of("cmd-1"),
-                null,
                 null,
                 CorrelationId.of("corr-1"),
                 null,

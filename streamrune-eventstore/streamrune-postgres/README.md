@@ -104,7 +104,7 @@ query timeout. Neither touches the connection's session, so the next borrower se
 `@Encrypted` fields are stored as ciphertext in the payload when a `CryptoEngine` is configured.
 
 **Metadata column:** the serialized `EventMetadata` record — `eventId`, `commandId`, `traceId`,
-`spanId`, `correlationId`, `causationId`, `userId`, `timestamp`, `baggage`, `sagaOrigin` (the
+`correlationId`, `causationId`, `userId`, `timestamp`, `baggage`, `sagaOrigin` (the
 saga whose dispatch caused the event as `{"sagaType": …, "sagaId": …, "hop": …}`, `null` for every
 other event) and `spanContext` (the span of the command that appended the event as `{"traceId": …,
 "spanId": …}`, left out when the command was not traced). An event with an origin holds the reserved correlation id `streamrune:saga:<sagaId>`,

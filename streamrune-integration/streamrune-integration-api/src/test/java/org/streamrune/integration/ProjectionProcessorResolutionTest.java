@@ -48,7 +48,9 @@ class ProjectionProcessorResolutionTest {
         List.of(
             new Registration("a", AT_LEAST_ONCE_IDEMPOTENT),
             new Registration("b", AT_LEAST_ONCE_IDEMPOTENT));
-    assertThat(ProjectionProcessorResolution.select(regs, null, List.of(BEAN), "runner"))
+    assertThat(
+            ProjectionProcessorResolution.select(
+                regs, SubscriptionLeadership.NOOP, List.of(BEAN), "runner"))
         .isSameAs(AtomicBatchProcessor.nonAtomicAtLeastOnce());
     assertThat(
             ProjectionProcessorResolution.select(
@@ -62,11 +64,16 @@ class ProjectionProcessorResolutionTest {
         List.of(
             new Registration("orders", TRANSACTIONAL_LOCAL),
             new Registration("audit", AT_LEAST_ONCE_IDEMPOTENT));
-    assertThat(ProjectionProcessorResolution.select(regs, null, List.of(BEAN), "runner"))
+    assertThat(
+            ProjectionProcessorResolution.select(
+                regs, SubscriptionLeadership.NOOP, List.of(BEAN), "runner"))
         .isSameAs(BEAN);
     assertThat(
             ProjectionProcessorResolution.select(
-                List.of(new Registration("fx", EXTERNAL_EFFECT)), null, List.of(BEAN), "runner"))
+                List.of(new Registration("fx", EXTERNAL_EFFECT)),
+                SubscriptionLeadership.NOOP,
+                List.of(BEAN),
+                "runner"))
         .isSameAs(BEAN);
   }
 
@@ -87,7 +94,10 @@ class ProjectionProcessorResolutionTest {
     assertThatThrownBy(
             () ->
                 ProjectionProcessorResolution.select(
-                    regs, null, List.of(), "streamRuneMultiProjectionRunner"))
+                    regs,
+                    SubscriptionLeadership.NOOP,
+                    List.of(),
+                    "streamRuneMultiProjectionRunner"))
         .isInstanceOf(IllegalStateException.class)
         .hasMessage(
             "streamRuneMultiProjectionRunner: projection 'orders' declares TRANSACTIONAL_LOCAL and"
@@ -101,7 +111,10 @@ class ProjectionProcessorResolutionTest {
   @Test
   void singleTransactionalRegistration_withoutABean_failsWithTheSingularFix() {
     var regs = List.of(new Registration("orders", TRANSACTIONAL_LOCAL));
-    assertThatThrownBy(() -> ProjectionProcessorResolution.select(regs, null, List.of(), "runner"))
+    assertThatThrownBy(
+            () ->
+                ProjectionProcessorResolution.select(
+                    regs, SubscriptionLeadership.NOOP, List.of(), "runner"))
         .isInstanceOf(IllegalStateException.class)
         .hasMessage(
             "runner: projection 'orders' declares TRANSACTIONAL_LOCAL, but no AtomicBatchProcessor"
@@ -152,12 +165,21 @@ class ProjectionProcessorResolutionTest {
     assertThatThrownBy(
             () ->
                 ProjectionProcessorResolution.select(
-                    regs, null, List.of(BEAN, OTHER_BEAN), "runner"))
+                    regs, SubscriptionLeadership.NOOP, List.of(BEAN, OTHER_BEAN), "runner"))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("2 AtomicBatchProcessor beans")
         .hasMessageContaining(BEAN.getClass().getName())
         .hasMessageContaining(OTHER_BEAN.getClass().getName())
         .hasMessageContaining("a runner of their own");
+  }
+
+  @Test
+  void aNullLeadershipIsRefused_noLeadershipIsNoop() {
+    var regs = List.of(new Registration("orders", AT_LEAST_ONCE_IDEMPOTENT));
+    assertThatThrownBy(
+            () -> ProjectionProcessorResolution.select(regs, null, List.of(BEAN), "runner"))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("leadership is required");
   }
 
   @Test

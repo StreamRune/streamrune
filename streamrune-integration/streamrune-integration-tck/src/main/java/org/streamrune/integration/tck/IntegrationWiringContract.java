@@ -3,9 +3,12 @@ package org.streamrune.integration.tck;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.sdk.trace.data.SpanData;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -14,6 +17,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -22,13 +26,32 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.audit.AuditEntry;
+import org.streamrune.core.outbox.OutboxEntry;
+import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxStatus;
+import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.projection.OffsetStore;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.tracing.TracingArea;
+import org.streamrune.core.types.AggregateId;
+import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.ProjectionName;
+import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.integration.OutboxWiringMessages;
 import org.streamrune.integration.RequestIdentityPolicy;
 import org.streamrune.integration.SnapshotPurgeSetting;
+import org.streamrune.integration.tck.ContractBeans.AcceptingOutboxPublisher;
+import org.streamrune.integration.tck.ContractBeans.ApplicationCommandInterceptor;
+import org.streamrune.integration.tck.ContractBeans.ApplicationLocker;
+import org.streamrune.integration.tck.ContractBeans.ApplicationTracing;
 import org.streamrune.integration.tck.ContractBeans.CommandInboxBean;
+import org.streamrune.integration.tck.ContractBeans.ContractCommand;
 import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
+import org.streamrune.integration.tck.ContractBeans.ContractInlineProjection;
 import org.streamrune.integration.tck.ContractBeans.ContractProjection;
 import org.streamrune.integration.tck.ContractBeans.ContractSagaState;
 import org.streamrune.integration.tck.ContractBeans.CryptoEngineBean;
@@ -36,12 +59,14 @@ import org.streamrune.integration.tck.ContractBeans.DeadLetterQueueBean;
 import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
 import org.streamrune.integration.tck.ContractBeans.FirstLeadership;
 import org.streamrune.integration.tck.ContractBeans.IdentifiedCallers;
+import org.streamrune.integration.tck.ContractBeans.OpenTelemetryBean;
 import org.streamrune.integration.tck.ContractBeans.OutboxStoreBean;
 import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
 import org.streamrune.integration.tck.ContractBeans.SecondLeadership;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.GraalJitGuard;
+import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 
 /**
@@ -513,6 +538,367 @@ public abstract class IntegrationWiringContract {
     }
   }
 
+  // ---- tracing -----------------------------------------------------------------------------
+
+  /**
+   * The configuration of a start whose background runners poll often enough for a test, and whose
+   * projection runner leads without a lease: an adapter may give an application without a database
+   * a {@code DataSource} that reaches none.
+   */
+  private static final Map<String, String> PROMPT_RUNNERS =
+      Map.of(
+          "streamrune.polling-interval", "50ms",
+          "streamrune.polling-jitter", "10ms",
+          "streamrune.outbox.flush-interval", "50ms",
+          "streamrune.subscription.single-active-consumer.enabled", "false");
+
+  /** The stream of the outbox entries the tracing rules relay. */
+  private static final StreamId OUTBOX_STREAM =
+      StreamId.of(AggregateType.of(ContractCommandRegistration.TYPE), AggregateId.of("outbox-1"));
+
+  /** The span name of a projection's batch, for {@link ContractProjection}. */
+  private static final String PROJECTION_SPAN =
+      TraceAttributes.projectionProcessSpanName(ProjectionName.of(ContractProjection.NAME));
+
+  /** The span name of an inline projection's batch, for {@link ContractInlineProjection}. */
+  private static final String INLINE_PROJECTION_SPAN =
+      TraceAttributes.projectionProcessSpanName(ProjectionName.of(ContractInlineProjection.NAME));
+
+  /** The beans of a start that traces every area the integration wires on its own. */
+  private static final Set<Class<?>> TRACED_APPLICATION =
+      Set.of(
+          OpenTelemetryBean.class,
+          ContractCommandRegistration.class,
+          ContractProjection.class,
+          ContractInlineProjection.class,
+          OutboxStoreBean.class,
+          AcceptingOutboxPublisher.class);
+
+  /**
+   * With an {@code OpenTelemetry} bean, a command on the integration's PostgreSQL event store
+   * produces the tree of a command: {@code command/…} holds {@code lock/acquire}, {@code
+   * eventstore/load} and {@code eventstore/append}, the append holds {@code
+   * eventstore/append/serialize}. The integration's command bus has no interceptor bean for tracing
+   * in its chain and adds the interceptor itself.
+   */
+  @Test
+  public void aCommandOnTheIntegrationsStoreIsTracedThroughTheOpenTelemetryBean() {
+    OpenTelemetryBean.reset();
+    try (Application application =
+        start(
+            postgresql(),
+            Map.of(),
+            Set.of(OpenTelemetryBean.class, ContractCommandRegistration.class))) {
+      assertStarted(application);
+      application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("traced-1"));
+
+      List<SpanData> spans = OpenTelemetryBean.spans();
+      SpanData command = onlySpan(spans, s -> s.getName().startsWith("command/"));
+      assertTrue(
+          command.getName().endsWith(ContractCommand.class.getSimpleName()), command::getName);
+      for (String child :
+          List.of(
+              TraceAttributes.LOCK_ACQUIRE,
+              TraceAttributes.EVENT_STORE_LOAD,
+              TraceAttributes.EVENT_STORE_APPEND)) {
+        SpanData span = onlySpan(spans, s -> s.getName().equals(child));
+        assertEquals(
+            command.getSpanId(), span.getParentSpanId(), child + " must be a child of the command");
+      }
+      SpanData append =
+          onlySpan(spans, s -> s.getName().equals(TraceAttributes.EVENT_STORE_APPEND));
+      SpanData serialize =
+          onlySpan(spans, s -> s.getName().equals(TraceAttributes.EVENT_STORE_APPEND_SERIALIZE));
+      assertEquals(append.getSpanId(), serialize.getParentSpanId());
+    }
+  }
+
+  /**
+   * {@code streamrune.tracing.event-store.enabled=false} removes every {@code eventstore/…} span of
+   * the integration's PostgreSQL event store, and the command and its lock are still traced.
+   */
+  @Test
+  public void theEventStoreSwitchRemovesTheStoresSpansOnly() {
+    OpenTelemetryBean.reset();
+    try (Application application =
+        start(
+            postgresql(),
+            Map.of("streamrune.tracing.event-store.enabled", "false"),
+            Set.of(OpenTelemetryBean.class, ContractCommandRegistration.class))) {
+      assertStarted(application);
+      application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("untraced-1"));
+
+      List<String> names = spanNames();
+      assertTrue(names.stream().anyMatch(n -> n.startsWith("command/")), names::toString);
+      assertTrue(names.contains(TraceAttributes.LOCK_ACQUIRE), names::toString);
+      assertTrue(names.stream().noneMatch(n -> n.startsWith("eventstore/")), names::toString);
+    }
+  }
+
+  /**
+   * Each area the integration wires has its switch: with every area on, a command, its lock, the
+   * projection runner, the inline projection and the outbox relay are traced; {@code
+   * streamrune.tracing.<area>.enabled= false} removes exactly that area's spans. The application's
+   * {@code StreamRuneTracing} bean, which the application hands to the components it builds itself,
+   * answers every area's switch, the subscription and saga areas included.
+   */
+  @Test
+  public void eachAreaSwitchRemovesExactlyThatArea() throws InterruptedException {
+    Map<TracingArea, Predicate<String>> areaSpans = new LinkedHashMap<>();
+    areaSpans.put(TracingArea.COMMAND, n -> n.startsWith("command/"));
+    areaSpans.put(TracingArea.LOCK, TraceAttributes.LOCK_ACQUIRE::equals);
+    areaSpans.put(
+        TracingArea.PROJECTION, n -> n.equals(PROJECTION_SPAN) || n.equals(INLINE_PROJECTION_SPAN));
+    areaSpans.put(TracingArea.OUTBOX, TraceAttributes.OUTBOX_RELAY::equals);
+
+    List<TracingArea> runs = new ArrayList<>();
+    runs.add(null);
+    runs.addAll(List.of(TracingArea.values()));
+    for (TracingArea off : runs) {
+      OpenTelemetryBean.reset();
+      Map<String, String> properties = new LinkedHashMap<>(PROMPT_RUNNERS);
+      properties.put("streamrune.outbox.enabled", "true");
+      if (off != null) {
+        properties.put(areaKey(off), "false");
+      }
+      try (Application application = start(null, properties, TRACED_APPLICATION)) {
+        assertStarted(application);
+        StreamRuneTracing tracing = application.bean(StreamRuneTracing.class);
+        for (TracingArea area : TracingArea.values()) {
+          assertEquals(
+              area != off, tracing.enabled(area), () -> area + " with " + areaKey(off) + " off");
+        }
+        application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("areas-1"));
+        OutboxStore outbox = application.bean(OutboxStore.class);
+        outbox.save(
+            OutboxEntry.pending(
+                OutboxEntryId.of("areas-entry"), "{}", "ContractPayload", OUTBOX_STREAM));
+        OffsetStore offsets = application.bean(OffsetStore.class);
+        await(
+            () ->
+                outbox.findById(OutboxEntryId.of("areas-entry")).orElseThrow().status()
+                        == OutboxStatus.DELIVERED
+                    && offsets.getLastOffset(ProjectionName.of(ContractProjection.NAME)).value()
+                        > 0,
+            "the outbox relay must deliver the entry and the projection runner process the event");
+
+        for (Map.Entry<TracingArea, Predicate<String>> area : areaSpans.entrySet()) {
+          if (area.getKey() != off) {
+            await(
+                () -> spanNames().stream().anyMatch(area.getValue()),
+                () ->
+                    area.getKey()
+                        + " must be traced with "
+                        + areaKey(off)
+                        + " off: "
+                        + spanNames());
+          }
+        }
+        if (off != TracingArea.PROJECTION) {
+          for (String projectionSpan : List.of(INLINE_PROJECTION_SPAN, PROJECTION_SPAN)) {
+            await(
+                () -> spanNames().contains(projectionSpan),
+                () -> projectionSpan + " with " + areaKey(off) + " off: " + spanNames());
+          }
+        }
+        if (off != null && areaSpans.containsKey(off)) {
+          // The spans of the work just awaited end right after it: give them the time to.
+          Thread.sleep(200);
+          List<String> names = spanNames();
+          assertTrue(
+              names.stream().noneMatch(areaSpans.get(off)),
+              () -> areaKey(off) + "=false must remove its spans: " + names);
+        }
+      }
+    }
+  }
+
+  /**
+   * {@code streamrune.tracing.enabled=false}: StreamRune starts no span at all, though the
+   * application has an {@code OpenTelemetry} bean, and its tracing bean is {@code
+   * StreamRuneTracing.NOOP}.
+   */
+  @Test
+  public void theMasterSwitchOffStartsNoSpan() throws InterruptedException {
+    OpenTelemetryBean.reset();
+    Map<String, String> properties = new LinkedHashMap<>(PROMPT_RUNNERS);
+    properties.put("streamrune.outbox.enabled", "true");
+    properties.put("streamrune.tracing.enabled", "false");
+    try (Application application = start(null, properties, TRACED_APPLICATION)) {
+      assertStarted(application);
+      assertSame(StreamRuneTracing.NOOP, application.bean(StreamRuneTracing.class));
+      application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("off-1"));
+      OutboxStore outbox = application.bean(OutboxStore.class);
+      outbox.save(
+          OutboxEntry.pending(
+              OutboxEntryId.of("off-entry"), "{}", "ContractPayload", OUTBOX_STREAM));
+      await(
+          () ->
+              outbox.findById(OutboxEntryId.of("off-entry")).orElseThrow().status()
+                  == OutboxStatus.DELIVERED,
+          "the outbox relay must deliver the entry");
+      assertEquals(List.of(), spanNames());
+    }
+  }
+
+  /**
+   * The application's own {@code StreamRuneTracing} bean wins over the one the integration would
+   * build from the {@code OpenTelemetry} bean: the integration's components trace through it.
+   */
+  @Test
+  public void theApplicationsTracingBeanWins() {
+    OpenTelemetryBean.reset();
+    ApplicationTracing.reset();
+    try (Application application =
+        start(
+            null,
+            Map.of(),
+            Set.of(
+                OpenTelemetryBean.class,
+                ApplicationTracing.class,
+                ContractCommandRegistration.class))) {
+      assertStarted(application);
+      application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("own-1"));
+
+      List<String> names = ApplicationTracing.spanNames();
+      assertTrue(names.stream().anyMatch(n -> n.startsWith("command/")), names::toString);
+      assertTrue(names.contains(TraceAttributes.LOCK_ACQUIRE), names::toString);
+      assertEquals(List.of(), spanNames());
+    }
+  }
+
+  /**
+   * An {@code OpenTelemetryCommandInterceptor} the application declares is the one the command bus
+   * runs: one command is one {@code command/…} span, never two.
+   */
+  @Test
+  public void theApplicationsCommandInterceptorIsNotDoubled() {
+    OpenTelemetryBean.reset();
+    try (Application application =
+        start(
+            null,
+            Map.of(),
+            Set.of(
+                OpenTelemetryBean.class,
+                ApplicationCommandInterceptor.class,
+                ContractCommandRegistration.class))) {
+      assertStarted(application);
+      VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
+      List<CommandInterceptor> tracingInterceptors =
+          bus.interceptors().stream()
+              .filter(OpenTelemetryCommandInterceptor.class::isInstance)
+              .toList();
+      assertEquals(
+          List.of(application.bean(OpenTelemetryCommandInterceptor.class)),
+          tracingInterceptors,
+          "the bus runs the application's interceptor, and no other");
+      bus.execute(new ContractCommand("once-1"));
+
+      List<String> names = spanNames();
+      assertEquals(
+          1, names.stream().filter(n -> n.startsWith("command/")).count(), names::toString);
+    }
+  }
+
+  /**
+   * An {@code AggregateLocker} the application declares in the place of the integration's default,
+   * a framework locker built without a tracing, is traced by the integration's command bus on its
+   * own locks: one command is one {@code lock/acquire} span, and {@code
+   * streamrune.tracing.lock.enabled=false} leaves none.
+   */
+  @Test
+  public void anApplicationsLockerIsTracedOnItsOwnLocks() {
+    for (boolean lockArea : List.of(true, false)) {
+      OpenTelemetryBean.reset();
+      Map<String, String> properties =
+          lockArea ? Map.of() : Map.of("streamrune.tracing.lock.enabled", "false");
+      try (Application application =
+          start(
+              null,
+              properties,
+              Set.of(
+                  OpenTelemetryBean.class,
+                  ApplicationLocker.class,
+                  ContractCommandRegistration.class))) {
+        assertStarted(application);
+        application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("locked-1"));
+
+        List<String> names = spanNames();
+        assertEquals(
+            lockArea ? 1 : 0,
+            names.stream().filter(TraceAttributes.LOCK_ACQUIRE::equals).count(),
+            () -> "lock area " + (lockArea ? "on" : "off") + ": " + names);
+      }
+    }
+  }
+
+  /**
+   * Without an {@code OpenTelemetry} bean the integration takes the global OpenTelemetry, which the
+   * OpenTelemetry Java agent or an SDK registered globally sets: a command is traced through it.
+   */
+  @Test
+  public void withoutABeanTheGlobalOpenTelemetryTraces() {
+    OpenTelemetryBean.reset();
+    GlobalOpenTelemetry.resetForTest();
+    GlobalOpenTelemetry.set(OpenTelemetryBean.view());
+    try (Application application =
+        start(null, Map.of(), Set.of(ContractCommandRegistration.class))) {
+      assertStarted(application);
+      application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("global-1"));
+
+      List<String> names = spanNames();
+      assertTrue(names.stream().anyMatch(n -> n.startsWith("command/")), names::toString);
+      assertTrue(names.contains(TraceAttributes.LOCK_ACQUIRE), names::toString);
+    } finally {
+      GlobalOpenTelemetry.resetForTest();
+    }
+  }
+
+  /**
+   * Without an {@code OpenTelemetry} bean and with no global OpenTelemetry registered, the
+   * integration's tracing is {@code StreamRuneTracing.NOOP}: nothing is traced, at no cost, and a
+   * command runs.
+   */
+  @Test
+  public void withoutOpenTelemetryTheTracingIsNoop() {
+    OpenTelemetryBean.reset();
+    GlobalOpenTelemetry.resetForTest();
+    try (Application application =
+        start(null, Map.of(), Set.of(ContractCommandRegistration.class))) {
+      assertStarted(application);
+      assertSame(StreamRuneTracing.NOOP, application.bean(StreamRuneTracing.class));
+      application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("noop-1"));
+      assertEquals(List.of(), spanNames());
+    } finally {
+      GlobalOpenTelemetry.resetForTest();
+    }
+  }
+
+  /** The key of an area's switch, {@code streamrune.tracing.<area>.enabled}. */
+  static String areaKey(TracingArea area) {
+    if (area == null) {
+      return "no area";
+    }
+    return "streamrune.tracing."
+        + area.name().toLowerCase(Locale.ROOT).replace('_', '-')
+        + ".enabled";
+  }
+
+  private static List<String> spanNames() {
+    return OpenTelemetryBean.spans().stream().map(SpanData::getName).toList();
+  }
+
+  private static SpanData onlySpan(List<SpanData> spans, Predicate<SpanData> which) {
+    List<SpanData> matching = spans.stream().filter(which).toList();
+    assertEquals(
+        1,
+        matching.size(),
+        () ->
+            "exactly one span must match; spans: "
+                + spans.stream().map(SpanData::getName).toList());
+    return matching.getFirst();
+  }
+
   // ---- assertions --------------------------------------------------------------------------
 
   static void assertStarted(Application application) {
@@ -537,10 +923,17 @@ public abstract class IntegrationWiringContract {
   /** Polls {@code condition} until it holds or {@link #patience()} has passed. */
   private void await(java.util.function.BooleanSupplier condition, String what)
       throws InterruptedException {
+    await(condition, () -> what);
+  }
+
+  /** Polls {@code condition} until it holds or {@link #patience()} has passed. */
+  private void await(
+      java.util.function.BooleanSupplier condition, java.util.function.Supplier<String> what)
+      throws InterruptedException {
     long deadline = System.nanoTime() + patience().toNanos();
     while (!condition.getAsBoolean()) {
       if (System.nanoTime() > deadline) {
-        fail(what + " (waited " + patience() + ")");
+        fail(what.get() + " (waited " + patience() + ")");
       }
       Thread.sleep(20);
     }

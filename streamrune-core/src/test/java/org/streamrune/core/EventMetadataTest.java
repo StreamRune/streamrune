@@ -34,7 +34,6 @@ class EventMetadataTest {
             EventId.of("evt_1"),
             CommandId.of("cmd_1"),
             null,
-            null,
             CorrelationId.of("corr_1"),
             null,
             null,
@@ -45,7 +44,6 @@ class EventMetadataTest {
     assertEquals(CorrelationId.of("corr_1"), md.correlationId());
     assertEquals(now, md.timestamp());
     assertNull(md.traceId());
-    assertNull(md.spanId());
     assertNull(md.causationId());
     assertNull(md.userId());
   }
@@ -58,7 +56,6 @@ class EventMetadataTest {
             new EventMetadata(
                 null,
                 CommandId.of("cmd_1"),
-                null,
                 null,
                 CorrelationId.of("corr_1"),
                 null,
@@ -75,7 +72,6 @@ class EventMetadataTest {
                 EventId.of("evt_1"),
                 null,
                 null,
-                null,
                 CorrelationId.of("corr_1"),
                 null,
                 null,
@@ -88,14 +84,7 @@ class EventMetadataTest {
         IllegalArgumentException.class,
         () ->
             new EventMetadata(
-                EventId.of("evt_1"),
-                CommandId.of("cmd_1"),
-                null,
-                null,
-                null,
-                null,
-                null,
-                Instant.now()));
+                EventId.of("evt_1"), CommandId.of("cmd_1"), null, null, null, null, Instant.now()));
   }
 
   @Test
@@ -106,7 +95,6 @@ class EventMetadataTest {
             new EventMetadata(
                 EventId.of("evt_1"),
                 CommandId.of("cmd_1"),
-                null,
                 null,
                 CorrelationId.of("corr_1"),
                 null,
@@ -122,7 +110,6 @@ class EventMetadataTest {
         new EventMetadata(
             EventId.of("evt_1"),
             CommandId.of("cmd_1"),
-            null,
             null,
             CorrelationId.of("corr_1"),
             null,
@@ -143,7 +130,6 @@ class EventMetadataTest {
             EventId.of("evt_1"),
             CommandId.of("cmd_1"),
             null,
-            null,
             CorrelationId.of("corr_1"),
             null,
             null,
@@ -160,7 +146,6 @@ class EventMetadataTest {
         new EventMetadata(
             EventId.of("evt_1"),
             CommandId.of("cmd_1"),
-            null,
             null,
             CorrelationId.of("corr_1"),
             null,
@@ -186,7 +171,6 @@ class EventMetadataTest {
             EventId.of("evt_1"),
             CommandId.of("cmd_1"),
             null,
-            null,
             CorrelationId.of("corr_1"),
             null,
             null,
@@ -195,7 +179,6 @@ class EventMetadataTest {
         new EventMetadata(
             EventId.of("evt_1"),
             CommandId.of("cmd_1"),
-            null,
             null,
             CorrelationId.of("corr_1"),
             null,
@@ -215,7 +198,6 @@ class EventMetadataTest {
         new EventMetadata(
             EventId.of("evt_1"),
             CommandId.of("cmd_1"),
-            null,
             null,
             CorrelationId.of("order-saga-42"),
             null,
@@ -238,7 +220,6 @@ class EventMetadataTest {
             EventId.of("evt_1"),
             CommandId.of("cmd_1"),
             null,
-            null,
             CorrelationId.of("corr_1"),
             null,
             null,
@@ -258,7 +239,6 @@ class EventMetadataTest {
             EventId.of("evt-s"),
             CommandId.of("cmd-s"),
             null,
-            null,
             CorrelationId.of("corr-s"),
             null,
             null,
@@ -270,7 +250,6 @@ class EventMetadataTest {
         new EventMetadata(
             EventId.of("evt-u"),
             CommandId.of("cmd-u"),
-            null,
             null,
             CorrelationId.of("corr-u"),
             null,
@@ -344,7 +323,6 @@ class EventMetadataTest {
             EventId.of("evt-n"),
             CommandId.of("cmd-n"),
             null,
-            null,
             CorrelationId.of("corr-n"),
             null,
             null,
@@ -374,5 +352,23 @@ class EventMetadataTest {
     assertThrows(
         UnrecognizedPropertyException.class,
         () -> mapper.readValue(withUnknownKey, EventMetadata.class));
+  }
+
+  @Test
+  void storedJsonWithASpanIdKey_reads_andIsWrittenBackWithoutIt() throws Exception {
+    ObjectMapper mapper = storeMapper();
+    String stored =
+        "{\"eventId\":\"evt_1\",\"commandId\":\"cmd_1\","
+            + "\"traceId\":\"0af7651916cd43dd8448eb211c80319c\",\"spanId\":\"b7ad6b7169203331\","
+            + "\"correlationId\":\"corr_1\",\"causationId\":null,\"userId\":null,"
+            + "\"timestamp\":\"2026-01-01T00:00:00Z\",\"baggage\":{},\"sagaOrigin\":null}";
+
+    EventMetadata md = mapper.readValue(stored, EventMetadata.class);
+
+    assertEquals(TraceId.of("0af7651916cd43dd8448eb211c80319c"), md.traceId());
+    assertSame(SpanLink.NONE, md.spanContext(), "a stored spanId builds no link");
+    String written = mapper.writeValueAsString(md);
+    assertFalse(written.contains("spanId"), written);
+    assertEquals(md, mapper.readValue(written, EventMetadata.class));
   }
 }

@@ -62,6 +62,13 @@ jars. In brief:
   integrations: a trusted gateway's `X-User-Id` header when
   `streamrune.security.trust-user-id-header=true`, otherwise the authenticated principal, otherwise
   anonymous. Startup is refused when command authorization is configured and the mode is anonymous.
+- **Tracing wherever OpenTelemetry is present.** The command, store, lock, outbox, subscription,
+  projection and saga paths emit named spans (`command/PlaceOrder`, `eventstore/append`,
+  `lock/acquire`, `outbox/publish`, `saga/{type}/step`, …) through a seam that costs one branch when
+  tracing is off. The integrations wire it from the application's `OpenTelemetry` bean or the
+  OpenTelemetry Java agent, `streamrune.tracing.*` switches it off as a whole or per area, and the
+  subscription, saga and outbox spans link to the span of the command that caused them, which the
+  command bus writes into `EventMetadata.spanContext` from nothing a client sends.
 
 ```kotlin
 repositories {
@@ -167,7 +174,8 @@ the calling thread (the class javadoc of each says why); `ForwardingCommandBus` 
 - Frameworks: Spring Boot 4.1.x (built and tested against 4.1.2, Spring Security 7.1.x), Quarkus
   3.40.x, Micronaut 5.2.x (Micronaut Security 5.4, Validation 5.2, Serde 3.2). Micrometer 1.16 or
   newer: the framework declares 1.16.3, the floor it is built against, and an application runs the
-  version its framework manages (1.17 with Spring Boot 4.1 and Quarkus 3.40). OpenTelemetry API 1.47 (optional).
+  version its framework manages (1.17 with Spring Boot 4.1 and Quarkus 3.40). OpenTelemetry API 1.47 or
+  newer (optional for Spring and Micronaut; Quarkus brings it).
 - Outbox brokers: Kafka clients 3.9 (`streamrune-kafka-outbox`), RabbitMQ `amqp-client` 5.25
   (`streamrune-rabbitmq-outbox`). Crypto backends: AWS SDK v2 KMS 2.57.3 (`streamrune-aws-kms-crypto`);
   HashiCorp Vault with the transit engine enabled, over its HTTP API (`streamrune-vault-crypto`).

@@ -29,7 +29,6 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
-import org.streamrune.core.types.SpanId;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
@@ -95,7 +94,6 @@ public class OutboxEventMapperBenchmark {
               EventId.of("evt-bench-1"),
               CommandId.of("cmd-bench-1"),
               TraceId.of("trace-bench-1"),
-              SpanId.of("span-bench-1"),
               CorrelationId.of("corr-bench-1"),
               CausationId.of("cause-bench-1"),
               UserId.of("user-bench-1"),

@@ -57,7 +57,6 @@ class CacheAwareProjectionIntegrationTest {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("corr-e2e"),
             null,
             null,

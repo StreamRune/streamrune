@@ -164,6 +164,7 @@ class SagaEventPathRetentionWiringTest {
       SubscriptionLeadership leadership) {
     Instance<SubscriptionLeadership> instance = mock(Instance.class);
     when(instance.isResolvable()).thenReturn(leadership != null);
+    when(instance.isUnsatisfied()).thenReturn(leadership == null);
     when(instance.get()).thenReturn(leadership);
     return new SagaEventPathRetentionConfigurer(runners, properties, instance);
   }
@@ -233,7 +234,10 @@ class SagaEventPathRetentionWiringTest {
                   .apply(null);
             });
 
-    assertEquals(List.of(new Report(null, 0), new Report(SubscriptionLeadership.NOOP, 0)), reports);
+    assertEquals(
+        List.of(
+            new Report(SubscriptionLeadership.NOOP, 0), new Report(SubscriptionLeadership.NOOP, 0)),
+        reports);
   }
 
   @Test
@@ -374,7 +378,6 @@ class SagaEventPathRetentionWiringTest {
     return new EventMetadata(
         IdGenerator.generateEventId(),
         IdGenerator.generateCommandId(),
-        null,
         null,
         CorrelationId.of("x"),
         null,

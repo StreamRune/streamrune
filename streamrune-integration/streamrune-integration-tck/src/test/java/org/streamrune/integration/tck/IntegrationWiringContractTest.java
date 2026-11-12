@@ -104,6 +104,15 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case BUS_ANSWERS_BY_RUNNER_RULES ->
           this::theCommandBusAnswersAKeyedReSendByTheRetryRunnersRules;
       case JVM_CHECK_OPT_OUT_REACHES_THE_BUS -> this::theOptOutOfTheJvmCheckReachesTheCommandBus;
+      case STORE_TRACED -> this::aCommandOnTheIntegrationsStoreIsTracedThroughTheOpenTelemetryBean;
+      case EVENT_STORE_SWITCH -> this::theEventStoreSwitchRemovesTheStoresSpansOnly;
+      case AREA_SWITCHES -> this::eachAreaSwitchRemovesExactlyThatArea;
+      case MASTER_SWITCH -> this::theMasterSwitchOffStartsNoSpan;
+      case APPLICATION_TRACING_WINS -> this::theApplicationsTracingBeanWins;
+      case ONE_COMMAND_INTERCEPTOR -> this::theApplicationsCommandInterceptorIsNotDoubled;
+      case GLOBAL_OPENTELEMETRY -> this::withoutABeanTheGlobalOpenTelemetryTraces;
+      case NOOP_WITHOUT_OPENTELEMETRY -> this::withoutOpenTelemetryTheTracingIsNoop;
+      case APPLICATION_LOCKER_TRACED -> this::anApplicationsLockerIsTracedOnItsOwnLocks;
     };
   }
 

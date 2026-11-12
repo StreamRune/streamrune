@@ -401,12 +401,12 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
      *     does; without one every use opens a physical connection
      */
     Node(String name, boolean forwardFence, Clock clock, Duration timeout, boolean pooled) {
-      this(name, forwardFence, clock, timeout, pooled, null, null);
+      this(name, forwardFence, clock, timeout, pooled, SubscriptionLeadership.NOOP, null);
     }
 
     /**
-     * @param leadership the leadership the node's runner delivers its saga type under; {@code null}
-     *     for none
+     * @param leadership the leadership the node's runner delivers its saga type under; {@link
+     *     SubscriptionLeadership#NOOP} for none
      * @param timeoutPollInterval the pause between two polls of the node's timeout runner; {@code
      *     null} for the timeout runner's default
      */
@@ -624,7 +624,6 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
                     new EventMetadata(
                         EventId.of("evt-" + UUID.randomUUID()),
                         CommandId.of("cmd-" + UUID.randomUUID()),
-                        null,
                         null,
                         CorrelationId.of("request-" + UUID.randomUUID()),
                         null,

@@ -37,7 +37,7 @@ final class ProjectionFencingPolicy {
    */
   static void requireFencingCapable(
       SubscriptionLeadership leadership, AtomicBatchProcessor processor, String runnerName) {
-    if (leadership == null || leadership == SubscriptionLeadership.NOOP) {
+    if (leadership == SubscriptionLeadership.NOOP) {
       return;
     }
     if (processor != null && processor.supportsFencing()) {

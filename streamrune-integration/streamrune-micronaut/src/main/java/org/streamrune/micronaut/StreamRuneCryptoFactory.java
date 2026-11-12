@@ -242,7 +242,7 @@ public class StreamRuneCryptoFactory {
     try {
       return FileSystemCryptoEngine.builder()
           .keyDirectory(Path.of(props.filesystem().keyDirectory()))
-          .metrics(metrics)
+          .metrics(StreamRuneMicronautModule.metricsOrNoop(metrics))
           .build();
     } catch (Exception e) {
       throw new IllegalStateException(
@@ -260,7 +260,7 @@ public class StreamRuneCryptoFactory {
     return PostgresCryptoEngine.builder()
         .dataSource(dataSource)
         .tableName(props.postgres().tableName())
-        .metrics(metrics)
+        .metrics(StreamRuneMicronautModule.metricsOrNoop(metrics))
         .build();
   }
 
@@ -319,7 +319,7 @@ public class StreamRuneCryptoFactory {
         AwsKmsCryptoEngine.builder()
             .kmsClient(kmsClient)
             .kmsKeyId(ap.kmsKeyId())
-            .metrics(metrics)
+            .metrics(StreamRuneMicronautModule.metricsOrNoop(metrics))
             .dataKeyCacheMaximumSize(dataKeyCacheOn ? maximumSize : 0)
             .dataKeyCacheExpireAfterWrite(expireAfterWrite);
     if (dataSource != null) {

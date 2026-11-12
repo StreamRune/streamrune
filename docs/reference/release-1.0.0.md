@@ -100,7 +100,7 @@ license.
 - `PostgresEventStore.create(...)` and `PostgresEventStore.builder().build()` refuse, before touching
   the database, a registered type with an `@Encrypted` component when no `CryptoEngine` is
   configured.
-- `EventMetadata` on every envelope: `eventId`, `commandId`, `traceId`, `spanId`, `correlationId`,
+- `EventMetadata` on every envelope: `eventId`, `commandId`, `traceId`, `spanContext`, `correlationId`,
   `causationId`, `userId`, `timestamp`, allow-listed W3C baggage and `sagaOrigin`, built by the
   command bus from the bound `StreamRuneContext`. `sagaOrigin` (`SagaOrigin`: saga type, saga id,
   hop) names the saga whose dispatch caused the event and is `null` on every other event;
@@ -844,7 +844,7 @@ license.
   and retries its compensations; the others take over within one attempt interval of a clean stop and
   within the lease TTL of a crash. Correctness does not rest on it: the saga row's compare-and-swap,
   the command inbox and the forward fence hold during a handover overlap. A runner without
-  leadership (absent, `null` or `NOOP`) delivers on every replica. A follower whose lease no
+  leadership (absent or `NOOP`) delivers on every replica. A follower whose lease no
   subscription of its process anchored logs one INFO on its second unanchored poll within 15 s of
   its start and one WARN past it, and its relay health reads `DEGRADED`; a runner with a lease delivering through
   `listener(runner.asEventListener())` logs one WARN. A sweeper of a runner without a lease keeps its
@@ -1340,11 +1340,26 @@ it, so always write the unit):
   projection runners, the outbox poller, the saga runners and `StreamRune` take it through
   `tracing(...)`. With OpenTelemetry present and the sampler dropping a trace, each span still
   costs about 0.2 µs; switching its area off removes that.
+- The integrations wire the tracing themselves: a `StreamRuneTracing` bean built from the
+  application's `OpenTelemetry` bean, or, without one, from `GlobalOpenTelemetry` (so the
+  OpenTelemetry Java agent works out of the box), `NOOP` when neither exists; an application's own
+  `StreamRuneTracing` bean wins. Every component an integration builds takes it, and the command bus
+  adds the command interceptor itself, never twice. `streamrune.tracing.enabled` and
+  `streamrune.tracing.<area>.enabled` (`command`, `subscription`, `projection`, `event-store`,
+  `lock`, `outbox`, `saga`; all `true` by default) switch tracing off as a whole or per area. Saga
+  and timeout runners, subscriptions, buses and projection runners an application builds itself
+  take the bean on their builders. Spring and Micronaut start without `opentelemetry-api`.
 - The command bus writes the span of each command into `EventMetadata.spanContext`, from nothing a
   client sends (`traceId` is the caller's `X-Trace-Id`, correlation data only); the subscription,
   saga step and outbox publish spans link to it. An `OutboxEntry` carries the command's link in
   `traceLink()` (columns `trace_id`, `span_id` of `outbox_events`). A malformed stored span context
   reads as no link, and `SpanLink.NONE` is left out of JSON.
+- The optional collaborators of every builder and constructor take no `null`: `metrics(...)`,
+  `tracing(...)`, `leadership(...)`, `healthContributor(...)` and `upcasters(...)` default to
+  `StreamRuneMetrics.NOOP`, `StreamRuneTracing.NOOP`, `SubscriptionLeadership.NOOP`,
+  `SubscriptionHealthContributor.NOOP` and no upcasters, and a `null` argument throws
+  `NullPointerException` (`<name> is required`). The integrations pass the `NOOP` value when a bean
+  is absent. `EventMetadata` has no `spanId`; a stored `spanId` key is ignored on read.
 - Every production log line goes through SLF4J; bring the binding of your choice.
 - The dedicated advisory-lock pool reports HikariCP's `hikaricp.connections.*` meters, tagged with
   its pool name `streamrune-advisory-lock`, when `PgAdvisoryLocker.withDedicatedPool` is given a

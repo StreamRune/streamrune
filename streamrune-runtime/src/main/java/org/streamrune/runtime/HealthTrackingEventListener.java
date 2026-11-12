@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import java.util.List;
+import java.util.Objects;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.types.SubscriptionName;
@@ -27,7 +28,8 @@ public final class HealthTrackingEventListener implements EventListener {
       SubscriptionHealthContributor healthContributor,
       SubscriptionName subscriptionName) {
     this.delegate = delegate;
-    this.healthContributor = healthContributor;
+    this.healthContributor =
+        Objects.requireNonNull(healthContributor, "healthContributor is required");
     this.subscriptionName = subscriptionName;
   }
 
@@ -55,16 +57,18 @@ public final class HealthTrackingEventListener implements EventListener {
    * under {@code subscriptionName}: {@code listener} wrapped in a {@link
    * HealthTrackingEventListener} for that contributor and name, so each failed page is recorded and
    * a delivered one clears the errors. Returns {@code listener} itself when {@code
-   * healthContributor} is {@code null}, and when {@code listener} already is a {@code
-   * HealthTrackingEventListener} for the same contributor and name, so an application that wrapped
-   * its listener itself is not counted twice. Only the outermost listener is inspected: a tracking
-   * listener wrapped inside another decorator is not found, and would count each failure twice.
+   * healthContributor} is {@link SubscriptionHealthContributor#NOOP}, and when {@code listener}
+   * already is a {@code HealthTrackingEventListener} for the same contributor and name, so an
+   * application that wrapped its listener itself is not counted twice. Only the outermost listener
+   * is inspected: a tracking listener wrapped inside another decorator is not found, and would
+   * count each failure twice.
    */
   public static EventListener tracking(
       EventListener listener,
       SubscriptionHealthContributor healthContributor,
       SubscriptionName subscriptionName) {
-    if (healthContributor == null) {
+    Objects.requireNonNull(healthContributor, "healthContributor is required");
+    if (healthContributor == SubscriptionHealthContributor.NOOP) {
       return listener;
     }
     if (listener instanceof HealthTrackingEventListener tracking

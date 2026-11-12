@@ -191,7 +191,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -222,7 +223,8 @@ class ProjectionProducerTest {
                     noClassifier(),
                     noHealth(),
                     TestProperties.defaults(),
-                    defaultConfig()));
+                    defaultConfig(),
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(ex.getMessage().contains("Duplicate"));
   }
 
@@ -244,7 +246,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            configWith("streamrune.projections.auto-discovery.enabled", "false"));
+            configWith("streamrune.projections.auto-discovery.enabled", "false"),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNull(
         runner, "auto-discovery.enabled=false must suppress the framework MultiProjectionRunner");
   }
@@ -270,7 +273,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            configWith("streamrune.projections.auto-discovery.enabled", value));
+            configWith("streamrune.projections.auto-discovery.enabled", value),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(runner, "auto-discovery.enabled=" + value + " must leave the factory enabled");
   }
 
@@ -291,7 +295,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            configWith("streamrune.projections.auto-discovery.enabled", value));
+            configWith("streamrune.projections.auto-discovery.enabled", value),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNull(runner, "auto-discovery.enabled=" + value + " must disable the factory");
   }
 
@@ -309,7 +314,8 @@ class ProjectionProducerTest {
             noLeadership(),
             noClassifier(),
             noHealth(),
-            configWith("streamrune.projections.auto-discovery.enabled", "false"));
+            configWith("streamrune.projections.auto-discovery.enabled", "false"),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNull(
         runner,
         "auto-discovery.enabled=false must suppress the framework ScheduledProjectionRunner");
@@ -335,7 +341,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNull(runner);
   }
@@ -360,7 +367,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNull(runner);
   }
@@ -385,7 +393,8 @@ class ProjectionProducerTest {
             noLeadership(),
             noClassifier(),
             noHealth(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -410,7 +419,8 @@ class ProjectionProducerTest {
             noLeadership(),
             noClassifier(),
             noHealth(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNull(runner);
   }
@@ -446,7 +456,8 @@ class ProjectionProducerTest {
                 noLeadership(),
                 noClassifier(),
                 noHealth(),
-                defaultConfig()));
+                defaultConfig(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   // --- Tests: InlineProjectionInterceptor ---
@@ -457,7 +468,11 @@ class ProjectionProducerTest {
     var projections = instanceOf(new InlineProjection());
 
     InlineProjectionInterceptor interceptor =
-        producer.inlineProjectionInterceptor(projections, defaultConfig(), noMetrics());
+        producer.inlineProjectionInterceptor(
+            projections,
+            defaultConfig(),
+            noMetrics(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(interceptor);
   }
@@ -496,7 +511,11 @@ class ProjectionProducerTest {
       var producer = new ProjectionProducer();
       var projections = instanceOf(new InlineProjection());
       InlineProjectionInterceptor interceptor =
-          producer.inlineProjectionInterceptor(projections, defaultConfig(), noMetrics());
+          producer.inlineProjectionInterceptor(
+              projections,
+              defaultConfig(),
+              noMetrics(),
+              org.streamrune.core.tracing.StreamRuneTracing.NOOP);
       assertNotNull(interceptor);
     } finally {
       julLogger.removeHandler(handler);
@@ -526,7 +545,8 @@ class ProjectionProducerTest {
         producer.inlineProjectionInterceptor(
             instanceOf(new InlineProjection()),
             configWith("streamrune.projections.auto-discovery.enabled", "false"),
-            noMetrics());
+            noMetrics(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNull(
         interceptor,
         "auto-discovery.enabled=false must suppress the framework InlineProjectionInterceptor");
@@ -539,7 +559,11 @@ class ProjectionProducerTest {
     var projections = instanceOf(new ContProjection());
 
     InlineProjectionInterceptor interceptor =
-        producer.inlineProjectionInterceptor(projections, defaultConfig(), noMetrics());
+        producer.inlineProjectionInterceptor(
+            projections,
+            defaultConfig(),
+            noMetrics(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNull(interceptor);
   }
@@ -577,7 +601,8 @@ class ProjectionProducerTest {
                 noClassifier(),
                 noHealth(),
                 TestProperties.defaults(),
-                defaultConfig()));
+                defaultConfig(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   // --- Tests: per-projection enabled flag ---
@@ -606,7 +631,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            config);
+            config,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNull(runner);
   }
@@ -642,7 +668,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            config);
+            config,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -673,7 +700,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            config);
+            config,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNull(runner);
   }
@@ -705,7 +733,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            config);
+            config,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -744,7 +773,8 @@ class ProjectionProducerTest {
                 noClassifier(),
                 noHealth(),
                 TestProperties.defaults(),
-                defaultConfig()));
+                defaultConfig(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   // --- Tests: CDI proxy hierarchy walk ---
@@ -771,7 +801,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -812,7 +843,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -841,7 +873,8 @@ class ProjectionProducerTest {
             noLeadership(),
             noClassifier(),
             noHealth(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertNotNull(runner);
     runner.close();
@@ -993,7 +1026,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
   }
 
   private static ScheduledProjectionRunner scheduled(
@@ -1009,7 +1043,8 @@ class ProjectionProducerTest {
             noLeadership(),
             noClassifier(),
             noHealth(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
   }
 
   /** The runner's private processor, read as QuarkusEpochFenceWiringTest reads it. */
@@ -1268,7 +1303,10 @@ class ProjectionProducerTest {
             () ->
                 new ProjectionProducer()
                     .inlineProjectionInterceptor(
-                        instanceOf(new InlineTlProjection()), defaultConfig(), noMetrics()));
+                        instanceOf(new InlineTlProjection()),
+                        defaultConfig(),
+                        noMetrics(),
+                        org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertEquals(
         "projection 'inline_tl' is INLINE and declares TRANSACTIONAL_LOCAL: INLINE runs post-commit on the"
             + " command thread with no checkpoint and no transaction of its own. Declare"
@@ -1301,7 +1339,10 @@ class ProjectionProducerTest {
       assertNotNull(
           new ProjectionProducer()
               .inlineProjectionInterceptor(
-                  instanceOf(new InlineProjection()), defaultConfig(), metricsInstanceOf(metrics)));
+                  instanceOf(new InlineProjection()),
+                  defaultConfig(),
+                  metricsInstanceOf(metrics),
+                  org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     } finally {
       julLogger.removeHandler(handler);
     }
@@ -1332,7 +1373,8 @@ class ProjectionProducerTest {
                         noClassifier(),
                         noHealth(),
                         TestProperties.defaults(),
-                        configWith("streamrune.projections.allow-at-least-once", "true")));
+                        configWith("streamrune.projections.allow-at-least-once", "true"),
+                        org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(ex.getMessage().contains("does not write through"), ex.getMessage());
   }
 
@@ -1389,7 +1431,8 @@ class ProjectionProducerTest {
                 Map.of(
                     "streamrune.polling-interval", "PT0.123S",
                     "streamrune.polling-jitter", "PT0.045S")),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var field = MultiProjectionRunner.class.getDeclaredField("subscriptionConfig");
     field.setAccessible(true);
@@ -1427,7 +1470,8 @@ class ProjectionProducerTest {
                 noClassifier(),
                 noHealth(),
                 TestProperties.defaults(),
-                config));
+                config,
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   // --- Tests: metrics wiring ---
@@ -1453,7 +1497,8 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var field = MultiProjectionRunner.class.getDeclaredField("metrics");
     field.setAccessible(true);
@@ -1480,12 +1525,12 @@ class ProjectionProducerTest {
             noClassifier(),
             noHealth(),
             TestProperties.defaults(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var field = MultiProjectionRunner.class.getDeclaredField("metrics");
     field.setAccessible(true);
-    // The builder leaves metrics null when absent; the runner falls back to NOOP per runner.
-    assertNull(field.get(runner));
+    assertSame(org.streamrune.core.StreamRuneMetrics.NOOP, field.get(runner));
     runner.close();
   }
 
@@ -1509,7 +1554,8 @@ class ProjectionProducerTest {
             noLeadership(),
             noClassifier(),
             noHealth(),
-            defaultConfig());
+            defaultConfig(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var field = ScheduledProjectionRunner.class.getDeclaredField("metrics");
     field.setAccessible(true);

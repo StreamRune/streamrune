@@ -149,7 +149,7 @@ public final class ForgetSubjectService {
     this.cryptoEngine = cryptoEngine;
     this.auditWriter = new GdprAuditWriter(auditStore);
     this.purgers = List.copyOf(purgers);
-    this.metrics = metrics == null ? StreamRuneMetrics.NOOP : metrics;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
     this.queryCache = queryCache;
   }
 
@@ -738,11 +738,13 @@ public final class ForgetSubjectService {
 
     /**
      * Sets the metrics collector so a failed read-model purge increments {@code
-     * streamrune.gdpr.purge_failed}. Optional; defaults to {@link StreamRuneMetrics#NOOP} (null →
-     * NOOP).
+     * streamrune.gdpr.purge_failed}. Optional; defaults to {@link StreamRuneMetrics#NOOP}.
+     *
+     * @param metrics the metrics; not {@code null}
+     * @return this builder
      */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 

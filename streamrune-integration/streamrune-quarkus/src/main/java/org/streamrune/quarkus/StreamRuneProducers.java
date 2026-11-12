@@ -35,6 +35,8 @@ import org.streamrune.core.gdpr.SubjectDataPurger;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.saga.SagaStore;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.integration.AuthenticatedUserResolver;
 import org.streamrune.integration.MicrometerStreamRuneMetrics;
@@ -57,7 +59,6 @@ import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.InboxRetentionSweeper;
 import org.streamrune.runtime.LocalStripedLocker;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OpenTelemetryTracing;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.OutboxRetentionSweeper;
@@ -146,14 +147,16 @@ public class StreamRuneProducers {
       Instance<org.streamrune.postgres.PostgresOutboxStore> outboxStoreInstance,
       Instance<PostgresCommandInbox> commandInboxInstance,
       Instance<CommandInbox> busCommandInboxInstance,
-      Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance) {
+      Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance,
+      StreamRuneTracing tracing) {
     var factory =
         new PostgresEventStoreFactory(dataSource, typeRegistry)
             .autoInitializeSchema(properties.eventStore().schema().autoInitialize())
+            .tracing(tracing)
             // Thread the metrics bean into the event store's CryptoShreddingModule so a
             // mass redaction on the replay/projection decrypt path emits subject_redacted; NOOP
-            // when absent (metrics(null) → NOOP), behavior unchanged.
-            .metrics(resolveMetricsOrNull(metricsInstance));
+            // when absent, behavior unchanged.
+            .metrics(resolveMetricsOrDefault(metricsInstance));
     // The store borrows from the Agroal DataSource as given and bounds its own statements per
     // transaction or per statement; the bound is the one knob it needs from configuration.
     try {
@@ -234,13 +237,16 @@ public class StreamRuneProducers {
     return factory.create();
   }
 
-  /** Creates a default LocalStripedLocker with configured stripe count. */
+  /**
+   * Creates a default LocalStripedLocker with configured stripe count, tracing its acquisitions
+   * through the {@link StreamRuneTracing} bean.
+   */
   @Produces
   @Singleton
   @DefaultBean
   public org.streamrune.core.AggregateLocker aggregateLocker(
-      StreamRuneQuarkusProperties properties) {
-    return new LocalStripedLocker(properties.stripeCount());
+      StreamRuneQuarkusProperties properties, StreamRuneTracing tracing) {
+    return new LocalStripedLocker(properties.stripeCount()).traced(tracing);
   }
 
   /**
@@ -283,7 +289,7 @@ public class StreamRuneProducers {
     return new JdbcProjectionRepository(
         dataSource,
         JdbcProjectionRepository.createObjectMapper(
-            cryptoEngine, resolveMetricsOrNull(metricsInstance)));
+            cryptoEngine, resolveMetricsOrDefault(metricsInstance)));
   }
 
   /** Produces a {@link PostgresOffsetStore} as the default {@link OffsetStore}. */
@@ -321,7 +327,7 @@ public class StreamRuneProducers {
   @DefaultBean
   @Typed(SimpleQueryBus.class)
   public SimpleQueryBus simpleQueryBus(Instance<org.streamrune.core.StreamRuneMetrics> metrics) {
-    return new SimpleQueryBus(resolveMetricsOrNull(metrics));
+    return new SimpleQueryBus(resolveMetricsOrDefault(metrics));
   }
 
   /**
@@ -477,18 +483,77 @@ public class StreamRuneProducers {
   }
 
   /**
-   * Produces an OTel command interceptor when {@code OpenTelemetry} is available. Dependent-scoped
-   * optional bean: returns {@code null} when OpenTelemetry is absent.
+   * The tracing every component these producers build starts its spans through, under the switches
+   * of {@code streamrune.tracing.*} (runtime configuration). It traces through the application's
+   * {@code OpenTelemetry} bean (the one the Quarkus OpenTelemetry extension produces), or, without
+   * one, through the global OpenTelemetry ({@code GlobalOpenTelemetry.get()}), which the
+   * OpenTelemetry Java agent registers before the application starts. It is {@link
+   * StreamRuneTracing#NOOP} when the master switch is off, and when that OpenTelemetry has no
+   * tracer provider of its own (nothing registered), so an application without OpenTelemetry pays
+   * nothing. An application {@code StreamRuneTracing} bean replaces it.
+   *
+   * <p>The global OpenTelemetry is read once, here: OpenTelemetry fixes it on its first read, so an
+   * SDK the application registers globally is registered before the application starts, or is an
+   * {@code OpenTelemetry} bean.
    */
   @Produces
+  @Singleton
   @DefaultBean
-  public OpenTelemetryCommandInterceptor openTelemetryCommandInterceptor(
-      Instance<OpenTelemetry> openTelemetry) {
-    if (openTelemetry.isUnsatisfied()) {
-      return null;
+  public StreamRuneTracing streamRuneTracing(
+      Instance<OpenTelemetry> openTelemetry, StreamRuneQuarkusProperties properties) {
+    return tracingOf(
+        openTelemetry.isResolvable() ? openTelemetry.get() : null,
+        tracingSettings(properties.tracing()));
+  }
+
+  /**
+   * The tracing over {@code openTelemetry}, or over the global OpenTelemetry when it is {@code
+   * null}, under {@code settings}.
+   */
+  static StreamRuneTracing tracingOf(OpenTelemetry openTelemetry, TracingSettings settings) {
+    if (!settings.enabled()) {
+      return StreamRuneTracing.NOOP;
     }
-    return new OpenTelemetryCommandInterceptor(
-        OpenTelemetryTracing.of(openTelemetry.get(), TracingSettings.allEnabled()));
+    OpenTelemetry source =
+        openTelemetry != null ? openTelemetry : io.opentelemetry.api.GlobalOpenTelemetry.get();
+    if (source.getTracerProvider() == io.opentelemetry.api.trace.TracerProvider.noop()) {
+      return StreamRuneTracing.NOOP;
+    }
+    return OpenTelemetryTracing.of(source, settings);
+  }
+
+  /** {@code streamrune.tracing.*} as the {@link TracingSettings} the tracing takes. */
+  static TracingSettings tracingSettings(StreamRuneQuarkusProperties.TracingConfig tracing) {
+    return TracingSettings.builder()
+        .enabled(tracing.enabled())
+        .area(TracingArea.COMMAND, tracing.command().enabled())
+        .area(TracingArea.SUBSCRIPTION, tracing.subscription().enabled())
+        .area(TracingArea.PROJECTION, tracing.projection().enabled())
+        .area(TracingArea.EVENT_STORE, tracing.eventStore().enabled())
+        .area(TracingArea.LOCK, tracing.lock().enabled())
+        .area(TracingArea.OUTBOX, tracing.outbox().enabled())
+        .area(TracingArea.SAGA, tracing.saga().enabled())
+        .build();
+  }
+
+  /**
+   * The locker the command bus takes, tracing through {@code tracing} when it is one of the
+   * framework's lockers: {@link LocalStripedLocker} and {@link
+   * org.streamrune.postgres.PgAdvisoryLocker} return a locker on the same locks that starts {@code
+   * lock/acquire}. Any other locker is returned as it is.
+   */
+  static org.streamrune.core.AggregateLocker traced(
+      org.streamrune.core.AggregateLocker locker, StreamRuneTracing tracing) {
+    if (!tracing.enabled(TracingArea.LOCK)) {
+      return locker;
+    }
+    if (locker instanceof LocalStripedLocker local) {
+      return local.traced(tracing);
+    }
+    if (locker instanceof org.streamrune.postgres.PgAdvisoryLocker advisory) {
+      return advisory.traced(tracing);
+    }
+    return locker;
   }
 
   /**
@@ -534,12 +599,9 @@ public class StreamRuneProducers {
     if (offsetStore == null) {
       offsetStore = INERT_OFFSET_STORE;
     }
-    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrNull(metricsInstance);
+    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrDefault(metricsInstance);
     return new org.streamrune.runtime.SubscriptionHealthContributor(
-        eventStore,
-        offsetStore,
-        lagThreshold,
-        metrics != null ? metrics : org.streamrune.core.StreamRuneMetrics.NOOP);
+        eventStore, offsetStore, lagThreshold, metrics);
   }
 
   /**
@@ -807,7 +869,7 @@ public class StreamRuneProducers {
     return new org.streamrune.postgres.PostgresSagaStore(
         dataSource,
         org.streamrune.postgres.PostgresSagaStore.createObjectMapper(
-            cryptoEngine, resolveMetricsOrNull(metricsInstance)));
+            cryptoEngine, resolveMetricsOrDefault(metricsInstance)));
   }
 
   /**
@@ -957,7 +1019,7 @@ public class StreamRuneProducers {
       b.auditStore(auditStore.get());
     }
     // Wire metrics so a failed read-model purge increments streamrune.gdpr.purge_failed.
-    b.metrics(resolveMetricsOrNull(metricsInstance));
+    b.metrics(resolveMetricsOrDefault(metricsInstance));
     // A forget evicts the query cache after its last purger, so no cached answer taken before the
     // erasure is served after it. An ambiguous CachingQueryBus fails loud rather than leave one
     // un-evicted.
@@ -1027,10 +1089,7 @@ public class StreamRuneProducers {
       Instance<org.streamrune.core.StreamRuneMetrics> metrics,
       Instance<org.streamrune.core.QueryAuthorizer> authorizer) {
     var builder = CachingQueryBus.builder().delegate(delegate);
-    org.streamrune.core.StreamRuneMetrics m = resolveMetricsOrNull(metrics);
-    if (m != null) {
-      builder.metrics(m);
-    }
+    builder.metrics(resolveMetricsOrDefault(metrics));
     if (authorizer.isAmbiguous()) {
       throw new IllegalStateException(
           "Multiple QueryAuthorizer beans exist but none is resolvable as default — StreamRune"
@@ -1159,7 +1218,8 @@ public class StreamRuneProducers {
       Instance<CryptoEngine> cryptoEngineInstance,
       Instance<CommandInbox> commandInboxInstance,
       Instance<org.streamrune.core.DeadLetterQueue> deadLetterQueueInstance,
-      Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance) {
+      Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance,
+      StreamRuneTracing tracing) {
 
     // Fail fast when a registered command type carries an @Encrypted field but no
     // CryptoEngine is configured — otherwise that PII would be dead-lettered as PLAINTEXT.
@@ -1197,7 +1257,9 @@ public class StreamRuneProducers {
         VirtualThreadCommandBus.builder()
             .allowGraalJit(properties.jvm().allowGraalJit())
             .eventStore(eventStore)
-            .locker(locker)
+            .locker(traced(locker, tracing))
+            // Adds the command interceptor in its slot, unless the chain holds the application's.
+            .tracing(tracing)
             .retryPolicy(retryPolicy)
             .snapshotPolicy(resolveSnapshotPolicy(snapshotPolicyInstance, properties))
             .lockTimeout(properties.lockTimeout())
@@ -1208,10 +1270,8 @@ public class StreamRuneProducers {
 
     // Wire the optional StreamRuneMetrics bean so command-bus meters are recorded (NOOP if absent),
     // mirroring Spring (StreamRuneAutoConfiguration) and the query bus on this framework.
-    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrNull(metricsInstance);
-    if (metrics != null) {
-      builder.metrics(metrics);
-    }
+    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrDefault(metricsInstance);
+    builder.metrics(metrics);
 
     // Wire the optional DeadLetterQueue bean so commands that exhaust retries are dead-lettered,
     // mirroring Spring. The DLQ publish mapper is ALWAYS the crypto-aware default — never an
@@ -1314,7 +1374,7 @@ public class StreamRuneProducers {
         cryptoEngineInstance.isUnsatisfied() ? null : cryptoEngineInstance.get();
     // Resolve the metrics bean once: it feeds BOTH the DLQ decrypt mapper's CryptoShreddingModule
     // (subject_redacted) and retry-exhaustion counters below; NOOP when absent.
-    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrNull(metricsInstance);
+    org.streamrune.core.StreamRuneMetrics metrics = resolveMetricsOrDefault(metricsInstance);
     com.fasterxml.jackson.databind.ObjectMapper resolvedMapper =
         org.streamrune.runtime.DeadLetterRetryRunner.createObjectMapper(cryptoEngine, metrics);
     var builder =
@@ -1341,16 +1401,11 @@ public class StreamRuneProducers {
     // de-dup.
     // Two leadership beans with none the default fail here, as the projection runners and the
     // saga sweepers do, instead of leaving this runner on NOOP.
-    var leadership = LeadershipInstances.resolve(leadershipInstance);
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    builder.leadership(LeadershipInstances.resolve(leadershipInstance));
 
     // Wire the optional StreamRuneMetrics bean (resolved above) so retry-exhaustion emits
     // streamrune.dlq.exhausted + a terminal ERROR log under the default policy; NOOP when absent.
-    if (metrics != null) {
-      builder.metrics(metrics);
-    }
+    builder.metrics(metrics);
 
     DeadLetterRetryRunner runner = builder.build();
     // Register for relay liveness health so /q/health/ready degrades if the thread dies.
@@ -1387,7 +1442,8 @@ public class StreamRuneProducers {
       Instance<org.streamrune.core.outbox.OutboxPublisher> publisher,
       StreamRuneQuarkusProperties properties,
       Instance<org.streamrune.core.StreamRuneMetrics> metrics,
-      Instance<org.streamrune.runtime.BackgroundRelayHealthContributor> relayHealthInstance) {
+      Instance<org.streamrune.runtime.BackgroundRelayHealthContributor> relayHealthInstance,
+      StreamRuneTracing tracing) {
     // Diagnostics only — the null-return control flow is unchanged. A dead poller that never starts
     // is otherwise invisible to operators: StreamRuneLifecycle resolves this to null and logs
     // nothing, so an operator who enabled the outbox but forgot the store/publisher bean has no
@@ -1419,6 +1475,7 @@ public class StreamRuneProducers {
                     properties.outbox().retryInitialDelay(),
                     properties.outbox().retryBackoffMultiplier()))
             .metrics(resolveMetricsOrDefault(metrics))
+            .tracing(tracing)
             .build();
     // Register for relay liveness health so /q/health/ready degrades if the thread dies.
     if (relayHealthInstance.isResolvable()) {

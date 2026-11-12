@@ -101,7 +101,14 @@ class PostgresEventStoreGlobalOffsetDesyncIT {
     commandInbox = new PostgresCommandInbox(dataSource);
     store =
         new PostgresEventStore(
-            dataSource, objectMapper, typeRegistry, null, null, null, null, commandInbox);
+            dataSource,
+            objectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            commandInbox);
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("DELETE FROM event_stream");
@@ -441,7 +448,6 @@ class PostgresEventStoreGlobalOffsetDesyncIT {
         new EventMetadata(
             EventId.of("evt-" + streamId.value() + "-" + version),
             CommandId.of("cmd-" + streamId.value() + "-" + version),
-            null,
             null,
             CorrelationId.of("corr-1"),
             null,

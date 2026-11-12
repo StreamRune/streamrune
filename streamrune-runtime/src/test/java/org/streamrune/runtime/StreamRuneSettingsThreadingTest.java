@@ -349,7 +349,6 @@ class StreamRuneSettingsThreadingTest {
           EventId.of(java.util.UUID.randomUUID().toString()),
           CommandId.of("cmd-seed"),
           null,
-          null,
           CorrelationId.of("corr-seed"),
           null,
           null,

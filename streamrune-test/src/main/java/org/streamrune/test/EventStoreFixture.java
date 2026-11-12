@@ -101,7 +101,6 @@ public final class EventStoreFixture {
             org.streamrune.core.IdGenerator.generateEventId(),
             org.streamrune.core.IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of(UUID.randomUUID().toString()),
             null,
             null,

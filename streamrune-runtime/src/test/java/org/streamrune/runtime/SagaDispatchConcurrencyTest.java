@@ -211,7 +211,6 @@ class SagaDispatchConcurrencyTest {
                     EventId.of("evt-" + orderId),
                     CommandId.of("cmd-" + orderId),
                     null,
-                    null,
                     CorrelationId.of("client-" + orderId),
                     null,
                     null,

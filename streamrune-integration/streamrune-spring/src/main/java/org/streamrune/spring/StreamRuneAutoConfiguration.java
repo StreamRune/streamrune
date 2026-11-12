@@ -11,6 +11,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -39,6 +40,7 @@ import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.gdpr.SubjectDataCollector;
 import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.saga.SagaStore;
+import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.integration.AuthenticatedUserResolver;
 import org.streamrune.integration.MicrometerStreamRuneMetrics;
@@ -274,7 +276,8 @@ public class StreamRuneAutoConfiguration {
    * {@code CryptoShreddingModule} so {@code @Encrypted} fields are persisted as ciphertext, and
    * passes all {@link org.streamrune.core.upcasting.EventUpcaster} beans into the store so stored
    * events are upcast on read, and all {@link org.streamrune.core.SnapshotMigration} beans so
-   * stored snapshots are upgraded on read.
+   * stored snapshots are upgraded on read. The store traces through the {@link StreamRuneTracing}
+   * bean (its {@code eventstore/…} spans).
    *
    * @throws IllegalStateException if multiple CryptoEngine beans exist with none marked
    *     {@code @Primary} — silently skipping encryption would persist PII as plaintext
@@ -294,10 +297,12 @@ public class StreamRuneAutoConfiguration {
       ObjectProvider<org.streamrune.postgres.PostgresOutboxStore> outboxStoreProvider,
       ObjectProvider<PostgresCommandInbox> commandInboxProvider,
       ObjectProvider<CommandInbox> busCommandInboxProvider,
-      ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider) {
+      ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider,
+      ObjectProvider<StreamRuneTracing> tracingProvider) {
     var factory =
         new PostgresEventStoreFactory(dataSource, typeRegistry)
             .autoInitializeSchema(properties.eventStore().schema().autoInitialize())
+            .tracing(tracingOf(tracingProvider))
             // Thread the metrics bean into the event store's CryptoShreddingModule so a
             // mass redaction on the replay/projection decrypt path emits subject_redacted; NOOP
             // when no metrics bean exists (behavior unchanged).
@@ -392,11 +397,20 @@ public class StreamRuneAutoConfiguration {
     return factory.create();
   }
 
-  /** Creates a default LocalStripedLocker with configured stripe count. */
+  /**
+   * Creates a default LocalStripedLocker with configured stripe count, tracing its acquisitions
+   * through the {@link StreamRuneTracing} bean.
+   */
   @Bean
   @ConditionalOnMissingBean(org.streamrune.core.AggregateLocker.class)
-  public org.streamrune.core.AggregateLocker aggregateLocker(StreamRuneProperties properties) {
-    return new LocalStripedLocker(properties.stripeCount());
+  public org.streamrune.core.AggregateLocker aggregateLocker(
+      StreamRuneProperties properties, ObjectProvider<StreamRuneTracing> tracingProvider) {
+    return new LocalStripedLocker(properties.stripeCount()).traced(tracingOf(tracingProvider));
+  }
+
+  /** The {@link StreamRuneTracing} bean, or {@link StreamRuneTracing#NOOP} without one. */
+  private static StreamRuneTracing tracingOf(ObjectProvider<StreamRuneTracing> tracingProvider) {
+    return tracingProvider.getIfAvailable(() -> StreamRuneTracing.NOOP);
   }
 
   /**
@@ -412,7 +426,8 @@ public class StreamRuneAutoConfiguration {
   @ConditionalOnMissingBean(SimpleQueryBus.class)
   public SimpleQueryBus simpleQueryBus(
       ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider) {
-    return new SimpleQueryBus(metricsProvider.getIfAvailable());
+    return new SimpleQueryBus(
+        metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP));
   }
 
   /**
@@ -497,6 +512,13 @@ public class StreamRuneAutoConfiguration {
    * {@code onError()} in reverse. User interceptors without {@code @Order} run innermost (after all
    * framework interceptors); declare {@code @Order} on the bean to slot in between.
    *
+   * <p><b>Tracing:</b> the bus traces through the {@link StreamRuneTracing} bean ({@link
+   * VirtualThreadCommandBus.Builder#tracing}): it adds the {@link OpenTelemetryCommandInterceptor}
+   * in its slot ahead of every framework interceptor, unless the chain already holds one the
+   * application declared. The {@link org.streamrune.core.AggregateLocker} bean traces its
+   * acquisitions through it too when it is a {@link LocalStripedLocker} or a {@code
+   * PgAdvisoryLocker}.
+   *
    * <p><b>Dead letter queue:</b> when the application defines a {@link
    * org.streamrune.core.DeadLetterQueue} bean, it is wired into the bus so commands that exhaust
    * retries are recorded. Payloads are ALWAYS serialized with {@link
@@ -541,7 +563,8 @@ public class StreamRuneAutoConfiguration {
       ObjectProvider<org.streamrune.core.DeadLetterQueue> deadLetterQueueProvider,
       ObjectProvider<CryptoEngine> cryptoEngineProvider,
       ObjectProvider<CommandInbox> commandInboxProvider,
-      ObjectProvider<RequestAttributeContextSource> requestContextSourceProvider) {
+      ObjectProvider<RequestAttributeContextSource> requestContextSourceProvider,
+      ObjectProvider<StreamRuneTracing> tracingProvider) {
 
     // Resolve the CryptoEngine once, up front: it both fails fast on @Encrypted command fields
     // (below) and makes the DLQ publish mapper crypto-aware (below).
@@ -573,11 +596,13 @@ public class StreamRuneAutoConfiguration {
     List<CommandInterceptor> interceptors =
         CommandInterceptorOrdering.sorted(interceptorProvider.orderedStream().toList());
 
+    StreamRuneTracing tracing = tracingOf(tracingProvider);
     var builder =
         VirtualThreadCommandBus.builder()
             .allowGraalJit(properties.jvm().allowGraalJit())
             .eventStore(eventStore)
-            .locker(locker)
+            .locker(traced(locker, tracing))
+            .tracing(tracing)
             .retryPolicy(retryPolicy)
             .snapshotPolicy(
                 snapshotPolicyProvider.getIfAvailable(
@@ -864,28 +889,88 @@ public class StreamRuneAutoConfiguration {
   }
 
   /**
-   * OpenTelemetry command tracing, isolated in a nested {@code @Configuration} gated by
-   * {@code @ConditionalOnClass} on the OTel API — evaluated by class NAME via configuration
-   * metadata, so Spring never introspects this class's OTel-typed {@code @Bean} method signature
-   * when {@code opentelemetry-api} (a {@code compileOnly}, classpath-optional dependency) is
-   * absent. Without this isolation an application that omits {@code opentelemetry-api} would fail
-   * context init with a NoClassDefFoundError as Spring reflected on the {@code OpenTelemetry}-typed
-   * bean method.
+   * The tracing of an application without {@code opentelemetry-api} on its classpath: {@link
+   * StreamRuneTracing#NOOP}, which traces nothing and loads no OpenTelemetry class. An application
+   * {@code StreamRuneTracing} bean replaces it.
+   */
+  @Bean
+  @ConditionalOnMissingClass("io.opentelemetry.api.OpenTelemetry")
+  @ConditionalOnMissingBean(StreamRuneTracing.class)
+  public StreamRuneTracing noopStreamRuneTracing() {
+    return StreamRuneTracing.NOOP;
+  }
+
+  /**
+   * The tracing of an application with {@code opentelemetry-api} on its classpath, isolated in a
+   * nested {@code @Configuration} gated by {@code @ConditionalOnClass} on the OTel API — evaluated
+   * by class NAME via configuration metadata, so Spring never introspects this class's OTel-typed
+   * {@code @Bean} method signature when {@code opentelemetry-api} (a {@code compileOnly},
+   * classpath-optional dependency) is absent. Without this isolation an application that omits
+   * {@code opentelemetry-api} would fail context init with a NoClassDefFoundError as Spring
+   * reflected on the {@code OpenTelemetry}-typed bean method.
    */
   @Configuration(proxyBeanMethods = false)
   @ConditionalOnClass(name = "io.opentelemetry.api.OpenTelemetry")
   static class OpenTelemetryConfiguration {
 
-    /** Registers the OTel command interceptor when an OpenTelemetry bean is available. */
+    /**
+     * The tracing every component the integration builds starts its spans through, under the
+     * switches of {@code streamrune.tracing.*}. It traces through the application's {@code
+     * OpenTelemetry} bean, or, without one, through the global OpenTelemetry ({@code
+     * GlobalOpenTelemetry.get()}), which the OpenTelemetry Java agent registers before the
+     * application starts. It is {@link StreamRuneTracing#NOOP} when the master switch is off, and
+     * when that OpenTelemetry has no tracer provider of its own (nothing registered), so an
+     * application without OpenTelemetry pays nothing. An application {@code StreamRuneTracing} bean
+     * replaces it.
+     *
+     * <p>The global OpenTelemetry is read once, here: OpenTelemetry fixes it on its first read, so
+     * an SDK the application registers globally is registered before the context starts, or is an
+     * {@code OpenTelemetry} bean.
+     */
     @Bean
-    @Order(CommandInterceptorOrdering.ORDER_OPEN_TELEMETRY)
-    @ConditionalOnBean(io.opentelemetry.api.OpenTelemetry.class)
-    @ConditionalOnMissingBean(OpenTelemetryCommandInterceptor.class)
-    public OpenTelemetryCommandInterceptor openTelemetryCommandInterceptor(
-        io.opentelemetry.api.OpenTelemetry openTelemetry) {
-      return new OpenTelemetryCommandInterceptor(
-          OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled()));
+    @ConditionalOnMissingBean(StreamRuneTracing.class)
+    public StreamRuneTracing streamRuneTracing(
+        ObjectProvider<io.opentelemetry.api.OpenTelemetry> openTelemetry,
+        StreamRuneProperties properties) {
+      return tracingOf(openTelemetry.getIfAvailable(), properties.tracing().settings());
     }
+
+    /**
+     * The tracing over {@code openTelemetry}, or over the global OpenTelemetry when it is {@code
+     * null}, under {@code settings}.
+     */
+    static StreamRuneTracing tracingOf(
+        io.opentelemetry.api.OpenTelemetry openTelemetry, TracingSettings settings) {
+      if (!settings.enabled()) {
+        return StreamRuneTracing.NOOP;
+      }
+      io.opentelemetry.api.OpenTelemetry source =
+          openTelemetry != null ? openTelemetry : io.opentelemetry.api.GlobalOpenTelemetry.get();
+      if (source.getTracerProvider() == io.opentelemetry.api.trace.TracerProvider.noop()) {
+        return StreamRuneTracing.NOOP;
+      }
+      return OpenTelemetryTracing.of(source, settings);
+    }
+  }
+
+  /**
+   * The locker the command bus takes, tracing through {@code tracing} when it is one of the
+   * framework's lockers: {@link LocalStripedLocker} and {@link
+   * org.streamrune.postgres.PgAdvisoryLocker} return a locker on the same locks that starts {@code
+   * lock/acquire}. Any other locker is returned as it is.
+   */
+  static org.streamrune.core.AggregateLocker traced(
+      org.streamrune.core.AggregateLocker locker, StreamRuneTracing tracing) {
+    if (!tracing.enabled(org.streamrune.core.tracing.TracingArea.LOCK)) {
+      return locker;
+    }
+    if (locker instanceof LocalStripedLocker local) {
+      return local.traced(tracing);
+    }
+    if (locker instanceof org.streamrune.postgres.PgAdvisoryLocker advisory) {
+      return advisory.traced(tracing);
+    }
+    return locker;
   }
 
   /**
@@ -1356,14 +1441,11 @@ public class StreamRuneAutoConfiguration {
 
     // Thread the single-active-consumer leadership bean (LeaseBasedLeadership when a
     // DataSource is present and the knob is on) into the DLQ retry runner so only the leader
-    // replica polls/retries; defaults to SubscriptionLeadership.NOOP (always leader) when no bean
-    // exists. Without this, two replicas' staggered polls both re-execute the same DLQ command
-    // (duplicate domain events) whenever no CommandInbox is present to de-dup them. Two leadership
-    // beans with none @Primary fail here, as on Quarkus and Micronaut.
-    var leadership = LeadershipBeans.resolve(leadershipProvider);
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    // replica polls/retries; SubscriptionLeadership.NOOP (always leader) when no bean exists.
+    // Without this, two replicas' staggered polls both re-execute the same DLQ command (duplicate
+    // domain events) whenever no CommandInbox is present to de-dup them. Two leadership beans with
+    // none @Primary fail here, as on Quarkus and Micronaut.
+    builder.leadership(LeadershipBeans.resolve(leadershipProvider));
 
     DeadLetterRetryRunner runner = builder.build();
     // Register for relay liveness health so /health degrades if this runner's thread
@@ -1474,7 +1556,8 @@ public class StreamRuneAutoConfiguration {
       org.streamrune.core.outbox.OutboxPublisher publisher,
       StreamRuneProperties properties,
       ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider,
-      ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor> relayHealthProvider) {
+      ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor> relayHealthProvider,
+      ObjectProvider<StreamRuneTracing> tracingProvider) {
     // Wire the metrics bean so streamrune.outbox.delivery_failed fires on a terminal FAILED entry
     // (the documented alert metric) and streamrune.outbox.pending tracks the backlog; falls back to
     // NOOP when no metrics bean exists (behavior unchanged).
@@ -1493,6 +1576,7 @@ public class StreamRuneAutoConfiguration {
                     properties.outbox().retryBackoffMultiplier()))
             .metrics(
                 metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP))
+            .tracing(tracingOf(tracingProvider))
             .build();
     // Register for relay liveness health so /health degrades if the relay thread dies.
     relayHealthProvider.ifAvailable(c -> c.registerOutboxPoller(poller));

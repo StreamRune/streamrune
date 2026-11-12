@@ -21,7 +21,7 @@ public final class CachingQueryBusBuilder {
 
   private QueryBus delegate;
   private Ticker ticker = Ticker.systemTicker();
-  private StreamRuneMetrics metrics;
+  private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
   private QueryAuthorizer authorizer;
 
   /** Package-private — obtain via {@link CachingQueryBus#builder()}. */
@@ -51,16 +51,15 @@ public final class CachingQueryBusBuilder {
   }
 
   /**
-   * Sets the metrics collector. Optional; when absent (or {@code null}) cache metrics are not
-   * recorded and behavior is unchanged. Records {@code queries.cache.hits} and {@code
-   * queries.cache.misses} tagged with the query type for {@link
-   * org.streamrune.core.Cacheable @Cacheable} queries.
+   * Sets the metrics collector. Optional; the default {@link StreamRuneMetrics#NOOP} records
+   * nothing. Records {@code queries.cache.hits} and {@code queries.cache.misses} tagged with the
+   * query type for {@link org.streamrune.core.Cacheable @Cacheable} queries.
    *
    * @param m the metrics collector; must not be {@code null}
    * @return this builder
    */
   public CachingQueryBusBuilder metrics(StreamRuneMetrics m) {
-    this.metrics = Objects.requireNonNull(m, "metrics");
+    this.metrics = Objects.requireNonNull(m, "metrics is required");
     return this;
   }
 

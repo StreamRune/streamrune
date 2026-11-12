@@ -367,7 +367,6 @@ class SagaStoredControlCharacterCorrelationIdTest {
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-" + UUID.randomUUID()),
             null,
-            null,
             CorrelationId.of(CONTROL_CHAR_SAGA_ID),
             null,
             null,

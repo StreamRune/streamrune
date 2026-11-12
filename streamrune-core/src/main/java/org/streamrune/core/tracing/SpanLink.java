@@ -84,9 +84,9 @@ public record SpanLink(TraceId traceId, SpanId spanId) {
   /**
    * The link to the span that wrote an event: the {@link EventMetadata#spanContext() spanContext}
    * of its metadata, the command span the command bus wrote there, when its ids are valid W3C ids;
-   * {@link #NONE} otherwise. The caller-supplied {@code traceId} and {@code spanId} of the metadata
-   * are correlation data and never build a link. Every component that links a span to the trace of
-   * an event builds the link here.
+   * {@link #NONE} otherwise. The caller-supplied {@code traceId} of the metadata is correlation
+   * data and never builds a link. Every component that links a span to the trace of an event builds
+   * the link here.
    *
    * @param metadata the event's metadata, or {@code null}
    * @return the link, or {@link #NONE}

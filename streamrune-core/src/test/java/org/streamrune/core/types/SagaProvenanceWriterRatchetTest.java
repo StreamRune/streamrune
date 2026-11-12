@@ -448,8 +448,8 @@ class SagaProvenanceWriterRatchetTest {
    */
   private static final Pattern LISTED_AMONG_THE_METADATA_FIELDS =
       Pattern.compile(
-          "\\b(?:eventId|commandId|traceId|spanId|causationId|userId)`?\\s*,\\s*`?correlationId\\b"
-              + "|\\bcorrelationId`?\\s*,\\s*`?(?:eventId|commandId|traceId|spanId|causationId|userId)\\b");
+          "\\b(?:eventId|commandId|traceId|causationId|userId)`?\\s*,\\s*`?correlationId\\b"
+              + "|\\bcorrelationId`?\\s*,\\s*`?(?:eventId|commandId|traceId|causationId|userId)\\b");
 
   /** A method call, or a method declaration: an identifier followed by an opening parenthesis. */
   private static final Pattern CALL = Pattern.compile("\\b([a-z][A-Za-z0-9_]*)\\s*\\(");
@@ -1156,7 +1156,7 @@ class SagaProvenanceWriterRatchetTest {
         | `sagaOrigin` | saga dispatch | no |
         - `EventMetadata` on every envelope: `eventId`, `correlationId`, `causationId`.
         - A saga is driven by `SagaRunner` as an `EventListener`.
-        - `EventMetadata` on every envelope: `traceId`, `spanId`, `correlationId`,
+        - `EventMetadata` on every envelope: `traceId`, `correlationId`,
           `causationId`, `userId` and `sagaOrigin`, which names the saga whose dispatch
           caused the event.
 
@@ -1421,7 +1421,7 @@ class SagaProvenanceWriterRatchetTest {
             "SagaOrigin::sagaId",
             "DispatchCause::causationId",
             "EventMetadata::eventId",
-            "new EventMetadata(eventId, commandId, null, null, correlationId, null, null, now)",
+            "new EventMetadata(eventId, commandId, null, correlationId, null, null, now)",
             "{@link SagaOrigin#nextHop()}",
             "{@link StreamRuneContext.DispatchCause}",
             "StreamRuneContext.DispatchCause cause = StreamRuneContext.cause();",

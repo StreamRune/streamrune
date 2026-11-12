@@ -221,7 +221,14 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
     commandInbox = new PostgresCommandInbox(dataSource);
     store =
         new PostgresEventStore(
-            dataSource, mapper, SAGA_REGISTRY, null, null, null, null, commandInbox);
+            dataSource,
+            mapper,
+            SAGA_REGISTRY,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            commandInbox);
     sagaStore = new PostgresSagaStore(dataSource, mapper);
     offsetStore = new PostgresOffsetStore(dataSource);
   }
@@ -261,7 +268,6 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
             new EventMetadata(
                 eventId,
                 CommandId.of("cmd-" + UUID.randomUUID()),
-                null,
                 null,
                 CorrelationId.of("order-place-" + orderId),
                 null,

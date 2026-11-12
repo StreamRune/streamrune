@@ -209,7 +209,36 @@ public record StreamRuneMicronautProperties(
     // stays aligned.
     @Bindable(defaultValue = "operator-only")
         @io.micronaut.context.annotation.Property(name = "streamrune.dead-letter.unkeyed-replay")
-        String deadLetterUnkeyedReplay) {
+        String deadLetterUnkeyedReplay,
+    // tracing.*: matches Spring/Quarkus. The master switch and the switch of each area of the
+    // spans StreamRune starts; they take effect when the application has OpenTelemetry (an
+    // OpenTelemetry bean, or a registered global OpenTelemetry such as the Java agent's). Read
+    // through StreamRuneMicronautModule.tracingSettings. Appended at the end so the positional
+    // withDefaults() stays aligned.
+    @Bindable(defaultValue = "true")
+        @io.micronaut.context.annotation.Property(name = "streamrune.tracing.enabled")
+        boolean tracingEnabled,
+    @Bindable(defaultValue = "true")
+        @io.micronaut.context.annotation.Property(name = "streamrune.tracing.command.enabled")
+        boolean tracingCommandEnabled,
+    @Bindable(defaultValue = "true")
+        @io.micronaut.context.annotation.Property(name = "streamrune.tracing.subscription.enabled")
+        boolean tracingSubscriptionEnabled,
+    @Bindable(defaultValue = "true")
+        @io.micronaut.context.annotation.Property(name = "streamrune.tracing.projection.enabled")
+        boolean tracingProjectionEnabled,
+    @Bindable(defaultValue = "true")
+        @io.micronaut.context.annotation.Property(name = "streamrune.tracing.event-store.enabled")
+        boolean tracingEventStoreEnabled,
+    @Bindable(defaultValue = "true")
+        @io.micronaut.context.annotation.Property(name = "streamrune.tracing.lock.enabled")
+        boolean tracingLockEnabled,
+    @Bindable(defaultValue = "true")
+        @io.micronaut.context.annotation.Property(name = "streamrune.tracing.outbox.enabled")
+        boolean tracingOutboxEnabled,
+    @Bindable(defaultValue = "true")
+        @io.micronaut.context.annotation.Property(name = "streamrune.tracing.saga.enabled")
+        boolean tracingSagaEnabled) {
 
   public StreamRuneMicronautProperties {
     org.streamrune.integration.SingleActiveConsumerSetting.enabled(
@@ -282,6 +311,16 @@ public record StreamRuneMicronautProperties(
         // gdpr.snapshot-purge
         "required",
         // dead-letter.unkeyed-replay
-        "operator-only");
+        "operator-only",
+        // tracing.enabled and tracing.<area>.enabled: command, subscription, projection,
+        // event-store, lock, outbox, saga
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true);
   }
 }

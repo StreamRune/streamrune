@@ -410,7 +410,7 @@ class TracingWithoutOpenTelemetryTest {
                         null)
                     .withTracing(tracing);
             EventMetadata metadata = new EventMetadata(EventId.of("e-1"), CommandId.of("c-1"),
-                null, null, CorrelationId.of("r-1"), null, null, java.time.Instant.now(), Map.of());
+                null, CorrelationId.of("r-1"), null, null, java.time.Instant.now(), Map.of());
             store.append(stream, List.of(new EventEnvelope(GlobalOffset.initial(), stream,
                 Version.initial(), EventType.of("Switched"), new Switched("on"), metadata)),
                 Version.initial());

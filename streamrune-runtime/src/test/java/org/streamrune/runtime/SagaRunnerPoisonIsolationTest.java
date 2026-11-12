@@ -186,7 +186,6 @@ class SagaRunnerPoisonIsolationTest {
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-1"),
             null,
-            null,
             CorrelationId.of("some-correlation"),
             null,
             null,
@@ -204,7 +203,6 @@ class SagaRunnerPoisonIsolationTest {
         new EventMetadata(
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-1"),
-            null,
             null,
             CorrelationId.of("no-saga-correlation"),
             null,

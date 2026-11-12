@@ -65,7 +65,6 @@ class StreamEventSubscriptionLifecycleTest {
             EventId.of("evt-1"),
             CommandId.of("cmd-1"),
             null,
-            null,
             CorrelationId.of("corr"),
             null,
             null,

@@ -391,7 +391,6 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("failover-corr-" + n),
             null,
             null,

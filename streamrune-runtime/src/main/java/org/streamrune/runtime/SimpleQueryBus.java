@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,16 +36,17 @@ public final class SimpleQueryBus implements QueryBus {
 
   /** Creates a bus without metrics. */
   public SimpleQueryBus() {
-    this(null);
+    this(StreamRuneMetrics.NOOP);
   }
 
   /**
-   * Creates a bus with an optional metrics collector.
+   * Creates a bus with a metrics collector.
    *
-   * @param metrics the metrics collector; {@code null} disables metrics (behavior unchanged)
+   * @param metrics the metrics collector; {@link StreamRuneMetrics#NOOP} records nothing, not
+   *     {@code null}
    */
   public SimpleQueryBus(StreamRuneMetrics metrics) {
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
   }
 
   @Override

@@ -419,7 +419,6 @@ class PostgresNotificationSubscriptionLeaseTest {
                       EventId.of("evt_" + i),
                       CommandId.of("cmd_" + i),
                       null,
-                      null,
                       CorrelationId.of("corr"),
                       null,
                       null,

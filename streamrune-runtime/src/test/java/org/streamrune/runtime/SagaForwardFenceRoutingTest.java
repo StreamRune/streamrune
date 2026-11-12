@@ -213,7 +213,6 @@ class SagaForwardFenceRoutingTest {
             EventId.of("evt-advanced"),
             CommandId.of("cmd-advanced"),
             null,
-            null,
             CorrelationId.of("request-1"),
             null,
             null,

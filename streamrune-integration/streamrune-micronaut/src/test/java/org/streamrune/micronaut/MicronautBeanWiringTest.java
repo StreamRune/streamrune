@@ -56,7 +56,6 @@ import org.streamrune.runtime.CircuitBreakerCommandInterceptor;
 import org.streamrune.runtime.InboxRetentionSweeper;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.MultiProjectionRunner;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.ProjectionState;
 import org.streamrune.runtime.SagaDeadLetterRetentionSweeper;
 import org.streamrune.runtime.SimpleQueryBus;
@@ -445,16 +444,18 @@ class MicronautBeanWiringTest {
         AnnotationAuthorizationInterceptor.class);
     assertMissingBeansGuard(
         StreamRuneMicronautModule.class,
-        "openTelemetryCommandInterceptor",
-        OpenTelemetryCommandInterceptor.class);
-    assertMissingBeansGuard(
-        StreamRuneMicronautModule.class,
         "authorizationCommandInterceptor",
         AuthorizationCommandInterceptor.class);
-    // The seventh framework CommandInterceptor is produced by the sibling
+    // The sixth framework CommandInterceptor is produced by the sibling
     // ProjectionFactory and is easy to overlook.
     assertMissingBeansGuard(
         ProjectionFactory.class, "inlineProjectionInterceptor", InlineProjectionInterceptor.class);
+    // The OpenTelemetry interceptor is no bean: the bus adds it from the tracing, which an
+    // application StreamRuneTracing bean replaces.
+    assertMissingBeansGuard(
+        StreamRuneMicronautModule.class,
+        "streamRuneTracing",
+        org.streamrune.core.tracing.StreamRuneTracing.class);
   }
 
   private static void assertMissingBeansGuard(

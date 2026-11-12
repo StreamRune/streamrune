@@ -380,7 +380,6 @@ class SseLiveFeedTest {
                       EventId.of("evt-early"),
                       CommandId.of("cmd-early"),
                       null,
-                      null,
                       CorrelationId.of("corr-early"),
                       null,
                       null,
@@ -431,7 +430,6 @@ class SseLiveFeedTest {
                   new EventMetadata(
                       EventId.of("evt-history"),
                       CommandId.of("cmd-history"),
-                      null,
                       null,
                       CorrelationId.of("corr-history"),
                       null,

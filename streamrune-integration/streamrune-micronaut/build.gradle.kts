@@ -76,6 +76,27 @@ dependencies {
     testImplementation(libs.bundles.testcontainers.pg)
 }
 
+// A test JVM without OpenTelemetry: opentelemetry-api is compileOnly, so an application that does
+// not use OpenTelemetry has none of its jars. The integration binds StreamRuneTracing.NOOP there and
+// must start and run a command; only a classpath without the jars shows that no bean definition of
+// the module needs them.
+val openTelemetryAbsentTestClass = "org.streamrune.micronaut.OpenTelemetryAbsentTest"
+
+val testSourceSet = project.the<SourceSetContainer>()["test"]
+
+val openTelemetryAbsentTest =
+    tasks.register<Test>("openTelemetryAbsentTest") {
+        group = "verification"
+        description = "Starts the integration and runs a command without any OpenTelemetry jar."
+        testClassesDirs = testSourceSet.output.classesDirs
+        classpath = testSourceSet.runtimeClasspath.filter { !it.name.startsWith("opentelemetry-") }
+        filter { includeTestsMatching(openTelemetryAbsentTestClass) }
+    }
+
+tasks.named<Test>("test") { filter { excludeTestsMatching(openTelemetryAbsentTestClass) } }
+
+tasks.named("check") { dependsOn(openTelemetryAbsentTest) }
+
 // ConfigurationDocLintTest reads the guides, this module's README, the pages listed in
 // gradle/doc-lint-pages.txt (declared by the root build) and the main sources of this module and of
 // streamrune-integration-api (the keys read in code) (docLintTest, see the root build): declared, so

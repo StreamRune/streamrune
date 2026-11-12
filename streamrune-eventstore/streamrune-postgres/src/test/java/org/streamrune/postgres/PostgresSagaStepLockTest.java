@@ -338,7 +338,6 @@ class PostgresSagaStepLockTest {
                         EventId.of("evt-" + UUID.randomUUID()),
                         CommandId.of("cmd-" + UUID.randomUUID()),
                         null,
-                        null,
                         CorrelationId.of("request-" + UUID.randomUUID()),
                         null,
                         null,

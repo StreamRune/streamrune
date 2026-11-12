@@ -403,7 +403,6 @@ class PostgresNullSagaDeadLetterReplayTest {
                         EventId.of("evt-" + UUID.randomUUID()),
                         CommandId.of("cmd-" + UUID.randomUUID()),
                         null,
-                        null,
                         CorrelationId.of("fulfill-" + orderId),
                         null,
                         null,

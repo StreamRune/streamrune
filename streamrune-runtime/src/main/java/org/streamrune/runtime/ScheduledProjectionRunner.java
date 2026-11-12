@@ -146,8 +146,8 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     this.batchSize = b.batchSize;
     this.atomicProcessor = b.atomicProcessor;
     this.deadLetterStore = b.deadLetterStore;
-    this.metrics = b.metrics != null ? b.metrics : StreamRuneMetrics.NOOP;
-    this.leadership = b.leadership != null ? b.leadership : SubscriptionLeadership.NOOP;
+    this.metrics = b.metrics;
+    this.leadership = b.leadership;
     this.classifier = b.classifier != null ? b.classifier : ProjectionErrorClassifier.DEFAULT;
     this.healthContributor = b.healthContributor;
     this.drainRetryInitialBackoff = b.drainRetryInitialBackoff;
@@ -215,15 +215,11 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
 
   /**
    * Registers a {@link SubscriptionLifecycle} view of the scheduled projection {@code name} with
-   * the health contributor (when one is wired). The view derives its lifecycle state from the
-   * runner's live {@link ScheduledProjectionState}, so a STOPPED/ERROR projection reports DOWN.
-   * Pause/resume are unsupported (scheduled projections have no pausable subscription). No-op when
-   * no contributor is present.
+   * the health contributor. The view derives its lifecycle state from the runner's live {@link
+   * ScheduledProjectionState}, so a STOPPED/ERROR projection reports DOWN. Pause/resume are
+   * unsupported (scheduled projections have no pausable subscription).
    */
   private void registerHealth(ProjectionName name) {
-    if (healthContributor == null) {
-      return;
-    }
     healthContributor.register(consumerName(name), new ScheduledSubscriptionView(name));
   }
 
@@ -420,7 +416,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
         var current = statuses.get(reg.name());
         if (current == null || current.state != ScheduledProjectionState.ERROR) {
           setState(reg.name(), ScheduledProjectionState.STOPPED);
-        } else if (healthContributor != null) {
+        } else {
           // Permanent ERROR/halt exit (HALT strategy set state=ERROR and the loop broke): keep the
           // projection registered and force its health terminally DOWN so overallStatus() — and
           // the /health endpoint — stays DOWN, not merely DEGRADED via lag/error-count. A clean
@@ -1206,21 +1202,14 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     }
   }
 
-  /**
-   * Feeds a clean chunk advance to the health contributor (resets the error count). No-op when no
-   * contributor is wired.
-   */
+  /** Feeds a clean chunk advance to the health contributor (resets the error count). */
   private void recordHealthSuccess(ProjectionName projectionName) {
-    if (healthContributor != null) {
-      healthContributor.recordSuccess(consumerName(projectionName));
-    }
+    healthContributor.recordSuccess(consumerName(projectionName));
   }
 
-  /** Feeds a chunk processing failure to the health contributor. No-op when none is wired. */
+  /** Feeds a chunk processing failure to the health contributor. */
   private void recordHealthError(ProjectionName projectionName) {
-    if (healthContributor != null) {
-      healthContributor.recordError(consumerName(projectionName));
-    }
+    healthContributor.recordError(consumerName(projectionName));
   }
 
   /**
@@ -1275,11 +1264,9 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
       return;
     }
     // Drop each projection from the health view — a stopped runner should not linger as a
-    // registered subscription. No-op when no contributor is wired.
-    if (healthContributor != null) {
-      for (var reg : registrations) {
-        healthContributor.unregister(consumerName(reg.name()));
-      }
+    // registered subscription.
+    for (var reg : registrations) {
+      healthContributor.unregister(consumerName(reg.name()));
     }
     // Clear thread references and reset both guards so start() can be called again on the same
     // instance — matches the restartable lifecycle contract (actuator restart, context refresh).
@@ -1400,10 +1387,10 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     private int batchSize = 50;
     private AtomicBatchProcessor atomicProcessor;
     private ProjectionDeadLetterStore deadLetterStore;
-    private StreamRuneMetrics metrics;
+    private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private SubscriptionLeadership leadership = SubscriptionLeadership.NOOP;
     private ProjectionErrorClassifier classifier = ProjectionErrorClassifier.DEFAULT;
-    private SubscriptionHealthContributor healthContributor;
+    private SubscriptionHealthContributor healthContributor = SubscriptionHealthContributor.NOOP;
     private Duration drainRetryInitialBackoff = DEFAULT_DRAIN_RETRY_INITIAL_BACKOFF;
     private Duration drainRetryMaxBackoff = DEFAULT_DRAIN_RETRY_MAX_BACKOFF;
     private int maxTransientRetries = DEFAULT_MAX_TRANSIENT_RETRIES;
@@ -1512,12 +1499,15 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     }
 
     /**
-     * Sets the metrics collector. Optional; when absent (or {@code null}) projection metrics are
-     * not recorded and behavior is unchanged. Records processed/failed counts and processing
-     * duration per chunk, tagged with the projection name.
+     * Sets the metrics collector. Optional; the default {@link StreamRuneMetrics#NOOP} records
+     * nothing. Records processed/failed counts and processing duration per chunk, tagged with the
+     * projection name.
+     *
+     * @param m the metrics; not {@code null}
+     * @return this builder
      */
     public Builder metrics(StreamRuneMetrics m) {
-      this.metrics = m;
+      this.metrics = Objects.requireNonNull(m, "metrics is required");
       return this;
     }
 
@@ -1526,9 +1516,12 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
      * SubscriptionLeadership#NOOP} (always leader), so single-instance behavior is unchanged. When
      * a real leadership is injected, only the leader for a projection's name drains its ticks; a
      * non-leader skips each tick until it takes over on the leader's death.
+     *
+     * @param leadership the leadership; not {@code null}
+     * @return this builder
      */
     public Builder leadership(SubscriptionLeadership leadership) {
-      this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
+      this.leadership = Objects.requireNonNull(leadership, "leadership is required");
       return this;
     }
 
@@ -1548,10 +1541,14 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
      * Sets the subscription health contributor. Optional; when present, each scheduled projection
      * is registered with it (so {@code health()} lists it and {@code overallStatus()} reflects its
      * state) and each chunk's processing outcome feeds the contributor's success/error counters.
-     * Absent (or {@code null}) makes health tracking a no-op.
+     * The default {@link SubscriptionHealthContributor#NOOP} tracks nothing.
+     *
+     * @param healthContributor the contributor; not {@code null}
+     * @return this builder
      */
     public Builder healthContributor(SubscriptionHealthContributor healthContributor) {
-      this.healthContributor = healthContributor;
+      this.healthContributor =
+          Objects.requireNonNull(healthContributor, "healthContributor is required");
       return this;
     }
 

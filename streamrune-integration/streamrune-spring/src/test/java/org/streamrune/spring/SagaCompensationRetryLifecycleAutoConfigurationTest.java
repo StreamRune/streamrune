@@ -281,7 +281,8 @@ class SagaCompensationRetryLifecycleAutoConfigurationTest {
                       properties.security(),
                       properties.sse(),
                       properties.gdpr(),
-                      properties.jvm());
+                      properties.jvm(),
+                      properties.tracing());
               var lifecycle =
                   new SagaCompensationRetryLifecycle(
                       ctx.getBeanProvider(

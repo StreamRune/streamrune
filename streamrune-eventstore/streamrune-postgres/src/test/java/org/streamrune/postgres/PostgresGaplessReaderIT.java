@@ -118,7 +118,6 @@ class PostgresGaplessReaderIT {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("gapless-reader"),
             null,
             null,
@@ -153,7 +152,6 @@ class PostgresGaplessReaderIT {
             new EventMetadata(
                 IdGenerator.generateEventId(),
                 IdGenerator.generateCommandId(),
-                null,
                 null,
                 CorrelationId.of("gapless-reader"),
                 null,

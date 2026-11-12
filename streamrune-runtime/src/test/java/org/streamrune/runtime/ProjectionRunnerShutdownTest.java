@@ -161,7 +161,6 @@ class ProjectionRunnerShutdownTest {
                     IdGenerator.generateEventId(),
                     IdGenerator.generateCommandId(),
                     null,
-                    null,
                     CorrelationId.of("corr"),
                     null,
                     null,

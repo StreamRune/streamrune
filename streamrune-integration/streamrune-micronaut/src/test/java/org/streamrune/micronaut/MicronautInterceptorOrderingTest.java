@@ -83,7 +83,9 @@ class MicronautInterceptorOrderingTest {
     try (VirtualThreadCommandBus bus =
         module.virtualThreadCommandBus(
             new InMemoryEventStore(),
-            module.aggregateLocker(StreamRuneMicronautProperties.withDefaults()),
+            module.aggregateLocker(
+                StreamRuneMicronautProperties.withDefaults(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             StreamRuneMicronautProperties.withDefaults(),
             null, // no application SnapshotPolicy bean
             containerOrder,
@@ -92,7 +94,8 @@ class MicronautInterceptorOrderingTest {
             null,
             null,
             null,
-            false)) {
+            false,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP)) {
       assertThrows(AuthorizationException.class, () -> bus.execute(new WidgetCommand("w-1")));
       assertTrue(
           saved.stream().anyMatch(e -> e.outcome() == AuditOutcome.FAILURE),

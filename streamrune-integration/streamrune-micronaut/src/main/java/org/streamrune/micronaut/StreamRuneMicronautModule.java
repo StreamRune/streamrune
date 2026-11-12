@@ -6,7 +6,6 @@ import io.micronaut.context.annotation.Property;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.context.annotation.Secondary;
 import io.micronaut.core.annotation.Nullable;
-import io.opentelemetry.api.OpenTelemetry;
 import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.util.List;
@@ -29,6 +28,8 @@ import org.streamrune.core.gdpr.SubjectDataCollector;
 import org.streamrune.core.gdpr.SubjectDataPurger;
 import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.saga.SagaStore;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.integration.AuthenticatedUserResolver;
 import org.streamrune.integration.MicrometerStreamRuneMetrics;
@@ -49,8 +50,6 @@ import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.InboxRetentionSweeper;
 import org.streamrune.runtime.LocalStripedLocker;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
-import org.streamrune.runtime.OpenTelemetryTracing;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.SimpleQueryBus;
 import org.streamrune.runtime.SseEventFeed;
@@ -157,6 +156,7 @@ public class StreamRuneMicronautModule {
    * @param eventAuditStore optional audit store for event-level auditing
    * @param outboxEventMapper optional outbox event mapper for transactional outbox emit
    * @param outboxStore optional outbox store for transactional outbox emit
+   * @param tracing the tracing it starts its spans through
    * @return a new {@link PostgresEventStoreFactory}
    * @throws IllegalStateException when an {@code OutboxEventMapper} bean is paired with an {@code
    *     OutboxStore} that is not a {@code PostgresOutboxStore}
@@ -179,7 +179,8 @@ public class StreamRuneMicronautModule {
       @jakarta.annotation.Nullable org.streamrune.core.outbox.OutboxStore outboxStore,
       @jakarta.annotation.Nullable PostgresCommandInbox commandInbox,
       @jakarta.annotation.Nullable CommandInbox busCommandInbox,
-      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
+      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
+      StreamRuneTracing tracing) {
     if (cryptoEngines.size() > 1) {
       throw new IllegalStateException(
           "Multiple CryptoEngine beans found ("
@@ -190,10 +191,11 @@ public class StreamRuneMicronautModule {
     var factory =
         new PostgresEventStoreFactory(dataSource, typeRegistry)
             .autoInitializeSchema(properties.autoInitializeSchema())
+            .tracing(tracing)
             // Thread the metrics bean into the event store's CryptoShreddingModule so a
             // mass redaction on the replay/projection decrypt path emits subject_redacted; NOOP
-            // when absent (metrics(null) → NOOP), behavior unchanged.
-            .metrics(metrics);
+            // when absent, behavior unchanged.
+            .metrics(metricsOrNoop(metrics));
     // The store borrows from the application DataSource as given and bounds its own statements
     // per transaction or per statement; the bound is the one knob it needs from configuration.
     // An explicit null keeps the factory's default.
@@ -300,16 +302,92 @@ public class StreamRuneMicronautModule {
   }
 
   /**
-   * Creates a default LocalStripedLocker with configured stripe count.
+   * Creates a default LocalStripedLocker with configured stripe count, tracing its acquisitions
+   * through the {@link StreamRuneTracing} bean.
    *
    * @param properties the StreamRune configuration properties
+   * @param tracing the tracing the locker starts {@code lock/acquire} through
    * @return a new {@link LocalStripedLocker}
    */
   @Singleton
   @Requires(missingBeans = org.streamrune.core.AggregateLocker.class)
   public org.streamrune.core.AggregateLocker aggregateLocker(
-      StreamRuneMicronautProperties properties) {
-    return new LocalStripedLocker(properties.stripeCount());
+      StreamRuneMicronautProperties properties, StreamRuneTracing tracing) {
+    return new LocalStripedLocker(properties.stripeCount()).traced(tracing);
+  }
+
+  /**
+   * The tracing every component this factory builds starts its spans through, under the switches of
+   * {@code streamrune.tracing.*}. With {@code opentelemetry-api} on the classpath it traces through
+   * the application's {@code OpenTelemetry} bean, or, without one, through the global OpenTelemetry
+   * ({@code GlobalOpenTelemetry.get()}), which the OpenTelemetry Java agent registers before the
+   * application starts; see {@link OpenTelemetryTracingResolution}. It is {@link
+   * StreamRuneTracing#NOOP} without {@code opentelemetry-api}, when the master switch is off, and
+   * when that OpenTelemetry has no tracer provider of its own (nothing registered), so an
+   * application without OpenTelemetry pays nothing. An application {@code StreamRuneTracing} bean
+   * replaces it.
+   *
+   * @param beanContext the context the {@code OpenTelemetry} bean is looked up in
+   * @param properties the StreamRune configuration properties
+   * @return the tracing
+   */
+  @Singleton
+  @Requires(missingBeans = StreamRuneTracing.class)
+  public StreamRuneTracing streamRuneTracing(
+      io.micronaut.context.BeanContext beanContext, StreamRuneMicronautProperties properties) {
+    TracingSettings settings = tracingSettings(properties);
+    if (!settings.enabled() || !openTelemetryOnTheClasspath()) {
+      return StreamRuneTracing.NOOP;
+    }
+    // The resolution names OpenTelemetry types, so its class is loaded only when they are present.
+    return OpenTelemetryTracingResolution.of(beanContext, settings);
+  }
+
+  /** Whether {@code opentelemetry-api} is on this module's classpath. */
+  static boolean openTelemetryOnTheClasspath() {
+    try {
+      Class.forName(
+          "io.opentelemetry.api.OpenTelemetry",
+          false,
+          StreamRuneMicronautModule.class.getClassLoader());
+      return true;
+    } catch (ClassNotFoundException | LinkageError e) {
+      return false;
+    }
+  }
+
+  /** {@code streamrune.tracing.*} as the {@link TracingSettings} the tracing takes. */
+  static TracingSettings tracingSettings(StreamRuneMicronautProperties properties) {
+    return TracingSettings.builder()
+        .enabled(properties.tracingEnabled())
+        .area(TracingArea.COMMAND, properties.tracingCommandEnabled())
+        .area(TracingArea.SUBSCRIPTION, properties.tracingSubscriptionEnabled())
+        .area(TracingArea.PROJECTION, properties.tracingProjectionEnabled())
+        .area(TracingArea.EVENT_STORE, properties.tracingEventStoreEnabled())
+        .area(TracingArea.LOCK, properties.tracingLockEnabled())
+        .area(TracingArea.OUTBOX, properties.tracingOutboxEnabled())
+        .area(TracingArea.SAGA, properties.tracingSagaEnabled())
+        .build();
+  }
+
+  /**
+   * The locker the command bus takes, tracing through {@code tracing} when it is one of the
+   * framework's lockers: {@link LocalStripedLocker} and {@link
+   * org.streamrune.postgres.PgAdvisoryLocker} return a locker on the same locks that starts {@code
+   * lock/acquire}. Any other locker is returned as it is.
+   */
+  static org.streamrune.core.AggregateLocker traced(
+      org.streamrune.core.AggregateLocker locker, StreamRuneTracing tracing) {
+    if (!tracing.enabled(TracingArea.LOCK)) {
+      return locker;
+    }
+    if (locker instanceof LocalStripedLocker local) {
+      return local.traced(tracing);
+    }
+    if (locker instanceof org.streamrune.postgres.PgAdvisoryLocker advisory) {
+      return advisory.traced(tracing);
+    }
+    return locker;
   }
 
   /**
@@ -337,7 +415,7 @@ public class StreamRuneMicronautModule {
   @Bean(typed = SimpleQueryBus.class)
   public SimpleQueryBus simpleQueryBus(
       @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
-    return new SimpleQueryBus(metrics);
+    return new SimpleQueryBus(metricsOrNoop(metrics));
   }
 
   /**
@@ -637,6 +715,7 @@ public class StreamRuneMicronautModule {
    * @param metrics optional metrics collector; when present, command-bus meters are recorded
    * @param allowGraalJit the value of {@value org.streamrune.runtime.GraalJitGuard#ALLOW_PROPERTY}:
    *     {@code true} builds the bus on a JVM {@code GraalJitGuard} refuses
+   * @param tracing the tracing it starts its spans through
    * @return a new {@link VirtualThreadCommandBus}
    * @throws IllegalStateException if multiple CryptoEngine beans exist, if a registered command
    *     type has an {@code @Encrypted} field with no CryptoEngine configured, or if {@link
@@ -658,7 +737,8 @@ public class StreamRuneMicronautModule {
       @jakarta.annotation.Nullable org.streamrune.core.DeadLetterQueue deadLetterQueue,
       @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
       @Property(name = org.streamrune.runtime.GraalJitGuard.ALLOW_PROPERTY, defaultValue = "false")
-          boolean allowGraalJit) {
+          boolean allowGraalJit,
+      StreamRuneTracing tracing) {
 
     // Fail fast when a registered command type carries an @Encrypted field but no
     // CryptoEngine is configured — otherwise that PII would be dead-lettered as PLAINTEXT.
@@ -692,7 +772,9 @@ public class StreamRuneMicronautModule {
     var builder =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)
-            .locker(locker)
+            .locker(traced(locker, tracing))
+            // Adds the command interceptor in its slot, unless the chain holds the application's.
+            .tracing(tracing)
             .retryPolicy(retryPolicy)
             .snapshotPolicy(
                 snapshotPolicy != null
@@ -721,7 +803,7 @@ public class StreamRuneMicronautModule {
           .deadLetterQueue(deadLetterQueue)
           .objectMapper(
               org.streamrune.runtime.DeadLetterRetryRunner.createObjectMapper(
-                  cryptoEngine, metrics))
+                  cryptoEngine, metricsOrNoop(metrics)))
           .deadLetterRetryPolicy(deadLetterRetryPolicy(properties))
           .inboxRetentionMaxAge(properties.inboxRetentionMaxAge());
     }
@@ -761,24 +843,6 @@ public class StreamRuneMicronautModule {
       void registerDecider(
           VirtualThreadCommandBus.Builder builder, DeciderRegistration<C, S, E> reg) {
     builder.register(reg.aggregateType(), reg.commandType(), reg.idExtractor(), reg.decider());
-  }
-
-  /**
-   * Creates an OTel command interceptor when {@code OpenTelemetry} is available.
-   *
-   * @param openTelemetry the OpenTelemetry instance
-   * @return a new {@link OpenTelemetryCommandInterceptor}
-   */
-  @Singleton
-  @Secondary
-  // Back off when the user defines their own OpenTelemetryCommandInterceptor (collection
-  // injection would otherwise run both — duplicate command spans).
-  @Requires(missingBeans = OpenTelemetryCommandInterceptor.class)
-  @Requires(beans = OpenTelemetry.class)
-  public OpenTelemetryCommandInterceptor openTelemetryCommandInterceptor(
-      OpenTelemetry openTelemetry) {
-    return new OpenTelemetryCommandInterceptor(
-        OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled()));
   }
 
   /**
@@ -1027,7 +1091,8 @@ public class StreamRuneMicronautModule {
     // on the saga-state decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
     return new org.streamrune.postgres.PostgresSagaStore(
         dataSource,
-        org.streamrune.postgres.PostgresSagaStore.createObjectMapper(cryptoEngine, metrics));
+        org.streamrune.postgres.PostgresSagaStore.createObjectMapper(
+            cryptoEngine, metricsOrNoop(metrics)));
   }
 
   /**
@@ -1205,7 +1270,8 @@ public class StreamRuneMicronautModule {
     // on the read-model decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
     return new org.streamrune.postgres.JdbcProjectionRepository(
         dataSource,
-        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(cryptoEngine, metrics));
+        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(
+            cryptoEngine, metricsOrNoop(metrics)));
   }
 
   /**
@@ -1269,7 +1335,7 @@ public class StreamRuneMicronautModule {
     if (auditStore != null) {
       b.auditStore(auditStore);
     }
-    b.metrics(metrics);
+    b.metrics(metricsOrNoop(metrics));
     // A forget evicts the query cache after its last purger, so no cached answer taken before the
     // erasure is served after it.
     b.queryCache(queryCache);
@@ -1369,7 +1435,7 @@ public class StreamRuneMicronautModule {
             .commandBus(commandBus)
             .objectMapper(
                 org.streamrune.runtime.DeadLetterRetryRunner.createObjectMapper(
-                    cryptoEngine, metrics))
+                    cryptoEngine, metricsOrNoop(metrics)))
             .policy(deadLetterRetryPolicy(properties))
             // The window the inbox retention sweeper prunes with: a keyed entry older than it is
             // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
@@ -1391,9 +1457,10 @@ public class StreamRuneMicronautModule {
     // replica polls/retries; NOOP (always leader) when absent. Without it, two replicas' staggered
     // polls both re-execute the same DLQ command (duplicate domain events) with no CommandInbox to
     // de-dup.
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    builder.leadership(
+        leadership != null
+            ? leadership
+            : org.streamrune.core.subscription.SubscriptionLeadership.NOOP);
 
     DeadLetterRetryRunner runner = builder.build();
     // Register for relay liveness health so /health degrades if this runner's thread
@@ -1432,6 +1499,7 @@ public class StreamRuneMicronautModule {
    * @param publisher the outbox publisher
    * @param properties the StreamRune configuration properties
    * @param metrics the optional metrics collector
+   * @param tracing the tracing it starts its spans through
    * @return a new {@link OutboxPoller}
    */
   @Singleton
@@ -1452,7 +1520,8 @@ public class StreamRuneMicronautModule {
       StreamRuneMicronautProperties properties,
       @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
       @jakarta.annotation.Nullable
-          org.streamrune.runtime.BackgroundRelayHealthContributor relayHealth) {
+          org.streamrune.runtime.BackgroundRelayHealthContributor relayHealth,
+      StreamRuneTracing tracing) {
     OutboxPoller poller =
         OutboxPoller.builder()
             .outboxStore(store)
@@ -1466,6 +1535,7 @@ public class StreamRuneMicronautModule {
                     properties.outboxRetryInitialDelay(),
                     properties.outboxRetryBackoffMultiplier()))
             .metrics(metrics != null ? metrics : org.streamrune.core.StreamRuneMetrics.NOOP)
+            .tracing(tracing)
             .build();
     // Register for relay liveness health so /health degrades if the relay thread dies.
     if (relayHealth != null) {
@@ -1766,5 +1836,11 @@ public class StreamRuneMicronautModule {
   public org.streamrune.core.upcasting.UpcasterChain upcasterChain(
       List<org.streamrune.core.upcasting.EventUpcaster> upcasters) {
     return new org.streamrune.core.upcasting.UpcasterChain(upcasters);
+  }
+
+  /** The application's metrics bean, or {@code StreamRuneMetrics.NOOP} when it has none. */
+  static org.streamrune.core.StreamRuneMetrics metricsOrNoop(
+      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
+    return metrics != null ? metrics : org.streamrune.core.StreamRuneMetrics.NOOP;
   }
 }

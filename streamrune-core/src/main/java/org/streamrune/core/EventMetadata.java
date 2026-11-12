@@ -1,5 +1,6 @@
 package org.streamrune.core;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
 import java.util.Map;
@@ -9,17 +10,19 @@ import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
-import org.streamrune.core.types.SpanId;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
 
 /**
  * Causal metadata attached to every persisted event.
  *
+ * <p>Reading its JSON form ignores a {@code spanId} key, which stored metadata can carry and the
+ * record does not define; with a mapper that fails on unknown properties, any other key the record
+ * does not define is refused.
+ *
  * @param eventId unique event identifier (required)
  * @param commandId identifier of the command that caused this event (required)
  * @param traceId the caller's {@code X-Trace-Id}: correlation data, never a link (nullable)
- * @param spanId no framework path writes it (nullable)
  * @param correlationId identifies the entire business process (required)
  * @param causationId identifies the direct predecessor event ID (nullable)
  * @param userId who triggered the action (nullable)
@@ -33,11 +36,11 @@ import org.streamrune.core.types.UserId;
  *     it ({@link SpanLink#of(EventMetadata)}). Never {@code null}: a {@code null} argument, and a
  *     JSON form without the key, read as {@code NONE}, and {@code NONE} is left out of the JSON
  */
+@JsonIgnoreProperties({"spanId"})
 public record EventMetadata(
     EventId eventId,
     CommandId commandId,
     TraceId traceId,
-    SpanId spanId,
     CorrelationId correlationId,
     CausationId causationId,
     UserId userId,
@@ -71,7 +74,6 @@ public record EventMetadata(
       EventId eventId,
       CommandId commandId,
       TraceId traceId,
-      SpanId spanId,
       CorrelationId correlationId,
       CausationId causationId,
       UserId userId,
@@ -82,7 +84,6 @@ public record EventMetadata(
         eventId,
         commandId,
         traceId,
-        spanId,
         correlationId,
         causationId,
         userId,
@@ -97,23 +98,12 @@ public record EventMetadata(
       EventId eventId,
       CommandId commandId,
       TraceId traceId,
-      SpanId spanId,
       CorrelationId correlationId,
       CausationId causationId,
       UserId userId,
       Instant timestamp,
       Map<String, String> baggage) {
-    this(
-        eventId,
-        commandId,
-        traceId,
-        spanId,
-        correlationId,
-        causationId,
-        userId,
-        timestamp,
-        baggage,
-        null);
+    this(eventId, commandId, traceId, correlationId, causationId, userId, timestamp, baggage, null);
   }
 
   /**
@@ -124,21 +114,10 @@ public record EventMetadata(
       EventId eventId,
       CommandId commandId,
       TraceId traceId,
-      SpanId spanId,
       CorrelationId correlationId,
       CausationId causationId,
       UserId userId,
       Instant timestamp) {
-    this(
-        eventId,
-        commandId,
-        traceId,
-        spanId,
-        correlationId,
-        causationId,
-        userId,
-        timestamp,
-        null,
-        null);
+    this(eventId, commandId, traceId, correlationId, causationId, userId, timestamp, null, null);
   }
 }

@@ -70,15 +70,15 @@ public final class TracingEventListener implements EventListener {
    * report a missing argument.
    *
    * @param listener the listener, or {@code null}
-   * @param tracing the tracing; {@code null} traces nothing
+   * @param tracing the tracing; {@link StreamRuneTracing#NOOP} traces nothing, not {@code null}
    * @param subscriptionName the subscription name, or {@code null}
    * @return the listener to deliver to
    */
   public static EventListener traced(
       EventListener listener, StreamRuneTracing tracing, SubscriptionName subscriptionName) {
+    Objects.requireNonNull(tracing, "tracing is required");
     if (listener == null
         || subscriptionName == null
-        || tracing == null
         || !tracing.enabled(TracingArea.SUBSCRIPTION)
         || isTraced(listener)) {
       return listener;

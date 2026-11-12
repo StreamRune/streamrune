@@ -96,7 +96,14 @@ class PostgresEventStoreAppendWithKeyTest {
     commandInbox = new PostgresCommandInbox(dataSource);
     store =
         new PostgresEventStore(
-            dataSource, objectMapper, typeRegistry, null, null, null, null, commandInbox);
+            dataSource,
+            objectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            commandInbox);
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("DELETE FROM event_stream");
@@ -114,7 +121,6 @@ class PostgresEventStoreAppendWithKeyTest {
         new EventMetadata(
             EventId.of("evt-v" + version),
             CommandId.of("cmd-v" + version),
-            null,
             null,
             CorrelationId.of("corr-1"),
             null,
@@ -476,7 +482,14 @@ class PostgresEventStoreAppendWithKeyTest {
       PostgresCommandInbox smallPoolInbox = new PostgresCommandInbox(smallPool);
       PostgresEventStore smallPoolStore =
           new PostgresEventStore(
-              smallPool, objectMapper, typeRegistry, null, null, null, null, smallPoolInbox);
+              smallPool,
+              objectMapper,
+              typeRegistry,
+              org.streamrune.core.upcasting.UpcasterChain.empty(),
+              null,
+              null,
+              null,
+              smallPoolInbox);
 
       IdempotentAppendResult result =
           smallPoolStore.appendWithKey(
@@ -544,7 +557,14 @@ class PostgresEventStoreAppendWithKeyTest {
   void appendWithKeyWithoutCommandInboxThrows() {
     PostgresEventStore storeNoInbox =
         new PostgresEventStore(
-            dataSource, objectMapper, typeRegistry, null, null, null, null, null);
+            dataSource,
+            objectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            null);
     assertThrows(
         UnsupportedOperationException.class,
         () ->

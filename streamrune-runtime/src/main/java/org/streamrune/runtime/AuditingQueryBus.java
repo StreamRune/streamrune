@@ -63,18 +63,19 @@ public final class AuditingQueryBus implements QueryBus {
   private final Map<Class<?>, Boolean> auditableCache = new ConcurrentHashMap<>();
 
   public AuditingQueryBus(QueryBus delegate, AuditStore auditStore) {
-    this(delegate, auditStore, null);
+    this(delegate, auditStore, StreamRuneMetrics.NOOP);
   }
 
   /**
-   * Creates an auditing bus with an optional metrics collector.
+   * Creates an auditing bus with a metrics collector.
    *
-   * @param metrics the metrics collector; {@code null} disables metrics (behavior unchanged)
+   * @param metrics the metrics collector; {@link StreamRuneMetrics#NOOP} records nothing, not
+   *     {@code null}
    */
   public AuditingQueryBus(QueryBus delegate, AuditStore auditStore, StreamRuneMetrics metrics) {
     this.delegate = Objects.requireNonNull(delegate, "delegate");
     this.auditStore = Objects.requireNonNull(auditStore, "auditStore");
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
   }
 
   @Override

@@ -739,7 +739,6 @@ class SagaBindingRefusalTest {
                       EventId.of("evt-order-" + orderId),
                       CommandId.of("cmd-order-" + orderId),
                       null,
-                      null,
                       CorrelationId.of("client-" + orderId),
                       null,
                       null,

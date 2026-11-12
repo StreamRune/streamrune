@@ -245,7 +245,7 @@ public final class PostgresNotificationSubscription implements EventSubscription
         PgNotificationListener.DEFAULT_LIVENESS_PROBE_INTERVAL_MS;
     private long livenessProbeTimeoutMs = PgNotificationListener.DEFAULT_LIVENESS_PROBE_TIMEOUT_MS;
     private SubscriptionLease lease;
-    private SubscriptionLeadership leadership;
+    private SubscriptionLeadership leadership = SubscriptionLeadership.NOOP;
     private SagaRunner<?> sagaRunner;
     private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
@@ -333,11 +333,15 @@ public final class PostgresNotificationSubscription implements EventSubscription
     /**
      * Delivers under the lease named after this subscription over {@code leadership}: the same as
      * {@code lease(SubscriptionLease.of(leadership, subscriptionName))}. One replica then delivers
-     * this subscription's events; the others stand by and take over when it stops or dies. Not
-     * together with {@link #lease} or {@link #sagaRunner}.
+     * this subscription's events; the others stand by and take over when it stops or dies. {@link
+     * SubscriptionLeadership#NOOP}, the default, delivers everywhere. A leadership other than
+     * {@code NOOP} is not taken together with {@link #lease} or {@link #sagaRunner}.
+     *
+     * @param leadership the leadership; not {@code null}
+     * @return this builder
      */
     public Builder leadership(SubscriptionLeadership leadership) {
-      this.leadership = leadership;
+      this.leadership = Objects.requireNonNull(leadership, "leadership is required");
       return this;
     }
 
@@ -393,13 +397,13 @@ public final class PostgresNotificationSubscription implements EventSubscription
                 + ": sagaRunner(...) and lease(...) are both set — sagaRunner(runner) takes"
                 + " runner.lease(); name one of them");
       }
-      if (sagaRunner != null && leadership != null) {
+      if (sagaRunner != null && leadership != SubscriptionLeadership.NOOP) {
         throw new IllegalArgumentException(
             prefix
                 + ": sagaRunner(...) and leadership(...) are both set — sagaRunner(runner) takes"
                 + " runner.lease(); name one of them");
       }
-      if (lease != null && leadership != null) {
+      if (lease != null && leadership != SubscriptionLeadership.NOOP) {
         throw new IllegalArgumentException(
             prefix
                 + ": lease(...) and leadership(...) are both set — leadership(l) is"
@@ -415,7 +419,7 @@ public final class PostgresNotificationSubscription implements EventSubscription
       if (lease != null) {
         return lease;
       }
-      if (leadership != null && subscriptionName != null) {
+      if (leadership != SubscriptionLeadership.NOOP && subscriptionName != null) {
         return SubscriptionLease.of(leadership, subscriptionName);
       }
       return SubscriptionLease.ungated();

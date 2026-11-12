@@ -1058,7 +1058,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
      * saga faults, compensation outcomes, and CAS conflicts encountered during timeout processing.
      */
     public Builder<S> metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 

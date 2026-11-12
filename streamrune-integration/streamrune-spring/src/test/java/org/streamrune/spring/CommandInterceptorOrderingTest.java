@@ -22,6 +22,7 @@ import org.streamrune.runtime.BeanValidationInterceptor;
 import org.streamrune.runtime.CircuitBreakerCommandInterceptor;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+import org.streamrune.runtime.VirtualThreadCommandBus;
 
 /**
  * Proves the auto-registered command interceptor chain is deterministic: every framework
@@ -30,7 +31,8 @@ import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
  * Audit → Authorization → AnnotationAuthorization → BeanValidation → CircuitBreaker →
  * InlineProjection, and {@code after()}/{@code onError()} run in reverse. Without explicit
  * ordering, e.g. the circuit breaker could count validation rejections as failures, or audit could
- * miss rejected commands.
+ * miss rejected commands. The OpenTelemetry interceptor is no bean: the command bus adds it in its
+ * slot from the {@code StreamRuneTracing} bean.
  */
 class CommandInterceptorOrderingTest {
 
@@ -42,7 +44,12 @@ class CommandInterceptorOrderingTest {
           .withBean(EventStore.class, () -> mock(EventStore.class))
           .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
           .withBean(
-              io.opentelemetry.api.OpenTelemetry.class, io.opentelemetry.api.OpenTelemetry::noop)
+              io.opentelemetry.api.OpenTelemetry.class,
+              () ->
+                  io.opentelemetry.sdk.OpenTelemetrySdk.builder()
+                      .setTracerProvider(
+                          io.opentelemetry.sdk.trace.SdkTracerProvider.builder().build())
+                      .build())
           .withBean(CommandAuthorizationPolicy.class, () -> mock(CommandAuthorizationPolicy.class))
           .withBean("orderingInlineProjection", Projection.class, InlineTestProjection::new);
 
@@ -56,6 +63,18 @@ class CommandInterceptorOrderingTest {
                   .<Class<?>>map(Object::getClass)
                   .toList();
           assertThat(chain)
+              .containsExactly(
+                  AuditCommandInterceptor.class,
+                  AuthorizationCommandInterceptor.class,
+                  AnnotationAuthorizationInterceptor.class,
+                  BeanValidationInterceptor.class,
+                  CircuitBreakerCommandInterceptor.class,
+                  InlineProjectionInterceptor.class);
+          List<Class<?>> busChain =
+              ctx.getBean(VirtualThreadCommandBus.class).interceptors().stream()
+                  .<Class<?>>map(Object::getClass)
+                  .toList();
+          assertThat(busChain)
               .containsExactly(
                   OpenTelemetryCommandInterceptor.class,
                   AuditCommandInterceptor.class,

@@ -83,15 +83,16 @@ public final class MultiProjectionRunner implements AutoCloseable {
     this.atomicProcessor = atomicProcessor;
     this.deadLetterStore = deadLetterStore;
     this.stopTimeoutMs = stopTimeout.toMillis();
-    this.metrics = metrics;
-    this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
+    this.leadership = Objects.requireNonNull(leadership, "leadership is required");
     this.classifier =
         classifier != null
             ? classifier
             : org.streamrune.core.projection.ProjectionErrorClassifier.DEFAULT;
-    this.healthContributor = healthContributor;
+    this.healthContributor =
+        Objects.requireNonNull(healthContributor, "healthContributor is required");
     this.clock = clock;
-    this.tracing = tracing != null ? tracing : StreamRuneTracing.NOOP;
+    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
   }
 
   /**
@@ -127,8 +128,8 @@ public final class MultiProjectionRunner implements AutoCloseable {
               // ProjectionErrorClassifier.DEFAULT.
               .classifier(classifier)
               // Same health contributor threaded into every per-registration runner so each
-              // projection's live subscription registers itself and reports delivery health; null
-              // (no contributor) makes health tracking a no-op.
+              // projection's live subscription registers itself and reports delivery health;
+              // SubscriptionHealthContributor.NOOP tracks nothing.
               .healthContributor(healthContributor)
               .tracing(tracing);
       if (clock != null) {
@@ -246,11 +247,11 @@ public final class MultiProjectionRunner implements AutoCloseable {
     private AtomicBatchProcessor atomicProcessor;
     private ProjectionDeadLetterStore deadLetterStore;
     private Duration stopTimeout = DEFAULT_STOP_TIMEOUT;
-    private StreamRuneMetrics metrics;
+    private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private SubscriptionLeadership leadership = SubscriptionLeadership.NOOP;
     private org.streamrune.core.projection.ProjectionErrorClassifier classifier =
         org.streamrune.core.projection.ProjectionErrorClassifier.DEFAULT;
-    private SubscriptionHealthContributor healthContributor;
+    private SubscriptionHealthContributor healthContributor = SubscriptionHealthContributor.NOOP;
     private Clock clock;
     private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
     private final List<ProjectionRegistration> registrations = new ArrayList<>();
@@ -308,11 +309,14 @@ public final class MultiProjectionRunner implements AutoCloseable {
 
     /**
      * Sets the metrics collector propagated to every per-projection {@link
-     * ContinuousProjectionRunner}. Optional; when absent (or {@code null}) projection metrics are
-     * not recorded and behavior is unchanged.
+     * ContinuousProjectionRunner}. Optional; the default {@link StreamRuneMetrics#NOOP} records
+     * nothing.
+     *
+     * @param metrics the metrics; not {@code null}
+     * @return this builder
      */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 
@@ -321,9 +325,12 @@ public final class MultiProjectionRunner implements AutoCloseable {
      * {@link ContinuousProjectionRunner}. Optional; defaults to {@link SubscriptionLeadership#NOOP}
      * (always leader), so single-instance behavior is unchanged. Each projection name is led
      * independently.
+     *
+     * @param leadership the leadership; not {@code null}
+     * @return this builder
      */
     public Builder leadership(SubscriptionLeadership leadership) {
-      this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
+      this.leadership = Objects.requireNonNull(leadership, "leadership is required");
       return this;
     }
 
@@ -346,10 +353,15 @@ public final class MultiProjectionRunner implements AutoCloseable {
      * Sets the subscription health contributor threaded into every per-projection {@link
      * ContinuousProjectionRunner}. Optional; when present, each projection's live subscription
      * registers itself so the health endpoint lists it and reflects its state, and delivery
-     * outcomes feed the contributor. Absent (or {@code null}) makes health tracking a no-op.
+     * outcomes feed the contributor. The default {@link SubscriptionHealthContributor#NOOP} tracks
+     * nothing.
+     *
+     * @param healthContributor the contributor; not {@code null}
+     * @return this builder
      */
     public Builder healthContributor(SubscriptionHealthContributor healthContributor) {
-      this.healthContributor = healthContributor;
+      this.healthContributor =
+          Objects.requireNonNull(healthContributor, "healthContributor is required");
       return this;
     }
 

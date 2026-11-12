@@ -116,7 +116,6 @@ class PostgresEventStorePostCommitCleanupTest {
             EventId.of("evt-v" + version),
             CommandId.of("cmd-v" + version),
             null,
-            null,
             CorrelationId.of("corr-1"),
             null,
             null,
@@ -180,7 +179,14 @@ class PostgresEventStorePostCommitCleanupTest {
     var commandInbox = new PostgresCommandInbox(realDataSource);
     var store =
         new PostgresEventStore(
-            faultyDs, objectMapper, typeRegistry, null, null, null, null, commandInbox);
+            faultyDs,
+            objectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            commandInbox);
     var streamId = TestStreams.stream("post-commit-keyed");
     var key = IdempotencyKey.of("post-commit-key-1");
 

@@ -155,7 +155,9 @@ leaves it out. Application code does not call, implement or bind it.
 
 The `@Bean`, producer and factory methods of the Spring, Quarkus and Micronaut integrations are
 wiring that the container calls, not API: an application replaces a bean with one of its own, and
-does not call these methods.
+does not call these methods. Their properties types (Spring's `StreamRuneProperties`,
+`StreamRuneMicronautProperties` with its `withDefaults()`, Quarkus' `StreamRuneQuarkusProperties`)
+are read-only for applications: the configuration keys are API, the types' constructors are not.
 
 Interfaces that applications implement (an `EventStore`, a `CommandBus` decorator, a
 `CommandInterceptor`, a `SagaStore` and the other ports) may gain new `default` methods in a minor

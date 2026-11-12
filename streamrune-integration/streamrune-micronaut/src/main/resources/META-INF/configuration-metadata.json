@@ -253,6 +253,54 @@
       "defaultValue": "1s"
     },
     {
+      "name": "streamrune.tracing.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Master switch of the StreamRune spans: false starts none, even with OpenTelemetry present. Without OpenTelemetry (no opentelemetry-api, or no OpenTelemetry bean and no registered global OpenTelemetry) nothing is traced and the tracing switches do nothing.",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.tracing.command.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the command/{CommandType} spans are started.",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.tracing.subscription.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the subscription/{name}/deliver spans are started.",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.tracing.projection.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the projection/{name}/process spans are started.",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.tracing.event-store.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the eventstore/... spans, snapshots included, are started.",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.tracing.lock.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the lock/acquire spans are started.",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.tracing.outbox.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the outbox/relay and outbox/publish spans are started.",
+      "defaultValue": true
+    },
+    {
+      "name": "streamrune.tracing.saga.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the saga/{SagaType}/... spans are started.",
+      "defaultValue": true
+    },
+    {
       "name": "streamrune.jvm.allow-graal-jit",
       "type": "java.lang.Boolean",
       "description": "Start on a JVM the startup check refuses: one that runs the Graal JIT, which is not reliable with StreamRune on JDK 25 (run GraalVM with -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler instead), or a GraalVM runtime whose compiler options the check cannot read (without the module jdk.management). It starts with one ERROR line, at the application's own risk. When false (the default) such a JVM refuses to start.",

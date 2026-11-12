@@ -336,7 +336,6 @@ public final class SagaFixture<S extends SagaState> {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             IdGenerator.generateCorrelationId(),
             null,
             null,

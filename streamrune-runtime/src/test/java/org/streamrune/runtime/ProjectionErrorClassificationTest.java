@@ -59,7 +59,6 @@ class ProjectionErrorClassificationTest {
         IdGenerator.generateEventId(),
         IdGenerator.generateCommandId(),
         null,
-        null,
         CorrelationId.of(correlationId),
         null,
         null,

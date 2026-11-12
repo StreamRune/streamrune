@@ -352,8 +352,7 @@ public final class SagaRunner<S extends SagaState> {
     this.executor.forwardFence(!Boolean.FALSE.equals(builder.forwardFence));
     this.lease =
         SubscriptionLease.of(
-            builder.leadership != null ? builder.leadership : SubscriptionLeadership.NOOP,
-            SubscriptionName.of(LEASE_NAME_PREFIX + sagaType.value()));
+            builder.leadership, SubscriptionName.of(LEASE_NAME_PREFIX + sagaType.value()));
   }
 
   /**
@@ -1414,7 +1413,7 @@ public final class SagaRunner<S extends SagaState> {
     private Duration inboxRetentionMaxAge;
     private Clock clock = Clock.systemUTC();
     private SagaStepLock stepLock;
-    private SubscriptionLeadership leadership;
+    private SubscriptionLeadership leadership = SubscriptionLeadership.NOOP;
     private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
     /** {@code null}: not named, which {@link #build()} treats as on. */
@@ -1486,7 +1485,7 @@ public final class SagaRunner<S extends SagaState> {
      * saga quarantines, faults, compensation outcomes, and CAS conflicts.
      */
     public Builder<S> metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 
@@ -1568,13 +1567,16 @@ public final class SagaRunner<S extends SagaState> {
      * {@code sagaRunner(runner)} ({@code PollingEventSubscription}, {@code
      * HybridEventSubscription}, {@code PostgresNotificationSubscription}). One replica then
      * delivers the saga type, and the {@link SagaTimeoutRunner} and the {@link
-     * SagaCompensationRetrySweeper} built from this runner act on that replica only. Absent, {@code
-     * null} or {@link SubscriptionLeadership#NOOP}: ungated, every replica that runs the
-     * subscription delivers — correct too: the saga row's compare-and-swap, the command inbox and
-     * the forward fence carry correctness either way.
+     * SagaCompensationRetrySweeper} built from this runner act on that replica only. With the
+     * default {@link SubscriptionLeadership#NOOP} the runner is ungated: every replica that runs
+     * the subscription delivers — correct too: the saga row's compare-and-swap, the command inbox
+     * and the forward fence carry correctness either way.
+     *
+     * @param leadership the leadership; not {@code null}
+     * @return this builder
      */
     public Builder<S> leadership(SubscriptionLeadership leadership) {
-      this.leadership = leadership;
+      this.leadership = Objects.requireNonNull(leadership, "leadership is required");
       return this;
     }
 

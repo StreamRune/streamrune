@@ -109,7 +109,6 @@ class PostgresGaplessOffsetIT {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("gapless"),
             null,
             null,

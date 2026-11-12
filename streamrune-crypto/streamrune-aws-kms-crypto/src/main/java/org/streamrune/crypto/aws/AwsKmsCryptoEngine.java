@@ -9,6 +9,7 @@ import java.security.spec.AlgorithmParameterSpec;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.LongSupplier;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
@@ -836,11 +837,13 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
     /**
      * The metrics collector that counts discarded encryptions ({@code
      * streamrune.crypto.encrypt_self_check_failed}) and retried decryptions ({@code
-     * streamrune.crypto.decrypt_retried}). Defaults to {@link StreamRuneMetrics#NOOP}; {@code null}
-     * keeps it.
+     * streamrune.crypto.decrypt_retried}). Defaults to {@link StreamRuneMetrics#NOOP}.
+     *
+     * @param metrics the metrics; not {@code null}
+     * @return this builder
      */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 

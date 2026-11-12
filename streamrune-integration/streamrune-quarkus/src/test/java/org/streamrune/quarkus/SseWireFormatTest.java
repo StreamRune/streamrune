@@ -329,7 +329,6 @@ class SseWireFormatTest {
             EventId.of("evt-" + globalOffset),
             CommandId.of("cmd-" + globalOffset),
             null,
-            null,
             CorrelationId.of("corr-" + globalOffset),
             null,
             null,

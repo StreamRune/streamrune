@@ -36,7 +36,12 @@ class MicronautOutboxMetricsWiringTest {
     StreamRuneMetrics sentinel = new StreamRuneMetrics() {};
     OutboxPoller poller =
         module.outboxPoller(
-            store, publisher, StreamRuneMicronautProperties.withDefaults(), sentinel, null);
+            store,
+            publisher,
+            StreamRuneMicronautProperties.withDefaults(),
+            sentinel,
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertSame(
         sentinel, metricsOf(poller), "the auto-configured poller must carry the metrics bean");
   }
@@ -45,7 +50,12 @@ class MicronautOutboxMetricsWiringTest {
   void outboxPollerFallsBackToNoopWhenNoMetricsBean() throws Exception {
     OutboxPoller poller =
         module.outboxPoller(
-            store, publisher, StreamRuneMicronautProperties.withDefaults(), null, null);
+            store,
+            publisher,
+            StreamRuneMicronautProperties.withDefaults(),
+            null,
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertSame(StreamRuneMetrics.NOOP, metricsOf(poller));
   }
 
@@ -56,7 +66,12 @@ class MicronautOutboxMetricsWiringTest {
     // falls back to the built-in default ladder.
     OutboxPoller poller =
         module.outboxPoller(
-            store, publisher, propsWithRetry(7, Duration.ofMillis(250), 3.0), null, null);
+            store,
+            publisher,
+            propsWithRetry(7, Duration.ofMillis(250), 3.0),
+            null,
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     RetryPolicy rp = retryPolicyOf(poller);
     assertEquals(7, rp.maxAttempts());
     assertEquals(Duration.ofMillis(250), rp.initialDelay());
@@ -123,7 +138,15 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofSeconds(1),
         "auto",
         "required",
-        "operator-only");
+        "operator-only",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true);
   }
 
   @Test
@@ -136,7 +159,12 @@ class MicronautOutboxMetricsWiringTest {
         module.micrometerStreamRuneMetrics(registry, StreamRuneMicronautProperties.withDefaults());
     OutboxPoller poller =
         module.outboxPoller(
-            store, publisher, StreamRuneMicronautProperties.withDefaults(), metrics, null);
+            store,
+            publisher,
+            StreamRuneMicronautProperties.withDefaults(),
+            metrics,
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertSame(
         metrics, metricsOf(poller), "the poller records into the factory's Micrometer adapter");
     assertNotNull(registry.find("streamrune.outbox.blocked_aggregates").gauge());
@@ -198,7 +226,15 @@ class MicronautOutboxMetricsWiringTest {
         Duration.ofSeconds(1),
         "auto",
         "required",
-        "operator-only");
+        "operator-only",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true);
   }
 
   private static StreamRuneMetrics metricsOf(OutboxPoller poller) throws Exception {

@@ -340,22 +340,37 @@ public final class StreamRune implements CommandBus, AutoCloseable {
   /**
    * Event-store settings collected by {@link Builder}: the event/state type registry populated via
    * {@link Builder#registerEventType(String, Class)} / {@link Builder#registerStateType(String,
-   * Class)}, the crypto engine from {@link Builder#cryptoEngine(CryptoEngine)} and the upcasters
-   * from {@link Builder#upcasters(List)}. Handed to a {@link ConfiguredEventStoreFactory} so the
-   * factory can apply them when constructing the store.
+   * Class)}, the crypto engine from {@link Builder#cryptoEngine(CryptoEngine)}, the upcasters from
+   * {@link Builder#upcasters(List)} and the tracing from {@link
+   * Builder#tracing(StreamRuneTracing)}. Handed to a {@link ConfiguredEventStoreFactory} so the
+   * factory can apply them when constructing the store, for example {@code
+   * PostgresEventStoreFactory.tracing(settings.tracing())}.
    *
    * @param typeRegistry the registry of event and state types (never null, possibly empty)
    * @param cryptoEngine the configured crypto engine, or {@code null} if none was configured
    * @param upcasters the configured upcasters (never null, possibly empty)
+   * @param tracing the configured tracing, {@link StreamRuneTracing#NOOP} when none was configured
+   *     (never null)
    */
   public record EventStoreSettings(
-      EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine, List<EventUpcaster> upcasters) {
+      EventTypeRegistry typeRegistry,
+      CryptoEngine cryptoEngine,
+      List<EventUpcaster> upcasters,
+      StreamRuneTracing tracing) {
 
+    /**
+     * Validates the settings.
+     *
+     * @throws IllegalArgumentException if {@code typeRegistry} is {@code null}
+     * @throws NullPointerException if {@code tracing} is {@code null}
+     */
     public EventStoreSettings {
       if (typeRegistry == null) {
         throw new IllegalArgumentException("typeRegistry is required");
       }
       upcasters = upcasters == null ? List.of() : List.copyOf(upcasters);
+      Objects.requireNonNull(
+          tracing, "tracing is required; StreamRuneTracing.NOOP when nothing is traced");
     }
   }
 
@@ -580,9 +595,12 @@ public final class StreamRune implements CommandBus, AutoCloseable {
      * {@link #eventStoreFactory(ConfiguredEventStoreFactory)} or {@link
      * #eventStoreFactoryProvider(ConfiguredEventStoreFactoryProvider)} — {@link #build()} throws
      * otherwise, because the facade cannot retrofit upcasting onto a pre-built store.
+     *
+     * @param upcasters the upcasters, empty for none; not {@code null}
+     * @return this builder
      */
     public Builder upcasters(List<EventUpcaster> upcasters) {
-      this.upcasters = upcasters;
+      this.upcasters = Objects.requireNonNull(upcasters, "upcasters is required");
       return this;
     }
 
@@ -798,10 +816,11 @@ public final class StreamRune implements CommandBus, AutoCloseable {
      * #registerProjection} is decorated with a {@link TracingProjectionDecorator} when the {@link
      * TracingArea#PROJECTION} area is on. A projection runner the application builds, or its {@link
      * ProjectionRunnerFactory} builds, takes the tracing on its own builder; a runner given the
-     * same tracing does not decorate a projection twice. So do an event store, a locker, an outbox
-     * poller and a saga runner the application builds: {@code PostgresEventStoreFactory.tracing},
-     * {@code PgAdvisoryLocker.traced}, {@link OutboxPoller.Builder#tracing}, {@link
-     * SagaRunner.Builder#tracing}.
+     * same tracing does not decorate a projection twice. A store built from {@link
+     * EventStoreSettings} receives it as {@link EventStoreSettings#tracing()}: hand it to the store
+     * ({@code PostgresEventStoreFactory.tracing(settings.tracing())}). So do a locker, an outbox
+     * poller and a saga runner the application builds: {@code PgAdvisoryLocker.traced}, {@link
+     * OutboxPoller.Builder#tracing}, {@link SagaRunner.Builder#tracing}.
      *
      * @param tracing the tracing; not {@code null}
      * @return this builder
@@ -917,7 +936,8 @@ public final class StreamRune implements CommandBus, AutoCloseable {
         // not the store — call create() on it ourselves, and retain the factory (closed exactly
         // like the plain eventStoreFactory(EventStoreFactory) form) so builder-accumulated
         // settings and automatic cleanup are not mutually exclusive.
-        var settings = new EventStoreSettings(typeRegistryBuilder.build(), cryptoEngine, upcasters);
+        var settings =
+            new EventStoreSettings(typeRegistryBuilder.build(), cryptoEngine, upcasters, tracing);
         EventStoreFactory factory = configuredEventStoreFactoryProvider.create(settings);
         if (factory == null) {
           throw new IllegalStateException("ConfiguredEventStoreFactoryProvider returned null");
@@ -931,7 +951,8 @@ public final class StreamRune implements CommandBus, AutoCloseable {
       }
 
       if (configuredEventStoreFactory != null) {
-        var settings = new EventStoreSettings(typeRegistryBuilder.build(), cryptoEngine, upcasters);
+        var settings =
+            new EventStoreSettings(typeRegistryBuilder.build(), cryptoEngine, upcasters, tracing);
         EventStore store = configuredEventStoreFactory.create(settings);
         if (store == null) {
           throw new IllegalStateException("ConfiguredEventStoreFactory returned null");

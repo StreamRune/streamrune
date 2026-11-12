@@ -150,7 +150,7 @@ abstract class E2ETestBase {
         source,
         MAPPER,
         TYPE_REGISTRY,
-        /* upcasterChain= */ null,
+        /* upcasterChain= */ org.streamrune.core.upcasting.UpcasterChain.empty(),
         /* auditStore= */ null,
         outboxStore,
         /* outboxEventMapper= */ null);
@@ -183,7 +183,6 @@ abstract class E2ETestBase {
     return new EventMetadata(
         IdGenerator.generateEventId(),
         IdGenerator.generateCommandId(),
-        null,
         null,
         CorrelationId.of("e2e-corr-" + n),
         null,

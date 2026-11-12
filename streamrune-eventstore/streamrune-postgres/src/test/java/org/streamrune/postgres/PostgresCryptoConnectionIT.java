@@ -195,7 +195,13 @@ class PostgresCryptoConnectionIT {
     objectMapper.registerModule(new JavaTimeModule());
     objectMapper.registerModule(new CryptoShreddingModule(new SlowCryptoEngine()));
 
-    store = new PostgresEventStore(pooledDataSource, objectMapper, typeRegistry, null, null);
+    store =
+        new PostgresEventStore(
+            pooledDataSource,
+            objectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null);
 
     try (var conn = schemaDataSource.getConnection();
         var stmt = conn.createStatement()) {
@@ -220,7 +226,6 @@ class PostgresCryptoConnectionIT {
         new EventMetadata(
             EventId.of("evt-" + streamId.value()),
             CommandId.of("cmd-" + streamId.value()),
-            null,
             null,
             CorrelationId.of("corr-" + streamId.value()),
             null,
@@ -295,7 +300,12 @@ class PostgresCryptoConnectionIT {
     fastObjectMapper.registerModule(new JavaTimeModule());
     fastObjectMapper.registerModule(new CryptoShreddingModule(new SlowCryptoEngine.Fast()));
     var setupStore =
-        new PostgresEventStore(schemaDataSource, fastObjectMapper, typeRegistry, null, null);
+        new PostgresEventStore(
+            schemaDataSource,
+            fastObjectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null);
     for (int i = 0; i < CONCURRENT_APPENDS; i++) {
       StreamId streamId = TestStreams.stream("crypto-read-stream-" + i);
       setupStore.append(streamId, List.of(envelope(streamId)), Version.initial());
