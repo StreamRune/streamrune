@@ -1,8 +1,10 @@
 package org.streamrune.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,10 +16,13 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.SagaType;
+import org.streamrune.core.types.SpanId;
+import org.streamrune.core.types.TraceId;
 
 class EventMetadataTest {
 
@@ -241,6 +246,49 @@ class EventMetadataTest {
     String noOriginJson = mapper.writeValueAsString(noOrigin);
     assertTrue(noOriginJson.endsWith(",\"baggage\":{},\"sagaOrigin\":null}"), noOriginJson);
     assertEquals(noOrigin, mapper.readValue(noOriginJson, EventMetadata.class));
+  }
+
+  @Test
+  void spanContext_roundTripsThroughJson_andNoneIsLeftOut() throws Exception {
+    ObjectMapper mapper = storeMapper();
+    var command =
+        new SpanLink(TraceId.of("0af7651916cd43dd8448eb211c80319c"), SpanId.of("b7ad6b7169203331"));
+    var traced =
+        new EventMetadata(
+            EventId.of("evt-s"),
+            CommandId.of("cmd-s"),
+            null,
+            null,
+            CorrelationId.of("corr-s"),
+            null,
+            null,
+            Instant.parse("2026-01-01T00:00:00Z"),
+            null,
+            null,
+            command);
+    var untraced =
+        new EventMetadata(
+            EventId.of("evt-u"),
+            CommandId.of("cmd-u"),
+            null,
+            null,
+            CorrelationId.of("corr-u"),
+            null,
+            null,
+            Instant.parse("2026-01-01T00:00:00Z"));
+
+    String tracedJson = mapper.writeValueAsString(traced);
+    String untracedJson = mapper.writeValueAsString(untraced);
+
+    assertTrue(
+        tracedJson.contains("\"spanContext\":{\"traceId\":\"0af7651916cd43dd8448eb211c80319c\""));
+    assertEquals(traced, mapper.readValue(tracedJson, EventMetadata.class));
+    assertFalse(untracedJson.contains("spanContext"), untracedJson);
+    assertSame(SpanLink.NONE, untraced.spanContext());
+    assertSame(SpanLink.NONE, mapper.readValue(untracedJson, EventMetadata.class).spanContext());
+    // A stored span context that is not a pair of W3C ids reads back as no link.
+    String corrupt = tracedJson.replace("0af7651916cd43dd8448eb211c80319c", "not-a-w3c-trace-id");
+    assertSame(SpanLink.NONE, mapper.readValue(corrupt, EventMetadata.class).spanContext());
   }
 
   @Test

@@ -1,5 +1,6 @@
 package org.streamrune.core.outbox;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
 import java.util.Objects;
 import org.streamrune.core.tracing.SpanLink;
@@ -25,14 +26,16 @@ import org.streamrune.core.types.StreamId;
  *
  * <p>{@code traceLink} names the span of the command whose append wrote the entry, so the relay's
  * {@code outbox/publish} span links to that command's trace. It is never {@code null}: an entry
- * without a link carries {@link SpanLink#NONE}, which the {@link #pending} factories set, and the
- * span of such an entry has no link. The event store fills it from the metadata of the event the
- * entry was derived from ({@code traceId} and {@code spanId}, through {@link
+ * without a link carries {@link SpanLink#NONE}, which the {@link #pending} factories set and a
+ * {@code null} argument reads as, and the span of such an entry has no link. The event store fills
+ * it from the metadata of the event the entry was derived from (its {@link
+ * org.streamrune.core.EventMetadata#spanContext() spanContext}, through {@link
  * SpanLink#of(org.streamrune.core.EventMetadata)}) when it writes the entry in the append
  * transaction, unless the entry already carries one; an {@link OutboxEventMapper} builds its
- * entries without it. It stays {@code NONE} when that metadata has no trace, and a store keeps only
+ * entries without it. It stays {@code NONE} when the command was not traced, and a store keeps only
  * a link whose ids are valid W3C ids ({@link SpanLink#isW3c()}): a stored link that is not one, or
- * none at all, reads back as {@code NONE}.
+ * none at all, reads back as {@code NONE}. In JSON the property is left out when it is {@code
+ * NONE}.
  */
 public record OutboxEntry(
     OutboxEntryId id,
@@ -46,7 +49,7 @@ public record OutboxEntry(
     Instant processedAt,
     Instant nextRetryAt,
     SkipRecord skip,
-    SpanLink traceLink) {
+    @JsonInclude(JsonInclude.Include.NON_EMPTY) SpanLink traceLink) {
 
   /**
    * The audit of an operator skip: all three are set together in one statement and are non-null iff
@@ -67,7 +70,7 @@ public record OutboxEntry(
     Objects.requireNonNull(payloadType, "payloadType is required");
     Objects.requireNonNull(status, "status is required");
     Objects.requireNonNull(createdAt, "createdAt is required");
-    Objects.requireNonNull(traceLink, "traceLink is required; SpanLink.NONE for none");
+    traceLink = traceLink == null ? SpanLink.NONE : traceLink;
     if (attempts < 0) {
       throw new IllegalArgumentException("attempts must be non-negative");
     }
@@ -82,9 +85,8 @@ public record OutboxEntry(
   /**
    * The same entry with {@code traceLink} as its link to the trace of the command that wrote it.
    *
-   * @param traceLink the link; {@link SpanLink#NONE} for none
+   * @param traceLink the link; {@link SpanLink#NONE} for none, as {@code null} reads
    * @return the entry with that link
-   * @throws NullPointerException if {@code traceLink} is {@code null}
    */
   public OutboxEntry withTraceLink(SpanLink traceLink) {
     return new OutboxEntry(

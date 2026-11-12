@@ -100,6 +100,20 @@ final class RecordingTracing implements StreamRuneTracing {
     return span;
   }
 
+  private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
+
+  /** A link with random W3C ids, the ids of a span this tracing records. */
+  static SpanLink randomLink() {
+    byte[] trace = new byte[16];
+    byte[] span = new byte[8];
+    RANDOM.nextBytes(trace);
+    RANDOM.nextBytes(span);
+    trace[0] |= 1;
+    span[0] |= 1;
+    var hex = java.util.HexFormat.of();
+    return SpanLink.ofW3c(hex.formatHex(trace), hex.formatHex(span));
+  }
+
   /** The one span named {@code name}. */
   RecordedSpan only(String name) {
     List<RecordedSpan> named = spans.stream().filter(s -> s.name.equals(name)).toList();
@@ -121,6 +135,10 @@ final class RecordingTracing implements StreamRuneTracing {
     final String name;
     final SpanKind kind;
     final SpanLink link;
+
+    /** The ids of this span, which {@link #link()} returns, as a tracing library generates them. */
+    final SpanLink own = randomLink();
+
     final RecordedSpan parent;
 
     /** The start time the emitter gave, or {@code null} when the span started when it was made. */
@@ -182,6 +200,11 @@ final class RecordingTracing implements StreamRuneTracing {
     @Override
     public void recordError(Throwable error) {
       this.error = error;
+    }
+
+    @Override
+    public SpanLink link() {
+      return own;
     }
 
     @Override

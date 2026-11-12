@@ -252,11 +252,14 @@ and is used as the sentinel value before append. You encounter `GlobalOffset` in
 
 ### EventMetadata
 
-`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, SpanId spanId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin)`
+`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, SpanId spanId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin, SpanLink spanContext)`
 
 Causal metadata attached to every persisted event. Built automatically by
-`VirtualThreadCommandBus`; propagates OpenTelemetry trace/span IDs and user ID from
-`StreamRuneContext` when a request context is bound. You encounter this inside
+`VirtualThreadCommandBus`, which copies the caller's trace id (the `X-Trace-Id` header) and user
+ID from `StreamRuneContext` when a request context is bound, and writes `spanContext` from its own
+`command/{CommandType}` span: `SpanLink.NONE` when the command was not traced. The spans that later
+handle the event link to `spanContext` only (`SpanLink.of(metadata)`); the caller-supplied
+`traceId` and `spanId` are correlation data and never build a link. You encounter this inside
 `EventEnvelope.metadata()` when writing projections or building audit trails.
 
 The PostgreSQL event store keeps it as JSON in the `event_stream.metadata` column and binds it back

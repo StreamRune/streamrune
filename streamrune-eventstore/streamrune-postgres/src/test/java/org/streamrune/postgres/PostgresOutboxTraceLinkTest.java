@@ -15,17 +15,24 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
+import org.streamrune.core.AggregateState;
+import org.streamrune.core.Command;
+import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxEventMapper;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.tracing.SpanLink;
+import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.core.types.AggregateId;
+import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
@@ -35,6 +42,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.OutboxPoller;
+import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -134,7 +142,13 @@ class PostgresOutboxTraceLinkTest {
     return TestStreams.stream("lamp-" + System.nanoTime());
   }
 
-  private static EventEnvelope event(StreamId stream, int version, String traceId, String spanId) {
+  /** An event the command span {@code spanContext} appended, with no caller trace id. */
+  private static EventEnvelope event(StreamId stream, int version, SpanLink spanContext) {
+    return event(stream, version, null, spanContext);
+  }
+
+  private static EventEnvelope event(
+      StreamId stream, int version, String clientTraceId, SpanLink spanContext) {
     return new EventEnvelope(
         GlobalOffset.initial(),
         stream,
@@ -144,12 +158,15 @@ class PostgresOutboxTraceLinkTest {
         new EventMetadata(
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
-            traceId == null ? null : TraceId.of(traceId),
-            spanId == null ? null : SpanId.of(spanId),
+            clientTraceId == null ? null : TraceId.of(clientTraceId),
+            null,
             CorrelationId.of("trace-link"),
             null,
             null,
-            Instant.now()));
+            Instant.now(),
+            null,
+            null,
+            spanContext));
   }
 
   private static String idOf(EventEnvelope event) {
@@ -232,8 +249,8 @@ class PostgresOutboxTraceLinkTest {
   void anAppendUnderATracedCommand_storesItsSpan_andTheRelaysPublishSpanLinksToIt()
       throws Exception {
     var stream = stream();
-    var first = event(stream, 1, TRACE, SPAN);
-    var second = event(stream, 2, TRACE, SPAN);
+    var first = event(stream, 1, COMMAND);
+    var second = event(stream, 2, COMMAND);
 
     store(MAPPER).append(stream, List.of(first, second), Version.initial());
 
@@ -248,7 +265,7 @@ class PostgresOutboxTraceLinkTest {
   @Test
   void aKeyedAppend_storesTheSpanToo() throws Exception {
     var stream = stream();
-    var event = event(stream, 1, TRACE, SPAN);
+    var event = event(stream, 1, COMMAND);
 
     store(MAPPER)
         .appendWithKey(
@@ -260,7 +277,7 @@ class PostgresOutboxTraceLinkTest {
   @Test
   void aLinkTheMapperSets_isKept() throws Exception {
     var stream = stream();
-    var event = event(stream, 1, TRACE, SPAN);
+    var event = event(stream, 1, COMMAND);
 
     store(envelope -> MAPPER.toOutbox(envelope).stream().map(e -> e.withTraceLink(OWN)).toList())
         .append(stream, List.of(event), Version.initial());
@@ -279,7 +296,7 @@ class PostgresOutboxTraceLinkTest {
     store(envelope -> List.of())
         .append(
             stream,
-            List.of(event(stream, 1, TRACE, SPAN), event(stream, 2, null, null)),
+            List.of(event(stream, 1, COMMAND), event(stream, 2, SpanLink.NONE)),
             Version.initial(),
             List.of(unlinked, linked));
 
@@ -288,10 +305,11 @@ class PostgresOutboxTraceLinkTest {
   }
 
   @Test
-  void metadataWithoutBothIds_storesNoLink_andThePublishSpanHasNone() throws Exception {
+  void metadataWithoutASpanContext_storesNoLink_evenWithACallerTraceId_andThePublishSpanHasNone()
+      throws Exception {
     var stream = stream();
-    var none = event(stream, 1, null, null);
-    var traceOnly = event(stream, 2, TRACE, null);
+    var none = event(stream, 1, SpanLink.NONE);
+    var traceOnly = event(stream, 2, TRACE, SpanLink.NONE);
 
     store(MAPPER).append(stream, List.of(none, traceOnly), Version.initial());
 
@@ -315,9 +333,13 @@ class PostgresOutboxTraceLinkTest {
   }
 
   @Test
-  void metadataIdsThatAreNotW3cIds_areNotStored_andTheAppendSucceeds() throws Exception {
+  void aSpanContextWhoseIdsAreNotW3cIds_isNotStored_andTheAppendSucceeds() throws Exception {
     var stream = stream();
-    var event = event(stream, 1, "trace-from-an-http-header", "not-a-span-id");
+    var event =
+        event(
+            stream,
+            1,
+            new SpanLink(TraceId.of("trace-from-an-http-header"), SpanId.of("not-a-span")));
 
     store(MAPPER).append(stream, List.of(event), Version.initial());
 
@@ -327,9 +349,9 @@ class PostgresOutboxTraceLinkTest {
   @Test
   void aCorruptStoredId_givesNoLink_andTheEntryIsStillDelivered() throws Exception {
     var stream = stream();
-    var badTrace = event(stream, 1, TRACE, SPAN);
-    var badSpan = event(stream, 2, TRACE, SPAN);
-    var halfLink = event(stream, 3, TRACE, SPAN);
+    var badTrace = event(stream, 1, COMMAND);
+    var badSpan = event(stream, 2, COMMAND);
+    var halfLink = event(stream, 3, COMMAND);
     store(MAPPER).append(stream, List.of(badTrace, badSpan, halfLink), Version.initial());
     try (var conn = dataSource.getConnection();
         var ps =
@@ -360,5 +382,100 @@ class PostgresOutboxTraceLinkTest {
               assertThat(s.link).isSameAs(SpanLink.NONE);
               assertThat(s.ok).isTrue();
             });
+  }
+
+  // ==================== Through the command bus, with no hand-built metadata ====================
+
+  record Lamp(int switches) implements AggregateState {}
+
+  record Switch(String lampId) implements Command {}
+
+  static final class LampDecider implements Decider<Switch, Lamp, Switched> {
+    @Override
+    public Lamp initialState() {
+      return new Lamp(0);
+    }
+
+    @Override
+    public List<Switched> decide(Switch command, Lamp state) {
+      return List.of(new Switched(command.lampId()));
+    }
+
+    @Override
+    public Lamp evolve(Lamp state, Switched event) {
+      return new Lamp(state.switches() + 1);
+    }
+  }
+
+  static final AggregateType LAMP = AggregateType.of("lamp");
+
+  /** Runs {@code Switch(lampId)} through a bus traced by {@code tracing}; returns its one event. */
+  private EventEnvelope switchThroughTheBus(String lampId, StreamRuneTracing tracing) {
+    var store = store(MAPPER);
+    try (var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(store)
+            .locker(new PgAdvisoryLocker(dataSource))
+            .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+            .tracing(tracing)
+            .build()) {
+      bus.execute(new Switch(lampId));
+    }
+    var events = store.readStream(StreamId.of(LAMP, AggregateId.of(lampId)), Version.initial(), 10);
+    assertThat(events).hasSize(1);
+    return events.getFirst();
+  }
+
+  @Test
+  void aTracedCommand_writesItsSpanIntoTheMetadata_andTheEntryAndThePublishSpanLinkToIt() {
+    var tracing = new RecordingTracing();
+
+    EventEnvelope event = switchThroughTheBus("lamp-" + System.nanoTime(), tracing);
+
+    SpanLink command = tracing.only("command/Switch").own;
+    assertThat(command.isW3c()).isTrue();
+    assertThat(event.metadata().spanContext()).as("read back from event_stream").isEqualTo(command);
+    assertThat(linkOf(idOf(event))).isEqualTo(command);
+    assertThat(relay(List.of(idOf(event))))
+        .singleElement()
+        .satisfies(publish -> assertThat(publish.link).isEqualTo(command));
+  }
+
+  @Test
+  void aClientSuppliedTraceId_neverReachesALink() throws Exception {
+    var client =
+        StreamRuneContext.RequestContext.fromRequest(
+            TraceId.of(TRACE), null, CorrelationId.of("client"), Instant.now(), Map.of());
+
+    EventEnvelope untraced =
+        ScopedValue.where(StreamRuneContext.CURRENT, client)
+            .call(() -> switchThroughTheBus("lamp-a-" + System.nanoTime(), StreamRuneTracing.NOOP));
+    var tracing = new RecordingTracing();
+    EventEnvelope traced =
+        ScopedValue.where(StreamRuneContext.CURRENT, client)
+            .call(() -> switchThroughTheBus("lamp-b-" + System.nanoTime(), tracing));
+
+    assertThat(untraced.metadata().traceId()).isEqualTo(TraceId.of(TRACE));
+    assertThat(untraced.metadata().spanContext()).isSameAs(SpanLink.NONE);
+    assertThat(linkOf(idOf(untraced))).isSameAs(SpanLink.NONE);
+    assertThat(storedIds(idOf(untraced))).containsExactly(null, null);
+    assertThat(traced.metadata().traceId()).isEqualTo(TraceId.of(TRACE));
+    SpanLink command = tracing.only("command/Switch").own;
+    assertThat(traced.metadata().spanContext()).isEqualTo(command);
+    assertThat(command.traceId().value()).isNotEqualTo(TRACE);
+    assertThat(relay(List.of(idOf(untraced), idOf(traced))))
+        .extracting(publish -> publish.link)
+        .containsExactlyInAnyOrder(SpanLink.NONE, command);
+  }
+
+  @Test
+  void aBusWithTheCommandAreaOff_writesNone() {
+    EventEnvelope event =
+        switchThroughTheBus(
+            "lamp-" + System.nanoTime(),
+            RecordingTracing.without(org.streamrune.core.tracing.TracingArea.COMMAND));
+
+    assertThat(event.metadata().spanContext()).isSameAs(SpanLink.NONE);
+    assertThat(linkOf(idOf(event))).isSameAs(SpanLink.NONE);
   }
 }

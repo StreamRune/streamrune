@@ -5,6 +5,7 @@ import java.util.Objects;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TraceScope;
@@ -133,6 +134,28 @@ public final class OpenTelemetryCommandInterceptor implements CommandInterceptor
     } finally {
       scope.close();
     }
+  }
+
+  /**
+   * The link to the span of the command executing on this thread: the innermost frame of this
+   * interceptor's stack, so a nested command sees its own span. {@link SpanLink#NONE} when the
+   * command area is off or no command of this interceptor is executing here. {@code
+   * VirtualThreadCommandBus} reads it when it builds the metadata of the events a command appends,
+   * on the thread that runs the command, between this interceptor's {@code before()} and {@code
+   * after()}.
+   */
+  SpanLink currentLink() {
+    if (!traced) {
+      return SpanLink.NONE;
+    }
+    ArrayDeque<TraceScope> frames = stack.get();
+    TraceScope top = frames.peek();
+    if (top == null) {
+      stack.remove();
+      return SpanLink.NONE;
+    }
+    SpanLink link = top.link();
+    return link == null ? SpanLink.NONE : link;
   }
 
   /**

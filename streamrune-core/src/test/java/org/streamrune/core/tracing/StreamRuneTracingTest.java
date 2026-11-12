@@ -181,17 +181,22 @@ class StreamRuneTracingTest {
   }
 
   @Test
-  void spanLink_ofMetadata_linksValidIds_andIsNoneOtherwise() {
-    assertThat(SpanLink.of(metadata(TRACE, SPAN)))
-        .isEqualTo(new SpanLink(TraceId.of(TRACE), SpanId.of(SPAN)));
+  void spanLink_ofMetadata_readsTheSpanContextOnly() {
+    var command = new SpanLink(TraceId.of(TRACE), SpanId.of(SPAN));
+    assertThat(SpanLink.of(metadata(null, null, command))).isEqualTo(command);
     assertThat(SpanLink.of(null)).isSameAs(SpanLink.NONE);
-    assertThat(SpanLink.of(metadata(null, null))).isSameAs(SpanLink.NONE);
-    assertThat(SpanLink.of(metadata(TRACE, null))).isSameAs(SpanLink.NONE);
-    assertThat(SpanLink.of(metadata(null, SPAN))).isSameAs(SpanLink.NONE);
-    assertThat(SpanLink.of(metadata("trace-from-a-header", SPAN))).isSameAs(SpanLink.NONE);
+    assertThat(SpanLink.of(metadata(null, null, null))).isSameAs(SpanLink.NONE);
+    // The caller-supplied trace id and span id are correlation data and never build a link.
+    assertThat(SpanLink.of(metadata(TRACE, SPAN, null))).isSameAs(SpanLink.NONE);
+    assertThat(
+            SpanLink.of(
+                metadata(
+                    null, null, new SpanLink(TraceId.of("trace-from-a-header"), SpanId.of("s")))))
+        .isSameAs(SpanLink.NONE);
   }
 
-  private static org.streamrune.core.EventMetadata metadata(String traceId, String spanId) {
+  private static org.streamrune.core.EventMetadata metadata(
+      String traceId, String spanId, SpanLink spanContext) {
     return new org.streamrune.core.EventMetadata(
         org.streamrune.core.IdGenerator.generateEventId(),
         org.streamrune.core.IdGenerator.generateCommandId(),
@@ -200,7 +205,31 @@ class StreamRuneTracingTest {
         org.streamrune.core.types.CorrelationId.of("c"),
         null,
         null,
-        java.time.Instant.now());
+        java.time.Instant.now(),
+        null,
+        null,
+        spanContext);
+  }
+
+  /** A holder of a link, as {@code EventMetadata} and {@code OutboxEntry} hold one. */
+  record Holder(
+      @com.fasterxml.jackson.annotation.JsonInclude(
+              com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
+          SpanLink link) {}
+
+  @Test
+  void spanLink_json_isAnObjectOfTheTwoIds_andNoneIsLeftOut() throws Exception {
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    var link = new SpanLink(TraceId.of(TRACE), SpanId.of(SPAN));
+
+    assertThat(mapper.writeValueAsString(new Holder(link)))
+        .isEqualTo("{\"link\":{\"traceId\":\"" + TRACE + "\",\"spanId\":\"" + SPAN + "\"}}");
+    assertThat(mapper.writeValueAsString(new Holder(SpanLink.NONE))).isEqualTo("{}");
+    assertThat(mapper.writeValueAsString(SpanLink.NONE)).isEqualTo("null");
+    assertThat(mapper.readValue(mapper.writeValueAsString(link), SpanLink.class)).isEqualTo(link);
+    assertThat(mapper.readValue("{\"traceId\":\"zz\",\"spanId\":\"" + SPAN + "\"}", SpanLink.class))
+        .isSameAs(SpanLink.NONE);
+    assertThat(mapper.readValue("{}", SpanLink.class)).isSameAs(SpanLink.NONE);
   }
 
   @Test

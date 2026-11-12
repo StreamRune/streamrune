@@ -1,5 +1,9 @@
 package org.streamrune.core.tracing;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonValue;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.types.SpanId;
@@ -78,19 +82,52 @@ public record SpanLink(TraceId traceId, SpanId spanId) {
   }
 
   /**
-   * The link to the span that wrote an event: the {@code traceId} and {@code spanId} of its
-   * metadata when both are valid W3C ids, {@link #NONE} otherwise — no metadata, only one of the
-   * two ids, or an id that is not a W3C id (a trace id an HTTP client sent, for example). Every
-   * component that links a span to the trace of an event builds the link here.
+   * The link to the span that wrote an event: the {@link EventMetadata#spanContext() spanContext}
+   * of its metadata, the command span the command bus wrote there, when its ids are valid W3C ids;
+   * {@link #NONE} otherwise. The caller-supplied {@code traceId} and {@code spanId} of the metadata
+   * are correlation data and never build a link. Every component that links a span to the trace of
+   * an event builds the link here.
    *
    * @param metadata the event's metadata, or {@code null}
    * @return the link, or {@link #NONE}
    */
   public static SpanLink of(EventMetadata metadata) {
-    if (metadata == null || metadata.traceId() == null || metadata.spanId() == null) {
+    if (metadata == null) {
       return NONE;
     }
-    return ofW3c(metadata.traceId().value(), metadata.spanId().value());
+    SpanLink context = metadata.spanContext();
+    return context.isW3c() ? context : NONE;
+  }
+
+  /**
+   * The JSON form of the link: an object with {@code traceId} and {@code spanId}, or JSON {@code
+   * null} for {@link #NONE}. A property that holds a link and is annotated
+   * {@code @JsonInclude(JsonInclude.Include.NON_EMPTY)} is left out of the JSON when it holds
+   * {@code NONE}, so {@code NONE} never appears in JSON.
+   *
+   * @return the two ids, or {@code null} for {@link #NONE}
+   */
+  @JsonValue
+  Map<String, String> toJson() {
+    if (!isPresent()) {
+      return null;
+    }
+    Map<String, String> json = new LinkedHashMap<>(2);
+    json.put("traceId", traceId.value());
+    json.put("spanId", spanId.value());
+    return json;
+  }
+
+  /**
+   * The link the JSON form names: {@link #NONE} unless it holds a {@code traceId} and a {@code
+   * spanId} that are valid W3C ids, so a malformed stored value reads back as no link.
+   *
+   * @param json the JSON object, or {@code null}
+   * @return the link, or {@link #NONE}
+   */
+  @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+  static SpanLink fromJson(Map<String, String> json) {
+    return json == null ? NONE : ofW3c(json.get("traceId"), json.get("spanId"));
   }
 
   /**

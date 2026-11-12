@@ -568,6 +568,17 @@ public final class OutboxPoller implements AutoCloseable {
     }
 
     @Override
+    public SpanLink link() {
+      try {
+        SpanLink link = delegate.link();
+        return link == null ? SpanLink.NONE : link;
+      } catch (RuntimeException e) {
+        tracingFailed(e);
+        return SpanLink.NONE;
+      }
+    }
+
+    @Override
     public void close() {
       try {
         delegate.close();

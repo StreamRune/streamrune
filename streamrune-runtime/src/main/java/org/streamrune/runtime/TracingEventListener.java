@@ -20,10 +20,11 @@ import org.streamrune.core.types.SubscriptionName;
  * Decorates an {@link EventListener} to start the span {@code subscription/{name}/deliver} for each
  * delivery batch, through a {@link StreamRuneTracing} (area {@link TracingArea#SUBSCRIPTION}).
  *
- * <p>When the first event's {@link EventMetadata} carries a {@code traceId} and a {@code spanId}
- * that are W3C ids, the span links back to the originating command trace ({@link
- * SpanLink#of(EventMetadata)}). The first event's baggage is the current baggage while the delegate
- * runs.
+ * <p>When the first event's {@link EventMetadata} carries the span of the command that appended it
+ * ({@link EventMetadata#spanContext()}, which the command bus writes from its own command span),
+ * the span links back to that command ({@link SpanLink#of(EventMetadata)}). The caller-supplied
+ * {@code traceId} of the metadata never builds a link. The first event's baggage is the current
+ * baggage while the delegate runs.
  *
  * <p>The subscription builders wrap their listener through {@link #traced} when they are given a
  * tracing. An application can also wrap a listener itself, with {@link #traced} or the constructor.

@@ -146,6 +146,30 @@ class OpenTelemetryTracingTest {
   }
 
   @Test
+  void aSpanTheSamplerDrops_stillHasALink_whenItsContextIsValid() {
+    try (var provider =
+        io.opentelemetry.sdk.trace.SdkTracerProvider.builder()
+            .setSampler(io.opentelemetry.sdk.trace.samplers.Sampler.alwaysOff())
+            .build()) {
+      StreamRuneTracing dropped =
+          OpenTelemetryTracing.of(
+              io.opentelemetry.sdk.OpenTelemetrySdk.builder().setTracerProvider(provider).build(),
+              TracingSettings.allEnabled());
+      SpanLink link;
+      boolean recording;
+      try (TraceScope scope =
+          dropped.start(
+              TracingArea.COMMAND, "command/X", SpanKind.INTERNAL, SpanAttributes.empty())) {
+        link = scope.link();
+        recording = Span.current().isRecording();
+      }
+      assertThat(recording).isFalse();
+      assertThat(link.isPresent()).isTrue();
+      assertThat(link.isW3c()).isTrue();
+    }
+  }
+
+  @Test
   void none_startsASpanWithNoLink() {
     StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
     tracing

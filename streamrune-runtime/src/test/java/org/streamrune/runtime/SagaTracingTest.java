@@ -36,6 +36,7 @@ import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.SpanId;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.TraceId;
+import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
@@ -136,7 +137,7 @@ class SagaTracingTest {
         .withTimeouts(builder -> builder.decider(new OrderSaga()).tracing(tracing));
   }
 
-  /** An order placed by a request whose span is {@link #WRITER_SPAN}. */
+  /** An order placed by a command whose span is {@link #WRITER_SPAN}. */
   private static EventEnvelope placedUnderTheWritersSpan(
       SagaFixture<OrderState> fixture, String id) {
     EventEnvelope event =
@@ -151,13 +152,15 @@ class SagaTracingTest {
         new EventMetadata(
             m.eventId(),
             m.commandId(),
-            WRITER_TRACE,
-            WRITER_SPAN,
+            m.traceId(),
+            m.spanId(),
             m.correlationId(),
             m.causationId(),
             m.userId(),
             m.timestamp(),
-            Map.of()));
+            Map.of(),
+            m.sagaOrigin(),
+            new org.streamrune.core.tracing.SpanLink(WRITER_TRACE, WRITER_SPAN)));
   }
 
   private static List<SpanData> spans(String name) {
@@ -486,6 +489,78 @@ class SagaTracingTest {
     assertThat(command.getTraceId()).isEqualTo(step.getTraceId());
     assertThat(EventStoreTracingTest.string(step, TraceAttributes.SAGA_STEP_OUTCOME))
         .isEqualTo("ADVANCED");
+  }
+
+  record OrderOpen() implements AggregateState {}
+
+  record PlaceOrder(String orderId) implements Command {}
+
+  static final class OrderDecider implements Decider<PlaceOrder, OrderOpen, OrderPlaced> {
+    @Override
+    public OrderOpen initialState() {
+      return new OrderOpen();
+    }
+
+    @Override
+    public List<OrderPlaced> decide(PlaceOrder command, OrderOpen state) {
+      return List.of(new OrderPlaced(command.orderId()));
+    }
+
+    @Override
+    public OrderOpen evolve(OrderOpen state, OrderPlaced event) {
+      return state;
+    }
+  }
+
+  /**
+   * No hand-built metadata: the bus writes each command's own span into the metadata of its events,
+   * the step links to the span of the command that placed the order, and the command the step
+   * dispatches writes its own span, a child of the step, into the events it appends.
+   */
+  @Test
+  void aStep_linksToTheCommandThatAppendedItsEvent_andTheCommandItDispatchesWritesItsOwnSpan() {
+    StreamRuneTracing tracing = tracing();
+    var inbox = new InMemoryCommandInbox();
+    var sagaStore = new InMemorySagaStore();
+    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    try (var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(store)
+            .commandInbox(inbox)
+            .register(ORDER, PlaceOrder.class, c -> AggregateId.of(c.orderId()), new OrderDecider())
+            .register(
+                STOCK, ReserveStock.class, c -> AggregateId.of(c.orderId()), new StockDecider())
+            .tracing(tracing)
+            .build()) {
+      SagaRunner<OrderState> runner =
+          routed(SagaRunner.<OrderState>builder(), tracing)
+              .sagaStore(sagaStore)
+              .commandBus(bus)
+              .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+              .forwardFence(false)
+              .build();
+      bus.execute(new PlaceOrder("o-1"));
+      List<EventEnvelope> placed = store.readStream(ORDER_1, Version.initial(), 10);
+
+      runner.asEventListener().onEvents(placed);
+    }
+
+    SpanData placeOrder = only("command/PlaceOrder");
+    SpanData step = only(TraceAttributes.sagaStepSpanName(TYPE));
+    assertThat(step.getLinks()).hasSize(1);
+    assertThat(step.getLinks().getFirst().getSpanContext().getTraceId())
+        .isEqualTo(placeOrder.getTraceId());
+    assertThat(step.getLinks().getFirst().getSpanContext().getSpanId())
+        .isEqualTo(placeOrder.getSpanId());
+    SpanData reserve = only("command/ReserveStock");
+    assertThat(reserve.getParentSpanId()).isEqualTo(step.getSpanId());
+    EventMetadata reserved =
+        store
+            .readStream(StreamId.of(STOCK, AggregateId.of("o-1")), Version.initial(), 10)
+            .getFirst()
+            .metadata();
+    assertThat(reserved.spanContext().traceId().value()).isEqualTo(reserve.getTraceId());
+    assertThat(reserved.spanContext().spanId().value()).isEqualTo(reserve.getSpanId());
   }
 
   @Test

@@ -256,9 +256,26 @@ class OutboxEntryTest {
   }
 
   @Test
-  void aNullTraceLink_isRejected() {
+  void aNullTraceLink_readsAsNone() {
     var entry = OutboxEntry.pending(OutboxEntryId.of("n"), "{}", "Event");
-    assertThrows(NullPointerException.class, () -> entry.withTraceLink(null));
+    assertSame(SpanLink.NONE, entry.withTraceLink(null).traceLink());
+  }
+
+  @Test
+  void json_leavesOutNone_andWritesALinkAsItsTwoIds() throws Exception {
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+    var entry = OutboxEntry.pending(OutboxEntryId.of("j"), "{}", "Event", STREAM);
+    var link =
+        new SpanLink(TraceId.of("0af7651916cd43dd8448eb211c80319c"), SpanId.of("b7ad6b7169203331"));
+
+    var unlinked = mapper.readTree(mapper.writeValueAsString(entry));
+    var linked = mapper.readTree(mapper.writeValueAsString(entry.withTraceLink(link)));
+
+    assertFalse(unlinked.has("traceLink"), unlinked.toString());
+    assertFalse(unlinked.toString().contains("0000000000000000"), unlinked.toString());
+    assertEquals(
+        "0af7651916cd43dd8448eb211c80319c", linked.get("traceLink").get("traceId").asText());
+    assertEquals("b7ad6b7169203331", linked.get("traceLink").get("spanId").asText());
   }
 
   @Test

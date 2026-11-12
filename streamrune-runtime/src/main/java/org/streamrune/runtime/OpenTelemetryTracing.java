@@ -286,6 +286,19 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
       span.setStatus(StatusCode.ERROR, message);
     }
 
+    /**
+     * The span's own trace id and span id when its context is valid, sampled or not: a span the
+     * sampler drops still has a valid context, so the events its command appends link to it under a
+     * parent-based sampler. {@link SpanLink#NONE} for an invalid context.
+     */
+    @Override
+    public SpanLink link() {
+      SpanContext context = span.getSpanContext();
+      return context.isValid()
+          ? SpanLink.ofW3c(context.getTraceId(), context.getSpanId())
+          : SpanLink.NONE;
+    }
+
     @Override
     public void close() {
       try {
