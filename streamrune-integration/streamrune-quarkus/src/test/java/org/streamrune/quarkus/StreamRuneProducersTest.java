@@ -58,7 +58,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -99,7 +100,8 @@ class StreamRuneProducersTest {
         unsatisfied(),
         unsatisfied(),
         unsatisfied(),
-        unsatisfied());
+        unsatisfied(),
+        org.streamrune.core.tracing.StreamRuneTracing.NOOP);
   }
 
   @Test
@@ -113,7 +115,9 @@ class StreamRuneProducersTest {
   @Test
   void aggregateLockerProduced() {
     var producers = new StreamRuneProducers();
-    AggregateLocker locker = producers.aggregateLocker(TestProperties.defaults());
+    AggregateLocker locker =
+        producers.aggregateLocker(
+            TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(locker);
   }
 
@@ -149,7 +153,8 @@ class StreamRuneProducersTest {
     VirtualThreadCommandBus bus =
         producers.virtualThreadCommandBus(
             mock(EventStore.class),
-            producers.aggregateLocker(TestProperties.defaults()),
+            producers.aggregateLocker(
+                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             TestBeanManagers.withInterceptors(),
@@ -158,7 +163,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(bus);
     bus.close();
   }
@@ -174,7 +180,8 @@ class StreamRuneProducersTest {
     VirtualThreadCommandBus bus =
         producers.virtualThreadCommandBus(
             mock(EventStore.class),
-            producers.aggregateLocker(TestProperties.defaults()),
+            producers.aggregateLocker(
+                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             withNulls,
@@ -183,7 +190,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(bus);
     bus.close();
   }
@@ -204,7 +212,8 @@ class StreamRuneProducersTest {
     VirtualThreadCommandBus bus =
         producers.virtualThreadCommandBus(
             mock(EventStore.class),
-            producers.aggregateLocker(TestProperties.defaults()),
+            producers.aggregateLocker(
+                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             TestBeanManagers.withInterceptors(),
@@ -213,7 +222,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertInstanceOf(org.streamrune.core.AsyncCommandBus.class, bus);
     bus.close();
@@ -332,7 +342,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -354,7 +365,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -376,7 +388,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     var field = factory.getClass().getDeclaredField("snapshotMigrations");
     field.setAccessible(true);
     assertEquals(List.of(migration), field.get(factory));
@@ -404,7 +417,8 @@ class StreamRuneProducersTest {
                 unsatisfied(),
                 unsatisfied(),
                 unsatisfied(),
-                unsatisfied()));
+                unsatisfied(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   @Test
@@ -426,7 +440,8 @@ class StreamRuneProducersTest {
             satisfied(outboxStore),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -450,7 +465,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -474,7 +490,8 @@ class StreamRuneProducersTest {
             satisfied(outboxStore),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -910,17 +927,11 @@ class StreamRuneProducersTest {
   }
 
   @Test
-  void openTelemetryCommandInterceptorProduced_whenPresent() {
+  void aNoopOpenTelemetryBeanGivesTheNoopTracing() {
     var producers = new StreamRuneProducers();
-    var interceptor = producers.openTelemetryCommandInterceptor(satisfied(OpenTelemetry.noop()));
-    assertNotNull(interceptor);
-  }
-
-  @Test
-  void openTelemetryCommandInterceptorNull_whenAbsent() {
-    var producers = new StreamRuneProducers();
-    var interceptor = producers.openTelemetryCommandInterceptor(unsatisfied());
-    assertNull(interceptor);
+    var tracing =
+        producers.streamRuneTracing(satisfied(OpenTelemetry.noop()), TestProperties.defaults());
+    assertSame(org.streamrune.core.tracing.StreamRuneTracing.NOOP, tracing);
   }
 
   @Test
@@ -1381,7 +1392,9 @@ class StreamRuneProducersTest {
             () ->
                 producers.virtualThreadCommandBus(
                     mock(EventStore.class),
-                    producers.aggregateLocker(TestProperties.defaults()),
+                    producers.aggregateLocker(
+                        TestProperties.defaults(),
+                        org.streamrune.core.tracing.StreamRuneTracing.NOOP),
                     TestProperties.defaults(),
                     unsatisfied(), // no application SnapshotPolicy bean
                     emptyInterceptorInstance(),
@@ -1390,7 +1403,8 @@ class StreamRuneProducersTest {
                     unsatisfied(),
                     unsatisfied(),
                     unsatisfied(),
-                    unsatisfied()));
+                    unsatisfied(),
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(ex.getMessage().contains("PiiCommand"), ex.getMessage());
     assertTrue(ex.getMessage().contains("email"), ex.getMessage());
   }
@@ -1417,7 +1431,9 @@ class StreamRuneProducersTest {
             () ->
                 producers.virtualThreadCommandBus(
                     mock(EventStore.class),
-                    producers.aggregateLocker(TestProperties.defaults()),
+                    producers.aggregateLocker(
+                        TestProperties.defaults(),
+                        org.streamrune.core.tracing.StreamRuneTracing.NOOP),
                     TestProperties.defaults(),
                     unsatisfied(), // no application SnapshotPolicy bean
                     emptyInterceptorInstance(),
@@ -1426,7 +1442,8 @@ class StreamRuneProducersTest {
                     satisfied(new org.streamrune.test.InMemoryCryptoEngine()),
                     unsatisfied(),
                     unsatisfied(),
-                    unsatisfied()));
+                    unsatisfied(),
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(
         ex.getMessage().contains("is already registered (aggregate type 'pii')"), ex.getMessage());
   }
@@ -1449,7 +1466,8 @@ class StreamRuneProducersTest {
     var bus =
         producers.virtualThreadCommandBus(
             mock(EventStore.class),
-            producers.aggregateLocker(TestProperties.defaults()),
+            producers.aggregateLocker(
+                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             emptyInterceptorInstance(),
@@ -1458,7 +1476,8 @@ class StreamRuneProducersTest {
             satisfied(new org.streamrune.test.InMemoryCryptoEngine()),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(bus);
     bus.close();
   }
@@ -1475,7 +1494,8 @@ class StreamRuneProducersTest {
         () ->
             producers.virtualThreadCommandBus(
                 mock(EventStore.class),
-                producers.aggregateLocker(TestProperties.defaults()),
+                producers.aggregateLocker(
+                    TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
                 TestProperties.defaults(),
                 unsatisfied(), // no application SnapshotPolicy bean
                 emptyInterceptorInstance(),
@@ -1484,7 +1504,8 @@ class StreamRuneProducersTest {
                 ambiguous,
                 unsatisfied(),
                 unsatisfied(),
-                unsatisfied()));
+                unsatisfied(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   /**
@@ -1514,7 +1535,8 @@ class StreamRuneProducersTest {
     var bus =
         producers.virtualThreadCommandBus(
             new org.streamrune.test.InMemoryEventStore(),
-            producers.aggregateLocker(TestProperties.defaults()),
+            producers.aggregateLocker(
+                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             emptyInterceptorInstance(),
@@ -1523,7 +1545,8 @@ class StreamRuneProducersTest {
             unsatisfied(), // no CryptoEngine
             unsatisfied(), // no CommandInbox
             satisfied((org.streamrune.core.DeadLetterQueue) dlq),
-            satisfied((StreamRuneMetrics) metrics));
+            satisfied((StreamRuneMetrics) metrics),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var command = new FailingCommand("agg-1");
     assertThrows(RuntimeException.class, () -> bus.execute(command));
@@ -1564,7 +1587,8 @@ class StreamRuneProducersTest {
     var bus =
         producers.virtualThreadCommandBus(
             new org.streamrune.test.InMemoryEventStore().withCommandInbox(inbox),
-            producers.aggregateLocker(properties),
+            producers.aggregateLocker(
+                properties, org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             properties,
             unsatisfied(),
             emptyInterceptorInstance(),
@@ -1578,7 +1602,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             satisfied((org.streamrune.core.CommandInbox) inbox),
             satisfied((org.streamrune.core.DeadLetterQueue) dlq),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertEquals(
         org.streamrune.runtime.CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR,
@@ -1707,7 +1732,8 @@ class StreamRuneProducersTest {
     var commandBus =
         producers.virtualThreadCommandBus(
             eventStore,
-            producers.aggregateLocker(TestProperties.defaults()),
+            producers.aggregateLocker(
+                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             emptyInterceptorInstance(),
@@ -1721,7 +1747,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var runner =
         producers.deadLetterRetryRunner(
@@ -1851,7 +1878,8 @@ class StreamRuneProducersTest {
     try (VirtualThreadCommandBus bus =
         producers.virtualThreadCommandBus(
             store,
-            producers.aggregateLocker(TestProperties.defaults()),
+            producers.aggregateLocker(
+                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             TestProperties.defaults(),
             snapshotPolicyInstance,
             emptyInterceptorInstance(),
@@ -1865,7 +1893,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied())) {
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP)) {
       bus.execute(new SnapshotProbeCommand("agg-snap"));
     }
     return seen.get();
@@ -1936,7 +1965,12 @@ class StreamRuneProducersTest {
     // outboxEnabled=false by default
     var poller =
         producers.outboxPoller(
-            unsatisfied(), unsatisfied(), TestProperties.defaults(), unsatisfied(), unsatisfied());
+            unsatisfied(),
+            unsatisfied(),
+            TestProperties.defaults(),
+            unsatisfied(),
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNull(poller);
   }
 
@@ -1956,7 +1990,8 @@ class StreamRuneProducersTest {
             satisfied(mock(org.streamrune.core.outbox.OutboxPublisher.class)),
             props,
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(poller);
     poller.close();
   }
@@ -1978,7 +2013,8 @@ class StreamRuneProducersTest {
             satisfied(mock(org.streamrune.core.outbox.OutboxPublisher.class)),
             props,
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNull(poller);
   }
 
@@ -1992,7 +2028,8 @@ class StreamRuneProducersTest {
             unsatisfied(),
             props,
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNull(poller);
   }
 

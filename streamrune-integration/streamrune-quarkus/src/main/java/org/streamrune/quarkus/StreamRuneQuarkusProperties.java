@@ -151,6 +151,58 @@ public interface StreamRuneQuarkusProperties {
   /** Server-Sent Events configuration, {@code streamrune.sse.*}. */
   SseConfig sse();
 
+  /**
+   * Tracing configuration, {@code streamrune.tracing.*}: the switches of the spans StreamRune
+   * starts. Runtime configuration: a deployment switches an area without a rebuild.
+   */
+  TracingConfig tracing();
+
+  /**
+   * Tracing section, {@code streamrune.tracing.*}. The switches take effect when the application
+   * has OpenTelemetry (an {@code OpenTelemetry} bean, or a registered global OpenTelemetry such as
+   * the Java agent's); without it nothing is traced and the switches do nothing.
+   */
+  interface TracingConfig {
+
+    /** The master switch: {@code false} starts no StreamRune span at all. */
+    @WithDefault("true")
+    boolean enabled();
+
+    /** The {@code command/…} spans, {@code streamrune.tracing.command.*}. */
+    AreaConfig command();
+
+    /** The {@code subscription/…/deliver} spans, {@code streamrune.tracing.subscription.*}. */
+    AreaConfig subscription();
+
+    /** The {@code projection/…/process} spans, {@code streamrune.tracing.projection.*}. */
+    AreaConfig projection();
+
+    /**
+     * The {@code eventstore/…} spans, snapshots included, {@code streamrune.tracing.event-store.*}.
+     */
+    AreaConfig eventStore();
+
+    /** The {@code lock/acquire} spans, {@code streamrune.tracing.lock.*}. */
+    AreaConfig lock();
+
+    /**
+     * The {@code outbox/relay} and {@code outbox/publish} spans, {@code
+     * streamrune.tracing.outbox.*}.
+     */
+    AreaConfig outbox();
+
+    /** The {@code saga/…} spans, {@code streamrune.tracing.saga.*}. */
+    AreaConfig saga();
+
+    /** The switch of one area. */
+    interface AreaConfig {
+
+      /** Whether the spans of the area are started. */
+      @WithDefault("true")
+      boolean enabled();
+    }
+  }
+
   /** Event-store section, {@code streamrune.event-store.*}. */
   interface EventStoreConfig {
 

@@ -536,12 +536,17 @@ public abstract class IntegrationWiringContract {
 
   // ---- tracing -----------------------------------------------------------------------------
 
-  /** The configuration of a start whose background runners poll often enough for a test. */
+  /**
+   * The configuration of a start whose background runners poll often enough for a test, and whose
+   * projection runner leads without a lease: an adapter may give an application without a database
+   * a {@code DataSource} that reaches none.
+   */
   private static final Map<String, String> PROMPT_RUNNERS =
       Map.of(
           "streamrune.polling-interval", "50ms",
           "streamrune.polling-jitter", "10ms",
-          "streamrune.outbox.flush-interval", "50ms");
+          "streamrune.outbox.flush-interval", "50ms",
+          "streamrune.subscription.single-active-consumer.enabled", "false");
 
   /** The stream of the outbox entries the tracing rules relay. */
   private static final StreamId OUTBOX_STREAM =

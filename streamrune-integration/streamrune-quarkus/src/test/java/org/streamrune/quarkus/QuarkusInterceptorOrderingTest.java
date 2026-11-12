@@ -85,7 +85,8 @@ class QuarkusInterceptorOrderingTest {
     try (VirtualThreadCommandBus bus =
         producers.virtualThreadCommandBus(
             new InMemoryEventStore(),
-            producers.aggregateLocker(TestProperties.defaults()),
+            producers.aggregateLocker(
+                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             containerOrder,
@@ -94,7 +95,8 @@ class QuarkusInterceptorOrderingTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied())) {
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP)) {
       assertThrows(AuthorizationException.class, () -> bus.execute(new WidgetCommand("w-1")));
       assertTrue(
           saved.stream().anyMatch(e -> e.outcome() == AuditOutcome.FAILURE),

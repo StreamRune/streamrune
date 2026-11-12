@@ -70,7 +70,8 @@ class QuarkusOutboxMetricsWiringTest {
             satisfied((OutboxPublisher) e -> {}),
             TestProperties.of(Map.of("streamrune.outbox.enabled", "true")),
             satisfied(sentinel),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertSame(sentinel, metricsOf(poller), "the produced poller must carry the metrics bean");
   }
 
@@ -82,7 +83,8 @@ class QuarkusOutboxMetricsWiringTest {
             satisfied((OutboxPublisher) e -> {}),
             TestProperties.of(Map.of("streamrune.outbox.enabled", "true")),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertSame(StreamRuneMetrics.NOOP, metricsOf(poller));
   }
 
@@ -100,7 +102,8 @@ class QuarkusOutboxMetricsWiringTest {
                     "streamrune.outbox.retry-initial-delay", "PT0.25S",
                     "streamrune.outbox.retry-backoff-multiplier", "3.0")),
             unsatisfied(),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     RetryPolicy rp = retryPolicyOf(poller);
     assertEquals(7, rp.maxAttempts());
     assertEquals(Duration.ofMillis(250), rp.initialDelay());
@@ -138,7 +141,8 @@ class QuarkusOutboxMetricsWiringTest {
             satisfied((OutboxPublisher) e -> {}),
             TestProperties.of(Map.of("streamrune.outbox.enabled", "true")),
             satisfied(metrics),
-            unsatisfied());
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertSame(
         metrics, metricsOf(poller), "the poller records into the produced Micrometer adapter");
     assertNotNull(registry.find("streamrune.outbox.blocked_aggregates").gauge());
