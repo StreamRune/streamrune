@@ -22,14 +22,16 @@ graph LR
 
 ```java
 var streamRune = StreamRune.builder()
-    // Crypto/upcasters/type-registrations are only honored on a store the facade
+    // Crypto/upcasters/type-registrations/tracing are only honored on a store the facade
     // constructs itself — pass eventStoreFactoryProvider(...) so the engine reaches it.
     // The store borrows from your DataSource; closing the DataSource stays with you.
     .eventStoreFactoryProvider(settings ->
         new PostgresEventStoreFactory(dataSource, settings.typeRegistry())
             .cryptoEngine(settings.cryptoEngine())
-            .upcasters(settings.upcasters()))
+            .upcasters(settings.upcasters())
+            .tracing(settings.tracing()))
     .cryptoEngine(cryptoEngine)
+    .tracing(tracing)
     .registerEventType("OrderPlaced", OrderPlaced.class)
     .register(AggregateType.of("order"), PlaceOrderCommand.class,
         c -> AggregateId.of(c.orderId()), new OrderDecider())

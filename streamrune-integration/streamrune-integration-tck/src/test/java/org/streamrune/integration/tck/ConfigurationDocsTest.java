@@ -91,6 +91,26 @@ class ConfigurationDocsTest {
   }
 
   @Test
+  void aPlaceholderNameIsKnownWhenItStandsForKeys() {
+    var docs =
+        ConfigurationDocs.of(
+            Map.of(
+                "guide.md",
+                String.join(
+                    "\n",
+                    "Each store: `streamrune.<store>.retention-max-age`.",
+                    "Each switch: `streamrune.outbox.<switch>`.",
+                    "No such keys: `streamrune.<store>.time-out`, `streamrune.<a>.<b>.<c>.<d>`.")));
+
+    assertEquals(
+        List.of(
+            "guide.md:3: streamrune.<store>.time-out", "guide.md:3: streamrune.<a>.<b>.<c>.<d>"),
+        docs.unknown(ORACLE));
+    // A placeholder name documents no key: each key is named on its own.
+    assertEquals(5, docs.undocumented(ORACLE).size(), docs.undocumented(ORACLE).toString());
+  }
+
+  @Test
   void aNameOnAnotherPageIsHeldToTheCodeAndDocumentsNoKey() {
     var docs =
         ConfigurationDocs.of(

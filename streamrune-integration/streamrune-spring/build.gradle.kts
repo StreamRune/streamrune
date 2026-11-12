@@ -117,10 +117,26 @@ val optionalDependencyAbsentTest =
         filter { includeTestsMatching(optionalDependencyAbsentTestClass) }
     }
 
+// A test JVM without OpenTelemetry: opentelemetry-api is compileOnly, so an application that does
+// not use OpenTelemetry has none of its jars. The auto-configuration binds StreamRuneTracing.NOOP
+// there and must start and run a command. FilteredClassLoader cannot hide the jars from the classes
+// the parent defines (see above), so the jars leave the classpath.
+val openTelemetryAbsentTestClass = "org.streamrune.spring.OpenTelemetryAbsentTest"
+
+val openTelemetryAbsentTest =
+    tasks.register<Test>("openTelemetryAbsentTest") {
+        group = "verification"
+        description = "Boots the auto-configuration and runs a command without any OpenTelemetry jar."
+        testClassesDirs = testSourceSet.output.classesDirs
+        classpath = testSourceSet.runtimeClasspath.filter { !it.name.startsWith("opentelemetry-") }
+        filter { includeTestsMatching(openTelemetryAbsentTestClass) }
+    }
+
 tasks.named<Test>("test") {
     filter {
         excludeTestsMatching(noValidationProviderTestClass)
         excludeTestsMatching(optionalDependencyAbsentTestClass)
+        excludeTestsMatching(openTelemetryAbsentTestClass)
     }
 
     // StreamRuneFailureAnalyzerTest reads this module's own
@@ -141,7 +157,9 @@ tasks.named<Test>("test") {
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
-tasks.named("check") { dependsOn(noValidationProviderTest, optionalDependencyAbsentTest) }
+tasks.named("check") {
+    dependsOn(noValidationProviderTest, optionalDependencyAbsentTest, openTelemetryAbsentTest)
+}
 
 // ConfigurationDocLintTest reads the guides, this module's README, the pages listed in
 // gradle/doc-lint-pages.txt (declared by the root build) and the main sources of this module and of

@@ -121,6 +121,17 @@ streamrune.metrics.enabled=true
 streamrune.metrics.prefix=streamrune
 streamrune.startup-log=true
 
+# Tracing: runtime switches, effective with OpenTelemetry (an OpenTelemetry bean, or the global
+# OpenTelemetry the Java agent registers); see production.md "Tracing"
+streamrune.tracing.enabled=true
+streamrune.tracing.command.enabled=true
+streamrune.tracing.subscription.enabled=true
+streamrune.tracing.projection.enabled=true
+streamrune.tracing.event-store.enabled=true
+streamrune.tracing.lock.enabled=true
+streamrune.tracing.outbox.enabled=true
+streamrune.tracing.saga.enabled=true
+
 # GDPR and encryption
 streamrune.gdpr.snapshot-purge=required
 streamrune.crypto.cache.enabled=true
@@ -378,8 +389,8 @@ application without Quarkus REST derives no identities from HTTP requests and is
 
 The command bus runs the framework's interceptors — audit (for an `AuditStore` bean),
 authorization (for a `CommandAuthorizationPolicy` bean), annotation authorization (for a
-`UserRoleResolver` bean), Bean Validation, the circuit breaker and OpenTelemetry (for an
-`OpenTelemetry` bean) — together with every `CommandInterceptor` bean the application declares,
+`UserRoleResolver` bean), Bean Validation and the circuit breaker — together with every
+`CommandInterceptor` bean the application declares,
 sorted into the canonical chain (audit outside authorization, validation after authorization,
 breaker innermost). An application interceptor takes its position with
 `@jakarta.annotation.Priority` on its class (lower runs first; `2500` sits between audit and
@@ -387,7 +398,9 @@ authorization) and runs innermost without one. The bus reads the annotation from
 interceptor's class, so a `@Priority` on a `@Produces` method does not position it. An application bean of a framework interceptor's type — a
 `@Produces AuditCommandInterceptor` — replaces that framework interceptor, as
 `@ConditionalOnMissingBean` does on Spring and `@Requires(missingBeans = …)` on Micronaut; the
-replacement is logged at startup.
+replacement is logged at startup. The bus adds the OpenTelemetry interceptor itself, first in the
+chain, from the `StreamRuneTracing` bean (see [Tracing](../../docs/guide/production.md#tracing)),
+unless the application produces an `OpenTelemetryCommandInterceptor` of its own.
 
 The beans are collected through the `BeanManager`, not by iterating an
 `Instance<CommandInterceptor>`: Arc resolves an `Instance` iteration (and an `@All List`) with

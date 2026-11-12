@@ -60,7 +60,10 @@ class StreamRuneMicronautModuleTest {
   @Test
   void aggregateLockerBuiltFromProperties() {
     var module = new StreamRuneMicronautModule();
-    AggregateLocker locker = module.aggregateLocker(StreamRuneMicronautProperties.withDefaults());
+    AggregateLocker locker =
+        module.aggregateLocker(
+            StreamRuneMicronautProperties.withDefaults(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(locker);
   }
 
@@ -68,7 +71,10 @@ class StreamRuneMicronautModuleTest {
   void virtualThreadCommandBusBuilt() {
     var module = new StreamRuneMicronautModule();
     EventStore eventStore = mock(EventStore.class);
-    AggregateLocker locker = module.aggregateLocker(StreamRuneMicronautProperties.withDefaults());
+    AggregateLocker locker =
+        module.aggregateLocker(
+            StreamRuneMicronautProperties.withDefaults(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     VirtualThreadCommandBus bus =
         module.virtualThreadCommandBus(
@@ -82,7 +88,8 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
-            false);
+            false,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(bus);
     bus.close();
   }
@@ -97,7 +104,10 @@ class StreamRuneMicronautModuleTest {
   void virtualThreadCommandBusFailsFast_whenEncryptedCommandHasNoCryptoEngine() {
     var module = new StreamRuneMicronautModule();
     EventStore eventStore = mock(EventStore.class);
-    AggregateLocker locker = module.aggregateLocker(StreamRuneMicronautProperties.withDefaults());
+    AggregateLocker locker =
+        module.aggregateLocker(
+            StreamRuneMicronautProperties.withDefaults(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     var registrations =
         List.<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>of(
             new org.streamrune.runtime.DeciderRegistration<>(
@@ -121,7 +131,8 @@ class StreamRuneMicronautModuleTest {
                     null,
                     null,
                     null,
-                    false));
+                    false,
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(ex.getMessage().contains("PiiCommand"), ex.getMessage());
     assertTrue(ex.getMessage().contains("email"), ex.getMessage());
   }
@@ -135,7 +146,10 @@ class StreamRuneMicronautModuleTest {
   void virtualThreadCommandBusBuilds_whenEncryptedCommandHasCryptoEngine() {
     var module = new StreamRuneMicronautModule();
     EventStore eventStore = mock(EventStore.class);
-    AggregateLocker locker = module.aggregateLocker(StreamRuneMicronautProperties.withDefaults());
+    AggregateLocker locker =
+        module.aggregateLocker(
+            StreamRuneMicronautProperties.withDefaults(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     var registrations =
         List.<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>of(
             new org.streamrune.runtime.DeciderRegistration<>(
@@ -156,7 +170,8 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
-            false);
+            false,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(bus);
     bus.close();
   }
@@ -165,7 +180,10 @@ class StreamRuneMicronautModuleTest {
   void virtualThreadCommandBusRejectsMultipleCryptoEngines() {
     var module = new StreamRuneMicronautModule();
     EventStore eventStore = mock(EventStore.class);
-    AggregateLocker locker = module.aggregateLocker(StreamRuneMicronautProperties.withDefaults());
+    AggregateLocker locker =
+        module.aggregateLocker(
+            StreamRuneMicronautProperties.withDefaults(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertThrows(
         IllegalStateException.class,
         () ->
@@ -180,7 +198,8 @@ class StreamRuneMicronautModuleTest {
                 null,
                 null,
                 null,
-                false));
+                false,
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   /**
@@ -210,7 +229,9 @@ class StreamRuneMicronautModuleTest {
             () ->
                 module.virtualThreadCommandBus(
                     mock(EventStore.class),
-                    module.aggregateLocker(StreamRuneMicronautProperties.withDefaults()),
+                    module.aggregateLocker(
+                        StreamRuneMicronautProperties.withDefaults(),
+                        org.streamrune.core.tracing.StreamRuneTracing.NOOP),
                     StreamRuneMicronautProperties.withDefaults(),
                     null, // no application SnapshotPolicy bean
                     List.of(),
@@ -219,7 +240,8 @@ class StreamRuneMicronautModuleTest {
                     null,
                     null,
                     null,
-                    false));
+                    false,
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(
         ex.getMessage().contains("is already registered (aggregate type 'pii')"), ex.getMessage());
     assertTrue(ex.getMessage().contains(PiiCommand.class.getName()), ex.getMessage());
@@ -242,7 +264,10 @@ class StreamRuneMicronautModuleTest {
     var dlq = new org.streamrune.test.InMemoryDeadLetterQueue();
     var metrics = new CountingMetrics();
     var eventStore = new org.streamrune.test.InMemoryEventStore();
-    var locker = module.aggregateLocker(StreamRuneMicronautProperties.withDefaults());
+    var locker =
+        module.aggregateLocker(
+            StreamRuneMicronautProperties.withDefaults(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     var registrations =
         List.<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>of(
             new org.streamrune.runtime.DeciderRegistration<>(
@@ -263,7 +288,8 @@ class StreamRuneMicronautModuleTest {
             null, // no CommandInbox
             dlq,
             metrics,
-            false);
+            false,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var command = new FailingCommand("agg-1");
     assertThrows(RuntimeException.class, () -> bus.execute(command));
@@ -312,7 +338,7 @@ class StreamRuneMicronautModuleTest {
     var bus =
         module.virtualThreadCommandBus(
             new org.streamrune.test.InMemoryEventStore().withCommandInbox(inbox),
-            module.aggregateLocker(properties),
+            module.aggregateLocker(properties, org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             properties,
             null,
             List.of(),
@@ -326,7 +352,8 @@ class StreamRuneMicronautModuleTest {
             inbox,
             dlq,
             null,
-            false);
+            false,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     assertEquals(
         org.streamrune.runtime.CommandDeadLetteredException.PendingOutcome.AWAITING_OPERATOR,
@@ -449,7 +476,8 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
-            null);
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -615,7 +643,8 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
-            null);
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -963,14 +992,6 @@ class StreamRuneMicronautModuleTest {
   // micrometerStreamRuneMetrics requires MeterRegistry on test classpath — tested via integration
 
   @Test
-  void openTelemetryCommandInterceptorBuilt() {
-    var module = new StreamRuneMicronautModule();
-    var interceptor =
-        module.openTelemetryCommandInterceptor(io.opentelemetry.api.OpenTelemetry.noop());
-    assertNotNull(interceptor);
-  }
-
-  @Test
   void deadLetterRetryRunnerBuilt() {
     var module = new StreamRuneMicronautModule();
     var runner =
@@ -1105,7 +1126,7 @@ class StreamRuneMicronautModuleTest {
     var bus =
         module.virtualThreadCommandBus(
             new org.streamrune.test.InMemoryEventStore(),
-            module.aggregateLocker(defaults),
+            module.aggregateLocker(defaults, org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             defaults,
             null,
             List.of(),
@@ -1114,7 +1135,8 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
-            false);
+            false,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     var dlq = new org.streamrune.test.InMemoryDeadLetterQueue();
 
     var byDefault =
@@ -1144,7 +1166,10 @@ class StreamRuneMicronautModuleTest {
     var dlq = new org.streamrune.test.InMemoryDeadLetterQueue();
     var objectMapper = new ObjectMapper();
     var eventStore = new org.streamrune.test.InMemoryEventStore();
-    var locker = module.aggregateLocker(StreamRuneMicronautProperties.withDefaults());
+    var locker =
+        module.aggregateLocker(
+            StreamRuneMicronautProperties.withDefaults(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var registrations =
         List.<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>of(
@@ -1166,7 +1191,8 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
-            false);
+            false,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
 
     var runner =
         module.deadLetterRetryRunner(
@@ -1263,7 +1289,8 @@ class StreamRuneMicronautModuleTest {
             mock(org.streamrune.core.outbox.OutboxPublisher.class),
             StreamRuneMicronautProperties.withDefaults(),
             null,
-            null);
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(poller);
   }
 
@@ -1286,7 +1313,8 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
-            null);
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -1311,7 +1339,8 @@ class StreamRuneMicronautModuleTest {
                     null,
                     null,
                     null,
-                    null));
+                    null,
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(
         ex.getMessage().contains("Multiple CryptoEngine beans found"),
         "exception message must identify the ambiguity");
@@ -1336,7 +1365,8 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
-            null);
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -1357,7 +1387,8 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
-            null);
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     var field = factory.getClass().getDeclaredField("snapshotMigrations");
     field.setAccessible(true);
     assertEquals(List.of(migration), field.get(factory));
@@ -1381,7 +1412,8 @@ class StreamRuneMicronautModuleTest {
             outboxStore,
             null,
             null,
-            null);
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -1403,7 +1435,8 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
-            null);
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -1425,7 +1458,8 @@ class StreamRuneMicronautModuleTest {
             outboxStore,
             null,
             null,
-            null);
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 
@@ -1470,7 +1504,8 @@ class StreamRuneMicronautModuleTest {
         null,
         null,
         null,
-        null);
+        null,
+        org.streamrune.core.tracing.StreamRuneTracing.NOOP);
   }
 
   private static Object statementTimeoutOf(EventStoreFactory factory) throws Exception {
@@ -1498,7 +1533,8 @@ class StreamRuneMicronautModuleTest {
                     new org.streamrune.test.InMemoryOutboxStore(),
                     null,
                     null,
-                    null));
+                    null,
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
     assertTrue(ex.getMessage().contains("InMemoryOutboxStore"), ex.getMessage());
     assertTrue(ex.getMessage().contains("PostgresOutboxStore"), ex.getMessage());
   }
@@ -1520,7 +1556,8 @@ class StreamRuneMicronautModuleTest {
             new org.streamrune.test.InMemoryOutboxStore(),
             null,
             null,
-            null);
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
     assertNotNull(factory);
   }
 

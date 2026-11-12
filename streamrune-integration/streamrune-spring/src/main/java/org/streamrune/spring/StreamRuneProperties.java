@@ -42,6 +42,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param security security configuration (authorization-identity source)
  * @param sse Server-Sent Events endpoint configuration
  * @param gdpr GDPR configuration of the auto-configured {@code ForgetSubjectService}
+ * @param jvm JVM configuration (the startup check of the JIT)
+ * @param tracing tracing configuration: the master switch and the switch of each area
  */
 @ConfigurationProperties(prefix = "streamrune")
 public record StreamRuneProperties(
@@ -72,7 +74,8 @@ public record StreamRuneProperties(
     @DefaultValue Security security,
     @DefaultValue Sse sse,
     @DefaultValue Gdpr gdpr,
-    @DefaultValue Jvm jvm) {
+    @DefaultValue Jvm jvm,
+    @DefaultValue Tracing tracing) {
 
   /**
    * @param enabled whether {@link org.streamrune.runtime.CachingQueryBus} is auto-configured
@@ -326,6 +329,50 @@ public record StreamRuneProperties(
 
     public Gdpr {
       org.streamrune.integration.SnapshotPurgeSetting.parse(snapshotPurge);
+    }
+  }
+
+  /**
+   * The switches of the spans StreamRune starts. They take effect when the application has
+   * OpenTelemetry (an {@code OpenTelemetry} bean, or a registered global OpenTelemetry such as the
+   * Java agent's); without it nothing is traced and the switches do nothing.
+   *
+   * @param enabled the master switch: {@code false} starts no StreamRune span at all
+   * @param command the {@code command/…} spans
+   * @param subscription the {@code subscription/…/deliver} spans
+   * @param projection the {@code projection/…/process} spans
+   * @param eventStore the {@code eventstore/…} spans, snapshots included
+   * @param lock the {@code lock/acquire} spans
+   * @param outbox the {@code outbox/relay} and {@code outbox/publish} spans
+   * @param saga the {@code saga/…} spans
+   */
+  public record Tracing(
+      @DefaultValue("true") boolean enabled,
+      @DefaultValue Area command,
+      @DefaultValue Area subscription,
+      @DefaultValue Area projection,
+      @DefaultValue Area eventStore,
+      @DefaultValue Area lock,
+      @DefaultValue Area outbox,
+      @DefaultValue Area saga) {
+
+    /**
+     * @param enabled whether the spans of the area are started
+     */
+    public record Area(@DefaultValue("true") boolean enabled) {}
+
+    /** These switches as the {@link org.streamrune.runtime.TracingSettings} the tracing takes. */
+    public org.streamrune.runtime.TracingSettings settings() {
+      return org.streamrune.runtime.TracingSettings.builder()
+          .enabled(enabled)
+          .area(org.streamrune.core.tracing.TracingArea.COMMAND, command.enabled())
+          .area(org.streamrune.core.tracing.TracingArea.SUBSCRIPTION, subscription.enabled())
+          .area(org.streamrune.core.tracing.TracingArea.PROJECTION, projection.enabled())
+          .area(org.streamrune.core.tracing.TracingArea.EVENT_STORE, eventStore.enabled())
+          .area(org.streamrune.core.tracing.TracingArea.LOCK, lock.enabled())
+          .area(org.streamrune.core.tracing.TracingArea.OUTBOX, outbox.enabled())
+          .area(org.streamrune.core.tracing.TracingArea.SAGA, saga.enabled())
+          .build();
     }
   }
 }

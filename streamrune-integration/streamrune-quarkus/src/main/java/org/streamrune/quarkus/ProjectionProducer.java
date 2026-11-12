@@ -25,6 +25,7 @@ import org.streamrune.core.projection.ProjectionErrorClassifier;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.integration.ProjectionDiscoveryMessages;
@@ -33,6 +34,7 @@ import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.ScheduledProjectionRunner;
 import org.streamrune.runtime.SubscriptionHealthContributor;
+import org.streamrune.runtime.TracingProjectionDecorator;
 
 /**
  * Quarkus CDI producer that discovers {@link ProjectionConfig @ProjectionConfig}-annotated {@link
@@ -104,7 +106,8 @@ public class ProjectionProducer {
       Instance<ProjectionErrorClassifier> classifierInstance,
       Instance<SubscriptionHealthContributor> healthInstance,
       StreamRuneQuarkusProperties properties,
-      Config config) {
+      Config config,
+      StreamRuneTracing tracing) {
 
     // streamrune.projections.auto-discovery.enabled=false is the framework kill switch
     // (parity with Spring/Micronaut) — assemble nothing, so the user owns runner lifecycle.
@@ -129,7 +132,9 @@ public class ProjectionProducer {
         MultiProjectionRunner.builder()
             .eventStore(eventStore)
             .offsetStore(offsetStore)
-            .subscriptionConfig(subscriptionConfig);
+            .subscriptionConfig(subscriptionConfig)
+            // Each projection's batches start projection/{name}/process.
+            .tracing(tracing);
 
     ProjectionDeadLetterStore dlq = resolveOrNull(dlqInstance);
     if (dlq != null) {
@@ -199,7 +204,8 @@ public class ProjectionProducer {
       Instance<SubscriptionLeadership> leadershipInstance,
       Instance<ProjectionErrorClassifier> classifierInstance,
       Instance<SubscriptionHealthContributor> healthInstance,
-      Config config) {
+      Config config,
+      StreamRuneTracing tracing) {
 
     // Auto-discovery kill switch (parity with Spring/Micronaut) — see multiProjectionRunner.
     if (!autoDiscoveryEnabled(config)) {
@@ -212,7 +218,10 @@ public class ProjectionProducer {
     }
 
     var builder =
-        ScheduledProjectionRunner.builder().eventStore(eventStore).offsetStore(offsetStore);
+        ScheduledProjectionRunner.builder()
+            .eventStore(eventStore)
+            .offsetStore(offsetStore)
+            .tracing(tracing);
 
     ProjectionDeadLetterStore dlq = resolveOrNull(dlqInstance);
     if (dlq != null) {
@@ -271,14 +280,17 @@ public class ProjectionProducer {
    * Produces an {@link InlineProjectionInterceptor} from all enabled INLINE projections. Returns
    * {@code null} when no INLINE projection is found. Every INLINE projection must declare {@code
    * AT_LEAST_ONCE_IDEMPOTENT}; each one is logged once at INFO and recorded on the {@code
-   * delivery_mode} gauge when a metrics bean exists.
+   * delivery_mode} gauge when a metrics bean exists. Each one is decorated with a {@link
+   * TracingProjectionDecorator} over the {@link StreamRuneTracing} bean, so its batch starts {@code
+   * projection/{name}/process} under the command's span.
    */
   @Produces
   @DefaultBean
   public InlineProjectionInterceptor inlineProjectionInterceptor(
       Instance<Projection> projections,
       Config config,
-      Instance<StreamRuneMetrics> metricsInstance) {
+      Instance<StreamRuneMetrics> metricsInstance,
+      StreamRuneTracing tracing) {
 
     // Honor the auto-discovery kill switch for INLINE too. Without this,
     // INLINE @ProjectionConfig projections keep running (the interceptor is picked up by the
@@ -305,7 +317,8 @@ public class ProjectionProducer {
       if (metrics != null) {
         metrics.recordProjectionDeliveryMode(ProjectionName.of(e.name()), e.deliveryMode());
       }
-      builder.register(ProjectionName.of(e.name()), e.projection());
+      ProjectionName name = ProjectionName.of(e.name());
+      builder.register(name, TracingProjectionDecorator.traced(name, e.projection(), tracing));
     }
 
     return builder.build();

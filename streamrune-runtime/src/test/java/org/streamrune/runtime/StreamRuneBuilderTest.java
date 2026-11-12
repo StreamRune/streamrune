@@ -31,6 +31,13 @@ import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRunner;
 import org.streamrune.core.subscription.SubscriptionConfig;
+import org.streamrune.core.tracing.SpanAttributes;
+import org.streamrune.core.tracing.SpanBaggage;
+import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
+import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.tracing.TraceScope;
+import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
@@ -177,6 +184,71 @@ class StreamRuneBuilderTest {
 
     assertNull(received.get().cryptoEngine());
     assertEquals(List.of(), received.get().upcasters());
+    assertSame(StreamRuneTracing.NOOP, received.get().tracing());
+  }
+
+  @Test
+  void shouldThreadTracingIntoConfiguredFactory() {
+    StreamRuneTracing tracing = new NamedTracing();
+    var received = new AtomicReference<StreamRune.EventStoreSettings>();
+
+    StreamRune.builder()
+        .eventStoreFactory(
+            settings -> {
+              received.set(settings);
+              return new InMemoryEventStore();
+            })
+        .tracing(tracing)
+        .build();
+
+    assertSame(tracing, received.get().tracing());
+  }
+
+  @Test
+  void shouldThreadTracingIntoConfiguredFactoryProvider() {
+    StreamRuneTracing tracing = new NamedTracing();
+    var received = new AtomicReference<StreamRune.EventStoreSettings>();
+
+    StreamRune.builder()
+        .eventStoreFactoryProvider(
+            settings -> {
+              received.set(settings);
+              return InMemoryEventStoreFactory.builder().build();
+            })
+        .tracing(tracing)
+        .build();
+
+    assertSame(tracing, received.get().tracing());
+  }
+
+  @Test
+  void eventStoreSettingsRefuseANullTracing() {
+    var registry = org.streamrune.core.SimpleEventTypeRegistry.builder().build();
+
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new StreamRune.EventStoreSettings(registry, null, List.of(), null));
+    assertTrue(ex.getMessage().contains("StreamRuneTracing.NOOP"), ex.getMessage());
+  }
+
+  /** A tracing that records nothing, distinct from {@link StreamRuneTracing#NOOP}. */
+  private static final class NamedTracing implements StreamRuneTracing {
+    @Override
+    public boolean enabled(TracingArea area) {
+      return false;
+    }
+
+    @Override
+    public TraceScope start(
+        TracingArea area,
+        String spanName,
+        SpanKind kind,
+        SpanAttributes attributes,
+        SpanLink link,
+        SpanBaggage baggage) {
+      return TraceScope.NOOP;
+    }
   }
 
   @Test

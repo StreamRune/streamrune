@@ -33,6 +33,7 @@ import org.streamrune.core.projection.ProjectionErrorClassifier;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.integration.ProjectionDiscoveryMessages;
@@ -40,6 +41,7 @@ import org.streamrune.integration.ProjectionProcessorResolution;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.ScheduledProjectionRunner;
+import org.streamrune.runtime.TracingProjectionDecorator;
 
 /**
  * Builds {@link MultiProjectionRunner}, {@link ScheduledProjectionRunner}, and {@link
@@ -97,7 +99,8 @@ public class ProjectionAutoConfig {
       ObjectProvider<StreamRuneMetrics> metricsProvider,
       ObjectProvider<SubscriptionLeadership> leadershipProvider,
       ObjectProvider<ProjectionErrorClassifier> classifierProvider,
-      ObjectProvider<org.streamrune.runtime.SubscriptionHealthContributor> healthProvider) {
+      ObjectProvider<org.streamrune.runtime.SubscriptionHealthContributor> healthProvider,
+      ObjectProvider<StreamRuneTracing> tracingProvider) {
     var entries = discover(ctx, env, ProjectionConfig.Mode.CONTINUOUS);
     // No eager @Conditional that instantiates every Projection during the
     // BeanFactoryPostProcessor phase. Instead discover() runs during bean instantiation (all
@@ -118,7 +121,9 @@ public class ProjectionAutoConfig {
         MultiProjectionRunner.builder()
             .eventStore(eventStore)
             .offsetStore(offsetStore)
-            .subscriptionConfig(subscriptionConfig);
+            .subscriptionConfig(subscriptionConfig)
+            // Each projection's batches start projection/{name}/process.
+            .tracing(tracingOf(tracingProvider));
     // The processor is chosen by what the registrations DECLARE and by whether the leadership
     // needs its epoch honoured — never by the presence of a DataSource or of the bean. An
     // all-AT_LEAST_ONCE_IDEMPOTENT runner without leadership runs on nonAtomicAtLeastOnce().
@@ -188,7 +193,8 @@ public class ProjectionAutoConfig {
       ObjectProvider<StreamRuneMetrics> metricsProvider,
       ObjectProvider<SubscriptionLeadership> leadershipProvider,
       ObjectProvider<ProjectionErrorClassifier> classifierProvider,
-      ObjectProvider<org.streamrune.runtime.SubscriptionHealthContributor> healthProvider) {
+      ObjectProvider<org.streamrune.runtime.SubscriptionHealthContributor> healthProvider,
+      ObjectProvider<StreamRuneTracing> tracingProvider) {
     var entries = discover(ctx, env, ProjectionConfig.Mode.SCHEDULED);
     // Return null when there is no SCHEDULED projection (see
     // streamRuneMultiProjectionRunner).
@@ -196,7 +202,10 @@ public class ProjectionAutoConfig {
       return null;
     }
     var builder =
-        ScheduledProjectionRunner.builder().eventStore(eventStore).offsetStore(offsetStore);
+        ScheduledProjectionRunner.builder()
+            .eventStore(eventStore)
+            .offsetStore(offsetStore)
+            .tracing(tracingOf(tracingProvider));
     // The same rule as the CONTINUOUS runner: the processor by declared need, never by bean
     // presence. A TRANSACTIONAL_LOCAL scheduled chunk's read-model write and its checkpoint commit
     // in the processor's one transaction, with the same split-brain guard as CONTINUOUS.
@@ -259,20 +268,26 @@ public class ProjectionAutoConfig {
   /**
    * Runs innermost in the command interceptor chain (see the {@code ORDER_*} constants of {@link
    * org.streamrune.runtime.CommandInterceptorOrdering}): {@code after()} executes in reverse order,
-   * so inline projections are applied first once events are committed.
+   * so inline projections are applied first once events are committed. Each inline projection is
+   * decorated with a {@link TracingProjectionDecorator} over the {@link StreamRuneTracing} bean, so
+   * its batch starts {@code projection/{name}/process} under the command's span.
    */
   @Bean
   @org.springframework.core.annotation.Order(
       org.streamrune.runtime.CommandInterceptorOrdering.ORDER_INLINE_PROJECTION)
   @ConditionalOnMissingBean
   public InlineProjectionInterceptor streamRuneInlineProjectionInterceptor(
-      ApplicationContext ctx, Environment env, ObjectProvider<StreamRuneMetrics> metricsProvider) {
+      ApplicationContext ctx,
+      Environment env,
+      ObjectProvider<StreamRuneMetrics> metricsProvider,
+      ObjectProvider<StreamRuneTracing> tracingProvider) {
     var entries = discover(ctx, env, ProjectionConfig.Mode.INLINE);
     // Return null when there is no INLINE projection (see streamRuneMultiProjectionRunner).
     if (entries.isEmpty()) {
       return null;
     }
     var builder = InlineProjectionInterceptor.builder();
+    StreamRuneTracing tracing = tracingOf(tracingProvider);
     for (var e : entries) {
       // INLINE has no checkpoint to be transactional with: only AT_LEAST_ONCE_IDEMPOTENT boots.
       ProjectionProcessorResolution.requireInlineMode(e.name(), e.deliveryMode());
@@ -280,9 +295,15 @@ public class ProjectionAutoConfig {
       log.info(ProjectionProcessorResolution.INLINE_INFO, LogSanitizer.sanitizeForLog(e.name()));
       metricsProvider.ifAvailable(
           m -> m.recordProjectionDeliveryMode(ProjectionName.of(e.name()), e.deliveryMode()));
-      builder.register(ProjectionName.of(e.name()), e.projection());
+      ProjectionName name = ProjectionName.of(e.name());
+      builder.register(name, TracingProjectionDecorator.traced(name, e.projection(), tracing));
     }
     return builder.build();
+  }
+
+  /** The {@link StreamRuneTracing} bean, or {@link StreamRuneTracing#NOOP} without one. */
+  private static StreamRuneTracing tracingOf(ObjectProvider<StreamRuneTracing> tracingProvider) {
+    return tracingProvider.getIfAvailable(() -> StreamRuneTracing.NOOP);
   }
 
   /**

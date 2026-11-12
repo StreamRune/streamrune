@@ -28,6 +28,7 @@ import org.streamrune.core.projection.ProjectionErrorClassifier;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.integration.ProjectionDiscoveryMessages;
@@ -36,6 +37,7 @@ import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.ScheduledProjectionRunner;
 import org.streamrune.runtime.SubscriptionHealthContributor;
+import org.streamrune.runtime.TracingProjectionDecorator;
 
 /**
  * Micronaut factory that discovers {@link ProjectionConfig @ProjectionConfig}-annotated {@link
@@ -109,6 +111,7 @@ public class ProjectionFactory {
    * @param healthContributor optional subscription health contributor
    * @param properties the StreamRune configuration properties
    * @param env the Micronaut environment for property access
+   * @param tracing the tracing it starts its spans through
    * @return a new runner
    */
   @Singleton
@@ -151,7 +154,8 @@ public class ProjectionFactory {
       @Nullable ProjectionErrorClassifier classifier,
       @Nullable SubscriptionHealthContributor healthContributor,
       StreamRuneMicronautProperties properties,
-      Environment env) {
+      Environment env,
+      StreamRuneTracing tracing) {
 
     var entries = discover(projections, env, ProjectionConfig.Mode.CONTINUOUS);
     if (entries.isEmpty()) {
@@ -170,7 +174,9 @@ public class ProjectionFactory {
         MultiProjectionRunner.builder()
             .eventStore(eventStore)
             .offsetStore(offsetStore)
-            .subscriptionConfig(subscriptionConfig);
+            .subscriptionConfig(subscriptionConfig)
+            // Each projection's batches start projection/{name}/process.
+            .tracing(tracing);
 
     // Micronaut collection injection exposes EVERY AtomicBatchProcessor bean. The processor is
     // chosen by what the registrations DECLARE and by whether the leadership needs its epoch
@@ -242,6 +248,7 @@ public class ProjectionFactory {
    * @param classifier optional poison-vs-transient classifier
    * @param healthContributor optional subscription health contributor
    * @param env the Micronaut environment for property access
+   * @param tracing the tracing it starts its spans through
    * @return a new runner
    */
   @Singleton
@@ -263,7 +270,8 @@ public class ProjectionFactory {
       @Nullable SubscriptionLeadership leadership,
       @Nullable ProjectionErrorClassifier classifier,
       @Nullable SubscriptionHealthContributor healthContributor,
-      Environment env) {
+      Environment env,
+      StreamRuneTracing tracing) {
 
     var entries = discover(projections, env, ProjectionConfig.Mode.SCHEDULED);
     if (entries.isEmpty()) {
@@ -271,7 +279,10 @@ public class ProjectionFactory {
     }
 
     var builder =
-        ScheduledProjectionRunner.builder().eventStore(eventStore).offsetStore(offsetStore);
+        ScheduledProjectionRunner.builder()
+            .eventStore(eventStore)
+            .offsetStore(offsetStore)
+            .tracing(tracing);
 
     // The same rule as the CONTINUOUS runner: the processor by declared need, never by bean
     // presence. A TRANSACTIONAL_LOCAL scheduled chunk's read-model write and its checkpoint commit
@@ -334,6 +345,7 @@ public class ProjectionFactory {
    * @param projections all {@link Projection} beans in the context
    * @param env the Micronaut environment for property access
    * @param metrics optional metrics collector
+   * @param tracing the tracing it starts its spans through
    * @return a new interceptor
    */
   @Singleton
@@ -349,7 +361,10 @@ public class ProjectionFactory {
   @Requires(missingBeans = InlineProjectionInterceptor.class)
   @Requires(condition = HasInlineProjections.class)
   public InlineProjectionInterceptor inlineProjectionInterceptor(
-      List<Projection> projections, Environment env, @Nullable StreamRuneMetrics metrics) {
+      List<Projection> projections,
+      Environment env,
+      @Nullable StreamRuneMetrics metrics,
+      StreamRuneTracing tracing) {
 
     var entries = discover(projections, env, ProjectionConfig.Mode.INLINE);
     if (entries.isEmpty()) {
@@ -365,7 +380,8 @@ public class ProjectionFactory {
       if (metrics != null) {
         metrics.recordProjectionDeliveryMode(ProjectionName.of(e.name()), e.deliveryMode());
       }
-      builder.register(ProjectionName.of(e.name()), e.projection());
+      ProjectionName name = ProjectionName.of(e.name());
+      builder.register(name, TracingProjectionDecorator.traced(name, e.projection(), tracing));
     }
 
     return builder.build();

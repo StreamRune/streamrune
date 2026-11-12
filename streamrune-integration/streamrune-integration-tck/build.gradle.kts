@@ -12,6 +12,10 @@ dependencies {
     api(project(":streamrune-test"))
     api(platform(libs.junit.bom))
     api("org.junit.jupiter:junit-jupiter-api")
+    // The tracing rules run a command against an OpenTelemetry SDK whose spans an in-memory
+    // exporter keeps; each integration's tests already have the SDK testing module on their
+    // classpath. A test JVM without OpenTelemetry leaves it out (see the integrations' builds).
+    api(libs.opentelemetry.sdk.testing)
     // The reference application keeps the warning the dead-letter retry runner logs when it is
     // built, as an integration's start logs it: a binding whose events it can capture.
     testImplementation(libs.logback.classic)
