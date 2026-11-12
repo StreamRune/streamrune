@@ -222,7 +222,6 @@ class ListenerContinuationTest {
                   EventId.of("evt-request-1"),
                   CommandId.of("cmd-request-1"),
                   TraceId.of("trace-7"),
-                  null,
                   CorrelationId.of("client-corr-7"),
                   null,
                   UserId.of("alice"),

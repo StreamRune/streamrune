@@ -71,7 +71,7 @@ public class SagaEventPathRetentionConfigurer
       @Nullable SubscriptionLeadership leadership) {
     this.sagaRunners = sagaRunners;
     this.properties = properties;
-    this.leadership = leadership;
+    this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
   }
 
   // The validators' tier: a lower value than the listeners that start the integration's runners

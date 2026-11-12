@@ -186,7 +186,6 @@ class CacheAwareProjectionCommitOrderTest {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("corr-" + orderId),
             null,
             null,

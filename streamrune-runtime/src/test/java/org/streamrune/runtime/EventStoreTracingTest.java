@@ -104,7 +104,6 @@ class EventStoreTracingTest {
             EventId.of("evt-1"),
             CommandId.of("cmd-1"),
             null,
-            null,
             CorrelationId.of("corr-1"),
             null,
             null,

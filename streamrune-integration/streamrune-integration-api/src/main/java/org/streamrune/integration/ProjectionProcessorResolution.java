@@ -2,6 +2,7 @@ package org.streamrune.integration;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import org.streamrune.core.Internal;
 import org.streamrune.core.projection.AtomicBatchProcessor;
@@ -39,7 +40,8 @@ public final class ProjectionProcessorResolution {
    * Selects the processor for one runner.
    *
    * @param registrations the runner's discovered registrations
-   * @param leadership the configured leadership bean, or {@code null} when none exists
+   * @param leadership the configured leadership bean, or {@link SubscriptionLeadership#NOOP} when
+   *     none exists; not {@code null}
    * @param candidates every {@code AtomicBatchProcessor} bean in the context (0, 1 or more)
    * @param runnerName for the message
    * @return the single bean when a registration or the leadership needs it; otherwise {@link
@@ -54,7 +56,8 @@ public final class ProjectionProcessorResolution {
       String runnerName) {
     List<Registration> transactional =
         registrations.stream().filter(r -> r.mode().writesInCheckpointTransaction()).toList();
-    boolean needsFencing = leadership != null && leadership != SubscriptionLeadership.NOOP;
+    boolean needsFencing =
+        Objects.requireNonNull(leadership, "leadership is required") != SubscriptionLeadership.NOOP;
     if (transactional.isEmpty() && !needsFencing) {
       return AtomicBatchProcessor.nonAtomicAtLeastOnce();
     }

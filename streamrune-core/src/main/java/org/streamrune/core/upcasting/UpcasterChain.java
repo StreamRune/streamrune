@@ -3,6 +3,7 @@ package org.streamrune.core.upcasting;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import org.streamrune.core.Internal;
 import org.streamrune.core.types.EventType;
@@ -14,21 +15,28 @@ import org.streamrune.core.types.EventType;
  * transformations V1 to V2 then V2 to V3 sequentially. If no upcaster is registered for a given
  * event type, the data is returned unchanged.
  *
+ * <p>A store without upcasters holds {@link #empty()}: every event type is at version 1 and nothing
+ * is upcast.
+ *
  * @hidden
  */
 @Internal
 public final class UpcasterChain {
+
+  private static final UpcasterChain EMPTY = new UpcasterChain(List.of());
 
   private final Map<EventType, EventUpcaster> upcasters;
 
   /**
    * Creates a chain from the given list of upcasters.
    *
-   * @param upcasters the upcasters to register; each event type must have at most one upcaster
+   * @param upcasters the upcasters to register, empty for none; each event type must have at most
+   *     one upcaster
    * @throws IllegalStateException if duplicate event types are detected
+   * @throws NullPointerException if {@code upcasters} is {@code null}
    */
   public UpcasterChain(List<EventUpcaster> upcasters) {
-    if (upcasters == null || upcasters.isEmpty()) {
+    if (Objects.requireNonNull(upcasters, "upcasters is required").isEmpty()) {
       this.upcasters = Map.of();
     } else {
       this.upcasters =
@@ -42,6 +50,24 @@ public final class UpcasterChain {
                             "Duplicate upcaster for event type: " + a.eventType());
                       }));
     }
+  }
+
+  /**
+   * The chain with no upcasters: every event type is at version 1 and nothing is upcast.
+   *
+   * @return the empty chain
+   */
+  public static UpcasterChain empty() {
+    return EMPTY;
+  }
+
+  /**
+   * Whether this chain has no upcasters, so every event type is at version 1.
+   *
+   * @return {@code true} for a chain without upcasters
+   */
+  public boolean isEmpty() {
+    return upcasters.isEmpty();
   }
 
   /**

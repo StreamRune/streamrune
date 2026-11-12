@@ -342,7 +342,7 @@ class ProjectionAutoConfigTest {
   }
 
   @Test
-  void absentMetricsLeavesMultiProjectionRunnerWithNullMetrics() {
+  void absentMetricsLeavesMultiProjectionRunnerWithNoopMetrics() {
     runner
         .withUserConfiguration(ContinuousBean.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
@@ -351,7 +351,7 @@ class ProjectionAutoConfigTest {
               var mpr = ctx.getBean(MultiProjectionRunner.class);
               var field = MultiProjectionRunner.class.getDeclaredField("metrics");
               field.setAccessible(true);
-              assertThat(field.get(mpr)).isNull();
+              assertThat(field.get(mpr)).isSameAs(org.streamrune.core.StreamRuneMetrics.NOOP);
             });
   }
 

@@ -165,13 +165,15 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 - `PostgresEventStore.create(...)` and `PostgresEventStore.builder().build()` refuse, before touching
   the database, a registered type with an `@Encrypted` component when no `CryptoEngine` is
   configured.
-- `EventMetadata` on every envelope: `eventId`, `commandId`, `traceId`, `spanId`, `correlationId`,
+- `EventMetadata` on every envelope: `eventId`, `commandId`, `traceId`, `correlationId`,
   `causationId`, `userId`, `timestamp`, allow-listed W3C baggage and `sagaOrigin`, built by the
   command bus from the bound `StreamRuneContext`. `sagaOrigin` (`SagaOrigin`: saga type, saga id,
   hop) names the saga whose dispatch caused the event and is `null` on every other event;
   `causationId` names the event the command reacted to and is `null` on a causation root. The bus
   copies both from the dispatch cause (`StreamRuneContext.CAUSE`) that saga dispatch and
   `StreamRuneContext.continuing` bind, never from a request header or a baggage entry.
+  `EventMetadata` has no `spanId` component; a read ignores a `spanId` key in stored metadata, and
+  every other key the record does not define is refused.
 - `StreamRuneContext.continuing(EventEnvelope)` returns the bindings for commands a listener
   dispatches in reaction to a stored event (a process manager):
   `StreamRuneContext.continuing(event).run(() -> commandBus.execute(command, key))`. The events of
@@ -807,7 +809,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   and retries its compensations; the others take over within one attempt interval of a clean stop and
   within the lease TTL of a crash. Correctness does not rest on it: the saga row's compare-and-swap,
   the command inbox and the forward fence hold during a handover overlap. A runner without
-  leadership (absent, `null` or `NOOP`) delivers on every replica. A follower whose lease no
+  leadership (absent or `NOOP`) delivers on every replica. A follower whose lease no
   subscription of its process anchored logs one INFO on its second unanchored poll within 15 s of
   its start and one WARN past it, and its relay health reads `DEGRADED`; a runner with a lease delivering through
   `listener(runner.asEventListener())` logs one WARN. A sweeper of a runner without a lease keeps its
@@ -1265,6 +1267,13 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
   baggage); attributes are `SpanAttributes.empty()` when there are none.
 - `TraceScope.link()`: the trace id and span id of the span a scope started, `SpanLink.NONE` for
   the no-op scope or an area that is off; a span the sampler drops still has one.
+- The optional collaborators of every builder and constructor take no `null`: `metrics(...)`,
+  `tracing(...)`, `leadership(...)`, `healthContributor(...)` and `upcasters(...)` default to
+  `StreamRuneMetrics.NOOP`, `StreamRuneTracing.NOOP`, `SubscriptionLeadership.NOOP`,
+  `SubscriptionHealthContributor.NOOP` and no upcasters, and a `null` argument throws
+  `NullPointerException` (`<name> is required`). `SubscriptionHealthContributor.NOOP` registers
+  nothing and reports no subscription; a subscription built with it delivers to its listener
+  unwrapped. The integrations pass the `NOOP` value when a bean is absent.
 - Every production log line goes through SLF4J; bring the binding of your choice.
 - `BackgroundRelayHealthContributor` for every background relay; a per-cycle aggregated WARN for
   transport and in-flight outbox outages.

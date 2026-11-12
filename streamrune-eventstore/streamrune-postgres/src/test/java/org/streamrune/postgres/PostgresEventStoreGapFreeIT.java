@@ -119,7 +119,6 @@ class PostgresEventStoreGapFreeIT {
                 IdGenerator.generateEventId(),
                 IdGenerator.generateCommandId(),
                 null,
-                null,
                 CorrelationId.of("gapfree"),
                 null,
                 null,

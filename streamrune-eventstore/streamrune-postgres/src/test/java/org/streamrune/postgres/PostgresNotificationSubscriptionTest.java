@@ -140,7 +140,6 @@ class PostgresNotificationSubscriptionTest {
             EventId.of("evt_" + v),
             CommandId.of("cmd_" + v),
             null,
-            null,
             CorrelationId.of("corr"),
             null,
             null,
@@ -1324,7 +1323,6 @@ class PostgresNotificationSubscriptionTest {
               new EventMetadata(
                   EventId.of("evt_" + globalOffset),
                   CommandId.of("cmd_" + globalOffset),
-                  null,
                   null,
                   CorrelationId.of("corr"),
                   null,

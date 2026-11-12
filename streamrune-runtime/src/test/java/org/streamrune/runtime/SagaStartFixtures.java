@@ -323,7 +323,6 @@ final class SagaStartFixtures {
                         EventId.of("evt-" + UUID.randomUUID()),
                         CommandId.of("cmd-" + UUID.randomUUID()),
                         null,
-                        null,
                         CorrelationId.of("saga-1"),
                         null,
                         null,
@@ -345,7 +344,6 @@ final class SagaStartFixtures {
         new EventMetadata(
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-" + UUID.randomUUID()),
-            null,
             null,
             CorrelationId.of("saga-1"),
             null,
@@ -369,7 +367,6 @@ final class SagaStartFixtures {
         new EventMetadata(
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-" + UUID.randomUUID()),
-            null,
             null,
             CorrelationId.of("saga-1"),
             null,

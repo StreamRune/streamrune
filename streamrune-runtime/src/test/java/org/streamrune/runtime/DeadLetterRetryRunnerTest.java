@@ -3149,8 +3149,7 @@ class DeadLetterRetryRunnerTest {
   }
 
   @Test
-  void nullLeadershipCoalescesToNoop() {
-    // Passing null to the builder must coalesce to NOOP, never leave a null that NPEs on poll.
+  void leadershipDefaultsToNoop_andANullOneIsRefused() {
     var built =
         DeadLetterRetryRunner.builder()
             .deadLetterQueue(dlq)
@@ -3158,9 +3157,12 @@ class DeadLetterRetryRunnerTest {
             .objectMapper(objectMapper)
             .policy(policy)
             .pollInterval(Duration.ofMinutes(1))
-            .leadership(null)
             .build();
     assertSame(SubscriptionLeadership.NOOP, built.leadership());
+    var refused =
+        assertThrows(
+            NullPointerException.class, () -> DeadLetterRetryRunner.builder().leadership(null));
+    assertEquals("leadership is required", refused.getMessage());
   }
 
   @Test

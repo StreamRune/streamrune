@@ -424,7 +424,6 @@ class CartIntegrationTest {
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-" + UUID.randomUUID()),
             null,
-            null,
             CorrelationId.of("corr-test"),
             null,
             null,

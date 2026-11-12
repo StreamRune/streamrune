@@ -131,7 +131,6 @@ class SagaDeciderAdapterTest {
             EventId.of(UUID.randomUUID().toString()),
             CommandId.of(UUID.randomUUID().toString()),
             null,
-            null,
             CorrelationId.of(streamId),
             null,
             null,

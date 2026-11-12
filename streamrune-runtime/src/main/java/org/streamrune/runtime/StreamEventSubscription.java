@@ -130,15 +130,23 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
       EventListener listener,
       SubscriptionConfig config,
       int fetchSize) {
-    this(subscriptionName, streamId, eventStore, offsetStore, listener, config, fetchSize, null);
+    this(
+        subscriptionName,
+        streamId,
+        eventStore,
+        offsetStore,
+        listener,
+        config,
+        fetchSize,
+        StreamRuneMetrics.NOOP);
   }
 
   /**
-   * Creates a new stream subscription with an optional metrics collector.
+   * Creates a new stream subscription with a metrics collector.
    *
-   * @param metrics the metrics collector; {@code null} disables metrics (behavior unchanged). When
-   *     present, records the number of events delivered for this stream and the delivery latency
-   *     per poll cycle, tagged with the subscription name.
+   * @param metrics the metrics collector; {@link StreamRuneMetrics#NOOP} records nothing, not
+   *     {@code null}. Records the number of events delivered for this stream and the delivery
+   *     latency per poll cycle, tagged with the subscription name.
    */
   public StreamEventSubscription(
       SubscriptionName subscriptionName,
@@ -242,7 +250,7 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
     this.listener = listener;
     this.config = config;
     this.fetchSize = fetchSize;
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
     this.readPoisonBound = Math.max(0, readPoisonBound);
     Duration maxBackoff =
         config.pollingInterval().compareTo(MAX_FAILURE_BACKOFF) > 0
@@ -580,7 +588,7 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
     private EventListener listener;
     private SubscriptionConfig config = SubscriptionConfig.DEFAULT;
     private int fetchSize = 100;
-    private StreamRuneMetrics metrics;
+    private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private long closeJoinTimeoutMs = DEFAULT_CLOSE_JOIN_TIMEOUT_MS;
     private int readPoisonBound = DEFAULT_READ_POISON_BOUND;
     private Clock clock;
@@ -627,12 +635,15 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
     }
 
     /**
-     * Sets the metrics collector. Optional; when absent (or {@code null}) subscription metrics are
-     * not recorded and behavior is unchanged. Records events received and delivery latency per poll
-     * cycle, tagged with the subscription name.
+     * Sets the metrics collector. Optional; the default {@link StreamRuneMetrics#NOOP} records
+     * nothing. Records events received and delivery latency per poll cycle, tagged with the
+     * subscription name.
+     *
+     * @param metrics the metrics; not {@code null}
+     * @return this builder
      */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 

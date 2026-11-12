@@ -173,11 +173,12 @@ public final class InMemoryEventStore implements EventStore {
 
   /**
    * Event upcaster chain applied on the read path in serializing mode, mirroring {@code
-   * PostgresEventStore}. Null (no upcasting) by default; set via {@link #withUpcasters}. An event's
-   * stored schema version is stamped at append time from this chain, so upcasting is exercised by
-   * appending under an empty/older chain and reading under a chain with a higher current version.
+   * PostgresEventStore}. {@link UpcasterChain#empty()} (no upcasting) by default; set via {@link
+   * #withUpcasters}. An event's stored schema version is stamped at append time from this chain, so
+   * upcasting is exercised by appending under an empty/older chain and reading under a chain with a
+   * higher current version.
    */
-  private volatile UpcasterChain upcasterChain;
+  private volatile UpcasterChain upcasterChain = UpcasterChain.empty();
 
   /** The tracing of the serializing mode's spans; set by {@link #withTracing}. */
   private volatile StreamRuneTracing tracing = StreamRuneTracing.NOOP;
@@ -301,8 +302,7 @@ public final class InMemoryEventStore implements EventStore {
    * @throws IllegalStateException if two upcasters are registered for the same event type
    */
   public InMemoryEventStore withUpcasters(List<EventUpcaster> upcasters) {
-    this.upcasterChain =
-        upcasters == null || upcasters.isEmpty() ? null : new UpcasterChain(upcasters);
+    this.upcasterChain = upcasters == null ? UpcasterChain.empty() : new UpcasterChain(upcasters);
     return this;
   }
 
@@ -400,7 +400,7 @@ public final class InMemoryEventStore implements EventStore {
     List<StoredEvent> stored = events.toList();
     UpcasterChain chain = upcasterChain;
     long upcasts =
-        chain == null
+        chain.isEmpty()
             ? 0
             : stored.stream()
                 .filter(e -> e.schemaVersion() < chain.currentVersion(e.eventType()))
@@ -846,8 +846,7 @@ public final class InMemoryEventStore implements EventStore {
                   + LogSanitizer.sanitizeForLog(streamId.value()),
               e);
         }
-        int schemaVersion =
-            upcasterChain != null ? upcasterChain.currentVersion(envelope.eventType()) : 1;
+        int schemaVersion = upcasterChain.currentVersion(envelope.eventType());
         templates.add(
             new StoredEvent(
                 envelope.globalOffset(),
@@ -886,14 +885,12 @@ public final class InMemoryEventStore implements EventStore {
     Class<?> eventClass = typeRegistry.resolveEventType(eventType);
     try {
       Object event;
-      // A reader with NO upcaster chain understands only v1 —
-      // the write path stamps schema_version = 1 when chainless (see the append path above) — so
-      // treat a null chain as currentVersion = 1 here too. The original guard branched only when
-      // the chain was non-null, so a chainless reader skipped it and a stored schema_version >= 2
-      // fell through to a plain readValue, silently mis-binding the payload — the SAME durable
-      // corruption the chain-PRESENT path already closes, left open on the null-chain path.
-      // Mirrors PostgresEventStore so the double cannot mask the divergence.
-      int currentVersion = upcasterChain != null ? upcasterChain.currentVersion(eventType) : 1;
+      // A reader with no upcasters understands only v1 — the write path stamps schema_version = 1
+      // with the empty chain (see the append path above) — and the empty chain reports
+      // currentVersion = 1, so a stored schema_version >= 2 meets the guard below instead of
+      // falling through to a plain readValue that would silently mis-bind the payload. Mirrors
+      // PostgresEventStore so the double cannot mask the divergence.
+      int currentVersion = upcasterChain.currentVersion(eventType);
       if (stored.schemaVersion() > currentVersion) {
         // A newer writer stamped it (a replica of the next release, or a store with upcasters
         // this one lacks). Reading on would silently mis-bind the payload. Fail closed with the
@@ -914,7 +911,8 @@ public final class InMemoryEventStore implements EventStore {
             stored.schemaVersion(),
             currentVersion);
       }
-      if (upcasterChain != null && stored.schemaVersion() < currentVersion) {
+      // A store without upcasters binds every row directly, a schema_version below 1 included.
+      if (!upcasterChain.isEmpty() && stored.schemaVersion() < currentVersion) {
         // Deserialize to map, upcast, then bind to the target class. convertValue() binds the
         // already-parsed map directly — no intermediate JSON string — mirroring
         // PostgresEventStore.
@@ -1301,10 +1299,10 @@ public final class InMemoryEventStore implements EventStore {
 
   /**
    * The schema version this store reads an event of {@code eventType} at: the current version of
-   * its upcaster chain, or {@code 1} without one. For {@link EventStreamFixtures}.
+   * its upcaster chain, {@code 1} without upcasters. For {@link EventStreamFixtures}.
    */
   int schemaVersionOf(EventType eventType) {
-    return upcasterChain != null ? upcasterChain.currentVersion(eventType) : 1;
+    return upcasterChain.currentVersion(eventType);
   }
 
   /**

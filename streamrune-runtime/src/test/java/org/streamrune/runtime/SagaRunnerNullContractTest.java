@@ -236,7 +236,6 @@ class SagaRunnerNullContractTest {
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-1"),
             null,
-            null,
             CorrelationId.of(correlationId),
             null,
             null,

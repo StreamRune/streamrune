@@ -119,7 +119,14 @@ class PostgresEventStoreIsolationRestoreIT {
     commandInbox = new PostgresCommandInbox(pooled);
     store =
         new PostgresEventStore(
-            pooled, objectMapper, typeRegistry, null, null, null, null, commandInbox);
+            pooled,
+            objectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            commandInbox);
     try (var conn = realDataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("DELETE FROM event_stream");
@@ -236,7 +243,6 @@ class PostgresEventStoreIsolationRestoreIT {
         new EventMetadata(
             EventId.of("evt-" + streamId.value() + "-" + version),
             CommandId.of("cmd-" + streamId.value() + "-" + version),
-            null,
             null,
             CorrelationId.of("corr-1"),
             null,

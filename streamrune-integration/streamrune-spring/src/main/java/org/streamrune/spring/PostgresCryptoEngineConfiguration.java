@@ -36,7 +36,7 @@ public class PostgresCryptoEngineConfiguration {
             .dataSource(dataSource)
             .tableName(props.postgres().tableName())
             // Counts discarded encryptions and retried decryptions; NOOP without a metrics bean.
-            .metrics(metrics)
+            .metrics(metrics != null ? metrics : StreamRuneMetrics.NOOP)
             .build();
 
     var cacheProps = props.cache();

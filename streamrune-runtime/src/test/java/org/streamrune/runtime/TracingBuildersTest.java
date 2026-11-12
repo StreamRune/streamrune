@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 
 import io.opentelemetry.api.common.AttributeKey;
@@ -202,7 +203,6 @@ class TracingBuildersTest {
         new EventMetadata(
             EventId.of("evt_" + version),
             CommandId.of("cmd_" + version),
-            null,
             null,
             CorrelationId.of("corr"),
             null,
@@ -534,7 +534,9 @@ class TracingBuildersTest {
     var name = SubscriptionName.of("s");
     var projectionName = ProjectionName.of("p");
 
-    assertThat(TracingEventListener.traced(listener, null, name)).isSameAs(listener);
+    assertThatThrownBy(() -> TracingEventListener.traced(listener, null, name))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("tracing is required");
     assertThat(TracingEventListener.traced(listener, StreamRuneTracing.NOOP, name))
         .isSameAs(listener);
     assertThat(TracingEventListener.traced(null, tracing(), name)).isNull();
@@ -542,8 +544,9 @@ class TracingBuildersTest {
     assertThat(TracingEventListener.traced(listener, tracing(), name))
         .isInstanceOf(TracingEventListener.class);
 
-    assertThat(TracingProjectionDecorator.traced(projectionName, projection, null))
-        .isSameAs(projection);
+    assertThatThrownBy(() -> TracingProjectionDecorator.traced(projectionName, projection, null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("tracing is required");
     assertThat(
             TracingProjectionDecorator.traced(projectionName, projection, StreamRuneTracing.NOOP))
         .isSameAs(projection);

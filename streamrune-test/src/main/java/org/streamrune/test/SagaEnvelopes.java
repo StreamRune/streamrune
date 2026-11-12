@@ -53,7 +53,6 @@ public final class SagaEnvelopes {
         IdGenerator.generateEventId(),
         IdGenerator.generateCommandId(),
         null,
-        null,
         origin.correlationId(),
         null,
         null,

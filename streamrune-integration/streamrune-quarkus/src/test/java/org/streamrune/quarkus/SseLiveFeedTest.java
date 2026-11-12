@@ -333,7 +333,6 @@ class SseLiveFeedTest {
                       EventId.of("evt-history"),
                       CommandId.of("cmd-history"),
                       null,
-                      null,
                       CorrelationId.of("corr-history"),
                       null,
                       null,

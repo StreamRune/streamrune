@@ -215,7 +215,6 @@ class SagaRunnerIdempotencyTest {
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-" + UUID.randomUUID()),
             null,
-            null,
             CorrelationId.of("fulfill-" + orderId),
             null,
             null,
@@ -234,7 +233,6 @@ class SagaRunnerIdempotencyTest {
         new EventMetadata(
             EventId.of("evt-" + UUID.randomUUID()),
             CommandId.of("cmd-" + UUID.randomUUID()),
-            null,
             null,
             CorrelationId.of("fulfill2-" + orderId),
             null,

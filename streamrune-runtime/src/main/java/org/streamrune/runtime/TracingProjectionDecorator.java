@@ -67,14 +67,14 @@ public final class TracingProjectionDecorator implements Projection {
    *
    * @param projectionName the projection name, or {@code null}
    * @param projection the projection, or {@code null}
-   * @param tracing the tracing; {@code null} traces nothing
+   * @param tracing the tracing; {@link StreamRuneTracing#NOOP} traces nothing, not {@code null}
    * @return the projection to process batches with
    */
   public static Projection traced(
       ProjectionName projectionName, Projection projection, StreamRuneTracing tracing) {
+    Objects.requireNonNull(tracing, "tracing is required");
     if (projection == null
         || projectionName == null
-        || tracing == null
         || !tracing.enabled(TracingArea.PROJECTION)
         || projection instanceof TracingProjectionDecorator) {
       return projection;

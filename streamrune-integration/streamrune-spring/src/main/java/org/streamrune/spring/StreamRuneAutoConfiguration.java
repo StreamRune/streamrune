@@ -412,7 +412,8 @@ public class StreamRuneAutoConfiguration {
   @ConditionalOnMissingBean(SimpleQueryBus.class)
   public SimpleQueryBus simpleQueryBus(
       ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider) {
-    return new SimpleQueryBus(metricsProvider.getIfAvailable());
+    return new SimpleQueryBus(
+        metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP));
   }
 
   /**
@@ -1356,14 +1357,11 @@ public class StreamRuneAutoConfiguration {
 
     // Thread the single-active-consumer leadership bean (LeaseBasedLeadership when a
     // DataSource is present and the knob is on) into the DLQ retry runner so only the leader
-    // replica polls/retries; defaults to SubscriptionLeadership.NOOP (always leader) when no bean
-    // exists. Without this, two replicas' staggered polls both re-execute the same DLQ command
-    // (duplicate domain events) whenever no CommandInbox is present to de-dup them. Two leadership
-    // beans with none @Primary fail here, as on Quarkus and Micronaut.
-    var leadership = LeadershipBeans.resolve(leadershipProvider);
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    // replica polls/retries; SubscriptionLeadership.NOOP (always leader) when no bean exists.
+    // Without this, two replicas' staggered polls both re-execute the same DLQ command (duplicate
+    // domain events) whenever no CommandInbox is present to de-dup them. Two leadership beans with
+    // none @Primary fail here, as on Quarkus and Micronaut.
+    builder.leadership(LeadershipBeans.resolve(leadershipProvider));
 
     DeadLetterRetryRunner runner = builder.build();
     // Register for relay liveness health so /health degrades if this runner's thread

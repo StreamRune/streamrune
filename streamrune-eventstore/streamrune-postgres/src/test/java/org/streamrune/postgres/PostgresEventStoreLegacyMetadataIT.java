@@ -89,7 +89,14 @@ class PostgresEventStoreLegacyMetadataIT {
   void setUp() throws Exception {
     store =
         new PostgresEventStore(
-            dataSource, objectMapper, typeRegistry, null, null, null, null, null);
+            dataSource,
+            objectMapper,
+            typeRegistry,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            null);
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("DELETE FROM event_stream");
@@ -103,6 +110,12 @@ class PostgresEventStoreLegacyMetadataIT {
    */
   private void insertLegacyRow(StreamId streamId, long globalOffset, String metadataJson)
       throws Exception {
+    insertLegacyRow(streamId, globalOffset, metadataJson, 1);
+  }
+
+  private void insertLegacyRow(
+      StreamId streamId, long globalOffset, String metadataJson, int schemaVersion)
+      throws Exception {
     try (var conn = dataSource.getConnection();
         var stmt =
             conn.prepareStatement(
@@ -115,7 +128,7 @@ class PostgresEventStoreLegacyMetadataIT {
       stmt.setString(4, "TestEvent");
       stmt.setString(5, "{\"value\":\"v1\"}");
       stmt.setString(6, metadataJson);
-      stmt.setInt(7, 1);
+      stmt.setInt(7, schemaVersion);
       stmt.executeUpdate();
     }
     try (var conn = dataSource.getConnection();
@@ -204,5 +217,32 @@ class PostgresEventStoreLegacyMetadataIT {
     insertLegacyRow(streamId, 1L, metadataWith("   ", null));
 
     assertThrows(EventStoreException.class, () -> store.load(streamId));
+  }
+
+  @Test
+  void loadAndReadGlobalStream_readMetadataThatCarriesASpanIdKey() throws Exception {
+    StreamId streamId = TestStreams.stream("legacy-span-id");
+    insertLegacyRow(
+        streamId,
+        1L,
+        metadataWith("legacy-corr-span", null)
+            .replace("\"spanId\":null", "\"spanId\":\"b7ad6b7169203331\""));
+
+    var history = assertDoesNotThrow(() -> store.load(streamId));
+    var metadata = history.events().getFirst().metadata();
+    assertEquals("legacy-corr-span", metadata.correlationId().value());
+    assertEquals(org.streamrune.core.tracing.SpanLink.NONE, metadata.spanContext());
+    assertEquals(1, store.readGlobalStream(GlobalOffset.initial(), 10).size());
+  }
+
+  @Test
+  void aStoreWithoutUpcasters_readsARowBelowSchemaVersionOneDirectly() throws Exception {
+    // The store has no upcasters: it binds the payload as stored and never asks a chain to upcast
+    // from a version below 1, which an upcaster chain refuses.
+    StreamId streamId = TestStreams.stream("legacy-version-zero");
+    insertLegacyRow(streamId, 1L, metadataWith("legacy-corr-v0", null), 0);
+
+    var history = assertDoesNotThrow(() -> store.load(streamId));
+    assertEquals(new TestEvent("v1"), history.events().getFirst().event());
   }
 }

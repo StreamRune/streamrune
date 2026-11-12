@@ -535,7 +535,6 @@ class SseEventFeedTest {
             EventId.of("evt-" + stream.value() + "-" + version),
             CommandId.of("cmd-" + stream.value() + "-" + version),
             null,
-            null,
             CorrelationId.of("corr"),
             null,
             null,

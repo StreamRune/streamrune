@@ -39,7 +39,7 @@ public class FileSystemCryptoEngineConfiguration {
     var delegate =
         FileSystemCryptoEngine.builder()
             .keyDirectory(Path.of(keyDirectory))
-            .metrics(metrics)
+            .metrics(metrics != null ? metrics : StreamRuneMetrics.NOOP)
             .build();
 
     var cacheProps = props.cache();

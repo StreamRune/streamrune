@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -1169,7 +1168,7 @@ class ProjectionFactoryTest {
   }
 
   @Test
-  void absentMetricsLeavesMultiProjectionRunnerWithNullMetrics() throws Exception {
+  void absentMetricsLeavesMultiProjectionRunnerWithNoopMetrics() throws Exception {
     var factory = new ProjectionFactory();
     var eventStore = mock(EventStore.class);
     var offsetStore = mock(OffsetStore.class);
@@ -1190,7 +1189,7 @@ class ProjectionFactoryTest {
 
     var field = MultiProjectionRunner.class.getDeclaredField("metrics");
     field.setAccessible(true);
-    assertNull(field.get(runner));
+    assertSame(org.streamrune.core.StreamRuneMetrics.NOOP, field.get(runner));
     runner.close();
   }
 

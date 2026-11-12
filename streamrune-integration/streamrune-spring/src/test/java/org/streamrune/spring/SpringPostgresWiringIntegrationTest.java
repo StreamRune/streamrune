@@ -326,7 +326,6 @@ class SpringPostgresWiringIntegrationTest {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("corr-it"),
             null,
             null,

@@ -220,7 +220,14 @@ class StaleEpochSweeperDedupIT extends E2ETestBase {
     // ONE shared inbox + store, exactly as SagaCrashResumeE2EIT wires them.
     store =
         new PostgresEventStore(
-            dataSource, mapper, SAGA_REGISTRY, null, null, null, null, commandInbox);
+            dataSource,
+            mapper,
+            SAGA_REGISTRY,
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null,
+            null,
+            null,
+            commandInbox);
     sagaStore = new PostgresSagaStore(dataSource, mapper);
   }
 

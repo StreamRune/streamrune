@@ -166,7 +166,6 @@ public abstract class AtomicBatchProcessorContract {
                   IdGenerator.generateEventId(),
                   IdGenerator.generateCommandId(),
                   null,
-                  null,
                   CorrelationId.of("contract"),
                   null,
                   null,

@@ -177,9 +177,14 @@ public class ProjectionFactory {
     // honoured — never by the presence of a DataSource or of a bean: the single bean when a
     // registration declares TRANSACTIONAL_LOCAL / EXTERNAL_EFFECT or the leadership must fence (no
     // bean, or more than one, is refused then), and nonAtomicAtLeastOnce() otherwise.
+    SubscriptionLeadership resolvedLeadership =
+        leadership != null ? leadership : SubscriptionLeadership.NOOP;
     builder.atomicProcessor(
         ProjectionProcessorResolution.select(
-            registrationsOf(entries), leadership, atomicProcessors, FRAMEWORK_MULTI_RUNNER));
+            registrationsOf(entries),
+            resolvedLeadership,
+            atomicProcessors,
+            FRAMEWORK_MULTI_RUNNER));
 
     // Propagate the metrics collector (e.g. the auto-configured MicrometerStreamRuneMetrics) so
     // projections.* meters are recorded; absent collector leaves projection metrics unchanged.
@@ -190,9 +195,7 @@ public class ProjectionFactory {
     // Thread the single-active-consumer leadership bean (LeaseBasedLeadership when a
     // DataSource is present and the knob is on) into every per-projection runner; NOOP (always
     // leader) when absent.
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    builder.leadership(resolvedLeadership);
 
     // Optional user-supplied poison-vs-transient classifier; DEFAULT when absent.
     if (classifier != null) {
@@ -273,9 +276,14 @@ public class ProjectionFactory {
     // The same rule as the CONTINUOUS runner: the processor by declared need, never by bean
     // presence. A TRANSACTIONAL_LOCAL scheduled chunk's read-model write and its checkpoint commit
     // in the processor's one transaction, with the same split-brain guard as CONTINUOUS.
+    SubscriptionLeadership resolvedLeadership =
+        leadership != null ? leadership : SubscriptionLeadership.NOOP;
     builder.atomicProcessor(
         ProjectionProcessorResolution.select(
-            registrationsOf(entries), leadership, atomicProcessors, FRAMEWORK_SCHEDULED_RUNNER));
+            registrationsOf(entries),
+            resolvedLeadership,
+            atomicProcessors,
+            FRAMEWORK_SCHEDULED_RUNNER));
 
     // Propagate the metrics collector so projections.* meters are recorded for scheduled runs;
     // absent collector leaves projection metrics unchanged.
@@ -284,9 +292,7 @@ public class ProjectionFactory {
     }
 
     // Only a leader drains on each tick; NOOP (always leader) when no leadership bean exists.
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    builder.leadership(resolvedLeadership);
 
     // Optional user-supplied poison-vs-transient classifier; DEFAULT when absent.
     if (classifier != null) {

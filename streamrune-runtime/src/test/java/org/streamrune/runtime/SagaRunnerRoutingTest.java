@@ -195,7 +195,6 @@ class SagaRunnerRoutingTest {
         IdGenerator.generateEventId(),
         IdGenerator.generateCommandId(),
         null,
-        null,
         CorrelationId.of(NAMED_BY_CORRELATION_ID.value()),
         null,
         null,

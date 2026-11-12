@@ -192,8 +192,8 @@ public class StreamRuneMicronautModule {
             .autoInitializeSchema(properties.autoInitializeSchema())
             // Thread the metrics bean into the event store's CryptoShreddingModule so a
             // mass redaction on the replay/projection decrypt path emits subject_redacted; NOOP
-            // when absent (metrics(null) → NOOP), behavior unchanged.
-            .metrics(metrics);
+            // when absent, behavior unchanged.
+            .metrics(metricsOrNoop(metrics));
     // The store borrows from the application DataSource as given and bounds its own statements
     // per transaction or per statement; the bound is the one knob it needs from configuration.
     // An explicit null keeps the factory's default.
@@ -337,7 +337,7 @@ public class StreamRuneMicronautModule {
   @Bean(typed = SimpleQueryBus.class)
   public SimpleQueryBus simpleQueryBus(
       @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
-    return new SimpleQueryBus(metrics);
+    return new SimpleQueryBus(metricsOrNoop(metrics));
   }
 
   /**
@@ -721,7 +721,7 @@ public class StreamRuneMicronautModule {
           .deadLetterQueue(deadLetterQueue)
           .objectMapper(
               org.streamrune.runtime.DeadLetterRetryRunner.createObjectMapper(
-                  cryptoEngine, metrics))
+                  cryptoEngine, metricsOrNoop(metrics)))
           .deadLetterRetryPolicy(deadLetterRetryPolicy(properties))
           .inboxRetentionMaxAge(properties.inboxRetentionMaxAge());
     }
@@ -1027,7 +1027,8 @@ public class StreamRuneMicronautModule {
     // on the saga-state decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
     return new org.streamrune.postgres.PostgresSagaStore(
         dataSource,
-        org.streamrune.postgres.PostgresSagaStore.createObjectMapper(cryptoEngine, metrics));
+        org.streamrune.postgres.PostgresSagaStore.createObjectMapper(
+            cryptoEngine, metricsOrNoop(metrics)));
   }
 
   /**
@@ -1205,7 +1206,8 @@ public class StreamRuneMicronautModule {
     // on the read-model decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
     return new org.streamrune.postgres.JdbcProjectionRepository(
         dataSource,
-        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(cryptoEngine, metrics));
+        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(
+            cryptoEngine, metricsOrNoop(metrics)));
   }
 
   /**
@@ -1269,7 +1271,7 @@ public class StreamRuneMicronautModule {
     if (auditStore != null) {
       b.auditStore(auditStore);
     }
-    b.metrics(metrics);
+    b.metrics(metricsOrNoop(metrics));
     // A forget evicts the query cache after its last purger, so no cached answer taken before the
     // erasure is served after it.
     b.queryCache(queryCache);
@@ -1369,7 +1371,7 @@ public class StreamRuneMicronautModule {
             .commandBus(commandBus)
             .objectMapper(
                 org.streamrune.runtime.DeadLetterRetryRunner.createObjectMapper(
-                    cryptoEngine, metrics))
+                    cryptoEngine, metricsOrNoop(metrics)))
             .policy(deadLetterRetryPolicy(properties))
             // The window the inbox retention sweeper prunes with: a keyed entry older than it is
             // refused (STALE_REPLAY_BLOCKED) instead of replayed past its dedup row.
@@ -1391,9 +1393,10 @@ public class StreamRuneMicronautModule {
     // replica polls/retries; NOOP (always leader) when absent. Without it, two replicas' staggered
     // polls both re-execute the same DLQ command (duplicate domain events) with no CommandInbox to
     // de-dup.
-    if (leadership != null) {
-      builder.leadership(leadership);
-    }
+    builder.leadership(
+        leadership != null
+            ? leadership
+            : org.streamrune.core.subscription.SubscriptionLeadership.NOOP);
 
     DeadLetterRetryRunner runner = builder.build();
     // Register for relay liveness health so /health degrades if this runner's thread
@@ -1766,5 +1769,11 @@ public class StreamRuneMicronautModule {
   public org.streamrune.core.upcasting.UpcasterChain upcasterChain(
       List<org.streamrune.core.upcasting.EventUpcaster> upcasters) {
     return new org.streamrune.core.upcasting.UpcasterChain(upcasters);
+  }
+
+  /** The application's metrics bean, or {@code StreamRuneMetrics.NOOP} when it has none. */
+  static org.streamrune.core.StreamRuneMetrics metricsOrNoop(
+      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
+    return metrics != null ? metrics : org.streamrune.core.StreamRuneMetrics.NOOP;
   }
 }

@@ -12,7 +12,6 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
-import org.streamrune.core.types.SpanId;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
@@ -32,7 +31,6 @@ class EventEnvelopeTest {
         EventId.of("evt_01ARZ3NDEKTSV4RRFFQ69G5FAV"),
         CommandId.of("cmd_01ARZ3NDEKTSV4RRFFQ69G5FAV"),
         TraceId.of("trace-1"),
-        SpanId.of("span-1"),
         CorrelationId.of("corr-1"),
         CausationId.of("cause-1"),
         UserId.of("user-1"),
@@ -47,14 +45,7 @@ class EventEnvelopeTest {
         IllegalArgumentException.class,
         () ->
             new EventMetadata(
-                null,
-                CommandId.of("cmd_x"),
-                null,
-                null,
-                CorrelationId.of("corr"),
-                null,
-                null,
-                NOW));
+                null, CommandId.of("cmd_x"), null, CorrelationId.of("corr"), null, null, NOW));
   }
 
   @Test
@@ -63,7 +54,7 @@ class EventEnvelopeTest {
         IllegalArgumentException.class,
         () ->
             new EventMetadata(
-                EventId.of("evt_x"), null, null, null, CorrelationId.of("corr"), null, null, NOW));
+                EventId.of("evt_x"), null, null, CorrelationId.of("corr"), null, null, NOW));
   }
 
   @Test
@@ -72,7 +63,7 @@ class EventEnvelopeTest {
         IllegalArgumentException.class,
         () ->
             new EventMetadata(
-                EventId.of("evt_x"), CommandId.of("cmd_x"), null, null, null, null, null, NOW));
+                EventId.of("evt_x"), CommandId.of("cmd_x"), null, null, null, null, NOW));
   }
 
   @Test
@@ -91,7 +82,6 @@ class EventEnvelopeTest {
                 EventId.of("evt_x"),
                 CommandId.of("cmd_x"),
                 null,
-                null,
                 CorrelationId.of("corr"),
                 null,
                 null,
@@ -105,7 +95,6 @@ class EventEnvelopeTest {
             EventId.of("evt_x"),
             CommandId.of("cmd_x"),
             null,
-            null,
             CorrelationId.of("corr-1"),
             null,
             null,
@@ -113,7 +102,6 @@ class EventEnvelopeTest {
     assertEquals("evt_x", m.eventId().value());
     assertEquals("cmd_x", m.commandId().value());
     assertNull(m.traceId());
-    assertNull(m.spanId());
     assertNull(m.causationId());
     assertNull(m.userId());
   }

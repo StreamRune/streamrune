@@ -580,9 +580,12 @@ public final class StreamRune implements CommandBus, AutoCloseable {
      * {@link #eventStoreFactory(ConfiguredEventStoreFactory)} or {@link
      * #eventStoreFactoryProvider(ConfiguredEventStoreFactoryProvider)} — {@link #build()} throws
      * otherwise, because the facade cannot retrofit upcasting onto a pre-built store.
+     *
+     * @param upcasters the upcasters, empty for none; not {@code null}
+     * @return this builder
      */
     public Builder upcasters(List<EventUpcaster> upcasters) {
-      this.upcasters = upcasters;
+      this.upcasters = Objects.requireNonNull(upcasters, "upcasters is required");
       return this;
     }
 

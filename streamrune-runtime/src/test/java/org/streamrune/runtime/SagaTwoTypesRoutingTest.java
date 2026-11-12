@@ -203,7 +203,6 @@ class SagaTwoTypesRoutingTest {
             IdGenerator.generateEventId(),
             IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of("corr-" + offset),
             null,
             null,

@@ -64,7 +64,11 @@ class ExceptionMessageSanitizationTest {
   void eventStoreLoad_quotesTheStreamSanitized() {
     var store =
         new PostgresEventStore(
-            down(), new ObjectMapper(), mock(EventTypeRegistry.class), null, null);
+            down(),
+            new ObjectMapper(),
+            mock(EventTypeRegistry.class),
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null);
 
     var ex = assertThrows(EventStoreException.class, () -> store.load(forgedStream()));
 
@@ -76,7 +80,11 @@ class ExceptionMessageSanitizationTest {
   void eventStoreReadStream_quotesTheStreamSanitized() {
     var store =
         new PostgresEventStore(
-            down(), new ObjectMapper(), mock(EventTypeRegistry.class), null, null);
+            down(),
+            new ObjectMapper(),
+            mock(EventTypeRegistry.class),
+            org.streamrune.core.upcasting.UpcasterChain.empty(),
+            null);
 
     var ex =
         assertThrows(

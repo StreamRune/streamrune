@@ -145,7 +145,6 @@ class InMemoryEventStoreSchemaBumpTest {
             EventId.of("evt_" + version),
             CommandId.of("cmd_" + version),
             null,
-            null,
             CorrelationId.of("corr"),
             null,
             null,

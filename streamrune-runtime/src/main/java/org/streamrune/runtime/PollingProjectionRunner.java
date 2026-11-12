@@ -2,6 +2,7 @@ package org.streamrune.runtime;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventEnvelope;
@@ -74,7 +75,7 @@ public final class PollingProjectionRunner implements ProjectionRunner {
       int fetchSize,
       int batchSize,
       AtomicBatchProcessor atomicProcessor) {
-    this(eventStore, offsetStore, fetchSize, batchSize, atomicProcessor, null);
+    this(eventStore, offsetStore, fetchSize, batchSize, atomicProcessor, StreamRuneMetrics.NOOP);
   }
 
   /**
@@ -88,7 +89,8 @@ public final class PollingProjectionRunner implements ProjectionRunner {
    * @param batchSize how many events to group into a single batch for the projection
    * @param atomicProcessor the atomic batch processor: a {@code JdbcProjectionRepository} or {@link
    *     AtomicBatchProcessor#nonAtomicAtLeastOnce()}
-   * @param metrics the metrics collector; {@code null} disables metrics (behavior unchanged)
+   * @param metrics the metrics collector; {@link StreamRuneMetrics#NOOP} records nothing, not
+   *     {@code null}
    */
   public PollingProjectionRunner(
       EventStore eventStore,
@@ -117,7 +119,7 @@ public final class PollingProjectionRunner implements ProjectionRunner {
     this.fetchSize = fetchSize;
     this.batchSize = batchSize;
     this.atomicProcessor = atomicProcessor;
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
   }
 
   @Override

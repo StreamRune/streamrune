@@ -8,6 +8,7 @@ import java.sql.*;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -158,18 +159,18 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * Without this the read path builds the mapper with NOOP metrics and the alerting is silent.
    *
    * @param cryptoEngine the crypto engine to wire in, or {@code null} for a crypto-blind mapper
-   * @param metrics the crypto-redaction metrics collector (null → {@link StreamRuneMetrics#NOOP})
+   * @param metrics the crypto-redaction metrics collector; {@link StreamRuneMetrics#NOOP} for none,
+   *     not {@code null}
    * @return a new {@link ObjectMapper}, independent from any other mapper instance
    */
   public static ObjectMapper createObjectMapper(
       CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
+    Objects.requireNonNull(metrics, "metrics is required");
     var mapper = new ObjectMapper();
     mapper.registerModule(new JavaTimeModule());
     mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     if (cryptoEngine != null) {
-      mapper.registerModule(
-          new org.streamrune.crypto.CryptoShreddingModule(
-              cryptoEngine, metrics == null ? StreamRuneMetrics.NOOP : metrics));
+      mapper.registerModule(new org.streamrune.crypto.CryptoShreddingModule(cryptoEngine, metrics));
     }
     return mapper;
   }

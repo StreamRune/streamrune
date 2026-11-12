@@ -145,7 +145,6 @@ public final class ProjectionFixture<S> {
             org.streamrune.core.IdGenerator.generateEventId(),
             org.streamrune.core.IdGenerator.generateCommandId(),
             null,
-            null,
             CorrelationId.of(UUID.randomUUID().toString()),
             null,
             null,

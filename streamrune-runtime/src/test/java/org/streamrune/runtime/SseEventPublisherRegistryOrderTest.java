@@ -177,7 +177,6 @@ class SseEventPublisherRegistryOrderTest {
             EventId.of("test-event-id"),
             CommandId.of("test-command-id"),
             null,
-            null,
             CorrelationId.of("test-correlation-id"),
             null,
             null,

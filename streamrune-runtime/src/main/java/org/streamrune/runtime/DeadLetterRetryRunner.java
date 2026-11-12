@@ -307,8 +307,8 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     this.batchSize = batchSize;
     this.commandTypeRegistry = Map.copyOf(commandTypeRegistry);
     this.clock = clock;
-    this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+    this.leadership = Objects.requireNonNull(leadership, "leadership is required");
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
     // Zero or negative is the inbox retention sweeper's "pruning disabled": no key ever goes stale,
     // so the guard has nothing to protect and is inert — the same normalization as
     // SagaDeadLetterReplayer. Comparing ages against a zero-width window would refuse every keyed
@@ -1858,17 +1858,17 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
    * replay/deserialize path builds the mapper with NOOP metrics and the alerting is silent.
    *
    * @param cryptoEngine the crypto engine to wire in, or {@code null} for a crypto-blind mapper
-   * @param metrics the crypto-redaction metrics collector (null → {@link StreamRuneMetrics#NOOP})
+   * @param metrics the crypto-redaction metrics collector; {@link StreamRuneMetrics#NOOP} for none,
+   *     not {@code null}
    * @return a new {@link ObjectMapper}, independent from any other mapper instance
    */
   public static ObjectMapper createObjectMapper(
       CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
+    Objects.requireNonNull(metrics, "metrics is required");
     var mapper = new ObjectMapper();
     mapper.registerModule(new JavaTimeModule());
     if (cryptoEngine != null) {
-      mapper.registerModule(
-          new CryptoShreddingModule(
-              cryptoEngine, metrics == null ? StreamRuneMetrics.NOOP : metrics));
+      mapper.registerModule(new CryptoShreddingModule(cryptoEngine, metrics));
     }
     return mapper;
   }
@@ -1975,7 +1975,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      * on-demand {@link DeadLetterRetryRunner#retry(CommandId)} admin path is never gated.
      */
     public Builder leadership(SubscriptionLeadership leadership) {
-      this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
+      this.leadership = Objects.requireNonNull(leadership, "leadership is required");
       return this;
     }
 
@@ -1986,7 +1986,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      * and is permanently dropped/abandoned — the terminal signal for a permanently-lost command.
      */
     public Builder metrics(StreamRuneMetrics metrics) {
-      this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+      this.metrics = Objects.requireNonNull(metrics, "metrics is required");
       return this;
     }
 

@@ -153,7 +153,8 @@ final class ReferenceApplication implements Application {
     }
     @SuppressWarnings("unchecked")
     List<SagaRunner<?>> runners = (List<SagaRunner<?>>) (List<?>) beansOf(SagaRunner.class);
-    SubscriptionLeadership leadership = leaderships.isEmpty() ? null : leaderships.getFirst();
+    SubscriptionLeadership leadership =
+        leaderships.isEmpty() ? SubscriptionLeadership.NOOP : leaderships.getFirst();
     if (keeps(Rule.UNGATED_SAGA_WARNING)
         && SagaLeaseWiring.warnUngatedUnderLeadership(runners, leadership) > 0) {
       // The contract's only saga runner is of ContractSagaState: its saga type is that class.

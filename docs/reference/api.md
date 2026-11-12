@@ -252,20 +252,21 @@ and is used as the sentinel value before append. You encounter `GlobalOffset` in
 
 ### EventMetadata
 
-`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, SpanId spanId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin, SpanLink spanContext)`
+`record EventMetadata(EventId eventId, CommandId commandId, TraceId traceId, CorrelationId correlationId, CausationId causationId, UserId userId, Instant timestamp, Map<String, String> baggage, SagaOrigin sagaOrigin, SpanLink spanContext)`
 
 Causal metadata attached to every persisted event. Built automatically by
 `VirtualThreadCommandBus`, which copies the caller's trace id (the `X-Trace-Id` header) and user
 ID from `StreamRuneContext` when a request context is bound, and writes `spanContext` from its own
 `command/{CommandType}` span: `SpanLink.NONE` when the command was not traced. The spans that later
 handle the event link to `spanContext` only (`SpanLink.of(metadata)`); the caller-supplied
-`traceId` and `spanId` are correlation data and never build a link. You encounter this inside
+`traceId` is correlation data and never builds a link. You encounter this inside
 `EventEnvelope.metadata()` when writing projections or building audit trails.
 
 The PostgreSQL event store keeps it as JSON in the `event_stream.metadata` column and binds it back
 to this record on every read. `eventId`, `commandId`, `correlationId` and `timestamp` are required, the other components
 are optional (`baggage` defaults to an empty map, a missing `sagaOrigin` key reads as `null`), and a
-key the record does not define is refused.
+key the record does not define is refused, except `spanId`: stored metadata can carry that key, and
+a read ignores it.
 A row written outside the framework — a hand-written `INSERT`, a data migration — with metadata
 that does not bind fails every read of its stream and of the global stream.
 
@@ -717,7 +718,7 @@ an application that needs one of those options builds the bus and its runners di
 | `retryPolicy(RetryPolicy)` | Retry policy for `OptimisticLockException`. | `RetryPolicy.DEFAULT` (3 attempts, 50 ms initial, 2× backoff, jitter) |
 | `snapshotPolicy(SnapshotPolicy)` | Controls when snapshots are persisted. | `SnapshotPolicy.never()` |
 | `cryptoEngine(CryptoEngine)` | Enables field-level encryption via the `@Encrypted` annotation. | none |
-| `upcasters(List<EventUpcaster>)` | Event upcasters for schema evolution. Applied on read. | none |
+| `upcasters(List<EventUpcaster>)` | Event upcasters for schema evolution. Applied on read. `null` is rejected. | none |
 | `interceptors(List<CommandInterceptor>)` | Command interceptors for cross-cutting concerns. | none |
 | `interceptors(CommandInterceptor...)` | Varargs convenience form of `interceptors(List)`. | none |
 | `tracing(StreamRuneTracing)` | The tracing the command bus starts the `command/{CommandType}` span through, and its default locker the `lock/acquire` span, and that decorates each projection registered with `registerProjection` (see [Tracing](../guide/production.md#tracing)). | `StreamRuneTracing.NOOP` (traces nothing) |
@@ -725,11 +726,20 @@ an application that needs one of those options builds the bus and its runners di
 | `unboundRequestContext(Supplier<RequestContext>)` | Where a command dispatched on a thread with `StreamRuneContext.CURRENT` unbound takes its request context from. Asked once per dispatch on the dispatching thread (on entry to `execute`, at submission in `executeAsync`), never while `CURRENT` is bound; its answer is bound as `CURRENT` for the whole dispatch, so it is the identity the command is authorized and audited as. `null` answer: no context. The Spring, Micronaut and Quarkus integrations set it to the request's context (see their READMEs). | none |
 | `objectMapper(ObjectMapper)` | The Jackson `ObjectMapper` that writes a command as JSON when the bus dead-letters it. Required when `deadLetterQueue` is set. The retry runner rebuilds the command from that JSON on replay, so a command type must round-trip through Jackson (records do by default; see [Dead-letter queue](../guide/advanced/retry-and-resilience.md#dead-letter-queue)). `DeadLetterRetryRunner.createObjectMapper(cryptoEngine)` builds a mapper for both sides. | none (the framework integrations supply one) |
 | `deadLetterQueue(DeadLetterQueue)` | Persists commands that fail after all retries. Once a command's entry is stored, `execute` throws `CommandDeadLetteredException` (`commandId()`, `streamId()`, `idempotencyKey()`, `pendingOutcome()`, the failure as its cause): the outcome is pending, not final (see [A dead-lettered command's caller is told so](../guide/advanced/retry-and-resilience.md#a-dead-lettered-commands-caller-is-told-so)). | none |
-| `metrics(StreamRuneMetrics)` | Metrics collector (e.g., `MicrometerStreamRuneMetrics`). | `StreamRuneMetrics.NOOP` |
+| `metrics(StreamRuneMetrics)` | Metrics collector (e.g., `MicrometerStreamRuneMetrics`). `null` is rejected. | `StreamRuneMetrics.NOOP` |
 | `registerProjection(ProjectionName name, Projection, ProjectionDeliveryMode)` | Registers a projection to run via `startProjections()` under its declared delivery mode — `TRANSACTIONAL_LOCAL`, `AT_LEAST_ONCE_IDEMPOTENT` or `EXTERNAL_EFFECT`; required, there is no default (see [Delivery modes](../guide/concepts.md#delivery-modes--what-a-projection-promises)). The runner checks the mode against its `AtomicBatchProcessor` before it reads an event. | none |
 | `projectionRunner(ProjectionRunner)` | Sets the projection runner implementation. | none |
 | `subscriptionConfig(SubscriptionConfig)` | Sets polling interval and jitter for live subscriptions. | `SubscriptionConfig.DEFAULT` |
 | `build()` | Builds the `StreamRune` instance. Throws `IllegalStateException` if neither `eventStore` nor `eventStoreFactory` is configured, or if a registered command type declares `@RequireRole`/`@RequirePermission` and no `AnnotationAuthorizationInterceptor` is among the interceptors (see [Authorization](../guide/advanced/authorization.md#annotation-based-authorization)). | — |
+
+**Optional collaborators take no `null`.** Across the framework's builders and constructors,
+`metrics(...)`, `tracing(...)`, `leadership(...)`, `healthContributor(...)` and `upcasters(...)`
+default to their empty value: `StreamRuneMetrics.NOOP`, `StreamRuneTracing.NOOP`,
+`SubscriptionLeadership.NOOP` (always leader, unfenced), `SubscriptionHealthContributor.NOOP`
+(registers nothing, reports no subscription) and no upcasters. Pass that value, or leave the
+setter out; a `null` argument throws `NullPointerException` with the message `<name> is required`.
+The documented exceptions are `PostgresEventStore.create(...)` and
+`InMemoryEventStore.withUpcasters(...)`, whose upcaster list may be `null` for none.
 
 ---
 

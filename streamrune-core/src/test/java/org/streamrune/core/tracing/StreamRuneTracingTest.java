@@ -183,25 +183,22 @@ class StreamRuneTracingTest {
   @Test
   void spanLink_ofMetadata_readsTheSpanContextOnly() {
     var command = new SpanLink(TraceId.of(TRACE), SpanId.of(SPAN));
-    assertThat(SpanLink.of(metadata(null, null, command))).isEqualTo(command);
+    assertThat(SpanLink.of(metadata(null, command))).isEqualTo(command);
     assertThat(SpanLink.of(null)).isSameAs(SpanLink.NONE);
-    assertThat(SpanLink.of(metadata(null, null, null))).isSameAs(SpanLink.NONE);
-    // The caller-supplied trace id and span id are correlation data and never build a link.
-    assertThat(SpanLink.of(metadata(TRACE, SPAN, null))).isSameAs(SpanLink.NONE);
+    assertThat(SpanLink.of(metadata(null, null))).isSameAs(SpanLink.NONE);
+    // The caller-supplied trace id is correlation data and never builds a link.
+    assertThat(SpanLink.of(metadata(TRACE, null))).isSameAs(SpanLink.NONE);
     assertThat(
             SpanLink.of(
-                metadata(
-                    null, null, new SpanLink(TraceId.of("trace-from-a-header"), SpanId.of("s")))))
+                metadata(null, new SpanLink(TraceId.of("trace-from-a-header"), SpanId.of("s")))))
         .isSameAs(SpanLink.NONE);
   }
 
-  private static org.streamrune.core.EventMetadata metadata(
-      String traceId, String spanId, SpanLink spanContext) {
+  private static org.streamrune.core.EventMetadata metadata(String traceId, SpanLink spanContext) {
     return new org.streamrune.core.EventMetadata(
         org.streamrune.core.IdGenerator.generateEventId(),
         org.streamrune.core.IdGenerator.generateCommandId(),
         traceId == null ? null : TraceId.of(traceId),
-        spanId == null ? null : SpanId.of(spanId),
         org.streamrune.core.types.CorrelationId.of("c"),
         null,
         null,

@@ -1,6 +1,7 @@
 package org.streamrune.runtime;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -58,6 +59,10 @@ import org.streamrune.core.types.SubscriptionName;
  * subscription's lag via {@link StreamRuneMetrics#recordSubscriptionLag(SubscriptionName, long)} so
  * the lag is graphable/alertable as a meter, not just observable through the health status. With
  * the default {@link StreamRuneMetrics#NOOP} the behaviour is unchanged.
+ *
+ * <p>{@link #NOOP} is the contributor of a component that tracks no health: it registers nothing,
+ * records nothing and reports no subscription. It is the default of every {@code
+ * healthContributor(...)} builder method.
  */
 public final class SubscriptionHealthContributor {
 
@@ -70,6 +75,15 @@ public final class SubscriptionHealthContributor {
 
   /** The default {@link #lagThreshold()}: 1000 events. */
   public static final long DEFAULT_LAG_THRESHOLD = 1000;
+
+  /**
+   * The contributor that tracks nothing: {@link #register}, {@link #replaceLifecycle}, {@link
+   * #markTerminalError}, {@link #recordError}, {@link #recordSuccess} and {@link #unregister} do
+   * nothing, {@link #health()} is empty, {@link #overallStatus()} is {@code UP} and {@link
+   * #currentLag} is 0. It reads no store and emits no meter. A subscription built with it delivers
+   * to its listener unwrapped ({@link HealthTrackingEventListener#tracking}).
+   */
+  public static final SubscriptionHealthContributor NOOP = new SubscriptionHealthContributor();
 
   private final EventStore eventStore;
   private final OffsetStore offsetStore;
@@ -88,6 +102,14 @@ public final class SubscriptionHealthContributor {
    */
   private final ConcurrentHashMap<SubscriptionName, AtomicLong> lastKnownLag =
       new ConcurrentHashMap<>();
+
+  /** The {@link #NOOP} contributor: no stores, no metrics, nothing registered. */
+  private SubscriptionHealthContributor() {
+    this.eventStore = null;
+    this.offsetStore = null;
+    this.lagThreshold = DEFAULT_LAG_THRESHOLD;
+    this.metrics = StreamRuneMetrics.NOOP;
+  }
 
   /** A contributor with the {@link #DEFAULT_LAG_THRESHOLD} and no metrics. */
   public SubscriptionHealthContributor(EventStore eventStore, OffsetStore offsetStore) {
@@ -114,9 +136,10 @@ public final class SubscriptionHealthContributor {
   /**
    * @param lagThreshold the lag, in events, at which a running subscription is reported {@code
    *     DEGRADED} — see {@link #lagThreshold()}; at least 1
-   * @param metrics the collector that receives the lag gauge; {@code null} means {@link
-   *     StreamRuneMetrics#NOOP}
+   * @param metrics the collector that receives the lag gauge; {@link StreamRuneMetrics#NOOP} for
+   *     none, not {@code null}
    * @throws IllegalArgumentException if {@code lagThreshold} is below 1
+   * @throws NullPointerException if {@code metrics} is {@code null}
    */
   public SubscriptionHealthContributor(
       EventStore eventStore,
@@ -130,7 +153,7 @@ public final class SubscriptionHealthContributor {
     this.eventStore = eventStore;
     this.offsetStore = offsetStore;
     this.lagThreshold = lagThreshold;
-    this.metrics = metrics != null ? metrics : StreamRuneMetrics.NOOP;
+    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
   }
 
   /**
@@ -142,6 +165,9 @@ public final class SubscriptionHealthContributor {
   }
 
   public void register(SubscriptionName name, SubscriptionLifecycle subscription) {
+    if (this == NOOP) {
+      return;
+    }
     // A fresh registration starts with no held lag, so a restarted/reset projection
     // never inherits the previous incarnation's last known value. Cleared before the gauge is
     // registered, since registration may sample the supplier immediately.
@@ -226,6 +252,9 @@ public final class SubscriptionHealthContributor {
    * either way.
    */
   public void replaceLifecycle(SubscriptionName name, SubscriptionLifecycle subscription) {
+    if (this == NOOP) {
+      return;
+    }
     SubscriptionEntry existing = subscriptions.get(name);
     if (existing == null) {
       register(name, subscription);
@@ -268,6 +297,9 @@ public final class SubscriptionHealthContributor {
    * see {@link #computeLag(SubscriptionName)}.
    */
   public long currentLag(SubscriptionName name) {
+    if (this == NOOP) {
+      return 0;
+    }
     AtomicLong lastKnown = lastKnownLag.computeIfAbsent(name, k -> new AtomicLong(0));
     try {
       long lag = computeLag(name).lag();
@@ -308,6 +340,9 @@ public final class SubscriptionHealthContributor {
    * halt is still visible in the health endpoint.
    */
   public void markTerminalError(SubscriptionName name) {
+    if (this == NOOP) {
+      return;
+    }
     subscriptions.compute(
         name,
         (k, existing) -> {
