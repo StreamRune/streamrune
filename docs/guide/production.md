@@ -490,8 +490,70 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   removes that cost.
 - The in-memory `InMemoryEventStore` starts the event-store spans in its serializing mode only; a
   by-reference store serializes nothing and does no I/O.
-- The command interceptor is auto-registered when an `OpenTelemetry` bean is present; the
-  subscription and projection decorators are opt-in wrappers.
+- The subscription and projection decorators also wrap a listener or a projection of your own;
+  the runners and subscriptions given a tracing apply them, never twice.
+
+#### Tracing with an integration
+
+The Spring Boot, Quarkus and Micronaut integrations build one `StreamRuneTracing` bean and hand it
+to everything they build. Its settings are the master switch `streamrune.tracing.enabled` and one
+switch per area, `streamrune.tracing.command.enabled`, `streamrune.tracing.subscription.enabled`,
+`streamrune.tracing.projection.enabled`, `streamrune.tracing.event-store.enabled`,
+`streamrune.tracing.lock.enabled`, `streamrune.tracing.outbox.enabled` and
+`streamrune.tracing.saga.enabled`, all `true` by default; see the
+[configuration reference](configuration.md#tracing). On Quarkus they are runtime configuration, so
+a deployment switches an area without a rebuild.
+
+- **Where the OpenTelemetry comes from.** The bean traces through the application's
+  `OpenTelemetry` bean (the one Spring Boot's OpenTelemetry support, the Quarkus OpenTelemetry
+  extension or Micronaut's OpenTelemetry tracing module provides). Without one it takes the global
+  OpenTelemetry, `GlobalOpenTelemetry.get()`, so an application run with the OpenTelemetry Java
+  agent, which registers the global instance before the application starts, is traced with no
+  bean and no code. The integration reads the global instance once, while it starts, and
+  OpenTelemetry fixes the global instance on its first read: an SDK the application registers
+  globally itself is registered before the application context starts, or is an `OpenTelemetry`
+  bean.
+- **Without OpenTelemetry the tracing is `StreamRuneTracing.NOOP`.** That is the bean when the
+  OpenTelemetry found has no tracer provider of its own (no bean, and nothing registered
+  globally), when `streamrune.tracing.enabled` is `false`, and, on Spring and Micronaut, when
+  `opentelemetry-api` is not on the classpath at all: those two declare it as an optional
+  dependency, and an application without it starts and runs. The Quarkus integration depends on
+  `opentelemetry-api`. With `NOOP` nothing is traced, the keys do nothing, and the cost is one
+  branch per traced call.
+- **What the integration hands it to.** The event store it builds on the application's
+  `DataSource` (`PostgresEventStoreFactory.tracing`), its default `LocalStripedLocker`, the command
+  bus, the outbox poller, the continuous and scheduled projection runners, and each inline
+  projection, which its interceptor runs decorated with `TracingProjectionDecorator`. The command
+  bus adds the `OpenTelemetryCommandInterceptor` in its slot ahead of every framework interceptor,
+  so no interceptor bean is needed. An `AggregateLocker` bean of the application that is a
+  `PgAdvisoryLocker` or a `LocalStripedLocker` is traced too: the bus takes the locker its
+  `traced(tracing)` returns, on the same locks.
+- **What the application keeps.** A `StreamRuneTracing` bean of the application replaces the
+  integration's everywhere. An `OpenTelemetryCommandInterceptor` bean of the application is the
+  one the integration's bus runs, never beside a second. A component the application builds
+  itself takes the bean on its builder: a `SagaRunner` and a `SagaTimeoutRunner`
+  (`tracing(tracing)`), a command bus of its own (`VirtualThreadCommandBus.Builder.tracing`, which
+  adds the interceptor even when the bus is given an explicit interceptor list), a subscription of
+  its own, an event store built from `StreamRune.EventStoreSettings` (`settings.tracing()`).
+
+```java
+@Bean
+SagaRunner<OrderState> orderSaga(SagaStore sagaStore, CommandBus bus, StreamRuneTracing tracing) {
+  return SagaRunner.<OrderState>builder()
+      .orchestrator(new OrderOrchestrator())
+      .sagaStore(sagaStore)
+      .commandBus(bus)
+      .tracing(tracing)
+      .build();
+}
+```
+
+To switch an area off, set its key: `streamrune.tracing.event-store.enabled=false` keeps the
+command, lock, outbox and saga spans and drops the `eventstore/…` ones, for example when the JDBC
+spans of the Java agent already show the store's time. `streamrune.tracing.enabled=false` starts
+no StreamRune span at all and leaves the application's own spans and the agent's untouched.
+
+#### Tracing without an integration
 
 Without an integration, the builders take the tracing as one value.
 `OpenTelemetryTracing.of(openTelemetry, settings)` returns a `StreamRuneTracing` (package

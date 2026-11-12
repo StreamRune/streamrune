@@ -50,6 +50,7 @@ import org.streamrune.integration.tck.ContractBeans.ApplicationTracing;
 import org.streamrune.integration.tck.ContractBeans.CommandInboxBean;
 import org.streamrune.integration.tck.ContractBeans.ContractCommand;
 import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
+import org.streamrune.integration.tck.ContractBeans.ContractInlineProjection;
 import org.streamrune.integration.tck.ContractBeans.ContractProjection;
 import org.streamrune.integration.tck.ContractBeans.ContractSagaState;
 import org.streamrune.integration.tck.ContractBeans.CryptoEngineBean;
@@ -558,12 +559,17 @@ public abstract class IntegrationWiringContract {
   private static final String PROJECTION_SPAN =
       TraceAttributes.projectionProcessSpanName(ProjectionName.of(ContractProjection.NAME));
 
+  /** The span name of an inline projection's batch, for {@link ContractInlineProjection}. */
+  private static final String INLINE_PROJECTION_SPAN =
+      TraceAttributes.projectionProcessSpanName(ProjectionName.of(ContractInlineProjection.NAME));
+
   /** The beans of a start that traces every area the integration wires on its own. */
   private static final Set<Class<?>> TRACED_APPLICATION =
       Set.of(
           OpenTelemetryBean.class,
           ContractCommandRegistration.class,
           ContractProjection.class,
+          ContractInlineProjection.class,
           OutboxStoreBean.class,
           AcceptingOutboxPublisher.class);
 
@@ -630,17 +636,18 @@ public abstract class IntegrationWiringContract {
 
   /**
    * Each area the integration wires has its switch: with every area on, a command, its lock, the
-   * projection runner and the outbox relay are traced; {@code streamrune.tracing.<area>.enabled=
-   * false} removes exactly that area's spans. The application's {@code StreamRuneTracing} bean,
-   * which the application hands to the components it builds itself, answers every area's switch,
-   * the subscription and saga areas included.
+   * projection runner, the inline projection and the outbox relay are traced; {@code
+   * streamrune.tracing.<area>.enabled= false} removes exactly that area's spans. The application's
+   * {@code StreamRuneTracing} bean, which the application hands to the components it builds itself,
+   * answers every area's switch, the subscription and saga areas included.
    */
   @Test
   public void eachAreaSwitchRemovesExactlyThatArea() throws InterruptedException {
     Map<TracingArea, Predicate<String>> areaSpans = new LinkedHashMap<>();
     areaSpans.put(TracingArea.COMMAND, n -> n.startsWith("command/"));
     areaSpans.put(TracingArea.LOCK, TraceAttributes.LOCK_ACQUIRE::equals);
-    areaSpans.put(TracingArea.PROJECTION, PROJECTION_SPAN::equals);
+    areaSpans.put(
+        TracingArea.PROJECTION, n -> n.equals(PROJECTION_SPAN) || n.equals(INLINE_PROJECTION_SPAN));
     areaSpans.put(TracingArea.OUTBOX, TraceAttributes.OUTBOX_RELAY::equals);
 
     List<TracingArea> runs = new ArrayList<>();
@@ -684,6 +691,13 @@ public abstract class IntegrationWiringContract {
                         + areaKey(off)
                         + " off: "
                         + spanNames());
+          }
+        }
+        if (off != TracingArea.PROJECTION) {
+          for (String projectionSpan : List.of(INLINE_PROJECTION_SPAN, PROJECTION_SPAN)) {
+            await(
+                () -> spanNames().contains(projectionSpan),
+                () -> projectionSpan + " with " + areaKey(off) + " off: " + spanNames());
           }
         }
         if (off != null && areaSpans.containsKey(off)) {

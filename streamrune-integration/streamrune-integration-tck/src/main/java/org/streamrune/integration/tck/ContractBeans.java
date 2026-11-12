@@ -449,6 +449,23 @@ public final class ContractBeans {
     public void process(List<EventEnvelope> batch) {}
   }
 
+  /**
+   * An inline projection the integration discovers and runs in the command bus, named {@value
+   * #NAME}. It reads every event and keeps nothing.
+   */
+  @ProjectionConfig(
+      name = ContractInlineProjection.NAME,
+      mode = ProjectionConfig.Mode.INLINE,
+      deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+  public static final class ContractInlineProjection implements Projection {
+
+    /** The projection's name. */
+    public static final String NAME = "contract_inline_projection";
+
+    @Override
+    public void process(List<EventEnvelope> batch) {}
+  }
+
   /** The state of the contract's saga. */
   public record ContractSagaState(SagaStatus status) implements SagaState {}
 
