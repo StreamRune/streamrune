@@ -148,14 +148,25 @@ public final class OpenTelemetryCommandInterceptor implements CommandInterceptor
     if (!traced) {
       return SpanLink.NONE;
     }
-    ArrayDeque<TraceScope> frames = stack.get();
-    TraceScope top = frames.peek();
-    if (top == null) {
-      stack.remove();
+    try {
+      ArrayDeque<TraceScope> frames = stack.get();
+      TraceScope top = frames.peek();
+      if (top == null) {
+        stack.remove();
+        return SpanLink.NONE;
+      }
+      SpanLink link = top.link();
+      return link != null && link.isW3c() ? link : SpanLink.NONE;
+    } catch (RuntimeException e) {
+      // A tracing that throws from link() leaves the events without a span context; it never
+      // fails the command.
       return SpanLink.NONE;
     }
-    SpanLink link = top.link();
-    return link == null ? SpanLink.NONE : link;
+  }
+
+  /** Whether this interceptor starts command spans: its tracing's command area is on. */
+  boolean traced() {
+    return traced;
   }
 
   /**

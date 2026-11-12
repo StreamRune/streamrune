@@ -31,11 +31,11 @@ import org.streamrune.core.types.StreamId;
  * it from the metadata of the event the entry was derived from (its {@link
  * org.streamrune.core.EventMetadata#spanContext() spanContext}, through {@link
  * SpanLink#of(org.streamrune.core.EventMetadata)}) when it writes the entry in the append
- * transaction, unless the entry already carries one; an {@link OutboxEventMapper} builds its
- * entries without it. It stays {@code NONE} when the command was not traced, and a store keeps only
- * a link whose ids are valid W3C ids ({@link SpanLink#isW3c()}): a stored link that is not one, or
- * none at all, reads back as {@code NONE}. In JSON the property is left out when it is {@code
- * NONE}.
+ * transaction, replacing any link a mapper or a caller set; an {@link OutboxEventMapper} builds its
+ * entries without it. A standalone {@link OutboxStore#save} stores the link the entry carries. It
+ * stays {@code NONE} when the command was not traced, and a store keeps only a link whose ids are
+ * valid W3C ids ({@link SpanLink#isW3c()}): a stored link that is not one, or none at all, reads
+ * back as {@code NONE}. In JSON the property is left out when it is {@code NONE}.
  */
 public record OutboxEntry(
     OutboxEntryId id,

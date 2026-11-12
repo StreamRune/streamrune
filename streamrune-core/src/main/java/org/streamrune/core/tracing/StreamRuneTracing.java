@@ -22,15 +22,15 @@ package org.streamrune.core.tracing;
  * <p>An implementation answers {@link #enabled(TracingArea)} the same way for its whole lifetime: a
  * component may read the answer once, when it is built, and a component that starts a span in one
  * call and ends it in another relies on both calls seeing the same answer. Implementations are
- * thread-safe, and they must not throw: neither {@code start} nor any method of the scopes it
- * returns may fail the work it traces. The outbox relay guards itself against an implementation
- * that throws all the same, so tracing can never change a delivery.
+ * thread-safe, and for valid arguments they must not throw: neither {@code start} nor any method of
+ * the scopes it returns may fail the work it traces. The outbox relay guards itself against an
+ * implementation that throws all the same, so tracing can never change a delivery.
  *
- * <p><b>No {@code null}s.</b> Every parameter of {@code start} is required: no attributes is {@link
+ * <p><b>No {@code null}s.</b> Callers pass no {@code null}: no attributes is {@link
  * SpanAttributes#empty()}, no link is {@link SpanLink#NONE} and leaving the baggage alone is {@link
- * SpanBaggage#KEEP}. An implementation rejects a {@code null} link or baggage with a {@link
- * NullPointerException}, starts a span for {@code NONE} without any link, so {@code NONE} never
- * reaches an exporter, and changes nothing for {@code KEEP}.
+ * SpanBaggage#KEEP}. An implementation rejects a {@code null} link, baggage or start time with a
+ * {@link NullPointerException}, starts a span for {@code NONE} without any link, so {@code NONE}
+ * never reaches an exporter, and changes nothing for {@code KEEP}.
  */
 public interface StreamRuneTracing {
 

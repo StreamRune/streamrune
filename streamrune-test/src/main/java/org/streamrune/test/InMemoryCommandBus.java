@@ -35,10 +35,12 @@ import org.streamrune.core.types.Version;
  * In-memory {@link CommandBus} implementation for unit testing.
  *
  * <p>This implementation is intentionally minimal: no locking, no retries, no interceptors, no
- * metrics. It dispatches commands via the Decider pattern, reconstructing aggregate state from the
- * {@link EventStore} before each command, running the decider's {@link Decider#guard authorization
- * hook} exactly as {@code VirtualThreadCommandBus} does (a guard skipped here made authz tests
- * false-green), and appending resulting events back to the store.
+ * metrics. With no interceptors there is no command span, so its events carry {@link
+ * org.streamrune.core.tracing.SpanLink#NONE} as their {@code spanContext}. It dispatches commands
+ * via the Decider pattern, reconstructing aggregate state from the {@link EventStore} before each
+ * command, running the decider's {@link Decider#guard authorization hook} exactly as {@code
+ * VirtualThreadCommandBus} does (a guard skipped here made authz tests false-green), and appending
+ * resulting events back to the store.
  *
  * <p>Event metadata follows the same topology as {@code VirtualThreadCommandBus}: all events of one
  * command share a single correlation id (the bound saga origin's reserved one when an origin is

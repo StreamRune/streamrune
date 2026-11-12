@@ -291,6 +291,71 @@ class EventMetadataTest {
     assertSame(SpanLink.NONE, mapper.readValue(corrupt, EventMetadata.class).spanContext());
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(
+      strings = {
+        "\"garbage\"",
+        "[]",
+        "5",
+        "\"\"",
+        "true",
+        "{}",
+        "{\"traceId\":{\"x\":1},\"spanId\":\"b7ad6b7169203331\"}",
+        "{\"traceId\":\"0af7651916cd43dd8448eb211c80319c\",\"spanId\":5}",
+        "{\"traceId\":\"0af7651916cd43dd8448eb211c80319c\"}",
+        "{\"traceId\":\"0AF7651916CD43DD8448EB211C80319C\",\"spanId\":\"b7ad6b7169203331\"}",
+        "[\"0af7651916cd43dd8448eb211c80319c\",\"b7ad6b7169203331\"]",
+        "null"
+      })
+  void aMalformedStoredSpanContext_readsAsNone_andNeverMakesTheEventUnreadable(String value)
+      throws Exception {
+    String stored =
+        "{\"eventId\":\"evt-m\",\"commandId\":\"cmd-m\",\"correlationId\":\"corr-m\","
+            + "\"timestamp\":\"2026-01-01T00:00:00Z\",\"spanContext\":"
+            + value
+            + "}";
+
+    EventMetadata md = storeMapper().readValue(stored, EventMetadata.class);
+
+    assertSame(SpanLink.NONE, md.spanContext());
+    assertEquals(EventId.of("evt-m"), md.eventId());
+  }
+
+  @Test
+  void aValidStoredSpanContext_roundTrips() throws Exception {
+    String stored =
+        "{\"eventId\":\"evt-v\",\"commandId\":\"cmd-v\",\"correlationId\":\"corr-v\","
+            + "\"timestamp\":\"2026-01-01T00:00:00Z\",\"spanContext\":{\"traceId\":"
+            + "\"0af7651916cd43dd8448eb211c80319c\",\"spanId\":\"b7ad6b7169203331\"}}";
+
+    EventMetadata md = storeMapper().readValue(stored, EventMetadata.class);
+
+    assertEquals(
+        new SpanLink(TraceId.of("0af7651916cd43dd8448eb211c80319c"), SpanId.of("b7ad6b7169203331")),
+        md.spanContext());
+    assertEquals(
+        md, storeMapper().readValue(storeMapper().writeValueAsString(md), EventMetadata.class));
+  }
+
+  @Test
+  void aSpanContextWhoseIdsAreNotW3cIds_isLeftOutOfTheJson() throws Exception {
+    var md =
+        new EventMetadata(
+            EventId.of("evt-n"),
+            CommandId.of("cmd-n"),
+            null,
+            null,
+            CorrelationId.of("corr-n"),
+            null,
+            null,
+            Instant.parse("2026-01-01T00:00:00Z"),
+            null,
+            null,
+            new SpanLink(TraceId.of("from-a-header"), SpanId.of("span")));
+
+    assertFalse(storeMapper().writeValueAsString(md).contains("spanContext"));
+  }
+
   @Test
   void jsonWithoutTheSagaOriginKeyReadsAsNoOrigin() throws Exception {
     ObjectMapper mapper = storeMapper();

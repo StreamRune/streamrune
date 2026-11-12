@@ -838,9 +838,10 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
   together. Set both the mapper and a `PostgresOutboxStore` (on the factory, or as two beans in an
   integration). `OutboxEntryId` is the idempotency key; saving the same id twice is a no-op.
 - An `OutboxEntry` carries `traceLink()`, the span of the command whose append wrote it, stored in
-  the `trace_id` and `span_id` columns of `outbox_events`: `PostgresEventStore` copies it from the
-  source event's metadata (`traceId`, `spanId`) when they are W3C ids, and the relay's
-  `outbox/publish` span links to it. An entry without a link carries `SpanLink.NONE`, never `null`.
+  the `trace_id` and `span_id` columns of `outbox_events`: `PostgresEventStore` sets it from the
+  source event's `EventMetadata.spanContext` when its ids are W3C ids, replacing any link a mapper
+  or a caller set, and the relay's `outbox/publish` span links to it. An entry without a link
+  carries `SpanLink.NONE`, never `null`, and JSON leaves the property out.
 - Ordering modes (`OutboxOrderingMode`, a constructor argument of the store, logged at relay start):
   - `STRICT_PER_AGGREGATE` (**default**) — `OutboxEntry.streamId` is mandatory
     (`OutboxOrderingViolationException` otherwise); a terminal `FAILED` head blocks every later entry
@@ -1252,7 +1253,18 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
 - OpenTelemetry spans, names and attribute keys defined in `org.streamrune.core.tracing.TraceAttributes`:
   `command/{CommandType}` (`OpenTelemetryCommandInterceptor`), `subscription/{name}/deliver`
   (`TracingEventListener`), `projection/{name}/process` (`TracingProjectionDecorator`); attributes
-  are `streamrune.`-prefixed. Trace and span ids propagate into `EventMetadata`.
+  are `streamrune.`-prefixed. The command bus writes the command span into
+  `EventMetadata.spanContext`; `traceId` is the caller's `X-Trace-Id`.
+- `EventMetadata.spanContext`: the span of the command that appended the event, written by the
+  command bus from its own `command/{CommandType}` span and from nothing a client sends;
+  `SpanLink.NONE` when the command was not traced, left out of the JSON. The subscription, saga
+  step and outbox spans link to it only, through `SpanLink.of(metadata)`.
+- The tracing seam takes no `null`: `StreamRuneTracing.start(area, name, kind, attributes, link,
+  baggage)` takes a `SpanLink` (`SpanLink.NONE` for no link, which never reaches an exporter) and a
+  `SpanBaggage` (`SpanBaggage.KEEP`, or `SpanBaggage.replace(map)`, where an empty map clears the
+  baggage); attributes are `SpanAttributes.empty()` when there are none.
+- `TraceScope.link()`: the trace id and span id of the span a scope started, `SpanLink.NONE` for
+  the no-op scope or an area that is off; a span the sampler drops still has one.
 - Every production log line goes through SLF4J; bring the binding of your choice.
 - `BackgroundRelayHealthContributor` for every background relay; a per-cycle aggregated WARN for
   transport and in-flight outbox outages.

@@ -275,18 +275,22 @@ class PostgresOutboxTraceLinkTest {
   }
 
   @Test
-  void aLinkTheMapperSets_isKept() throws Exception {
+  void aLinkTheMapperSets_isReplacedByTheEventsSpanContext() throws Exception {
     var stream = stream();
-    var event = event(stream, 1, COMMAND);
+    var traced = event(stream, 1, COMMAND);
+    var untraced = event(stream, 2, SpanLink.NONE);
 
     store(envelope -> MAPPER.toOutbox(envelope).stream().map(e -> e.withTraceLink(OWN)).toList())
-        .append(stream, List.of(event), Version.initial());
+        .append(stream, List.of(traced, untraced), Version.initial());
 
-    assertThat(linkOf(idOf(event))).isEqualTo(OWN);
+    assertThat(linkOf(idOf(traced))).isEqualTo(COMMAND);
+    assertThat(linkOf(idOf(untraced))).isSameAs(SpanLink.NONE);
+    assertThat(storedIds(idOf(untraced))).containsExactly(null, null);
   }
 
   @Test
-  void entriesPassedToTheAppend_getTheFirstEventsSpan_unlessTheyCarryALink() throws Exception {
+  void entriesPassedToTheAppend_getTheFirstEventsSpan_replacingALinkTheCallerSet()
+      throws Exception {
     var stream = stream();
     var unlinked = OutboxEntry.pending(OutboxEntryId.of("explicit-1"), "{}", "Switched", stream);
     var linked =
@@ -301,7 +305,7 @@ class PostgresOutboxTraceLinkTest {
             List.of(unlinked, linked));
 
     assertThat(storedIds("explicit-1")).containsExactly(TRACE, SPAN);
-    assertThat(linkOf("explicit-2")).isEqualTo(OWN);
+    assertThat(storedIds("explicit-2")).containsExactly(TRACE, SPAN);
   }
 
   @Test
@@ -462,6 +466,7 @@ class PostgresOutboxTraceLinkTest {
     assertThat(traced.metadata().traceId()).isEqualTo(TraceId.of(TRACE));
     SpanLink command = tracing.only("command/Switch").own;
     assertThat(traced.metadata().spanContext()).isEqualTo(command);
+    assertThat(traced.metadata().spanContext().traceId()).isEqualTo(command.traceId());
     assertThat(command.traceId().value()).isNotEqualTo(TRACE);
     assertThat(relay(List.of(idOf(untraced), idOf(traced))))
         .extracting(publish -> publish.link)

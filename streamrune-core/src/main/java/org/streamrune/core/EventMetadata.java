@@ -18,8 +18,8 @@ import org.streamrune.core.types.UserId;
  *
  * @param eventId unique event identifier (required)
  * @param commandId identifier of the command that caused this event (required)
- * @param traceId OpenTelemetry Trace ID (nullable)
- * @param spanId OpenTelemetry Span ID (nullable)
+ * @param traceId the caller's {@code X-Trace-Id}: correlation data, never a link (nullable)
+ * @param spanId no framework path writes it (nullable)
  * @param correlationId identifies the entire business process (required)
  * @param causationId identifies the direct predecessor event ID (nullable)
  * @param userId who triggered the action (nullable)

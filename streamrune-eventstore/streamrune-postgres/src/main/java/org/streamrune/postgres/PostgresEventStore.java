@@ -1409,10 +1409,11 @@ public final class PostgresEventStore implements EventStore {
    * the caller exactly that weaker guarantee under a method that promises co-commit, with no way to
    * tell the difference.
    *
-   * <p><b>Trace link.</b> An entry without a {@link OutboxEntry#traceLink() traceLink} gets the
-   * link of the first event's metadata ({@code traceId} and {@code spanId}): the events of one
+   * <p><b>Trace link.</b> Every entry's {@link OutboxEntry#traceLink() traceLink} is the link of
+   * the first event's metadata, its {@code spanContext}, via {@link SpanLink#of}: the events of one
    * append come from one command, so the relay's {@code outbox/publish} span links to that
-   * command's trace. An entry that carries a link keeps it.
+   * command's span. A link the caller set on an entry is replaced; {@link SpanLink#NONE} when the
+   * command was not traced.
    *
    * @param streamId the stream to append to (required)
    * @param events the events to append (required)
@@ -1784,8 +1785,8 @@ public final class PostgresEventStore implements EventStore {
 
   /**
    * The outbox entries the configured mapper derives from {@code events}; none without one. Each
-   * entry without a trace link gets the link of the event it was derived from (see {@link
-   * #withTraceLink}).
+   * entry's trace link is the link of the event it was derived from, whatever the mapper set (see
+   * {@link #withTraceLink}).
    */
   private List<OutboxEntry> outboxEntriesOf(List<EventEnvelope> events) {
     return outboxStore != null && outboxEventMapper != null
@@ -1796,27 +1797,31 @@ public final class PostgresEventStore implements EventStore {
   }
 
   /**
-   * The link to the trace of the command that wrote {@code event}: the {@code traceId} and {@code
-   * spanId} of its metadata when both are W3C ids, {@link SpanLink#NONE} otherwise.
+   * The link to the span of the command that wrote {@code event}: its {@code spanContext}, via
+   * {@link SpanLink#of}; {@link SpanLink#NONE} when the command was not traced.
    */
   private static SpanLink traceLinkOf(EventEnvelope event) {
     return event == null ? SpanLink.NONE : SpanLink.of(event.metadata());
   }
 
   /**
-   * {@code entries} with {@code link} on each entry that carries none ({@link SpanLink#NONE}); an
-   * entry that already carries a link keeps it. {@code PostgresOutboxStore} stores a link only when
-   * its ids are valid W3C ids.
+   * {@code entries}, each with {@code link} as its trace link, replacing any link a mapper or a
+   * caller set, so every stored link is the span context of the source event. {@code entries}
+   * itself when every entry already carries {@code link}, the untraced case with no link set.
+   * {@code PostgresOutboxStore} stores a link only when its ids are valid W3C ids.
    */
   private static List<OutboxEntry> withTraceLink(List<OutboxEntry> entries, SpanLink link) {
-    if (!link.isPresent() || entries.isEmpty()) {
-      return entries;
+    List<OutboxEntry> linked = null;
+    for (int i = 0; i < entries.size(); i++) {
+      OutboxEntry entry = entries.get(i);
+      if (!entry.traceLink().equals(link)) {
+        if (linked == null) {
+          linked = new ArrayList<>(entries);
+        }
+        linked.set(i, entry.withTraceLink(link));
+      }
     }
-    List<OutboxEntry> linked = new ArrayList<>(entries.size());
-    for (OutboxEntry entry : entries) {
-      linked.add(entry.traceLink().isPresent() ? entry : entry.withTraceLink(link));
-    }
-    return linked;
+    return linked == null ? entries : linked;
   }
 
   /**

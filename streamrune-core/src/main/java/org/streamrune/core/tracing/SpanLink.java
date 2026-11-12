@@ -101,7 +101,8 @@ public record SpanLink(TraceId traceId, SpanId spanId) {
 
   /**
    * The JSON form of the link: an object with {@code traceId} and {@code spanId}, or JSON {@code
-   * null} for {@link #NONE}. A property that holds a link and is annotated
+   * null} for {@link #NONE} and for any link whose ids are not valid W3C ids, the rule the outbox
+   * columns follow. A property that holds a link and is annotated
    * {@code @JsonInclude(JsonInclude.Include.NON_EMPTY)} is left out of the JSON when it holds
    * {@code NONE}, so {@code NONE} never appears in JSON.
    *
@@ -109,7 +110,7 @@ public record SpanLink(TraceId traceId, SpanId spanId) {
    */
   @JsonValue
   Map<String, String> toJson() {
-    if (!isPresent()) {
+    if (!isW3c()) {
       return null;
     }
     Map<String, String> json = new LinkedHashMap<>(2);
@@ -119,15 +120,22 @@ public record SpanLink(TraceId traceId, SpanId spanId) {
   }
 
   /**
-   * The link the JSON form names: {@link #NONE} unless it holds a {@code traceId} and a {@code
-   * spanId} that are valid W3C ids, so a malformed stored value reads back as no link.
+   * The link the JSON form names: {@link #NONE} unless it is an object whose {@code traceId} and
+   * {@code spanId} are strings and valid W3C ids. Any other value — a string, a number, an array,
+   * an object without the two ids or with ids of another type — reads as {@link #NONE} and never
+   * throws, so a malformed stored value cannot make a stream unreadable.
    *
-   * @param json the JSON object, or {@code null}
+   * @param json the JSON value, bound to plain Java values, or {@code null}
    * @return the link, or {@link #NONE}
    */
   @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
-  static SpanLink fromJson(Map<String, String> json) {
-    return json == null ? NONE : ofW3c(json.get("traceId"), json.get("spanId"));
+  static SpanLink fromJson(Object json) {
+    if (json instanceof Map<?, ?> map
+        && map.get("traceId") instanceof String traceId
+        && map.get("spanId") instanceof String spanId) {
+      return ofW3c(traceId, spanId);
+    }
+    return NONE;
   }
 
   /**

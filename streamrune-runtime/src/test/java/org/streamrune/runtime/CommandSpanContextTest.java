@@ -174,6 +174,104 @@ class CommandSpanContextTest {
     assertThat(traced.getFirst().metadata().traceId()).isEqualTo(TraceId.of(CLIENT_TRACE));
     assertThat(traced.getFirst().metadata().spanContext().spanId().value())
         .isEqualTo(command.getSpanId());
+    assertThat(traced.getFirst().metadata().spanContext().traceId().value())
+        .isEqualTo(command.getTraceId());
+  }
+
+  @Test
+  void anInterceptorTheApplicationRegisters_withoutTracingOnTheBuilder_writesTheSpanContext() {
+    StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
+    InMemoryEventStore store = new InMemoryEventStore();
+    try (var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(store)
+            .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+            .interceptors(new OpenTelemetryCommandInterceptor(tracing))
+            .build()) {
+      bus.execute(new Switch("l-registered"));
+    }
+
+    SpanData command = only("command/Switch");
+    assertThat(
+            store.readStream(
+                StreamId.of(LAMP, AggregateId.of("l-registered")), Version.initial(), 10))
+        .hasSize(2)
+        .allSatisfy(
+            event ->
+                assertThat(event.metadata().spanContext().spanId().value())
+                    .isEqualTo(command.getSpanId()));
+  }
+
+  @Test
+  void aCommandDispatchedFromAnAfterCallback_writesItsOwnSpan_andTheOuterKeepsTheOuterSpan() {
+    StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
+    InMemoryEventStore store = new InMemoryEventStore();
+    var busRef = new java.util.concurrent.atomic.AtomicReference<VirtualThreadCommandBus>();
+    org.streamrune.core.CommandInterceptor dispatching =
+        new org.streamrune.core.CommandInterceptor() {
+          @Override
+          public void after(CommandContext ctx) {
+            // Runs while the outer command's span is still open: the tracing interceptor sits
+            // ahead of this one, so its after() runs later.
+            if (ctx.command() instanceof Switch s && s.lampId().equals("outer")) {
+              busRef.get().execute(new Switch("inner"));
+            }
+          }
+        };
+    try (var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(store)
+            .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+            .interceptors(dispatching)
+            .tracing(tracing)
+            .build()) {
+      busRef.set(bus);
+      bus.execute(new Switch("outer"));
+    }
+
+    List<SpanData> commands =
+        otelTesting.getSpans().stream().filter(s -> s.getName().equals("command/Switch")).toList();
+    assertThat(commands).hasSize(2);
+    SpanData inner = commands.getFirst(); // ends first
+    SpanData outer = commands.get(1);
+    assertThat(inner.getParentSpanId()).isEqualTo(outer.getSpanId());
+    assertThat(store.readStream(StreamId.of(LAMP, AggregateId.of("outer")), Version.initial(), 10))
+        .allSatisfy(
+            e ->
+                assertThat(e.metadata().spanContext().spanId().value())
+                    .isEqualTo(outer.getSpanId()));
+    assertThat(store.readStream(StreamId.of(LAMP, AggregateId.of("inner")), Version.initial(), 10))
+        .hasSize(2)
+        .allSatisfy(
+            e ->
+                assertThat(e.metadata().spanContext().spanId().value())
+                    .isEqualTo(inner.getSpanId()));
+  }
+
+  @Test
+  void anAsyncCommand_writesTheSpanOfItsOwnExecution() {
+    StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
+    InMemoryEventStore store = new InMemoryEventStore();
+    try (var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(store)
+            .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+            .tracing(tracing)
+            .build()) {
+      bus.executeAsync(new Switch("l-async")).join();
+    }
+
+    SpanData command = only("command/Switch");
+    assertThat(
+            store.readStream(StreamId.of(LAMP, AggregateId.of("l-async")), Version.initial(), 10))
+        .hasSize(2)
+        .allSatisfy(
+            e -> {
+              assertThat(e.metadata().spanContext().traceId().value())
+                  .isEqualTo(command.getTraceId());
+              assertThat(e.metadata().spanContext().spanId().value())
+                  .isEqualTo(command.getSpanId());
+            });
   }
 
   @Test

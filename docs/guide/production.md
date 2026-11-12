@@ -426,8 +426,11 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   command area off), and the spans that later handle those events link back to it through
   `SpanLink.of(metadata)`. The bus takes it from its own `command/{CommandType}` span, a command
   a saga or a continuation dispatches included, and never from a header, the request context or
-  baggage: the metadata's `traceId` is the caller's `X-Trace-Id` and never builds a link. A span
-  the sampler drops still has a valid context, so the links hold under a parent-based sampler.
+  baggage: the metadata's `traceId` is the caller's `X-Trace-Id` and never builds a link. The span
+  id of `spanContext` is the command span's own; its trace id follows the OpenTelemetry context of
+  the request, so a `traceparent` header that the server's instrumentation accepts chooses it. No
+  StreamRune header, baggage entry or request-context value is ever copied into it. A span the
+  sampler drops still has a valid context, so the links hold under a parent-based sampler.
   `TracingEventListener` links its span to the command of the first event it delivers,
   `saga/{SagaType}/step` to the command of the event it handles, and `outbox/publish` to the
   command whose append wrote the entry.
@@ -474,9 +477,9 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 - `outbox/publish` links to the command span through the entry. `PostgresEventStore` writes the
   span context of the source event's metadata with each entry in the append transaction,
   in the `trace_id` and `span_id` columns of `outbox_events`, and the store reads them back as
-  `OutboxEntry.traceLink()`; an entry the mapper or the caller already linked keeps its link, and
-  an entry passed to `append(streamId, events, expectedVersion, outboxEntries)` takes the first
-  event's. An entry without a link carries `SpanLink.NONE`, never `null`: when the command was not
+  `OutboxEntry.traceLink()`. The store always sets it from the source event, replacing any link a
+  mapper or a caller set; an entry passed to `append(streamId, events, expectedVersion,
+  outboxEntries)` takes the first event's. An entry without a link carries `SpanLink.NONE`, never `null`: when the command was not
   traced, or the ids are not W3C ids (32 and 16 lowercase hexadecimal characters, not all zeros).
   In JSON, the admin endpoints that list entries included, `NONE` is left out: an entry without a
   link has no `traceLink` property. The store writes `NONE` as two `NULL` columns and reads
@@ -1593,7 +1596,7 @@ Every stored event carries an `EventMetadata` record in `event_stream.metadata`,
 | `correlationId` | the first value of the `X-Correlation-Id` header, kept as sent; generated when the header is absent or that value is blank; the reserved `streamrune:` form where the framework binds it (below) | **yes, in every identity mode**: any value of at most 255 characters without control characters that does not start with `streamrune:` |
 | `traceId` | the first value of the `X-Trace-Id` header, kept as sent; generated when the header is absent or that value is blank | **yes, in every identity mode**: any value of at most 255 characters without control characters |
 | `spanId` | always `null` | no |
-| `spanContext` | the command bus, from the span of the command that appended the event; `SpanLink.NONE`, left out of the JSON, when the command was not traced | no: the framework sets it, from no header, baggage entry or request context |
+| `spanContext` | the command bus, from the span of the command that appended the event; `SpanLink.NONE`, left out of the JSON, when the command was not traced | The span id: no. The trace id follows the OpenTelemetry context of the request, so a `traceparent` header that the server's instrumentation accepts chooses it. No StreamRune header, baggage entry or request-context value is ever copied into it. |
 | `causationId` | the bound dispatch cause (below) | no |
 | `sagaOrigin` | the bound dispatch cause (below) | no |
 | `userId` | the authenticated principal; the `X-User-Id` header in the trusted-gateway mode; `null` for an anonymous request | only where the gateway lets a client's header through |

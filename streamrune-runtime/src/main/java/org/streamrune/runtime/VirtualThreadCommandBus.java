@@ -169,7 +169,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
   /**
    * The interceptor whose {@code command/{CommandType}} span the events of a command link to, the
-   * first {@link OpenTelemetryCommandInterceptor} of the chain; {@code null} when the chain holds
+   * first traced {@link OpenTelemetryCommandInterceptor} of the chain, whether {@link
+   * Builder#tracing} added it or the application registered it; {@code null} when the chain holds
    * none. {@link #buildMetadata} reads the span of the executing command from it.
    */
   private final OpenTelemetryCommandInterceptor commandSpans;
@@ -2037,10 +2038,14 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         spanContext);
   }
 
-  /** The first {@link OpenTelemetryCommandInterceptor} of {@code chain}, or {@code null}. */
+  /**
+   * The first traced {@link OpenTelemetryCommandInterceptor} of {@code chain} (its command area
+   * on), or {@code null}.
+   */
   private static OpenTelemetryCommandInterceptor commandSpansOf(List<CommandInterceptor> chain) {
     for (CommandInterceptor interceptor : chain) {
-      if (interceptor instanceof OpenTelemetryCommandInterceptor commandSpans) {
+      if (interceptor instanceof OpenTelemetryCommandInterceptor commandSpans
+          && commandSpans.traced()) {
         return commandSpans;
       }
     }
