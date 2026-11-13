@@ -202,6 +202,11 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
         public Class<?> resolveStateType(String stateType) {
           throw new IllegalArgumentException("No aggregate snapshots in this test: " + stateType);
         }
+
+        @Override
+        public java.util.Collection<Class<?>> registeredTypes() {
+          return List.of(OrderPlaced.class, OrderCancelled.class);
+        }
       };
 
   private final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
@@ -220,15 +225,11 @@ class SagaCrashResumeE2EIT extends E2ETestBase {
     }
     commandInbox = new PostgresCommandInbox(dataSource);
     store =
-        new PostgresEventStore(
-            dataSource,
-            mapper,
-            SAGA_REGISTRY,
-            org.streamrune.core.upcasting.UpcasterChain.empty(),
-            null,
-            null,
-            null,
-            commandInbox);
+        PostgresEventStore.builder()
+            .dataSource(dataSource)
+            .typeRegistry(SAGA_REGISTRY)
+            .commandInbox(commandInbox)
+            .build();
     sagaStore = new PostgresSagaStore(dataSource, mapper);
     offsetStore = new PostgresOffsetStore(dataSource);
   }

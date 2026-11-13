@@ -526,10 +526,9 @@ domain events — as long as that path serializes with the `CryptoEngine`:
   connection, instead of silently persisting plaintext PII. A custom `EventTypeRegistry` that does
   not implement `registeredTypes()` is refused too, because it cannot be checked. The Spring, Quarkus
   and Micronaut integrations build the store through the factory and also check the registered
-  command types at startup. Not checked: the `PostgresEventStore` constructors that take a
-  ready-made `ObjectMapper` (build it with `PostgresEventStore.createObjectMapper(cryptoEngine,
-  metrics)`), and command types registered with the plain-Java `StreamRune` builder. Configure a
-  `CryptoEngine` — see [Usage](#usage) above — before registering any `@Encrypted` type.
+  command types at startup. Not checked: command types registered with the plain-Java `StreamRune`
+  builder. Configure a `CryptoEngine` — see [Usage](#usage) above — before registering any
+  `@Encrypted` type.
 - **OTel baggage is allowlisted, not persisted verbatim.** `EventMetadata#baggage()` is immutable
   and cannot be crypto-shredded (a `Map` field can't carry `@Encrypted`), yet OTel baggage is
   populated from the client-supplied, unauthenticated W3C `baggage:` header — without filtering, a

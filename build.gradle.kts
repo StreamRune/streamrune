@@ -1126,6 +1126,87 @@ subprojects {
         }
         tasks.named("check") { dependsOn(verifyStableModuleName) }
 
+        // ── The public API: a checked-in baseline per module and the @Internal rules ─────────
+        //
+        // The README promises that a minor or patch release does not break code written against
+        // the public API, everything but what is marked @Internal. Two things hold that promise in
+        // the build. (1) `api/<module>.api` in each published module lists its public API: every
+        // type application code can reach, with its supertypes and its public (and, in a
+        // non-final type, protected) members and their generic signatures. verifyApiSurface, part
+        // of `check` and `quickCheck`, compares the compiled classes with that file and fails on
+        // any difference, listing the removed or changed lines (which break callers) apart from
+        // the added ones; `./gradlew apiDump` rewrites the file after a deliberate change, so the
+        // change is visible in review. (2) The rules of the marker: no listed signature names a
+        // StreamRune type that is @Internal, nested in one, not exported by its module or not
+        // public, and every @Internal declaration carries @hidden, so the API documentation
+        // leaves it out. Both tasks enforce them.
+        //
+        // The checker is gradle/api-check/ApiSurfaceCheck.java, a JDK-only program that reads the
+        // class files with java.lang.classfile; it runs with the source launcher of the module's
+        // Java 25 toolchain (the JVM that runs Gradle may be older). It compares source shape, not
+        // binary compatibility against a released artifact.
+        if (file("src/main/java").isDirectory) {
+            val apiCheckSource = rootProject.file("gradle/api-check/ApiSurfaceCheck.java")
+            val apiBaseline = file("api/${project.name}.api")
+            val mainSourceSet = the<SourceSetContainer>()["main"]
+            val apiClasses: FileCollection = mainSourceSet.output.classesDirs
+            val apiSources: FileCollection = files(mainSourceSet.java.srcDirs)
+            val apiClasspath: FileCollection = files(configurations.named("compileClasspath"))
+            val apiLauncher =
+                the<JavaToolchainService>().launcherFor(the<JavaPluginExtension>().toolchain)
+            val apiReport = layout.buildDirectory.file("reports/api-surface.txt")
+            val apiLabel = project.path
+            fun apiSurfaceTask(name: String, mode: String, text: String) =
+                tasks.register<Exec>(name) {
+                    group = "verification"
+                    description = text
+                    inputs.file(apiCheckSource).withPropertyName("checker")
+                        .withPathSensitivity(PathSensitivity.NONE)
+                    inputs.files(apiClasses).withPropertyName("classes")
+                        .withPathSensitivity(PathSensitivity.RELATIVE)
+                    inputs.files(apiSources).withPropertyName("sources")
+                        .withPathSensitivity(PathSensitivity.RELATIVE)
+                    inputs.files(apiClasspath).withPropertyName("classpath")
+                        .withNormalizer(ClasspathNormalizer::class.java)
+                    // The JDK's class-file and compiler APIs read the classes and sources: a new
+                    // toolchain runs the check again.
+                    inputs.property("jdk", apiLauncher.map { it.metadata.javaRuntimeVersion })
+                    outputs.file(apiReport).withPropertyName("report")
+                    if (mode == "check") {
+                        inputs.files(apiBaseline).withPropertyName("baseline")
+                            .withPathSensitivity(PathSensitivity.NONE)
+                    } else {
+                        outputs.file(apiBaseline).withPropertyName("baseline")
+                        outputs.upToDateWhen { false }
+                    }
+                    argumentProviders.add(
+                        CommandLineArgumentProvider {
+                            listOf(
+                                apiCheckSource.absolutePath,
+                                "--mode", mode,
+                                "--module", apiLabel,
+                                "--baseline", apiBaseline.absolutePath,
+                                "--report", apiReport.get().asFile.absolutePath) +
+                                apiClasses.files.flatMap { listOf("--classes", it.absolutePath) } +
+                                apiClasspath.files.flatMap { listOf("--classpath", it.absolutePath) } +
+                                apiSources.files.flatMap { listOf("--sources", it.absolutePath) }
+                        })
+                    doFirst { executable = apiLauncher.get().executablePath.asFile.absolutePath }
+                }
+            val apiDump =
+                apiSurfaceTask(
+                    "apiDump", "dump",
+                    "Rewrites api/${project.name}.api from the compiled public API (after a " +
+                        "deliberate API change).")
+            val verifyApiSurface =
+                apiSurfaceTask(
+                    "verifyApiSurface", "check",
+                    "Fails when the public API differs from api/${project.name}.api or breaks " +
+                        "the rules of the @Internal marker.")
+            verifyApiSurface.configure { mustRunAfter(apiDump) }
+            tasks.named("check") { dependsOn(verifyApiSurface) }
+        }
+
         // Publishing goes through the Sonatype Central Portal (https://central.sonatype.com).
         // Plain `maven-publish` cannot speak the Portal's upload REST API (it is a bundle
         // upload, not a Maven repository), so the vanniktech plugin drives the upload:
@@ -1953,11 +2034,44 @@ tasks.named("check") { dependsOn(verifyPostgresTestImage) }
 apply(plugin = "com.diffplug.spotless")
 configure<com.diffplug.gradle.spotless.SpotlessExtension> {
     java {
-        target("gradle/test-support/**/*.java")
+        target("gradle/test-support/**/*.java", "gradle/api-check/**/*.java")
         googleJavaFormat("1.34.1")
         removeUnusedImports()
     }
 }
+
+// ── The test of the public API checker ─────────────────────────────────────────────────────
+//
+// gradle/api-check/ApiSurfaceCheckTest.java compiles small fixtures and runs ApiSurfaceCheck on
+// them: the exposure rule, the @hidden rule, the baseline difference and what the baseline records.
+// Without it a change to the checker could silence a rule while every verifyApiSurface stays green.
+// Part of `check` and `quickCheck`; it runs with the source launcher of the Java 25 toolchain.
+val testApiSurfaceCheck =
+    tasks.register<Exec>("testApiSurfaceCheck") {
+        group = "verification"
+        description = "Tests the public API checker (gradle/api-check) on compiled fixtures."
+        val checkerDir = file("gradle/api-check")
+        val scratch = layout.buildDirectory.dir("api-check-test")
+        val marker = layout.buildDirectory.file("reports/api-check-test.txt")
+        val launcher =
+            javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) }
+        inputs.files(fileTree(checkerDir) { include("*.java") }).withPropertyName("checker")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.property("jdk", launcher.map { it.metadata.javaRuntimeVersion })
+        outputs.file(marker).withPropertyName("marker")
+        argumentProviders.add(
+            CommandLineArgumentProvider {
+                listOf(
+                    checkerDir.resolve("ApiSurfaceCheckTest.java").absolutePath,
+                    scratch.get().asFile.absolutePath)
+            })
+        doFirst { executable = launcher.get().executablePath.asFile.absolutePath }
+        doLast {
+            marker.get().asFile.parentFile.mkdirs()
+            marker.get().asFile.writeText("ApiSurfaceCheckTest passed\n")
+        }
+    }
+tasks.named("check") { dependsOn(testApiSurfaceCheck) }
 
 // ── testSummary and quickCheck ──────────────────────────────────────────────────────────────
 //
@@ -2017,6 +2131,8 @@ tasks.register("quickCheck") {
     dependsOn("spotlessCheck", subprojects.map { "${it.path}:spotlessCheck" })
     dependsOn(dockerFreeModules.map { "$it:test" })
     dependsOn(docLintModules.map { "$it:docLintTest" })
+    dependsOn(subprojects.map { p -> p.tasks.matching { it.name == "verifyApiSurface" } })
+    dependsOn(testApiSurfaceCheck)
     finalizedBy(testSummary)
 }
 

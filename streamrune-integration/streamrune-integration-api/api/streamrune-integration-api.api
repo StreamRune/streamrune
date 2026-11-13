@@ -1,0 +1,159 @@
+# The public API of :streamrune-integration:streamrune-integration-api. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public interface org.streamrune.integration.AuthenticatedUserResolver
+  public abstract java.util.Optional<org.streamrune.core.types.UserId> currentUser()
+
+public final class org.streamrune.integration.DeadLetterUnkeyedReplaySetting
+  public static final java.lang.String PROPERTY = "streamrune.dead-letter.unkeyed-replay"
+  public static org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay parse(java.lang.String)
+
+public final class org.streamrune.integration.MicrometerStreamRuneMetrics implements org.streamrune.core.StreamRuneMetrics
+  public static final java.lang.String DEFAULT_PREFIX = "streamrune"
+  public static final java.lang.String UNKNOWN_TAG_VALUE = "unknown"
+  public static org.streamrune.integration.MicrometerStreamRuneMetrics$Builder builder()
+  public void recordCommandAsyncRejected()
+  public void recordCommandDispatched()
+  public void recordCommandDispatched(java.lang.String)
+  public void recordCommandDuration(long)
+  public void recordCommandFailed()
+  public void recordCommandRetried(java.lang.String)
+  public void recordCommandShortCircuited(java.lang.String)
+  public void recordCommandSucceeded()
+  public void recordDeadLetterExhausted(java.lang.String)
+  public void recordDeadLetterPublished(java.lang.String)
+  public void recordDeadLetterReaderBehind(java.lang.String)
+  public void recordDeadLetterStaleReplayBlocked(java.lang.String)
+  public void recordDeadLetterSwept(long)
+  public void recordDecryptRetried(java.lang.String)
+  public void recordDlqAwaitingOperator(long)
+  public void recordDlqBacklog(long)
+  public void recordDlqRetryDegradation(long)
+  public void recordEncryptSelfCheckFailed()
+  public void recordEventAppendDuration(long)
+  public void recordEventAppended()
+  public void recordEventAppended(java.lang.String)
+  public void recordEventReplayed()
+  public void recordGdprPurgeFailed(java.lang.String)
+  public void recordInboxReplayHit(java.lang.String)
+  public void recordInboxSwept(long)
+  public void recordListenerReconnect(java.lang.String)
+  public void recordLockWait(long)
+  public void recordOutboxBacklog(long)
+  public void recordOutboxBlockageAge(long)
+  public void recordOutboxBlockedAggregates(long)
+  public void recordOutboxDeliveryFailed()
+  public void recordOutboxInFlight(long)
+  public void recordOutboxInFlightHorizonViolation()
+  public void recordOutboxRelayDegradation(long)
+  public void recordOutboxReplayed(long)
+  public void recordOutboxSkipped()
+  public void recordOutboxSkippedSwept(long)
+  public void recordOutboxSwept(long)
+  public void recordProjectionDeadLetterBacklog(long)
+  public void recordProjectionDeadLettered()
+  public void recordProjectionDeadLettered(org.streamrune.core.types.ProjectionName)
+  public void recordProjectionDeliveryMode(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public void recordProjectionDuration(long)
+  public void recordProjectionDuration(org.streamrune.core.types.ProjectionName, long)
+  public void recordProjectionFailed()
+  public void recordProjectionFailed(org.streamrune.core.types.ProjectionName)
+  public void recordProjectionProcessed()
+  public void recordProjectionProcessed(org.streamrune.core.types.ProjectionName)
+  public void recordQueryCacheHit(java.lang.String)
+  public void recordQueryCacheMiss(java.lang.String)
+  public void recordQueryDispatched(java.lang.String)
+  public void recordQueryDuration(java.lang.String, long)
+  public void recordSagaCasConflict(java.lang.String)
+  public void recordSagaCompensateFaulted(java.lang.String, java.lang.String)
+  public void recordSagaCompensatingBacklog(java.lang.String, long)
+  public void recordSagaCompensation(java.lang.String, java.lang.String)
+  public void recordSagaCompensationRetry(java.lang.String)
+  public void recordSagaCompensationUnderForwardStep(java.lang.String)
+  public void recordSagaDeadLetterSwept(long)
+  public void recordSagaDeliveryRetried(java.lang.String)
+  public void recordSagaEventHeld(java.lang.String, java.lang.String)
+  public void recordSagaFaulted(java.lang.String)
+  public void recordSagaFaultedBacklog(long)
+  public void recordSagaFaultedRows(java.lang.String, long)
+  public void recordSagaForcedStaleResume(java.lang.String)
+  public void recordSagaForwardCommandFenced(java.lang.String)
+  public void recordSagaQuarantined(java.lang.String)
+  public void recordSagaReplayDeferred(java.lang.String)
+  public void recordSagaReplayed(java.lang.String, java.lang.String)
+  public void recordSagaResumeFaulted(java.lang.String, java.lang.String)
+  public void recordSagaSkippedWhileFaulted(java.lang.String)
+  public void recordSagaTimedOutBacklog(java.lang.String, long)
+  public void recordSagaTimeoutClaimDeferred(java.lang.String)
+  public void recordSnapshotCreated()
+  public void recordSnapshotDiscarded(java.lang.String)
+  public void recordSnapshotLoaded()
+  public void recordSnapshotRefused()
+  public void recordSubjectRedacted()
+  public void recordSubscriptionDeliveryLatency(long)
+  public void recordSubscriptionEventReceived()
+  public void recordSubscriptionLag(org.streamrune.core.types.SubscriptionName, long)
+  public void recordSystemicKeyStoreFailure()
+  public void registerInFlightCommandsGauge(java.util.function.LongSupplier)
+  public void registerSubscriptionLagGauge(org.streamrune.core.types.SubscriptionName, java.util.function.LongSupplier)
+
+public static class org.streamrune.integration.MicrometerStreamRuneMetrics$Builder
+  public <init>()
+  public org.streamrune.integration.MicrometerStreamRuneMetrics build()
+  public org.streamrune.integration.MicrometerStreamRuneMetrics$Builder prefix(java.lang.String)
+  public org.streamrune.integration.MicrometerStreamRuneMetrics$Builder registry(io.micrometer.core.instrument.MeterRegistry)
+
+public final class org.streamrune.integration.RequestEdgeAuthority
+  public static org.streamrune.core.StreamRuneContext$RequestContext capture(org.streamrune.core.StreamRuneContext$RequestContext, org.streamrune.core.UserRoleResolver, java.util.function.Consumer<java.lang.RuntimeException>)
+
+public final class org.streamrune.integration.RequestIdentityPolicy
+  public java.lang.String describe()
+  public java.util.Map<java.lang.String, java.lang.String> applyRole(java.util.Map<java.lang.String, java.lang.String>, java.util.List<java.lang.String>)
+  public java.util.Optional<java.lang.String> unacceptablePrincipalWarning(org.streamrune.core.types.UserId)
+  public org.streamrune.core.types.UserId resolve(java.util.List<java.lang.String>, org.streamrune.integration.RequestIdentityPolicy$MismatchListener)
+  public org.streamrune.integration.RequestIdentityPolicy$Mode mode()
+  public static final java.lang.String REFUSED_REQUEST_CONTEXT = "The request's correlation id, trace id or user id is not acceptable"
+  public static final java.lang.String TRUST_USER_ID_HEADER_PROPERTY = "streamrune.security.trust-user-id-header"
+  public static final java.lang.String USER_ID_HEADER = "X-User-Id"
+  public static final java.lang.String USER_ROLE_HEADER = "X-User-Role"
+  public static org.streamrune.integration.RequestIdentityPolicy of(org.streamrune.integration.AuthenticatedUserResolver, boolean)
+  public void requireIdentitySourceFor(java.util.Collection<java.lang.String>)
+
+public static interface org.streamrune.integration.RequestIdentityPolicy$MismatchListener
+  public abstract void onMismatch(org.streamrune.core.types.UserId, org.streamrune.core.types.UserId)
+
+public static enum org.streamrune.integration.RequestIdentityPolicy$Mode
+  constants AUTHENTICATED_PRINCIPAL, TRUSTED_GATEWAY, ANONYMOUS
+  public static final org.streamrune.integration.RequestIdentityPolicy$Mode ANONYMOUS
+  public static final org.streamrune.integration.RequestIdentityPolicy$Mode AUTHENTICATED_PRINCIPAL
+  public static final org.streamrune.integration.RequestIdentityPolicy$Mode TRUSTED_GATEWAY
+  public static org.streamrune.integration.RequestIdentityPolicy$Mode valueOf(java.lang.String)
+  public static org.streamrune.integration.RequestIdentityPolicy$Mode[] values()
+
+public enum org.streamrune.integration.SagaForwardFenceSetting
+  constants AUTO, ON, OFF
+  public boolean enabled(boolean)
+  public static final java.lang.String PROPERTY = "streamrune.saga.forward-fence"
+  public static final org.streamrune.integration.SagaForwardFenceSetting AUTO
+  public static final org.streamrune.integration.SagaForwardFenceSetting OFF
+  public static final org.streamrune.integration.SagaForwardFenceSetting ON
+  public static org.streamrune.integration.SagaForwardFenceSetting parse(java.lang.String)
+  public static org.streamrune.integration.SagaForwardFenceSetting valueOf(java.lang.String)
+  public static org.streamrune.integration.SagaForwardFenceSetting[] values()
+
+public final class org.streamrune.integration.SingleActiveConsumerSetting
+  public static boolean enabled(java.lang.String)
+  public static final java.lang.String PROPERTY = "streamrune.subscription.single-active-consumer.enabled"
+
+public enum org.streamrune.integration.SnapshotPurgeSetting
+  constants REQUIRED, NONE
+  public boolean withoutSnapshotPurge(java.util.List<? extends org.streamrune.core.gdpr.SubjectDataPurger>)
+  public static final java.lang.String PROPERTY = "streamrune.gdpr.snapshot-purge"
+  public static final org.streamrune.integration.SnapshotPurgeSetting NONE
+  public static final org.streamrune.integration.SnapshotPurgeSetting REQUIRED
+  public static org.streamrune.integration.SnapshotPurgeSetting parse(java.lang.String)
+  public static org.streamrune.integration.SnapshotPurgeSetting valueOf(java.lang.String)
+  public static org.streamrune.integration.SnapshotPurgeSetting[] values()
+
+public interface org.streamrune.integration.SseAuthorizer
+  public abstract boolean isAuthorized(org.streamrune.core.StreamRuneContext$RequestContext, org.streamrune.core.types.StreamId)
+  public static final org.streamrune.integration.SseAuthorizer DENY_ALL

@@ -4,7 +4,9 @@
 AES-256-GCM engine: `FileSystemCryptoEngine`, with its keys in a temporary directory. The event goes
 through the `ObjectMapper` that `PostgresEventStore` writes and reads every event with
 (`PostgresEventStore.createObjectMapper`, which registers `CryptoShreddingModule` on the engine), so
-the benchmark measures the event store's own serialization path. No network, no database.
+the benchmark measures the event store's own serialization path. No network, no database. That
+method is package-private, so the benchmark is declared in the package `org.streamrune.postgres`;
+JMH runs it on the class path, where that package may span this source set and the store's jar.
 
 | Benchmark | Parameter | What one operation is |
 | --- | --- | --- |

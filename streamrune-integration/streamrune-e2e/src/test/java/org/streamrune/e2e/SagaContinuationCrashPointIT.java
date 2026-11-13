@@ -518,6 +518,11 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
         public Class<?> resolveStateType(String stateType) {
           throw new IllegalArgumentException("No aggregate snapshots in this test: " + stateType);
         }
+
+        @Override
+        public java.util.Collection<Class<?>> registeredTypes() {
+          return List.copyOf(types.values());
+        }
       };
 
   private static ObjectMapper mapper() {
@@ -539,15 +544,11 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
     final ObjectMapper mapper = mapper();
     final PostgresCommandInbox inbox = new PostgresCommandInbox(dataSource);
     final PostgresEventStore store =
-        new PostgresEventStore(
-            dataSource,
-            mapper,
-            REGISTRY,
-            org.streamrune.core.upcasting.UpcasterChain.empty(),
-            null,
-            null,
-            null,
-            inbox);
+        PostgresEventStore.builder()
+            .dataSource(dataSource)
+            .typeRegistry(REGISTRY)
+            .commandInbox(inbox)
+            .build();
     final PostgresSagaStore sagaStore = new PostgresSagaStore(dataSource, mapper);
     final PostgresSagaDeadLetterStore sagaDeadLetters = new PostgresSagaDeadLetterStore(dataSource);
     final PostgresOffsetStore offsets = new PostgresOffsetStore(dataSource);
@@ -780,16 +781,7 @@ class SagaContinuationCrashPointIT extends E2ETestBase {
 
   @BeforeEach
   void probes() throws Exception {
-    probe =
-        new PostgresEventStore(
-            dataSource,
-            mapper(),
-            REGISTRY,
-            org.streamrune.core.upcasting.UpcasterChain.empty(),
-            null,
-            null,
-            null,
-            null);
+    probe = PostgresEventStore.builder().dataSource(dataSource).typeRegistry(REGISTRY).build();
     sagaProbe = new PostgresSagaStore(dataSource, mapper());
     fresh();
   }

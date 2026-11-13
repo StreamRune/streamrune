@@ -17,8 +17,13 @@ dependencies {
     // (`requires`, not `requires transitive`), not by the POM scope.
     // Enforced by the `verifyModularApiScopes` check in the root build.
     api(project(":streamrune-crypto:streamrune-crypto-api"))
-    api(platform(libs.junit.bom))
-    api("org.junit.jupiter:junit-jupiter-api")
+    // The JUnit floor the kit runs on (see `junit-floor` in the version catalog), not a JUnit BOM:
+    // an exported BOM would move every JUnit module of an application to its version. The kit's
+    // main sources compile against the floor, so they cannot use API it lacks; its tests run on
+    // the framework's JUnit (the root build's testImplementation platform). The compiler does not
+    // see API that JUnit 6 removed (MethodOrderer.Alphanumeric, for one): the kit's own tests, on
+    // JUnit 6, are what catch a use of it.
+    api(libs.junit.jupiter.api.floor)
     api(libs.jackson.databind)
     api(libs.jackson.core)
     api(libs.jackson.datatype.jsr310)
@@ -39,3 +44,86 @@ tasks.named<Test>("docLintTest") {
         .withPropertyName("kitDocs")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
+
+// The kit's published metadata must leave an application's JUnit version alone: no platform or BOM
+// among its dependencies (Gradle module metadata and POM), and junit-jupiter-api required at the
+// floor, with no strict version. Runs on the files the publication would upload.
+val verifyJUnitFloor =
+    tasks.register("verifyJUnitFloor") {
+        // Locals, not script-level vals: doLast must not capture the script object (configuration
+        // cache).
+        val junitFloor = libs.versions.junit.floor.get()
+        val publishedMetadata = files(tasks.withType<GenerateModuleMetadata>())
+        val publishedPoms = files(tasks.withType<GenerateMavenPom>())
+        group = "verification"
+        description =
+            "Fails when the published metadata exports a JUnit BOM or requires more than the " +
+                "JUnit floor."
+        inputs.files(publishedMetadata).withPropertyName("metadata")
+        inputs.files(publishedPoms).withPropertyName("poms")
+        inputs.property("floor", junitFloor)
+        val report = layout.buildDirectory.file("reports/junit-floor.txt")
+        outputs.file(report).withPropertyName("report")
+        doLast {
+            val problems = mutableListOf<String>()
+            val metadata = publishedMetadata.files.filter { it.isFile }
+            val poms = publishedPoms.files.filter { it.isFile }
+            if (metadata.isEmpty() || poms.isEmpty()) {
+                problems += "no generated module metadata or POM to check"
+            }
+            metadata.forEach { file ->
+                @Suppress("UNCHECKED_CAST")
+                val json = groovy.json.JsonSlurper().parse(file) as Map<String, Any?>
+                @Suppress("UNCHECKED_CAST")
+                val variants = json["variants"] as List<Map<String, Any?>>
+                for (variant in variants) {
+                    // Constraints count too: one on a JUnit module raises it like a dependency.
+                    @Suppress("UNCHECKED_CAST")
+                    val dependencies =
+                        (variant["dependencies"] as List<Map<String, Any?>>?).orEmpty() +
+                            (variant["dependencyConstraints"] as List<Map<String, Any?>>?).orEmpty()
+                    for (dependency in dependencies) {
+                        val coordinates = "${dependency["group"]}:${dependency["module"]}"
+                        @Suppress("UNCHECKED_CAST")
+                        val attributes = (dependency["attributes"] as Map<String, Any?>?).orEmpty()
+                        val category = attributes["org.gradle.category"]
+                        if (category == "platform" || category == "enforced-platform") {
+                            problems += "${file.name} (${variant["name"]}): $coordinates is a $category"
+                        }
+                        if (coordinates.startsWith("org.junit")) {
+                            @Suppress("UNCHECKED_CAST")
+                            val version = (dependency["version"] as Map<String, Any?>?).orEmpty()
+                            if (coordinates != "org.junit.jupiter:junit-jupiter-api" ||
+                                version["requires"] != junitFloor ||
+                                version.containsKey("strictly")) {
+                                problems += "${file.name} (${variant["name"]}): $coordinates $version " +
+                                    "(expected only org.junit.jupiter:junit-jupiter-api requiring $junitFloor)"
+                            }
+                        }
+                    }
+                }
+            }
+            poms.forEach { file ->
+                val text = file.readText()
+                if (text.contains("<dependencyManagement>")) {
+                    problems += "${file.name} imports a BOM in <dependencyManagement>"
+                }
+                val junit =
+                    Regex("""<artifactId>(junit-[^<]+)</artifactId>\s*<version>([^<]*)</version>""")
+                        .findAll(text).map { it.groupValues[1] to it.groupValues[2] }.toList()
+                if (junit != listOf("junit-jupiter-api" to junitFloor)) {
+                    problems += "${file.name}: JUnit dependencies $junit " +
+                        "(expected only junit-jupiter-api $junitFloor)"
+                }
+            }
+            report.get().asFile.parentFile.mkdirs()
+            report.get().asFile.writeText(
+                "floor: $junitFloor\nproblems: ${problems.size}\n" + problems.joinToString("\n"))
+            if (problems.isNotEmpty()) {
+                throw GradleException(
+                    "streamrune-test would publish a JUnit dependency that moves an application's " +
+                        "JUnit version:\n  " + problems.joinToString("\n  "))
+            }
+        }
+    }
+tasks.named("check") { dependsOn(verifyJUnitFloor) }

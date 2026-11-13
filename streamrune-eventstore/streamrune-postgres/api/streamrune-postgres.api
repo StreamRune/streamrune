@@ -1,0 +1,344 @@
+# The public API of :streamrune-eventstore:streamrune-postgres. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.postgres.HybridEventSubscription implements org.streamrune.core.subscription.SubscriptionLifecycle, org.streamrune.runtime.ReadPoisonAware, org.streamrune.runtime.PushHealthAware, org.streamrune.runtime.LeaseRoleAware
+  public <init>(org.streamrune.core.types.SubscriptionName, javax.sql.DataSource, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, org.streamrune.core.subscription.EventListener, org.streamrune.core.subscription.SubscriptionConfig, int)
+  public <init>(org.streamrune.core.types.SubscriptionName, javax.sql.DataSource, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, org.streamrune.core.subscription.EventListener, org.streamrune.core.subscription.SubscriptionConfig, int, org.streamrune.core.StreamRuneMetrics)
+  public <init>(org.streamrune.core.types.SubscriptionName, javax.sql.DataSource, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, org.streamrune.core.subscription.EventListener, org.streamrune.core.subscription.SubscriptionConfig, int, org.streamrune.core.StreamRuneMetrics, int)
+  public boolean isRunning()
+  public boolean pushHealthy()
+  public org.streamrune.core.subscription.LeaseRole leaseRole()
+  public org.streamrune.core.subscription.SubscriptionLifecycleState state()
+  public org.streamrune.runtime.ProjectionReadPoisonException readPoisonError()
+  public org.streamrune.runtime.PushHealthAware$PushPathStatus pushPathStatus()
+  public static org.streamrune.postgres.HybridEventSubscription$Builder builder()
+  public void close()
+  public void pause()
+  public void resume()
+  public void start()
+
+public static final class org.streamrune.postgres.HybridEventSubscription$Builder
+  public <init>()
+  public org.streamrune.postgres.HybridEventSubscription build()
+  public org.streamrune.postgres.HybridEventSubscription$Builder config(org.streamrune.core.subscription.SubscriptionConfig)
+  public org.streamrune.postgres.HybridEventSubscription$Builder dataSource(javax.sql.DataSource)
+  public org.streamrune.postgres.HybridEventSubscription$Builder eventStore(org.streamrune.core.EventStore)
+  public org.streamrune.postgres.HybridEventSubscription$Builder fetchSize(int)
+  public org.streamrune.postgres.HybridEventSubscription$Builder healthContributor(org.streamrune.runtime.SubscriptionHealthContributor)
+  public org.streamrune.postgres.HybridEventSubscription$Builder leadership(org.streamrune.core.subscription.SubscriptionLeadership)
+  public org.streamrune.postgres.HybridEventSubscription$Builder lease(org.streamrune.runtime.SubscriptionLease)
+  public org.streamrune.postgres.HybridEventSubscription$Builder listener(org.streamrune.core.subscription.EventListener)
+  public org.streamrune.postgres.HybridEventSubscription$Builder metrics(org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.postgres.HybridEventSubscription$Builder offsetStore(org.streamrune.core.projection.OffsetStore)
+  public org.streamrune.postgres.HybridEventSubscription$Builder readPoisonBound(int)
+  public org.streamrune.postgres.HybridEventSubscription$Builder sagaRunner(org.streamrune.runtime.SagaRunner<?>)
+  public org.streamrune.postgres.HybridEventSubscription$Builder subscriptionName(org.streamrune.core.types.SubscriptionName)
+  public org.streamrune.postgres.HybridEventSubscription$Builder tracing(org.streamrune.core.tracing.StreamRuneTracing)
+
+public final class org.streamrune.postgres.JdbcProjectionRepository implements org.streamrune.core.projection.ProjectionRepository, org.streamrune.core.projection.AtomicBatchProcessor
+  public <T> java.util.List<T> findAll(org.streamrune.core.types.ProjectionName, java.lang.Class<T>)
+  public <T> java.util.Optional<T> findById(org.streamrune.core.types.ProjectionName, java.lang.String, java.lang.Class<T>)
+  public <T> java.util.Optional<org.streamrune.core.Versioned<T>> findById(org.streamrune.core.types.ProjectionName, java.lang.String, java.lang.Class<T>, org.streamrune.core.LockMode)
+  public <T> org.streamrune.core.Page<T> findAll(org.streamrune.core.types.ProjectionName, java.lang.Class<T>, org.streamrune.core.PageRequest)
+  public <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T)
+  public <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T, long)
+  public <init>(javax.sql.DataSource)
+  public <init>(javax.sql.DataSource, com.fasterxml.jackson.databind.ObjectMapper)
+  public boolean serializesReplay()
+  public boolean supportsFencing()
+  public java.lang.Object writeTargetIdentity()
+  public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine)
+  public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.StreamRuneMetrics)
+  public void checkProjectionName(org.streamrune.core.types.ProjectionName)
+  public void delete(org.streamrune.core.types.ProjectionName, java.lang.String)
+  public void executeAtomically(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.GlobalOffset, long, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater, org.streamrune.core.projection.OffsetStore)
+  public void executeReplay(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater)
+  public void prepareReadModel(org.streamrune.core.types.ProjectionName)
+  public void resetOffset(org.streamrune.core.types.ProjectionName)
+  public void stampFencingEpoch(org.streamrune.core.types.ProjectionName, long)
+
+public static final class org.streamrune.postgres.JdbcProjectionRepository$JdbcWriteTarget
+  public boolean equals(java.lang.Object)
+  public com.fasterxml.jackson.databind.ObjectMapper objectMapper()
+  public int hashCode()
+  public java.lang.String toString()
+  public javax.sql.DataSource dataSource()
+
+public final class org.streamrune.postgres.LeaseBasedLeadership implements org.streamrune.core.subscription.SubscriptionLeadership
+  public <init>(javax.sql.DataSource, java.time.Duration)
+  public java.util.Optional<org.streamrune.core.subscription.SubscriptionLeadership$Lease> current(org.streamrune.core.types.SubscriptionName)
+  public java.util.Optional<org.streamrune.core.subscription.SubscriptionLeadership$Lease> tryAcquire(org.streamrune.core.types.SubscriptionName)
+  public void close()
+  public void resign(org.streamrune.core.types.SubscriptionName)
+
+public interface org.streamrune.postgres.ListenDataSource extends javax.sql.DataSource, java.lang.AutoCloseable
+  public abstract void close()
+
+public final class org.streamrune.postgres.PgAdvisoryLocker implements org.streamrune.core.AggregateLocker, java.lang.AutoCloseable
+  public <init>(javax.sql.DataSource)
+  public java.lang.AutoCloseable acquireLock(org.streamrune.core.types.StreamId, java.time.Duration)
+  public org.streamrune.postgres.PgAdvisoryLocker traced(org.streamrune.core.tracing.StreamRuneTracing)
+  public static org.streamrune.postgres.PgAdvisoryLocker withDedicatedPool(java.lang.String, java.lang.String, java.lang.String, int)
+  public static org.streamrune.postgres.PgAdvisoryLocker withDedicatedPool(java.lang.String, java.lang.String, java.lang.String, int, com.zaxxer.hikari.metrics.MetricsTrackerFactory)
+  public static org.streamrune.postgres.PgAdvisoryLocker withDedicatedPool(javax.sql.DataSource)
+  public void close()
+
+public final class org.streamrune.postgres.PgNotificationListener implements java.lang.AutoCloseable
+  public <init>(javax.sql.DataSource, java.lang.Runnable)
+  public <init>(javax.sql.DataSource, java.lang.Runnable, java.lang.String)
+  public <init>(javax.sql.DataSource, java.lang.Runnable, java.lang.String, int, org.streamrune.core.StreamRuneMetrics)
+  public boolean isListening()
+  public boolean isRunning()
+  public static final int UNBOUNDED_RECONNECTS = -1
+  public static org.streamrune.postgres.PgNotificationListener$Builder builder()
+  public void close()
+  public void start()
+
+public static final class org.streamrune.postgres.PgNotificationListener$Builder
+  public <init>()
+  public org.streamrune.postgres.PgNotificationListener build()
+  public org.streamrune.postgres.PgNotificationListener$Builder channel(java.lang.String)
+  public org.streamrune.postgres.PgNotificationListener$Builder dataSource(javax.sql.DataSource)
+  public org.streamrune.postgres.PgNotificationListener$Builder maxReconnectAttempts(int)
+  public org.streamrune.postgres.PgNotificationListener$Builder metrics(org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.postgres.PgNotificationListener$Builder onNotification(java.lang.Runnable)
+
+public final class org.streamrune.postgres.PostgresAuditStore implements org.streamrune.core.audit.AuditStore
+  public <init>(javax.sql.DataSource)
+  public void save(org.streamrune.core.audit.AuditEntry)
+
+public final class org.streamrune.postgres.PostgresCommandAuditQuery implements org.streamrune.core.audit.CommandAuditQuery
+  public <init>(javax.sql.DataSource)
+  public java.util.Optional<org.streamrune.core.audit.AuditEntry> findByCommandId(org.streamrune.core.types.CommandId)
+  public org.streamrune.core.Page<org.streamrune.core.audit.AuditEntry> findByCommandType(java.lang.String, java.time.Instant, java.time.Instant, org.streamrune.core.PageRequest)
+  public org.streamrune.core.Page<org.streamrune.core.audit.AuditEntry> findByOutcome(org.streamrune.core.audit.AuditOutcome, java.time.Instant, java.time.Instant, org.streamrune.core.PageRequest)
+  public org.streamrune.core.Page<org.streamrune.core.audit.AuditEntry> findByUserId(org.streamrune.core.types.UserId, java.time.Instant, java.time.Instant, org.streamrune.core.PageRequest)
+
+public final class org.streamrune.postgres.PostgresCommandInbox implements org.streamrune.core.CommandInbox
+  public <init>(javax.sql.DataSource)
+  public boolean tryClaim(org.streamrune.core.types.IdempotencyKey, java.lang.String, org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, java.sql.Connection) throws java.sql.SQLException
+  public int deleteProcessedBefore(java.time.Instant)
+  public java.util.Optional<org.streamrune.core.CommandInbox$InboxResult> find(org.streamrune.core.types.IdempotencyKey)
+  public void backfillOffsets(org.streamrune.core.types.IdempotencyKey, java.util.List<org.streamrune.core.types.GlobalOffset>, java.sql.Connection) throws java.sql.SQLException
+
+public final class org.streamrune.postgres.PostgresComplianceReportQuery implements org.streamrune.core.audit.ComplianceReportQuery
+  public <init>(javax.sql.DataSource)
+  public org.streamrune.core.audit.ComplianceReport generate(java.time.Instant, java.time.Instant)
+  public org.streamrune.core.audit.ComplianceReport generateForUser(org.streamrune.core.types.UserId, java.time.Instant, java.time.Instant)
+
+public final class org.streamrune.postgres.PostgresDeadLetterQueue implements org.streamrune.core.DeadLetterQueue
+  public <init>(javax.sql.DataSource)
+  public int deleteOlderThan(java.time.Instant)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> findByIdempotencyKey(org.streamrune.core.types.IdempotencyKey)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> read(int)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> readRetryable(int, int, boolean, java.time.Instant)
+  public java.util.Optional<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> find(org.streamrune.core.types.CommandId)
+  public long countAwaitingOperator(int, boolean, java.time.Instant)
+  public long countPending()
+  public void discard(org.streamrune.core.types.CommandId)
+  public void publish(org.streamrune.core.DeadLetterQueue$DeadLetterPublishRequest)
+  public void updateAttempts(org.streamrune.core.types.CommandId, int, java.time.Instant)
+
+public final class org.streamrune.postgres.PostgresEventAuditQuery implements org.streamrune.core.audit.EventAuditQuery
+  public <init>(javax.sql.DataSource)
+  public java.util.List<org.streamrune.core.audit.EventAuditEntry> findByCausationId(org.streamrune.core.types.CausationId)
+  public java.util.List<org.streamrune.core.audit.EventAuditEntry> findByCommandId(org.streamrune.core.types.CommandId)
+  public java.util.List<org.streamrune.core.audit.EventAuditEntry> findByCorrelationId(org.streamrune.core.types.CorrelationId)
+  public java.util.List<org.streamrune.core.audit.EventAuditEntry> findByStreamId(org.streamrune.core.types.StreamId, java.time.Instant, java.time.Instant)
+  public java.util.List<org.streamrune.core.audit.EventAuditEntry> findByUserId(org.streamrune.core.types.UserId, java.time.Instant, java.time.Instant)
+  public java.util.List<org.streamrune.core.audit.EventAuditEntry> traceFullCausationChain(org.streamrune.core.types.EventId)
+
+public final class org.streamrune.postgres.PostgresEventAuditStore implements org.streamrune.core.audit.EventAuditStore
+  public <init>(javax.sql.DataSource)
+  public void save(org.streamrune.core.audit.EventAuditEntry)
+  public void saveAll(java.util.List<org.streamrune.core.audit.EventAuditEntry>)
+
+public final class org.streamrune.postgres.PostgresEventStore implements org.streamrune.core.EventStore
+  public boolean saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int, long)
+  public java.lang.Object sagaFenceStorageIdentity()
+  public java.util.List<org.streamrune.core.EventEnvelope> readGlobalStream(org.streamrune.core.types.GlobalOffset, int)
+  public java.util.List<org.streamrune.core.EventEnvelope> readStream(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, int)
+  public org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId)
+  public org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId, int)
+  public org.streamrune.core.EventStore$AppendResult append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version)
+  public org.streamrune.core.EventStore$AppendResult append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, java.util.List<org.streamrune.core.outbox.OutboxEntry>)
+  public org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String)
+  public org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String, org.streamrune.core.saga.SagaOrigin)
+  public org.streamrune.core.types.GlobalOffset lastGlobalOffset()
+  public static org.streamrune.postgres.PostgresEventStore create(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry, org.streamrune.core.crypto.CryptoEngine, java.util.List<org.streamrune.core.upcasting.EventUpcaster>)
+  public static org.streamrune.postgres.PostgresEventStore create(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry, org.streamrune.core.crypto.CryptoEngine, java.util.List<org.streamrune.core.upcasting.EventUpcaster>, org.streamrune.core.StreamRuneMetrics)
+  public static org.streamrune.postgres.PostgresEventStore$Builder builder()
+
+public static final class org.streamrune.postgres.PostgresEventStore$Builder
+  public <init>()
+  public org.streamrune.postgres.PostgresEventStore build()
+  public org.streamrune.postgres.PostgresEventStore$Builder commandInbox(org.streamrune.postgres.PostgresCommandInbox)
+  public org.streamrune.postgres.PostgresEventStore$Builder cryptoEngine(org.streamrune.core.crypto.CryptoEngine)
+  public org.streamrune.postgres.PostgresEventStore$Builder dataSource(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresEventStore$Builder eventAuditStore(org.streamrune.postgres.PostgresEventAuditStore)
+  public org.streamrune.postgres.PostgresEventStore$Builder metrics(org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.postgres.PostgresEventStore$Builder migrations(java.util.List<org.streamrune.core.SnapshotMigration>)
+  public org.streamrune.postgres.PostgresEventStore$Builder outboxEventMapper(org.streamrune.core.outbox.OutboxEventMapper)
+  public org.streamrune.postgres.PostgresEventStore$Builder outboxStore(org.streamrune.postgres.PostgresOutboxStore)
+  public org.streamrune.postgres.PostgresEventStore$Builder statementTimeout(java.time.Duration)
+  public org.streamrune.postgres.PostgresEventStore$Builder tracing(org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.postgres.PostgresEventStore$Builder typeRegistry(org.streamrune.core.EventTypeRegistry)
+  public org.streamrune.postgres.PostgresEventStore$Builder upcasters(java.util.List<org.streamrune.core.upcasting.EventUpcaster>)
+
+public final class org.streamrune.postgres.PostgresEventStoreFactory implements org.streamrune.core.EventStoreFactory
+  public <init>(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry)
+  public org.streamrune.core.EventStore create()
+  public org.streamrune.core.projection.ProjectionRepository createProjectionRepository()
+  public org.streamrune.postgres.PostgresEventStoreFactory autoInitializeSchema(boolean)
+  public org.streamrune.postgres.PostgresEventStoreFactory commandInbox(org.streamrune.postgres.PostgresCommandInbox)
+  public org.streamrune.postgres.PostgresEventStoreFactory cryptoEngine(org.streamrune.core.crypto.CryptoEngine)
+  public org.streamrune.postgres.PostgresEventStoreFactory eventAuditStore(org.streamrune.postgres.PostgresEventAuditStore)
+  public org.streamrune.postgres.PostgresEventStoreFactory initializeSchema()
+  public org.streamrune.postgres.PostgresEventStoreFactory metrics(org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.postgres.PostgresEventStoreFactory outboxEventMapper(org.streamrune.core.outbox.OutboxEventMapper)
+  public org.streamrune.postgres.PostgresEventStoreFactory outboxStore(org.streamrune.postgres.PostgresOutboxStore)
+  public org.streamrune.postgres.PostgresEventStoreFactory snapshotMigrations(java.util.List<org.streamrune.core.SnapshotMigration>)
+  public org.streamrune.postgres.PostgresEventStoreFactory statementTimeout(java.time.Duration)
+  public org.streamrune.postgres.PostgresEventStoreFactory tracing(org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.postgres.PostgresEventStoreFactory upcasters(java.util.List<org.streamrune.core.upcasting.EventUpcaster>)
+  public org.streamrune.postgres.PostgresEventStoreFactory validateSchema(boolean)
+
+public final class org.streamrune.postgres.PostgresNotificationSubscription implements org.streamrune.core.subscription.EventSubscription, org.streamrune.runtime.ReadPoisonAware
+  public boolean isRunning()
+  public org.streamrune.runtime.ProjectionReadPoisonException readPoisonError()
+  public static org.streamrune.postgres.ListenDataSource createListenDataSource(javax.sql.DataSource)
+  public static org.streamrune.postgres.PostgresNotificationSubscription$Builder builder(org.streamrune.core.types.SubscriptionName)
+  public void close()
+  public void notifyNewEvents()
+  public void start()
+
+public static final class org.streamrune.postgres.PostgresNotificationSubscription$Builder
+  public org.streamrune.postgres.PostgresNotificationSubscription build()
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder config(org.streamrune.core.subscription.SubscriptionConfig)
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder eventStore(org.streamrune.core.EventStore)
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder fetchSize(int)
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder leadership(org.streamrune.core.subscription.SubscriptionLeadership)
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder lease(org.streamrune.runtime.SubscriptionLease)
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder listenDataSource(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder listener(org.streamrune.core.subscription.EventListener)
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder offsetStore(org.streamrune.core.projection.OffsetStore)
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder readPoisonBound(int)
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder sagaRunner(org.streamrune.runtime.SagaRunner<?>)
+  public org.streamrune.postgres.PostgresNotificationSubscription$Builder tracing(org.streamrune.core.tracing.StreamRuneTracing)
+
+public final class org.streamrune.postgres.PostgresOffsetStore implements org.streamrune.core.projection.OffsetStore
+  public <init>(javax.sql.DataSource)
+  public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName)
+  public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+
+public final class org.streamrune.postgres.PostgresOutboxStore implements org.streamrune.core.outbox.OutboxStore
+  public <init>(javax.sql.DataSource)
+  public <init>(javax.sql.DataSource, java.time.Duration)
+  public <init>(javax.sql.DataSource, java.time.Duration, org.streamrune.core.outbox.OutboxOrderingMode)
+  public boolean markDelivered(org.streamrune.core.outbox.OutboxEntryId, java.lang.String)
+  public boolean markFailed(org.streamrune.core.outbox.OutboxEntryId, int, java.lang.String, java.lang.String)
+  public boolean markRetry(org.streamrune.core.outbox.OutboxEntryId, int, java.lang.String, java.time.Duration, java.lang.String)
+  public boolean resetFailedToPending(org.streamrune.core.outbox.OutboxEntryId)
+  public boolean skipFailed(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String)
+  public int deleteDelivered(java.time.Instant)
+  public int deleteSkipped(java.time.Instant)
+  public int markDeliveredAll(java.util.Collection<org.streamrune.core.outbox.OutboxEntryId>, java.lang.String)
+  public int releaseClaims(java.util.Collection<org.streamrune.core.outbox.OutboxEntry>, java.lang.String)
+  public java.lang.String claimedBy()
+  public java.time.Duration claimLease()
+  public java.util.List<org.streamrune.core.outbox.OutboxEntry> findByStatus(org.streamrune.core.outbox.OutboxStatus, int)
+  public java.util.List<org.streamrune.core.outbox.OutboxEntry> loadPending(int)
+  public java.util.Optional<org.streamrune.core.outbox.OutboxEntry> findById(org.streamrune.core.outbox.OutboxEntryId)
+  public long countByStatus(org.streamrune.core.outbox.OutboxStatus)
+  public org.streamrune.core.outbox.OutboxOrderingMode orderingMode()
+  public org.streamrune.core.outbox.OutboxStore$BlockageSample sampleBlockage()
+  public void delete(org.streamrune.core.outbox.OutboxEntryId)
+  public void save(org.streamrune.core.outbox.OutboxEntry)
+
+public final class org.streamrune.postgres.PostgresProjectionDeadLetterStore implements org.streamrune.core.projection.ProjectionDeadLetterStore
+  public <init>(javax.sql.DataSource)
+  public java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> read(org.streamrune.core.types.ProjectionName, int)
+  public java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> readAll(int)
+  public long countPending()
+  public void discard(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+  public void save(org.streamrune.core.projection.ProjectionDeadLetterEntry)
+
+public final class org.streamrune.postgres.PostgresSagaDeadLetterStore implements org.streamrune.core.saga.SagaDeadLetterStore
+  public <init>(javax.sql.DataSource)
+  public boolean clearShieldIfDrained(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
+  public boolean discard(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset)
+  public int deleteOlderThan(java.time.Instant)
+  public java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findAll(int)
+  public java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findBySaga(org.streamrune.core.saga.SagaId)
+  public java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findNullSagaEntriesByResolvedTarget(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaId)
+  public java.util.Optional<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findNullSagaEntry(org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset)
+  public long countFaultedBacklog()
+  public void establishFirstReplayAnchor(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, java.time.Instant)
+  public void publish(org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry)
+  public void publishShielded(org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry)
+  public void setResolvedTarget(org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, org.streamrune.core.saga.SagaId)
+
+public final class org.streamrune.postgres.PostgresSagaStore implements org.streamrune.core.saga.SagaStore
+  public <S extends org.streamrune.core.saga.SagaState> java.util.Optional<org.streamrune.core.saga.LoadedSaga<S>> load(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, java.lang.Class<S>)
+  public <init>(javax.sql.DataSource, com.fasterxml.jackson.databind.ObjectMapper)
+  public boolean markFaulted(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, long)
+  public java.lang.Object storageIdentity()
+  public java.util.List<org.streamrune.core.saga.SagaId> findByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus, int)
+  public java.util.List<org.streamrune.core.saga.SagaId> findTimedOut(org.streamrune.core.types.SagaType, java.time.Instant, int)
+  public java.util.List<org.streamrune.core.saga.SagaStore$CompensatingSaga> findCompensating(org.streamrune.core.types.SagaType, java.time.Instant, int)
+  public long countByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus)
+  public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine)
+  public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.StreamRuneMetrics)
+  public void applyEvent(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, long, org.streamrune.core.saga.SagaStore$AppliedEvent)
+  public void claimCompensating(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, long, org.streamrune.core.types.EventId)
+  public void create(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean)
+  public void createFaulted(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState)
+  public void createGenesisPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean, org.streamrune.core.types.EventId)
+  public void delete(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
+  public void setDeadLetterPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, boolean)
+  public void update(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, long)
+
+public final class org.streamrune.postgres.PostgresServerVersion
+  public static final int MINIMUM_MAJOR_VERSION = 17
+  public static void requireSupported(javax.sql.DataSource)
+
+public final class org.streamrune.postgres.PostgresSnapshotStorePurger implements org.streamrune.core.gdpr.SnapshotPurger
+  public <init>(javax.sql.DataSource, java.util.function.Function<org.streamrune.core.types.SubjectId, ? extends java.util.Collection<org.streamrune.core.types.StreamId>>)
+  public java.lang.String name()
+  public void purge(org.streamrune.core.types.SubjectId)
+
+public final record org.streamrune.postgres.SchemaIssue
+  public <init>(org.streamrune.postgres.SchemaIssue$Severity, java.lang.String, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String message()
+  public java.lang.String table()
+  public org.streamrune.postgres.SchemaIssue$Severity severity()
+
+public static enum org.streamrune.postgres.SchemaIssue$Severity
+  constants WARNING, ERROR
+  public static final org.streamrune.postgres.SchemaIssue$Severity ERROR
+  public static final org.streamrune.postgres.SchemaIssue$Severity WARNING
+  public static org.streamrune.postgres.SchemaIssue$Severity valueOf(java.lang.String)
+  public static org.streamrune.postgres.SchemaIssue$Severity[] values()
+
+public class org.streamrune.postgres.SchemaValidationException extends java.lang.RuntimeException
+  public <init>(org.streamrune.postgres.SchemaValidationResult)
+  public org.streamrune.postgres.SchemaValidationResult result()
+
+public final record org.streamrune.postgres.SchemaValidationResult
+  public <init>(java.util.List<org.streamrune.postgres.SchemaIssue>)
+  public boolean isValid()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.util.List<org.streamrune.postgres.SchemaIssue> issues()
+
+public final class org.streamrune.postgres.SchemaValidator
+  public static org.streamrune.postgres.SchemaValidationResult validate(javax.sql.DataSource)
+  public static org.streamrune.postgres.SchemaValidationResult validateCryptoTables(javax.sql.DataSource, java.util.Set<java.lang.String>)
+
+public final class org.streamrune.postgres.UnsupportedServerVersionException extends java.lang.RuntimeException
+  public int minimumMajorVersion()
+  public java.lang.String serverVersion()

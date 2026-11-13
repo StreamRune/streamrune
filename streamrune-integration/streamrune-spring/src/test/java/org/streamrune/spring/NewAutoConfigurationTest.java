@@ -163,8 +163,12 @@ class NewAutoConfigurationTest {
             });
   }
 
+  /**
+   * An upcaster bean reaches the store through the event store factory; the integration publishes
+   * no chain bean of its own, whose type is not part of the public API.
+   */
   @Test
-  void eventUpcastersRegisteredWithEventStore() {
+  void eventUpcasterBeanStartsTheContextWithoutAChainBean() {
     runner
         .withBean(
             org.streamrune.core.upcasting.EventUpcaster.class,
@@ -174,6 +178,10 @@ class NewAutoConfigurationTest {
               when(upcaster.currentVersion()).thenReturn(2);
               return upcaster;
             })
-        .run(ctx -> assertThat(ctx).hasBean("upcasterChain"));
+        .run(
+            ctx ->
+                assertThat(ctx)
+                    .hasNotFailed()
+                    .doesNotHaveBean(org.streamrune.core.upcasting.UpcasterChain.class));
   }
 }

@@ -211,6 +211,42 @@ class PostgresEventStoreOutboxIT {
         "build() must throw when outboxStore is set without outboxEventMapper");
   }
 
+  @Test
+  void mapper_that_derives_nothing_writes_only_the_entries_passed_to_append() {
+    var outboxStore = new PostgresOutboxStore(dataSource, Duration.ofMinutes(1));
+    var store =
+        PostgresEventStore.builder()
+            .dataSource(dataSource)
+            .typeRegistry(typeRegistry)
+            .outboxStore(outboxStore)
+            .outboxEventMapper(event -> List.of()) // explicit entries only
+            .build();
+
+    var withEntry = TestStreams.stream("outbox-explicit-" + System.nanoTime());
+    var entry =
+        OutboxEntry.pending(
+            OutboxEntryId.of(IdGenerator.generateEventId().value()),
+            "{\"k\":2}",
+            "Explicit",
+            withEntry);
+    store.append(
+        withEntry,
+        List.of(envelope(withEntry, "MappedEvent", new MappedEvent("explicit"))),
+        Version.initial(),
+        List.of(entry));
+
+    var withoutEntry = TestStreams.stream("outbox-none-" + System.nanoTime());
+    store.append(
+        withoutEntry,
+        List.of(envelope(withoutEntry, "MappedEvent", new MappedEvent("derived?"))),
+        Version.initial());
+
+    var pending = outboxStore.loadPending(10);
+    assertEquals(1, pending.size(), "only the entry passed to append is written, none derived");
+    assertEquals("Explicit", pending.getFirst().payloadType());
+    assertEquals(withEntry, pending.getFirst().streamId());
+  }
+
   // ── (d) mapper throws → append rolls back entirely (no event row, no outbox row) ───────
 
   @Test

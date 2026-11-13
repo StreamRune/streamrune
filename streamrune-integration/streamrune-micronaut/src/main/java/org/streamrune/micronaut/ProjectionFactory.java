@@ -17,6 +17,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.Internal;
 import org.streamrune.core.ProjectionConfig;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
@@ -56,7 +57,7 @@ import org.streamrune.runtime.TracingProjectionDecorator;
  * registration must declare {@code AT_LEAST_ONCE_IDEMPOTENT}.
  *
  * <p>Disabled when {@code streamrune.projections.auto-discovery.enabled=false} (or any other
- * canonical-false spelling — see {@link AutoDiscoveryEnabled}).
+ * canonical-false spelling — see {@code AutoDiscoveryEnabled}).
  */
 @Factory
 @Requires(condition = ProjectionFactory.AutoDiscoveryEnabled.class)
@@ -90,7 +91,7 @@ public class ProjectionFactory {
 
   /**
    * Produces a {@link MultiProjectionRunner} from all enabled CONTINUOUS projections. The bean is
-   * only created when at least one enabled CONTINUOUS projection exists (see {@link
+   * only created when at least one enabled CONTINUOUS projection exists (see {@code
    * HasContinuousProjections}) — Micronaut factory methods must not return {@code null}.
    *
    * <p>The runner is given the {@link AtomicBatchProcessor} bean (e.g. the default {@code
@@ -231,7 +232,7 @@ public class ProjectionFactory {
 
   /**
    * Produces a {@link ScheduledProjectionRunner} from all enabled SCHEDULED projections. The bean
-   * is only created when at least one enabled SCHEDULED projection exists (see {@link
+   * is only created when at least one enabled SCHEDULED projection exists (see {@code
    * HasScheduledProjections}).
    *
    * <p>The processor is chosen by the same rule as {@link #multiProjectionRunner}: the bean for a
@@ -337,7 +338,7 @@ public class ProjectionFactory {
 
   /**
    * Produces an {@link InlineProjectionInterceptor} from all enabled INLINE projections. The bean
-   * is only created when at least one enabled INLINE projection exists (see {@link
+   * is only created when at least one enabled INLINE projection exists (see {@code
    * HasInlineProjections}). Every INLINE projection must declare {@code AT_LEAST_ONCE_IDEMPOTENT};
    * each one is logged once at INFO and recorded on the {@code delivery_mode} gauge when a metrics
    * bean exists.
@@ -441,7 +442,12 @@ public class ProjectionFactory {
    * enabled} flag (see {@link ProjectionModeCondition}, below, and {@code discover()}), which
    * already used it. Absent (or blank) defaults to enabled, matching the old {@code notEquals}
    * behavior for a missing property.
+   *
+   * <p>Public only because Micronaut instantiates it for {@code @Requires(condition = ...)}.
+   *
+   * @hidden
    */
+  @Internal
   public static final class AutoDiscoveryEnabled implements Condition {
     @Override
     public boolean matches(ConditionContext context) {
@@ -456,7 +462,13 @@ public class ProjectionFactory {
     }
   }
 
-  /** Matches when at least one enabled CONTINUOUS projection bean exists. */
+  /**
+   * Matches when at least one enabled CONTINUOUS projection bean exists. Public only because
+   * Micronaut instantiates it for {@code @Requires(condition = ...)}.
+   *
+   * @hidden
+   */
+  @Internal
   public static final class HasContinuousProjections extends ProjectionModeCondition {
     /** Creates the condition. */
     public HasContinuousProjections() {
@@ -469,7 +481,13 @@ public class ProjectionFactory {
     }
   }
 
-  /** Matches when at least one enabled SCHEDULED projection bean exists. */
+  /**
+   * Matches when at least one enabled SCHEDULED projection bean exists. Public only because
+   * Micronaut instantiates it for {@code @Requires(condition = ...)}.
+   *
+   * @hidden
+   */
+  @Internal
   public static final class HasScheduledProjections extends ProjectionModeCondition {
     /** Creates the condition. */
     public HasScheduledProjections() {
@@ -482,7 +500,13 @@ public class ProjectionFactory {
     }
   }
 
-  /** Matches when at least one enabled INLINE projection bean exists. */
+  /**
+   * Matches when at least one enabled INLINE projection bean exists. Public only because Micronaut
+   * instantiates it for {@code @Requires(condition = ...)}.
+   *
+   * @hidden
+   */
+  @Internal
   public static final class HasInlineProjections extends ProjectionModeCondition {
     /** Creates the condition. */
     public HasInlineProjections() {

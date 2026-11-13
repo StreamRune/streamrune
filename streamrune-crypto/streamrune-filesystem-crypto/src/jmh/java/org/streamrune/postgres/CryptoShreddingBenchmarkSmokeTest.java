@@ -1,11 +1,11 @@
-package org.streamrune.crypto.filesystem;
+package org.streamrune.postgres;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.streamrune.crypto.filesystem.CryptoShreddingBenchmark.CryptoState;
+import org.streamrune.postgres.CryptoShreddingBenchmark.CryptoState;
 
 /**
  * Runs every {@link CryptoShreddingBenchmark} method twice against a real {@code @Setup} state,

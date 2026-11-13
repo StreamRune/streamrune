@@ -1,7 +1,5 @@
 package org.streamrune.e2e;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -81,9 +79,6 @@ abstract class E2ETestBase {
         }
       };
 
-  private static final ObjectMapper MAPPER =
-      new ObjectMapper().registerModule(new JavaTimeModule());
-
   @BeforeAll
   static void startContainer() {
     if (!POSTGRES.isRunning()) {
@@ -146,14 +141,13 @@ abstract class E2ETestBase {
    */
   protected static PostgresEventStore eventStore(
       DataSource source, PostgresOutboxStore outboxStore) {
-    return new PostgresEventStore(
-        source,
-        MAPPER,
-        TYPE_REGISTRY,
-        /* upcasterChain= */ org.streamrune.core.upcasting.UpcasterChain.empty(),
-        /* auditStore= */ null,
-        outboxStore,
-        /* outboxEventMapper= */ null);
+    return PostgresEventStore.builder()
+        .dataSource(source)
+        .typeRegistry(TYPE_REGISTRY)
+        .outboxStore(outboxStore)
+        // Derives nothing: the scenarios pass their outbox entries to append(...) themselves.
+        .outboxEventMapper(event -> List.of())
+        .build();
   }
 
   /** A {@link PostgresEventStore} with no outbox store (sufficient for projection scenarios). */

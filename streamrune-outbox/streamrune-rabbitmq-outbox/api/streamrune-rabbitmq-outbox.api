@@ -1,0 +1,23 @@
+# The public API of :streamrune-outbox:streamrune-rabbitmq-outbox. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher implements org.streamrune.core.outbox.OutboxPublisher
+  public java.time.Duration inFlightHorizon()
+  public org.streamrune.core.outbox.OutboxPublisher$BatchResult publishBatch(java.util.List<org.streamrune.core.outbox.OutboxEntry>, java.time.Instant, org.streamrune.core.outbox.OutboxEntrySpans)
+  public org.streamrune.core.outbox.OutboxPublisher$FailureKind classifyFailure(java.lang.Exception)
+  public static final java.time.Duration DEFAULT_PUBLISH_BLOCK_BUDGET
+  public static org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher$Builder builder()
+  public void publish(org.streamrune.core.outbox.OutboxEntry) throws java.lang.Exception
+
+public static final class org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher$Builder
+  public org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher build() throws java.io.IOException
+  public org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher$Builder channel(com.rabbitmq.client.Channel)
+  public org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher$Builder confirmTimeout(java.time.Duration)
+  public org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher$Builder exchange(java.lang.String)
+  public org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher$Builder publishBlockBudget(java.time.Duration)
+  public org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher$Builder routingKey(java.lang.String)
+
+public static final class org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher$ChannelFailureException extends java.io.IOException
+
+public static final class org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher$NotInConfirmModeException extends java.io.IOException
+
+public static final class org.streamrune.outbox.rabbitmq.RabbitMqOutboxPublisher$UnpublishableEntryException extends java.lang.IllegalArgumentException

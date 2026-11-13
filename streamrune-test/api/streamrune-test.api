@@ -1,0 +1,889 @@
+# The public API of :streamrune-test. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public abstract class org.streamrune.test.AtomicBatchProcessorContract
+  protected <init>()
+  protected abstract java.util.Optional<org.streamrune.test.AtomicBatchProcessorContract$ContractView> readFromOutside(org.streamrune.core.types.ProjectionName, java.lang.String)
+  protected abstract org.streamrune.core.projection.AtomicBatchProcessor processor()
+  protected abstract org.streamrune.core.projection.OffsetStore offsetStore()
+  protected abstract org.streamrune.core.projection.ProjectionRepository repositoryOfAnotherStore()
+  protected abstract org.streamrune.core.types.GlobalOffset committedOffset(org.streamrune.core.types.ProjectionName)
+  protected org.streamrune.core.projection.ProjectionRepository repository()
+  protected org.streamrune.core.types.ProjectionName freshName()
+  protected static java.util.List<org.streamrune.core.EventEnvelope> batch(long, long)
+  public void afterCommitRunsAfterTheCommit_andIsDroppedOnRollback()
+  public void batchWaitsForAnOpenReplayOfTheSameProjection() throws java.lang.InterruptedException
+  public void handedRepositoryIsNonNull()
+  public void overlappingBatchIsRejected_andTheReadModelIsNotDoubleApplied()
+  public void replayAppliesItsWrites_andMovesNeitherTheOffsetNorTheEpoch()
+  public void replayDoesNotWaitForAnOpenBatchOfAnotherProjection() throws java.lang.InterruptedException
+  public void replayForAProjectionWithoutACheckpoint_leavesTheCheckpointAtTheStart()
+  public void replayUpdaterExceptionCommitsNothing()
+  public void replayWaitsForAnOpenBatchOfTheSameProjection() throws java.lang.InterruptedException
+  public void staleEpochIsRejectedBeforeTheUpdaterRuns()
+  public void updaterExceptionCommitsNothing_andTheRerunAppliesOnce()
+  public void writeAndCheckpointBecomeVisibleTogether_neverOneWithoutTheOther()
+  public void writesToItself_andNotToAnotherStore()
+  public void writesToStaysTrueThroughAForwardingProxyOnEitherSide()
+
+public static final record org.streamrune.test.AtomicBatchProcessorContract$ContractEvent implements org.streamrune.core.DomainEvent
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String payload()
+
+public static final record org.streamrune.test.AtomicBatchProcessorContract$ContractView
+  public <init>(java.lang.String, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String id()
+  public java.lang.String value()
+
+public abstract class org.streamrune.test.CommandBusProvenanceContract
+  protected abstract org.streamrune.core.CommandBus newBus(org.streamrune.core.EventStore)
+  protected final java.util.List<org.streamrune.core.EventEnvelope> storedEventsOf(java.lang.ScopedValue$Carrier)
+  protected static final org.streamrune.core.saga.SagaOrigin ORIGIN
+  public <init>()
+  public java.util.stream.Stream<org.junit.jupiter.api.DynamicTest> aReservedCorrelationIdThatIsNotTheBoundOrigins_isRefusedBeforeAnythingIsStored()
+  public java.util.stream.Stream<org.junit.jupiter.api.DynamicTest> aReservedCorrelationIdWithoutAnOrigin_isRefusedBeforeAnythingIsStored()
+  public java.util.stream.Stream<org.junit.jupiter.api.DynamicTest> continuing_storesOriginHopAndCausation()
+  public java.util.stream.Stream<org.junit.jupiter.api.DynamicTest> withACauseBound_everyEventCarriesItsOriginAndItsCausationId()
+  public java.util.stream.Stream<org.junit.jupiter.api.DynamicTest> withAnOriginBound_theCorrelationIdIsDerivedFromIt()
+  public java.util.stream.Stream<org.junit.jupiter.api.DynamicTest> withNoCauseBound_noEventCarriesAnOriginOrACausationId()
+  public static final org.streamrune.core.Decider<org.streamrune.test.CommandBusProvenanceContract$Mark, org.streamrune.test.CommandBusProvenanceContract$Marks, org.streamrune.test.CommandBusProvenanceContract$Marked> DECIDER
+  public static final org.streamrune.core.types.AggregateType AGGREGATE_TYPE
+  public static org.streamrune.core.types.AggregateId aggregateIdOf(org.streamrune.test.CommandBusProvenanceContract$Mark)
+  public void aContextBoundToNull_isNoContext()
+  public void aTaskWrappedInsideASagaDispatch_executesItsCommandAsTheSagasWork() throws java.lang.Exception
+  public void continuingAnEventWithAReservedCorrelationIdAndNoOrigin_isRefused()
+
+public static final record org.streamrune.test.CommandBusProvenanceContract$Mark implements org.streamrune.core.Command
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String aggregateId()
+
+public static final record org.streamrune.test.CommandBusProvenanceContract$Marked implements org.streamrune.core.DomainEvent
+  public <init>(java.lang.String, int)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int ordinal()
+  public java.lang.String aggregateId()
+
+public static final record org.streamrune.test.CommandBusProvenanceContract$Marks implements org.streamrune.core.AggregateState
+  public <init>(int)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int count()
+
+public final class org.streamrune.test.DeciderFixture<C extends org.streamrune.core.Command, S extends org.streamrune.core.AggregateState, E extends org.streamrune.core.DomainEvent>
+  public final org.streamrune.test.DeciderFixture<C, S, E>$GivenStage given(E...)
+  public final org.streamrune.test.DeciderFixture<C, S, E>$GivenStage givenEvents(E...)
+  public static <C extends org.streamrune.core.Command, S extends org.streamrune.core.AggregateState, E extends org.streamrune.core.DomainEvent> org.streamrune.test.DeciderFixture<C, S, E> of(org.streamrune.core.Decider<C, S, E>)
+
+public final class org.streamrune.test.DeciderFixture$GivenStage
+  public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage when(C)
+  public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage whenCommand(C)
+
+public final class org.streamrune.test.DeciderFixture$WhenStage
+  public <X extends java.lang.Throwable> org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectException(java.lang.Class<X>)
+  public <X extends java.lang.Throwable> org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectFailedWith(java.lang.Class<X>, java.lang.String)
+  public final org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectEvents(E...)
+  public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectNoEvents()
+  public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectProduced(java.util.function.Consumer<java.util.List<E>>, java.util.function.Consumer<S>)
+  public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectState(java.util.function.Consumer<S>)
+  public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectStateMatches(S)
+
+public final class org.streamrune.test.EventPayloadAssertions
+  public static <E extends org.streamrune.core.DomainEvent> E assertRoundTrips(E)
+  public static <E extends org.streamrune.core.DomainEvent> E assertUpcastBinds(org.streamrune.core.upcasting.EventUpcaster, java.util.Map<java.lang.String, java.lang.Object>, int, java.lang.Class<E>)
+
+public final class org.streamrune.test.EventStoreFixture
+  public org.streamrune.test.EventStoreFixture$GivenStage given()
+  public org.streamrune.test.EventStoreFixture$WhenStage when()
+  public static org.streamrune.core.EventEnvelope event(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.types.EventType, org.streamrune.core.DomainEvent)
+  public static org.streamrune.test.EventStoreFixture store()
+  public static org.streamrune.test.EventStoreFixture store(org.streamrune.core.EventStore)
+
+public final class org.streamrune.test.EventStoreFixture$GivenStage
+  public <init>()
+  public org.streamrune.test.EventStoreFixture$GivenStage append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>)
+  public org.streamrune.test.EventStoreFixture$WhenStage when()
+
+public final class org.streamrune.test.EventStoreFixture$ThenStage
+  public org.streamrune.core.AggregateHistory loadedHistory()
+  public org.streamrune.core.EventStore getEventStore()
+  public org.streamrune.test.EventStoreFixture$ThenStage eventsPersisted()
+  public org.streamrune.test.EventStoreFixture$ThenStage expectEventCount(org.streamrune.core.types.StreamId, int)
+  public org.streamrune.test.EventStoreFixture$ThenStage expectLoadedVersion(long)
+  public org.streamrune.test.EventStoreFixture$ThenStage expectOptimisticLockException()
+
+public final class org.streamrune.test.EventStoreFixture$WhenStage
+  public <init>()
+  public org.streamrune.test.EventStoreFixture$ThenStage append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version)
+  public org.streamrune.test.EventStoreFixture$ThenStage load(org.streamrune.core.types.StreamId)
+
+public final class org.streamrune.test.EventStreamFixtures
+  public static java.util.List<org.streamrune.test.EventStreamFixtures$StoredEvent> read(java.nio.file.Path) throws java.io.IOException
+  public static void appendTo(org.streamrune.test.InMemoryEventStore, java.util.List<org.streamrune.test.EventStreamFixtures$StoredEvent>)
+  public static void write(org.streamrune.test.InMemoryEventStore, java.nio.file.Path) throws java.io.IOException
+
+public static final record org.streamrune.test.EventStreamFixtures$StoredEvent
+  public <init>(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.types.EventType, int, com.fasterxml.jackson.databind.JsonNode, org.streamrune.core.EventMetadata)
+  public com.fasterxml.jackson.databind.JsonNode payload()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int schemaVersion()
+  public org.streamrune.core.EventMetadata metadata()
+  public org.streamrune.core.types.EventType eventType()
+  public org.streamrune.core.types.StreamId streamId()
+  public org.streamrune.core.types.Version version()
+
+public final class org.streamrune.test.FaultSchedule
+  public int calls()
+  public int calls(java.lang.String)
+  public org.streamrune.test.FaultSchedule crashAfter(java.lang.String)
+  public org.streamrune.test.FaultSchedule failAlways(java.lang.String)
+  public org.streamrune.test.FaultSchedule failAt(java.lang.String, int)
+  public org.streamrune.test.FaultSchedule failOnce(java.lang.String)
+  public org.streamrune.test.FaultSchedule throwing(java.util.function.Supplier<? extends java.lang.RuntimeException>)
+  public static org.streamrune.test.FaultSchedule none()
+  public void reset()
+
+public class org.streamrune.test.ForwardingCommandBus implements org.streamrune.core.CommandBus
+  protected final org.streamrune.core.CommandBus delegate
+  protected final org.streamrune.test.FaultSchedule schedule
+  public <C extends org.streamrune.core.Command> org.streamrune.core.CommandBus$CommandResult execute(C)
+  public <C extends org.streamrune.core.Command> org.streamrune.core.CommandBus$CommandResult execute(C, org.streamrune.core.types.IdempotencyKey)
+  public <init>(org.streamrune.core.CommandBus)
+  public <init>(org.streamrune.core.CommandBus, org.streamrune.test.FaultSchedule)
+  public boolean supportsIdempotentExecution()
+  public java.lang.Object sagaFenceStorageIdentity()
+
+public class org.streamrune.test.ForwardingDeadLetterQueue implements org.streamrune.core.DeadLetterQueue
+  protected final org.streamrune.core.DeadLetterQueue delegate
+  protected final org.streamrune.test.FaultSchedule schedule
+  public <init>(org.streamrune.core.DeadLetterQueue)
+  public <init>(org.streamrune.core.DeadLetterQueue, org.streamrune.test.FaultSchedule)
+  public int deleteOlderThan(java.time.Instant)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> findByIdempotencyKey(org.streamrune.core.types.IdempotencyKey)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> read(int)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> readRetryable(int, int, boolean, java.time.Instant)
+  public java.util.Optional<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> find(org.streamrune.core.types.CommandId)
+  public long countAwaitingOperator(int, boolean, java.time.Instant)
+  public long countPending()
+  public void discard(org.streamrune.core.types.CommandId)
+  public void publish(org.streamrune.core.DeadLetterQueue$DeadLetterPublishRequest)
+  public void updateAttempts(org.streamrune.core.types.CommandId, int, java.time.Instant)
+
+public class org.streamrune.test.ForwardingEventStore implements org.streamrune.core.EventStore
+  protected final org.streamrune.core.EventStore delegate
+  protected final org.streamrune.test.FaultSchedule schedule
+  public <init>(org.streamrune.core.EventStore)
+  public <init>(org.streamrune.core.EventStore, org.streamrune.test.FaultSchedule)
+  public boolean saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int, long)
+  public java.lang.Object sagaFenceStorageIdentity()
+  public java.util.List<org.streamrune.core.EventEnvelope> readGlobalStream(org.streamrune.core.types.GlobalOffset, int)
+  public java.util.List<org.streamrune.core.EventEnvelope> readStream(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, int)
+  public org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId)
+  public org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId, int)
+  public org.streamrune.core.EventStore$AppendResult append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version)
+  public org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String)
+  public org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String, org.streamrune.core.saga.SagaOrigin)
+  public org.streamrune.core.types.GlobalOffset lastGlobalOffset()
+  public void saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState)
+  public void saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int)
+
+public class org.streamrune.test.ForwardingOffsetStore implements org.streamrune.core.projection.OffsetStore
+  protected final org.streamrune.core.projection.OffsetStore delegate
+  protected final org.streamrune.test.FaultSchedule schedule
+  public <init>(org.streamrune.core.projection.OffsetStore)
+  public <init>(org.streamrune.core.projection.OffsetStore, org.streamrune.test.FaultSchedule)
+  public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName)
+  public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+
+public class org.streamrune.test.ForwardingOutboxStore implements org.streamrune.core.outbox.OutboxStore
+  protected final org.streamrune.core.outbox.OutboxStore delegate
+  protected final org.streamrune.test.FaultSchedule schedule
+  public <init>(org.streamrune.core.outbox.OutboxStore)
+  public <init>(org.streamrune.core.outbox.OutboxStore, org.streamrune.test.FaultSchedule)
+  public boolean markDelivered(org.streamrune.core.outbox.OutboxEntryId, java.lang.String)
+  public boolean markFailed(org.streamrune.core.outbox.OutboxEntryId, int, java.lang.String, java.lang.String)
+  public boolean markRetry(org.streamrune.core.outbox.OutboxEntryId, int, java.lang.String, java.time.Duration, java.lang.String)
+  public boolean resetFailedToPending(org.streamrune.core.outbox.OutboxEntryId)
+  public boolean skipFailed(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String)
+  public int deleteDelivered(java.time.Instant)
+  public int deleteSkipped(java.time.Instant)
+  public int markDeliveredAll(java.util.Collection<org.streamrune.core.outbox.OutboxEntryId>, java.lang.String)
+  public int releaseClaims(java.util.Collection<org.streamrune.core.outbox.OutboxEntry>, java.lang.String)
+  public java.lang.String claimedBy()
+  public java.time.Duration claimLease()
+  public java.util.List<org.streamrune.core.outbox.OutboxEntry> findByStatus(org.streamrune.core.outbox.OutboxStatus, int)
+  public java.util.List<org.streamrune.core.outbox.OutboxEntry> loadPending(int)
+  public java.util.Optional<org.streamrune.core.outbox.OutboxEntry> findById(org.streamrune.core.outbox.OutboxEntryId)
+  public long countByStatus(org.streamrune.core.outbox.OutboxStatus)
+  public org.streamrune.core.outbox.OutboxOrderingMode orderingMode()
+  public org.streamrune.core.outbox.OutboxStore$BlockageSample sampleBlockage()
+  public void delete(org.streamrune.core.outbox.OutboxEntryId)
+  public void save(org.streamrune.core.outbox.OutboxEntry)
+
+public class org.streamrune.test.ForwardingProjectionDeadLetterStore implements org.streamrune.core.projection.ProjectionDeadLetterStore
+  protected final org.streamrune.core.projection.ProjectionDeadLetterStore delegate
+  protected final org.streamrune.test.FaultSchedule schedule
+  public <init>(org.streamrune.core.projection.ProjectionDeadLetterStore)
+  public <init>(org.streamrune.core.projection.ProjectionDeadLetterStore, org.streamrune.test.FaultSchedule)
+  public java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> read(org.streamrune.core.types.ProjectionName, int)
+  public java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> readAll(int)
+  public long countPending()
+  public void discard(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+  public void save(org.streamrune.core.projection.ProjectionDeadLetterEntry)
+
+public class org.streamrune.test.ForwardingSagaDeadLetterStore implements org.streamrune.core.saga.SagaDeadLetterStore
+  protected final org.streamrune.core.saga.SagaDeadLetterStore delegate
+  protected final org.streamrune.test.FaultSchedule schedule
+  public <init>(org.streamrune.core.saga.SagaDeadLetterStore)
+  public <init>(org.streamrune.core.saga.SagaDeadLetterStore, org.streamrune.test.FaultSchedule)
+  public boolean clearShieldIfDrained(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
+  public boolean discard(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset)
+  public int deleteOlderThan(java.time.Instant)
+  public java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findAll(int)
+  public java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findBySaga(org.streamrune.core.saga.SagaId)
+  public java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findNullSagaEntriesByResolvedTarget(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaId)
+  public java.util.Optional<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findNullSagaEntry(org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset)
+  public long countFaultedBacklog()
+  public void establishFirstReplayAnchor(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, java.time.Instant)
+  public void publish(org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry)
+  public void publishShielded(org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry)
+  public void setResolvedTarget(org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, org.streamrune.core.saga.SagaId)
+
+public class org.streamrune.test.ForwardingSagaStore implements org.streamrune.core.saga.SagaStore
+  protected final org.streamrune.core.saga.SagaStore delegate
+  protected final org.streamrune.test.FaultSchedule schedule
+  public <S extends org.streamrune.core.saga.SagaState> java.util.Optional<org.streamrune.core.saga.LoadedSaga<S>> load(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, java.lang.Class<S>)
+  public <init>(org.streamrune.core.saga.SagaStore)
+  public <init>(org.streamrune.core.saga.SagaStore, org.streamrune.test.FaultSchedule)
+  public boolean markFaulted(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, long)
+  public java.lang.Object storageIdentity()
+  public java.util.List<org.streamrune.core.saga.SagaId> findByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus, int)
+  public java.util.List<org.streamrune.core.saga.SagaId> findTimedOut(org.streamrune.core.types.SagaType, java.time.Instant, int)
+  public java.util.List<org.streamrune.core.saga.SagaStore$CompensatingSaga> findCompensating(org.streamrune.core.types.SagaType, java.time.Instant, int)
+  public long countByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus)
+  public void applyEvent(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, long, org.streamrune.core.saga.SagaStore$AppliedEvent)
+  public void claimCompensating(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, long)
+  public void claimCompensating(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, long, org.streamrune.core.types.EventId)
+  public void create(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus)
+  public void create(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean)
+  public void createFaulted(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState)
+  public void createGenesisPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean)
+  public void createGenesisPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean, org.streamrune.core.types.EventId)
+  public void delete(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
+  public void setDeadLetterPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, boolean)
+  public void update(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, long)
+
+public final class org.streamrune.test.InMemoryCommandBus implements org.streamrune.core.CommandBus, java.lang.AutoCloseable
+  public <C extends org.streamrune.core.Command, S extends org.streamrune.core.AggregateState, E extends org.streamrune.core.DomainEvent> org.streamrune.test.InMemoryCommandBus register(org.streamrune.test.InMemoryCommandBus$DeciderRegistration<C, S, E>)
+  public <C extends org.streamrune.core.Command> org.streamrune.core.CommandBus$CommandResult execute(C)
+  public static org.streamrune.test.InMemoryCommandBus$Builder builder()
+  public void close()
+
+public static final class org.streamrune.test.InMemoryCommandBus$Builder
+  public <C extends org.streamrune.core.Command, S extends org.streamrune.core.AggregateState, E extends org.streamrune.core.DomainEvent> org.streamrune.test.InMemoryCommandBus$Builder register(org.streamrune.test.InMemoryCommandBus$DeciderRegistration<C, S, E>)
+  public org.streamrune.test.InMemoryCommandBus build()
+  public org.streamrune.test.InMemoryCommandBus$Builder eventStore(org.streamrune.core.EventStore)
+
+public static final record org.streamrune.test.InMemoryCommandBus$DeciderRegistration<C extends org.streamrune.core.Command, S extends org.streamrune.core.AggregateState, E extends org.streamrune.core.DomainEvent>
+  public <init>(org.streamrune.core.types.AggregateType, java.lang.Class<C>, java.util.function.Function<C, org.streamrune.core.types.AggregateId>, org.streamrune.core.Decider<C, S, E>)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.Class<C> commandType()
+  public java.util.function.Function<C, org.streamrune.core.types.AggregateId> idExtractor()
+  public org.streamrune.core.Decider<C, S, E> decider()
+  public org.streamrune.core.types.AggregateType aggregateType()
+
+public final class org.streamrune.test.InMemoryCommandInbox implements org.streamrune.core.CommandInbox
+  public <init>()
+  public int deleteProcessedBefore(java.time.Instant)
+  public java.util.Optional<org.streamrune.core.CommandInbox$InboxResult> find(org.streamrune.core.types.IdempotencyKey)
+  public void record(org.streamrune.core.CommandInbox$InboxResult)
+
+public final class org.streamrune.test.InMemoryCryptoEngine implements org.streamrune.core.crypto.CryptoEngine
+  public <init>()
+  public boolean isKeyAvailable(org.streamrune.core.types.SubjectId)
+  public byte[] decrypt(org.streamrune.core.types.SubjectId, byte[])
+  public byte[] encrypt(org.streamrune.core.types.SubjectId, byte[])
+  public void deleteKey(org.streamrune.core.types.SubjectId)
+  public void reinstate(org.streamrune.core.types.SubjectId)
+
+public final class org.streamrune.test.InMemoryDeadLetterQueue implements org.streamrune.core.DeadLetterQueue
+  public <init>()
+  public <init>(java.time.Clock)
+  public int deleteOlderThan(java.time.Instant)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> all()
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> findByIdempotencyKey(org.streamrune.core.types.IdempotencyKey)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> read(int)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> readRetryable(int, int, boolean, java.time.Instant)
+  public long countAwaitingOperator(int, boolean, java.time.Instant)
+  public long countPending()
+  public void discard(org.streamrune.core.types.CommandId)
+  public void publish(org.streamrune.core.DeadLetterQueue$DeadLetterPublishRequest)
+  public void updateAttempts(org.streamrune.core.types.CommandId, int, java.time.Instant)
+
+public final class org.streamrune.test.InMemoryEventStore implements org.streamrune.core.EventStore
+  public <init>()
+  public <init>(com.fasterxml.jackson.databind.ObjectMapper, org.streamrune.core.EventTypeRegistry)
+  public boolean saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int, long)
+  public java.lang.Object sagaFenceStorageIdentity()
+  public java.util.List<org.streamrune.core.EventEnvelope> readGlobalStream(org.streamrune.core.types.GlobalOffset, int)
+  public java.util.List<org.streamrune.core.EventEnvelope> readStream(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, int)
+  public org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId)
+  public org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId, int)
+  public org.streamrune.core.EventStore$AppendResult append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version)
+  public org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String)
+  public org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String, org.streamrune.core.saga.SagaOrigin)
+  public org.streamrune.core.types.GlobalOffset lastGlobalOffset()
+  public org.streamrune.test.InMemoryEventStore withCommandInbox(org.streamrune.test.InMemoryCommandInbox)
+  public org.streamrune.test.InMemoryEventStore withMigrations(java.util.List<org.streamrune.core.SnapshotMigration>)
+  public org.streamrune.test.InMemoryEventStore withSagaStore(org.streamrune.test.InMemorySagaStore)
+  public org.streamrune.test.InMemoryEventStore withTracing(org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.test.InMemoryEventStore withUpcasters(java.util.List<org.streamrune.core.upcasting.EventUpcaster>)
+  public static org.streamrune.test.InMemoryEventStore serializing(org.streamrune.core.EventTypeRegistry, org.streamrune.core.crypto.CryptoEngine)
+  public void addAppendListener(org.streamrune.test.InMemoryEventStore$AppendListener)
+  public void removeAppendListener(org.streamrune.test.InMemoryEventStore$AppendListener)
+
+public static interface org.streamrune.test.InMemoryEventStore$AppendListener
+  public abstract void onAppend(long)
+
+public final class org.streamrune.test.InMemoryEventStoreFactory implements org.streamrune.core.EventStoreFactory
+  public org.streamrune.core.EventStore create()
+  public static org.streamrune.test.InMemoryEventStoreFactory$Builder builder()
+
+public static class org.streamrune.test.InMemoryEventStoreFactory$Builder
+  public <init>()
+  public org.streamrune.test.InMemoryEventStoreFactory build()
+
+public final class org.streamrune.test.InMemoryEventSubscription implements org.streamrune.core.subscription.EventSubscription
+  public <init>(org.streamrune.test.InMemoryEventStore, org.streamrune.core.subscription.EventListener)
+  public <init>(org.streamrune.test.InMemoryEventStore, org.streamrune.core.subscription.EventListener, int)
+  public boolean isRunning()
+  public long deliveryFailureCount()
+  public long droppedNotificationCount()
+  public long lastDeliveredOffset()
+  public void close()
+  public void dropNotifications(boolean)
+  public void poll()
+  public void start()
+
+public final class org.streamrune.test.InMemoryOffsetStore implements org.streamrune.core.projection.OffsetStore
+  public <init>()
+  public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName)
+  public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+
+public final class org.streamrune.test.InMemoryOutboxStore implements org.streamrune.core.outbox.OutboxStore
+  public <init>()
+  public <init>(java.time.Clock)
+  public <init>(java.time.Clock, java.time.Duration)
+  public <init>(java.time.Clock, java.time.Duration, org.streamrune.core.outbox.OutboxOrderingMode)
+  public boolean markDelivered(org.streamrune.core.outbox.OutboxEntryId, java.lang.String)
+  public boolean markFailed(org.streamrune.core.outbox.OutboxEntryId, int, java.lang.String, java.lang.String)
+  public boolean markRetry(org.streamrune.core.outbox.OutboxEntryId, int, java.lang.String, java.time.Duration, java.lang.String)
+  public boolean resetFailedToPending(org.streamrune.core.outbox.OutboxEntryId)
+  public boolean skipFailed(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String)
+  public int deleteDelivered(java.time.Instant)
+  public int deleteSkipped(java.time.Instant)
+  public int releaseClaims(java.util.Collection<org.streamrune.core.outbox.OutboxEntry>, java.lang.String)
+  public java.lang.String claimedBy()
+  public java.time.Duration claimLease()
+  public java.util.List<org.streamrune.core.outbox.OutboxEntry> all()
+  public java.util.List<org.streamrune.core.outbox.OutboxEntry> findByStatus(org.streamrune.core.outbox.OutboxStatus, int)
+  public java.util.List<org.streamrune.core.outbox.OutboxEntry> loadPending(int)
+  public java.util.Optional<org.streamrune.core.outbox.OutboxEntry> findById(org.streamrune.core.outbox.OutboxEntryId)
+  public long countByStatus(org.streamrune.core.outbox.OutboxStatus)
+  public org.streamrune.core.outbox.OutboxOrderingMode orderingMode()
+  public org.streamrune.core.outbox.OutboxStore$BlockageSample sampleBlockage()
+  public org.streamrune.test.InMemoryOutboxStore withOrderingMode(org.streamrune.core.outbox.OutboxOrderingMode)
+  public static final java.time.Duration DEFAULT_CLAIM_LEASE
+  public void delete(org.streamrune.core.outbox.OutboxEntryId)
+  public void save(org.streamrune.core.outbox.OutboxEntry)
+
+public final class org.streamrune.test.InMemoryProjectionDeadLetterStore implements org.streamrune.core.projection.ProjectionDeadLetterStore
+  public <init>()
+  public java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> all()
+  public java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> read(org.streamrune.core.types.ProjectionName, int)
+  public java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> readAll(int)
+  public long countPending()
+  public void discard(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+  public void save(org.streamrune.core.projection.ProjectionDeadLetterEntry)
+
+public final class org.streamrune.test.InMemoryProjectionRepository implements org.streamrune.core.projection.ProjectionRepository, org.streamrune.core.projection.AtomicBatchProcessor, org.streamrune.core.projection.OffsetStore
+  public <T> java.util.List<T> findAll(org.streamrune.core.types.ProjectionName, java.lang.Class<T>)
+  public <T> java.util.Optional<T> findById(org.streamrune.core.types.ProjectionName, java.lang.String, java.lang.Class<T>)
+  public <T> java.util.Optional<org.streamrune.core.Versioned<T>> findById(org.streamrune.core.types.ProjectionName, java.lang.String, java.lang.Class<T>, org.streamrune.core.LockMode)
+  public <T> org.streamrune.core.Page<T> findAll(org.streamrune.core.types.ProjectionName, java.lang.Class<T>, org.streamrune.core.PageRequest)
+  public <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T)
+  public <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T, long)
+  public <init>()
+  public boolean hasReadModels(org.streamrune.core.types.ProjectionName)
+  public boolean serializesReplay()
+  public boolean supportsFencing()
+  public int rowCount(org.streamrune.core.types.ProjectionName)
+  public long stampedEpoch(org.streamrune.core.types.ProjectionName)
+  public org.streamrune.core.types.GlobalOffset committedOffset(org.streamrune.core.types.ProjectionName)
+  public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
+  public void delete(org.streamrune.core.types.ProjectionName, java.lang.String)
+  public void executeAtomically(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.GlobalOffset, long, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater, org.streamrune.core.projection.OffsetStore)
+  public void executeReplay(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater)
+  public void reset(org.streamrune.core.types.ProjectionName)
+  public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+  public void stampFencingEpoch(org.streamrune.core.types.ProjectionName, long)
+
+public final class org.streamrune.test.InMemoryQueryBus implements org.streamrune.core.QueryBus
+  public <Q extends org.streamrune.core.Query<R>, R> void register(java.lang.Class<Q>, org.streamrune.core.QueryHandler<Q, R>)
+  public <R> R dispatch(org.streamrune.core.Query<R>)
+  public static org.streamrune.test.InMemoryQueryBus$Builder builder()
+
+public static final class org.streamrune.test.InMemoryQueryBus$Builder
+  public <Q extends org.streamrune.core.Query<R>, R> org.streamrune.test.InMemoryQueryBus$Builder register(java.lang.Class<Q>, org.streamrune.core.QueryHandler<Q, R>)
+  public org.streamrune.test.InMemoryQueryBus build()
+
+public final class org.streamrune.test.InMemorySagaDeadLetterStore implements org.streamrune.core.saga.SagaDeadLetterStore
+  public <init>(org.streamrune.core.saga.SagaStore)
+  public boolean clearShieldIfDrained(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
+  public boolean discard(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset)
+  public int deleteOlderThan(java.time.Instant)
+  public java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> all()
+  public java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findAll(int)
+  public java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findBySaga(org.streamrune.core.saga.SagaId)
+  public java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findNullSagaEntriesByResolvedTarget(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaId)
+  public long countFaultedBacklog()
+  public void establishFirstReplayAnchor(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, java.time.Instant)
+  public void publish(org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry)
+  public void publishShielded(org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry)
+  public void setResolvedTarget(org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, org.streamrune.core.saga.SagaId)
+
+public final class org.streamrune.test.InMemorySagaStore implements org.streamrune.core.saga.SagaStore
+  public <S extends org.streamrune.core.saga.SagaState> java.util.Optional<org.streamrune.core.saga.LoadedSaga<S>> load(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, java.lang.Class<S>)
+  public <init>()
+  public <init>(java.time.Clock)
+  public boolean markFaulted(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, long)
+  public java.util.List<org.streamrune.core.saga.SagaId> findByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus, int)
+  public java.util.List<org.streamrune.core.saga.SagaId> findTimedOut(org.streamrune.core.types.SagaType, java.time.Instant, int)
+  public java.util.List<org.streamrune.core.saga.SagaStore$CompensatingSaga> findCompensating(org.streamrune.core.types.SagaType, java.time.Instant, int)
+  public java.util.Set<org.streamrune.core.saga.SagaId> all()
+  public long countByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus)
+  public void applyEvent(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, long, org.streamrune.core.saga.SagaStore$AppliedEvent)
+  public void claimCompensating(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, long, org.streamrune.core.types.EventId)
+  public void create(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean)
+  public void createFaulted(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState)
+  public void createGenesisPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean, org.streamrune.core.types.EventId)
+  public void delete(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
+  public void setDeadLetterPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, boolean)
+  public void update(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, long)
+
+public class org.streamrune.test.InjectedFaultException extends java.lang.RuntimeException
+  public <init>(java.lang.String)
+
+public final class org.streamrune.test.MutableClock extends java.time.Clock
+  public java.time.Clock withZone(java.time.ZoneId)
+  public java.time.Instant instant()
+  public java.time.ZoneId getZone()
+  public static org.streamrune.test.MutableClock startingAt(java.time.Instant)
+  public static org.streamrune.test.MutableClock startingAt(java.time.Instant, java.time.ZoneId)
+  public void advance(java.time.Duration)
+  public void setInstant(java.time.Instant)
+
+public final class org.streamrune.test.NativeReflectionTypes
+  public static java.util.Set<java.lang.Class<?>> allFrameworkSerializableTypes()
+  public static java.util.Set<java.lang.Class<?>> expectedNativeReflectionTypes(java.util.Collection<java.lang.Class<?>>)
+  public static java.util.Set<java.lang.Class<?>> jsonValueTypesInCorePackage()
+  public static java.util.Set<java.lang.Class<?>> reachableSerializableTypes(java.util.Collection<java.lang.Class<?>>)
+
+public abstract class org.streamrune.test.OutboxStoreContract
+  protected abstract org.streamrune.core.outbox.OutboxStore newStore(org.streamrune.core.outbox.OutboxOrderingMode)
+  protected abstract org.streamrune.core.outbox.OutboxStore sameDataWithMode(org.streamrune.core.outbox.OutboxStore, org.streamrune.core.outbox.OutboxOrderingMode)
+  protected static final org.streamrune.core.tracing.SpanLink TRACE_LINK
+  protected static final org.streamrune.core.types.StreamId A
+  protected static final org.streamrune.core.types.StreamId A_OTHER_TYPE
+  protected static final org.streamrune.core.types.StreamId B
+  protected static java.util.List<java.lang.String> claimIds(org.streamrune.core.outbox.OutboxStore)
+  protected static org.streamrune.core.outbox.OutboxEntry pending(java.lang.String, org.streamrune.core.types.StreamId)
+  protected static org.streamrune.core.outbox.OutboxEntry pendingFree(java.lang.String)
+  protected static org.streamrune.core.outbox.OutboxStatus statusOf(org.streamrune.core.outbox.OutboxStore, java.lang.String)
+  protected static void failHead(org.streamrune.core.outbox.OutboxStore, java.lang.String)
+  public <init>()
+  public void claimReturnsOnlyTheLowestSeqHeadOfEachAggregate_availabilityFirst_freeNullRows()
+  public void claimReturnsOnlyTheLowestSeqHeadOfEachAggregate_strict()
+  public void delete_nonFailedRow_removesIt_andAbsentId_isNoop_bothModes()
+  public void delete_refusesFailedRow_namesSkipAndReplay_bothModes()
+  public void failedHead_blocksSuccessors_untilResolved_strict()
+  public void failedHead_doesNotGateSuccessors_availabilityFirst_gapAndReorderUntilReplay()
+  public void failedRowBelowAPendingRow_blocksAfterSwitchToStrict_andIsReleasedBySkip()
+  public void findById_readOnly_bothModes()
+  public void findByStatus_enumeratesSkipped_oldestFirst_bothModes()
+  public void nullAggregateLegacyRows_stillDrain_afterSwitchToStrict()
+  public void onceTheHeadIsEligibleAgain_itIsClaimedBeforeItsSuccessor_bothModes()
+  public void replay_onNonFailed_returnsFalse_bothModes()
+  public void replay_returnsHeadToPending_atOriginalPosition_deliveredBeforeSuccessors_strict()
+  public void retention_neverDeletesFailed_deletesAgedSkippedOnly_bothModes()
+  public void sampleBlockage_countsDistinctNonNullFailedAggregates_ageCoversEveryFailedRow()
+  public void sampleBlockage_countsTwoTypesSharingAnIdValueAsTwoStreams()
+  public void save_nullAggregateId_isAccepted_availabilityFirst()
+  public void save_nullAggregateId_isRejected_strict_nothingInserted()
+  public void skipThenReplay_andReplayThenSkip_exactlyOneResolutionStands_bothModes()
+  public void skip_onNonFailed_returnsFalse_bothModes()
+  public void skip_onNonHeadFailedRow_recordsAudit_releasesNothing_legacyAvailabilityFirstData()
+  public void skip_recordsAudit_releasesNothing_availabilityFirst()
+  public void skip_releasesSuccessors_andRecordsAudit_strict()
+  public void traceLink_isReadBackByEveryLookup_andKeptByEveryTransition_bothModes()
+  public void traceLink_withIdsThatAreNotW3cIds_isNotStored_andTheEntryIsStillDelivered_bothModes()
+  public void transientFailureOnTheHeadHoldsTheWholeAggregate_bothModes()
+  public void twoStreamsSharingAnIdValue_haveIndependentHeads_strict()
+
+public final class org.streamrune.test.ProjectionFixture<S>
+  public org.streamrune.test.ProjectionFixture<S>$GivenStage givenEvents(java.util.List<org.streamrune.core.EventEnvelope>)
+  public org.streamrune.test.ProjectionFixture<S>$WhenStage when()
+  public static <S> org.streamrune.test.ProjectionFixture<S> given(org.streamrune.core.projection.Projection)
+  public static <S> org.streamrune.test.ProjectionFixture<S> given(org.streamrune.core.projection.Projection, java.util.function.Supplier<S>)
+  public static org.streamrune.core.EventEnvelope event(org.streamrune.core.types.StreamId, org.streamrune.core.types.EventType, org.streamrune.core.DomainEvent)
+  public static org.streamrune.core.EventEnvelope event(org.streamrune.core.types.StreamId, org.streamrune.core.types.EventType, org.streamrune.core.DomainEvent, org.streamrune.core.types.Version)
+
+public final class org.streamrune.test.ProjectionFixture$GivenStage
+  public <init>()
+  public org.streamrune.test.ProjectionFixture<S>$WhenStage when()
+
+public final class org.streamrune.test.ProjectionFixture$ThenStage
+  public <init>()
+  public java.util.List<org.streamrune.core.EventEnvelope> getEvents()
+  public org.streamrune.test.ProjectionFixture<S>$ThenStage expectEventCount(int)
+  public org.streamrune.test.ProjectionFixture<S>$ThenStage state(java.util.function.Consumer<S>)
+
+public final class org.streamrune.test.ProjectionFixture$WhenStage
+  public <init>()
+  public org.streamrune.test.ProjectionFixture<S>$ThenStage receive(java.util.List<org.streamrune.core.EventEnvelope>)
+  public org.streamrune.test.ProjectionFixture<S>$ThenStage receive(org.streamrune.core.EventEnvelope)
+  public org.streamrune.test.ProjectionFixture<S>$ThenStage receive(org.streamrune.core.EventEnvelope...)
+
+public class org.streamrune.test.RecordingStreamRuneMetrics implements org.streamrune.core.StreamRuneMetrics
+  public <init>()
+  public java.lang.String toString()
+  public java.util.List<org.streamrune.test.RecordingStreamRuneMetrics$Sample> samples()
+  public java.util.List<org.streamrune.test.RecordingStreamRuneMetrics$Sample> samples(java.lang.String)
+  public java.util.OptionalLong lastGauge(java.lang.String, java.lang.String...)
+  public long count(java.lang.String, java.lang.String...)
+  public long total(java.lang.String, java.lang.String...)
+  public void assertIncremented(java.lang.String, java.lang.String...)
+  public void recordCommandAsyncRejected()
+  public void recordCommandDispatched()
+  public void recordCommandDispatched(java.lang.String)
+  public void recordCommandDuration(java.lang.String, long)
+  public void recordCommandDuration(long)
+  public void recordCommandFailed()
+  public void recordCommandFailed(java.lang.String)
+  public void recordCommandRetried(java.lang.String)
+  public void recordCommandShortCircuited(java.lang.String)
+  public void recordCommandSucceeded()
+  public void recordCommandSucceeded(java.lang.String)
+  public void recordDeadLetterExhausted(java.lang.String)
+  public void recordDeadLetterPublished(java.lang.String)
+  public void recordDeadLetterReaderBehind(java.lang.String)
+  public void recordDeadLetterStaleReplayBlocked(java.lang.String)
+  public void recordDeadLetterSwept(long)
+  public void recordDecryptRetried(java.lang.String)
+  public void recordDlqAwaitingOperator(long)
+  public void recordDlqBacklog(long)
+  public void recordDlqRetryDegradation(long)
+  public void recordEncryptSelfCheckFailed()
+  public void recordEventAppendDuration(long)
+  public void recordEventAppended()
+  public void recordEventAppended(java.lang.String)
+  public void recordEventReplayed()
+  public void recordGdprPurgeFailed(java.lang.String)
+  public void recordInboxReplayHit(java.lang.String)
+  public void recordInboxSwept(long)
+  public void recordListenerReconnect(java.lang.String)
+  public void recordLockWait(long)
+  public void recordOutboxBacklog(long)
+  public void recordOutboxBlockageAge(long)
+  public void recordOutboxBlockedAggregates(long)
+  public void recordOutboxDeliveryFailed()
+  public void recordOutboxInFlight(long)
+  public void recordOutboxInFlightHorizonViolation()
+  public void recordOutboxRelayDegradation(long)
+  public void recordOutboxReplayed(long)
+  public void recordOutboxSkipped()
+  public void recordOutboxSkippedSwept(long)
+  public void recordOutboxSwept(long)
+  public void recordProjectionDeadLetterBacklog(long)
+  public void recordProjectionDeadLettered()
+  public void recordProjectionDeadLettered(org.streamrune.core.types.ProjectionName)
+  public void recordProjectionDeliveryMode(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public void recordProjectionDuration(long)
+  public void recordProjectionDuration(org.streamrune.core.types.ProjectionName, long)
+  public void recordProjectionFailed()
+  public void recordProjectionFailed(org.streamrune.core.types.ProjectionName)
+  public void recordProjectionProcessed()
+  public void recordProjectionProcessed(org.streamrune.core.types.ProjectionName)
+  public void recordQueryCacheHit(java.lang.String)
+  public void recordQueryCacheMiss(java.lang.String)
+  public void recordQueryDispatched(java.lang.String)
+  public void recordQueryDuration(java.lang.String, long)
+  public void recordSagaCasConflict(java.lang.String)
+  public void recordSagaCompensateFaulted(java.lang.String, java.lang.String)
+  public void recordSagaCompensatingBacklog(java.lang.String, long)
+  public void recordSagaCompensation(java.lang.String, java.lang.String)
+  public void recordSagaCompensationRetry(java.lang.String)
+  public void recordSagaCompensationUnderForwardStep(java.lang.String)
+  public void recordSagaDeadLetterSwept(long)
+  public void recordSagaDeliveryRetried(java.lang.String)
+  public void recordSagaEventHeld(java.lang.String, java.lang.String)
+  public void recordSagaFaulted(java.lang.String)
+  public void recordSagaFaultedBacklog(long)
+  public void recordSagaFaultedRows(java.lang.String, long)
+  public void recordSagaForcedStaleResume(java.lang.String)
+  public void recordSagaForwardCommandFenced(java.lang.String)
+  public void recordSagaQuarantined(java.lang.String)
+  public void recordSagaReplayDeferred(java.lang.String)
+  public void recordSagaReplayed(java.lang.String, java.lang.String)
+  public void recordSagaResumeFaulted(java.lang.String, java.lang.String)
+  public void recordSagaSkippedWhileFaulted(java.lang.String)
+  public void recordSagaTimedOutBacklog(java.lang.String, long)
+  public void recordSagaTimeoutClaimDeferred(java.lang.String)
+  public void recordSnapshotCreated()
+  public void recordSnapshotDiscarded(java.lang.String)
+  public void recordSnapshotLoaded()
+  public void recordSnapshotRefused()
+  public void recordSubjectRedacted()
+  public void recordSubscriptionDeliveryLatency(long)
+  public void recordSubscriptionDeliveryLatency(org.streamrune.core.types.SubscriptionName, long)
+  public void recordSubscriptionEventReceived()
+  public void recordSubscriptionEventReceived(org.streamrune.core.types.SubscriptionName)
+  public void recordSubscriptionLag(org.streamrune.core.types.SubscriptionName, long)
+  public void recordSystemicKeyStoreFailure()
+  public void registerInFlightCommandsGauge(java.util.function.LongSupplier)
+  public void registerSubscriptionLagGauge(org.streamrune.core.types.SubscriptionName, java.util.function.LongSupplier)
+  public void reset()
+
+public static final record org.streamrune.test.RecordingStreamRuneMetrics$Sample
+  public <init>(java.lang.String, java.util.Map<java.lang.String, java.lang.String>, long)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String meterName()
+  public java.util.Map<java.lang.String, java.lang.String> tags()
+  public long value()
+
+public abstract class org.streamrune.test.SagaDeadLetterStoreContract
+  protected abstract org.streamrune.core.saga.SagaDeadLetterStore newStore(org.streamrune.core.saga.SagaStore)
+  protected abstract org.streamrune.core.saga.SagaStore newSagaStore()
+  protected org.streamrune.core.saga.SagaDeadLetterStore store
+  protected org.streamrune.core.saga.SagaStore sagaStore
+  protected static final java.time.Instant T0
+  protected static final org.streamrune.core.saga.SagaId A
+  protected static final org.streamrune.core.types.SagaType OTHER
+  protected static final org.streamrune.core.types.SagaType TYPE
+  protected static org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry entry(org.streamrune.core.saga.SagaId, long, java.time.Instant)
+  protected void row(org.streamrune.core.saga.SagaId, org.streamrune.core.saga.SagaStatus)
+  public <init>()
+  public void clearShieldIfDrained_clearsOnlyWhenNoNamedAndNoResolvedEntryExists()
+  public void clearShieldIfDrained_rejectsANullSagaIdOrType_andLeavesTheShield()
+  public void countFaultedBacklog_countsShieldedOrFaultedOwners_rowlessNamed_andResolvedNull()
+  public void deleteOlderThan_neverPrunesANamedEntryWhoseSagaHasNoRow()
+  public void deleteOlderThan_neverPrunesAResolvedNullEntry_whateverItsTargetLooksLike()
+  public void deleteOlderThan_neverPrunesEntriesOfAFaultedOrShieldedOwner()
+  public void deleteOlderThan_neverPrunesEntriesOfAnOwnerBornShielded()
+  public void deleteOlderThan_prunesEntriesOfAHealthyUnshieldedOwner_andUnroutableNullEntries()
+  public void discard_rejectsANullSagaType()
+  public void discard_typed_removesOnlyTheMatchingType()
+  public void entry_convenienceConstructors_defaultFirstFaultedAtToFaultedAt()
+  public void establishFirstReplayAnchor_rejectsANullSagaType_andWritesNothing()
+  public void establishFirstReplayAnchor_storedValueWins()
+  public void findNullSagaEntriesByResolvedTarget_newestPerOffset_ascendingByOffset()
+  public void findNullSagaEntriesByResolvedTarget_rejectsANullSagaType()
+  public void findNullSagaEntry_rejectsANullSagaType()
+  public void publishShielded_absentOwnerRow_recordsTheEntry_andDoesNotThrow()
+  public void publishShielded_publishesTheEntryAndShieldsTheOwner_inOneCall()
+  public void publish_named_refreshesErrorDetails_keepsFirstFaultedAtAnchorAndTarget()
+  public void publish_nullSaga_keepsFirstFaultedAtAnchorAndResolvedTarget_acrossRefreshes()
+  public void setResolvedTarget_rejectsANullSagaType_andWritesNothing()
+
+public final class org.streamrune.test.SagaEnvelopes
+  public static org.streamrune.core.EventEnvelope causedBy(java.lang.Class<? extends org.streamrune.core.saga.SagaState>, org.streamrune.core.saga.SagaId, int, org.streamrune.core.types.StreamId, org.streamrune.core.DomainEvent)
+  public static org.streamrune.core.EventEnvelope causedBy(java.lang.Class<? extends org.streamrune.core.saga.SagaState>, org.streamrune.core.saga.SagaId, org.streamrune.core.types.StreamId, org.streamrune.core.DomainEvent)
+  public static org.streamrune.core.EventEnvelope continuationOf(org.streamrune.core.EventEnvelope, org.streamrune.core.types.StreamId, org.streamrune.core.DomainEvent)
+  public static org.streamrune.core.EventMetadata metadataCausedBy(java.lang.Class<? extends org.streamrune.core.saga.SagaState>, org.streamrune.core.saga.SagaId)
+  public static org.streamrune.core.EventMetadata metadataOfContinuation(org.streamrune.core.EventEnvelope)
+
+public final class org.streamrune.test.SagaFixture<S extends org.streamrune.core.saga.SagaState>
+  public java.util.List<org.streamrune.core.Command> dispatched()
+  public java.util.List<org.streamrune.core.EventEnvelope> delivered()
+  public java.util.Optional<org.streamrune.core.saga.LoadedSaga<S>> saga(org.streamrune.core.saga.SagaId)
+  public org.streamrune.core.CommandBus commandBus()
+  public org.streamrune.core.EventEnvelope event(org.streamrune.core.types.StreamId, org.streamrune.core.DomainEvent)
+  public org.streamrune.core.EventEnvelope reply(org.streamrune.core.saga.SagaId, org.streamrune.core.types.StreamId, org.streamrune.core.DomainEvent)
+  public org.streamrune.runtime.SagaRunner<S> runner()
+  public org.streamrune.test.FaultSchedule sagaStoreFaults()
+  public org.streamrune.test.InMemorySagaDeadLetterStore deadLetterStore()
+  public org.streamrune.test.InMemorySagaStore sagaStore()
+  public org.streamrune.test.MutableClock clock()
+  public org.streamrune.test.SagaFixture<S> advance(java.time.Duration)
+  public org.streamrune.test.SagaFixture<S> expectCommands(org.streamrune.core.Command...)
+  public org.streamrune.test.SagaFixture<S> expectCompensating(org.streamrune.core.saga.SagaId)
+  public org.streamrune.test.SagaFixture<S> expectCompleted(org.streamrune.core.saga.SagaId)
+  public org.streamrune.test.SagaFixture<S> expectDeadLettered(org.streamrune.core.saga.SagaId)
+  public org.streamrune.test.SagaFixture<S> expectNoCommands()
+  public org.streamrune.test.SagaFixture<S> expectState(org.streamrune.core.saga.SagaId, java.util.function.Predicate<S>)
+  public org.streamrune.test.SagaFixture<S> expectStatus(org.streamrune.core.saga.SagaId, org.streamrune.core.saga.SagaStatus)
+  public org.streamrune.test.SagaFixture<S> failing(java.lang.Class<? extends org.streamrune.core.Command>, java.util.function.Supplier<? extends java.lang.RuntimeException>)
+  public org.streamrune.test.SagaFixture<S> given(org.streamrune.core.EventEnvelope...)
+  public org.streamrune.test.SagaFixture<S> redeliver()
+  public org.streamrune.test.SagaFixture<S> replyingTo(org.streamrune.core.saga.SagaId, org.streamrune.core.DomainEvent)
+  public org.streamrune.test.SagaFixture<S> replyingTo(org.streamrune.core.saga.SagaId, org.streamrune.core.types.StreamId, org.streamrune.core.DomainEvent)
+  public org.streamrune.test.SagaFixture<S> runTimeouts()
+  public org.streamrune.test.SagaFixture<S> when(org.streamrune.core.EventEnvelope)
+  public org.streamrune.test.SagaFixture<S> when(org.streamrune.core.types.StreamId, org.streamrune.core.DomainEvent)
+  public org.streamrune.test.SagaFixture<S> withTimeouts(java.util.function.Consumer<org.streamrune.runtime.SagaTimeoutRunner$Builder<S>>)
+  public static <S extends org.streamrune.core.saga.SagaState> org.streamrune.test.SagaFixture<S> of(java.lang.Class<S>, java.util.function.Consumer<org.streamrune.runtime.SagaRunner$Builder<S>>)
+  public static final java.time.Instant START
+
+public abstract class org.streamrune.test.SagaForwardFenceContract
+  protected abstract org.streamrune.core.EventStore eventStore()
+  protected abstract org.streamrune.core.saga.SagaStore sagaStore()
+  protected java.util.List<org.streamrune.core.EventEnvelope> stored(org.streamrune.core.types.StreamId)
+  protected org.streamrune.core.EventStore$IdempotentAppendResult append(org.streamrune.core.types.StreamId, org.streamrune.core.types.IdempotencyKey, org.streamrune.core.saga.SagaOrigin)
+  protected static final java.lang.String COMMAND_TYPE = "FenceCommand"
+  protected static final org.streamrune.core.saga.SagaId ID
+  protected static final org.streamrune.core.saga.SagaOrigin FORWARD_OF
+  protected static final org.streamrune.core.types.SagaType TYPE
+  protected static final org.streamrune.core.types.StreamId TARGET
+  protected static org.streamrune.core.EventEnvelope event(org.streamrune.core.types.StreamId, long)
+  protected static org.streamrune.core.saga.SagaOrigin forwardOf(org.streamrune.core.saga.SagaId)
+  protected void forwardRow(org.streamrune.core.saga.SagaId)
+  protected void stampedRow(org.streamrune.core.saga.SagaId)
+  public <init>()
+  public static final org.streamrune.core.types.EventType EVENT_TYPE
+  public void aCommandWithoutAForwardOriginIsNotFenced()
+  public void aFaultedRowWithoutAStampAcceptsTheCommand()
+  public void aForwardRowAcceptsTheCommand()
+  public void aKeyClaimedBeforeTheStampIsAnsweredFromTheInbox()
+  public void aRowInItsEpisodeRefusesTheCommandStoresNothingAndLeavesTheKeyUnclaimed()
+  public void aRowOfAnotherSagaTypeRefusesTheCommand()
+  public void aTerminalRowRefusesTheCommand()
+  public void aZeroEventForwardCommandIsFencedToo()
+  public void noRowRefusesTheCommand()
+  public void theStoreFencesAgainstTheSagaStoresRows()
+
+public static final record org.streamrune.test.SagaForwardFenceContract$FenceEvent implements org.streamrune.core.DomainEvent
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String value()
+
+public static final record org.streamrune.test.SagaForwardFenceContract$FenceState implements org.streamrune.core.saga.SagaState
+  public <init>(org.streamrune.core.saga.SagaStatus)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.core.saga.SagaStatus status()
+
+public abstract class org.streamrune.test.SagaStoreContract
+  protected abstract org.streamrune.core.saga.SagaStore newStore()
+  protected org.streamrune.core.saga.LoadedSaga<org.streamrune.test.SagaStoreContract$ContractState> row()
+  protected org.streamrune.core.saga.SagaStore store
+  protected static final org.streamrune.core.saga.SagaId ID
+  protected static final org.streamrune.core.types.SagaType TYPE
+  protected static final org.streamrune.test.SagaStoreContract$ContractState EVOLVED
+  protected static final org.streamrune.test.SagaStoreContract$ContractState INITIAL
+  public <init>()
+  public void aStampedEpisodeWithoutACause_isNotGivenOneByALaterWrite()
+  public void aStampedEpisode_isNeverReStamped_byAnyWrite()
+  public void aStampedEpisode_keepsItsCauseThroughATerminalApplyEvent()
+  public void aStampedEpisode_keepsItsCauseThroughEveryLaterWrite()
+  public void applyEvent_clearsTheFault_andRecordsTheNewStatus()
+  public void applyEvent_landingAnotherStatus_recordsNoCause()
+  public void applyEvent_landingCompensating_recordsTheAppliedEventAsTheCause()
+  public void applyEvent_landingCompensating_stampsTheEpisode_atTheVersionItLandsAt()
+  public void applyEvent_liveOffsetIsAMaximum_replayOffsetIsExact()
+  public void applyEvent_rejectsANullAppliedEvent_andWritesNothing()
+  public void applyEvent_startPath_setsGenesisApplied_andLastAppliedOffset()
+  public void applyEvent_withoutAnEventId_stampsWithNoCause()
+  public void casWrites_rejectANullSagaType_andWriteNothing()
+  public void casWrites_staleVersion_terminalRow_absentRow_orForeignType_throwOptimisticLock()
+  public void claimCompensating_clearsPreFault_stampsEpisode_keepsGenesisFlag()
+  public void claimCompensating_withAnEvent_recordsItAsTheEpisodeCause()
+  public void claimCompensating_withoutAnEvent_recordsNoCause()
+  public void createAndUpdate_landingCompensating_recordNoCause()
+  public void createFaulted_isFaultedAtVersion1_genesisPending_shielded_noPreFault()
+  public void createGenesisPending_bornCompensating_recordsTheCause()
+  public void createGenesisPending_bornRunning_recordsNoCause()
+  public void createGenesisPending_isVersion1_withGenesisNotApplied()
+  public void createGenesisPending_withCompensating_isBornStamped_inTheInsert()
+  public void createGenesisPending_withTheShield_isBornShielded_inOneStatement()
+  public void createGenesisPending_withoutAnEvent_bornCompensating_recordsNoCause()
+  public void create_isACompleteRow_genesisApplied_noFault_noShield_noOffsets()
+  public void create_withCompensating_isBornStamped()
+  public void create_withTheShield_isBornShielded_andComplete()
+  public void creates_rejectANullSagaType_andInsertNothing()
+  public void delete_rejectsANullSagaType_andRemovesNothing()
+  public void everySagaIdOperation_rejectsANullSagaId_andWritesNothing()
+  public void everyStateOperation_rejectsANullState_andWritesNothing()
+  public void everyStatusOperation_rejectsANullStatus_andWritesNothing()
+  public void findTimedOut_aCompensatingBacklogLargerThanTheBatch_cannotStarveAForwardTimeout()
+  public void findTimedOut_aForwardBacklogLargerThanTheBatch_cannotStarveACompensationRepick()
+  public void findTimedOut_bothPopulationsSaturated_interleavesThemByRank_forwardFirst()
+  public void findTimedOut_compensationRepicksAreServedInLastWriteOrder()
+  public void findTimedOut_forwardTimeoutsAreServedInStartOrder_notLastWriteOrder()
+  public void load_afterAClaimReturned_returnsTheClaimedRowWithItsStamp()
+  public void load_isTypeScoped_forTheRecordedFacts()
+  public void load_rejectsANullSagaType()
+  public void load_rejectsANullStateType()
+  public void markFaulted_onACompensatingGenesisPendingRow_recordsCompensating()
+  public void markFaulted_onAFaultedRow_keepsPreFault_bumpsVersion_returnsFalse()
+  public void markFaulted_onAGenesisPendingRow_recordsNoPreFaultStatus()
+  public void markFaulted_recordsThePreFaultStatus_bumpsVersion_returnsTrue()
+  public void markFaulted_staleVersionOrTerminalRow_throwsOptimisticLock()
+  public void queries_rejectANullSagaType()
+  public void queries_rejectANullStatusOrInstant()
+  public void queries_rejectANullStatusOrInstant_evenWhenNoRowExists()
+  public void setDeadLetterPending_isAFlagWrite_noVersionBump_absentRowIsANoop()
+  public void setDeadLetterPending_rejectsANullSagaType_andWritesNothing()
+  public void storageIdentity_isStable_andNeverNull()
+  public void update_clearsPreFault_keepsGenesisAndOffsets()
+  public void update_landingCompensating_stampsTheEpisode()
+  public void writesThatLandAnyOtherStatus_neverStamp()
+
+public static final record org.streamrune.test.SagaStoreContract$ContractState implements org.streamrune.core.saga.SagaState
+  public <init>(org.streamrune.core.saga.SagaStatus, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String marker()
+  public org.streamrune.core.saga.SagaStatus status()
+
+public class org.streamrune.test.ScriptedSubscriptionLeadership implements org.streamrune.core.subscription.SubscriptionLeadership
+  public <init>()
+  public int acquisitions()
+  public int attempts()
+  public int resignations()
+  public java.util.Optional<org.streamrune.core.subscription.SubscriptionLeadership$Lease> current(org.streamrune.core.types.SubscriptionName)
+  public java.util.Optional<org.streamrune.core.subscription.SubscriptionLeadership$Lease> tryAcquire(org.streamrune.core.types.SubscriptionName)
+  public org.streamrune.test.ScriptedSubscriptionLeadership deny()
+  public org.streamrune.test.ScriptedSubscriptionLeadership grant()
+  public org.streamrune.test.ScriptedSubscriptionLeadership revoke()
+  public static org.streamrune.test.ScriptedSubscriptionLeadership granting()
+  public void close()
+  public void resign(org.streamrune.core.types.SubscriptionName)
+
+public final class org.streamrune.test.ShippedMigrationScripts
+  public static final java.util.List<java.lang.String> DIRECTORIES
+  public static java.util.List<java.lang.String> onClassPath(java.lang.ClassLoader)
+
+public final class org.streamrune.test.UnregisteredSealedTypes
+  public static java.lang.Class<?> sealedInterface(java.lang.invoke.MethodHandles$Lookup)

@@ -1,0 +1,446 @@
+# The public API of :streamrune-integration:streamrune-spring. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public class org.streamrune.spring.AwsKmsCryptoEngineConfiguration
+  public <init>()
+
+public final class org.streamrune.spring.CryptoForgetListenHealthRegistrar implements org.springframework.context.SmartLifecycle
+  public <init>(org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public boolean isRunning()
+  public int getPhase()
+  public void start()
+  public void stop()
+
+public class org.streamrune.spring.CryptoPropertiesConfiguration
+  public <init>()
+
+public class org.streamrune.spring.FileSystemCryptoEngineConfiguration
+  public <init>()
+
+public class org.streamrune.spring.PostgresCryptoEngineConfiguration
+  public <init>()
+
+public class org.streamrune.spring.ProjectionAutoConfig
+  public <init>()
+  public org.streamrune.runtime.InlineProjectionInterceptor streamRuneInlineProjectionInterceptor(org.springframework.context.ApplicationContext, org.springframework.core.env.Environment, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.tracing.StreamRuneTracing>)
+  public org.streamrune.runtime.MultiProjectionRunner streamRuneMultiProjectionRunner(org.springframework.context.ApplicationContext, org.springframework.core.env.Environment, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.AtomicBatchProcessor>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.ProjectionDeadLetterStore>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.ProjectionErrorClassifier>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SubscriptionHealthContributor>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.tracing.StreamRuneTracing>)
+  public org.streamrune.runtime.ScheduledProjectionRunner streamRuneScheduledProjectionRunner(org.springframework.context.ApplicationContext, org.springframework.core.env.Environment, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.AtomicBatchProcessor>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.ProjectionDeadLetterStore>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.ProjectionErrorClassifier>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SubscriptionHealthContributor>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.tracing.StreamRuneTracing>)
+  public org.streamrune.spring.RunnerLifecycle streamRuneMultiProjectionRunnerLifecycle(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.MultiProjectionRunner>)
+  public org.streamrune.spring.RunnerLifecycle streamRuneScheduledProjectionRunnerLifecycle(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.ScheduledProjectionRunner>)
+
+public final class org.streamrune.spring.RequestAttributeContextSource implements java.util.function.Supplier<org.streamrune.core.StreamRuneContext$RequestContext>
+  public <init>()
+  public org.streamrune.core.StreamRuneContext$RequestContext get()
+  public static final java.lang.String ATTRIBUTE = "org.streamrune.spring.RequestAttributeContextSource.context"
+
+public final class org.streamrune.spring.RunnerLifecycle implements org.springframework.context.SmartLifecycle
+  public <init>(java.lang.String, java.lang.Runnable, java.lang.Runnable)
+  public boolean isRunning()
+  public int getPhase()
+  public static final int PHASE = 2147481599
+  public void start()
+  public void stop()
+
+public final class org.streamrune.spring.SagaCompensationRetryLifecycle implements org.springframework.context.SmartLifecycle
+  public <init>(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.core.saga.SagaStore, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>, org.streamrune.spring.StreamRuneProperties)
+  public boolean isRunning()
+  public int getPhase()
+  public void start()
+  public void stop()
+
+public class org.streamrune.spring.SagaEventPathRetentionConfigurer implements org.springframework.beans.factory.SmartInitializingSingleton
+  public <init>(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>)
+  public void afterSingletonsInstantiated()
+
+public class org.streamrune.spring.SagaStateCryptoValidator implements org.springframework.beans.factory.SmartInitializingSingleton
+  public <init>(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>)
+  public void afterSingletonsInstantiated()
+
+public final class org.streamrune.spring.SagaTimeoutRunnerHealthRegistrar implements org.springframework.context.SmartLifecycle
+  public <init>(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaTimeoutRunner<?>>, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public boolean isRunning()
+  public int getPhase()
+  public void start()
+  public void stop()
+
+public class org.streamrune.spring.ScopedValueFilter implements jakarta.servlet.Filter
+  public <init>()
+  public <init>(java.util.Set<java.lang.String>)
+  public <init>(java.util.Set<java.lang.String>, org.streamrune.integration.RequestIdentityPolicy, org.streamrune.core.UserRoleResolver)
+  public static java.util.List<java.lang.String> userIdHeaderValues(jakarta.servlet.http.HttpServletRequest)
+  public void doFilter(jakarta.servlet.ServletRequest, jakarta.servlet.ServletResponse, jakarta.servlet.FilterChain) throws java.io.IOException, jakarta.servlet.ServletException
+
+public class org.streamrune.spring.SpringSecurityAuthenticatedUserResolver implements org.streamrune.integration.AuthenticatedUserResolver
+  public <init>()
+  public java.util.Optional<org.streamrune.core.types.UserId> currentUser()
+
+public class org.streamrune.spring.SpringSecurityUserRoleResolver implements org.streamrune.core.UserRoleResolver
+  public <init>()
+  public boolean requiresRequestContext()
+  public org.streamrune.core.UserAuthority resolve(org.streamrune.core.types.UserId)
+
+public class org.streamrune.spring.SseController implements org.springframework.context.SmartLifecycle, java.lang.AutoCloseable
+  public <init>(org.streamrune.runtime.SseEventPublisher, org.streamrune.integration.SseAuthorizer, org.streamrune.integration.RequestIdentityPolicy)
+  public <init>(org.streamrune.runtime.SseEventPublisher, org.streamrune.integration.SseAuthorizer, org.streamrune.integration.RequestIdentityPolicy, java.time.Duration, java.time.Duration)
+  public boolean isRunning()
+  public int getPhase()
+  public org.springframework.web.servlet.mvc.method.annotation.SseEmitter stream(java.lang.String, java.lang.String, jakarta.servlet.http.HttpServletRequest)
+  public org.springframework.web.servlet.mvc.method.annotation.SseEmitter stream(java.lang.String, java.lang.String, java.util.List<java.lang.String>, org.streamrune.core.StreamRuneContext$RequestContext)
+  public static final int PHASE = 2147483135
+  public void close()
+  public void start()
+  public void stop()
+  public void stop(java.lang.Runnable)
+
+public class org.streamrune.spring.StreamRuneAuthorizationValidator implements org.springframework.beans.factory.SmartInitializingSingleton
+  public <init>(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.VirtualThreadCommandBus>)
+  public void afterSingletonsInstantiated()
+
+public class org.streamrune.spring.StreamRuneAutoConfiguration
+  public <init>()
+  public org.streamrune.core.AggregateLocker aggregateLocker(org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.tracing.StreamRuneTracing>)
+  public org.streamrune.core.AsyncCommandBus asyncCommandBus(org.streamrune.runtime.VirtualThreadCommandBus)
+  public org.streamrune.core.EventStore eventStore(org.streamrune.core.EventStoreFactory)
+  public org.streamrune.core.EventStoreFactory postgresEventStoreFactory(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.upcasting.EventUpcaster>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.SnapshotMigration>, org.springframework.beans.factory.ObjectProvider<org.streamrune.postgres.PostgresEventAuditStore>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.outbox.OutboxEventMapper>, org.springframework.beans.factory.ObjectProvider<org.streamrune.postgres.PostgresOutboxStore>, org.springframework.beans.factory.ObjectProvider<org.streamrune.postgres.PostgresCommandInbox>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.CommandInbox>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.tracing.StreamRuneTracing>)
+  public org.streamrune.core.EventTypeRegistry eventTypeRegistry()
+  public org.streamrune.core.QueryBus queryBus(org.streamrune.runtime.SimpleQueryBus, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.CachingQueryBus>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.audit.AuditStore>, org.springframework.beans.factory.ObjectProvider<org.streamrune.spring.RequestAttributeContextSource>)
+  public org.streamrune.core.audit.AuditStore postgresAuditStore(javax.sql.DataSource)
+  public org.streamrune.core.audit.CommandAuditQuery commandAuditQuery(javax.sql.DataSource)
+  public org.streamrune.core.audit.ComplianceReportQuery complianceReportQuery(javax.sql.DataSource)
+  public org.streamrune.core.saga.SagaStore sagaStore(javax.sql.DataSource, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>)
+  public org.streamrune.core.subscription.SubscriptionLeadership streamRuneSubscriptionLeadership(javax.sql.DataSource, org.streamrune.spring.StreamRuneProperties)
+  public org.streamrune.core.tracing.StreamRuneTracing noopStreamRuneTracing()
+  public org.streamrune.integration.MicrometerStreamRuneMetrics micrometerStreamRuneMetrics(io.micrometer.core.instrument.MeterRegistry, org.streamrune.spring.StreamRuneProperties)
+  public org.streamrune.integration.RequestIdentityPolicy requestIdentityPolicy(org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.integration.AuthenticatedUserResolver>)
+  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(javax.sql.DataSource, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>)
+  public org.streamrune.postgres.PostgresCommandInbox commandInbox(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresEventAuditQuery postgresEventAuditQuery(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresEventAuditStore postgresEventAuditStore(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresOffsetStore postgresOffsetStore(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresProjectionDeadLetterStore postgresProjectionDeadLetterStore(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresSagaDeadLetterStore sagaDeadLetterStore(javax.sql.DataSource)
+  public org.streamrune.runtime.AnnotationAuthorizationInterceptor annotationAuthorizationInterceptor(org.streamrune.core.UserRoleResolver)
+  public org.streamrune.runtime.AuditCommandInterceptor auditCommandInterceptor(org.streamrune.core.audit.AuditStore)
+  public org.streamrune.runtime.AuthorizationCommandInterceptor authorizationCommandInterceptor(org.streamrune.core.CommandAuthorizationPolicy)
+  public org.streamrune.runtime.BackgroundRelayHealthContributor backgroundRelayHealthContributor()
+  public org.streamrune.runtime.CacheInvalidator cacheInvalidator(org.streamrune.runtime.CachingQueryBus)
+  public org.streamrune.runtime.CachingQueryBus cachingQueryBus(org.streamrune.runtime.SimpleQueryBus, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.QueryAuthorizer>)
+  public org.streamrune.runtime.CircuitBreakerCommandInterceptor circuitBreakerCommandInterceptor(org.streamrune.spring.StreamRuneProperties)
+  public org.streamrune.runtime.DeadLetterRetentionSweeper streamRuneDeadLetterRetentionSweeper(org.streamrune.core.DeadLetterQueue, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>)
+  public org.streamrune.runtime.DeadLetterRetryRunner streamRuneDeadLetterRetryRunner(org.streamrune.core.DeadLetterQueue, org.streamrune.runtime.VirtualThreadCommandBus, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>, org.streamrune.spring.StreamRuneProperties)
+  public org.streamrune.runtime.InboxRetentionSweeper streamRuneInboxRetentionSweeper(org.streamrune.postgres.PostgresCommandInbox, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>)
+  public org.streamrune.runtime.OutboxFailedReplayer streamRuneOutboxFailedReplayer(org.streamrune.core.outbox.OutboxStore, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>)
+  public org.streamrune.runtime.OutboxPoller streamRuneOutboxPoller(org.streamrune.core.outbox.OutboxStore, org.streamrune.core.outbox.OutboxPublisher, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.tracing.StreamRuneTracing>)
+  public org.streamrune.runtime.OutboxRetentionSweeper streamRuneOutboxRetentionSweeper(org.streamrune.postgres.PostgresOutboxStore, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>)
+  public org.streamrune.runtime.SagaDeadLetterRetentionSweeper streamRuneSagaDeadLetterRetentionSweeper(org.streamrune.postgres.PostgresSagaDeadLetterStore, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>)
+  public org.streamrune.runtime.SimpleQueryBus simpleQueryBus(org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>)
+  public org.streamrune.runtime.SseEventPublisher sseEventPublisher()
+  public org.streamrune.runtime.SubscriptionHealthContributor subscriptionHealthContributor(org.streamrune.core.EventStore, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.OffsetStore>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.streamrune.spring.StreamRuneProperties)
+  public org.streamrune.runtime.VirtualThreadCommandBus virtualThreadCommandBus(org.streamrune.core.EventStore, org.streamrune.core.AggregateLocker, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.SnapshotPolicy>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.CommandInterceptor>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.DeadLetterQueue>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.CommandInbox>, org.springframework.beans.factory.ObjectProvider<org.streamrune.spring.RequestAttributeContextSource>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.tracing.StreamRuneTracing>)
+  public org.streamrune.runtime.gdpr.ExportSubjectDataService exportSubjectDataService(java.util.List<org.streamrune.core.gdpr.SubjectDataCollector>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.audit.AuditStore>)
+  public org.streamrune.runtime.gdpr.ForgetSubjectService forgetSubjectService(org.streamrune.core.crypto.CryptoEngine, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.audit.AuditStore>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.gdpr.SubjectDataPurger>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.CachingQueryBus>, org.streamrune.spring.StreamRuneProperties)
+  public org.streamrune.spring.CryptoForgetListenHealthRegistrar streamRuneCryptoForgetListenHealthRegistrar(org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public org.streamrune.spring.RunnerLifecycle streamRuneDeadLetterRetentionSweeperLifecycle(org.streamrune.runtime.DeadLetterRetentionSweeper)
+  public org.streamrune.spring.RunnerLifecycle streamRuneDeadLetterRetryRunnerLifecycle(org.streamrune.runtime.DeadLetterRetryRunner)
+  public org.streamrune.spring.RunnerLifecycle streamRuneInboxRetentionSweeperLifecycle(org.streamrune.runtime.InboxRetentionSweeper)
+  public org.streamrune.spring.RunnerLifecycle streamRuneOutboxPollerLifecycle(org.streamrune.runtime.OutboxPoller)
+  public org.streamrune.spring.RunnerLifecycle streamRuneOutboxRetentionSweeperLifecycle(org.streamrune.runtime.OutboxRetentionSweeper)
+  public org.streamrune.spring.RunnerLifecycle streamRuneSagaDeadLetterRetentionSweeperLifecycle(org.streamrune.runtime.SagaDeadLetterRetentionSweeper)
+  public org.streamrune.spring.RunnerLifecycle streamRuneSubscriptionLeadershipLifecycle(org.streamrune.core.subscription.SubscriptionLeadership)
+  public org.streamrune.spring.SagaCompensationRetryLifecycle streamRuneSagaCompensationRetryLifecycle(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.core.saga.SagaStore, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>, org.streamrune.spring.StreamRuneProperties)
+  public org.streamrune.spring.SagaEventPathRetentionConfigurer sagaEventPathRetentionConfigurer(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>)
+  public org.streamrune.spring.SagaStateCryptoValidator sagaStateCryptoValidator(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>)
+  public org.streamrune.spring.SagaTimeoutRunnerHealthRegistrar streamRuneSagaTimeoutRunnerHealthRegistrar(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaTimeoutRunner<?>>, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public org.streamrune.spring.SpringSecurityAuthenticatedUserResolver springSecurityAuthenticatedUserResolver()
+  public org.streamrune.spring.SpringSecurityUserRoleResolver springSecurityUserRoleResolver()
+  public org.streamrune.spring.StreamRuneAuthorizationValidator streamRuneAuthorizationValidator(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.VirtualThreadCommandBus>)
+  public org.streamrune.spring.StreamRuneConfigValidator streamRuneConfigValidator(org.streamrune.spring.StreamRuneProperties, org.springframework.context.ApplicationContext, org.springframework.core.env.Environment)
+  public org.streamrune.spring.StreamRuneStartupLogger streamRuneStartupLogger(org.springframework.context.ApplicationContext)
+  public static final int SCOPED_VALUE_FILTER_ORDER = -90
+
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.TYPE}) public @interface org.streamrune.spring.StreamRuneComponent
+
+public class org.streamrune.spring.StreamRuneConfigValidator implements org.springframework.beans.factory.SmartInitializingSingleton
+  public <init>(org.streamrune.spring.StreamRuneProperties, org.springframework.context.ApplicationContext, org.springframework.core.env.Environment)
+  public void afterSingletonsInstantiated()
+
+public final record org.streamrune.spring.StreamRuneCryptoProperties
+  public <init>(org.streamrune.spring.StreamRuneCryptoProperties$Cache, org.streamrune.spring.StreamRuneCryptoProperties$FileSystem, org.streamrune.spring.StreamRuneCryptoProperties$Postgres, org.streamrune.spring.StreamRuneCryptoProperties$Vault, org.streamrune.spring.StreamRuneCryptoProperties$Aws)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.spring.StreamRuneCryptoProperties$Aws aws()
+  public org.streamrune.spring.StreamRuneCryptoProperties$Cache cache()
+  public org.streamrune.spring.StreamRuneCryptoProperties$FileSystem filesystem()
+  public org.streamrune.spring.StreamRuneCryptoProperties$Postgres postgres()
+  public org.streamrune.spring.StreamRuneCryptoProperties$Vault vault()
+
+public static final record org.streamrune.spring.StreamRuneCryptoProperties$Aws
+  public <init>(java.lang.String, java.lang.String, org.streamrune.spring.StreamRuneCryptoProperties$Aws$DataKeyCache)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String kmsKeyId()
+  public java.lang.String region()
+  public org.streamrune.spring.StreamRuneCryptoProperties$Aws$DataKeyCache dataKeyCache()
+
+public static final record org.streamrune.spring.StreamRuneCryptoProperties$Aws$DataKeyCache
+  public <init>(int, java.time.Duration)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int maximumSize()
+  public java.time.Duration expireAfterWrite()
+
+public static final record org.streamrune.spring.StreamRuneCryptoProperties$Cache
+  public <init>(boolean, int, java.time.Duration, java.time.Duration)
+  public boolean enabled()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int maximumSize()
+  public java.time.Duration expireAfterAccess()
+  public java.time.Duration expireAfterWrite()
+
+public static final record org.streamrune.spring.StreamRuneCryptoProperties$FileSystem
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String keyDirectory()
+
+public static final record org.streamrune.spring.StreamRuneCryptoProperties$Postgres
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String tableName()
+
+public static final record org.streamrune.spring.StreamRuneCryptoProperties$Vault
+  public <init>(java.lang.String, java.lang.String, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String address()
+  public java.lang.String engineMount()
+  public java.lang.String token()
+
+public class org.streamrune.spring.StreamRuneFailureAnalyzer extends org.springframework.boot.diagnostics.AbstractFailureAnalyzer<org.springframework.beans.factory.NoSuchBeanDefinitionException>
+  protected org.springframework.boot.diagnostics.FailureAnalysis analyze(java.lang.Throwable, org.springframework.beans.factory.NoSuchBeanDefinitionException)
+  public <init>()
+
+public class org.streamrune.spring.StreamRuneHealthIndicator implements org.springframework.boot.health.contributor.HealthIndicator
+  public <init>(javax.sql.DataSource)
+  public <init>(javax.sql.DataSource, org.streamrune.runtime.SubscriptionHealthContributor)
+  public <init>(javax.sql.DataSource, org.streamrune.runtime.SubscriptionHealthContributor, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public org.springframework.boot.health.contributor.Health health()
+
+public final record org.streamrune.spring.StreamRuneProperties
+  public <init>(int, int, java.time.Duration, double, java.time.Duration, java.time.Duration, java.time.Duration, int, int, int, java.time.Duration, boolean, boolean, org.streamrune.spring.StreamRuneProperties$QueryCache, org.streamrune.spring.StreamRuneProperties$Saga, org.streamrune.spring.StreamRuneProperties$Outbox, org.streamrune.spring.StreamRuneProperties$Inbox, org.streamrune.spring.StreamRuneProperties$DeadLetter, org.streamrune.spring.StreamRuneProperties$Subscription, org.streamrune.spring.StreamRuneProperties$Metrics, boolean, boolean, org.streamrune.spring.StreamRuneProperties$EventStore, org.streamrune.spring.StreamRuneProperties$Metadata, org.streamrune.spring.StreamRuneProperties$Security, org.streamrune.spring.StreamRuneProperties$Sse, org.streamrune.spring.StreamRuneProperties$Gdpr, org.streamrune.spring.StreamRuneProperties$Jvm, org.streamrune.spring.StreamRuneProperties$Tracing)
+  public boolean eventAuditEnabled()
+  public boolean projectionDlqEnabled()
+  public boolean startupLog()
+  public boolean validationEnabled()
+  public double retryBackoffMultiplier()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int circuitBreakerFailureThreshold()
+  public int maxInFlightAsyncCommands()
+  public int retryMaxAttempts()
+  public int snapshotEveryNEvents()
+  public int stripeCount()
+  public java.time.Duration circuitBreakerCooldown()
+  public java.time.Duration lockTimeout()
+  public java.time.Duration pollingInterval()
+  public java.time.Duration pollingJitter()
+  public java.time.Duration retryInitialDelay()
+  public org.streamrune.spring.StreamRuneProperties$DeadLetter deadLetter()
+  public org.streamrune.spring.StreamRuneProperties$EventStore eventStore()
+  public org.streamrune.spring.StreamRuneProperties$Gdpr gdpr()
+  public org.streamrune.spring.StreamRuneProperties$Inbox inbox()
+  public org.streamrune.spring.StreamRuneProperties$Jvm jvm()
+  public org.streamrune.spring.StreamRuneProperties$Metadata metadata()
+  public org.streamrune.spring.StreamRuneProperties$Metrics metrics()
+  public org.streamrune.spring.StreamRuneProperties$Outbox outbox()
+  public org.streamrune.spring.StreamRuneProperties$QueryCache queryCache()
+  public org.streamrune.spring.StreamRuneProperties$Saga saga()
+  public org.streamrune.spring.StreamRuneProperties$Security security()
+  public org.streamrune.spring.StreamRuneProperties$Sse sse()
+  public org.streamrune.spring.StreamRuneProperties$Subscription subscription()
+  public org.streamrune.spring.StreamRuneProperties$Tracing tracing()
+
+public static final record org.streamrune.spring.StreamRuneProperties$DeadLetter
+  public <init>(boolean, int, java.time.Duration, java.time.Duration, java.lang.String)
+  public boolean enabled()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int maxRetries()
+  public java.lang.String unkeyedReplay()
+  public java.time.Duration retentionMaxAge()
+  public java.time.Duration retryInterval()
+  public org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay unkeyedReplayPolicy()
+
+public static final record org.streamrune.spring.StreamRuneProperties$EventStore
+  public <init>(org.streamrune.spring.StreamRuneProperties$Schema, java.time.Duration)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Duration statementTimeout()
+  public org.streamrune.spring.StreamRuneProperties$Schema schema()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Gdpr
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String snapshotPurge()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Inbox
+  public <init>(java.time.Duration)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Duration retentionMaxAge()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Jvm
+  public <init>(boolean)
+  public boolean allowGraalJit()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Metadata
+  public <init>(java.util.List<java.lang.String>)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.util.List<java.lang.String> baggageAllowlist()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Metrics
+  public <init>(boolean, java.lang.String)
+  public boolean enabled()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String prefix()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Outbox
+  public <init>(boolean, int, java.time.Duration, java.time.Duration, java.time.Duration, int, java.time.Duration, double)
+  public boolean enabled()
+  public double retryBackoffMultiplier()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int batchSize()
+  public int retryMaxAttempts()
+  public java.time.Duration flushInterval()
+  public java.time.Duration retentionMaxAge()
+  public java.time.Duration retryInitialDelay()
+  public java.time.Duration skippedRetentionMaxAge()
+
+public static final record org.streamrune.spring.StreamRuneProperties$QueryCache
+  public <init>(boolean)
+  public boolean enabled()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Saga
+  public <init>(boolean, java.time.Duration, boolean, java.time.Duration, java.time.Duration, java.lang.String)
+  public boolean compensationRetryEnabled()
+  public boolean enabled()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String forwardFence()
+  public java.time.Duration compensationRetryGiveUpAfter()
+  public java.time.Duration compensationRetryInterval()
+  public java.time.Duration deadLetterRetentionMaxAge()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Schema
+  public <init>(boolean)
+  public boolean autoInitialize()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Security
+  public <init>(boolean)
+  public boolean trustUserIdHeader()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Sse
+  public <init>(boolean, java.time.Duration, java.time.Duration, java.time.Duration)
+  public boolean enabled()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Duration keepAliveInterval()
+  public java.time.Duration pollingInterval()
+  public java.time.Duration timeout()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Subscription
+  public <init>(org.streamrune.spring.StreamRuneProperties$Subscription$SingleActiveConsumer, org.streamrune.spring.StreamRuneProperties$Subscription$Health)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.spring.StreamRuneProperties$Subscription$Health health()
+  public org.streamrune.spring.StreamRuneProperties$Subscription$SingleActiveConsumer singleActiveConsumer()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Subscription$Health
+  public <init>(long)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public long lagThreshold()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Subscription$SingleActiveConsumer
+  public <init>(java.lang.String, java.time.Duration)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String enabled()
+  public java.time.Duration leaseTtl()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Tracing
+  public <init>(boolean, org.streamrune.spring.StreamRuneProperties$Tracing$Area, org.streamrune.spring.StreamRuneProperties$Tracing$Area, org.streamrune.spring.StreamRuneProperties$Tracing$Area, org.streamrune.spring.StreamRuneProperties$Tracing$Area, org.streamrune.spring.StreamRuneProperties$Tracing$Area, org.streamrune.spring.StreamRuneProperties$Tracing$Area, org.streamrune.spring.StreamRuneProperties$Tracing$Area)
+  public boolean enabled()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.runtime.TracingSettings settings()
+  public org.streamrune.spring.StreamRuneProperties$Tracing$Area command()
+  public org.streamrune.spring.StreamRuneProperties$Tracing$Area eventStore()
+  public org.streamrune.spring.StreamRuneProperties$Tracing$Area lock()
+  public org.streamrune.spring.StreamRuneProperties$Tracing$Area outbox()
+  public org.streamrune.spring.StreamRuneProperties$Tracing$Area projection()
+  public org.streamrune.spring.StreamRuneProperties$Tracing$Area saga()
+  public org.streamrune.spring.StreamRuneProperties$Tracing$Area subscription()
+
+public static final record org.streamrune.spring.StreamRuneProperties$Tracing$Area
+  public <init>(boolean)
+  public boolean enabled()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+
+public class org.streamrune.spring.StreamRuneRequestIdentityValidator implements org.springframework.beans.factory.SmartInitializingSingleton
+  public <init>(org.streamrune.integration.RequestIdentityPolicy, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.VirtualThreadCommandBus>)
+  public void afterSingletonsInstantiated()
+
+public class org.streamrune.spring.StreamRuneRuntimeHints implements org.springframework.aot.hint.RuntimeHintsRegistrar
+  public <init>()
+  public static final java.util.List<java.lang.Class<?>> NATIVE_IMAGE_TYPES
+  public static void registerDomainPackages(org.springframework.aot.hint.RuntimeHints, java.lang.ClassLoader, java.lang.String...)
+  public static void registerSerializableTypes(org.springframework.aot.hint.RuntimeHints, java.lang.Iterable<java.lang.Class<?>>)
+  public void registerHints(org.springframework.aot.hint.RuntimeHints, java.lang.ClassLoader)
+
+public class org.streamrune.spring.StreamRuneStartupLogger implements org.springframework.beans.factory.SmartInitializingSingleton
+  public <init>(org.springframework.context.ApplicationContext)
+  public void afterSingletonsInstantiated()
+
+public class org.streamrune.spring.VaultCryptoEngineConfiguration
+  public <init>()

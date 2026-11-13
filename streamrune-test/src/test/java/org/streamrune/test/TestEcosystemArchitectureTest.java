@@ -15,7 +15,7 @@ import com.tngtech.archunit.lang.ArchRule;
  * necessary to verify cross-module conventions.
  *
  * <ul>
- *   <li>JUnit 5 as the sole test framework (no Spock, TestNG, JUnit 4)
+ *   <li>JUnit Jupiter as the sole test framework (no Spock, TestNG, JUnit 4)
  *   <li>AssertJ for fluent assertions
  *   <li>Testcontainers for integration tests
  *   <li>Records (Java 25) for immutable test DTOs
@@ -26,7 +26,7 @@ class TestEcosystemArchitectureTest {
 
   private static final String ALL_PACKAGES = "org.streamrune..";
 
-  // --- Test framework: JUnit 5 only, no Spock or TestNG ---
+  // --- Test framework: JUnit Jupiter only, no Spock or TestNG ---
 
   @ArchTest
   static final ArchRule no_spock_framework =
@@ -50,13 +50,13 @@ class TestEcosystemArchitectureTest {
           .dependOnClassesThat()
           .resideInAnyPackage("org.testng..");
 
-  // ArchUnit's own test runner does not use JUnit 5 — exclude it. A *ContractTest (e.g.
-  // InMemorySagaStoreContractTest) is a thin factory-only subclass of a shared abstract JUnit 5
+  // ArchUnit's own test runner does not use JUnit Jupiter — exclude it. A *ContractTest (e.g.
+  // InMemorySagaStoreContractTest) is a thin factory-only subclass of a shared abstract JUnit
   // suite (e.g. SagaStoreContract): every @Test method is inherited, so the subclass's OWN
   // bytecode has no direct org.junit.jupiter reference — ArchUnit's dependency check is per-class,
   // not transitive through the superclass, so it would otherwise flag a class that is exercising
-  // JUnit 5 exactly as intended. Excluded by name pattern rather than allowlisting the concrete
-  // class, since every future *ContractTest subclass repeats this shape.
+  // JUnit Jupiter exactly as intended. Excluded by name pattern rather than allowlisting the
+  // concrete class, since every future *ContractTest subclass repeats this shape.
   @ArchTest
   static final ArchRule junit5_is_present =
       classes()

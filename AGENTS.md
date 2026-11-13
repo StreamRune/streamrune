@@ -50,7 +50,7 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 
 | Command | What it runs | Typical wall time |
 |---|---|---|
-| `./gradlew quickCheck` | Compiles every source set of every module, runs `spotlessCheck`, the tests of the seven modules whose tests need no Docker and every doc-lint test. No JaCoCo, no Javadoc, no Testcontainers. | about 3 minutes when the runtime tests run, under a minute when they are up to date |
+| `./gradlew quickCheck` | Compiles every source set of every module, runs `spotlessCheck`, the tests of the seven modules whose tests need no Docker, every doc-lint test and the public API check (`verifyApiSurface`, section 3). No JaCoCo, no Javadoc, no Testcontainers. | about 3 minutes when the runtime tests run, under a minute when they are up to date |
 | `./gradlew build` | What the `build` check runs in CI: every test suite, Javadoc, the coverage gates, `spotlessCheck` and the build's own verification tasks. Needs Docker. | about 7 minutes; `streamrune-postgres`'s suite is the longest |
 | `./gradlew :streamrune-core:test` | One module's tests | |
 | `./gradlew :streamrune-core:test --tests "DeadLetterRetryPolicyTest"` | One test class; `--tests` also takes a pattern such as `"*RetryPolicy*"` | |
@@ -58,6 +58,7 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 | `./gradlew postgresTest -PpostgresImage=postgres:17-alpine` | The PostgreSQL-backed suites on another server version, as the `postgres-17` check runs them | |
 | `./gradlew :streamrune-integration:streamrune-e2e:brokerTest` | The Kafka and RabbitMQ end-to-end suite, which is not part of `check` | |
 | `./gradlew docLintTest` | The doc-lint tests of every module (section 5); `check` and `quickCheck` run them too | seconds |
+| `./gradlew apiDump` | Rewrites each published module's `api/<module>.api` from its compiled public API, after a deliberate API change (section 3) | seconds |
 | `./gradlew spotlessApply` | Formats the Java sources | |
 | `./gradlew :streamrune-runtime:jmh -PjmhIncludes=ProjectionRunnerBenchmark` | The JMH benchmarks of a module whose name matches; `-PbenchCi` gives them the nightly settings (section 2, Benchmarks) | seconds to minutes per benchmark |
 
@@ -141,6 +142,23 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   and the `build` check in CI fail on a formatting violation; the pre-commit hook
   (`gradle/hooks/pre-commit`, installed by `./gradlew installGitHooks` and by every `build`) runs
   the same check before each commit, and `./gradlew spotlessApply` fixes what it reports.
+- **The public API is recorded.** Each published module has `api/<module>.api`: its public types
+  (in an exported package, not marked `@Internal`) with their supertypes and their public members,
+  and the protected members of a non-final type, with generic signatures, annotation defaults, the
+  retention and targets of annotation types and the order of enum constants. `verifyApiSurface`,
+  part of `check` and `quickCheck`, fails when the compiled module differs from that file, and
+  lists type by type the removed or changed lines apart from the added ones; a removed or changed
+  line can break code written against the API, unless it only widens what the API declares. After
+  a deliberate change, `./gradlew apiDump` rewrites the file and the pull request carries it, so
+  every API change is visible in review; from `1.0.0` on, a breaking change waits for a major
+  version unless it is outside the public API (README, "API stability": the integrations' `@Bean`,
+  producer and factory methods and the constructors of their properties types are listed but are
+  wiring). The same task enforces the rules of `@Internal`: no public signature names a StreamRune
+  type that is `@Internal`, nested in one, not exported, not reachable or not on the class path,
+  and every `@Internal` declaration carries the `@hidden` javadoc tag (read from the parsed sources
+  and counted against the class files). The checker is `gradle/api-check/ApiSurfaceCheck.java`;
+  `testApiSurfaceCheck`, part of `check` and `quickCheck`, runs `ApiSurfaceCheckTest.java` beside
+  it on compiled fixtures.
 - **Build scripts and the configuration cache.** Code that runs at execution time (`doLast`,
   `onlyIf`, a test listener) captures plain values computed at configuration time, never `project`
   or a top-level declaration of the script; the root `build.gradle.kts` keeps such helpers in nested

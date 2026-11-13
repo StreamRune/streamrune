@@ -918,14 +918,18 @@ class StreamRuneMicronautModuleTest {
     assertEquals(2_500L, contributor.lagThreshold());
   }
 
+  /**
+   * Upcaster beans reach the store through the event store factory; the module publishes no chain
+   * bean of its own, whose type is not part of the public API.
+   */
   @Test
-  void upcasterChainBuilt() {
-    var module = new StreamRuneMicronautModule();
-    var upcaster = mock(org.streamrune.core.upcasting.EventUpcaster.class);
-    when(upcaster.eventType()).thenReturn(new EventType("TestEvent"));
-    when(upcaster.currentVersion()).thenReturn(2);
-    var chain = module.upcasterChain(List.of(upcaster));
-    assertNotNull(chain);
+  void noBeanMethodPublishesAnUpcasterChain() {
+    assertEquals(
+        List.of(),
+        java.util.Arrays.stream(StreamRuneMicronautModule.class.getMethods())
+            .filter(m -> m.getReturnType() == org.streamrune.core.upcasting.UpcasterChain.class)
+            .map(java.lang.reflect.Method::getName)
+            .toList());
   }
 
   @Test

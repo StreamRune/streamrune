@@ -1,0 +1,56 @@
+# The public API of :streamrune-crypto:streamrune-crypto-api. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.crypto.CachedCryptoEngine implements org.streamrune.core.crypto.CryptoEngine, java.lang.AutoCloseable
+  public boolean isKeyAvailable(org.streamrune.core.types.SubjectId)
+  public byte[] decrypt(org.streamrune.core.types.SubjectId, byte[])
+  public byte[] encrypt(org.streamrune.core.types.SubjectId, byte[])
+  public java.util.Set<java.lang.String> requiredCryptoTables()
+  public org.streamrune.core.crypto.CryptoEngine delegate()
+  public org.streamrune.crypto.CryptoForgetSignal forgetSignal()
+  public static final java.time.Duration DEFAULT_EXPIRE_AFTER_WRITE
+  public static org.streamrune.crypto.CachedCryptoEngine$Builder builder()
+  public void close()
+  public void deleteKey(org.streamrune.core.types.SubjectId)
+  public void reinstate(org.streamrune.core.types.SubjectId)
+
+public static final class org.streamrune.crypto.CachedCryptoEngine$Builder
+  public <init>()
+  public org.streamrune.crypto.CachedCryptoEngine build()
+  public org.streamrune.crypto.CachedCryptoEngine$Builder delegate(org.streamrune.core.crypto.CryptoEngine)
+  public org.streamrune.crypto.CachedCryptoEngine$Builder expireAfterAccess(java.time.Duration)
+  public org.streamrune.crypto.CachedCryptoEngine$Builder expireAfterWrite(java.time.Duration)
+  public org.streamrune.crypto.CachedCryptoEngine$Builder forgetSignal(org.streamrune.crypto.CryptoForgetSignal)
+  public org.streamrune.crypto.CachedCryptoEngine$Builder maximumSize(int)
+
+public interface org.streamrune.crypto.CryptoForgetSignal extends java.lang.AutoCloseable
+  public abstract void publish(java.lang.String)
+  public abstract void subscribe(java.util.function.Consumer<java.lang.String>, java.lang.Runnable)
+  public default boolean isListening()
+  public default boolean isSubscribed()
+  public default void close()
+  public default void subscribe(java.util.function.Consumer<java.lang.String>)
+  public static final org.streamrune.crypto.CryptoForgetSignal NOOP
+
+public final class org.streamrune.crypto.CryptoShreddingModule extends com.fasterxml.jackson.databind.module.SimpleModule
+  public <init>(org.streamrune.core.crypto.CryptoEngine)
+  public <init>(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.StreamRuneMetrics)
+  public static final java.lang.String REDACTED = "[REDACTED]"
+  public void setupModule(com.fasterxml.jackson.databind.Module$SetupContext)
+
+public interface org.streamrune.crypto.ForgottenSubjectStore
+  public abstract boolean isForgotten(org.streamrune.core.types.SubjectId)
+  public abstract void forget(org.streamrune.core.types.SubjectId)
+  public abstract void reinstate(org.streamrune.core.types.SubjectId)
+  public default boolean requiresDatabaseSchema()
+  public default java.util.Optional<java.time.Instant> forgottenAt(org.streamrune.core.types.SubjectId)
+  public default java.util.Optional<java.time.Instant> keyCreatedAt(org.streamrune.core.types.SubjectId)
+  public default void forget(org.streamrune.core.types.SubjectId, java.time.Instant)
+
+public final class org.streamrune.crypto.InMemoryForgottenSubjectStore implements org.streamrune.crypto.ForgottenSubjectStore
+  public <init>()
+  public boolean isForgotten(org.streamrune.core.types.SubjectId)
+  public java.util.Optional<java.time.Instant> forgottenAt(org.streamrune.core.types.SubjectId)
+  public java.util.Optional<java.time.Instant> keyCreatedAt(org.streamrune.core.types.SubjectId)
+  public void forget(org.streamrune.core.types.SubjectId)
+  public void forget(org.streamrune.core.types.SubjectId, java.time.Instant)
+  public void reinstate(org.streamrune.core.types.SubjectId)
