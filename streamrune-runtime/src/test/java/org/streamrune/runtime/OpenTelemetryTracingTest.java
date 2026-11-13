@@ -234,6 +234,62 @@ class OpenTelemetryTracingTest {
   }
 
   @Test
+  void startChild_startsASpanOnlyUnderTheCurrentSpan_andOnlyForAnAreaThatIsOn() {
+    StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
+    java.time.Instant started = java.time.Instant.parse("2026-11-13T10:00:00Z");
+
+    assertThat(
+            tracing.startChild(
+                TracingArea.EVENT_STORE,
+                "eventstore/read",
+                SpanKind.INTERNAL,
+                SpanAttributes.empty(),
+                started))
+        .isSameAs(TraceScope.NOOP);
+    assertThat(otelTesting.getSpans()).isEmpty();
+
+    Span parent = otelTesting.getOpenTelemetry().getTracer("t").spanBuilder("parent").startSpan();
+    try (Scope _ = parent.makeCurrent()) {
+      tracing(TracingSettings.builder().area(TracingArea.EVENT_STORE, false).build())
+          .startChild(
+              TracingArea.EVENT_STORE,
+              "eventstore/read",
+              SpanKind.INTERNAL,
+              SpanAttributes.empty(),
+              started)
+          .close();
+      tracing
+          .startChild(
+              TracingArea.EVENT_STORE,
+              "eventstore/read",
+              SpanKind.INTERNAL,
+              SpanAttributes.empty(),
+              started)
+          .close();
+    } finally {
+      parent.end();
+    }
+
+    SpanData read =
+        otelTesting.getSpans().stream()
+            .filter(s -> s.getName().equals("eventstore/read"))
+            .findFirst()
+            .orElseThrow();
+    assertThat(otelTesting.getSpans()).hasSize(2);
+    assertThat(read.getParentSpanId()).isEqualTo(parent.getSpanContext().getSpanId());
+    assertThat(read.getStartEpochNanos()).isEqualTo(started.toEpochMilli() * 1_000_000L);
+    assertThatThrownBy(
+            () ->
+                tracing.startChild(
+                    TracingArea.EVENT_STORE,
+                    "eventstore/read",
+                    SpanKind.INTERNAL,
+                    SpanAttributes.empty(),
+                    null))
+        .isInstanceOf(NullPointerException.class);
+  }
+
+  @Test
   void baggage_replacesTheCurrentBaggage_andKeepKeepsIt() {
     StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
     try (Scope _ = Baggage.builder().put("outer", "kept").build().makeCurrent()) {

@@ -115,6 +115,18 @@ class EventStoreTracingTest {
     return event(STREAM, new Switched(to));
   }
 
+  /** Runs {@code read} under a span of the application, as a request handler's read runs. */
+  private static SpanData underARequest(Runnable read) {
+    io.opentelemetry.api.trace.Span request =
+        otelTesting.getOpenTelemetry().getTracer("http").spanBuilder("GET /lamps").startSpan();
+    try (io.opentelemetry.context.Scope ignored = request.makeCurrent()) {
+      read.run();
+    } finally {
+      request.end();
+    }
+    return span("GET /lamps");
+  }
+
   static SpanData span(String name) {
     List<SpanData> spans =
         otelTesting.getSpans().stream().filter(s -> s.getName().equals(name)).toList();
@@ -321,7 +333,7 @@ class EventStoreTracingTest {
     otelTesting.clearSpans();
     long before = System.currentTimeMillis() * 1_000_000L;
 
-    store.readGlobalStream(GlobalOffset.initial(), 10);
+    underARequest(() -> store.readGlobalStream(GlobalOffset.initial(), 10));
 
     SpanData read = span(TraceAttributes.EVENT_STORE_READ);
     assertThat(read.getStartEpochNanos()).isGreaterThanOrEqualTo(before - 1_000_000L);
@@ -445,24 +457,31 @@ class EventStoreTracingTest {
     store.append(STREAM, List.of(event(STREAM, new Renamed("on"))), new Version(0));
     otelTesting.clearSpans();
 
-    assertThatThrownBy(() -> store.readGlobalStream(GlobalOffset.initial(), 10))
-        .isInstanceOf(EventDeserializationException.class);
+    underARequest(
+        () ->
+            assertThatThrownBy(() -> store.readGlobalStream(GlobalOffset.initial(), 10))
+                .isInstanceOf(EventDeserializationException.class));
 
     assertFailed(span(TraceAttributes.EVENT_STORE_READ));
   }
 
   @Test
-  void aReadThatReturnsEvents_startsTheReadSpan_andAnEmptyReadStartsNone() {
+  void aReadThatReturnsEvents_startsTheReadSpanUnderTheCurrentSpan_andAnEmptyReadStartsNone() {
     InMemoryEventStore store = store(tracing());
     store.append(STREAM, List.of(switched("on"), switched("off")), new Version(0));
     otelTesting.clearSpans();
 
-    store.readGlobalStream(GlobalOffset.of(2), 10);
-    store.readStream(STREAM, new Version(2), 10);
-    assertThat(otelTesting.getSpans()).isEmpty();
+    underARequest(
+        () -> {
+          store.readGlobalStream(GlobalOffset.of(2), 10);
+          store.readStream(STREAM, new Version(2), 10);
+        });
+    assertThat(names()).containsExactly("GET /lamps");
+    otelTesting.clearSpans();
 
-    store.readGlobalStream(GlobalOffset.initial(), 10);
+    SpanData request = underARequest(() -> store.readGlobalStream(GlobalOffset.initial(), 10));
     SpanData global = span(TraceAttributes.EVENT_STORE_READ);
+    assertThat(global.getParentSpanId()).isEqualTo(request.getSpanId());
     assertThat(global.getKind()).isEqualTo(SpanKind.INTERNAL);
     assertThat(keys(global))
         .containsExactlyInAnyOrder(TraceAttributes.EVENT_COUNT, TraceAttributes.READ_KIND);
@@ -470,14 +489,26 @@ class EventStoreTracingTest {
     assertThat(string(global, TraceAttributes.READ_KIND)).isEqualTo("GLOBAL");
     otelTesting.clearSpans();
 
-    store.readStream(STREAM, new Version(1), 10);
+    underARequest(() -> store.readStream(STREAM, new Version(1), 10));
     SpanData stream = span(TraceAttributes.EVENT_STORE_READ);
     assertThat(number(stream, TraceAttributes.EVENT_COUNT)).isEqualTo(1L);
     assertThat(string(stream, TraceAttributes.READ_KIND)).isEqualTo("STREAM");
   }
 
   @Test
-  void anIdleSubscriptionPoll_startsNoSpan_andAPollThatDeliversStartsTheReadAndDeliverySpans() {
+  void aReadWithNoSpanCurrent_startsNoSpan() {
+    InMemoryEventStore store = store(tracing());
+    store.append(STREAM, List.of(switched("on")), new Version(0));
+    otelTesting.clearSpans();
+
+    assertThat(store.readGlobalStream(GlobalOffset.initial(), 10)).hasSize(1);
+    assertThat(store.readStream(STREAM, Version.initial(), 10)).hasSize(1);
+
+    assertThat(otelTesting.getSpans()).isEmpty();
+  }
+
+  @Test
+  void anIdleSubscriptionPoll_startsNoSpan_andAPollThatDelivers_isOneTraceOfItsDeliverySpan() {
     StreamRuneTracing tracing = tracing();
     InMemoryEventStore store = store(tracing);
     List<EventEnvelope> delivered = new java.util.ArrayList<>();
@@ -486,7 +517,12 @@ class EventStoreTracingTest {
             .subscriptionName(SubscriptionName.of("lamps"))
             .eventStore(store)
             .offsetStore(new InMemoryOffsetStore())
-            .listener(delivered::addAll)
+            .listener(
+                events -> {
+                  delivered.addAll(events);
+                  // A read the listener makes is part of the poll's one trace.
+                  store.readStream(STREAM, Version.initial(), 10);
+                })
             .tracing(tracing)
             .build();
 
@@ -501,6 +537,11 @@ class EventStoreTracingTest {
     assertThat(delivered).hasSize(1);
     assertThat(names())
         .containsExactlyInAnyOrder(TraceAttributes.EVENT_STORE_READ, "subscription/lamps/deliver");
+    SpanData delivery = span("subscription/lamps/deliver");
+    SpanData read = span(TraceAttributes.EVENT_STORE_READ);
+    assertThat(read.getParentSpanId()).isEqualTo(delivery.getSpanId());
+    assertThat(string(read, TraceAttributes.READ_KIND)).isEqualTo("STREAM");
+    assertThat(delivery.getParentSpanContext().isValid()).isFalse();
   }
 
   @Test

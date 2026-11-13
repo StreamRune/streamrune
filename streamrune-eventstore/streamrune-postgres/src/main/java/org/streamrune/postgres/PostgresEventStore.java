@@ -163,10 +163,12 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * TraceAttributes#EVENT_STORE_LOAD} with the children {@value
  * TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD} (when the stream has a stored snapshot) and {@value
  * TraceAttributes#EVENT_STORE_LOAD_DESERIALIZE}; a snapshot write starts {@value
- * TraceAttributes#EVENT_STORE_SNAPSHOT_SAVE}; and a global or stream read that returns events
- * starts {@value TraceAttributes#EVENT_STORE_READ}, which covers its query and the events'
- * deserialization. A read that returns nothing starts no span, so an idle subscription's polling
- * adds no trace.
+ * TraceAttributes#EVENT_STORE_SNAPSHOT_SAVE}; and a global or stream read that returns events,
+ * under a span current on its thread, starts {@value TraceAttributes#EVENT_STORE_READ} as its
+ * child, which covers its query and the events' deserialization ({@link
+ * StreamRuneTracing#startChild}). A read that returns nothing starts no span, and neither does a
+ * read with no span current, the poll of a subscription or a projection runner: its consumer's span
+ * is the one trace of the poll.
  *
  * <p><b>The saga forward fence.</b> {@link #appendWithKey(StreamId, List, Version, IdempotencyKey,
  * String, SagaOrigin)} with a saga origin takes the saga's shared fence lock in the append
@@ -1221,17 +1223,18 @@ public final class PostgresEventStore implements EventStore {
 
   /**
    * The events of a global or stream read, deserialized from {@code rows}; inside the span {@value
-   * TraceAttributes#EVENT_STORE_READ} when the event-store area is traced and the read returned at
-   * least one row. The span starts at {@code started}, when the read's query started, so it covers
-   * the query and the deserialization; a read that returned no row starts none, and an idle
-   * subscription polls without adding a trace.
+   * TraceAttributes#EVENT_STORE_READ} when the event-store area is traced, the read returned at
+   * least one row and a span is current on this thread, whose child it is. The span starts at
+   * {@code started}, when the read's query started, so it covers the query and the deserialization;
+   * a read that returned no row starts none, and a consumer's poll, with no span current, starts
+   * none either.
    */
   private List<EventEnvelope> readEvents(List<RawEventRow> rows, String readKind, Instant started) {
     if (!traced || rows.isEmpty()) {
       return toEnvelopes(rows);
     }
     TraceScope scope =
-        tracing.start(
+        tracing.startChild(
             TracingArea.EVENT_STORE,
             TraceAttributes.EVENT_STORE_READ,
             SpanKind.INTERNAL,

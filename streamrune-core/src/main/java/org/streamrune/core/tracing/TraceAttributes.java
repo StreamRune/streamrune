@@ -146,7 +146,10 @@ public final class TraceAttributes {
 
   /**
    * Span name for one global or stream read that returns at least one event, from the start of its
-   * query to the end of its deserialization; a read that returns none starts no span.
+   * query to the end of its deserialization, as a child of the span current on the reading thread.
+   * A read that returns none starts no span, and neither does a read with no span current: the poll
+   * of a subscription or a projection runner, whose delivery or processing span is the poll's one
+   * trace.
    */
   public static final String EVENT_STORE_READ = "eventstore/read";
 

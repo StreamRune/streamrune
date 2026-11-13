@@ -115,6 +115,47 @@ class StreamRuneTracingTest {
   }
 
   @Test
+  void theChildDefault_startsTheSpanAsTheStartTimeOverloadDoes() {
+    var seen = new java.util.ArrayList<String>();
+    StreamRuneTracing recording =
+        new StreamRuneTracing() {
+          @Override
+          public boolean enabled(TracingArea area) {
+            return true;
+          }
+
+          @Override
+          public TraceScope start(
+              TracingArea area,
+              String spanName,
+              SpanKind kind,
+              SpanAttributes attributes,
+              SpanLink link,
+              SpanBaggage baggage) {
+            seen.add(spanName);
+            return TraceScope.NOOP;
+          }
+        };
+
+    recording.startChild(
+        TracingArea.EVENT_STORE,
+        "eventstore/read",
+        SpanKind.INTERNAL,
+        SpanAttributes.empty(),
+        java.time.Instant.now());
+
+    assertThat(seen).containsExactly("eventstore/read");
+    assertThat(
+            StreamRuneTracing.NOOP.startChild(
+                TracingArea.EVENT_STORE,
+                "eventstore/read",
+                SpanKind.INTERNAL,
+                SpanAttributes.empty(),
+                java.time.Instant.now()))
+        .isSameAs(TraceScope.NOOP);
+  }
+
+  @Test
   void noop_rejectsANullLinkOrBaggage() {
     assertThatThrownBy(
             () ->

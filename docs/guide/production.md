@@ -446,12 +446,17 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   synchronous command's does, on a bus an integration builds too. An implementation of the seam
   whose context is bound to a thread overrides `propagating`; its default returns the task as it is.
 - `eventstore/read` covers a read from the start of its query to the end of its events'
-  deserialization. `eventstore/snapshot/load` covers turning the stored snapshot into the state
+  deserialization, as a child of the span current on the reading thread: a read a request
+  handler or a listener makes nests under their span. A read with no span current starts none:
+  the poll of a subscription or a projection runner, whose `subscription/{name}/deliver` or
+  `projection/{name}/process` span is the poll's one trace. The seam method is
+  `StreamRuneTracing.startChild`; its default starts the span whether a span is current or not,
+  and `OpenTelemetryTracing` starts it only under a valid current span. `eventstore/snapshot/load` covers turning the stored snapshot into the state
   the load starts from (deserialize, decrypt, migrate), after the snapshot's row was read in the
   load's own query; a stream without a stored snapshot starts none, and its load span carries
   `streamrune.snapshot.used` `false`.
-- Background work with nothing to do starts no span: an `eventstore/read` that returns no event
-  (an idle subscription's poll), an outbox poll that claims no entry, a saga timeout poll that
+- Background work with nothing to do starts no span: a poll that reads no event (an idle
+  subscription or projection runner), an outbox poll that claims no entry, a saga timeout poll that
   finds no saga past its deadline and a timeout claim deferred while a step of the saga is in
   flight add no trace. `outbox/relay` covers one batch that claimed entries, and
   `saga/{SagaType}/timeout` one saga the timeout runner acts on.

@@ -112,6 +112,25 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
     return new OpenTelemetryScope(span, Context.current().with(span).makeCurrent());
   }
 
+  /**
+   * Starts the span only when the OpenTelemetry context of this thread holds a valid span, one of
+   * StreamRune's or another instrumentation's (a server request, a listener's own span); with none
+   * it returns {@link TraceScope#NOOP} and starts nothing.
+   */
+  @Override
+  public TraceScope startChild(
+      TracingArea area,
+      String spanName,
+      SpanKind kind,
+      SpanAttributes attributes,
+      java.time.Instant startTime) {
+    Objects.requireNonNull(startTime, "startTime is required");
+    if (!enabled[area.ordinal()] || !Span.current().getSpanContext().isValid()) {
+      return TraceScope.NOOP;
+    }
+    return start(area, spanName, kind, attributes, startTime);
+  }
+
   @Override
   public TraceScope start(
       TracingArea area,

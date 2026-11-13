@@ -1479,6 +1479,7 @@ public interface org.streamrune.core.tracing.StreamRuneTracing
   public default java.lang.Runnable propagating(java.lang.Runnable)
   public default org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes)
   public default org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, java.time.Instant)
+  public default org.streamrune.core.tracing.TraceScope startChild(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, java.time.Instant)
   public static final org.streamrune.core.tracing.StreamRuneTracing NOOP
 
 public final class org.streamrune.core.tracing.TraceAttributes
