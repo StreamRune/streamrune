@@ -1,8 +1,17 @@
 package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.projection.OffsetStore;
@@ -25,7 +34,8 @@ import org.streamrune.core.types.ProjectionName;
  *       saves resume after it. Every store implements it: the {@code UnsupportedOperationException}
  *       of the interface's default is not a permitted answer.
  *   <li>The monotonic guard: a save that would move a name's offset backward or leave it where it
- *       is changes nothing and throws nothing. The shipped stores apply it; a store without it
+ *       is changes nothing and throws nothing, also when several threads save at once: the offset
+ *       read afterwards is the greatest one saved. The shipped stores apply it; a store without it
  *       overrides {@link #guardsAgainstRegression()} to return {@code false}, and the guard's cases
  *       are skipped.
  * </ol>
@@ -152,5 +162,52 @@ public abstract class OffsetStoreContract {
 
     assertEquals(
         GlobalOffset.of(5), store.getLastOffset(ORDERS), "only reset rewinds a guarded store");
+  }
+
+  /**
+   * Threads save rising offsets under one name at the same time, interleaved so that every thread
+   * saves values below another thread's latest: the offset read afterwards is the greatest saved,
+   * and a reader never sees it move backward meanwhile.
+   */
+  @Test
+  public void concurrentRisingSavesLeaveTheGreatestOffset() throws Exception {
+    assumeTrue(guardsAgainstRegression(), "the store applies no monotonic guard");
+    int threads = 8;
+    int savesEach = 50;
+    var start = new CountDownLatch(1);
+    ExecutorService pool = Executors.newFixedThreadPool(threads);
+    try {
+      List<Future<?>> done = new ArrayList<>();
+      for (int t = 0; t < threads; t++) {
+        long first = t + 1;
+        done.add(
+            pool.submit(
+                () -> {
+                  start.await();
+                  for (int i = 0; i < savesEach; i++) {
+                    store.saveOffset(ORDERS, GlobalOffset.of(first + (long) i * threads));
+                  }
+                  return null;
+                }));
+      }
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+      start.countDown();
+      long seen = 0;
+      while (!done.stream().allMatch(Future::isDone)) {
+        if (System.nanoTime() > deadline) {
+          fail("the saves did not finish within 60 seconds");
+        }
+        long now = store.getLastOffset(ORDERS).value();
+        assertTrue(now >= seen, "the offset moved backward from " + seen + " to " + now);
+        seen = now;
+      }
+      for (var saves : done) {
+        saves.get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+      }
+    } finally {
+      pool.shutdownNow();
+    }
+
+    assertEquals(GlobalOffset.of((long) threads * savesEach), store.getLastOffset(ORDERS));
   }
 }

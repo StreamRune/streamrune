@@ -13,17 +13,25 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.UnaryOperator;
+import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +40,7 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventDeserializationException;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStore.AppendResult;
@@ -48,13 +57,21 @@ import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.CausationId;
+import org.streamrune.core.types.CommandId;
+import org.streamrune.core.types.CorrelationId;
+import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.IdConstraints;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubjectId;
+import org.streamrune.core.types.TraceId;
+import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.EventUpcaster;
 
@@ -89,13 +106,27 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *   <li><b>Empty appends.</b> An empty event list stores nothing and returns {@code new
  *       AppendResult(List.of(), expectedVersion)} without consulting the head.
  *   <li><b>Atomicity.</b> A multi-event append stores all of its events or none, also when several
- *       race for one version.
+ *       race for one version, and its events become readable together: while appends run, no read
+ *       returns some events of one append without the others.
+ *   <li><b>Concurrent appends.</b> Appends to distinct streams at the same time store every event
+ *       once, under an offset no other event has, each stream holding versions {@code 1..n}; within
+ *       one append the offsets follow the order of its events.
  *   <li><b>No idempotence by default.</b> Appending an envelope twice stores two events.
  *   <li><b>Reads.</b> {@link EventStore#load} returns a stream's events in version order; {@link
  *       EventStore#readStream} reads one stream strictly after a version, {@link
  *       EventStore#readGlobalStream} every stream strictly after a global offset, in append order;
  *       both return at most {@code maxCount} events. The same id value under another aggregate type
- *       is another stream.
+ *       is another stream. A reader that pages through {@link EventStore#readGlobalStream} from the
+ *       offset of the last event it read visits every event once and in order, also while appends
+ *       run, and {@link EventStore#readStream} pages through a stream of over a thousand events the
+ *       same way. Every field of an event's metadata reads back as appended, on all three reads.
+ *   <li><b>Identifiers.</b> A stream whose aggregate type and id are as long as {@link
+ *       AggregateType} and {@link StreamId} allow, in ASCII, two-byte or supplementary-plane
+ *       characters, is stored, read, snapshotted and keyed like any other.
+ *   <li><b>Null arguments.</b> {@code append}, {@code load}, {@code readStream}, {@code
+ *       readGlobalStream} and {@code saveSnapshot} refuse a {@code null} stream, event list,
+ *       version or offset with {@link NullPointerException}, and {@code saveSnapshot} a {@code
+ *       null} state with {@link IllegalArgumentException}; a refused call stores nothing.
  *   <li><b>Read path.</b> On all three reads: an append stores each event at the current version of
  *       the writing store's upcaster for its type ({@code 1} without one), whatever its payload; a
  *       store reads an event stored below its upcaster's version through each step up to it, and
@@ -112,12 +143,12 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *   <li><b>Snapshots.</b> A saved snapshot is loaded with only the events after it; a later one
  *       replaces it; {@code load(streamId, n)} uses it only when its schema version is {@code n},
  *       uses any with {@code 0}, never reads it with {@link EventStore#IGNORE_SNAPSHOT}, and
- *       rejects {@code n} below that with {@link IllegalArgumentException}; a schema version below
- *       {@code 1} and a negative purge generation are rejected; a save at generation {@code 0} of a
- *       stream never purged is stored, and a store without a purge record stores a save at any
- *       generation. For a store with a purge record ({@link #purgeSnapshot(StreamId)}): a purge
- *       removes the snapshot and raises the generation, and a save from a load before the purge
- *       writes nothing.
+ *       rejects {@code n} below that with {@link IllegalArgumentException}; the save that names no
+ *       schema version stores schema version {@code 1}; a schema version below {@code 1} and a
+ *       negative purge generation are rejected; a save at generation {@code 0} of a stream never
+ *       purged is stored, and a store without a purge record stores a save at any generation. For a
+ *       store with a purge record ({@link #purgeSnapshot(StreamId)}): a purge removes the snapshot
+ *       and raises the generation, and a save from a load before the purge writes nothing.
  *   <li><b>Using a stored snapshot.</b> On a schema-version mismatch a complete chain of {@link
  *       SnapshotMigration}s migrates the snapshot, which is used with only the later events. It is
  *       discarded, and every event returned, when no complete chain reaches the expected version, a
@@ -372,6 +403,47 @@ public abstract class EventStoreContract {
         streamId, events(streamId, head + 1, count), new Version(head), key, commandType);
   }
 
+  /**
+   * Releases {@code workers} together, each on a thread of its own, and waits for all of them,
+   * calling {@code poll} on the calling thread in the meantime when it is not {@code null}. Fails
+   * when they have not finished within 60 seconds and rethrows the first failure of a worker; the
+   * threads are stopped either way.
+   */
+  private static void runConcurrently(List<Callable<?>> workers, Runnable poll) throws Exception {
+    var start = new CountDownLatch(1);
+    ExecutorService pool = Executors.newFixedThreadPool(workers.size());
+    try {
+      List<Future<?>> done = new ArrayList<>();
+      for (Callable<?> worker : workers) {
+        done.add(
+            pool.submit(
+                () -> {
+                  start.await();
+                  return worker.call();
+                }));
+      }
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+      start.countDown();
+      if (poll != null) {
+        while (!done.stream().allMatch(Future::isDone)) {
+          if (System.nanoTime() > deadline) {
+            fail("the workers did not finish within 60 seconds");
+          }
+          poll.run();
+        }
+      }
+      for (var worker : done) {
+        worker.get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+      }
+    } finally {
+      pool.shutdownNow();
+    }
+  }
+
+  private static List<EventId> eventIds(List<EventEnvelope> events) {
+    return events.stream().map(e -> e.metadata().eventId()).toList();
+  }
+
   // ── Version assignment ──────────────────────────────────────────────────────────────────────
 
   @Test
@@ -563,6 +635,222 @@ public abstract class EventStoreContract {
     }
   }
 
+  /**
+   * Writers append batches of three events to streams of their own while readers read through
+   * {@link EventStore#readGlobalStream}, {@link EventStore#readStream} and {@link EventStore#load}
+   * as fast as they can. An append's events become readable together, so no read returns the first
+   * event of a batch without the other two. A read cut short by its {@code maxCount} is not judged,
+   * and neither is a batch whose first event lies before where the read started; the verdict never
+   * depends on timing, only how likely a store that publishes a batch piecemeal is to be caught.
+   */
+  @Test
+  public void noReadReturnsPartOfAnAppendWhileMultiEventAppendsRun() throws Exception {
+    int writers = 4;
+    int batchesEach = 100;
+    int batchSize = 3;
+    int maxCount = 1_000;
+    var writing = new CountDownLatch(writers);
+    Queue<String> violations = new ConcurrentLinkedQueue<>();
+    List<StreamId> streams = new ArrayList<>();
+    List<Callable<?>> work = new ArrayList<>();
+    for (int w = 0; w < writers; w++) {
+      StreamId stream = StreamId.of(ORDER, AggregateId.of("batches-" + w));
+      streams.add(stream);
+      work.add(
+          () -> {
+            try {
+              for (int b = 0; b < batchesEach; b++) {
+                String batch = stream.aggregateId().value() + "/" + b;
+                long head = (long) b * batchSize;
+                var envelopes =
+                    LongStream.rangeClosed(1, batchSize)
+                        .mapToObj(
+                            i ->
+                                EventStoreFixture.event(
+                                    stream,
+                                    new Version(head + i),
+                                    EVENT_TYPE,
+                                    new ContractEvent(batch + "#" + i)))
+                        .toList();
+                store.append(stream, envelopes, new Version(head));
+              }
+            } finally {
+              writing.countDown();
+            }
+            return null;
+          });
+    }
+    work.add(
+        () -> {
+          GlobalOffset cursor = GlobalOffset.initial();
+          while (writing.getCount() > 0 && !Thread.currentThread().isInterrupted()) {
+            List<EventEnvelope> read = store.readGlobalStream(cursor, maxCount);
+            if (read.size() < maxCount) {
+              recordPartialBatches("readGlobalStream", read, batchSize, violations);
+            }
+            if (!read.isEmpty()) {
+              cursor = read.getLast().globalOffset();
+            }
+          }
+          return null;
+        });
+    work.add(
+        () -> {
+          Map<StreamId, Version> cursors = new HashMap<>();
+          for (int n = 0; writing.getCount() > 0 && !Thread.currentThread().isInterrupted(); n++) {
+            StreamId stream = streams.get(n % streams.size());
+            List<EventEnvelope> read =
+                store.readStream(stream, cursors.getOrDefault(stream, Version.initial()), maxCount);
+            if (read.size() < maxCount) {
+              recordPartialBatches("readStream", read, batchSize, violations);
+            }
+            if (!read.isEmpty()) {
+              cursors.put(stream, read.getLast().version());
+            }
+          }
+          return null;
+        });
+    work.add(
+        () -> {
+          for (int n = 0; writing.getCount() > 0 && !Thread.currentThread().isInterrupted(); n++) {
+            recordPartialBatches(
+                "load",
+                store.load(streams.get(n % streams.size())).events(),
+                batchSize,
+                violations);
+          }
+          return null;
+        });
+
+    runConcurrently(work, null);
+
+    assertEquals(List.of(), List.copyOf(violations), "a read returned part of an append");
+    assertEquals(writers * batchesEach * batchSize, global().size());
+  }
+
+  /**
+   * Records in {@code violations} every batch of {@code read} whose first event it holds without
+   * all {@code batchSize} of its events; a contract event's value is {@code <batch>#<index>}.
+   */
+  private static void recordPartialBatches(
+      String path, List<EventEnvelope> read, int batchSize, Queue<String> violations) {
+    Map<String, List<Integer>> indexes = new HashMap<>();
+    for (String value : values(read)) {
+      int hash = value.lastIndexOf('#');
+      indexes
+          .computeIfAbsent(value.substring(0, hash), k -> new ArrayList<>())
+          .add(Integer.parseInt(value.substring(hash + 1)));
+    }
+    List<Integer> whole = IntStream.rangeClosed(1, batchSize).boxed().toList();
+    indexes.forEach(
+        (batch, seen) -> {
+          if (seen.contains(1) && !seen.equals(whole)) {
+            violations.add(path + " returned " + batch + " as " + seen);
+          }
+        });
+  }
+
+  // ── Concurrent appends ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Writers append to streams of their own at the same time. Every event is stored once, under an
+   * offset no other event has, and each stream holds its events as versions {@code 1..n} in the
+   * order its writer appended them, under the offsets its appends returned.
+   */
+  @Test
+  public void concurrentAppendsToDistinctStreamsStoreEveryEventOnceUnderItsOwnOffset()
+      throws Exception {
+    int writers = 8;
+    int appendsEach = 20;
+    Map<StreamId, List<AppendResult>> results = new ConcurrentHashMap<>();
+    List<Callable<?>> work = new ArrayList<>();
+    int expected = 0;
+    for (int w = 0; w < writers; w++) {
+      StreamId stream = StreamId.of(ORDER, AggregateId.of("distinct-" + w));
+      int size = 1 + w % 3;
+      expected += size * appendsEach;
+      work.add(
+          () -> {
+            List<AppendResult> mine = new ArrayList<>();
+            for (int i = 0; i < appendsEach; i++) {
+              long head = (long) i * size;
+              mine.add(store.append(stream, events(stream, head + 1, size), new Version(head)));
+            }
+            results.put(stream, mine);
+            return null;
+          });
+    }
+
+    runConcurrently(work, null);
+
+    List<EventEnvelope> all = global();
+    assertEquals(expected, all.size());
+    assertEquals(all.size(), new HashSet<>(offsets(all)).size(), "every offset is distinct");
+    assertEquals(all.size(), new HashSet<>(eventIds(all)).size(), "every event is read once");
+    assertStrictlyIncreasing(offsets(all));
+    assertEquals(writers, results.size());
+    for (var entry : results.entrySet()) {
+      StreamId stream = entry.getKey();
+      List<EventEnvelope> read = stored(stream);
+      int n = read.size();
+      assertEquals(LongStream.rangeClosed(1, n).boxed().toList(), versions(read));
+      assertEquals(
+          LongStream.rangeClosed(1, n)
+              .mapToObj(v -> stream.aggregateId().value() + "@" + v)
+              .toList(),
+          values(read));
+      assertEquals(
+          entry.getValue().stream().flatMap(r -> r.globalOffsets().stream()).toList(),
+          offsets(read),
+          "the stream's events carry the offsets its appends returned");
+    }
+  }
+
+  /**
+   * Within one append offsets follow the order of its events, also while other appends run: the
+   * event read at each offset an append returned is the event given at that position. That the
+   * offsets of one append are contiguous is not promised, so nothing is asserted about other
+   * appends' offsets lying between them.
+   */
+  @Test
+  public void theOffsetsOfAnAppendFollowTheOrderOfItsEventsWhileOthersAppend() throws Exception {
+    int writers = 4;
+    int appendsEach = 10;
+    int size = 4;
+    record Appended(List<EventEnvelope> given, AppendResult result) {}
+    Queue<Appended> appended = new ConcurrentLinkedQueue<>();
+    List<Callable<?>> work = new ArrayList<>();
+    for (int w = 0; w < writers; w++) {
+      StreamId stream = StreamId.of(ORDER, AggregateId.of("ordered-" + w));
+      work.add(
+          () -> {
+            for (int i = 0; i < appendsEach; i++) {
+              long head = (long) i * size;
+              List<EventEnvelope> given = events(stream, head + 1, size);
+              appended.add(new Appended(given, store.append(stream, given, new Version(head))));
+            }
+            return null;
+          });
+    }
+
+    runConcurrently(work, null);
+
+    Map<GlobalOffset, EventId> byOffset = new HashMap<>();
+    global().forEach(e -> byOffset.put(e.globalOffset(), e.metadata().eventId()));
+    assertEquals(writers * appendsEach, appended.size());
+    for (Appended append : appended) {
+      List<GlobalOffset> offsets = append.result().globalOffsets();
+      assertEquals(size, offsets.size());
+      assertStrictlyIncreasing(offsets);
+      for (int i = 0; i < size; i++) {
+        assertEquals(
+            append.given().get(i).metadata().eventId(),
+            byOffset.get(offsets.get(i)),
+            "the event at the append's offset " + i + " is the one given at that position");
+      }
+    }
+  }
+
   // ── No idempotence by default ───────────────────────────────────────────────────────────────
 
   @Test
@@ -699,6 +987,263 @@ public abstract class EventStoreContract {
   @Test
   public void readGlobalStreamOfAnEmptyStoreIsEmpty() {
     assertTrue(global().isEmpty());
+  }
+
+  @Test
+  public void pagingByCheckpointVisitsEveryEventOnceInOrder() {
+    List<StreamId> streams = List.of(A, B, A_OTHER_TYPE);
+    Map<StreamId, Long> heads = new HashMap<>();
+    int total = 0;
+    for (int i = 0; i < 30; i++) {
+      StreamId stream = streams.get(i % streams.size());
+      long head = heads.getOrDefault(stream, 0L);
+      int size = 1 + i % 4;
+      store.append(stream, events(stream, head + 1, size), new Version(head));
+      heads.put(stream, head + size);
+      total += size;
+    }
+
+    int pageSize = 7;
+    List<EventEnvelope> paged = new ArrayList<>();
+    GlobalOffset checkpoint = GlobalOffset.initial();
+    for (List<EventEnvelope> page = store.readGlobalStream(checkpoint, pageSize);
+        !page.isEmpty();
+        page = store.readGlobalStream(checkpoint, pageSize)) {
+      assertTrue(page.size() <= pageSize, "a page holds at most maxCount events");
+      paged.addAll(page);
+      checkpoint = page.getLast().globalOffset();
+      assertTrue(paged.size() <= total, "paging reads no event twice and ends");
+    }
+
+    assertEquals(total, paged.size());
+    assertEquals(total, new HashSet<>(eventIds(paged)).size(), "every event is visited once");
+    assertStrictlyIncreasing(offsets(paged));
+    List<EventEnvelope> all = global();
+    assertEquals(offsets(all), offsets(paged));
+    assertEquals(values(all), values(paged));
+  }
+
+  /**
+   * A reader pages through {@link EventStore#readGlobalStream} from its checkpoint, the offset of
+   * the last event it read, in small pages while writers append, and drains to an empty read once
+   * they are done: it reads every appended event exactly once, in increasing offset order.
+   */
+  @Test
+  public void aReaderPagingByCheckpointWhileWritersAppendReadsEveryEventOnce() throws Exception {
+    int writers = 4;
+    int appendsEach = 25;
+    int pageSize = 7;
+    Set<EventId> appended = ConcurrentHashMap.newKeySet();
+    List<Callable<?>> work = new ArrayList<>();
+    for (int w = 0; w < writers; w++) {
+      StreamId stream = StreamId.of(ORDER, AggregateId.of("paged-" + w));
+      work.add(
+          () -> {
+            for (int i = 0; i < appendsEach; i++) {
+              List<EventEnvelope> given = events(stream, 2L * i + 1, 2);
+              store.append(stream, given, new Version(2L * i));
+              appended.addAll(eventIds(given));
+            }
+            return null;
+          });
+    }
+    List<EventEnvelope> read = new ArrayList<>();
+    GlobalOffset[] checkpoint = {GlobalOffset.initial()};
+    Runnable readPage =
+        () -> {
+          List<EventEnvelope> page = store.readGlobalStream(checkpoint[0], pageSize);
+          if (!page.isEmpty()) {
+            read.addAll(page);
+            checkpoint[0] = page.getLast().globalOffset();
+          }
+        };
+
+    runConcurrently(work, readPage);
+    int before;
+    do {
+      before = read.size();
+      readPage.run();
+      assertTrue(read.size() <= writers * appendsEach * 2, "paging reads no event twice and ends");
+    } while (read.size() > before);
+
+    assertEquals(writers * appendsEach * 2, appended.size());
+    assertStrictlyIncreasing(offsets(read));
+    assertEquals(read.size(), new HashSet<>(eventIds(read)).size(), "no event is read twice");
+    assertEquals(appended, new HashSet<>(eventIds(read)), "every appended event is read");
+    assertEquals(offsets(global()), offsets(read));
+  }
+
+  @Test
+  public void aStreamOfElevenHundredEventsLoadsWholeAndInOrder() {
+    int count = 1_100;
+    store.append(A, events(A, 1, count), Version.initial());
+    List<Long> expectedVersions = LongStream.rangeClosed(1, count).boxed().toList();
+    List<String> expectedValues =
+        LongStream.rangeClosed(1, count).mapToObj(v -> "order-A@" + v).toList();
+
+    AggregateHistory history = store.load(A);
+
+    assertEquals(expectedVersions, versions(history.events()));
+    assertEquals(expectedValues, values(history.events()));
+    assertEquals(new Version(count), history.version());
+    List<EventEnvelope> paged = new ArrayList<>();
+    Version after = Version.initial();
+    for (List<EventEnvelope> page = store.readStream(A, after, 250);
+        !page.isEmpty();
+        page = store.readStream(A, after, 250)) {
+      assertTrue(page.size() <= 250, "a page holds at most maxCount events");
+      paged.addAll(page);
+      after = page.getLast().version();
+      assertTrue(paged.size() <= count, "paging reads no event twice and ends");
+    }
+    assertEquals(expectedVersions, versions(paged));
+    assertEquals(expectedValues, values(paged));
+  }
+
+  @Test
+  public void everyMetadataFieldRoundTripsOnEveryReadPath() {
+    SagaOrigin oneHopFromASaga =
+        SagaEnvelopes.metadataOfContinuation(
+                SagaEnvelopes.causedBy(
+                    SagaForwardFenceContract.FenceState.class,
+                    SagaId.of("saga-full"),
+                    B,
+                    new ContractEvent("cause")))
+            .sagaOrigin();
+    EventMetadata full =
+        new EventMetadata(
+            EventId.of("evt-full"),
+            CommandId.of("cmd-full"),
+            TraceId.of("trace-full"),
+            CorrelationId.of("corr-full"),
+            CausationId.of("cause-full"),
+            UserId.of("user-full"),
+            Instant.parse("2026-03-04T05:06:07.123456789Z"),
+            Map.of("tenant", "t-1", "region", "eu-west"),
+            oneHopFromASaga,
+            SpanLink.ofW3c("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"));
+    EventMetadata sparse =
+        new EventMetadata(
+            EventId.of("evt-sparse"),
+            CommandId.of("cmd-sparse"),
+            null,
+            CorrelationId.of("corr-sparse"),
+            null,
+            null,
+            Instant.parse("2026-03-04T05:06:08Z"),
+            null,
+            null,
+            null);
+    assertTrue(full.spanContext().isPresent(), "the full metadata links a span");
+    assertEquals(1, oneHopFromASaga.hop());
+    store.append(
+        A,
+        List.of(withMetadata(event(A, 1), full), withMetadata(event(A, 2), sparse)),
+        Version.initial());
+    List<EventMetadata> expected = List.of(full, sparse);
+
+    assertEquals(expected, metadata(store.load(A).events()), "load");
+    assertEquals(expected, metadata(stored(A)), "readStream");
+    assertEquals(expected, metadata(global()), "readGlobalStream");
+  }
+
+  private static EventEnvelope withMetadata(EventEnvelope envelope, EventMetadata metadata) {
+    return new EventEnvelope(
+        envelope.globalOffset(),
+        envelope.streamId(),
+        envelope.version(),
+        envelope.eventType(),
+        envelope.event(),
+        metadata);
+  }
+
+  private static List<EventMetadata> metadata(List<EventEnvelope> events) {
+    return events.stream().map(EventEnvelope::metadata).toList();
+  }
+
+  // ── Identifier lengths ─────────────────────────────────────────────────────────────────────
+
+  /**
+   * Streams whose aggregate type and id are as long as the core types allow: a type of {@value
+   * AggregateType#MAX_LENGTH} characters, and ids of {@value IdConstraints#MAX_LENGTH} characters
+   * that are ASCII, two bytes each in UTF-8, or supplementary-plane characters of two UTF-16 code
+   * units each (which {@link StreamId} counts as one character each, as the {@code aggregate_id}
+   * columns do, and which only {@link AggregateId}'s decode door builds). Each is appended, read on
+   * every path, snapshotted and, with an inbox, keyed.
+   */
+  @Test
+  public void idsAsLongAsTheCoreTypesAllowAreStoredReadAndSnapshotted() {
+    AggregateType longestType =
+        AggregateType.of("ids_" + "t".repeat(AggregateType.MAX_LENGTH - "ids_".length()));
+    int longest = IdConstraints.MAX_LENGTH;
+    List<StreamId> streams =
+        List.of(
+            StreamId.of(longestType, AggregateId.of("a".repeat(longest))),
+            StreamId.of(longestType, AggregateId.of("é".repeat(longest))),
+            StreamId.of(longestType, new AggregateId("😀".repeat(longest))));
+
+    for (StreamId stream : streams) {
+      String shown = stream.aggregateId().value().substring(0, 2);
+      AppendResult appended = store.append(stream, events(stream, 1, 2), Version.initial());
+
+      AggregateHistory history = store.load(stream);
+      assertEquals(List.of(1L, 2L), versions(history.events()), shown);
+      assertEquals(appended.globalOffsets(), offsets(history.events()), shown);
+      history.events().forEach(e -> assertEquals(stream, e.streamId(), shown));
+      stored(stream).forEach(e -> assertEquals(stream, e.streamId(), shown));
+      List<EventEnvelope> fromGlobal =
+          store.readGlobalStream(
+              GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 2);
+      fromGlobal.forEach(e -> assertEquals(stream, e.streamId(), shown));
+      assertEquals(appended.globalOffsets(), offsets(fromGlobal), shown);
+      if (supportsSnapshots()) {
+        store.saveSnapshot(stream, new Version(2), new ContractState(shown));
+        assertEquals(new ContractState(shown), store.load(stream).snapshotState(), shown);
+      }
+      if (supportsIdempotentAppend()) {
+        IdempotencyKey key = IdempotencyKey.of("key-long-" + streams.indexOf(stream));
+        assertFalse(appendWithKey(stream, 2, 1, key, COMMAND_TYPE).alreadyApplied(), shown);
+        assertTrue(appendWithKey(stream, 2, 1, key, COMMAND_TYPE).alreadyApplied(), shown);
+        assertEquals(List.of(1L, 2L, 3L), versions(stored(stream)), shown);
+      }
+    }
+  }
+
+  // ── Null arguments ─────────────────────────────────────────────────────────────────────────
+
+  @Test
+  public void appendRefusesANullArgumentAndStoresNothing() {
+    assertThrows(
+        NullPointerException.class, () -> store.append(null, events(A, 1, 1), Version.initial()));
+    assertThrows(NullPointerException.class, () -> store.append(A, null, Version.initial()));
+    assertThrows(NullPointerException.class, () -> store.append(A, events(A, 1, 1), null));
+
+    assertTrue(global().isEmpty());
+  }
+
+  @Test
+  public void loadRefusesANullStream() {
+    assertThrows(NullPointerException.class, () -> store.load(null));
+    assertThrows(NullPointerException.class, () -> store.load(null, 0));
+    assertThrows(NullPointerException.class, () -> store.load(null, EventStore.IGNORE_SNAPSHOT));
+  }
+
+  @Test
+  public void readStreamRefusesANullArgumentOnAnEmptyAndAFilledStore() {
+    assertThrows(NullPointerException.class, () -> store.readStream(null, Version.initial(), 10));
+    assertThrows(NullPointerException.class, () -> store.readStream(A, null, 10));
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    assertThrows(NullPointerException.class, () -> store.readStream(null, Version.initial(), 10));
+    assertThrows(NullPointerException.class, () -> store.readStream(A, null, 10));
+  }
+
+  @Test
+  public void readGlobalStreamRefusesANullOffsetOnAnEmptyAndAFilledStore() {
+    assertThrows(NullPointerException.class, () -> store.readGlobalStream(null, 10));
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    assertThrows(NullPointerException.class, () -> store.readGlobalStream(null, 10));
   }
 
   // ── The global head ─────────────────────────────────────────────────────────────────────────
@@ -1001,6 +1546,48 @@ public abstract class EventStoreContract {
     assumeFalse(supportsSnapshotSchemaVersions(), "the store has snapshot schema versions");
 
     assertThrows(UnsupportedOperationException.class, () -> store.load(A, 1));
+  }
+
+  @Test
+  public void theSaveWithoutASchemaVersionStoresSchemaVersionOne() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    store.append(A, events(A, 1, 3), Version.initial());
+
+    store.saveSnapshot(A, new Version(2), new ContractState("default-schema"));
+
+    AggregateHistory atOne = store.load(A, 1);
+    assertEquals(new ContractState("default-schema"), atOne.snapshotState());
+    assertEquals(List.of(3L), versions(atOne.events()));
+    AggregateHistory atTwo = store.load(A, 2);
+    assertNull(atTwo.snapshotState());
+    assertEquals(List.of(1L, 2L, 3L), versions(atTwo.events()));
+  }
+
+  @Test
+  public void aSaveWithANullStateIsRejectedWithAnIllegalArgumentException() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    assertThrows(
+        IllegalArgumentException.class, () -> store.saveSnapshot(A, new Version(2), null, 1, 0));
+    assertThrows(IllegalArgumentException.class, () -> store.saveSnapshot(A, new Version(2), null));
+
+    assertNull(store.load(A).snapshotState(), "nothing is stored");
+  }
+
+  @Test
+  public void aSaveWithANullStreamOrVersionIsRejectedWithANullPointerException() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    assertThrows(
+        NullPointerException.class,
+        () -> store.saveSnapshot(null, new Version(2), new ContractState("no-stream"), 1, 0));
+    assertThrows(
+        NullPointerException.class,
+        () -> store.saveSnapshot(A, null, new ContractState("no-version"), 1, 0));
+
+    assertNull(store.load(A).snapshotState(), "nothing is stored");
   }
 
   // ── Snapshot purge ──────────────────────────────────────────────────────────────────────────

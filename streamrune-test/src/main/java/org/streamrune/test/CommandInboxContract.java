@@ -1,6 +1,8 @@
 package org.streamrune.test;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -50,14 +52,17 @@ import org.streamrune.core.types.Version;
  *   <li>{@link CommandInbox#find} of a key never processed is empty.
  *   <li>A processed command is found under its key with the result it recorded: its command type,
  *       its stream (aggregate type included), its final version, the global offsets of its events
- *       in order, and the time it was processed.
+ *       in order, and the time it was processed. {@link InboxResult#requireBoundTo} of the row
+ *       found accepts its own command type and stream and refuses the same id value under another
+ *       aggregate type.
  *   <li>A zero-event command is recorded too, with no offsets and the expected version as its final
  *       version, so a redelivery is not re-run.
  *   <li>A keyed append that fails records nothing: the row and the events are visible together or
  *       not at all.
  *   <li>A replay leaves the recorded row as it was.
  *   <li>{@link CommandInbox#deleteProcessedBefore} deletes exactly the rows processed strictly
- *       before the cutoff, returns how many it deleted, and a deleted key is not found.
+ *       before the cutoff, returns how many it deleted, and a deleted key is not found: a command
+ *       presenting it again is processed again.
  * </ol>
  */
 public abstract class CommandInboxContract {
@@ -176,6 +181,18 @@ public abstract class CommandInboxContract {
   }
 
   @Test
+  public void aFoundRowIsBoundToItsOwnStreamAndNotToTheSameIdUnderAnotherType() {
+    IdempotencyKey key = IdempotencyKey.of("inbox-bound");
+    process(key, STREAM, 0, 1);
+
+    InboxResult row = inbox().find(key).orElseThrow();
+
+    assertDoesNotThrow(() -> row.requireBoundTo(COMMAND_TYPE, STREAM));
+    assertThrows(
+        IllegalArgumentException.class, () -> row.requireBoundTo(COMMAND_TYPE, STREAM_OTHER_TYPE));
+  }
+
+  @Test
   public void aZeroEventCommandIsRecordedWithNoOffsets() {
     process(IdempotencyKey.of("inbox-before-zero-events"), STREAM, 0, 2);
     IdempotencyKey key = IdempotencyKey.of("inbox-zero-events");
@@ -247,6 +264,26 @@ public abstract class CommandInboxContract {
     assertEquals(2, deleted);
     assertTrue(inbox().find(IdempotencyKey.of("inbox-old-1")).isEmpty());
     assertTrue(inbox().find(IdempotencyKey.of("inbox-old-2")).isEmpty());
+  }
+
+  @Test
+  public void aKeyDeletedByRetentionIsProcessedAgain() {
+    IdempotencyKey key = IdempotencyKey.of("inbox-expired");
+    var first = process(key, STREAM, 0, 1);
+    setProcessedAt(inboxed, key, AGED);
+    assertEquals(1, inbox().deleteProcessedBefore(AGED.plusSeconds(1)));
+
+    var again = process(key, STREAM, 1, 1);
+
+    assertFalse(again.alreadyApplied(), "a deleted key does not answer a redelivery");
+    assertEquals(new Version(2), again.finalVersion());
+    assertEquals(1, again.globalOffsets().size());
+    assertNotEquals(first.globalOffsets(), again.globalOffsets());
+    assertEquals(
+        2, eventStore().readStream(STREAM, Version.initial(), 10).size(), "its events are stored");
+    InboxResult row = inbox().find(key).orElseThrow();
+    assertEquals(again.globalOffsets(), row.globalOffsets());
+    assertEquals(new Version(2), row.finalVersion());
   }
 
   @Test
