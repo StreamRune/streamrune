@@ -161,6 +161,42 @@ class EventMetadataTest {
     return new ObjectMapper().registerModule(new JavaTimeModule());
   }
 
+  /**
+   * A mapper that may not override access modifiers, a hardening some applications apply to every
+   * mapper they hand a component: it reaches public members only.
+   */
+  private static ObjectMapper accessCheckingMapper() {
+    return com.fasterxml.jackson.databind.json.JsonMapper.builder()
+        .addModule(new JavaTimeModule())
+        .disable(com.fasterxml.jackson.databind.MapperFeature.CAN_OVERRIDE_ACCESS_MODIFIERS)
+        .build();
+  }
+
+  @Test
+  void aMapperThatMayNotOverrideAccessModifiers_writesAndReadsTheSpanContext() throws Exception {
+    ObjectMapper mapper = accessCheckingMapper();
+    SpanLink link =
+        new SpanLink(TraceId.of("4bf92f3577b34da6a3ce929d0e0e4736"), SpanId.of("00f067aa0ba902b7"));
+    for (SpanLink spanContext : new SpanLink[] {link, SpanLink.NONE}) {
+      var md =
+          new EventMetadata(
+              EventId.of("evt_1"),
+              CommandId.of("cmd_1"),
+              null,
+              CorrelationId.of("corr_1"),
+              null,
+              null,
+              Instant.parse("2026-11-12T00:00:00Z"),
+              Map.of(),
+              null,
+              spanContext);
+
+      String json = mapper.writeValueAsString(md);
+
+      assertEquals(spanContext, mapper.readValue(json, EventMetadata.class).spanContext());
+    }
+  }
+
   private static final SagaOrigin ORIGIN =
       SagaOrigin.dispatchedBy(SagaType.of("com.shop.OrderSaga$State"), SagaId.of("order-saga-42"));
 

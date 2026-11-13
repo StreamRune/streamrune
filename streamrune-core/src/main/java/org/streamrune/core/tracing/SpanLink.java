@@ -104,12 +104,13 @@ public record SpanLink(TraceId traceId, SpanId spanId) {
    * null} for {@link #NONE} and for any link whose ids are not valid W3C ids, the rule the outbox
    * columns follow. A property that holds a link and is annotated
    * {@code @JsonInclude(JsonInclude.Include.NON_EMPTY)} is left out of the JSON when it holds
-   * {@code NONE}, so {@code NONE} never appears in JSON.
+   * {@code NONE}, so {@code NONE} never appears in JSON. Public, as {@link #fromJson(Object)} is,
+   * so a mapper that may not override access modifiers writes and reads a link too.
    *
    * @return the two ids, or {@code null} for {@link #NONE}
    */
   @JsonValue
-  Map<String, String> toJson() {
+  public Map<String, String> toJson() {
     if (!isW3c()) {
       return null;
     }
@@ -129,7 +130,7 @@ public record SpanLink(TraceId traceId, SpanId spanId) {
    * @return the link, or {@link #NONE}
    */
   @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
-  static SpanLink fromJson(Object json) {
+  public static SpanLink fromJson(Object json) {
     if (json instanceof Map<?, ?> map
         && map.get("traceId") instanceof String traceId
         && map.get("spanId") instanceof String spanId) {
