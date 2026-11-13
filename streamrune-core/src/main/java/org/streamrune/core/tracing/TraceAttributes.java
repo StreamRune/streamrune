@@ -79,7 +79,9 @@ public final class TraceAttributes {
    * its subtypes {@code ValidationException} and {@code AuthorizationException} included. Present
    * on a rejected command only: a rejection is the command's answer, not a failure, so its span
    * keeps the unset status and records no exception, as an HTTP server span does for a client
-   * error. The rejection's message is not exported.
+   * error. The rejection's message is not exported. The span {@code saga/{SagaType}/compensate}
+   * carries it too when its compensation command was rejected; that span is ERROR, since a refused
+   * compensation is a failure of the saga, and records the rejection by its type alone.
    */
   public static final String COMMAND_REJECTION_TYPE = "streamrune.command.rejection.type";
 

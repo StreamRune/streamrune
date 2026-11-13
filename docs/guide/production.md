@@ -405,7 +405,7 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 | `OutboxPoller` | `outbox/relay` | `INTERNAL` | `streamrune.batch.size`, `streamrune.outbox.published`, `streamrune.outbox.failed` |
 | `OutboxPoller` | `outbox/publish` | `PRODUCER` | `streamrune.outbox.entry.id`, `streamrune.outbox.payload.type` |
 | `SagaRunner` | `saga/{SagaType}/step` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id`, `streamrune.saga.step.outcome` |
-| `SagaRunner`, `SagaTimeoutRunner` | `saga/{SagaType}/compensate` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id`, `streamrune.saga.compensation.index` |
+| `SagaRunner`, `SagaTimeoutRunner` | `saga/{SagaType}/compensate` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id`, `streamrune.saga.compensation.index`, `streamrune.command.rejection.type` |
 | `SagaTimeoutRunner` | `saga/{SagaType}/timeout` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id` |
 
 - `streamrune.stream.id` (`<type>:<id>`, for example `order:ord-42`) is set when the span starts,
@@ -425,7 +425,10 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   the exception's own message, sanitized as free text and cut at 256 characters (`...` after it),
   with its type and its stack trace (the messages of its causes are left out); a message of yours
   must not quote personal data. A command its domain rejects exports the rejection's type only,
-  never its message. A subscription's delivery span clears the OpenTelemetry baggage while its
+  never its message: its `command/…` span keeps the unset status, and when it is a saga's
+  compensation command its `saga/{SagaType}/compensate` span is `ERROR` (a refused compensation
+  is a failure of the saga) and records it by type too, as a `CompensationRejectedException`
+  without a message around the rejection, with `streamrune.command.rejection.type`. A subscription's delivery span clears the OpenTelemetry baggage while its
   listener runs, so no caller's baggage, `role` included, travels with the listener's outbound
   calls; the listener reads an event's baggage from that event's metadata.
 - **Which process emitted a span.** StreamRune's attributes name types and ids, never the process.
