@@ -18,7 +18,9 @@ A default is written in one form in this guide and in every other table with a `
   write the unit, also for zero: `0s`. Micronaut refuses every value it cannot read, naming the
   property and the value, where it would otherwise bind the property's default: a unit in upper
   case or after a space (`1D`, `1 d`), a decimal (`1.5d`), and a number of milliseconds above
-  2147483647 (`2592000000ms`; write `30d`);
+  2147483647 (`2592000000ms`; write `30d`). An interval or delay key written with a `-ms` suffix
+  is not a key: the three integrations refuse to start on it, and Spring and Micronaut name the key
+  to set instead;
 - a boolean or a number as its value: `true`, `100`, `2.0`; a text as it is: `operator-only`;
 - `—` where the property has no default.
 

@@ -1185,8 +1185,8 @@ suffix — `streamrune.polling-interval`, `streamrune.retry-initial-delay`,
 `streamrune.dead-letter.retry-interval`, `streamrune.outbox.flush-interval`, … — and a bare number is
 not portable: Spring reads it as milliseconds, Quarkus as seconds, and Micronaut refuses to start on
 it, so always write the unit, also for zero, `0s`; Micronaut refuses any value it cannot read,
-naming the property and the value, and the three refuse a `-ms` spelling of an interval key, naming
-the key to set):
+naming the property and the value, and the three refuse a `-ms` spelling of an interval key —
+Spring and Micronaut name the key to set):
 
 - The event store through `PostgresEventStoreFactory`, a `VirtualThreadCommandBus` with
   `PostgresCommandInbox`, `PostgresAuditStore`, `PostgresDeadLetterQueue` + `DeadLetterRetryRunner`,
