@@ -391,7 +391,7 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 
 | Emitter | Span name | Kind | Attributes |
 | --- | --- | --- | --- |
-| `TracingCommandInterceptor` | `command/{CommandType}` | `INTERNAL` | `streamrune.command.type`, `streamrune.command.id`, `streamrune.aggregate.type`, `streamrune.aggregate.id`, `streamrune.stream.id` |
+| `TracingCommandInterceptor` | `command/{CommandType}` | `INTERNAL` | `streamrune.command.type`, `streamrune.command.id`, `streamrune.aggregate.type`, `streamrune.aggregate.id`, `streamrune.stream.id`, `streamrune.command.rejection.type` |
 | `TracingEventListener` | `subscription/{name}/deliver` | `CONSUMER` | `streamrune.subscription.name`, `streamrune.batch.size` |
 | `TracingProjectionDecorator` | `projection/{name}/process` | `INTERNAL` | `streamrune.projection.name`, `streamrune.batch.size` |
 | `PostgresEventStore`, `InMemoryEventStore` | `eventstore/append` | `INTERNAL` | `streamrune.stream.id`, `streamrune.aggregate.type`, `streamrune.event.count`, `streamrune.expected.version`, `streamrune.outbox.entry.count`, `streamrune.append.outcome` |
@@ -455,7 +455,10 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   finds no saga past its deadline and a timeout claim deferred while a step of the saga is in
   flight add no trace. `outbox/relay` covers one batch that claimed entries, and
   `saga/{SagaType}/timeout` one saga the timeout runner acts on.
-- An expected outcome is an attribute value, and the span is not marked as failed: a lock held
+- An expected outcome is an attribute value, and the span is not marked as failed: a command a
+  `DomainException` rejected — its decider, or authorization or validation in front of it
+  (`streamrune.command.rejection.type`, the exception's class name; its message is not exported,
+  and the span records no exception, as an HTTP server span does for a `4xx`), a lock held
   past the timeout (`streamrune.lock.outcome` `TIMEOUT`, or `INTERRUPTED`), an append that lost
   its optimistic-lock check (`streamrune.append.outcome` `CONFLICT`; `DUPLICATE` for a keyed
   append whose key was already recorded; `FENCED` for a saga's forward command the saga forward

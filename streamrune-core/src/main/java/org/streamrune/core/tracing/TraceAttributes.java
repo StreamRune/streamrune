@@ -36,10 +36,11 @@ import org.streamrune.core.types.SubscriptionName;
  * names, never ids. A constant whose value holds a {@code /} is a span name; every other constant
  * is an attribute key.
  *
- * <p><b>Outcomes.</b> An expected outcome — a lock not acquired in time, an append that lost its
- * optimistic-lock check or that the saga forward fence refused, a saga event held for later, a saga
- * step that waits for another step of its saga — is an attribute value, and the span keeps an unset
- * or OK status. A failure records the exception type and message and the ERROR status.
+ * <p><b>Outcomes.</b> An expected outcome — a command its domain rejected, a lock not acquired in
+ * time, an append that lost its optimistic-lock check or that the saga forward fence refused, a
+ * saga event held for later, a saga step that waits for another step of its saga — is an attribute
+ * value, and the span keeps an unset or OK status. A failure records the exception type and message
+ * and the ERROR status.
  */
 public final class TraceAttributes {
 
@@ -64,6 +65,15 @@ public final class TraceAttributes {
    * when the span starts: the command bus composes the stream before any interceptor runs.
    */
   public static final String STREAM_ID = "streamrune.stream.id";
+
+  /**
+   * The class name of the {@link org.streamrune.core.DomainException} that rejected the command,
+   * its subtypes {@code ValidationException} and {@code AuthorizationException} included. Present
+   * on a rejected command only: a rejection is the command's answer, not a failure, so its span
+   * keeps the unset status and records no exception, as an HTTP server span does for a client
+   * error. The rejection's message is not exported.
+   */
+  public static final String COMMAND_REJECTION_TYPE = "streamrune.command.rejection.type";
 
   /**
    * Span name for one command execution.

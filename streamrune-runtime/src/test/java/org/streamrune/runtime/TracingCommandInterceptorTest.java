@@ -165,6 +165,42 @@ class TracingCommandInterceptorTest {
   }
 
   @Test
+  void aRejection_isTheCommandsAnswer_withNoErrorStatus_noEvent_andItsTypeOnly() {
+    var interceptor =
+        new TracingCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
+    List<RuntimeException> rejections =
+        List.of(
+            new org.streamrune.core.DomainException("Customer already registered: cust-alice"),
+            new org.streamrune.core.ValidationException("quantity must be positive", List.of()),
+            new org.streamrune.core.AuthorizationException("not the owner of cust-alice"));
+
+    for (RuntimeException rejection : rejections) {
+      otelTesting.clearSpans();
+      var ctx = ctx("RegisterCustomer");
+      interceptor.before(ctx);
+      interceptor.onError(ctx, rejection);
+
+      SpanData span = otelTesting.getSpans().getFirst();
+      assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode(), rejection::toString);
+      assertTrue(span.getEvents().isEmpty(), rejection::toString);
+      assertEquals(
+          rejection.getClass().getName(),
+          span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.COMMAND_REJECTION_TYPE)));
+      assertFalse(span.toString().contains("cust-alice"), span::toString);
+    }
+
+    otelTesting.clearSpans();
+    var ctx = ctx("RegisterCustomer");
+    interceptor.before(ctx);
+    interceptor.onError(ctx, new IllegalStateException("the store is down"));
+    SpanData failed = otelTesting.getSpans().getFirst();
+    assertEquals(StatusCode.ERROR, failed.getStatus().getStatusCode());
+    assertNull(
+        failed.getAttributes().get(AttributeKey.stringKey(TraceAttributes.COMMAND_REJECTION_TYPE)));
+  }
+
+  @Test
   void aContextWithoutAStream_carriesNeitherTypeNorStreamAttribute() {
     var interceptor =
         new TracingCommandInterceptor(

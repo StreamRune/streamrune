@@ -3,6 +3,7 @@ package org.streamrune.runtime;
 import java.util.ArrayDeque;
 import java.util.Objects;
 import org.streamrune.core.CommandInterceptor;
+import org.streamrune.core.DomainException;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
@@ -34,6 +35,12 @@ import org.streamrune.core.types.LogSanitizer;
  *
  * <p>The span name and attribute keys are those of {@link TraceAttributes}. The command id, the
  * aggregate id and the stream id pass {@link LogSanitizer#sanitizeForTrace(String)}.
+ *
+ * <p>A command that succeeds ends its span with the OK status. A command that a {@link
+ * DomainException} rejects — its decider, or a gate such as authorization or validation — ends it
+ * with the unset status and {@link TraceAttributes#COMMAND_REJECTION_TYPE}: a rejection is the
+ * command's answer, as a client error is an HTTP server's, and an operator who alerts on failed
+ * spans is not paged for it. Any other failure records the exception and the ERROR status.
  *
  * <p>For {@code executeAsync}: the command span is created on the spawned virtual thread. The bus
  * wraps the command's task with {@link StreamRuneTracing#propagating(Runnable)} of this
@@ -126,7 +133,10 @@ public final class TracingCommandInterceptor implements CommandInterceptor {
       return; // no matching before() — nothing to end or close
     }
     try {
-      if (error != null) {
+      if (error instanceof DomainException rejection) {
+        // The domain's answer, not a failure: no ERROR status, no exception event, no message.
+        scope.setAttribute(TraceAttributes.COMMAND_REJECTION_TYPE, rejection.getClass().getName());
+      } else if (error != null) {
         scope.recordError(error);
       } else {
         scope.recordSuccess();
