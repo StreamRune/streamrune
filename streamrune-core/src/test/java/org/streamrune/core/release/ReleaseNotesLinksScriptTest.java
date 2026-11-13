@@ -69,6 +69,26 @@ class ReleaseNotesLinksScriptTest {
   }
 
   @Test
+  void aSingleQuotedTitleAndBracketsInTheLinkTextAreRewrittenToo() throws IOException {
+    String notes = rewrite("[g](docs/g.md 'The guide') and [see [RFC]](README.md#api)\n", 0);
+
+    assertThat(notes)
+        .isEqualTo(
+            "[g]("
+                + BASE
+                + "/docs/g.md 'The guide') and [see [RFC]]("
+                + BASE
+                + "/README.md#api)\n");
+  }
+
+  @Test
+  void aTargetWithParentStepsAnywhereRefusesTheNotes() throws IOException {
+    assertThat(run("[a](./../other/README.md)\n").exitCode()).isEqualTo(1);
+    assertThat(run("[b](docs/../../other/README.md)\n").exitCode()).isEqualTo(1);
+    assertThat(run("[c]: docs/../../other/README.md\n").exitCode()).isEqualTo(1);
+  }
+
+  @Test
   void aFootnoteDefinitionIsNotALink() throws IOException {
     String text = "A claim.[^1]\n\n[^1]: Measured on the nightly runs.\n";
 
