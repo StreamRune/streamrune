@@ -156,11 +156,6 @@ class PostgresCommandInboxTest {
   }
 
   @Test
-  void findReturnsEmptyForUnknownKey() {
-    assertTrue(inbox.find(IdempotencyKey.of("no-such-key")).isEmpty());
-  }
-
-  @Test
   void deleteProcessedBeforePrunesOldRows() throws Exception {
     // Insert 2 old rows and 1 recent row
     Instant past = Instant.parse("2020-01-01T00:00:00Z");

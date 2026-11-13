@@ -1475,8 +1475,9 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   take `clock(Clock)`; with one, the timestamps they record and the durations they measure come
   from it (without one, the system clock and `System.nanoTime()`; a system clock such as
   `Clock.systemUTC()` stamps and leaves the durations on `System.nanoTime()`).
-- Contract suites a custom store can extend: `SagaStoreContract`, `SagaDeadLetterStoreContract`,
-  `OutboxStoreContract`, `AtomicBatchProcessorContract`; and `CommandBusProvenanceContract` for a
+- Contract suites a custom store can extend: `EventStoreContract`, `CommandInboxContract`,
+  `OffsetStoreContract`, `SagaStoreContract`, `SagaDeadLetterStoreContract`, `OutboxStoreContract`,
+  `SagaForwardFenceContract`, `AtomicBatchProcessorContract`; and `CommandBusProvenanceContract` for a
   custom `CommandBus`: the saga origin and the causation id come from the bound dispatch cause and
   from nowhere else; a command executed inside `StreamRuneContext.continuing` stores what that
   helper binds; with an origin bound the stored correlation id is the origin's reserved one; a

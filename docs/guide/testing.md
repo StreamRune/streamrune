@@ -909,6 +909,52 @@ it from synthetic data only, and keep it in test resources.
 
 ---
 
+## Proving a storage backend
+
+A backend that stores events in another database implements the storage interfaces of
+`streamrune-core`. For each of them `streamrune-test` holds an abstract JUnit suite with one test per
+promise the interface's javadoc makes: a test class of the backend extends the suite, implements its
+factory method, and inherits the tests. `InMemoryEventStore` and `PostgresEventStore`, and the other
+shipped stores, run the same suites, so a backend that passes behaves as they do.
+
+```java
+@Testcontainers
+class MyEventStoreContractTest extends EventStoreContract {
+
+  @Override
+  protected EventStore newStore() {
+    emptyTheTables();                                    // a fresh, empty store for each test
+    return new MyEventStore(dataSource, typeRegistry, new MyCommandInbox(dataSource));
+  }
+}
+```
+
+- `EventStoreContract` — `newStore()` returns an `EventStore` with empty storage and a command inbox.
+  It covers version assignment, strict conflict detection (an expected version behind or beyond the
+  head), the empty append, atomicity (also of appends racing for one version), the absence of
+  idempotence by default, the reads, the global head (also while appends run concurrently),
+  snapshots and `appendWithKey`. The suite appends `EventStoreContract.ContractEvent` under the event
+  type `ContractEvent` and saves `EventStoreContract.ContractState` snapshots: a registry-backed
+  store resolves both. The javadoc lets a store leave four capabilities out, answering them with
+  `UnsupportedOperationException`; a store that does overrides `supportsIdempotentAppend()`,
+  `supportsSnapshots()`, `supportsSnapshotSchemaVersions()` or `supportsLastGlobalOffset()` to return
+  `false`, and the suite checks the refusal instead. A store whose snapshots a `SnapshotPurger`
+  purges overrides `purgeSnapshot(streamId)` to purge one and return `true`, which runs the purge
+  generation cases. The saga forward fence has its own suite, `SagaForwardFenceContract`.
+- `CommandInboxContract` — `inbox()` returns the `CommandInbox` and `eventStore()` the event store
+  whose `appendWithKey` writes its rows (the inbox has no write method of its own). It covers the
+  recorded result of a processed command, the zero-event command, a failed keyed append that
+  records nothing, and `deleteProcessedBefore`.
+- `OffsetStoreContract` — `newStore()` returns an `OffsetStore`. It covers reads, saves, per-name
+  isolation, `reset` and the monotonic guard; a store without the guard overrides
+  `guardsAgainstRegression()` to return `false`.
+
+`InMemoryEventStoreContractTest`, `InMemoryCommandInboxContractTest` and
+`InMemoryOffsetStoreContractTest` in `streamrune-test`, and their `Postgres…ContractTest`
+counterparts in `streamrune-postgres`, show the factory methods for the shipped stores.
+
+---
+
 ## The kit, type by type
 
 Every public type of `streamrune-test` (package `org.streamrune.test`):
@@ -950,6 +996,9 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `SagaStoreContract` | The contract suite of every `SagaStore`: the recovery state a saga runner, step executor and replayer depend on. |
 | `SagaDeadLetterStoreContract` | The contract suite of every `SagaDeadLetterStore`: stored facts win, and the shield decides what retention removes. |
 | `SagaForwardFenceContract` | The contract suite of an `EventStore` that fences a saga's forward command against the rows of a `SagaStore`. |
+| `EventStoreContract` | The contract suite of every `EventStore`: versions, conflicts, atomicity, reads, the global head, snapshots and the idempotent append; extend it to prove a custom store. |
+| `CommandInboxContract` | The contract suite of every `CommandInbox`, written through the keyed append of its event store: the recorded result and retention. |
+| `OffsetStoreContract` | The contract suite of every `OffsetStore`: reads, saves, `reset` and the monotonic guard. |
 | `NativeReflectionTypes` | Derives from code the StreamRune types a GraalVM native image registers for reflection; the integrations' native-hint tests compare their hints with it. |
 | `ShippedMigrationScripts` | Lists the Flyway migration scripts StreamRune ships, from the class path, so a native-image test can check each is a registered resource. |
 | `UnregisteredSealedTypes` | Builds a sealed type that looks like one a native image did not register (`isSealed()` with no permitted subclasses), to test the code that refuses it. |

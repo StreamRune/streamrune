@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import org.streamrune.core.CommandInbox;
 import org.streamrune.core.CommandInbox.InboxResult;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -27,11 +26,6 @@ class InMemoryCommandInboxTest {
   private InboxResult makeResult(IdempotencyKey k, Instant processedAt) {
     return new InboxResult(
         k, "PlaceOrder", streamId, new Version(1), List.of(GlobalOffset.of(1L)), processedAt);
-  }
-
-  @Test
-  void find_returnsEmpty_whenNothingRecorded() {
-    assertTrue(inbox.find(key).isEmpty());
   }
 
   @Test
@@ -77,12 +71,5 @@ class InMemoryCommandInboxTest {
     assertEquals(2, inbox.deleteProcessedBefore(Instant.now()));
     assertTrue(inbox.find(IdempotencyKey.of("a")).isEmpty());
     assertTrue(inbox.find(IdempotencyKey.of("b")).isEmpty());
-  }
-
-  @Test
-  void implementsCommandInbox() {
-    // Verifies structural contract: InMemoryCommandInbox IS-A CommandInbox
-    CommandInbox asInterface = inbox;
-    assertTrue(asInterface.find(key).isEmpty());
   }
 }
