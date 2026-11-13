@@ -151,7 +151,9 @@ public interface CommandInterceptor {
    *
    * <p>{@code after()} and {@code onError()} invoke both members even when the first-called member
    * throws: the remaining member still runs, and any secondary failure is attached as a suppressed
-   * exception of the one that propagates (the bus logs and isolates it).
+   * exception of the one that propagates (the bus logs and isolates it). An {@link Error} a member
+   * throws is handled the same way, so the other member still releases what its {@code before()}
+   * opened.
    */
   static CommandInterceptor compose(CommandInterceptor first, CommandInterceptor second) {
     return new CommandInterceptor() {
@@ -162,12 +164,12 @@ public interface CommandInterceptor {
         }
         try {
           return second.before(ctx);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
           // first.before() completed, so per the lifecycle contract it must be notified of the
           // failure even though the bus only sees the composed unit as the thrower.
           try {
             first.onError(ctx, e);
-          } catch (RuntimeException onErrorFailure) {
+          } catch (RuntimeException | Error onErrorFailure) {
             e.addSuppressed(onErrorFailure);
           }
           throw e;
@@ -178,10 +180,10 @@ public interface CommandInterceptor {
       public void after(CommandContext ctx) {
         try {
           second.after(ctx);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
           try {
             first.after(ctx);
-          } catch (RuntimeException alsoFailed) {
+          } catch (RuntimeException | Error alsoFailed) {
             e.addSuppressed(alsoFailed);
           }
           throw e;
@@ -193,10 +195,10 @@ public interface CommandInterceptor {
       public void onError(CommandContext ctx, Throwable error) {
         try {
           second.onError(ctx, error);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
           try {
             first.onError(ctx, error);
-          } catch (RuntimeException alsoFailed) {
+          } catch (RuntimeException | Error alsoFailed) {
             e.addSuppressed(alsoFailed);
           }
           throw e;

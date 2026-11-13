@@ -52,6 +52,9 @@ import org.streamrune.core.types.LogSanitizer;
  * the status description. A run of line breaks or control characters becomes one space, and a
  * format character is removed.
  *
+ * <p>{@link #of} returns the tracing {@linkplain GuardedTracing guarded}, so an OpenTelemetry SDK
+ * extension that throws never fails the work a span covers.
+ *
  * <p>This is the class of the seam that references OpenTelemetry, and the {@code opentelemetry-api}
  * dependency is optional: an application without it never loads this class as long as it passes
  * {@link StreamRuneTracing#NOOP}, the default of every builder.
@@ -77,6 +80,9 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
 
   /**
    * The tracing that records the areas {@code settings} switches on through {@code openTelemetry}.
+   * It is {@linkplain GuardedTracing guarded}: what the OpenTelemetry SDK throws underneath it — a
+   * sampler, a span processor's {@code onStart} or {@code onEnd}, a context storage — is caught and
+   * logged, and the traced work runs on without the span.
    *
    * @param openTelemetry the OpenTelemetry instance whose tracer records the spans
    * @param settings the switches
@@ -86,7 +92,7 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
   public static StreamRuneTracing of(OpenTelemetry openTelemetry, TracingSettings settings) {
     Objects.requireNonNull(openTelemetry, "openTelemetry is required");
     Objects.requireNonNull(settings, "settings is required");
-    return new OpenTelemetryTracing(openTelemetry, settings);
+    return GuardedTracing.of(new OpenTelemetryTracing(openTelemetry, settings));
   }
 
   @Override
@@ -109,7 +115,7 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
     attributes.forEach((key, value) -> setAttribute(builder, key, value));
     builder.setStartTimestamp(startTime);
     Span span = builder.startSpan();
-    return new OpenTelemetryScope(span, Context.current().with(span).makeCurrent());
+    return current(span, Context.current().with(span));
   }
 
   /**
@@ -163,7 +169,26 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
       baggage.entries().forEach(baggageBuilder::put);
       context = context.with(baggageBuilder.build());
     }
-    return new OpenTelemetryScope(span, context.makeCurrent());
+    return current(span, context);
+  }
+
+  /**
+   * Makes {@code context}, which holds the started {@code span}, current. A context that cannot be
+   * made current ends the span it would have leaked, and the failure goes to the guard.
+   */
+  private static TraceScope current(Span span, Context context) {
+    Scope scope;
+    try {
+      scope = context.makeCurrent();
+    } catch (Throwable t) {
+      try {
+        span.end();
+      } catch (Throwable endFailure) {
+        t.addSuppressed(endFailure);
+      }
+      throw t;
+    }
+    return new OpenTelemetryScope(span, scope);
   }
 
   /**

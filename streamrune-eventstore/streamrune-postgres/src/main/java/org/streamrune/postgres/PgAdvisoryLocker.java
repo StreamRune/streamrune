@@ -22,6 +22,7 @@ import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.runtime.GuardedTracing;
 
 /**
  * PostgreSQL advisory-lock based {@link AggregateLocker}. Uses transaction-scoped advisory locks
@@ -124,8 +125,8 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
     this.dataSource = dataSource;
     this.ownedPool = ownedPool;
     this.closed = closed;
-    this.tracing = tracing;
-    this.traced = tracing.enabled(TracingArea.LOCK);
+    this.tracing = GuardedTracing.of(tracing);
+    this.traced = this.tracing.enabled(TracingArea.LOCK);
   }
 
   /**
@@ -323,20 +324,53 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
                 .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
                 .build());
     boolean[] timedOut = new boolean[1];
+    AutoCloseable lock;
     try {
-      AutoCloseable lock = acquire(streamId, timeout, timedOut);
-      scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "ACQUIRED");
-      scope.recordSuccess();
-      return lock;
-    } catch (Throwable t) {
-      if (timedOut[0]) {
-        scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "TIMEOUT");
-      } else {
-        scope.recordError(t);
+      lock = acquire(streamId, timeout, timedOut);
+    } catch (Throwable notAcquired) {
+      // Nothing is held: acquire() returned the connection it checked out. The span ends with
+      // the outcome, and the caller sees the acquisition's own failure whatever the span does.
+      try {
+        try {
+          if (timedOut[0]) {
+            scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "TIMEOUT");
+          } else {
+            scope.recordError(notAcquired);
+          }
+        } finally {
+          scope.close();
+        }
+      } catch (Throwable tracingFailure) {
+        notAcquired.addSuppressed(tracingFailure);
       }
-      throw t;
-    } finally {
-      scope.close();
+      throw notAcquired;
+    }
+    // The advisory lock is held from here on, on a connection of the lock pool in an open
+    // transaction, and the caller does not have the handle yet: nothing below may leave this
+    // method without either handing the handle over or closing it. A handle dropped here would
+    // keep the stream locked for every replica and the connection out of the pool until this
+    // process ends. The tracing is guarded and does not throw; if anything is thrown here all the
+    // same, the lock is released and the connection returned first.
+    try {
+      try {
+        scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "ACQUIRED");
+        scope.recordSuccess();
+      } finally {
+        scope.close();
+      }
+    } catch (Throwable afterAcquisition) {
+      releaseAfterFailure(lock, afterAcquisition);
+      throw afterAcquisition;
+    }
+    return lock;
+  }
+
+  /** Releases {@code lock}, which the caller never received, before {@code failure} propagates. */
+  private static void releaseAfterFailure(AutoCloseable lock, Throwable failure) {
+    try {
+      lock.close();
+    } catch (Throwable releaseFailure) {
+      failure.addSuppressed(releaseFailure);
     }
   }
 

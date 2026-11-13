@@ -63,8 +63,8 @@ public final class LocalStripedLocker implements AggregateLocker {
 
   private LocalStripedLocker(Lock[] stripes, StreamRuneTracing tracing) {
     this.stripes = stripes;
-    this.tracing = tracing;
-    this.traced = tracing.enabled(TracingArea.LOCK);
+    this.tracing = GuardedTracing.of(tracing);
+    this.traced = this.tracing.enabled(TracingArea.LOCK);
   }
 
   /**
@@ -113,21 +113,52 @@ public final class LocalStripedLocker implements AggregateLocker {
             SpanAttributes.builder()
                 .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
                 .build());
+    AutoCloseable lock;
     try {
-      AutoCloseable lock = acquire(streamId, timeout);
-      scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "ACQUIRED");
-      scope.recordSuccess();
-      return lock;
-    } catch (LockAcquisitionException notAcquired) {
-      scope.setAttribute(
-          TraceAttributes.LOCK_OUTCOME,
-          notAcquired.getCause() instanceof InterruptedException ? "INTERRUPTED" : "TIMEOUT");
+      lock = acquire(streamId, timeout);
+    } catch (Throwable notAcquired) {
+      // Nothing is held. The span ends with the outcome, and the caller sees the acquisition's
+      // own failure whatever the span does.
+      try {
+        try {
+          if (notAcquired instanceof LockAcquisitionException) {
+            scope.setAttribute(
+                TraceAttributes.LOCK_OUTCOME,
+                notAcquired.getCause() instanceof InterruptedException ? "INTERRUPTED" : "TIMEOUT");
+          } else {
+            scope.recordError(notAcquired);
+          }
+        } finally {
+          scope.close();
+        }
+      } catch (Throwable tracingFailure) {
+        notAcquired.addSuppressed(tracingFailure);
+      }
       throw notAcquired;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
+    }
+    // The lock is held from here on, and the caller does not have it yet: nothing below may leave
+    // this method without either handing the lock over or releasing it. The tracing is guarded
+    // and does not throw; if anything is thrown here all the same, the lock is released first.
+    try {
+      try {
+        scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "ACQUIRED");
+        scope.recordSuccess();
+      } finally {
+        scope.close();
+      }
+    } catch (Throwable afterAcquisition) {
+      releaseAfterFailure(lock, afterAcquisition);
+      throw afterAcquisition;
+    }
+    return lock;
+  }
+
+  /** Releases {@code lock}, which the caller never received, before {@code failure} propagates. */
+  private static void releaseAfterFailure(AutoCloseable lock, Throwable failure) {
+    try {
+      lock.close();
+    } catch (Throwable releaseFailure) {
+      failure.addSuppressed(releaseFailure);
     }
   }
 

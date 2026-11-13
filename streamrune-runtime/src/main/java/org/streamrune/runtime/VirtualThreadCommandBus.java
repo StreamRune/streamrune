@@ -479,6 +479,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     recordMetric(metrics::recordCommandDispatched, "recordCommandDispatched");
 
     long start = System.nanoTime();
+    // The callbacks owed to the interceptors whose before() completed; set once the chain starts.
+    InterceptorCallbacks callbacks = null;
     try {
       // Extract the aggregate id and compose the stream id early: interceptors never observe a
       // null id or an invalid stream, and every later step — the veto result, the replay guard,
@@ -523,7 +525,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
       // Phase 1: before() in registration order. Track how many completed so callbacks are
       // only ever delivered to interceptors whose before() actually ran to completion.
-      int completedBefores = 0;
+      callbacks = new InterceptorCallbacks(beforeCtx);
       String shortCircuitedBy = null;
       try {
         for (CommandInterceptor interceptor : interceptors) {
@@ -531,12 +533,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
             shortCircuitedBy = interceptorName(interceptor);
             break;
           }
-          completedBefores++;
+          callbacks.completedBefores++;
         }
       } catch (RuntimeException e) {
         // before() threw: notify only interceptors whose before() completed, in reverse order.
         // Neither the thrower nor interceptors that never ran are notified.
-        notifyOnError(beforeCtx, e, completedBefores);
+        callbacks.failed(e);
         recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
         throw e;
       }
@@ -557,7 +559,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
                 List.of(),
                 shortCircuitedBy,
                 CommandBus.ShortCircuitReason.VETOED);
-        notifyAfter(withResult(beforeCtx, shortCircuitResult), completedBefores);
+        callbacks.accept(shortCircuitResult);
         return shortCircuitResult;
       }
 
@@ -581,7 +583,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           // breaker never counts), no FAILURE audit row is written, and the failure metric is never
           // recorded — precisely during an infrastructure incident. Nothing executed, so
           // exactly-once semantics are unaffected.
-          notifyOnError(beforeCtx, e, completedBefores);
+          callbacks.failed(e);
           recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
           throw e;
         }
@@ -596,11 +598,11 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
             // Key reused across commands (different type, or a different target stream): never
             // leak the stored result to the wrong caller. Treated like any other pre-commit
             // failure — onError fires, nothing was executed or committed.
-            notifyOnError(beforeCtx, e, completedBefores);
+            callbacks.failed(e);
             recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
             throw e;
           }
-          notifyAfter(withResult(beforeCtx, replayResult), completedBefores);
+          callbacks.accept(replayResult);
           try {
             metrics.recordCommandSucceeded();
           } catch (RuntimeException e) {
@@ -610,9 +612,6 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         }
       }
 
-      // completedBefores is reassigned by the before()-chain loop above, so it is not
-      // effectively final; the lambda below needs its own, never-reassigned copy of the value.
-      int completedBeforesAtDispatch = completedBefores;
       CommandResult result;
       try {
         result =
@@ -624,16 +623,14 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
                 commandTimestamp,
                 key,
                 dispatched,
-                // Invoked from INSIDE executeWithRetry's
+                // The after() phase, invoked from INSIDE executeWithRetry's
                 // try-with-resources — i.e. while the per-stream lock is still held; see that
                 // method's javadoc. notifyAfter() itself already swallows and logs every
                 // interceptor's after() exception, so this can never turn a committed command into
                 // a reported failure.
-                committedResult ->
-                    notifyAfter(
-                        withResult(beforeCtx, committedResult), completedBeforesAtDispatch));
+                callbacks);
       } catch (RuntimeException e) {
-        notifyOnError(beforeCtx, failureItself(e, command), completedBefores);
+        callbacks.failed(failureItself(e, command));
         recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
         throw e;
       }
@@ -650,6 +647,18 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         LOG.error("Metrics recordCommandSucceeded failed after command was committed", e);
       }
       return result;
+    } catch (Error e) {
+      // An Error (a LinkageError after a bad deployment, a StackOverflowError, an AssertionError)
+      // is not a failure the bus handles, and it propagates as it is. The interceptors whose
+      // before() completed are still owed their callback: each holds what its before() opened —
+      // the command's span and the trace context it made current on this thread, the audit
+      // user, a circuit breaker's in-flight count — until after() or onError() releases it. Once
+      // a callback phase ran, on any path, it is not run a second time.
+      if (callbacks != null && !callbacks.delivered) {
+        callbacks.failed(e);
+        recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
+      }
+      throw e;
     } finally {
       try {
         metrics.recordCommandDuration(System.nanoTime() - start);
@@ -787,6 +796,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * throwing callback must neither change the outcome nor starve sibling interceptors.
    */
   private void notifyAfter(CommandContext ctx, int count) {
+    Error error = null;
     for (int i = count - 1; i >= 0; i--) {
       CommandInterceptor interceptor = interceptors.get(i);
       try {
@@ -797,7 +807,60 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
             interceptorName(interceptor),
             LogSanitizer.sanitizeForLog(ctx.commandId().value()),
             e);
+      } catch (Error e) {
+        error = firstError(error, e);
       }
+    }
+    if (error != null) {
+      throw error;
+    }
+  }
+
+  /**
+   * The {@link Error} a callback phase throws once every interceptor had its callback: the first
+   * one, with the later ones suppressed on it. An {@code Error} from one interceptor's callback
+   * propagates, but only after the interceptors before it in the chain had theirs.
+   */
+  private static Error firstError(Error first, Error next) {
+    if (first == null) {
+      return next;
+    }
+    if (first != next) {
+      first.addSuppressed(next);
+    }
+    return first;
+  }
+
+  /**
+   * The callbacks owed to the interceptors of one command execution: {@code after()} or {@code
+   * onError()} for each interceptor whose {@code before()} completed. It is the after phase the bus
+   * hands to {@link #executeWithRetry}, and it records that a phase ran, so that an {@link Error}
+   * leaving the execution delivers {@code onError()} exactly when no callback was delivered yet.
+   */
+  private final class InterceptorCallbacks implements Consumer<CommandResult> {
+    private final CommandContext beforeCtx;
+
+    /** How many interceptors' {@code before()} completed, in registration order. */
+    private int completedBefores;
+
+    /** Whether {@code after()} or {@code onError()} was started for this execution. */
+    private boolean delivered;
+
+    InterceptorCallbacks(CommandContext beforeCtx) {
+      this.beforeCtx = beforeCtx;
+    }
+
+    /** Delivers {@code after()} with {@code result}, in reverse registration order. */
+    @Override
+    public void accept(CommandResult result) {
+      delivered = true;
+      notifyAfter(withResult(beforeCtx, result), completedBefores);
+    }
+
+    /** Delivers {@code onError()} with {@code failure}, in reverse registration order. */
+    void failed(Throwable failure) {
+      delivered = true;
+      notifyOnError(beforeCtx, failure, completedBefores);
     }
   }
 
@@ -807,6 +870,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * suppresses the original failure nor starves sibling interceptors.
    */
   private void notifyOnError(CommandContext ctx, Throwable error, int count) {
+    Error callbackError = null;
     for (int i = count - 1; i >= 0; i--) {
       CommandInterceptor interceptor = interceptors.get(i);
       try {
@@ -817,7 +881,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
             interceptorName(interceptor),
             LogSanitizer.sanitizeForLog(ctx.commandId().value()),
             e);
+      } catch (Error e) {
+        callbackError = firstError(callbackError, e);
       }
+    }
+    if (callbackError != null) {
+      throw callbackError;
     }
   }
 
@@ -2487,7 +2556,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * @return this builder
      */
     public Builder tracing(StreamRuneTracing tracing) {
-      this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+      this.tracing = GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"));
       return this;
     }
 

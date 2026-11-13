@@ -83,8 +83,8 @@ public final class TracingCommandInterceptor implements CommandInterceptor {
    * @throws NullPointerException if {@code tracing} is {@code null}
    */
   public TracingCommandInterceptor(StreamRuneTracing tracing) {
-    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
-    this.traced = tracing.enabled(TracingArea.COMMAND);
+    this.tracing = GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"));
+    this.traced = this.tracing.enabled(TracingArea.COMMAND);
   }
 
   @Override

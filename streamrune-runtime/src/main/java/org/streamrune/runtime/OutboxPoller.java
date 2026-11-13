@@ -363,14 +363,11 @@ public final class OutboxPoller implements AutoCloseable {
    */
   private final OutboxEntrySpans entrySpans;
 
-  /** Whether a failure of {@link #tracing} was logged; it is logged once. */
-  private final AtomicBoolean tracingFailureLogged = new AtomicBoolean();
-
   private OutboxPoller(Builder builder) {
     this.closeJoinTimeoutMs = builder.closeJoinTimeoutMs;
     this.store = builder.store;
     this.publisher = builder.publisher;
-    this.tracing = builder.tracing;
+    this.tracing = GuardedTracing.of(builder.tracing);
     this.traced = tracing.enabled(TracingArea.OUTBOX);
     this.entrySpans = traced ? this::startPublishSpan : OutboxEntrySpans.NONE;
     this.maxInFlightHorizon = normalizeHorizon(builder.publisher.inFlightHorizon());
@@ -635,104 +632,14 @@ public final class OutboxPoller implements AutoCloseable {
   }
 
   /**
-   * Starts an outbox span so that the tracing can never change a delivery: a {@code start} that
-   * throws gives {@link TraceScope#NOOP}, and the returned scope swallows what its own methods
-   * throw. A {@link StreamRuneTracing} must not throw; one that does is reported once, with one
-   * WARN, and the relay delivers every entry as it would untraced.
+   * Starts an outbox span. The relay's tracing is {@linkplain GuardedTracing guarded}, so the
+   * tracing can never change a delivery: a {@code start} that throws gives {@link TraceScope#NOOP},
+   * the scope swallows what its own methods throw, and the relay delivers every entry as it would
+   * untraced.
    */
   private TraceScope guardedStart(
       String spanName, SpanKind kind, SpanAttributes attributes, SpanLink link) {
-    TraceScope scope;
-    try {
-      scope = tracing.start(TracingArea.OUTBOX, spanName, kind, attributes, link, SpanBaggage.KEEP);
-    } catch (RuntimeException e) {
-      tracingFailed(e);
-      return TraceScope.NOOP;
-    }
-    return scope == null || scope == TraceScope.NOOP ? TraceScope.NOOP : new GuardedScope(scope);
-  }
-
-  private void tracingFailed(RuntimeException failure) {
-    if (tracingFailureLogged.compareAndSet(false, true)) {
-      LOG.warn(
-          "The tracing of the outbox relay threw; the relay delivers without the span. A"
-              + " StreamRuneTracing must not throw. Later failures of the tracing are not logged.",
-          failure);
-    }
-  }
-
-  /** A scope whose failures are reported once and never reach the relay or the publisher. */
-  private final class GuardedScope implements TraceScope {
-    private final TraceScope delegate;
-
-    GuardedScope(TraceScope delegate) {
-      this.delegate = delegate;
-    }
-
-    @Override
-    public void setAttribute(String key, String value) {
-      try {
-        delegate.setAttribute(key, value);
-      } catch (RuntimeException e) {
-        tracingFailed(e);
-      }
-    }
-
-    @Override
-    public void setAttribute(String key, long value) {
-      try {
-        delegate.setAttribute(key, value);
-      } catch (RuntimeException e) {
-        tracingFailed(e);
-      }
-    }
-
-    @Override
-    public void setAttribute(String key, boolean value) {
-      try {
-        delegate.setAttribute(key, value);
-      } catch (RuntimeException e) {
-        tracingFailed(e);
-      }
-    }
-
-    @Override
-    public void recordSuccess() {
-      try {
-        delegate.recordSuccess();
-      } catch (RuntimeException e) {
-        tracingFailed(e);
-      }
-    }
-
-    @Override
-    public void recordError(Throwable error) {
-      try {
-        delegate.recordError(error);
-      } catch (RuntimeException e) {
-        tracingFailed(e);
-      }
-    }
-
-    @Override
-    public SpanLink link() {
-      try {
-        SpanLink link = delegate.link();
-        return link == null ? SpanLink.NONE : link;
-      } catch (RuntimeException e) {
-        tracingFailed(e);
-        return SpanLink.NONE;
-      }
-    }
-
-    @Override
-    public void close() {
-      try {
-        delegate.close();
-      } catch (RuntimeException e) {
-        tracingFailed(e);
-      }
-    }
+    return tracing.start(TracingArea.OUTBOX, spanName, kind, attributes, link, SpanBaggage.KEEP);
   }
 
   /**

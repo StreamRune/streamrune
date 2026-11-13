@@ -67,6 +67,7 @@ import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.core.upcasting.UpcasterChain;
 import org.streamrune.crypto.CryptoConfigValidator;
 import org.streamrune.crypto.CryptoShreddingModule;
+import org.streamrune.runtime.GuardedTracing;
 
 /**
  * PostgreSQL-backed {@link EventStore} using JSONB for event payloads and metadata. Supports
@@ -578,7 +579,7 @@ public final class PostgresEventStore implements EventStore {
     this.metrics = Objects.requireNonNull(metrics, "metrics is required");
     this.statementTimeout =
         statementTimeout == null ? StatementTimeout.of(StatementTimeout.DEFAULT) : statementTimeout;
-    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+    this.tracing = GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"));
     this.traced = this.tracing.enabled(TracingArea.EVENT_STORE);
   }
 

@@ -60,10 +60,10 @@ public final class TracingEventListener implements EventListener {
   public TracingEventListener(
       EventListener delegate, StreamRuneTracing tracing, SubscriptionName subscriptionName) {
     this.delegate = Objects.requireNonNull(delegate, "delegate is required");
-    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
+    this.tracing = GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"));
     this.subscriptionName =
         Objects.requireNonNull(subscriptionName, "subscriptionName is required");
-    this.traced = tracing.enabled(TracingArea.SUBSCRIPTION);
+    this.traced = this.tracing.enabled(TracingArea.SUBSCRIPTION);
   }
 
   /**
@@ -82,14 +82,14 @@ public final class TracingEventListener implements EventListener {
    */
   public static EventListener traced(
       EventListener listener, StreamRuneTracing tracing, SubscriptionName subscriptionName) {
-    Objects.requireNonNull(tracing, "tracing is required");
+    StreamRuneTracing guarded = GuardedTracing.of(tracing);
     if (listener == null
         || subscriptionName == null
-        || !tracing.enabled(TracingArea.SUBSCRIPTION)
+        || !guarded.enabled(TracingArea.SUBSCRIPTION)
         || isTraced(listener)) {
       return listener;
     }
-    return new TracingEventListener(listener, tracing, subscriptionName);
+    return new TracingEventListener(listener, guarded, subscriptionName);
   }
 
   /** Whether {@code listener} already traces: it is a tracing listener, or tracks health of one. */

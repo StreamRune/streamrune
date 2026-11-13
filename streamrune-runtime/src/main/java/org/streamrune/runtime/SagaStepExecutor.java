@@ -281,7 +281,7 @@ final class SagaStepExecutor<S extends SagaState> {
       Duration inboxRetentionMaxAge,
       Clock clock,
       StreamRuneTracing tracing) {
-    this.tracing = tracing;
+    this.tracing = GuardedTracing.of(tracing);
     this.orchestrator = orchestrator;
     this.sagaStore = sagaStore;
     this.commandBus = commandBus;
