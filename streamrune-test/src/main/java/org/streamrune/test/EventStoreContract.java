@@ -37,6 +37,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.AggregateHistory;
 import org.streamrune.core.AggregateState;
+import org.streamrune.core.CommandInbox;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventDeserializationException;
 import org.streamrune.core.EventEnvelope;
@@ -122,7 +123,10 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *       same way. Every field of an event's metadata reads back as appended, on all three reads.
  *   <li><b>Identifiers.</b> A stream whose aggregate type and id are as long as {@link
  *       AggregateType} and {@link StreamId} allow, in ASCII, two-byte or supplementary-plane
- *       characters, is stored, read, snapshotted and keyed like any other.
+ *       characters, is stored, read, snapshotted and keyed like any other. So is an event type of
+ *       {@value EventType#MAX_LENGTH} characters; a command type of {@value
+ *       CommandInbox#MAX_COMMAND_TYPE_LENGTH} characters is recorded and replayed, and a longer one
+ *       is refused with {@link IllegalArgumentException} before anything is written.
  *   <li><b>Null arguments.</b> {@code append}, {@code load}, {@code readStream}, {@code
  *       readGlobalStream} and {@code saveSnapshot} refuse a {@code null} stream, event list,
  *       version or offset with {@link NullPointerException}, and {@code saveSnapshot} a {@code
@@ -1207,6 +1211,81 @@ public abstract class EventStoreContract {
         assertEquals(List.of(1L, 2L, 3L), versions(stored(stream)), shown);
       }
     }
+  }
+
+  /**
+   * Events whose type is as long as {@link EventType} allows, {@value EventType#MAX_LENGTH}
+   * characters: ASCII, and supplementary-plane characters (two UTF-16 code units each, one
+   * character as the {@code event_type} columns count it). Each is appended and read on every path.
+   */
+  @Test
+  public void eventTypesAsLongAsTheCoreTypeAllowsAreStoredAndRead() {
+    EventType ascii = new EventType("t".repeat(EventType.MAX_LENGTH));
+    EventType supplementary = new EventType("😀".repeat(EventType.MAX_LENGTH));
+    store =
+        newStore(
+            Setup.defaults()
+                .withRegistry(
+                    SimpleEventTypeRegistry.builder()
+                        .registerEvent(ascii, ContractEvent.class)
+                        .registerEvent(supplementary, ContractEvent.class)
+                        .registerState(ContractState.class.getSimpleName(), ContractState.class)
+                        .build()));
+    List<EventType> types = List.of(ascii, supplementary);
+
+    for (EventType type : types) {
+      StreamId stream = StreamId.of(ORDER, AggregateId.of("long-type-" + types.indexOf(type)));
+      List<EventEnvelope> batch =
+          List.of(
+              EventStoreFixture.event(stream, new Version(1), type, new ContractEvent("one")),
+              EventStoreFixture.event(stream, new Version(2), type, new ContractEvent("two")));
+      AppendResult appended = store.append(stream, batch, Version.initial());
+
+      List<EventEnvelope> loaded = store.load(stream).events();
+      assertEquals(List.of("one", "two"), values(loaded));
+      loaded.forEach(e -> assertEquals(type, e.eventType()));
+      stored(stream).forEach(e -> assertEquals(type, e.eventType()));
+      List<EventEnvelope> fromGlobal =
+          store.readGlobalStream(
+              GlobalOffset.of(appended.globalOffsets().getFirst().value() - 1), 2);
+      fromGlobal.forEach(e -> assertEquals(type, e.eventType()));
+      assertEquals(appended.globalOffsets(), offsets(fromGlobal));
+    }
+  }
+
+  /**
+   * A command type of exactly {@value CommandInbox#MAX_COMMAND_TYPE_LENGTH} characters, ASCII or
+   * supplementary-plane, is recorded and replayed; one character more is refused with {@link
+   * IllegalArgumentException} before anything is written, claims no key and stores no event.
+   */
+  @Test
+  public void aCommandTypeIsBoundedAtTheColumnWidthAndARefusedOneStoresNothing() {
+    assumeTrue(supportsIdempotentAppend(), "the store does not implement appendWithKey");
+    List<String> accepted =
+        List.of(
+            "c".repeat(CommandInbox.MAX_COMMAND_TYPE_LENGTH),
+            "😀".repeat(CommandInbox.MAX_COMMAND_TYPE_LENGTH));
+
+    for (String commandType : accepted) {
+      StreamId stream =
+          StreamId.of(ORDER, AggregateId.of("long-command-" + accepted.indexOf(commandType)));
+      IdempotencyKey key = IdempotencyKey.of("key-long-command-" + accepted.indexOf(commandType));
+      assertFalse(appendWithKey(stream, 0, 2, key, commandType).alreadyApplied());
+      assertTrue(appendWithKey(stream, 0, 2, key, commandType).alreadyApplied());
+      assertEquals(List.of(1L, 2L), versions(stored(stream)));
+    }
+
+    String tooLong = "c".repeat(CommandInbox.MAX_COMMAND_TYPE_LENGTH + 1);
+    IdempotencyKey key = IdempotencyKey.of("key-too-long-command");
+    var refused =
+        assertThrows(IllegalArgumentException.class, () -> appendWithKey(A, 0, 1, key, tooLong));
+    assertFalse(refused.getMessage().contains(tooLong), "the value is not echoed");
+    assertTrue(stored(A).isEmpty(), "nothing is stored");
+
+    assertFalse(
+        appendWithKey(A, 0, 1, key, COMMAND_TYPE).alreadyApplied(),
+        "the refused call claimed no key");
+    assertEquals(List.of(1L), versions(stored(A)));
   }
 
   // ── Null arguments ─────────────────────────────────────────────────────────────────────────

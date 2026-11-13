@@ -31,6 +31,34 @@ import org.streamrune.core.types.Version;
  */
 public interface CommandInbox {
 
+  /**
+   * The longest command type, in code points: the width of the {@code command_type} columns. A
+   * longer one is refused by {@link #requireCommandType} before anything is written.
+   */
+  int MAX_COMMAND_TYPE_LENGTH = 255;
+
+  /**
+   * Checks a command type: present and at most {@value #MAX_COMMAND_TYPE_LENGTH} characters,
+   * counted in code points as the {@code command_type VARCHAR(255)} columns count it. Every {@link
+   * EventStore#appendWithKey} implementation calls it before it writes anything, and {@link
+   * InboxResult} calls it on construction.
+   *
+   * @param commandType the command type
+   * @return {@code commandType}
+   * @throws NullPointerException if {@code commandType} is {@code null}
+   * @throws IllegalArgumentException if it is longer than {@value #MAX_COMMAND_TYPE_LENGTH}
+   *     characters; the message states the length and the maximum and does not echo the value
+   */
+  static String requireCommandType(String commandType) {
+    Objects.requireNonNull(commandType, "commandType is required");
+    int length = commandType.codePointCount(0, commandType.length());
+    if (length > MAX_COMMAND_TYPE_LENGTH) {
+      throw new IllegalArgumentException(
+          "commandType is " + length + " characters; at most " + MAX_COMMAND_TYPE_LENGTH);
+    }
+    return commandType;
+  }
+
   /** Returns the recorded result for {@code key}, or empty if this command was never processed. */
   Optional<InboxResult> find(IdempotencyKey key);
 
@@ -47,7 +75,7 @@ public interface CommandInbox {
       Instant processedAt) {
     public InboxResult {
       Objects.requireNonNull(key, "key is required");
-      Objects.requireNonNull(commandType, "commandType is required");
+      requireCommandType(commandType);
       Objects.requireNonNull(streamId, "streamId is required");
       Objects.requireNonNull(finalVersion, "finalVersion is required");
       Objects.requireNonNull(globalOffsets, "globalOffsets is required");

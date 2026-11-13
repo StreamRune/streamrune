@@ -104,6 +104,8 @@ public final class org.streamrune.core.CommandFailureClassification
 public interface org.streamrune.core.CommandInbox
   public abstract int deleteProcessedBefore(java.time.Instant)
   public abstract java.util.Optional<org.streamrune.core.CommandInbox$InboxResult> find(org.streamrune.core.types.IdempotencyKey)
+  public static final int MAX_COMMAND_TYPE_LENGTH = 255
+  public static java.lang.String requireCommandType(java.lang.String)
 
 public static final record org.streamrune.core.CommandInbox$InboxResult
   public <init>(org.streamrune.core.types.IdempotencyKey, java.lang.String, org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, java.util.List<org.streamrune.core.types.GlobalOffset>, java.time.Instant)
@@ -1604,6 +1606,7 @@ public final record org.streamrune.core.types.EventType
   public final int hashCode()
   public java.lang.String toString()
   public java.lang.String value()
+  public static final int MAX_LENGTH = 255
   public static org.streamrune.core.types.EventType fromClass(java.lang.Class<?>)
   public static org.streamrune.core.types.EventType of(java.lang.String)
 

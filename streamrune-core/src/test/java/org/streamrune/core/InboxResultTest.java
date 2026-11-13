@@ -173,4 +173,36 @@ class InboxResultTest {
     assertTrue(message.contains(LogSanitizer.sanitizeForLog(presentedStream.value())), message);
     assertTrue(message.contains(CMD_TYPE), message);
   }
+
+  @Test
+  void commandTypeOfExactlyTheColumnWidthIsAccepted() {
+    String longest = "c".repeat(CommandInbox.MAX_COMMAND_TYPE_LENGTH);
+    String supplementary = "\uD83D\uDE00".repeat(CommandInbox.MAX_COMMAND_TYPE_LENGTH);
+
+    assertEquals(255, CommandInbox.MAX_COMMAND_TYPE_LENGTH);
+    assertEquals(
+        longest,
+        new CommandInbox.InboxResult(KEY, longest, STREAM, VERSION, OFFSETS, NOW).commandType());
+    assertEquals(supplementary, CommandInbox.requireCommandType(supplementary));
+  }
+
+  @Test
+  void commandTypeOverTheBoundIsRefusedWithoutEchoingIt() {
+    String tooLong = "SecretCommand".repeat(20);
+
+    var fromResult =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new CommandInbox.InboxResult(KEY, tooLong, STREAM, VERSION, OFFSETS, NOW));
+    var fromCheck =
+        assertThrows(
+            IllegalArgumentException.class, () -> CommandInbox.requireCommandType(tooLong));
+
+    assertEquals("commandType is 260 characters; at most 255", fromResult.getMessage());
+    assertEquals(fromResult.getMessage(), fromCheck.getMessage());
+    assertFalse(fromResult.getMessage().contains("SecretCommand"));
+    assertThrows(
+        IllegalArgumentException.class, () -> CommandInbox.requireCommandType("c".repeat(256)));
+    assertThrows(NullPointerException.class, () -> CommandInbox.requireCommandType(null));
+  }
 }

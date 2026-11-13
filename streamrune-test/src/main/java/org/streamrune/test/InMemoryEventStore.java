@@ -780,7 +780,7 @@ public final class InMemoryEventStore implements EventStore {
     Objects.requireNonNull(events, "events is required");
     Objects.requireNonNull(expectedVersion, "expectedVersion is required");
     Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
-    Objects.requireNonNull(commandType, "commandType is required");
+    CommandInbox.requireCommandType(commandType);
 
     InMemorySagaStore rows = sagaStore;
     if (forwardOf != null && rows == null) {

@@ -10,15 +10,32 @@ import com.fasterxml.jackson.annotation.JsonValue;
  * and reducing the risk of typos and invalid type references. Serializes as a plain JSON string,
  * like the identifier value types.
  *
+ * <p>A name is non-blank and at most {@value #MAX_LENGTH} characters, counted in code points as the
+ * {@code event_type VARCHAR(255)} columns count it, so a name that is accepted here is stored by
+ * every event store. The refusal states the length and the maximum and does not echo the name.
+ *
  * @param value the event type name (typically simple class name or fully-qualified name)
  */
 public record EventType(@JsonValue String value) {
 
-  /** Creates a new EventType with the given name. */
+  /** The longest name, in code points: the width of the {@code event_type} columns. */
+  public static final int MAX_LENGTH = 255;
+
+  /**
+   * Creates a new EventType with the given name.
+   *
+   * @throws IllegalArgumentException if the name is blank or longer than {@value #MAX_LENGTH}
+   *     characters (code points); the name is not echoed
+   */
   @JsonCreator
   public EventType {
     if (value == null || value.isBlank()) {
       throw new IllegalArgumentException("EventType name must not be blank");
+    }
+    int length = value.codePointCount(0, value.length());
+    if (length > MAX_LENGTH) {
+      throw new IllegalArgumentException(
+          "EventType name is " + length + " characters; at most " + MAX_LENGTH);
     }
   }
 

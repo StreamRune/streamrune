@@ -491,8 +491,14 @@ public interface EventStore {
    * <p>Implementations that do not support the command inbox throw {@link
    * UnsupportedOperationException} (the default).
    *
+   * <p>{@code commandType} is required and at most {@value CommandInbox#MAX_COMMAND_TYPE_LENGTH}
+   * characters (code points), the width of the inbox column; implementations check it with {@link
+   * CommandInbox#requireCommandType} before they write anything, so a longer one claims no key and
+   * stores no event.
+   *
    * @throws IllegalArgumentException if {@code idempotencyKey} is already recorded against a
-   *     different command type or a different stream
+   *     different command type or a different stream, or if {@code commandType} is longer than
+   *     {@value CommandInbox#MAX_COMMAND_TYPE_LENGTH} characters
    */
   default IdempotentAppendResult appendWithKey(
       StreamId streamId,

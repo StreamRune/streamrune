@@ -1861,6 +1861,7 @@ public final class PostgresEventStore implements EventStore {
     Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
+    CommandInbox.requireCommandType(commandType);
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
     List<OutboxEntry> outboxEntries =
         mappedOutboxEntries != null ? mappedOutboxEntries : outboxEntriesOf(events);

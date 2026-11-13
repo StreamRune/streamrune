@@ -181,6 +181,41 @@ public abstract class CommandInboxContract {
   }
 
   @Test
+  public void aCommandTypeOfExactlyTheColumnWidthIsFoundAsRecorded() {
+    IdempotencyKey ascii = IdempotencyKey.of("inbox-long-command-ascii");
+    IdempotencyKey supplementary = IdempotencyKey.of("inbox-long-command-supplementary");
+    String asciiType = "c".repeat(CommandInbox.MAX_COMMAND_TYPE_LENGTH);
+    String supplementaryType = "😀".repeat(CommandInbox.MAX_COMMAND_TYPE_LENGTH);
+
+    eventStore().appendWithKey(STREAM, events(STREAM, 1, 1), Version.initial(), ascii, asciiType);
+    eventStore()
+        .appendWithKey(
+            STREAM_OTHER_TYPE,
+            events(STREAM_OTHER_TYPE, 1, 1),
+            Version.initial(),
+            supplementary,
+            supplementaryType);
+
+    assertEquals(asciiType, inbox().find(ascii).orElseThrow().commandType());
+    assertEquals(supplementaryType, inbox().find(supplementary).orElseThrow().commandType());
+  }
+
+  @Test
+  public void aCommandTypeOverTheColumnWidthIsRefusedAndLeavesNoRow() {
+    IdempotencyKey key = IdempotencyKey.of("inbox-too-long-command");
+    String tooLong = "c".repeat(CommandInbox.MAX_COMMAND_TYPE_LENGTH + 1);
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            eventStore()
+                .appendWithKey(STREAM, events(STREAM, 1, 1), Version.initial(), key, tooLong));
+
+    assertTrue(inbox().find(key).isEmpty());
+    assertTrue(eventStore().readStream(STREAM, Version.initial(), 10).isEmpty());
+  }
+
+  @Test
   public void aFoundRowIsBoundToItsOwnStreamAndNotToTheSameIdUnderAnotherType() {
     IdempotencyKey key = IdempotencyKey.of("inbox-bound");
     process(key, STREAM, 0, 1);

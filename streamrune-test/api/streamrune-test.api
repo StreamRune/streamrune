@@ -95,6 +95,8 @@ public abstract class org.streamrune.test.CommandInboxContract
   protected static java.util.List<org.streamrune.core.EventEnvelope> events(org.streamrune.core.types.StreamId, long, int)
   public <init>()
   public static final org.streamrune.core.types.EventType EVENT_TYPE
+  public void aCommandTypeOfExactlyTheColumnWidthIsFoundAsRecorded()
+  public void aCommandTypeOverTheColumnWidthIsRefusedAndLeavesNoRow()
   public void aFoundRowIsBoundToItsOwnStreamAndNotToTheSameIdUnderAnotherType()
   public void aKeyDeletedByRetentionIsProcessedAgain()
   public void aKeyNeverProcessedIsNotFound()
@@ -171,6 +173,7 @@ public abstract class org.streamrune.test.EventStoreContract
   protected static void assertStrictlyIncreasing(java.util.List<org.streamrune.core.types.GlobalOffset>)
   public <init>()
   public static final org.streamrune.core.types.EventType EVENT_TYPE
+  public void aCommandTypeIsBoundedAtTheColumnWidthAndARefusedOneStoresNothing()
   public void aCryptoMappingFailureInAMigrationStepIsAnEventDeserializationException()
   public void aFirstAppendStoresVersionsFromOneInListOrder()
   public void aFirstKeyedAppendStoresItsEvents()
@@ -256,6 +259,7 @@ public abstract class org.streamrune.test.EventStoreContract
   public void concurrentKeyedAppendsOfOneKeyOnOneStreamStoreOnce() throws java.lang.Exception
   public void concurrentKeyedAppendsOfOneKeyStoreOnceAndRefuseAnotherStream() throws java.lang.Exception
   public void distinctKeysAppendIndependently()
+  public void eventTypesAsLongAsTheCoreTypeAllowsAreStoredAndRead()
   public void eventsStoredAfterTheHeadWasReadLieAboveIt()
   public void everyMetadataFieldRoundTripsOnEveryReadPath()
   public void globalOffsetsIncreaseAcrossStreamsInAppendOrder()
