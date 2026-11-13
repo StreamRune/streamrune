@@ -56,6 +56,36 @@ class ReleaseNotesLinksScriptTest {
   }
 
   @Test
+  void aTitledLinkAndAnImageWithAQueryPointAtTheTagToo() throws IOException {
+    String notes = rewrite("[g](docs/g.md \"The guide\") ![c](docs/chart.svg?sanitize=true)\n", 0);
+
+    assertThat(notes)
+        .isEqualTo(
+            "[g]("
+                + BASE
+                + "/docs/g.md \"The guide\") ![c]("
+                + BASE
+                + "/docs/chart.svg?sanitize=true&raw=true)\n");
+  }
+
+  @Test
+  void aFootnoteDefinitionIsNotALink() throws IOException {
+    String text = "A claim.[^1]\n\n[^1]: Measured on the nightly runs.\n";
+
+    assertThat(rewrite(text, 0)).isEqualTo(text);
+  }
+
+  @Test
+  void aLinkOutOfTheTreeOrARelativeHtmlLinkRefusesTheNotes() throws IOException {
+    assertThat(run("[other](../other/README.md)\n").exitCode()).isEqualTo(1);
+    assertThat(run("<a href=\"docs/x.md\">x</a>\n").output())
+        .contains("cannot resolve")
+        .contains("1: <a href=");
+    assertThat(run("<img src='docs/a.png'>\n").exitCode()).isEqualTo(1);
+    assertThat(run("<a href=\"https://example.com\">x</a>\n").exitCode()).isZero();
+  }
+
+  @Test
   void anchorsAndAbsoluteLinksStayAsWritten() throws IOException {
     String text =
         """
