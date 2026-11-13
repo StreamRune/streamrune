@@ -36,7 +36,9 @@ name: Release
 # the commit before the run (git tag -s v<version> -m 'StreamRune <version>' <commit>, then
 # git push origin v<version>): verify accepts a tag on the run's commit and the tag job leaves it as
 # it is. A tag pushed by hand starts Build and Broker E2E Tests on its commit; those runs are then
-# the newest, so start the release once both have finished green.
+# the newest, so start the release once both have finished green. The same holds for a Broker E2E
+# Tests run that starts on the commit while the release runs (the nightly one at 03:00 UTC): publish
+# refuses until it has finished green, then "Re-run failed jobs" continues the release.
 #
 # Before the run, one pull request dates the `## [<version>]` heading of CHANGELOG.md and removes the
 # sentences that say the version is not on Maven Central yet (the Status section of the README and
