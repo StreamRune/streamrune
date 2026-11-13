@@ -7,7 +7,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -17,8 +16,12 @@ import org.junit.jupiter.api.io.TempDir;
  * {@code .github/scripts/benchmark-trend.py}, which judges the newest point of the benchmark
  * history: a change of runner must raise no alert, a slowdown that stays must.
  *
- * <p>The histories mirror the nightly runs on unchanged code: every series moves with the machine
- * the run drew, by up to 2.1 times between machines.
+ * <p>Each history has eight benchmarks. Every point multiplies all of them by the speed of the
+ * machine the run drew ({@code machine}), and a benchmark named in {@code code} by its own factor
+ * too. The machine factors mirror the recorded runs on unchanged code: draws up to 2.1 times apart,
+ * every benchmark moving with them. Each case is chosen so that the rule it names decides it: the
+ * threshold of 2.5, the median baseline, the confirmation by a second point, the sustained rule,
+ * its division by the run's median and its three points.
  */
 class BenchmarkTrendScriptTest {
 
@@ -26,24 +29,36 @@ class BenchmarkTrendScriptTest {
 
   private static final String NAME = "StreamRune JMH";
 
+  private static final List<String> BENCHMARKS =
+      List.of("append", "load", "loadSnapshot", "project", "serialize", "encrypt", "bus", "map");
+
   @TempDir Path dir;
 
   @Test
-  void aChangeOfMachineOnUnchangedCodeRaisesNoAlert() throws IOException {
-    // The first recorded runs: one machine twice, a faster one, a slower one, then two of the
-    // slowest kind in a row, 2.1 times the fastest.
-    double[] machine = {1.0, 1.0, 0.48, 0.63, 1.0, 1.0};
-    RepositoryScripts.Result result = judge(history(machine, Map.of()));
+  void twoSlowDrawsAfterABaselineOfFastOnesRaiseNoAlert() throws IOException {
+    // 1.0 / 0.48 = 2.08 times the baseline in both newest points: the spread between machines. A
+    // threshold of 2.0 or of the comparison's former 1.3 would report it.
+    RepositoryScripts.Result result =
+        judge(history(new double[] {0.48, 0.48, 0.48, 0.48, 0.48, 1.0, 1.0}, Map.of()));
 
     assertThat(result.exitCode()).as(result.output()).isZero();
-    assertThat(result.output()).doesNotContain("::warning::").doesNotContain("regression |");
+    assertThat(result.output()).doesNotContain("::warning::").doesNotContain("over once");
   }
 
   @Test
-  void aSlowdownInTheNewestPointAloneIsReportedButRaisesNoAlert() throws IOException {
-    double[] machine = {1.0, 1.0, 1.0, 1.0, 1.0};
+  void theBaselineIsTheMedianSoOneFastDrawBeforeTheNewestIsNoBaseline() throws IOException {
+    // Against the point before alone, the newest would be 1.0 / 0.3 = 3.3 times slower.
     RepositoryScripts.Result result =
-        judge(history(machine, Map.of("load", new double[] {1, 1, 1, 1, 3})));
+        judge(history(new double[] {1.0, 1.0, 1.0, 1.0, 0.3, 1.0}, Map.of()));
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(result.output()).doesNotContain("over once").doesNotContain("::warning::");
+  }
+
+  @Test
+  void aLargeSlowdownInTheNewestPointAloneIsReportedButRaisesNoAlert() throws IOException {
+    RepositoryScripts.Result result =
+        judge(history(ones(5), Map.of("load", new double[] {1, 1, 1, 1, 3})));
 
     assertThat(result.exitCode()).as(result.output()).isZero();
     assertThat(result.output())
@@ -53,10 +68,9 @@ class BenchmarkTrendScriptTest {
   }
 
   @Test
-  void aSlowdownThatStaysForTwoPointsRaisesTheAlert() throws IOException {
-    double[] machine = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  void aLargeSlowdownThatStaysForTwoPointsRaisesTheAlert() throws IOException {
     RepositoryScripts.Result result =
-        judge(history(machine, Map.of("load", new double[] {1, 1, 1, 1, 3, 3.2})));
+        judge(history(ones(6), Map.of("load", new double[] {1, 1, 1, 1, 3, 3.2})));
 
     assertThat(result.exitCode()).isEqualTo(1);
     assertThat(result.output())
@@ -65,14 +79,63 @@ class BenchmarkTrendScriptTest {
   }
 
   @Test
-  void theBaselineIsTheMedianSoOneFastMachineDoesNotMakeASlowOneLookLikeARegression()
-      throws IOException {
-    // Against the previous point alone the newest would be 2.1/0.48 = 4.4 times slower.
-    double[] machine = {1.0, 1.0, 1.0, 0.48, 1.0, 1.0};
-    RepositoryScripts.Result result = judge(history(machine, Map.of()));
+  void aLargeSlowdownOfEveryBenchmarkStillRaisesTheAlert() throws IOException {
+    RepositoryScripts.Result result = judge(history(new double[] {1, 1, 1, 1, 3, 3}, Map.of()));
+
+    assertThat(result.exitCode()).isEqualTo(1);
+    assertThat(result.output()).contains("::warning::load takes 3.00x");
+  }
+
+  @Test
+  void aSmallerSlowdownOfOneBenchmarkThatStaysForThreePointsRaisesTheAlert() throws IOException {
+    // 1.6 times in the last three points while the machine moves by up to 1.7 times between them.
+    RepositoryScripts.Result result =
+        judge(
+            history(
+                new double[] {1, 1, 1, 1, 1, 1.2, 0.7, 1.1},
+                Map.of("load", new double[] {1, 1, 1, 1, 1, 1.6, 1.6, 1.6})));
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output())
+        .contains("::warning::load takes more than 1.5x its baseline, relative to the other")
+        .contains("sustained regression")
+        .doesNotContain("::warning::append");
+  }
+
+  @Test
+  void aSmallerSlowdownForTwoPointsOnlyRaisesNoAlert() throws IOException {
+    RepositoryScripts.Result result =
+        judge(
+            history(
+                new double[] {1, 1, 1, 1, 1, 1, 1.2, 0.7},
+                Map.of("load", new double[] {1, 1, 1, 1, 1, 1, 1.6, 1.6})));
 
     assertThat(result.exitCode()).as(result.output()).isZero();
-    assertThat(result.output()).doesNotContain("over once");
+    assertThat(result.output()).contains("over once").doesNotContain("::warning::");
+  }
+
+  @Test
+  void aSlowerMachineForThreePointsIsTheRunsShareNotARegression() throws IOException {
+    // Every benchmark 1.6 times slower: above the sustained threshold unless divided by the run.
+    RepositoryScripts.Result result =
+        judge(history(new double[] {1, 1, 1, 1, 1, 1.6, 1.6, 1.6}, Map.of()));
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(result.output()).doesNotContain("::warning::").doesNotContain("over once");
+  }
+
+  @Test
+  void aBenchmarkJustAboveTheMeasuredNoiseRaisesNoAlert() throws IOException {
+    // 1.35 times relative to the run in three points, just above the 1.33 measured on unchanged
+    // code and below the sustained threshold of 1.5.
+    RepositoryScripts.Result result =
+        judge(
+            history(
+                new double[] {1, 1, 1, 1, 1, 0.6, 1.0, 0.8},
+                Map.of("load", new double[] {1, 1, 1, 1, 1, 1.35, 1.35, 1.35})));
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(result.output()).doesNotContain("::warning::");
   }
 
   @Test
@@ -86,9 +149,7 @@ class BenchmarkTrendScriptTest {
 
   @Test
   void aBenchmarkMissingFromTheNewestPointIsNotJudged() throws IOException {
-    Map<String, double[]> series = new LinkedHashMap<>();
-    series.put("load", new double[] {1, 1, 1, 3, 3, 7});
-    String data = history(new double[] {1, 1, 1, 1, 1, 1}, series);
+    String data = history(ones(6), Map.of("load", new double[] {1, 1, 1, 3, 3, 7}));
     data = data.replace(",{\"name\":\"load\",\"value\":7.0,\"unit\":\"us/op\"}", "");
     assertThat(data).doesNotContain("7.0");
 
@@ -97,15 +158,18 @@ class BenchmarkTrendScriptTest {
     assertThat(result.output()).doesNotContain("| load |");
   }
 
-  /**
-   * A data.js of {@code machine.length} points with the series {@code append} and {@code load},
-   * each its machine factor times the code's factor ({@code code}, 1 where absent).
-   */
+  private static double[] ones(int points) {
+    double[] machine = new double[points];
+    java.util.Arrays.fill(machine, 1.0);
+    return machine;
+  }
+
+  /** A data.js of {@code machine.length} points of {@link #BENCHMARKS}. */
   private static String history(double[] machine, Map<String, double[]> code) {
     List<String> entries = new ArrayList<>();
     for (int i = 0; i < machine.length; i++) {
       List<String> benches = new ArrayList<>();
-      for (String name : List.of("append", "load")) {
+      for (String name : BENCHMARKS) {
         double factor = code.containsKey(name) ? code.get(name)[i] : 1.0;
         benches.add(
             "{\"name\":\""

@@ -49,14 +49,15 @@ Shared GitHub runners are not one machine. In the first recorded runs, two runs 
 agreed within about 6%, while runs that drew different machines differed by up to 2.1 times on
 unchanged code — CPU-only series (`StreamRuneBenchmark.eventStoreLoad`, `batchSize=1`: 0.131 and
 0.064 µs/op) as much as PostgreSQL ones (`PostgresEventStoreBenchmark.load`, `streamLength=10`: 617
-and 293 µs/op) — with every series moving together. A comparison with the previous run reports the
-machine, so nothing is commented on a commit. After recording, the workflow judges each benchmark of
-the newest point against the median of its previous five points (with fewer than three, nothing is
-judged yet), with a threshold of 2.5 times, and reports a regression only when the point before was
-over the threshold too: the record job then fails, with a warning naming the benchmark and a table
-in the job summary (`.github/scripts/benchmark-trend.py`). The nightly numbers catch a large
-slowdown that stays; a smaller change shows as a trend over several points of the chart, and a run
-of the benchmark on both commits on one machine confirms it.
+and 293 µs/op). Every series moves with the machine, though: divided by the median change of all
+the series of its run, a series' change stayed between 0.81 and 1.33. A comparison with the previous
+run reports the machine, so nothing is commented on a commit. After recording, the workflow's judge
+job compares each benchmark of the newest point with the median of its previous five points (with
+fewer than three, nothing is judged yet) and reports a regression when it is over 2.5 times that
+baseline in the two newest points, or over 1.5 times it relative to the median of its run in each of
+its last three points (`.github/scripts/benchmark-trend.py`). The job then fails, with a warning
+naming the benchmark and a table in the job summary. A smaller slowdown shows as a trend over several
+points of the chart, and a run of the benchmark on both commits on one machine confirms it.
 
 ## In `check`
 
