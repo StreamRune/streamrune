@@ -153,6 +153,69 @@ class PostgresOutboxPollerShutdownIT {
     assertEquals(0, poller.consecutiveFailures(), "stopping is not a failed cycle");
   }
 
+  @Test
+  void aBacklogOfSeveralBatches_isDeliveredInOnePollCycle_inStreamOrder() throws Exception {
+    var store =
+        new PostgresOutboxStore(
+            pool, PostgresOutboxStore.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.STRICT_PER_AGGREGATE);
+    // 30 streams with two entries each: six full batches of ten under one-head-per-stream claims.
+    for (int s = 0; s < 30; s++) {
+      for (int n = 1; n <= 2; n++) {
+        store.save(
+            OutboxEntry.pending(
+                OutboxEntryId.of("s" + s + "-" + n),
+                "{}",
+                "Event",
+                TestStreams.stream("agg-" + s)));
+      }
+    }
+    var published = new CopyOnWriteArrayList<String>();
+    var batches = new CopyOnWriteArrayList<Integer>();
+    OutboxPublisher publisher =
+        new OutboxPublisher() {
+          @Override
+          public void publish(OutboxEntry entry) {
+            published.add(entry.id().value());
+          }
+
+          @Override
+          public BatchResult publishBatch(
+              List<OutboxEntry> entries,
+              java.time.Instant deadline,
+              org.streamrune.core.outbox.OutboxEntrySpans spans) {
+            batches.add(entries.size());
+            return OutboxPublisher.super.publishBatch(entries, deadline, spans);
+          }
+        };
+    // A poll interval far longer than the test: everything must go out in the first cycle.
+    var poller =
+        OutboxPoller.builder()
+            .outboxStore(store)
+            .publisher(publisher)
+            .batchSize(10)
+            .pollInterval(Duration.ofMinutes(10))
+            .build();
+
+    poller.start();
+    try {
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+      while (!"60".equals(scalar("SELECT count(*) FROM outbox_events WHERE status = 'DELIVERED'"))
+          && System.nanoTime() < deadline) {
+        Thread.sleep(50);
+      }
+    } finally {
+      poller.close();
+    }
+
+    assertEquals("60", scalar("SELECT count(*) FROM outbox_events WHERE status = 'DELIVERED'"));
+    assertEquals(List.of(10, 10, 10, 10, 10, 10), batches);
+    for (int s = 0; s < 30; s++) {
+      assertTrue(
+          published.indexOf("s" + s + "-1") < published.indexOf("s" + s + "-2"),
+          "stream agg-" + s + " is delivered in order");
+    }
+  }
+
   private static String status(String id) throws SQLException {
     return scalar("SELECT status FROM outbox_events WHERE entry_id = '" + id + "'");
   }

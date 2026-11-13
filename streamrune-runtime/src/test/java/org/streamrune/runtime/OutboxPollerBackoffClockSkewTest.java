@@ -62,7 +62,7 @@ class OutboxPollerBackoffClockSkewTest {
             .pollInterval(Duration.ofSeconds(60))
             .build();
 
-    poller.processBatch(); // attempt 1 fails -> markRetry(backoff = 60s)
+    poller.pollCycle(); // attempt 1 fails -> markRetry(backoff = 60s)
 
     // The entry is backing off, measured by the STORE clock (next_retry_at = storeNow + 60s). With
     // the relay clock a full day behind the store, a relay-clock next_retry_at (realNow + 60s) is

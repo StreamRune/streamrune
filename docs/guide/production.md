@@ -483,7 +483,8 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 - Background work with nothing to do starts no span: a poll that reads no event (an idle
   subscription or projection runner), an outbox poll that claims no entry, a saga timeout poll that
   finds no saga past its deadline and a timeout claim deferred while a step of the saga is in
-  flight add no trace. `outbox/relay` covers one batch that claimed entries, and
+  flight add no trace. `outbox/relay` covers one batch that claimed entries — an outbox poll that
+  drains several full batches starts one per batch, each its own trace — and
   `saga/{SagaType}/timeout` one saga the timeout runner acts on.
 - An expected outcome is an attribute value, and the span is not marked as failed: a command a
   `DomainException` rejected — its decider, or authorization or validation in front of it

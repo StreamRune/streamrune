@@ -896,6 +896,12 @@ license.
   that does not strictly exceed the publisher's in-flight horizon, a store whose `orderingMode()` or
   `claimLease()` returns `null` (a non-positive lease is the explicit opt-out), and a non-positive
   batch size or poll interval.
+- A poll cycle claims the next batch at once while the last one came back full (`batchSize`
+  entries) and every entry of it was confirmed or rejected for itself; a partial or empty batch, a
+  stop, a publish cut short by its deadline, a transport failure or an in-flight hand-off ends the
+  cycle, and the relay waits `pollInterval`. One cycle drains for at most ten poll intervals. Each
+  batch keeps its own claim, publish deadline and `outbox/relay` span; the gauges are sampled once
+  per cycle.
 - Stopping the relay mid-batch records the deliveries the broker confirmed, keeps an entry whose
   publish the stop cut short claimed until its lease expires, and returns the untouched entries to
   `PENDING` at once.

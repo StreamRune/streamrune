@@ -113,8 +113,8 @@ names the property and the value:
 | Property | Default | Meaning |
 |---|---|---|
 | `streamrune.outbox.enabled` | `false` | Whether the outbox relay runs. |
-| `streamrune.outbox.batch-size` | `100` | Entries the relay claims per poll. |
-| `streamrune.outbox.flush-interval` | `5s` | Interval between two polls of the relay. |
+| `streamrune.outbox.batch-size` | `100` | Entries the relay claims per batch. A poll claims the next batch at once while they come back full. |
+| `streamrune.outbox.flush-interval` | `5s` | Interval between two polls of the relay: the wait after a poll that ended on a partial or empty batch, a failure, or its drain budget of ten intervals. |
 | `streamrune.outbox.retry-max-attempts` | `10` | Delivery attempts a rejected entry may accrue before it is `FAILED`. |
 | `streamrune.outbox.retry-initial-delay` | `1s` | First retry delay; it grows by the multiplier, up to 60s. |
 | `streamrune.outbox.retry-backoff-multiplier` | `2.0` | Factor by which the retry delay grows with each attempt. |

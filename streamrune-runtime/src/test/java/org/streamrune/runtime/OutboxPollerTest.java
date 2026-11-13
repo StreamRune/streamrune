@@ -22,6 +22,7 @@ import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxEntrySpans;
+import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -67,7 +68,7 @@ class OutboxPollerTest {
         .publisher(publisher)
         .retryPolicy(retryPolicy)
         .batchSize(10)
-        .pollInterval(Duration.ofSeconds(60)) // long interval — tests call processBatch() manually
+        .pollInterval(Duration.ofSeconds(60)) // long interval — tests call pollCycle() manually
         .build();
   }
 
@@ -428,8 +429,8 @@ class OutboxPollerTest {
             .pollInterval(Duration.ofSeconds(60))
             .build();
     assertEquals(1, reads.get(), "build() reads the lease");
-    poller.processBatch();
-    poller.processBatch();
+    poller.pollCycle();
+    poller.pollCycle();
     poller.start();
     poller.close();
     assertEquals(1, reads.get(), "no later cycle or start re-reads the lease");
@@ -460,7 +461,7 @@ class OutboxPollerTest {
             return FailureKind.IN_FLIGHT;
           }
         };
-    pollerWith(new RetryPolicy(3, Duration.ofSeconds(1), 2.0, false), publisher).processBatch();
+    pollerWith(new RetryPolicy(3, Duration.ofSeconds(1), 2.0, false), publisher).pollCycle();
 
     var entries = store.all();
     assertEquals(1, entries.size());
@@ -518,7 +519,7 @@ class OutboxPollerTest {
             inFlightClassifyingZeroHorizon(),
             metrics);
 
-    poller.processBatch();
+    poller.pollCycle();
 
     var entries = store.all();
     assertEquals(1, entries.size());
@@ -564,7 +565,7 @@ class OutboxPollerTest {
         pollerWithMetrics(
             new RetryPolicy(3, Duration.ofSeconds(1), 2.0, false), publisher, metrics);
 
-    poller.processBatch();
+    poller.pollCycle();
 
     assertEquals(
         OutboxStatus.IN_PROGRESS, store.all().getFirst().status(), "claim held as designed");
@@ -578,7 +579,7 @@ class OutboxPollerTest {
   void processBatch_delivers_pending_entry_and_marks_delivered() {
     store.save(OutboxEntry.pending(OutboxEntryId.of("e1"), "{}", "OrderCreated"));
 
-    pollerWithDefaults(entry -> published.add(entry)).processBatch();
+    pollerWithDefaults(entry -> published.add(entry)).pollCycle();
 
     assertEquals(1, published.size());
     assertEquals("e1", published.getFirst().id().value());
@@ -591,7 +592,7 @@ class OutboxPollerTest {
     store.save(OutboxEntry.pending(OutboxEntryId.of("e1"), "{}", "Event"));
     store.save(OutboxEntry.pending(OutboxEntryId.of("e2"), "{}", "Event"));
 
-    pollerWithDefaults(entry -> published.add(entry)).processBatch();
+    pollerWithDefaults(entry -> published.add(entry)).pollCycle();
 
     assertEquals(2, published.size());
     assertTrue(store.loadPending(10).isEmpty());
@@ -607,7 +608,7 @@ class OutboxPollerTest {
                 entry -> {
                   throw new RuntimeException("delivery failed");
                 }))
-        .processBatch();
+        .pollCycle();
 
     var entries = store.all();
     assertEquals(1, entries.size());
@@ -634,7 +635,7 @@ class OutboxPollerTest {
                 entry -> {
                   throw new RuntimeException(raw);
                 }))
-        .processBatch();
+        .pollCycle();
 
     var entries = store.all();
     assertEquals(1, entries.size());
@@ -661,9 +662,9 @@ class OutboxPollerTest {
                   throw new RuntimeException("always fails");
                 }));
 
-    poller.processBatch(); // attempt 1 — markRetry (releases to PENDING, nextRetryAt ~now+1ms)
+    poller.pollCycle(); // attempt 1 — markRetry (releases to PENDING, nextRetryAt ~now+1ms)
     Thread.sleep(20); // let the backoff window elapse so loadPending re-claims it
-    poller.processBatch(); // attempt 2 — re-claim then markFailed (terminal)
+    poller.pollCycle(); // attempt 2 — re-claim then markFailed (terminal)
 
     var failed =
         store.all().stream()
@@ -686,11 +687,11 @@ class OutboxPollerTest {
               throw new RuntimeException("fail");
             });
 
-    poller.processBatch(); // attempt 1 — sets nextRetryAt ~60s in future
+    poller.pollCycle(); // attempt 1 — sets nextRetryAt ~60s in future
     published.clear();
 
     var secondPoller = pollerWith(retryPolicy, entry -> published.add(entry));
-    secondPoller.processBatch();
+    secondPoller.pollCycle();
 
     assertTrue(published.isEmpty(), "entry with future nextRetryAt should not be delivered");
   }
@@ -700,19 +701,35 @@ class OutboxPollerTest {
     for (int i = 0; i < 5; i++) {
       store.save(OutboxEntry.pending(OutboxEntryId.of("e" + i), "{}", "Event"));
     }
+    var batchSizes = new ArrayList<Integer>();
+    OutboxPublisher publisher =
+        new OutboxPublisher() {
+          @Override
+          public void publish(OutboxEntry entry) {
+            published.add(entry);
+          }
+
+          @Override
+          public BatchResult publishBatch(
+              List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
+            batchSizes.add(entries.size());
+            return OutboxPublisher.super.publishBatch(entries, deadline, spans);
+          }
+        };
 
     var poller =
         OutboxPoller.builder()
             .outboxStore(store)
-            .publisher(entry -> published.add(entry))
+            .publisher(publisher)
             .retryPolicy(new RetryPolicy(3, Duration.ofMillis(50), 2.0, false))
             .batchSize(3)
             .pollInterval(Duration.ofSeconds(60))
             .build();
-    poller.processBatch();
+    poller.pollCycle();
 
-    assertEquals(3, published.size());
-    assertEquals(2, store.loadPending(10).size());
+    // Every claim respects batchSize; the full first batch lets the cycle drain the rest.
+    assertEquals(List.of(3, 2), batchSizes);
+    assertEquals(5, published.size());
   }
 
   @Test
@@ -952,7 +969,7 @@ class OutboxPollerTest {
         .batchSize(10)
         .pollInterval(Duration.ofSeconds(60))
         .build()
-        .processBatch();
+        .pollCycle();
 
     assertEquals(2, published.size(), "both entries must be published");
     assertEquals(0, deliveredSingleIds.size(), "markDelivered(id) must NOT be called per-entry");
@@ -1060,7 +1077,7 @@ class OutboxPollerTest {
           }
         };
 
-    pollerWithDefaults(partialPublisher).processBatch();
+    pollerWithDefaults(partialPublisher).pollCycle();
 
     var all = store.all();
     var okEntry = all.stream().filter(e -> "ok".equals(e.id().value())).findFirst().orElseThrow();
@@ -1108,7 +1125,7 @@ class OutboxPollerTest {
         .batchSize(10)
         .pollInterval(Duration.ofSeconds(60))
         .build()
-        .processBatch();
+        .pollCycle();
 
     assertTrue(
         publishedIds.size() < total,
@@ -1206,7 +1223,7 @@ class OutboxPollerTest {
         .batchSize(10)
         .pollInterval(Duration.ofSeconds(60))
         .build()
-        .processBatch();
+        .pollCycle();
 
     var unattempted =
         store.all().stream().filter(e -> !publisher.attempted.contains(e.id())).toList();
@@ -1252,8 +1269,8 @@ class OutboxPollerTest {
             .pollInterval(Duration.ofSeconds(60))
             .build();
 
-    poller.processBatch();
-    poller.processBatch();
+    poller.pollCycle();
+    poller.pollCycle();
 
     long delivered = store.all().stream().filter(e -> e.status() == OutboxStatus.DELIVERED).count();
     assertEquals(
@@ -1383,7 +1400,7 @@ class OutboxPollerTest {
         .batchSize(10)
         .pollInterval(Duration.ofSeconds(60))
         .build()
-        .processBatch();
+        .pollCycle();
 
     var deadline = capturedDeadline.get();
     assertNotNull(deadline, "publisher must have received a lease-bounded deadline");
@@ -1448,7 +1465,7 @@ class OutboxPollerTest {
         .batchSize(10)
         .pollInterval(Duration.ofSeconds(60))
         .build()
-        .processBatch();
+        .pollCycle();
 
     var deadline = capturedDeadline.get();
     assertNotNull(deadline, "publisher must have received a lease-bounded deadline");
@@ -1482,7 +1499,7 @@ class OutboxPollerTest {
         .batchSize(10)
         .pollInterval(Duration.ofSeconds(60))
         .build()
-        .processBatch();
+        .pollCycle();
 
     var deadline = capturedDeadline.get();
     assertNotNull(deadline, "publisher must have received a lease-bounded deadline");
@@ -1516,7 +1533,7 @@ class OutboxPollerTest {
         .batchSize(10)
         .pollInterval(Duration.ofSeconds(60))
         .build()
-        .processBatch();
+        .pollCycle();
 
     var deadline = capturedDeadline.get();
     assertNotNull(deadline, "publisher must have received a lease-bounded deadline");
@@ -1589,7 +1606,7 @@ class OutboxPollerTest {
             .build();
 
     for (int cycle = 0; cycle < 8; cycle++) { // far past maxAttempts=3
-      poller.processBatch();
+      poller.pollCycle();
       clock.advance(Duration.ofMinutes(2)); // elapse the (capped) backoff so it is re-claimed
     }
 
@@ -1648,7 +1665,7 @@ class OutboxPollerTest {
             .build();
 
     for (int cycle = 0; cycle < 8; cycle++) { // far past maxAttempts=3
-      poller.processBatch();
+      poller.pollCycle();
       clock.advance(Duration.ofMinutes(2)); // elapse the (capped) backoff so it is re-claimed
     }
 
@@ -1708,7 +1725,7 @@ class OutboxPollerTest {
 
     // 15-cycle broker outage — every failure TRANSPORT (non-counting).
     for (int cycle = 0; cycle < 15; cycle++) {
-      poller.processBatch();
+      poller.pollCycle();
       clock.advance(Duration.ofMinutes(2)); // elapse the capped backoff so it is re-claimed
     }
     var afterOutage = store.all().getFirst();
@@ -1722,7 +1739,7 @@ class OutboxPollerTest {
     // Broker returns but the entry is now rejected per-ENTRY (e.g. unroutable). The FIRST such
     // failure must NOT terminal-FAIL — the outage did not pre-burn the ladder.
     publisher.kind = org.streamrune.core.outbox.OutboxPublisher.FailureKind.ENTRY;
-    poller.processBatch();
+    poller.pollCycle();
     var afterFirstEntry = store.all().getFirst();
     assertEquals(
         OutboxStatus.PENDING,
@@ -1733,9 +1750,9 @@ class OutboxPollerTest {
 
     // The entry terminal-FAILs only after its full maxAttempts ENTRY ladder.
     clock.advance(Duration.ofMinutes(2));
-    poller.processBatch(); // ENTRY attempt 2
+    poller.pollCycle(); // ENTRY attempt 2
     clock.advance(Duration.ofMinutes(2));
-    poller.processBatch(); // ENTRY attempt 3 → terminal
+    poller.pollCycle(); // ENTRY attempt 3 → terminal
     var terminal = store.all().getFirst();
     assertEquals(OutboxStatus.FAILED, terminal.status());
     assertEquals(3, terminal.attempts());
@@ -1765,7 +1782,7 @@ class OutboxPollerTest {
             .build();
 
     for (int cycle = 0; cycle < 3; cycle++) { // exactly maxAttempts cycles
-      poller.processBatch();
+      poller.pollCycle();
       clock.advance(Duration.ofMinutes(2));
     }
 
@@ -1803,7 +1820,7 @@ class OutboxPollerTest {
         clock.advance(
             Duration.ofMinutes(10)); // elapse the prior (capped) backoff BEFORE re-claiming
       }
-      poller.processBatch();
+      poller.pollCycle();
     }
 
     var entry = store.all().getFirst();
@@ -1875,7 +1892,7 @@ class OutboxPollerTest {
 
     var stamped = new ArrayList<Duration>();
     for (int cycle = 0; cycle < 10; cycle++) {
-      poller.processBatch();
+      poller.pollCycle();
       Duration backoff = stampedBackoff(store, clock, "cadence-1");
       stamped.add(backoff);
       clock.advance(backoff.plusMillis(1)); // elapse exactly that deferral, then poll again
@@ -1940,7 +1957,7 @@ class OutboxPollerTest {
     var stamped = new ArrayList<Duration>();
     var bases = new ArrayList<Duration>();
     for (int cycle = 0; cycle < 6; cycle++) {
-      poller.processBatch();
+      poller.pollCycle();
       Duration backoff = stampedBackoff(store, clock, "jitter-1");
       stamped.add(backoff);
       bases.add(Duration.ofSeconds(1L << cycle));
@@ -1994,7 +2011,7 @@ class OutboxPollerTest {
     // Sustained outage: saturate the cadence at the cap.
     Duration backoff = Duration.ZERO;
     for (int cycle = 0; cycle < 8; cycle++) {
-      poller.processBatch();
+      poller.pollCycle();
       backoff = stampedBackoff(store, clock, "recover-a");
       clock.advance(backoff.plusMillis(1));
     }
@@ -2003,7 +2020,7 @@ class OutboxPollerTest {
     // Broker returns: the pending entry is delivered — a confirmed publish proves the transport
     // works, so the outage streak is over.
     publisher.down = false;
-    poller.processBatch();
+    poller.pollCycle();
     assertEquals(
         OutboxStatus.DELIVERED,
         store.all().stream()
@@ -2017,7 +2034,7 @@ class OutboxPollerTest {
     // NOT by the pre-recovery escalated cadence.
     publisher.down = true;
     store.save(OutboxEntry.pending(OutboxEntryId.of("recover-b"), "{}", "Event"));
-    poller.processBatch();
+    poller.pollCycle();
 
     assertEquals(
         Duration.ofSeconds(1),
@@ -2049,7 +2066,7 @@ class OutboxPollerTest {
 
     // Six cycles of unconfirmed hand-offs, each re-attempted only after the claim lease lapses.
     for (int cycle = 0; cycle < 6; cycle++) {
-      poller.processBatch();
+      poller.pollCycle();
       clock.advance(lease.plusSeconds(1)); // the abandoned claim is reclaimed next loadPending
     }
     var inflight =
@@ -2064,7 +2081,7 @@ class OutboxPollerTest {
     // contributed no escalation.
     publisher.kind = org.streamrune.core.outbox.OutboxPublisher.FailureKind.TRANSPORT;
     store.save(OutboxEntry.pending(OutboxEntryId.of("inflight-b"), "{}", "Event"));
-    poller.processBatch();
+    poller.pollCycle();
 
     assertEquals(
         Duration.ofSeconds(1),
@@ -2094,13 +2111,13 @@ class OutboxPollerTest {
             .build();
 
     for (int cycle = 0; cycle < 8; cycle++) { // saturate the transport cadence at the cap
-      poller.processBatch();
+      poller.pollCycle();
       clock.advance(stampedBackoff(store, clock, "mixed-1").plusMillis(1));
     }
 
     // The broker is reachable again but rejects THIS entry on its own merits (unroutable/nack).
     publisher.kind = org.streamrune.core.outbox.OutboxPublisher.FailureKind.ENTRY;
-    poller.processBatch();
+    poller.pollCycle();
 
     var entry =
         store.all().stream()
@@ -2166,7 +2183,7 @@ class OutboxPollerTest {
       // Fresh healthy traffic EVERY cycle: each cycle has a confirmed delivery, which resets the
       // relay-wide streak — the exact condition that used to pin the poisoned entry at 1s.
       store.save(OutboxEntry.pending(OutboxEntryId.of("healthy-" + cycle), "{}", "Event"));
-      poller.processBatch();
+      poller.pollCycle();
       Duration backoff = stampedBackoff(store, clock, "poison-1");
       stamped.add(backoff);
       clock.advance(backoff.plusMillis(1)); // elapse exactly that deferral, then poll again
@@ -2231,7 +2248,7 @@ class OutboxPollerTest {
             .build();
 
     for (int cycle = 0; cycle < 3; cycle++) {
-      poller.processBatch();
+      poller.pollCycle();
       clock.advance(stampedBackoff(store, clock, "poison-1").plusMillis(1));
     }
     assertEquals(
@@ -2240,7 +2257,7 @@ class OutboxPollerTest {
         "the failing entry must be tracked while it keeps failing transport");
 
     publisher.down = false;
-    poller.processBatch(); // the entry confirms
+    poller.pollCycle(); // the entry confirms
     assertEquals(
         0,
         poller.trackedTransportStreakEntries(),
@@ -2268,7 +2285,7 @@ class OutboxPollerTest {
             .pollInterval(Duration.ofSeconds(1))
             .build();
 
-    poller.processBatch();
+    poller.pollCycle();
 
     assertEquals(
         1024,
@@ -2343,7 +2360,7 @@ class OutboxPollerTest {
               .pollInterval(Duration.ofSeconds(1))
               .build();
 
-      poller.processBatch();
+      poller.pollCycle();
 
       var warns = transportWarnLines(appender);
       assertEquals(1, warns.size(), "exactly one aggregated transport WARN per cycle: " + warns);
@@ -2387,7 +2404,7 @@ class OutboxPollerTest {
               .pollInterval(Duration.ofSeconds(1))
               .build();
 
-      poller.processBatch();
+      poller.pollCycle();
 
       var warns = transportWarnLines(appender);
       assertEquals(1, warns.size(), "exactly one aggregated transport WARN per cycle: " + warns);
@@ -2470,7 +2487,7 @@ class OutboxPollerTest {
               .pollInterval(Duration.ofSeconds(1))
               .build();
 
-      poller.processBatch();
+      poller.pollCycle();
 
       var warns = transportWarnLines(appender);
       assertEquals(1, warns.size(), "exactly one aggregated transport WARN per cycle: " + warns);
@@ -2507,7 +2524,7 @@ class OutboxPollerTest {
               .pollInterval(Duration.ofSeconds(1))
               .build();
 
-      poller.processBatch();
+      poller.pollCycle();
 
       var warns = transportWarnLines(appender);
       assertEquals(1, warns.size(), "exactly one aggregated transport WARN per cycle: " + warns);
@@ -2553,7 +2570,7 @@ class OutboxPollerTest {
               .pollInterval(Duration.ofSeconds(60))
               .build();
 
-      poller.processBatch();
+      poller.pollCycle();
 
       var warns =
           appender.list.stream()
@@ -2636,7 +2653,7 @@ class OutboxPollerTest {
             .build();
 
     for (int cycle = 0; cycle < 6; cycle++) { // twice the 3-attempt ladder
-      poller.processBatch();
+      poller.pollCycle();
       if (store.all().getFirst().status() != OutboxStatus.PENDING) {
         break; // terminal — the assertions below report the regression
       }
@@ -2756,7 +2773,7 @@ class OutboxPollerTest {
             .build();
 
     // markDeliveredAll returns 0 (all leases lost) — the poller must swallow it, not throw.
-    assertDoesNotThrow(poller::processBatch);
+    assertDoesNotThrow(poller::pollCycle);
     assertEquals(1, published.size(), "the entry was still published");
   }
 
@@ -2777,7 +2794,7 @@ class OutboxPollerTest {
             .build();
 
     // markRetry returns false (lease lost) — recordFailure must swallow it, not throw.
-    assertDoesNotThrow(poller::processBatch);
+    assertDoesNotThrow(poller::pollCycle);
   }
 
   // ── Terminal FAILED metric + retry/terminal accounting ──────────────────────
@@ -2814,10 +2831,10 @@ class OutboxPollerTest {
             .metrics(metrics)
             .build();
 
-    poller.processBatch(); // attempt 1 — markRetry, no metric
+    poller.pollCycle(); // attempt 1 — markRetry, no metric
     assertEquals(0, metrics.deliveryFailed, "a scheduled retry must NOT emit the terminal metric");
     Thread.sleep(20); // let the backoff window elapse so loadPending re-claims it
-    poller.processBatch(); // attempt 2 — terminal markFailed → metric
+    poller.pollCycle(); // attempt 2 — terminal markFailed → metric
 
     assertEquals(
         1, metrics.deliveryFailed, "terminal FAILED emits recordOutboxDeliveryFailed once");
@@ -2845,7 +2862,7 @@ class OutboxPollerTest {
             .metrics(metrics)
             .build();
 
-    poller.processBatch();
+    poller.pollCycle();
     assertEquals(0, metrics.deliveryFailed, "a scheduled retry must not emit the terminal metric");
     assertEquals(
         OutboxStatus.PENDING, store.all().getFirst().status(), "entry is retrying (PENDING)");
@@ -2969,7 +2986,7 @@ class OutboxPollerTest {
             .build();
 
     // The crash surfaces out of processBatch (the DELIVERED write threw).
-    assertThrows(RuntimeException.class, relay1::processBatch);
+    assertThrows(RuntimeException.class, relay1::pollCycle);
 
     // The entry was published exactly once so far, but its outcome was NEVER recorded: it is not
     // DELIVERED, not FAILED — it stays IN_PROGRESS (a live, now-orphaned claim), i.e. NOT LOST.
@@ -2997,7 +3014,7 @@ class OutboxPollerTest {
             .batchSize(10)
             .pollInterval(Duration.ofSeconds(60))
             .build();
-    relay2.processBatch();
+    relay2.pollCycle();
 
     assertEquals(
         2,
@@ -3093,10 +3110,10 @@ class OutboxPollerTest {
                 }),
             metrics);
 
-    poller.processBatch(); // attempt 1 — markRetry (not terminal)
+    poller.pollCycle(); // attempt 1 — markRetry (not terminal)
     assertEquals(0, metrics.deliveryFailed, "delivery-failed must not fire before retries exhaust");
     Thread.sleep(20); // let the backoff window elapse so the entry is re-claimed
-    poller.processBatch(); // attempt 2 — terminal markFailed
+    poller.pollCycle(); // attempt 2 — terminal markFailed
 
     assertEquals(
         OutboxStatus.FAILED,
@@ -3123,7 +3140,7 @@ class OutboxPollerTest {
             },
             metrics);
 
-    poller.processBatch();
+    poller.pollCycle();
 
     assertEquals(
         3,
@@ -3158,8 +3175,8 @@ class OutboxPollerTest {
         pollerWithMetrics(
             new RetryPolicy(3, Duration.ofSeconds(1), 2.0, false), inFlightPublisher, metrics);
 
-    poller.processBatch(); // claims all three; every publish fails post-hand-off
-    poller.processBatch(); // samples the gauges with the batch parked IN_PROGRESS
+    poller.pollCycle(); // claims all three; every publish fails post-hand-off
+    poller.pollCycle(); // samples the gauges with the batch parked IN_PROGRESS
 
     assertEquals(
         3,
@@ -3177,7 +3194,7 @@ class OutboxPollerTest {
   @Test
   void processBatch_samples_relay_degradation_gauge_each_cycle() {
     // The relay degradation gauge is sampled every cycle so a stalled-but-alive relay is
-    // visible on the metrics endpoint. A direct processBatch() call runs outside the resilient
+    // visible on the metrics endpoint. A direct pollCycle() call runs outside the resilient
     // loop,
     // so consecutiveFailures() is 0 here — the point is that the gauge is reported at all.
     var metrics = new RecordingMetrics();
@@ -3185,7 +3202,7 @@ class OutboxPollerTest {
     var poller =
         pollerWithMetrics(new RetryPolicy(3, Duration.ofSeconds(1), 2.0, false), e -> {}, metrics);
 
-    poller.processBatch();
+    poller.pollCycle();
 
     assertTrue(metrics.relayDegradationSamples >= 1, "relay degradation gauge must be sampled");
     assertEquals(0, metrics.lastRelayDegradation, "no failures on a clean cycle");
@@ -3228,7 +3245,7 @@ class OutboxPollerTest {
   void processBatch_survivesThrowingRelayDegradationGauge_andStillProcessesTheBatch() {
     // sampleObservability() called recordOutboxRelayDegradation BARE (a byte-identical twin
     // of the DLQ retry runner's degradation gauge, guarded the same way), and it runs
-    // FIRST in every processBatch() — before loadPending claims anything. A throwing metrics
+    // FIRST in every pollCycle() — before loadPending claims anything. A throwing metrics
     // backend therefore aborted the ENTIRE cycle every time: no claim, no delivery, no retry,
     // indistinguishable from a dead relay except for the very gauge that never got the chance to
     // report it.
@@ -3252,7 +3269,7 @@ class OutboxPollerTest {
             .metrics(throwing)
             .build();
 
-    assertDoesNotThrow(poller::processBatch);
+    assertDoesNotThrow(poller::pollCycle);
 
     assertEquals(
         1, published.size(), "the entry must still be published despite the metrics throw");
@@ -3286,7 +3303,7 @@ class OutboxPollerTest {
             .metrics(throwing)
             .build();
 
-    assertDoesNotThrow(poller::processBatch); // maxAttempts=1: attempt 1 is immediately terminal
+    assertDoesNotThrow(poller::pollCycle); // maxAttempts=1: attempt 1 is immediately terminal
 
     assertEquals(
         OutboxStatus.FAILED,
@@ -3317,7 +3334,7 @@ class OutboxPollerTest {
             inFlightClassifyingZeroHorizon(),
             throwing);
 
-    assertDoesNotThrow(poller::processBatch);
+    assertDoesNotThrow(poller::pollCycle);
 
     assertEquals(
         OutboxStatus.IN_PROGRESS,
@@ -3502,7 +3519,7 @@ class OutboxPollerTest {
               .batchSize(10)
               .pollInterval(Duration.ofSeconds(60))
               .build();
-      poller.processBatch(); // attempt 1 of 1 → terminal FAILED
+      poller.pollCycle(); // attempt 1 of 1 → terminal FAILED
       var errors = linesAt(appender, ch.qos.logback.classic.Level.ERROR);
       assertEquals(1, errors.size(), errors.toString());
       assertTrue(errors.getFirst().contains("of stream agg:agg-x"), errors.getFirst());
@@ -3534,7 +3551,7 @@ class OutboxPollerTest {
                   entry -> {
                     throw new RuntimeException("schema rejected");
                   }));
-      poller.processBatch();
+      poller.pollCycle();
       var errors = linesAt(appender, ch.qos.logback.classic.Level.ERROR);
       assertEquals(1, errors.size(), errors.toString());
       assertTrue(
@@ -3570,16 +3587,16 @@ class OutboxPollerTest {
             .pollInterval(Duration.ofSeconds(60))
             .metrics(metrics)
             .build();
-    poller.processBatch(); // samples (0 blocked), then fails h0 terminally
+    poller.pollCycle(); // samples (0 blocked), then fails h0 terminally
     assertEquals(0, metrics.lastBlockedAggregates);
     assertEquals(0, metrics.lastBlockageAge);
     Thread.sleep(1100); // the age is in whole seconds
-    poller.processBatch(); // samples: agg-z blocked, age >= 1s
+    poller.pollCycle(); // samples: agg-z blocked, age >= 1s
     assertEquals(1, metrics.lastBlockedAggregates, "one blocked aggregate");
     assertTrue(
         metrics.lastBlockageAge >= 1, "age of the oldest FAILED row: " + metrics.lastBlockageAge);
     assertTrue(strict.skipFailed(OutboxEntryId.of("h0"), "ops", "poison"));
-    poller.processBatch();
+    poller.pollCycle();
     assertEquals(0, metrics.lastBlockedAggregates, "released");
     assertEquals(0, metrics.lastBlockageAge, "0 when none");
   }
@@ -3605,8 +3622,8 @@ class OutboxPollerTest {
               .pollInterval(Duration.ofSeconds(60))
               .metrics(metrics)
               .build();
-      poller.processBatch();
-      poller.processBatch();
+      poller.pollCycle();
+      poller.pollCycle();
       var warns =
           linesAt(appender, ch.qos.logback.classic.Level.WARN).stream()
               .filter(l -> l.contains("sampleBlockage"))
@@ -3635,7 +3652,7 @@ class OutboxPollerTest {
                 entry -> {
                   throw new RuntimeException("poison");
                 }))
-        .processBatch(); // legacy-1 is FAILED, null aggregate
+        .pollCycle(); // legacy-1 is FAILED, null aggregate
     var strict =
         store.withOrderingMode(org.streamrune.core.outbox.OutboxOrderingMode.STRICT_PER_AGGREGATE);
     var appender = captureOutboxPollerLogs();
@@ -3646,8 +3663,8 @@ class OutboxPollerTest {
               .publisher(entry -> {})
               .pollInterval(Duration.ofSeconds(60))
               .build(); // metrics: NOOP
-      poller.processBatch();
-      poller.processBatch();
+      poller.pollCycle();
+      poller.pollCycle();
       var warns =
           linesAt(appender, ch.qos.logback.classic.Level.WARN).stream()
               .filter(l -> l.contains("FAILED entries with no aggregate_id"))
@@ -3673,8 +3690,8 @@ class OutboxPollerTest {
                   entry -> {
                     throw new RuntimeException("poison");
                   }));
-      poller.processBatch();
-      poller.processBatch();
+      poller.pollCycle();
+      poller.pollCycle();
       assertTrue(
           linesAt(appender, ch.qos.logback.classic.Level.WARN).stream()
               .noneMatch(l -> l.contains("no aggregate_id")),
@@ -3705,9 +3722,9 @@ class OutboxPollerTest {
               .publisher(entry -> {})
               .pollInterval(Duration.ofSeconds(60))
               .build(); // metrics: NOOP, so the only sampleBlockage caller is the legacy check
-      poller.processBatch(); // throws → not armed, WARN "retrying next cycle"
-      poller.processBatch(); // succeeds → armed (0 legacy rows: no legacy WARN)
-      poller.processBatch(); // armed → no call
+      poller.pollCycle(); // throws → not armed, WARN "retrying next cycle"
+      poller.pollCycle(); // succeeds → armed (0 legacy rows: no legacy WARN)
+      poller.pollCycle(); // armed → no call
       assertEquals(2, calls.get(), "retried once, then armed");
       var warns = linesAt(appender, ch.qos.logback.classic.Level.WARN);
       assertEquals(1, warns.size(), warns.toString());

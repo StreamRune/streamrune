@@ -64,7 +64,7 @@ class OutboxOrderingCrashPointTest {
             .pollInterval(Duration.ofSeconds(60))
             .metrics(metrics)
             .build();
-    freshRelay.processBatch();
+    freshRelay.pollCycle();
     assertThat(metrics.lastBlockedAggregates).isEqualTo(1);
     assertThat(metrics.lastBlockageAge).isGreaterThanOrEqualTo(0);
     assertThat(store.findById(OutboxEntryId.of("n1")).orElseThrow().status())

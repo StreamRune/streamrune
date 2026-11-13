@@ -225,7 +225,7 @@ class OutboxPollerShutdownTest {
             .pollInterval(Duration.ofSeconds(60))
             .build();
 
-    poller.processBatch();
+    poller.pollCycle();
 
     assertEquals(OutboxStatus.IN_PROGRESS, entry(inner, "e1").status(), "claim held");
     assertEquals(0, entry(inner, "e1").attempts(), "no attempt burned");
@@ -270,7 +270,7 @@ class OutboxPollerShutdownTest {
 
     boolean stillInterrupted;
     try {
-      poller.processBatch();
+      poller.pollCycle();
     } finally {
       stillInterrupted = Thread.interrupted();
     }

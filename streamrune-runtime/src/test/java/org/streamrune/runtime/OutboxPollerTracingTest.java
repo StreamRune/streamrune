@@ -83,7 +83,7 @@ class OutboxPollerTracingTest {
     save("e-2");
     List<OutboxEntry> published = new ArrayList<>();
 
-    poller(published::add, tracing()).processBatch();
+    poller(published::add, tracing()).pollCycle();
 
     assertThat(published).hasSize(2);
     List<SpanData> relays = spans(TraceAttributes.OUTBOX_RELAY);
@@ -118,6 +118,23 @@ class OutboxPollerTracingTest {
   }
 
   @Test
+  void aCycleThatDrainsSeveralBatches_startsOneRelaySpanPerBatch_eachItsOwnTrace() {
+    for (int i = 0; i < 25; i++) {
+      save("e-" + i);
+    }
+
+    poller(entry -> {}, tracing()).pollCycle();
+
+    List<SpanData> relays = spans(TraceAttributes.OUTBOX_RELAY);
+    assertThat(relays)
+        .extracting(r -> EventStoreTracingTest.number(r, TraceAttributes.BATCH_SIZE))
+        .containsExactly(10L, 10L, 5L);
+    assertThat(relays).allSatisfy(r -> assertThat(r.getParentSpanContext().isValid()).isFalse());
+    assertThat(relays).extracting(SpanData::getTraceId).doesNotHaveDuplicates();
+    assertThat(spans(TraceAttributes.OUTBOX_PUBLISH)).hasSize(25);
+  }
+
+  @Test
   void aFailedPublish_marksItsPublishSpanFailed_andCountsInTheRelay() {
     save("e-1");
     save("e-2");
@@ -129,7 +146,7 @@ class OutboxPollerTracingTest {
               }
             },
             tracing())
-        .processBatch();
+        .pollCycle();
 
     SpanData relay = spans(TraceAttributes.OUTBOX_RELAY).getFirst();
     assertThat(EventStoreTracingTest.number(relay, TraceAttributes.OUTBOX_PUBLISHED)).isEqualTo(1L);
@@ -145,7 +162,7 @@ class OutboxPollerTracingTest {
 
   @Test
   void aPollThatClaimsNothing_startsNoSpan() {
-    poller(entry -> {}, tracing()).processBatch();
+    poller(entry -> {}, tracing()).pollCycle();
 
     assertThat(otelTesting.getSpans()).isEmpty();
   }
@@ -183,7 +200,7 @@ class OutboxPollerTracingTest {
     save("e-2");
     List<OutboxEntry> published = new ArrayList<>();
 
-    poller(published::add, tracing()).processBatch();
+    poller(published::add, tracing()).pollCycle();
 
     assertThat(published)
         .extracting(OutboxEntry::traceLink)
@@ -233,7 +250,7 @@ class OutboxPollerTracingTest {
           }
         };
 
-    poller(pipelining, tracing()).processBatch();
+    poller(pipelining, tracing()).pollCycle();
 
     assertThat(publishSpanOf("e-1").getLinks())
         .singleElement()
@@ -290,7 +307,7 @@ class OutboxPollerTracingTest {
         .pollInterval(Duration.ofSeconds(60))
         .tracing(recording)
         .build()
-        .processBatch();
+        .pollCycle();
 
     assertThat(published).extracting(e -> e.id().value()).containsExactly("e-1");
     assertThat(links).containsExactly(SpanLink.NONE);
@@ -336,7 +353,7 @@ class OutboxPollerTracingTest {
           }
         };
 
-    poller(pipelining, tracing()).processBatch();
+    poller(pipelining, tracing()).pollCycle();
 
     assertThat(batches).hasSize(1);
     SpanData relay = spans(TraceAttributes.OUTBOX_RELAY).getFirst();
@@ -365,7 +382,7 @@ class OutboxPollerTracingTest {
           }
         };
 
-    poller(wrapper, tracing()).processBatch();
+    poller(wrapper, tracing()).pollCycle();
 
     assertThat(published).hasSize(2);
     assertThat(spans(TraceAttributes.OUTBOX_PUBLISH)).hasSize(2);
@@ -484,7 +501,7 @@ class OutboxPollerTracingTest {
                   }
                 };
 
-        poller(publisher, throwingTracing(fromStart)).processBatch();
+        poller(publisher, throwingTracing(fromStart)).pollCycle();
 
         assertThat(published)
             .as("start throws: %s, own batch path: %s", fromStart, ownBatchPath)
@@ -502,7 +519,7 @@ class OutboxPollerTracingTest {
                 TracingSettings.builder().area(TracingArea.OUTBOX, false).build()),
             StreamRuneTracing.NOOP)) {
       save("e-" + off.hashCode());
-      poller(entry -> {}, off).processBatch();
+      poller(entry -> {}, off).pollCycle();
     }
 
     assertThat(otelTesting.getSpans()).isEmpty();
