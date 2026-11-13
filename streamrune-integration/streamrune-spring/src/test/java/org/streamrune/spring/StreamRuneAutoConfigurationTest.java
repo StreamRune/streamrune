@@ -371,7 +371,7 @@ class StreamRuneAutoConfigurationTest {
                   .hasMessageContaining("at least 1ms");
             });
     webContextRunner
-        .withPropertyValues("streamrune.sse.enabled=true", "streamrune.sse.polling-interval=0")
+        .withPropertyValues("streamrune.sse.enabled=true", "streamrune.sse.polling-interval=0s")
         .run(
             ctx ->
                 assertThat(ctx.getStartupFailure())
@@ -477,7 +477,7 @@ class StreamRuneAutoConfigurationTest {
   @Test
   void sseTimeoutZeroDisablesTheDeadline() {
     webContextRunner
-        .withPropertyValues("streamrune.sse.enabled=true", "streamrune.sse.timeout=0")
+        .withPropertyValues("streamrune.sse.enabled=true", "streamrune.sse.timeout=0s")
         .withBean(org.streamrune.integration.SseAuthorizer.class, () -> (caller, streamId) -> true)
         .run(
             ctx -> {

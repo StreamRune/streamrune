@@ -681,8 +681,8 @@ Use `SubscriptionConfig.DEFAULT` for production (LISTEN/NOTIFY enabled). Use `po
 
 Every `Duration` knob accepts the compact form (`30s`, `30d`) or ISO-8601 (`PT30S`, `PT720H`), on
 each of the three integrations. Write zero with its unit, `0s` (or `PT0S`): a bare `0` is a number
-without a unit, which Micronaut refuses at startup, naming the property, and which Spring reads as
-milliseconds and Quarkus as seconds. What a **zero** or a **negative** value does is *not*
+without a unit, which every integration refuses at startup, naming the property (see
+[What the integrations refuse](configuration.md#what-the-integrations-refuse)). What a **zero** or a **negative** value does is *not*
 uniform across the knobs, because the knobs do not all measure the same kind of thing. The rule
 StreamRune froze for 1.0.0 is:
 

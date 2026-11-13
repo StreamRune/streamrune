@@ -241,20 +241,124 @@ public abstract class IntegrationWiringContract {
   }
 
   /**
-   * A name that reads like a StreamRune property but that no integration binds, such as an interval
-   * with a {@code -ms} suffix, refuses the start and the refusal names it: no integration runs on
-   * the default of the property the application meant.
+   * A name that reads like a StreamRune property but that no integration binds — a duration
+   * property with a {@code -ms} suffix, the outbox retry multiplier under a shorter name — refuses
+   * the start and the refusal names it: no integration runs on the default of the property the
+   * application meant.
    */
   @Test
   public void aMisspelledPropertyNameRefusesStart() {
-    MisspelledPropertyNames.all()
-        .keySet()
-        .forEach(
-            name -> {
-              try (Application application = start(null, Map.of(name, "5"), Set.of())) {
-                assertRefused(application, name);
-              }
-            });
+    List<String> names = new ArrayList<>();
+    for (String duration :
+        List.of(
+            "streamrune.retry-initial-delay",
+            "streamrune.polling-interval",
+            "streamrune.polling-jitter",
+            "streamrune.lock-timeout",
+            "streamrune.dead-letter.retry-interval",
+            "streamrune.outbox.flush-interval",
+            "streamrune.outbox.retry-initial-delay",
+            "streamrune.sse.polling-interval")) {
+      names.add(duration + "-ms");
+    }
+    names.addAll(MisspelledPropertyNames.OTHER_NAMES.keySet());
+    for (String name : names) {
+      try (Application application = start(null, Map.of(name, "5"), Set.of())) {
+        assertRefused(application, name);
+      }
+    }
+  }
+
+  /**
+   * A duration written as a number without its unit refuses the start on every integration, and the
+   * refusal names the property and the value: Spring would read it as milliseconds, Quarkus as
+   * seconds, and Micronaut cannot read it. Zero too.
+   */
+  @Test
+  public void aDurationWithoutItsUnitRefusesStart() {
+    for (Map.Entry<String, String> bare :
+        List.of(
+            Map.entry("streamrune.outbox.flush-interval", "5000"),
+            Map.entry("streamrune.inbox.retention-max-age", "0"),
+            Map.entry("streamrune.polling-jitter", "0"),
+            Map.entry("streamrune.saga.compensation-retry-interval", "60"))) {
+      try (Application application =
+          start(null, Map.of(bare.getKey(), bare.getValue()), Set.of())) {
+        assertRefused(
+            application,
+            bare.getKey(),
+            bare.getValue(),
+            "a duration needs its unit, such as 5000ms, 30s or 0s");
+      }
+    }
+  }
+
+  /**
+   * A bare zero dead-letter retention beside a finite inbox retention never starts: whichever way
+   * an integration reads the {@code 0}, the refusal names the property. An integration that bound
+   * the default in its place would start and prune the rows the application asked to keep.
+   */
+  @Test
+  public void aBareZeroDeadLetterRetentionRefusesStart() {
+    try (Application application =
+        start(
+            null,
+            Map.of("streamrune.dead-letter.retention-max-age", "0"),
+            Set.of(CommandInboxBean.class, DeadLetterQueueBean.class))) {
+      assertRefused(application, "streamrune.dead-letter.retention-max-age");
+    }
+  }
+
+  /** A bare negative lock timeout never starts: the refusal names the property. */
+  @Test
+  public void aBareNegativeLockTimeoutRefusesStart() {
+    try (Application application = start(null, Map.of("streamrune.lock-timeout", "-5"), Set.of())) {
+      assertRefused(application, "streamrune.lock-timeout");
+    }
+  }
+
+  /**
+   * A switch is {@code true} or {@code false}, in lower case, on every integration: any other
+   * spelling refuses the start, naming the property and the value. The frameworks read {@code
+   * TRUE}, {@code yes} or {@code 1} differently from one another, and a bean condition can compare
+   * the text where the bound settings read a boolean: {@code streamrune.crypto.cache.enabled=FALSE}
+   * could keep the decrypted-plaintext cache while the settings read it as off, and {@code
+   * streamrune.validation-enabled=TRUE} could leave out the Bean Validation interceptor while they
+   * read it as on.
+   */
+  @Test
+  public void aSwitchSpelledOtherThanTrueOrFalseRefusesStart() {
+    for (Map.Entry<String, String> spelling :
+        List.of(
+            Map.entry("streamrune.crypto.cache.enabled", "FALSE"),
+            Map.entry("streamrune.validation-enabled", "TRUE"),
+            Map.entry("streamrune.saga.enabled", "yes"),
+            Map.entry("streamrune.outbox.enabled", "1"),
+            Map.entry("streamrune.tracing.enabled", "off"))) {
+      try (Application application =
+          start(null, Map.of(spelling.getKey(), spelling.getValue()), Set.of())) {
+        assertRefused(
+            application,
+            spelling.getKey(),
+            spelling.getValue(),
+            "a switch is true or false, in lower case");
+      }
+    }
+  }
+
+  /** The same switches spelled {@code true} and {@code false} start. */
+  @Test
+  public void aSwitchSpelledTrueOrFalseStarts() {
+    try (Application application =
+        start(
+            null,
+            Map.of(
+                "streamrune.crypto.cache.enabled", "false",
+                "streamrune.validation-enabled", "true",
+                "streamrune.tracing.enabled", "false"),
+            Set.of())) {
+      assertStarted(application);
+    }
   }
 
   /**

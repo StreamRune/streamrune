@@ -49,6 +49,7 @@ import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.integration.CommandDeadLetterRetentionValidator;
+import org.streamrune.integration.ConfigurationSpelling;
 import org.streamrune.integration.MisspelledPropertyNames;
 import org.streamrune.integration.OutboxWiringMessages;
 import org.streamrune.integration.RequestIdentityPolicy;
@@ -113,7 +114,9 @@ final class ReferenceApplication implements Application {
     READABLE_VALUES,
     MISSPELLED_NAMES,
     ZERO_WITH_ITS_UNIT,
-    LOCK_TIMEOUT
+    LOCK_TIMEOUT,
+    BARE_NUMBERS,
+    SWITCHES
   }
 
   /** The durations among the keys the contract sets, read as an integration binds them. */
@@ -126,7 +129,10 @@ final class ReferenceApplication implements Application {
           "streamrune.dead-letter.retry-interval",
           "streamrune.saga.compensation-retry-interval",
           "streamrune.polling-interval",
-          "streamrune.polling-jitter");
+          "streamrune.polling-jitter",
+          "streamrune.retry-initial-delay",
+          "streamrune.outbox.retry-initial-delay",
+          "streamrune.sse.polling-interval");
 
   /** The whole numbers among the keys the contract sets. */
   private static final Set<String> INTEGER_KEYS =
@@ -200,9 +206,22 @@ final class ReferenceApplication implements Application {
   }
 
   private void validate() {
+    List<String> spelling = new ArrayList<>();
     if (keeps(Rule.MISSPELLED_NAMES)) {
-      MisspelledPropertyNames.refuseIfSet(properties::containsKey);
+      spelling.addAll(MisspelledPropertyNames.problems(DURATION_KEYS, properties::containsKey));
     }
+    properties.forEach(
+        (key, value) -> {
+          if (keeps(Rule.BARE_NUMBERS)
+              && DURATION_KEYS.contains(key)
+              && ConfigurationSpelling.isBareNumber(value)) {
+            spelling.add(ConfigurationSpelling.bareNumber(key, value));
+          }
+          if (keeps(Rule.SWITCHES) && isSwitch(key) && !ConfigurationSpelling.isSwitch(value)) {
+            spelling.add(ConfigurationSpelling.notASwitch(key, value));
+          }
+        });
+    ConfigurationSpelling.refuse(spelling);
     if (keeps(Rule.READABLE_VALUES)) {
       List<String> unreadable = new ArrayList<>();
       properties.forEach(
@@ -279,8 +298,24 @@ final class ReferenceApplication implements Application {
     return duration.isZero() && !keeps(Rule.ZERO_WITH_ITS_UNIT) ? fallback : duration;
   }
 
-  /** A duration in the short form ({@code 0s}, {@code 500ms}, {@code 7d}) or ISO-8601. */
+  /**
+   * Whether {@code key} is a switch: a {@code streamrune.*} key ending in {@code enabled}, except
+   * the ones read through {@code RelaxedBoolean}.
+   */
+  private static boolean isSwitch(String key) {
+    return key.endsWith("enabled")
+        && !key.equals("streamrune.subscription.single-active-consumer.enabled")
+        && !key.startsWith("streamrune.projections.");
+  }
+
+  /**
+   * A duration in the short form ({@code 0s}, {@code 500ms}, {@code 7d}) or ISO-8601; a number
+   * without a unit is milliseconds, as Spring reads it.
+   */
   private static Duration duration(String value) {
+    if (ConfigurationSpelling.isBareNumber(value)) {
+      return Duration.ofMillis(Long.parseLong(value.strip()));
+    }
     Matcher matcher = SHORT_DURATION.matcher(value);
     if (!matcher.matches()) {
       return Duration.parse(value);

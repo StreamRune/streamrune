@@ -1182,11 +1182,13 @@ Spring Boot 4, Quarkus and Micronaut each auto-configure the same picture from a
 set of `streamrune.*` properties with the same names on all three (a `Duration` takes the short form
 `30s`/`7d` or ISO-8601 `PT30S`/`PT168H` on each; every interval is a `Duration` key without a unit
 suffix — `streamrune.polling-interval`, `streamrune.retry-initial-delay`,
-`streamrune.dead-letter.retry-interval`, `streamrune.outbox.flush-interval`, … — and a bare number is
-not portable: Spring reads it as milliseconds, Quarkus as seconds, and Micronaut refuses to start on
-it, so always write the unit, also for zero, `0s`; Micronaut refuses any value it cannot read,
-naming the property and the value, and the three refuse a `-ms` spelling of an interval key —
-Spring and Micronaut name the key to set):
+`streamrune.dead-letter.retry-interval`, `streamrune.outbox.flush-interval`, … — and a bare number
+would be milliseconds to Spring and seconds to Quarkus, so the three refuse a duration without its
+unit, zero included — write `0s`. Each refuses to
+start on a value it cannot read and on a switch spelled other than `true` or `false`, naming the
+property and the value; Spring and Micronaut refuse a duration property written with a `-ms`
+suffix, naming the key to set, and Quarkus every name its mapping does not declare — see
+[What the integrations refuse](../guide/configuration.md#what-the-integrations-refuse)):
 
 - The event store through `PostgresEventStoreFactory`, a `VirtualThreadCommandBus` with
   `PostgresCommandInbox`, `PostgresAuditStore`, `PostgresDeadLetterQueue` + `DeadLetterRetryRunner`,

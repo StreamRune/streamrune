@@ -288,14 +288,14 @@ public final class ConfigurationDocs {
    * Every {@code streamrune.} name inside a string literal of the Java sources under {@code
    * sourceRoot} that is not a key of {@code oracle}, a meter, a span attribute or a namespace of
    * them, as {@code file:line: name}: a key the integration reads in code that the oracle does not
-   * know. The names of {@code MisspelledPropertyNames}, which the integrations look up only to
-   * refuse them, are not keys and are not reported. Comment lines (starting with {@code //}, {@code
-   * /*} or {@code *}) are skipped.
+   * know. The names {@code MisspelledPropertyNames.OTHER_NAMES} lists, which the integrations look
+   * up only to refuse them, are not keys and are not reported. Comment lines (starting with {@code
+   * //}, {@code /*} or {@code *}) are skipped.
    */
   public static List<String> unknownInJavaSources(Path sourceRoot, Map<String, String> oracle) {
     Set<String> known = new TreeSet<>(oracle.keySet());
     known.addAll(nonConfigurationNames());
-    known.addAll(MisspelledPropertyNames.all().keySet());
+    known.addAll(MisspelledPropertyNames.OTHER_NAMES.keySet());
     List<String> problems = new ArrayList<>();
     try (Stream<Path> sources = Files.walk(sourceRoot)) {
       for (Path source : sources.filter(p -> p.toString().endsWith(".java")).sorted().toList()) {

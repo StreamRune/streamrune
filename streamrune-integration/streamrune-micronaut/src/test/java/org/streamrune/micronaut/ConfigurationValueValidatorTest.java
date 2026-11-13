@@ -47,9 +47,7 @@ class ConfigurationValueValidatorTest {
   void aDurationWithoutItsUnitRefusesTheStart() {
     assertRefusalNames(
         refusal(Map.of("streamrune.outbox.flush-interval", "1000")),
-        "streamrune.outbox.flush-interval=1000",
-        "cannot be read as Duration",
-        "A duration needs its unit");
+        "streamrune.outbox.flush-interval=1000: a duration needs its unit, such as 5000ms");
   }
 
   /** YAML reads an unquoted number as an Integer: refused the same way. */
@@ -71,6 +69,7 @@ class ConfigurationValueValidatorTest {
             "streamrune.inbox.retention-max-age",
             "streamrune.outbox.retention-max-age",
             "streamrune.dead-letter.retention-max-age",
+            "streamrune.saga.dead-letter-retention-max-age",
             "streamrune.lock-timeout",
             "streamrune.event-store.statement-timeout",
             "streamrune.polling-jitter",
@@ -113,7 +112,9 @@ class ConfigurationValueValidatorTest {
     for (String value : List.of("1D", "1 d", "1.5d", "2592000000ms", "soon")) {
       assertRefusalNames(
           refusal(Map.of("streamrune.inbox.retention-max-age", value)),
-          "streamrune.inbox.retention-max-age=" + value);
+          "streamrune.inbox.retention-max-age=" + value,
+          "cannot be read as Duration",
+          "a duration needs its unit");
     }
   }
 
@@ -124,6 +125,9 @@ class ConfigurationValueValidatorTest {
         refusal(Map.of("streamrune.stripe-count", "many")),
         "streamrune.stripe-count=many",
         "cannot be read as int");
+    assertTrue(
+        !refusal(Map.of("streamrune.stripe-count", "many")).contains("a duration needs its unit"),
+        "a number that is not a duration is not told about units");
     assertRefusalNames(
         refusal(Map.of("streamrune.retry-backoff-multiplier", "two")),
         "streamrune.retry-backoff-multiplier=two",
@@ -184,5 +188,61 @@ class ConfigurationValueValidatorTest {
         "these configuration values",
         "streamrune.lock-timeout=-5",
         "streamrune.polling-interval=5000");
+  }
+
+  /**
+   * A switch is {@code true} or {@code false}: Micronaut binds {@code FALSE} as {@code false} while
+   * the cached crypto engine's condition, which compares the text, keeps the plaintext cache; and
+   * binds {@code TRUE} as {@code true} while the Bean Validation interceptor's condition leaves it
+   * out. Every other spelling is refused, naming the property and the value.
+   */
+  @Test
+  void aSwitchSpelledOtherThanTrueOrFalseRefusesTheStart() {
+    Map<String, String> spellings = new LinkedHashMap<>();
+    spellings.put("streamrune.crypto.cache.enabled", "FALSE");
+    spellings.put("streamrune.validation-enabled", "TRUE");
+    spellings.put("streamrune.saga.enabled", "yes");
+    spellings.put("streamrune.outbox.enabled", "1");
+    spellings.put("streamrune.tracing.lock.enabled", "off");
+    spellings.put("streamrune.metrics.enabled", "");
+    spellings.forEach(
+        (key, value) ->
+            assertRefusalNames(
+                refusal(Map.of(key, value)), key + "=" + value + ": a switch is true or false"));
+  }
+
+  /** A property only a bean condition reads, bound by no settings record, is held to it too. */
+  @Test
+  void aSwitchOnlyABeanConditionReadsIsCheckedToo() {
+    for (String key :
+        List.of(
+            "streamrune.sse.enabled",
+            "streamrune.runner-lifecycle-enabled",
+            "streamrune.crypto.filesystem.enabled")) {
+      assertRefusalNames(refusal(Map.of(key, "TRUE")), key + "=TRUE");
+    }
+  }
+
+  @Test
+  void aSwitchSpelledTrueOrFalseBindsAsWritten() {
+    var bound =
+        start(Map.of("streamrune.validation-enabled", "false", "streamrune.saga.enabled", "true"));
+    assertEquals(false, bound.validationEnabled());
+    assertEquals(true, bound.sagaEnabled());
+  }
+
+  /** Every duration property written with a {@code -ms} suffix is refused, naming the property. */
+  @Test
+  void aDurationPropertyWithAMillisecondSuffixRefusesTheStart() {
+    for (String name :
+        List.of(
+            "streamrune.polling-interval-ms",
+            "streamrune.lock-timeout-ms",
+            "streamrune.sse.polling-interval-ms",
+            "streamrune.saga.compensation-retry-interval-ms")) {
+      String property = name.substring(0, name.length() - "-ms".length());
+      assertRefusalNames(
+          refusal(Map.of(name, "200")), name + " is not a StreamRune property; set " + property);
+    }
   }
 }

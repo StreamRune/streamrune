@@ -13,20 +13,39 @@ A default is written in one form in this guide and in every other table with a `
 
 - a duration as the shortest exact one of `Nd`, `Nh`, `Nm`, `Ns` and `Nms`: `7d`, `1m`, `30s`,
   `500ms`. All three integrations accept that form as it is, and ISO-8601 (`PT168H` for `7d`,
-  `PT60S` for `1m`, `PT0.05S` for `50ms`) as well. A bare number is not portable — Spring reads
-  `5000` as milliseconds, Quarkus as seconds, and Micronaut refuses to start on it — so always
-  write the unit, also for zero: `0s`. Micronaut refuses every value it cannot read, naming the
-  property and the value, where it would otherwise bind the property's default: a unit in upper
-  case or after a space (`1D`, `1 d`), a decimal (`1.5d`), and a number of milliseconds above
-  2147483647 (`2592000000ms`; write `30d`). An interval or delay key written with a `-ms` suffix
-  is not a key: the three integrations refuse to start on it, and Spring and Micronaut name the key
-  to set instead;
+  `PT60S` for `1m`, `PT0.05S` for `50ms`) as well;
 - a boolean or a number as its value: `true`, `100`, `2.0`; a text as it is: `operator-only`;
 - `—` where the property has no default.
 
 The tests of each integration (`ConfigurationDocLintTest`) compare every such table with the
 defaults the integration binds, and fail on a key that the guides do not name or that the
 integration does not bind.
+
+## What the integrations refuse
+
+The three integrations read a value the same way, or refuse to start on it with a message that
+names the property and the value:
+
+- **A duration without its unit.** `5000` would be milliseconds on Spring and seconds on Quarkus,
+  so all three refuse a number without a unit, zero included: write `5000ms`, and zero as `0s`.
+- **A value an integration cannot read as the property's type**, such as `soon` for a duration or
+  `many` for a number. Spring and Quarkus refuse it when they bind it. Micronaut would bind the
+  property's default in its place, so its integration refuses it at startup: a unit in upper case
+  or after a space (`1D`, `1 d`), a decimal (`1.5d`), and a number of milliseconds above 2147483647
+  (`2592000000ms`; write `30d`) among them.
+- **A switch spelled other than `true` or `false`**, in lower case: `TRUE`, `yes`, `on` and `1`
+  are refused, because the frameworks read them differently and a bean condition can read a
+  spelling one way while the bound setting reads it the other. Spring and Micronaut refuse an empty
+  switch too; Quarkus reads it as not set. The per-projection switches
+  (`streamrune.projections.<name>.enabled`, `streamrune.projections.auto-discovery.enabled`) and
+  `streamrune.subscription.single-active-consumer.enabled` are read by one parser on all three,
+  for the setting and the bean condition alike, which takes `true`/`false`, `on`/`off`, `yes`/`no`,
+  `y`/`n`, `t`/`f` and `1`/`0` in any case.
+- **A name that reads like a property but is none.** Quarkus refuses every `streamrune.` name its
+  configuration mapping does not declare. Spring and Micronaut ignore a name they do not bind, with
+  two exceptions they refuse, naming the property to set instead: a duration property written with
+  a `-ms` suffix, and the outbox retry multiplier written as `retry-multiplier` instead of
+  `retry-backoff-multiplier`.
 
 ## Commands, locking and retries
 

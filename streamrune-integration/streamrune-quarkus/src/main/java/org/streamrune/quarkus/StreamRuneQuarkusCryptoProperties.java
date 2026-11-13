@@ -1,6 +1,7 @@
 package org.streamrune.quarkus;
 
 import io.smallrye.config.ConfigMapping;
+import io.smallrye.config.WithConverter;
 import io.smallrye.config.WithDefault;
 import io.smallrye.config.WithName;
 import java.time.Duration;
@@ -33,6 +34,7 @@ public interface StreamRuneQuarkusCryptoProperties {
   /** File-system engine configuration. */
   interface FileSystemConfig {
     @WithDefault("false")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /**
@@ -47,6 +49,7 @@ public interface StreamRuneQuarkusCryptoProperties {
   /** PostgreSQL engine configuration. */
   interface PostgresConfig {
     @WithDefault("false")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /**
@@ -62,6 +65,7 @@ public interface StreamRuneQuarkusCryptoProperties {
   /** HashiCorp Vault engine configuration. */
   interface VaultConfig {
     @WithDefault("false")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /** Base URL of the Vault server (e.g. {@code http://localhost:8200}). */
@@ -83,6 +87,7 @@ public interface StreamRuneQuarkusCryptoProperties {
   /** AWS KMS engine configuration. */
   interface AwsConfig {
     @WithDefault("false")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /**
@@ -117,6 +122,7 @@ public interface StreamRuneQuarkusCryptoProperties {
        * Quarkus application.
        */
       @WithDefault("PT5M")
+      @WithConverter(StrictDurationConverter.class)
       Duration expireAfterWrite();
     }
   }
@@ -125,6 +131,7 @@ public interface StreamRuneQuarkusCryptoProperties {
   interface CacheConfig {
     /** Whether caching is enabled. When {@code false}, no cache wrapper is applied. */
     @WithDefault("true")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /** Maximum number of decrypted entries held in the cache. */
@@ -138,12 +145,14 @@ public interface StreamRuneQuarkusCryptoProperties {
      * application.
      */
     @WithDefault("PT5M")
+    @WithConverter(StrictDurationConverter.class)
     Duration expireAfterWrite();
 
     /**
      * Time after which an entry is expired, counted from its last access; unset, entries expire by
      * write age only. A duration: {@code PT10M}, or {@code 10m} in a Quarkus application.
      */
+    @WithConverter(StrictDurationConverter.class)
     Optional<Duration> expireAfterAccess();
   }
 }

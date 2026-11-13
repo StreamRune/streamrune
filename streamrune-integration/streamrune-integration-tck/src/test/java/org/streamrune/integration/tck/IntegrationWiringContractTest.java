@@ -117,6 +117,8 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case MISSPELLED_NAMES -> this::aMisspelledPropertyNameRefusesStart;
       case ZERO_WITH_ITS_UNIT -> this::zeroWithItsUnitReachesTheRetentionCheck;
       case LOCK_TIMEOUT -> this::aNegativeLockTimeoutRefusesStart;
+      case BARE_NUMBERS -> this::aDurationWithoutItsUnitRefusesStart;
+      case SWITCHES -> this::aSwitchSpelledOtherThanTrueOrFalseRefusesStart;
     };
   }
 

@@ -40,10 +40,6 @@ public class StreamRuneConfigValidator implements ApplicationEventListener<Start
 
   @Override
   public void onApplicationEvent(StartupEvent event) {
-    // Micronaut ignores a streamrune.* name it does not bind, where Quarkus refuses one: a name an
-    // application writes for a property StreamRune binds under another name is refused here, so
-    // the application does not run on that property's default without a word.
-    org.streamrune.integration.MisspelledPropertyNames.refuseIfSet(ctx::containsProperty);
     // Singletons are created on first use, so the command bus builder's own check could run only
     // at the first command: the JVM is checked when the application starts.
     org.streamrune.runtime.GraalJitGuard.check(
