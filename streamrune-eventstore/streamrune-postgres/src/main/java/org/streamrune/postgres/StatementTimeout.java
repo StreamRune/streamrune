@@ -69,7 +69,7 @@ final class StatementTimeout {
     }
     if (timeout.toMillis() < 1L) {
       throw new IllegalArgumentException(
-          "statementTimeout must be either exactly 0 (disabled) or at least 1ms — a shorter"
+          "statementTimeout must be either exactly 0s (disabled) or at least 1ms — a shorter"
               + " duration truncates to statement_timeout = 0, which PostgreSQL reads as"
               + " \"no timeout at all\", the opposite of what was asked; got: "
               + timeout);

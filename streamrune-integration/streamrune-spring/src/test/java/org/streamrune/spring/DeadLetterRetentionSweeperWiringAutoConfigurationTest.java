@@ -83,7 +83,7 @@ class DeadLetterRetentionSweeperWiringAutoConfigurationTest {
         // either:
         // otherwise a retained keyed entry would outlive its inbox row (startup refuses that).
         .withPropertyValues(
-            "streamrune.dead-letter.retention-max-age=0", "streamrune.inbox.retention-max-age=0")
+            "streamrune.dead-letter.retention-max-age=0s", "streamrune.inbox.retention-max-age=0s")
         .withBean(DeadLetterQueue.class, () -> deadLetterQueue)
         .run(
             ctx -> {

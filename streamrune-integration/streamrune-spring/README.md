@@ -67,7 +67,7 @@ streamrune:
   stripe-count: 1024
   event-store:
     # bound on every event-store statement, per transaction or statement (never on the pooled
-    # session); 0 sets none
+    # session); 0s sets none
     statement-timeout: 30s
 ```
 
@@ -108,8 +108,8 @@ streamrune:
   sse:
     enabled: true            # default false
     polling-interval: 1s     # how often the feed reads the global stream; must be positive
-    timeout: 5m              # the server completes a stream after this; 0 disables
-    keep-alive-interval: 30s # ": keepalive" comment frames; 0 disables
+    timeout: 5m              # the server completes a stream after this; 0s disables
+    keep-alive-interval: 30s # ": keepalive" comment frames; 0s disables
 ```
 
 - **What it emits** — one frame per domain event of that stream: `id` is the global offset, `data`

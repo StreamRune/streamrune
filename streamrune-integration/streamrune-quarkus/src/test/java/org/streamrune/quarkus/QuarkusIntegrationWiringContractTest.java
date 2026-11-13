@@ -295,7 +295,13 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   @Override
   protected Application start(
       DataSource dataSource, Map<String, String> properties, Set<Class<?>> extraBeans) {
-    ApplicationInfrastructure.config = configuration(properties);
+    // A Quarkus application refuses to start on a configuration SmallRye cannot map: a value it
+    // cannot convert, or a streamrune.* name the mapping does not declare.
+    try {
+      ApplicationInfrastructure.config = configuration(properties);
+    } catch (RuntimeException refused) {
+      return new QuarkusApplication(null, null, messages(refused), List.of());
+    }
     ApplicationInfrastructure.dataSource = dataSource != null ? dataSource : new NoDatabase();
     List<Class<?>> beans = new ArrayList<>(FRAMEWORK_BEANS);
     // The qualifiers SmallRye Health and the configuration register: indexed, Arc reads them as

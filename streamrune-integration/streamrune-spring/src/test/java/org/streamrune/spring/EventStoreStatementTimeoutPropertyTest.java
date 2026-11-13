@@ -50,7 +50,7 @@ class EventStoreStatementTimeoutPropertyTest {
   @Test
   void zeroSetsNoBound() {
     runner
-        .withPropertyValues("streamrune.event-store.statement-timeout=0")
+        .withPropertyValues("streamrune.event-store.statement-timeout=0s")
         .run(
             ctx ->
                 assertThat(boundOf(ctx.getBean(EventStoreFactory.class))).isEqualTo(Duration.ZERO));

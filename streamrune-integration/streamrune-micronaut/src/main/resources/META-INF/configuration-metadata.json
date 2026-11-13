@@ -419,7 +419,7 @@
     {
       "name": "streamrune.inbox.retention-max-age",
       "type": "java.time.Duration",
-      "description": "How long processed command-inbox rows are kept; 0 or negative keeps them.",
+      "description": "How long processed command-inbox rows are kept; 0s or negative keeps them.",
       "defaultValue": "7d"
     },
     {
@@ -436,7 +436,7 @@
     {
       "name": "streamrune.outbox.retention-max-age",
       "type": "java.time.Duration",
-      "description": "How long delivered entries are kept; 0 or negative keeps them.",
+      "description": "How long delivered entries are kept; 0s or negative keeps them.",
       "defaultValue": "7d"
     },
     {

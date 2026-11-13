@@ -64,7 +64,7 @@ import org.streamrune.runtime.SseEventPublisher;
  * minutes, far beyond the test. Two configurations:
  *
  * <ul>
- *   <li>{@code streamrune.sse.keep-alive-interval=0}: no keepalive tick comes along to notice the
+ *   <li>{@code streamrune.sse.keep-alive-interval=0s}: no keepalive tick comes along to notice the
  *       dead connection, so nothing but the endpoint's own handling of the failed write can
  *       unsubscribe the client;
  *   <li>{@code streamrune.sse.keep-alive-interval=200ms}: a tick would reap the subscription, but
@@ -83,7 +83,7 @@ class SseEarlyClientResetTest {
   private static final Duration PHASE_TIMEOUT = Duration.ofSeconds(8);
 
   @ParameterizedTest(name = "streamrune.sse.keep-alive-interval={0}")
-  @ValueSource(strings = {"0", "200ms"})
+  @ValueSource(strings = {"0s", "200ms"})
   void aClientResetBeforeTheResponseIsWrittenReleasesTheSubscriptionAndDoesNotHoldTheShutdown(
       String keepAliveInterval) throws Exception {
     resetBeforeTheResponseIsWritten(SseApplication.class, keepAliveInterval);
@@ -95,7 +95,7 @@ class SseEarlyClientResetTest {
     ResolvesEverything.seen.clear();
 
     // No keepalive: nothing but the framework's resolver can release the stream.
-    resetBeforeTheResponseIsWritten(SseApplicationWithACatchAllResolver.class, "0");
+    resetBeforeTheResponseIsWritten(SseApplicationWithACatchAllResolver.class, "0s");
 
     assertThat(ResolvesEverything.seen)
         .as("the application's resolver was asked about the failed write, and resolved it")
@@ -104,7 +104,7 @@ class SseEarlyClientResetTest {
 
   @Test
   void anErrorOfAnOrdinaryControllerIsStillResolvedBySpringMvcsOwnResolvers() throws Exception {
-    ConfigurableApplicationContext context = start(SseApplication.class, "0");
+    ConfigurableApplicationContext context = start(SseApplication.class, "0s");
     try (HttpClient client = HttpClient.newHttpClient()) {
       int port = ((WebServerApplicationContext) context).getWebServer().getPort();
 

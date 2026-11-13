@@ -42,7 +42,7 @@ import org.streamrune.core.types.StreamId;
  * events until the stream ends. {@code streamrune.sse.timeout} (default five minutes) ends every
  * stream, and a client that reconnects is authorized again: the timeout is therefore the bound on
  * how long a revoked caller keeps reading. Keep it finite wherever access can change; {@code
- * streamrune.sse.timeout=0} removes that bound.
+ * streamrune.sse.timeout=0s} removes that bound.
  */
 @FunctionalInterface
 public interface SseAuthorizer {

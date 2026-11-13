@@ -390,8 +390,8 @@ class StreamRuneQuarkusPropertiesTest {
    * In a Quarkus application every duration key takes the short form the configuration reference
    * writes its default in ({@code 7d}, {@code 1m}, {@code 30s}, {@code 500ms}) as well as ISO-8601:
    * bound with each default written that way, the mappings read as they read with no source at all.
-   * SmallRye Config without Quarkus' converter reads ISO-8601 only, which is why the README's
-   * listing writes ISO-8601.
+   * The mappings name their own duration converter, so SmallRye Config reads the short form even
+   * without the converter a Quarkus application registers.
    */
   @Test
   void everyDurationTakesTheShortFormOfTheConfigurationReferenceInAQuarkusApplication() {
@@ -425,11 +425,17 @@ class StreamRuneQuarkusPropertiesTest {
                 application.getConfigMapping(StreamRuneQuarkusProperties.class),
                 application.getConfigMapping(StreamRuneQuarkusCryptoProperties.class))
             .keys());
-    String sample = shortForms.keySet().iterator().next();
-    assertThrows(
-        RuntimeException.class,
-        () -> TestProperties.of(Map.of(sample, shortForms.get(sample))),
-        "SmallRye Config alone reads ISO-8601 only");
+    assertEquals(
+        defaults.entrySet().stream()
+            .filter(entry -> !entry.getKey().startsWith("streamrune.crypto."))
+            .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)),
+        ConfigurationDocLintTest.oracleOf(TestProperties.of(shortForms), crypto)
+            .keys()
+            .entrySet()
+            .stream()
+            .filter(entry -> !entry.getKey().startsWith("streamrune.crypto."))
+            .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)),
+        "SmallRye Config without Quarkus' converter reads the short form too");
   }
 
   private static Map<String, String> merged(Map<String, String> a, Map<String, String> b) {

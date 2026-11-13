@@ -1,6 +1,7 @@
 package org.streamrune.quarkus;
 
 import io.smallrye.config.ConfigMapping;
+import io.smallrye.config.WithConverter;
 import io.smallrye.config.WithDefault;
 import java.time.Duration;
 import java.util.List;
@@ -33,6 +34,7 @@ public interface StreamRuneQuarkusProperties {
 
   /** Delay before the first command retry. */
   @WithDefault("PT0.05S")
+  @WithConverter(StrictDurationConverter.class)
   Duration retryInitialDelay();
 
   /** Multiplier applied to the retry delay after each failed attempt. */
@@ -44,14 +46,17 @@ public interface StreamRuneQuarkusProperties {
    * projections.
    */
   @WithDefault("PT5S")
+  @WithConverter(StrictDurationConverter.class)
   Duration pollingInterval();
 
   /** Random jitter added to the polling interval. */
   @WithDefault("PT1S")
+  @WithConverter(StrictDurationConverter.class)
   Duration pollingJitter();
 
   /** Maximum time to wait for an aggregate lock. */
   @WithDefault("PT5S")
+  @WithConverter(StrictDurationConverter.class)
   Duration lockTimeout();
 
   /** Number of stripes in the local aggregate locker. */
@@ -72,14 +77,17 @@ public interface StreamRuneQuarkusProperties {
 
   /** How long the circuit breaker stays open before allowing a probe. */
   @WithDefault("PT30S")
+  @WithConverter(StrictDurationConverter.class)
   Duration circuitBreakerCooldown();
 
   /** Whether per-event audit logging to the event audit store is enabled. */
   @WithDefault("false")
+  @WithConverter(StrictBooleanConverter.class)
   boolean eventAuditEnabled();
 
   /** Whether the projection dead-letter store is enabled. */
   @WithDefault("false")
+  @WithConverter(StrictBooleanConverter.class)
   boolean projectionDlqEnabled();
 
   /**
@@ -133,10 +141,12 @@ public interface StreamRuneQuarkusProperties {
 
   /** Whether the Bean Validation command interceptor is enabled. */
   @WithDefault("true")
+  @WithConverter(StrictBooleanConverter.class)
   boolean validationEnabled();
 
   /** Whether the startup banner/log line is emitted. */
   @WithDefault("true")
+  @WithConverter(StrictBooleanConverter.class)
   boolean startupLog();
 
   /** Event-metadata configuration, {@code streamrune.metadata.*} (baggage allowlisting). */
@@ -166,6 +176,7 @@ public interface StreamRuneQuarkusProperties {
 
     /** The master switch: {@code false} starts no StreamRune span at all. */
     @WithDefault("true")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /** The {@code command/…} spans, {@code streamrune.tracing.command.*}. */
@@ -199,6 +210,7 @@ public interface StreamRuneQuarkusProperties {
 
       /** Whether the spans of the area are started. */
       @WithDefault("true")
+      @WithConverter(StrictBooleanConverter.class)
       boolean enabled();
     }
   }
@@ -217,6 +229,7 @@ public interface StreamRuneQuarkusProperties {
      * applies; a negative value or a positive one below one millisecond fails the boot.
      */
     @WithDefault("PT30S")
+    @WithConverter(StrictDurationConverter.class)
     Duration statementTimeout();
 
     /** Schema management section, {@code streamrune.event-store.schema.*}. */
@@ -227,6 +240,7 @@ public interface StreamRuneQuarkusProperties {
        * Flyway migrations.
        */
       @WithDefault("true")
+      @WithConverter(StrictBooleanConverter.class)
       boolean autoInitialize();
     }
   }
@@ -236,6 +250,7 @@ public interface StreamRuneQuarkusProperties {
 
     /** Whether the PostgreSQL saga store bean is produced. */
     @WithDefault("true")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /**
@@ -250,6 +265,7 @@ public interface StreamRuneQuarkusProperties {
      * The saga lifecycle fails fast on a config that violates this.
      */
     @WithDefault("PT168H")
+    @WithConverter(StrictDurationConverter.class)
     Duration deadLetterRetentionMaxAge();
 
     /**
@@ -259,6 +275,7 @@ public interface StreamRuneQuarkusProperties {
      * sampling-only mode so {@code streamrune.saga.compensating} / {@code faulted_rows} stay live.
      */
     @WithDefault("true")
+    @WithConverter(StrictBooleanConverter.class)
     boolean compensationRetryEnabled();
 
     /**
@@ -267,6 +284,7 @@ public interface StreamRuneQuarkusProperties {
      * e.g. {@code PT60S}.
      */
     @WithDefault("PT60S")
+    @WithConverter(StrictDurationConverter.class)
     Duration compensationRetryInterval();
 
     /**
@@ -274,6 +292,7 @@ public interface StreamRuneQuarkusProperties {
      * FAULTED} (poison bound). ISO-8601, e.g. {@code PT1H}.
      */
     @WithDefault("PT1H")
+    @WithConverter(StrictDurationConverter.class)
     Duration compensationRetryGiveUpAfter();
 
     /**
@@ -291,6 +310,7 @@ public interface StreamRuneQuarkusProperties {
 
     /** Whether the outbox poller is enabled (requires an OutboxStore and OutboxPublisher bean). */
     @WithDefault("false")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /** Number of outbox entries published per poll. */
@@ -299,6 +319,7 @@ public interface StreamRuneQuarkusProperties {
 
     /** Interval between two polls of the outbox relay. */
     @WithDefault("PT5S")
+    @WithConverter(StrictDurationConverter.class)
     Duration flushInterval();
 
     /**
@@ -307,6 +328,7 @@ public interface StreamRuneQuarkusProperties {
      * retention pruning. Use ISO-8601 duration syntax, e.g. {@code PT168H} (7 days).
      */
     @WithDefault("PT168H")
+    @WithConverter(StrictDurationConverter.class)
     Duration retentionMaxAge();
 
     /**
@@ -317,6 +339,7 @@ public interface StreamRuneQuarkusProperties {
      * {@code PT720H} (30 days).
      */
     @WithDefault("PT720H")
+    @WithConverter(StrictDurationConverter.class)
     Duration skippedRetentionMaxAge();
 
     /**
@@ -332,6 +355,7 @@ public interface StreamRuneQuarkusProperties {
      * Default 1s.
      */
     @WithDefault("PT1S")
+    @WithConverter(StrictDurationConverter.class)
     Duration retryInitialDelay();
 
     /** Exponential backoff multiplier applied to {@link #retryInitialDelay} each attempt. */
@@ -349,6 +373,7 @@ public interface StreamRuneQuarkusProperties {
      * cannot re-admit a duplicate. Use ISO-8601 duration syntax, e.g. {@code PT168H} (7 days).
      */
     @WithDefault("PT168H")
+    @WithConverter(StrictDurationConverter.class)
     Duration retentionMaxAge();
   }
 
@@ -362,6 +387,7 @@ public interface StreamRuneQuarkusProperties {
      * {@link #retentionMaxAge()}).
      */
     @WithDefault("true")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /** Maximum dead-letter retry attempts per command. */
@@ -370,6 +396,7 @@ public interface StreamRuneQuarkusProperties {
 
     /** Interval between dead-letter retry polls. */
     @WithDefault("PT60S")
+    @WithConverter(StrictDurationConverter.class)
     Duration retryInterval();
 
     /**
@@ -382,6 +409,7 @@ public interface StreamRuneQuarkusProperties {
      * otherwise). Use ISO-8601 duration syntax, e.g. {@code PT168H} (7 days).
      */
     @WithDefault("PT168H")
+    @WithConverter(StrictDurationConverter.class)
     Duration retentionMaxAge();
 
     /**
@@ -400,6 +428,7 @@ public interface StreamRuneQuarkusProperties {
 
     /** Whether Micrometer metrics are enabled (requires a MeterRegistry bean). */
     @WithDefault("true")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /** Prefix for all StreamRune metric names. */
@@ -451,6 +480,7 @@ public interface StreamRuneQuarkusProperties {
        * stops renewing). The renew heartbeat runs at {@code leaseTtl/3}. Default 15s.
        */
       @WithDefault("PT15S")
+      @WithConverter(StrictDurationConverter.class)
       Duration leaseTtl();
     }
   }
@@ -464,6 +494,7 @@ public interface StreamRuneQuarkusProperties {
      * QueryBus} routes through the cache.
      */
     @WithDefault("false")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
   }
 
@@ -484,6 +515,7 @@ public interface StreamRuneQuarkusProperties {
      * UserRoleResolver}) refuses startup (Quarkus REST applications).
      */
     @WithDefault("false")
+    @WithConverter(StrictBooleanConverter.class)
     boolean trustUserIdHeader();
   }
 
@@ -498,6 +530,7 @@ public interface StreamRuneQuarkusProperties {
      * Defaults to {@code false}: such a JVM refuses to start ({@code GraalJitGuard}).
      */
     @WithDefault("false")
+    @WithConverter(StrictBooleanConverter.class)
     boolean allowGraalJit();
   }
 
@@ -515,6 +548,7 @@ public interface StreamRuneQuarkusProperties {
      * does not start.
      */
     @WithDefault("false")
+    @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
     /**
@@ -529,6 +563,7 @@ public interface StreamRuneQuarkusProperties {
      * the three.
      */
     @WithDefault("PT5M")
+    @WithConverter(StrictDurationConverter.class)
     Duration timeout();
 
     /**
@@ -540,6 +575,7 @@ public interface StreamRuneQuarkusProperties {
      * streamrune.sse.keep-alive-interval} on Spring and Micronaut.
      */
     @WithDefault("PT30S")
+    @WithConverter(StrictDurationConverter.class)
     Duration keepAliveInterval();
 
     /**
@@ -550,6 +586,7 @@ public interface StreamRuneQuarkusProperties {
      * start-up. Matches {@code streamrune.sse.polling-interval} on Spring and Micronaut.
      */
     @WithDefault("PT1S")
+    @WithConverter(StrictDurationConverter.class)
     Duration pollingInterval();
   }
 

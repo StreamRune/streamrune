@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.sql.DataSource;
 import org.streamrune.core.AggregateLocker;
@@ -47,6 +49,8 @@ import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.integration.CommandDeadLetterRetentionValidator;
+import org.streamrune.integration.ConfigurationSpelling;
+import org.streamrune.integration.MisspelledPropertyNames;
 import org.streamrune.integration.OutboxWiringMessages;
 import org.streamrune.integration.RequestIdentityPolicy;
 import org.streamrune.integration.SnapshotPurgeSetting;
@@ -106,8 +110,36 @@ final class ReferenceApplication implements Application {
     ONE_COMMAND_INTERCEPTOR,
     GLOBAL_OPENTELEMETRY,
     NOOP_WITHOUT_OPENTELEMETRY,
-    APPLICATION_LOCKER_TRACED
+    APPLICATION_LOCKER_TRACED,
+    READABLE_VALUES,
+    MISSPELLED_NAMES,
+    ZERO_WITH_ITS_UNIT,
+    LOCK_TIMEOUT,
+    BARE_NUMBERS,
+    SWITCHES
   }
+
+  /** The durations among the keys the contract sets, read as an integration binds them. */
+  private static final Set<String> DURATION_KEYS =
+      Set.of(
+          "streamrune.lock-timeout",
+          "streamrune.outbox.flush-interval",
+          "streamrune.inbox.retention-max-age",
+          "streamrune.dead-letter.retention-max-age",
+          "streamrune.dead-letter.retry-interval",
+          "streamrune.saga.compensation-retry-interval",
+          "streamrune.polling-interval",
+          "streamrune.polling-jitter",
+          "streamrune.retry-initial-delay",
+          "streamrune.outbox.retry-initial-delay",
+          "streamrune.sse.polling-interval");
+
+  /** The whole numbers among the keys the contract sets. */
+  private static final Set<String> INTEGER_KEYS =
+      Set.of("streamrune.stripe-count", "streamrune.dead-letter.max-retries");
+
+  /** A duration in the short form: a whole number and its unit. */
+  private static final Pattern SHORT_DURATION = Pattern.compile("(-?\\d+)(ms|s|m|h|d)");
 
   private final List<Object> beans;
   private final String failure;
@@ -174,6 +206,49 @@ final class ReferenceApplication implements Application {
   }
 
   private void validate() {
+    List<String> spelling = new ArrayList<>();
+    if (keeps(Rule.MISSPELLED_NAMES)) {
+      spelling.addAll(MisspelledPropertyNames.problems(DURATION_KEYS, properties::containsKey));
+    }
+    properties.forEach(
+        (key, value) -> {
+          if (keeps(Rule.BARE_NUMBERS)
+              && DURATION_KEYS.contains(key)
+              && ConfigurationSpelling.isBareNumber(value)) {
+            spelling.add(ConfigurationSpelling.bareNumber(key, value));
+          }
+          if (keeps(Rule.SWITCHES) && isSwitch(key) && !ConfigurationSpelling.isSwitch(value)) {
+            spelling.add(ConfigurationSpelling.notASwitch(key, value));
+          }
+        });
+    ConfigurationSpelling.refuse(spelling);
+    if (keeps(Rule.READABLE_VALUES)) {
+      List<String> unreadable = new ArrayList<>();
+      properties.forEach(
+          (key, value) -> {
+            try {
+              if (DURATION_KEYS.contains(key)) {
+                duration(value);
+              } else if (INTEGER_KEYS.contains(key)) {
+                Integer.parseInt(value);
+              }
+            } catch (RuntimeException e) {
+              unreadable.add(key + "=" + value);
+            }
+          });
+      if (!unreadable.isEmpty()) {
+        throw new IllegalStateException("cannot read " + String.join(", ", unreadable));
+      }
+    }
+    if (keeps(Rule.LOCK_TIMEOUT)) {
+      try {
+        AggregateLocker.requireValidTimeout(
+            durationOf("streamrune.lock-timeout", Duration.ofSeconds(5)),
+            "streamrune.lock-timeout");
+      } catch (IllegalArgumentException e) {
+        throw new IllegalStateException(e.getMessage(), e);
+      }
+    }
     if (keeps(Rule.OUTBOX_RELAY)
         && Boolean.parseBoolean(properties.get("streamrune.outbox.enabled"))
         && !beansOf(OutboxStore.class).isEmpty()
@@ -193,8 +268,7 @@ final class ReferenceApplication implements Application {
         && !beansOf(CommandInbox.class).isEmpty()
         && !beansOf(DeadLetterQueue.class).isEmpty()) {
       CommandDeadLetterRetentionValidator.validate(
-          Duration.parse(
-              properties.getOrDefault("streamrune.dead-letter.retention-max-age", "PT168H")),
+          durationOf("streamrune.dead-letter.retention-max-age", Duration.ofDays(7)),
           Duration.ofDays(7));
     }
     @SuppressWarnings("unchecked")
@@ -209,6 +283,51 @@ final class ReferenceApplication implements Application {
               + ContractBeans.ContractSagaState.class.getName()
               + " is delivered on every replica: its SagaRunner carries no lease.");
     }
+  }
+
+  /**
+   * The duration {@code key} is set to, or {@code fallback} when it is not set. An application that
+   * breaks {@link Rule#ZERO_WITH_ITS_UNIT} binds the fallback in the place of a zero.
+   */
+  private Duration durationOf(String key, Duration fallback) {
+    String value = properties.get(key);
+    if (value == null) {
+      return fallback;
+    }
+    Duration duration = duration(value);
+    return duration.isZero() && !keeps(Rule.ZERO_WITH_ITS_UNIT) ? fallback : duration;
+  }
+
+  /**
+   * Whether {@code key} is a switch: a {@code streamrune.*} key ending in {@code enabled}, except
+   * the ones read through {@code RelaxedBoolean}.
+   */
+  private static boolean isSwitch(String key) {
+    return key.endsWith("enabled")
+        && !key.equals("streamrune.subscription.single-active-consumer.enabled")
+        && !key.startsWith("streamrune.projections.");
+  }
+
+  /**
+   * A duration in the short form ({@code 0s}, {@code 500ms}, {@code 7d}) or ISO-8601; a number
+   * without a unit is milliseconds, as Spring reads it.
+   */
+  private static Duration duration(String value) {
+    if (ConfigurationSpelling.isBareNumber(value)) {
+      return Duration.ofMillis(Long.parseLong(value.strip()));
+    }
+    Matcher matcher = SHORT_DURATION.matcher(value);
+    if (!matcher.matches()) {
+      return Duration.parse(value);
+    }
+    long amount = Long.parseLong(matcher.group(1));
+    return switch (matcher.group(2)) {
+      case "ms" -> Duration.ofMillis(amount);
+      case "s" -> Duration.ofSeconds(amount);
+      case "m" -> Duration.ofMinutes(amount);
+      case "h" -> Duration.ofHours(amount);
+      default -> Duration.ofDays(amount);
+    };
   }
 
   /**

@@ -22,6 +22,11 @@ public class StreamRuneConfigValidator implements SmartInitializingSingleton {
 
   @Override
   public void afterSingletonsInstantiated() {
+    // First, so every later check reads the value the operator meant: a misspelled name Spring
+    // would ignore, a duration without its unit Spring would read as milliseconds, a switch Spring
+    // would bind one way while a bean condition reads it the other (ConfigurationSpellingCheck).
+    org.streamrune.integration.ConfigurationSpelling.refuse(
+        ConfigurationSpellingCheck.problems(env));
     // Every application, also one that builds its own command bus: a JVM that runs the Graal JIT,
     // which is not reliable with StreamRune, refuses to start (the bus builder runs the same
     // check).

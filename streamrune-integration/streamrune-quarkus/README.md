@@ -40,8 +40,9 @@ All keys live under the `streamrune.` prefix and bind through `StreamRuneQuarkus
 `StreamRuneQuarkusCryptoProperties` (`@ConfigMapping`); the
 [configuration reference](../../docs/guide/configuration.md) says what each one does. A duration
 takes the short form of the reference (`7d`, `1m`, `500ms`) or ISO-8601 (`PT168H`) in a Quarkus
-application. The listing below sets every key to its default, durations in ISO-8601, which SmallRye
-Config reads without Quarkus as well; a key without a default and the keys of one projection are
+application; a duration without its unit and a switch spelled other than `true` or `false` refuse
+the start ([What the integrations refuse](../../docs/guide/configuration.md#what-the-integrations-refuse)).
+The listing below sets every key to its default, durations in ISO-8601; a key without a default and the keys of one projection are
 commented out. A `.properties` comment must
 start its own line — text after a value is part of the value.
 
