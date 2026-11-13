@@ -361,7 +361,7 @@ public final class PostgresEventStore implements EventStore {
    * @param dataSource the JDBC data source (required)
    * @param objectMapper Jackson object mapper (required)
    * @param typeRegistry event/state type registry (required)
-   * @param upcasterChain upcaster chain for schema evolution, {@link UpcasterChain#empty()} if not
+   * @param upcasterChain upcaster chain for schema evolution, {@code UpcasterChain.empty()} if not
    *     needed
    * @param eventAuditStore event audit store for same-transaction audit writes, or null if not
    *     needed
@@ -377,7 +377,9 @@ public final class PostgresEventStore implements EventStore {
 
   /**
    * Creates a new PostgresEventStore with full control over all collaborators including the outbox
-   * event mapper.
+   * event mapper. Package-private: {@link #builder()}, {@link #create(DataSource,
+   * EventTypeRegistry, CryptoEngine, List, StreamRuneMetrics)} and {@link
+   * PostgresEventStoreFactory} are the public entry points.
    *
    * <p>Performs no {@code @Encrypted} check: {@code objectMapper} is used as given, and a mapper
    * without the crypto module writes {@code @Encrypted} components as plaintext. When a registered
@@ -388,7 +390,7 @@ public final class PostgresEventStore implements EventStore {
    * @param dataSource the JDBC data source (required)
    * @param objectMapper Jackson object mapper (required)
    * @param typeRegistry event/state type registry (required)
-   * @param upcasterChain upcaster chain for schema evolution, {@link UpcasterChain#empty()} if not
+   * @param upcasterChain upcaster chain for schema evolution, {@code UpcasterChain.empty()} if not
    *     needed
    * @param eventAuditStore event audit store for same-transaction audit writes, or null if not
    *     needed
@@ -397,7 +399,7 @@ public final class PostgresEventStore implements EventStore {
    * @param outboxEventMapper mapper that derives outbox entries from each appended event, or null
    *     if automatic outbox emission is not needed
    */
-  public PostgresEventStore(
+  PostgresEventStore(
       DataSource dataSource,
       ObjectMapper objectMapper,
       EventTypeRegistry typeRegistry,
@@ -418,7 +420,7 @@ public final class PostgresEventStore implements EventStore {
 
   /**
    * Creates a new PostgresEventStore with full control over all collaborators including the command
-   * inbox for idempotent appends.
+   * inbox for idempotent appends. Package-private: {@link #builder()} is the public entry point.
    *
    * <p>Performs no {@code @Encrypted} check: {@code objectMapper} is used as given, and a mapper
    * without the crypto module writes {@code @Encrypted} components as plaintext. When a registered
@@ -429,7 +431,7 @@ public final class PostgresEventStore implements EventStore {
    * @param dataSource the JDBC data source (required)
    * @param objectMapper Jackson object mapper (required)
    * @param typeRegistry event/state type registry (required)
-   * @param upcasterChain upcaster chain for schema evolution, {@link UpcasterChain#empty()} if not
+   * @param upcasterChain upcaster chain for schema evolution, {@code UpcasterChain.empty()} if not
    *     needed
    * @param eventAuditStore event audit store for same-transaction audit writes, or null if not
    *     needed
@@ -439,7 +441,7 @@ public final class PostgresEventStore implements EventStore {
    *     if automatic outbox emission is not needed
    * @param commandInbox command inbox for idempotent appends, or null if not needed
    */
-  public PostgresEventStore(
+  PostgresEventStore(
       DataSource dataSource,
       ObjectMapper objectMapper,
       EventTypeRegistry typeRegistry,
@@ -1419,8 +1421,8 @@ public final class PostgresEventStore implements EventStore {
    * @param events the events to append (required)
    * @param expectedVersion the expected current stream version for optimistic locking (required)
    * @param outboxEntries outbox entries to persist atomically with the events (required; may be
-   *     empty). Non-empty entries require an outbox store — see the constructor — and at least one
-   *     event.
+   *     empty). Non-empty entries require an outbox store — see {@link
+   *     Builder#outboxStore(PostgresOutboxStore)} — and at least one event.
    * @return the append result with assigned global offsets and the new stream version
    * @throws IllegalStateException if outboxEntries is non-empty and no outbox store was configured
    * @throws IllegalArgumentException if outboxEntries is non-empty and events is empty
@@ -1552,7 +1554,7 @@ public final class PostgresEventStore implements EventStore {
     if (!outboxEntries.isEmpty() && outboxStore == null) {
       throw new IllegalStateException(
           "Outbox entries were passed but no PostgresOutboxStore is configured on this event"
-              + " store — use the constructor that accepts an outbox store");
+              + " store — set one with PostgresEventStore.builder().outboxStore(...)");
     }
     if (events.isEmpty()) {
       // The empty-events no-op returns BEFORE any transaction is opened, so
@@ -2924,9 +2926,10 @@ public final class PostgresEventStore implements EventStore {
     }
 
     /**
-     * Sets the outbox store for same-transaction outbox writes (optional). Must be set together
-     * with {@link #outboxEventMapper}; providing only one of the two causes {@link #build()} to
-     * throw {@link IllegalStateException}.
+     * Sets the outbox store for same-transaction outbox writes (optional). With an {@link
+     * #outboxEventMapper outbox event mapper}, every append writes the entries the mapper derives
+     * from its events; without one, an append writes only the entries passed to {@link
+     * PostgresEventStore#append(StreamId, List, Version, List)}.
      */
     public Builder outboxStore(PostgresOutboxStore outboxStore) {
       this.outboxStore = outboxStore;
@@ -2934,9 +2937,9 @@ public final class PostgresEventStore implements EventStore {
     }
 
     /**
-     * Sets the mapper that derives outbox entries from appended events (optional). Must be set
-     * together with {@link #outboxStore}; providing only one of the two causes {@link #build()} to
-     * throw {@link IllegalStateException}.
+     * Sets the mapper that derives outbox entries from appended events (optional). Requires an
+     * {@link #outboxStore outbox store}, which the entries are written to; a mapper without one
+     * causes {@link #build()} to throw {@link IllegalStateException}.
      */
     public Builder outboxEventMapper(OutboxEventMapper outboxEventMapper) {
       this.outboxEventMapper = outboxEventMapper;
@@ -3007,8 +3010,9 @@ public final class PostgresEventStore implements EventStore {
 
     /**
      * Builds the {@link PostgresEventStore}. Requires {@code dataSource} and {@code typeRegistry}.
-     * {@code outboxStore} and {@code outboxEventMapper} must be configured together or not at all.
-     * Does not touch the database.
+     * An {@code outboxEventMapper} requires an {@code outboxStore}; an {@code outboxStore} alone is
+     * allowed and serves the outbox entries passed to {@link PostgresEventStore#append(StreamId,
+     * List, Version, List)}. Does not touch the database.
      *
      * <p>Without a {@link #cryptoEngine(CryptoEngine) crypto engine}, refuses a registered event or
      * state type that carries {@code @Encrypted} (nested records included), because the store would
@@ -3017,9 +3021,9 @@ public final class PostgresEventStore implements EventStore {
      * encryption. See {@link PostgresEventStore#create(DataSource, EventTypeRegistry, CryptoEngine,
      * List, StreamRuneMetrics)}.
      *
-     * @throws IllegalStateException if exactly one of {@code outboxStore} / {@code
-     *     outboxEventMapper} is set, or if no crypto engine is set and a registered event or state
-     *     type carries {@code @Encrypted}
+     * @throws IllegalStateException if {@code outboxEventMapper} is set without {@code
+     *     outboxStore}, or if no crypto engine is set and a registered event or state type carries
+     *     {@code @Encrypted}
      * @throws IllegalArgumentException if {@code typeRegistry} or {@code dataSource} is missing
      * @throws UnsupportedOperationException if no crypto engine is set and the registry does not
      *     implement {@link EventTypeRegistry#registeredTypes()}
@@ -3038,9 +3042,10 @@ public final class PostgresEventStore implements EventStore {
     }
 
     private PostgresEventStore build(boolean checkCrypto) {
-      if ((outboxStore == null) != (outboxEventMapper == null)) {
+      if (outboxEventMapper != null && outboxStore == null) {
         throw new IllegalStateException(
-            "outboxStore and outboxEventMapper must be set together (or neither).");
+            "outboxEventMapper is set without an outboxStore: the entries it derives would have"
+                + " nowhere to go. Set outboxStore(...) as well.");
       }
       if (checkCrypto) {
         validateCryptoConfig(typeRegistry, cryptoEngine);

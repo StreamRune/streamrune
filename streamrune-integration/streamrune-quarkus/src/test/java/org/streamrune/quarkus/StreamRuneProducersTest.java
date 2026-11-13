@@ -23,7 +23,6 @@ import org.streamrune.core.SnapshotPolicy;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.UserRoleResolver;
 import org.streamrune.core.crypto.CryptoEngine;
-import org.streamrune.core.types.EventType;
 import org.streamrune.runtime.CachingUserRoleResolver;
 import org.streamrune.runtime.DeadLetterRetentionSweeper;
 import org.streamrune.runtime.DeciderRegistration;
@@ -2033,21 +2032,18 @@ class StreamRuneProducersTest {
     assertNull(poller);
   }
 
+  /**
+   * Upcaster beans reach the store through the event store factory; no producer publishes a chain
+   * bean, which used to be {@code null} without upcasters and whose type is not public API.
+   */
   @Test
-  void upcasterChainNull_whenNoUpcasters() {
-    var producers = new StreamRuneProducers();
-    var chain = producers.upcasterChain(List.of());
-    assertNull(chain);
-  }
-
-  @Test
-  void upcasterChainProduced_whenUpcastersPresent() {
-    var producers = new StreamRuneProducers();
-    var upcaster = mock(org.streamrune.core.upcasting.EventUpcaster.class);
-    when(upcaster.eventType()).thenReturn(new EventType("TestEvent"));
-    when(upcaster.currentVersion()).thenReturn(2);
-    var chain = producers.upcasterChain(List.of(upcaster));
-    assertNotNull(chain);
+  void noProducerPublishesAnUpcasterChain() {
+    assertEquals(
+        List.of(),
+        java.util.Arrays.stream(StreamRuneProducers.class.getMethods())
+            .filter(m -> m.getReturnType() == org.streamrune.core.upcasting.UpcasterChain.class)
+            .map(java.lang.reflect.Method::getName)
+            .toList());
   }
 
   @Test

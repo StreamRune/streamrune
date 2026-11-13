@@ -1755,19 +1755,4 @@ public class StreamRuneProducers {
     org.streamrune.core.StreamRuneMetrics resolved = resolveMetricsOrNull(metrics);
     return resolved != null ? resolved : org.streamrune.core.StreamRuneMetrics.NOOP;
   }
-
-  /**
-   * Produces an {@code UpcasterChain} aggregating all registered {@link
-   * org.streamrune.core.upcasting.EventUpcaster} beans. Dependent-scoped optional bean: returns
-   * {@code null} when no upcasters are registered.
-   */
-  @Produces
-  @DefaultBean
-  public org.streamrune.core.upcasting.UpcasterChain upcasterChain(
-      @All List<org.streamrune.core.upcasting.EventUpcaster> upcasters) {
-    if (upcasters.isEmpty()) {
-      return null;
-    }
-    return new org.streamrune.core.upcasting.UpcasterChain(upcasters);
-  }
 }

@@ -37,7 +37,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 /**
  * Integration tests proving that {@link PostgresEventStore}, when configured with an {@link
  * OutboxEventMapper} + {@link PostgresOutboxStore}, writes outbox entries in the SAME transaction
- * as the domain events — and that the builder enforces both-or-neither configuration.
+ * as the domain events — that a mapper without an outbox store is refused, and that an outbox store
+ * without a mapper writes exactly the entries passed to the append.
  */
 @Testcontainers
 class PostgresEventStoreOutboxIT {
@@ -180,7 +181,7 @@ class PostgresEventStoreOutboxIT {
     assertTrue(pending.isEmpty(), "skipped event must produce no outbox entry");
   }
 
-  // ── (c) builder fail-fast: mapper without store, or store without mapper ──
+  // ── (c) builder: a mapper without a store is refused, a store without a mapper is not ──
 
   @Test
   void builder_throws_when_outboxEventMapper_set_without_outboxStore() {
@@ -197,18 +198,38 @@ class PostgresEventStoreOutboxIT {
   }
 
   @Test
-  void builder_throws_when_outboxStore_set_without_outboxEventMapper() {
+  void builder_with_outboxStore_and_no_mapper_writes_only_the_entries_passed_to_append() {
     var outboxStore = new PostgresOutboxStore(dataSource, Duration.ofMinutes(1));
-    var builder =
+    var store =
         PostgresEventStore.builder()
             .dataSource(dataSource)
             .typeRegistry(typeRegistry)
-            .outboxStore(outboxStore); // no mapper
+            .outboxStore(outboxStore) // no mapper: explicit entries only
+            .build();
 
-    assertThrows(
-        IllegalStateException.class,
-        builder::build,
-        "build() must throw when outboxStore is set without outboxEventMapper");
+    var withEntry = TestStreams.stream("outbox-explicit-" + System.nanoTime());
+    var entry =
+        OutboxEntry.pending(
+            OutboxEntryId.of(IdGenerator.generateEventId().value()),
+            "{\"k\":2}",
+            "Explicit",
+            withEntry);
+    store.append(
+        withEntry,
+        List.of(envelope(withEntry, "MappedEvent", new MappedEvent("explicit"))),
+        Version.initial(),
+        List.of(entry));
+
+    var withoutEntry = TestStreams.stream("outbox-none-" + System.nanoTime());
+    store.append(
+        withoutEntry,
+        List.of(envelope(withoutEntry, "MappedEvent", new MappedEvent("derived?"))),
+        Version.initial());
+
+    var pending = outboxStore.loadPending(10);
+    assertEquals(1, pending.size(), "only the entry passed to append is written, none derived");
+    assertEquals("Explicit", pending.getFirst().payloadType());
+    assertEquals(withEntry, pending.getFirst().streamId());
   }
 
   // ── (d) mapper throws → append rolls back entirely (no event row, no outbox row) ───────

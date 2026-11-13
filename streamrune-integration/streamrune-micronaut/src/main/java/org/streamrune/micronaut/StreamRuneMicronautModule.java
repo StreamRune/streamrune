@@ -1823,21 +1823,6 @@ public class StreamRuneMicronautModule {
     return sweeper;
   }
 
-  /**
-   * Creates an {@code UpcasterChain} when at least one {@link
-   * org.streamrune.core.upcasting.EventUpcaster} bean is available.
-   *
-   * @param upcasters all registered event upcasters
-   * @return a new {@code UpcasterChain}
-   */
-  @Singleton
-  @Secondary
-  @Requires(beans = org.streamrune.core.upcasting.EventUpcaster.class)
-  public org.streamrune.core.upcasting.UpcasterChain upcasterChain(
-      List<org.streamrune.core.upcasting.EventUpcaster> upcasters) {
-    return new org.streamrune.core.upcasting.UpcasterChain(upcasters);
-  }
-
   /** The application's metrics bean, or {@code StreamRuneMetrics.NOOP} when it has none. */
   static org.streamrune.core.StreamRuneMetrics metricsOrNoop(
       @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {

@@ -2024,18 +2024,6 @@ public class StreamRuneAutoConfiguration {
     return b.build();
   }
 
-  /**
-   * Registers an {@code UpcasterChain} when at least one {@link
-   * org.streamrune.core.upcasting.EventUpcaster} bean is available.
-   */
-  @Bean("upcasterChain")
-  @ConditionalOnBean(org.streamrune.core.upcasting.EventUpcaster.class)
-  @ConditionalOnMissingBean(org.streamrune.core.upcasting.UpcasterChain.class)
-  public org.streamrune.core.upcasting.UpcasterChain upcasterChain(
-      List<org.streamrune.core.upcasting.EventUpcaster> upcasters) {
-    return new org.streamrune.core.upcasting.UpcasterChain(upcasters);
-  }
-
   /** Logs a startup summary line after all StreamRune beans are initialized. */
   @Bean
   @ConditionalOnMissingBean(StreamRuneStartupLogger.class)

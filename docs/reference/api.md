@@ -533,8 +533,8 @@ public interface EventUpcaster {
 }
 ```
 
-Handles one event type; that one upcaster owns every version step of the type (`UpcasterChain`
-refuses a second upcaster for the same type). The chain applies the steps automatically: if the
+Handles one event type; that one upcaster owns every version step of the type (building the event
+store refuses a second upcaster for the same type). The store applies the steps automatically: if the
 stored `schema_version` is 1 and `currentVersion()` is 3, `upcast` is called twice (1→2, then 2→3).
 On write, the current schema version is recorded in the `schema_version` column; on read, if the
 stored version is lower than `currentVersion()`, upcasting is applied before deserialization, and a
