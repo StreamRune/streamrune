@@ -105,10 +105,13 @@ public record SpanLink(TraceId traceId, SpanId spanId) {
    * columns follow. A property that holds a link and is annotated
    * {@code @JsonInclude(JsonInclude.Include.NON_EMPTY)} is left out of the JSON when it holds
    * {@code NONE}, so {@code NONE} never appears in JSON. Public, as {@link #fromJson(Object)} is,
-   * so a mapper that may not override access modifiers writes and reads a link too.
+   * so a mapper that may not override access modifiers writes and reads a link too. Jackson's entry
+   * point, not an application's.
    *
    * @return the two ids, or {@code null} for {@link #NONE}
+   * @hidden
    */
+  @org.streamrune.core.Internal
   @JsonValue
   public Map<String, String> toJson() {
     if (!isW3c()) {
@@ -128,7 +131,9 @@ public record SpanLink(TraceId traceId, SpanId spanId) {
    *
    * @param json the JSON value, bound to plain Java values, or {@code null}
    * @return the link, or {@link #NONE}
+   * @hidden
    */
+  @org.streamrune.core.Internal
   @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
   public static SpanLink fromJson(Object json) {
     if (json instanceof Map<?, ?> map

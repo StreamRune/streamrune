@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Stream;
+import org.streamrune.core.Internal;
 
 /**
  * The settings with which an application switches its OpenTelemetry tracing off, which an
@@ -26,7 +27,12 @@ import java.util.stream.Stream;
  * processor of the application, or of a test, still receives the spans. {@code
  * streamrune.tracing.enabled=false} switches StreamRune's spans off whatever the OpenTelemetry
  * settings are.
+ *
+ * <p>Public for the three integrations only; not an application entry point.
+ *
+ * @hidden
  */
+@Internal
 public final class OpenTelemetrySwitches {
 
   /** How the component that owns a key reads its value; surrounding whitespace is ignored. */

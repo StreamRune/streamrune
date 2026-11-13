@@ -1465,11 +1465,9 @@ public final record org.streamrune.core.tracing.SpanLink
   public final boolean equals(java.lang.Object)
   public final int hashCode()
   public final java.lang.String toString()
-  public java.util.Map<java.lang.String, java.lang.String> toJson()
   public org.streamrune.core.types.SpanId spanId()
   public org.streamrune.core.types.TraceId traceId()
   public static final org.streamrune.core.tracing.SpanLink NONE
-  public static org.streamrune.core.tracing.SpanLink fromJson(java.lang.Object)
   public static org.streamrune.core.tracing.SpanLink of(org.streamrune.core.EventMetadata)
   public static org.streamrune.core.tracing.SpanLink ofW3c(java.lang.String, java.lang.String)
 
