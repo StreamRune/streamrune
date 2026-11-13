@@ -363,7 +363,7 @@ public class SseController implements SmartLifecycle, AutoCloseable {
 
     // The publisher's slow-consumer eviction is only as good as this hook: an evicted client
     // whose emitter stayed open would receive no further event while its keepalive still wrote
-    // successfully (the client is slow, not dead), and with streamrune.sse.timeout=0 no deadline
+    // successfully (the client is slow, not dead), and with streamrune.sse.timeout=0s no deadline
     // would end it either. The hook can run on the PUBLISHER's thread, inline in publish(), so it
     // waits for nothing: the cleanup takes no lock a write holds, and the emitter is failed on a
     // thread of its own (see failOnItsOwnThread).
@@ -414,7 +414,7 @@ public class SseController implements SmartLifecycle, AutoCloseable {
    * connection in the meantime makes the write fail: the failure is thrown out of the hand-over, no
    * callback of the emitter ever runs, and the request stays in asynchronous mode with nobody left
    * to end it. The client would stay subscribed until a keepalive write failed (never with {@code
-   * streamrune.sse.keep-alive-interval=0}), and the request would hold the web server's graceful
+   * streamrune.sse.keep-alive-interval=0s}), and the request would hold the web server's graceful
    * shutdown for its whole phase.
    *
    * <p><b>What this does.</b> It runs the stream's cleanup — the registration leaves {@link

@@ -171,7 +171,7 @@ public record StreamRuneMicronautProperties(
         Duration sseKeepAliveInterval,
     // event-store.statement-timeout: matches Spring/Quarkus. The bound on every statement the
     // event store runs, applied per transaction or per statement and never on the pooled
-    // connection's session; 0 sets no bound of the store's own. A negative value or a positive one
+    // connection's session; 0s sets no bound of the store's own. A negative value or a positive one
     // below 1ms fails the boot. Bound with its "30s" default (not @Nullable, see
     // subscriptionLeaseTtl); the factory method keeps the factory's default for an explicit null.
     // Appended at the end so the positional withDefaults() stays aligned.

@@ -23,7 +23,7 @@ public record SubscriptionConfig(
     if (pollingInterval == null) {
       throw new IllegalArgumentException("pollingInterval is required");
     }
-    if (pollingInterval.compareTo(ONE_MILLISECOND) < 0) {
+    if (pollingInterval.compareTo(Duration.ofMillis(1)) < 0) {
       throw new IllegalArgumentException(
           "pollingInterval (streamrune.polling-interval) must be at least 1ms, got: "
               + pollingInterval);
@@ -35,14 +35,12 @@ public record SubscriptionConfig(
       throw new IllegalArgumentException(
           "pollingJitter (streamrune.polling-jitter) must not be negative, got: " + pollingJitter);
     }
-    if (!pollingJitter.isZero() && pollingJitter.compareTo(ONE_MILLISECOND) < 0) {
+    if (!pollingJitter.isZero() && pollingJitter.compareTo(Duration.ofMillis(1)) < 0) {
       throw new IllegalArgumentException(
           "pollingJitter (streamrune.polling-jitter) must be zero or at least 1ms, got: "
               + pollingJitter);
     }
   }
-
-  private static final Duration ONE_MILLISECOND = Duration.ofMillis(1);
 
   public static final SubscriptionConfig DEFAULT =
       new SubscriptionConfig(true, Duration.ofSeconds(5), Duration.ofSeconds(1));

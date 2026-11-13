@@ -232,8 +232,8 @@ public record StreamRuneProperties(
   /**
    * @param schema event-store schema management configuration
    * @param statementTimeout the bound on every statement the event store runs (default {@code
-   *     30s}); a statement past it is cancelled and the operation fails. {@code 0} sets no bound of
-   *     the store's own, so the session's {@code statement_timeout} applies. Applied per
+   *     30s}); a statement past it is cancelled and the operation fails. {@code 0s} sets no bound
+   *     of the store's own, so the session's {@code statement_timeout} applies. Applied per
    *     transaction or per statement, never on the pooled connection's session. A negative value or
    *     a positive one below {@code 1ms} fails the boot.
    */
