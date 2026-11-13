@@ -1,5 +1,6 @@
-# The Flyway migrations a release has shipped, one per line: the SHA-256 of the file, two spaces,
-# its repository-relative path (`shasum -a 256 <file>` prints that line). A shipped migration never
+# The Flyway migrations a release has shipped, one per line: the SHA-256 of the file with LF line
+# endings, two spaces, its repository-relative path (`shasum -a 256 <file>` prints that line on a
+# checkout with LF line endings; the test hashes a CRLF checkout as LF, as Flyway ignores them too). A shipped migration never
 # changes: a database that ran it has recorded its checksum, and Flyway refuses that database when the
 # file differs. ReleasedMigrationsTest in streamrune-core fails when a listed file differs from its
 # checksum, and, once the newest entry of CHANGELOG.md is dated, when a migration is not listed. The

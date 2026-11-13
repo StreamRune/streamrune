@@ -77,6 +77,20 @@ class ReleasedMigrationsTest {
   }
 
   @Test
+  void theChecksumIsThatOfTheFileWithLfLineEndings() {
+    byte[] lf =
+        "create table a (\n  id int\n);\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    byte[] crlf =
+        "\uFEFFcreate table a (\r\n  id int\r\n);\r\n"
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+    assertThat(checksum(crlf)).isEqualTo(checksum(lf)).isEqualTo(sha(lf));
+    assertThat(checksum(lf))
+        .isNotEqualTo(
+            checksum("create table b;\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+  }
+
+  @Test
   void aMalformedManifestLineIsRefused() {
     assertThat(problems(undated(), "abc  db/V001__baseline.sql\n", Map.of()))
         .singleElement()
@@ -159,13 +173,28 @@ class ReleasedMigrationsTest {
                   })
               .toList()) {
         files.put(
-            root.relativize(file).toString().replace('\\', '/'), sha(Files.readAllBytes(file)));
+            root.relativize(file).toString().replace('\\', '/'),
+            checksum(Files.readAllBytes(file)));
       }
     } catch (UncheckedIOException e) {
       throw e.getCause();
     }
     assertThat(files).as("the repository's Flyway migrations").isNotEmpty();
     return files;
+  }
+
+  /**
+   * The SHA-256 of a migration with LF line endings and no byte-order mark: a checkout with CRLF
+   * line endings (Windows, {@code core.autocrlf}) has the checksum of the file in the repository,
+   * as Flyway's own checksum, which reads the file line by line, does. On a checkout with LF line
+   * endings it is what {@code shasum -a 256} prints.
+   */
+  static String checksum(byte[] file) {
+    String text = new String(file, java.nio.charset.StandardCharsets.UTF_8);
+    if (text.startsWith("\uFEFF")) {
+      text = text.substring(1);
+    }
+    return sha(text.replace("\r\n", "\n"));
   }
 
   private static String sha(String text) {
