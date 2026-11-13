@@ -225,13 +225,12 @@ jobs:
               "$VERSION" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$tag" >> "$notes"
             echo "Release notes: the lead of the CHANGELOG section of $VERSION and a link to the whole section, which exceeds $limit characters."
           fi
-          # A link into docs/ written relative, ](docs/…) or ](./docs/…), as the 1.0.0 entry links its
-          # reference page, resolves in GitHub's file view but not on a release page: it is pointed
-          # at that file at the tag. Images, anchors and absolute links stay as written, and so does
-          # any other relative link; write those absolute in CHANGELOG.md.
-          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$tag"
-          sed -E "s#(^|[^!])(\[[^]]*\])\((\./)?(docs/[^ ()]*)\)#\1\2(${base}/\4)#g" "$notes" > "$notes.tmp"
-          mv "$notes.tmp" "$notes"
+          # A relative link, ](README.md#…) or ](docs/…), resolves in GitHub's file view but not on a
+          # release page: every one is pointed at its file at the tag, and a link the rewrite cannot
+          # read refuses the run (.github/scripts/release-notes-links.sh). Anchors and absolute links
+          # stay as written.
+          bash .github/scripts/release-notes-links.sh "$notes" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$tag" \
+            || fail "The release notes of $VERSION have a link a release page cannot resolve (listed above)."
           [ "$(wc -m < "$notes")" -le "$limit" ] || fail "The release notes exceed $limit characters."
           echo "Releasing $VERSION from $GITHUB_SHA as $tag."
 
