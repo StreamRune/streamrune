@@ -109,13 +109,22 @@ public final class org.streamrune.integration.OpenTelemetrySwitches
   public static final java.util.List<org.streamrune.integration.OpenTelemetrySwitches$Switch> SPRING
   public static java.util.Optional<org.streamrune.integration.OpenTelemetrySwitches$Switch> switchedOffBy(java.util.List<org.streamrune.integration.OpenTelemetrySwitches$Switch>, java.util.function.Function<java.lang.String, java.lang.String>)
 
+public static enum org.streamrune.integration.OpenTelemetrySwitches$Reading
+  constants TRUE_DISABLES, ANYTHING_BUT_TRUE_DISABLES, SMALLRYE_TRUE_DISABLES, SMALLRYE_ANYTHING_BUT_TRUE_DISABLES
+  public static final org.streamrune.integration.OpenTelemetrySwitches$Reading ANYTHING_BUT_TRUE_DISABLES
+  public static final org.streamrune.integration.OpenTelemetrySwitches$Reading SMALLRYE_ANYTHING_BUT_TRUE_DISABLES
+  public static final org.streamrune.integration.OpenTelemetrySwitches$Reading SMALLRYE_TRUE_DISABLES
+  public static final org.streamrune.integration.OpenTelemetrySwitches$Reading TRUE_DISABLES
+  public static org.streamrune.integration.OpenTelemetrySwitches$Reading valueOf(java.lang.String)
+  public static org.streamrune.integration.OpenTelemetrySwitches$Reading[] values()
+
 public static final record org.streamrune.integration.OpenTelemetrySwitches$Switch
-  public <init>(java.lang.String, java.lang.String)
+  public <init>(java.lang.String, org.streamrune.integration.OpenTelemetrySwitches$Reading)
   public final boolean equals(java.lang.Object)
   public final int hashCode()
   public java.lang.String key()
-  public java.lang.String offValue()
   public java.lang.String toString()
+  public org.streamrune.integration.OpenTelemetrySwitches$Reading reading()
 
 public final class org.streamrune.integration.RequestEdgeAuthority
   public static org.streamrune.core.StreamRuneContext$RequestContext capture(org.streamrune.core.StreamRuneContext$RequestContext, org.streamrune.core.UserRoleResolver, java.util.function.Consumer<java.lang.RuntimeException>)

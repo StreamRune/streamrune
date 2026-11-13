@@ -140,10 +140,10 @@ class OpenTelemetryAutoConfigurationTest {
 
   /**
    * Spring Boot's own OpenTelemetry SDK auto-configuration, not a stub bean: with {@code
-   * management.opentelemetry.enabled=false} it builds an SDK with no span processor, and
-   * StreamRune's tracing is {@code NOOP}; by default, and with Spring Boot 3's export switch {@code
-   * management.tracing.enabled=false}, which Spring Boot 4 does not read, StreamRune traces through
-   * it.
+   * management.opentelemetry.enabled=false}, or any other value Spring Boot reads as not {@code
+   * true}, it builds an SDK with no span processor, and StreamRune's tracing is {@code NOOP}; by
+   * default, and with Spring Boot 3's export switch {@code management.tracing.enabled=false}, which
+   * Spring Boot 4 does not read, StreamRune traces through it.
    */
   @Test
   void springBootsOwnOpenTelemetrySwitch_turnsStreamRunesTracingOff() {
@@ -152,7 +152,9 @@ class OpenTelemetryAutoConfigurationTest {
             AutoConfigurations.of(
                 org.springframework.boot.opentelemetry.autoconfigure
                     .OpenTelemetrySdkAutoConfiguration.class));
-    for (String off : java.util.List.of("management.opentelemetry.enabled=false")) {
+    for (String off :
+        java.util.List.of(
+            "management.opentelemetry.enabled=false", "management.opentelemetry.enabled=off")) {
       withBootsSdk
           .withPropertyValues(off)
           .run(

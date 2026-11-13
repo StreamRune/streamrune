@@ -133,6 +133,8 @@ class OpenTelemetryProducersTest {
     for (Map<String, String> off :
         List.of(
             Map.of("quarkus.otel.sdk.disabled", "true"),
+            Map.of("quarkus.otel.sdk.disabled", "yes"),
+            Map.of("quarkus.otel.traces.enabled", "off"),
             Map.of("quarkus.otel.traces.enabled", "false"),
             Map.of("quarkus.otel.enabled", "false"),
             Map.of("otel.sdk.disabled", " TRUE "))) {

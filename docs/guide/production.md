@@ -550,7 +550,10 @@ a deployment switches an area without a rebuild.
   its own settings — `otel.sdk.disabled=true` (system property, environment variable or
   configuration key) on every integration, `management.opentelemetry.enabled=false` on Spring Boot,
   `quarkus.otel.enabled=false`, `quarkus.otel.sdk.disabled=true` or
-  `quarkus.otel.traces.enabled=false` on Quarkus; the integration logs which one at `INFO`.
+  `quarkus.otel.traces.enabled=false` on Quarkus; the integration logs which one at `INFO`. A
+  value is read as the component that owns the key reads it: Spring Boot switches its SDK off for
+  any value of `management.opentelemetry.enabled` but `true`, and SmallRye Config reads `yes`, `on`
+  and `1` as `true` for the Quarkus keys.
   Spring Boot maps the environment variable `OTEL_SDK_DISABLED` onto
   `management.opentelemetry.enabled`; `otel.sdk.disabled` is the switch of an SDK Spring Boot does
   not build, the OpenTelemetry Java agent's. `management.tracing.enabled`, Spring Boot 3's

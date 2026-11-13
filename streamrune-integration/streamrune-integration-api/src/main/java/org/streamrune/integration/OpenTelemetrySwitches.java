@@ -18,7 +18,8 @@ import java.util.stream.Stream;
  * <p>The switches are those of the OpenTelemetry SDK itself ({@link #SDK}: {@code
  * otel.sdk.disabled=true}, as a system property, an environment variable or a configuration key)
  * and those of each framework's OpenTelemetry support ({@link #SPRING}, {@link #QUARKUS}, {@link
- * #MICRONAUT}). A value matches ignoring case and surrounding whitespace.
+ * #MICRONAUT}). Each value is read as the component that owns the key reads it ({@link Reading}): a
+ * spelling that turns the SDK off there turns StreamRune's tracing off here.
  *
  * <p>A setting that only removes the exporter ({@code otel.traces.exporter=none}, {@code
  * management.tracing.export.enabled=false}) is not among them: the SDK still runs, and a span
@@ -28,13 +29,57 @@ import java.util.stream.Stream;
  */
 public final class OpenTelemetrySwitches {
 
+  /** How the component that owns a key reads its value; surrounding whitespace is ignored. */
+  public enum Reading {
+    /**
+     * The OpenTelemetry SDK's {@code otel.sdk.disabled}: off when the value is {@code true},
+     * ignoring case.
+     */
+    TRUE_DISABLES,
+
+    /**
+     * A Spring Boot property condition that matches {@code true} and also when the key is not set:
+     * off when the key is set to anything but {@code true}, ignoring case ({@code false}, {@code
+     * off}, {@code no}, {@code 0}).
+     */
+    ANYTHING_BUT_TRUE_DISABLES,
+
+    /**
+     * A SmallRye Config {@code boolean} that disables: off when the value is one of SmallRye's
+     * {@code true} spellings, ignoring case ({@code true}, {@code 1}, {@code yes}, {@code y},
+     * {@code on}, {@code ja}, {@code j}, {@code si}, {@code sim}, {@code oui}).
+     */
+    SMALLRYE_TRUE_DISABLES,
+
+    /**
+     * A SmallRye Config {@code boolean} that enables: off when the key is set to anything SmallRye
+     * does not read as {@code true}, since SmallRye reads every other value as {@code false}.
+     */
+    SMALLRYE_ANYTHING_BUT_TRUE_DISABLES;
+
+    /** The values SmallRye Config's {@code boolean} converter reads as {@code true}. */
+    private static final java.util.Set<String> SMALLRYE_TRUE =
+        java.util.Set.of("true", "1", "yes", "y", "on", "ja", "j", "si", "sim", "oui");
+
+    /** Whether {@code value}, a set value, turns the SDK off. */
+    boolean disables(String value) {
+      String v = value.strip().toLowerCase(Locale.ROOT);
+      return switch (this) {
+        case TRUE_DISABLES -> v.equals("true");
+        case ANYTHING_BUT_TRUE_DISABLES -> !v.equals("true");
+        case SMALLRYE_TRUE_DISABLES -> SMALLRYE_TRUE.contains(v);
+        case SMALLRYE_ANYTHING_BUT_TRUE_DISABLES -> !SMALLRYE_TRUE.contains(v);
+      };
+    }
+  }
+
   /**
-   * One setting and the value that switches tracing off.
+   * One setting and how its value is read.
    *
    * @param key the configuration key
-   * @param offValue the value that switches tracing off
+   * @param reading how the component that owns the key reads its value
    */
-  public record Switch(String key, String offValue) {
+  public record Switch(String key, Reading reading) {
 
     /**
      * Checks both parts.
@@ -43,37 +88,38 @@ public final class OpenTelemetrySwitches {
      */
     public Switch {
       Objects.requireNonNull(key, "key is required");
-      Objects.requireNonNull(offValue, "offValue is required");
+      Objects.requireNonNull(reading, "reading is required");
     }
 
     @Override
     public String toString() {
-      return key + "=" + offValue;
+      return key;
     }
   }
 
-  /** The OpenTelemetry SDK's own switches, which every integration reads. */
-  public static final List<Switch> SDK = List.of(new Switch("otel.sdk.disabled", "true"));
+  /** The OpenTelemetry SDK's own switch, which every integration reads. */
+  public static final List<Switch> SDK =
+      List.of(new Switch("otel.sdk.disabled", Reading.TRUE_DISABLES));
 
   /**
-   * The SDK's switches and Spring Boot's: {@code management.opentelemetry.enabled=false} replaces
-   * the SDK Spring Boot builds with one that has no span processor, and Spring Boot maps the
+   * The SDK's switch and Spring Boot's: {@code management.opentelemetry.enabled=false} replaces the
+   * SDK Spring Boot builds with one that has no span processor, and Spring Boot maps the
    * environment variable {@code OTEL_SDK_DISABLED} onto it. {@code otel.sdk.disabled} stays among
    * them for an SDK that is not Spring Boot's: the OpenTelemetry Java agent's, which reads it as a
    * system property or an environment variable. {@code management.tracing.export.enabled=false}
    * only removes the exporters and is not a switch.
    */
   public static final List<Switch> SPRING =
-      with(new Switch("management.opentelemetry.enabled", "false"));
+      with(new Switch("management.opentelemetry.enabled", Reading.ANYTHING_BUT_TRUE_DISABLES));
 
-  /** The SDK's switches and those of the Quarkus OpenTelemetry extension. */
+  /** The SDK's switch and those of the Quarkus OpenTelemetry extension. */
   public static final List<Switch> QUARKUS =
       with(
-          new Switch("quarkus.otel.enabled", "false"),
-          new Switch("quarkus.otel.sdk.disabled", "true"),
-          new Switch("quarkus.otel.traces.enabled", "false"));
+          new Switch("quarkus.otel.enabled", Reading.SMALLRYE_ANYTHING_BUT_TRUE_DISABLES),
+          new Switch("quarkus.otel.sdk.disabled", Reading.SMALLRYE_TRUE_DISABLES),
+          new Switch("quarkus.otel.traces.enabled", Reading.SMALLRYE_ANYTHING_BUT_TRUE_DISABLES));
 
-  /** The SDK's switches, which Micronaut's OpenTelemetry tracing module reads as they are. */
+  /** The SDK's switch, which Micronaut's OpenTelemetry tracing module hands to the SDK. */
   public static final List<Switch> MICRONAUT = SDK;
 
   private OpenTelemetrySwitches() {}
@@ -83,7 +129,8 @@ public final class OpenTelemetrySwitches {
   }
 
   /**
-   * The first of {@code switches} that {@code property} holds at its off value.
+   * The first of {@code switches} whose key {@code property} holds at a value that turns the SDK
+   * off, as the key's owner reads it.
    *
    * @param switches the switches to read, {@link #SPRING}, {@link #QUARKUS} or {@link #MICRONAUT}
    * @param property the configured value of a key, or {@code null} when the key is not set
@@ -96,7 +143,7 @@ public final class OpenTelemetrySwitches {
     Objects.requireNonNull(property, "property is required");
     for (Switch candidate : switches) {
       String value = property.apply(candidate.key());
-      if (value != null && value.strip().toLowerCase(Locale.ROOT).equals(candidate.offValue())) {
+      if (value != null && candidate.reading().disables(value)) {
         return Optional.of(candidate);
       }
     }
