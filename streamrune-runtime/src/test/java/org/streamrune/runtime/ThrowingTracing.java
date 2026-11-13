@@ -90,6 +90,15 @@ final class ThrowingTracing implements StreamRuneTracing {
   }
 
   @Override
+  public String toString() {
+    Throwable sample = failure.get();
+    return "ThrowingTracing"
+        + new java.util.TreeSet<>(faults)
+        + "/"
+        + sample.getClass().getSimpleName();
+  }
+
+  @Override
   public Runnable propagating(Runnable task) {
     maybeThrow(Fault.PROPAGATING);
     return task;

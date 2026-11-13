@@ -305,6 +305,79 @@ class TracingFailureIsolationTest {
     assertThat(fixture.dispatched()).hasSize(2);
   }
 
+  /**
+   * The claim of a saga past its deadline takes a hold on the saga's step lock before it starts its
+   * span. A span that cannot be started must not leave that hold with the poll thread: the timeout
+   * is claimed and compensated once, the hold is released, and a later delivery for the saga, from
+   * another thread, is not refused.
+   */
+  @Test
+  void aTimeoutSpanThatCannotBeStarted_leavesNoHoldOnTheSagasStepLock() throws Exception {
+    AtomicInteger thrown = new AtomicInteger();
+    StreamRuneTracing throwsForTheTimeoutSpan =
+        new StreamRuneTracing() {
+          @Override
+          public boolean enabled(org.streamrune.core.tracing.TracingArea area) {
+            return area == org.streamrune.core.tracing.TracingArea.SAGA;
+          }
+
+          @Override
+          public org.streamrune.core.tracing.TraceScope start(
+              org.streamrune.core.tracing.TracingArea area,
+              String spanName,
+              org.streamrune.core.tracing.SpanKind kind,
+              org.streamrune.core.tracing.SpanAttributes attributes,
+              org.streamrune.core.tracing.SpanLink link,
+              org.streamrune.core.tracing.SpanBaggage baggage) {
+            if (spanName.endsWith("/timeout")) {
+              thrown.incrementAndGet();
+              throw new IllegalStateException("the sampler failed");
+            }
+            return org.streamrune.core.tracing.TraceScope.NOOP;
+          }
+        };
+    SagaStepLock lock = new SagaStepLock(Duration.ofMillis(400));
+    SagaFixture<OrderState> fixture = sagaFixture(throwsForTheTimeoutSpan, lock);
+    fixture.when(ORDER_1, new OrderPlaced("o-1"));
+
+    // The poll runs on a thread of its own that lives on, as the runner's poll thread does.
+    java.util.concurrent.CountDownLatch polled = new java.util.concurrent.CountDownLatch(1);
+    java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+    Thread poll =
+        Thread.ofPlatform()
+            .start(
+                () -> {
+                  try {
+                    fixture.advance(Duration.ofMinutes(6)).runTimeouts();
+                  } finally {
+                    polled.countDown();
+                  }
+                  try {
+                    done.await();
+                  } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                  }
+                });
+    try {
+      assertThat(polled.await(10, TimeUnit.SECONDS)).isTrue();
+      assertThat(thrown.get()).as("the timeout span's start threw").isPositive();
+      assertThat(lock.sagasInFlight()).as("the claim hold is released").isZero();
+      assertThat(fixture.dispatched())
+          .as("the timeout fired once")
+          .containsExactly(new ReserveStock("o-1"), new CancelOrder("o-1"));
+
+      // A late reply for the saga, delivered on this thread, is not refused for the step lock.
+      assertThatCode(() -> fixture.replyingTo(SAGA_1, new StockReserved("o-1")))
+          .doesNotThrowAnyException();
+      // A second poll claims nothing more.
+      fixture.runTimeouts();
+      assertThat(fixture.dispatched()).hasSize(2);
+    } finally {
+      done.countDown();
+      poll.join(10_000);
+    }
+  }
+
   @ParameterizedTest
   @MethodSource("brokenTracings")
   void aSagaThatCompletesIsCompleted(ThrowingTracing broken) {

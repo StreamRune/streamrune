@@ -577,6 +577,17 @@ a deployment switches an area without a rebuild.
   `quarkus.otel.traces.exporter=none`), whose span processors still receive the spans, and one
   whose sampler drops every trace. `streamrune.tracing.enabled=false` stops that whatever the
   SDK.
+- **Tracing never fails the work it traces.** Every component wraps the tracing it is given in a
+  `GuardedTracing`, and `OpenTelemetryTracing.of` returns its tracing already wrapped. When the
+  OpenTelemetry SDK throws underneath it — a sampler, a span processor's `onStart` or `onEnd`, a
+  context storage — or a `StreamRuneTracing` of your own throws, the span is lost and the work
+  goes on with its true outcome: the command commits and returns its result, the lock is handed
+  over or released, the subscription delivers, the saga step and the timeout claim run. The
+  failure is logged at `WARN` by `org.streamrune.runtime.GuardedTracing`, the first one at once
+  and then at most once per five minutes with the number of failures since. A command that ends
+  in an `Error` (a `NoClassDefFoundError` after a bad deployment, a `StackOverflowError`) ends its
+  span too and restores the trace context of the calling thread, and the `Error` propagates as
+  it is.
 - **What the integration hands it to.** The event store it builds on the application's
   `DataSource` (`PostgresEventStoreFactory.tracing`), its default `LocalStripedLocker`, the command
   bus, the outbox poller, the continuous and scheduled projection runners, and each inline
