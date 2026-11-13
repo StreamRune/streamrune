@@ -554,23 +554,21 @@ a deployment switches an area without a rebuild.
   register it before the context starts.
 - **Without OpenTelemetry the tracing is `StreamRuneTracing.NOOP`.** That is the bean when the
   OpenTelemetry found has no tracer provider of its own (no bean, and nothing registered
-  globally), when `streamrune.tracing.enabled` is `false`, when the SDK is switched off by one of
-  its own settings — `otel.sdk.disabled=true` (system property, environment variable or
-  configuration key) on every integration, `management.opentelemetry.enabled=false` on Spring Boot,
-  `quarkus.otel.enabled=false`, `quarkus.otel.sdk.disabled=true` or
-  `quarkus.otel.traces.enabled=false` on Quarkus; the integration logs which one at `INFO`. A
-  value is read as the component that owns the key reads it: Spring Boot switches its SDK off for
-  any value of `management.opentelemetry.enabled` but `true`, and SmallRye Config reads `yes`, `on`
-  and `1` as `true` for the Quarkus keys.
-  Spring Boot maps the environment variable `OTEL_SDK_DISABLED` onto
+  globally); when `streamrune.tracing.enabled` is `false`; on Spring and Micronaut, when
+  `opentelemetry-api` is not on the classpath at all (those two do not depend on it — it is a
+  compile-only dependency — and an application without it starts and runs; the Quarkus
+  integration depends on it); and when the SDK is switched off by one of its own settings:
+  `otel.sdk.disabled=true` (system property, environment variable or configuration key) on every
+  integration, `management.opentelemetry.enabled=false` on Spring Boot, `quarkus.otel.enabled=false`,
+  `quarkus.otel.sdk.disabled=true` or `quarkus.otel.traces.enabled=false` on Quarkus. The
+  integration logs which setting switched it off at `INFO`. A value is read as the component that
+  owns the key reads it: Spring Boot switches its SDK off for any value of
+  `management.opentelemetry.enabled` but `true`, and SmallRye Config reads `yes`, `on` and `1` as
+  `true` for the Quarkus keys. Spring Boot maps the environment variable `OTEL_SDK_DISABLED` onto
   `management.opentelemetry.enabled`; `otel.sdk.disabled` is the switch of an SDK Spring Boot does
   not build, the OpenTelemetry Java agent's. `management.tracing.enabled`, Spring Boot 3's
-  spelling of the export switch, is not one — and,
-  on Spring and Micronaut, when
-  `opentelemetry-api` is not on the classpath at all: those two do not depend on it (it is a
-  compile-only dependency), and an application without it starts and runs. The Quarkus integration
-  depends on
-  `opentelemetry-api`. With `NOOP` nothing is traced, the keys do nothing, no event carries a
+  spelling of the export switch, is not one.
+  With `NOOP` nothing is traced, the keys do nothing, no event carries a
   span context, and the cost is one branch per traced call. Any other SDK makes StreamRune start
   its spans and write their span context into every event's metadata and every outbox row: one
   without an exporter (`otel.traces.exporter=none`, `management.tracing.export.enabled=false`,
