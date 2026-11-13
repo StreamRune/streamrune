@@ -297,4 +297,13 @@ class InMemoryEventStoreSerializingTest {
     assertEquals(original, loaded, "an encrypted event must round-trip its other components");
     assertEquals(2, loaded.total().scale(), "BigDecimal scale must survive the load");
   }
+
+  @Test
+  void aStoreKeepingItsDataByReferenceCannotBeReopenedSerializing() {
+    var byReference = new InMemoryEventStore();
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> InMemoryEventStore.sharingStorageOf(byReference, registry, null));
+  }
 }

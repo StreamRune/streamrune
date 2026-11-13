@@ -914,7 +914,7 @@ it from synthetic data only, and keep it in test resources.
 A backend that stores events in another database implements the storage interfaces of
 `streamrune-core`. For each of them `streamrune-test` holds an abstract JUnit suite with one test per
 promise the interface's javadoc makes: a test class of the backend extends the suite, implements its
-factory method, and inherits the tests. The shipped stores run the same suites, so a backend that
+factory hooks, and inherits the tests. The shipped stores run the same suites, so a backend that
 passes behaves as they do: `InMemoryEventStore` (with and without a command inbox) and
 `PostgresEventStore` run `EventStoreContract`, `InMemoryCommandInbox` and `PostgresCommandInbox` run
 `CommandInboxContract`, and `InMemoryOffsetStore`, `InMemoryProjectionRepository` and
@@ -925,36 +925,52 @@ passes behaves as they do: `InMemoryEventStore` (with and without a command inbo
 class MyEventStoreContractTest extends EventStoreContract {
 
   @Override
-  protected EventStore newStore() {
-    emptyTheTables();                                    // a fresh, empty store for each test
-    return new MyEventStore(dataSource, typeRegistry, new MyCommandInbox(dataSource));
+  protected EventStore newStore(Setup setup) {
+    emptyTheTables();                                    // empty storage, offsets from 1 again
+    return build(setup);
+  }
+
+  @Override
+  protected EventStore reopen(EventStore store, Setup setup) {
+    return build(setup);                                 // the same tables, another setup
+  }
+
+  private EventStore build(Setup setup) {
+    return new MyEventStore(dataSource, setup.registry(), setup.crypto(), setup.upcasters(),
+        setup.migrations(), new MyCommandInbox(dataSource));
   }
 }
 ```
 
-- `EventStoreContract` — `newStore()` returns an `EventStore` with empty storage and a command inbox.
-  It covers version assignment, strict conflict detection (an expected version behind or beyond the
+- `EventStoreContract` — `newStore(setup)` returns an `EventStore` over empty storage with a command
+  inbox, built with a `Setup`: the type registry, crypto engine, upcasters and snapshot migrations
+  of a deployment (`Setup.defaults()` resolves the suite's types and has no crypto, upcasters or
+  migrations). `reopen(store, setup)` returns a new store over the same data as `store`, built with
+  a possibly different setup, as a deployment restarted with another configuration sees what it
+  stored before. It covers version assignment, strict conflict detection (an expected version behind or beyond the
   head), the empty append, atomicity (also of appends racing for one version), the absence of
   idempotence by default, the reads, the global head (also while appends run concurrently),
-  snapshots and `appendWithKey`. The suite appends `EventStoreContract.ContractEvent` under the event
-  type `ContractEvent` and saves `EventStoreContract.ContractState` snapshots: a registry-backed
-  store resolves both. The javadoc lets a store leave four capabilities out, answering them with
+  snapshots, `appendWithKey` and reopening over stored data. The suite appends
+  `EventStoreContract.ContractEvent` under the event type `ContractEvent` and saves
+  `EventStoreContract.ContractState` snapshots: a registry-backed store resolves both through the
+  registry of its `Setup`. The javadoc lets a store leave four capabilities out, answering them with
   `UnsupportedOperationException`; a store that does overrides `supportsIdempotentAppend()`,
   `supportsSnapshots()`, `supportsSnapshotSchemaVersions()` or `supportsLastGlobalOffset()` to return
   `false`, and the suite checks the refusal instead. A store whose snapshots a `SnapshotPurger`
   purges overrides `purgeSnapshot(streamId)` to purge one and return `true`, which runs the purge
   generation cases. The saga forward fence has its own suite, `SagaForwardFenceContract`.
-- `CommandInboxContract` — `inbox()` returns the `CommandInbox` and `eventStore()` the event store
-  whose `appendWithKey` writes its rows (the inbox has no write method of its own). It covers the
-  recorded result of a processed command, the zero-event command, a failed keyed append that
-  records nothing, and `deleteProcessedBefore`.
+- `CommandInboxContract` — `newStore()` returns an `Inboxed` pair: an empty `CommandInbox` and the
+  event store whose `appendWithKey` writes its rows (the inbox has no write method of its own).
+  `setProcessedAt(inboxed, key, processedAt)` moves a recorded row's processed time, so the
+  retention cases age rows without waiting. It covers the recorded result of a processed command,
+  the zero-event command, a failed keyed append that records nothing, and `deleteProcessedBefore`.
 - `OffsetStoreContract` — `newStore()` returns an `OffsetStore`. It covers reads, saves, per-name
   isolation, `reset` and the monotonic guard; a store without the guard overrides
   `guardsAgainstRegression()` to return `false`.
 
 `InMemoryEventStoreContractTest`, `InMemoryCommandInboxContractTest` and
 `InMemoryOffsetStoreContractTest` in `streamrune-test`, and their `Postgres…ContractTest`
-counterparts in `streamrune-postgres`, show the factory methods for the shipped stores. A store that
+counterparts in `streamrune-postgres`, show the factory hooks for the shipped stores. A store that
 keeps snapshots overrides `load(StreamId, int)` to honour `EventStore.IGNORE_SNAPSHOT`, also when it
 has no snapshot schema versions: the interface's default would read the snapshot.
 

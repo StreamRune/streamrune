@@ -1,6 +1,7 @@
 package org.streamrune.test;
 
 import java.time.Instant;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import org.streamrune.core.CommandInbox;
@@ -24,6 +25,30 @@ public final class InMemoryCommandInbox implements CommandInbox {
    */
   public void record(InboxResult result) {
     rows.put(result.key(), result);
+  }
+
+  /**
+   * Replaces the processed time of the row recorded under {@code key}, so a test can age it without
+   * waiting.
+   *
+   * @throws IllegalStateException if no row is recorded under {@code key}
+   */
+  void setProcessedAt(IdempotencyKey key, Instant processedAt) {
+    Objects.requireNonNull(processedAt, "processedAt is required");
+    InboxResult aged =
+        rows.computeIfPresent(
+            key,
+            (k, row) ->
+                new InboxResult(
+                    row.key(),
+                    row.commandType(),
+                    row.streamId(),
+                    row.finalVersion(),
+                    row.globalOffsets(),
+                    processedAt));
+    if (aged == null) {
+      throw new IllegalStateException("no row is recorded under " + key);
+    }
   }
 
   @Override

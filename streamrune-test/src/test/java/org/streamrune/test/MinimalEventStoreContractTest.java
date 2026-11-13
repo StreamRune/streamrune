@@ -17,8 +17,19 @@ import org.streamrune.core.types.Version;
 class MinimalEventStoreContractTest extends EventStoreContract {
 
   @Override
-  protected EventStore newStore() {
-    return new MinimalEventStore(new InMemoryEventStore());
+  protected EventStore newStore(Setup setup) {
+    return new MinimalEventStore(
+        InMemoryEventStoreContractTest.configured(
+            InMemoryEventStore.serializing(setup.registry(), setup.crypto()), setup));
+  }
+
+  /** A minimal store over the events of {@code store}'s in-memory store. */
+  @Override
+  protected EventStore reopen(EventStore store, Setup setup) {
+    var events = ((MinimalEventStore) store).events();
+    return new MinimalEventStore(
+        InMemoryEventStoreContractTest.configured(
+            InMemoryEventStore.sharingStorageOf(events, setup.registry(), setup.crypto()), setup));
   }
 
   @Override
@@ -42,7 +53,7 @@ class MinimalEventStoreContractTest extends EventStoreContract {
   }
 
   /** Events through an in-memory store; every default method of the interface left in place. */
-  private record MinimalEventStore(EventStore events) implements EventStore {
+  private record MinimalEventStore(InMemoryEventStore events) implements EventStore {
 
     @Override
     public AggregateHistory load(StreamId streamId) {

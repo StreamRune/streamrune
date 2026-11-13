@@ -2,6 +2,7 @@ package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
@@ -71,5 +72,13 @@ class InMemoryCommandInboxTest {
     assertEquals(2, inbox.deleteProcessedBefore(Instant.now()));
     assertTrue(inbox.find(IdempotencyKey.of("a")).isEmpty());
     assertTrue(inbox.find(IdempotencyKey.of("b")).isEmpty());
+  }
+
+  @Test
+  void setProcessedAt_refusesAKeyWithNoRow() {
+    Instant at = Instant.parse("2026-01-01T00:00:00Z");
+
+    assertThrows(IllegalStateException.class, () -> inbox.setProcessedAt(key, at));
+    assertTrue(inbox.find(key).isEmpty());
   }
 }

@@ -1,20 +1,21 @@
 package org.streamrune.test;
 
-import org.streamrune.core.CommandInbox;
-import org.streamrune.core.EventStore;
+import java.time.Instant;
+import org.streamrune.core.types.IdempotencyKey;
 
+/**
+ * The command-inbox contract against {@link InMemoryCommandInbox}, written by an in-memory store.
+ */
 class InMemoryCommandInboxContractTest extends CommandInboxContract {
 
-  private final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-  private final InMemoryEventStore events = new InMemoryEventStore().withCommandInbox(inbox);
-
   @Override
-  protected CommandInbox inbox() {
-    return inbox;
+  protected Inboxed newStore() {
+    var inbox = new InMemoryCommandInbox();
+    return new Inboxed(new InMemoryEventStore().withCommandInbox(inbox), inbox);
   }
 
   @Override
-  protected EventStore eventStore() {
-    return events;
+  protected void setProcessedAt(Inboxed inboxed, IdempotencyKey key, Instant processedAt) {
+    ((InMemoryCommandInbox) inboxed.inbox()).setProcessedAt(key, processedAt);
   }
 }

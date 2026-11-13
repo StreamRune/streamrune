@@ -1,15 +1,16 @@
 package org.streamrune.postgres;
 
 import java.sql.SQLException;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.postgresql.ds.PGSimpleDataSource;
-import org.streamrune.core.CommandInbox;
-import org.streamrune.core.EventStore;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.types.EventType;
+import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.test.CommandInboxContract;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.junit.jupiter.Container;
@@ -29,9 +30,6 @@ class PostgresCommandInboxContractTest extends CommandInboxContract {
 
   static PGSimpleDataSource dataSource;
   static EventTypeRegistry typeRegistry;
-
-  private PostgresCommandInbox inbox;
-  private PostgresEventStore events;
 
   @BeforeAll
   static void initSchema() {
@@ -59,28 +57,37 @@ class PostgresCommandInboxContractTest extends CommandInboxContract {
     new PostgresEventStoreFactory(dataSource, typeRegistry).create();
   }
 
-  @BeforeEach
-  void freshStores() throws SQLException {
+  @Override
+  protected Inboxed newStore() {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("TRUNCATE event_stream, command_inbox");
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
     }
-    inbox = new PostgresCommandInbox(dataSource);
-    events =
+    var inbox = new PostgresCommandInbox(dataSource);
+    var events =
         PostgresEventStore.builder()
             .dataSource(dataSource)
             .typeRegistry(typeRegistry)
             .commandInbox(inbox)
             .build();
+    return new Inboxed(events, inbox);
   }
 
   @Override
-  protected CommandInbox inbox() {
-    return inbox;
-  }
-
-  @Override
-  protected EventStore eventStore() {
-    return events;
+  protected void setProcessedAt(Inboxed inboxed, IdempotencyKey key, Instant processedAt) {
+    try (var conn = dataSource.getConnection();
+        var stmt =
+            conn.prepareStatement(
+                "UPDATE command_inbox SET processed_at = ? WHERE idempotency_key = ?")) {
+      stmt.setObject(1, OffsetDateTime.ofInstant(processedAt, ZoneOffset.UTC));
+      stmt.setString(2, key.value());
+      if (stmt.executeUpdate() != 1) {
+        throw new IllegalStateException("no row is recorded under " + key);
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
+    }
   }
 }

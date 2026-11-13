@@ -147,13 +147,14 @@ public final class InMemoryEventStore implements EventStore {
     void onAppend(long lastGlobalOffset);
   }
 
-  private final List<StoredEvent> globalStream = new CopyOnWriteArrayList<>();
-  private final Map<StreamId, List<StoredEvent>> streams = new ConcurrentHashMap<>();
   private static final Logger log = LoggerFactory.getLogger(InMemoryEventStore.class);
 
-  private final Map<StreamId, Snapshot> snapshots = new ConcurrentHashMap<>();
-  private final ReentrantLock appendLock = new ReentrantLock();
-  private final AtomicLong globalOffset = new AtomicLong(0);
+  // The stored data and the lock that orders its appends; shared by a store reopened over it.
+  private final List<StoredEvent> globalStream;
+  private final Map<StreamId, List<StoredEvent>> streams;
+  private final Map<StreamId, Snapshot> snapshots;
+  private final ReentrantLock appendLock;
+  private final AtomicLong globalOffset;
   private final List<AppendListener> appendListeners = new CopyOnWriteArrayList<>();
 
   private volatile InMemoryCommandInbox commandInbox;
@@ -193,8 +194,7 @@ public final class InMemoryEventStore implements EventStore {
 
   /** Creates a store that keeps events and snapshot state by reference (no serialization). */
   public InMemoryEventStore() {
-    this.objectMapper = null;
-    this.typeRegistry = null;
+    this(null, null, null);
   }
 
   /**
@@ -209,8 +209,33 @@ public final class InMemoryEventStore implements EventStore {
    *     {@code PostgresEventStore} does on read
    */
   public InMemoryEventStore(ObjectMapper objectMapper, EventTypeRegistry typeRegistry) {
-    this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper is required");
-    this.typeRegistry = Objects.requireNonNull(typeRegistry, "typeRegistry is required");
+    this(
+        Objects.requireNonNull(objectMapper, "objectMapper is required"),
+        Objects.requireNonNull(typeRegistry, "typeRegistry is required"),
+        null);
+  }
+
+  /**
+   * A store over the stored data of {@code shared}, or over empty storage when it is {@code null}.
+   */
+  private InMemoryEventStore(
+      ObjectMapper objectMapper, EventTypeRegistry typeRegistry, InMemoryEventStore shared) {
+    this.objectMapper = objectMapper;
+    this.typeRegistry = typeRegistry;
+    if (shared == null) {
+      this.globalStream = new CopyOnWriteArrayList<>();
+      this.streams = new ConcurrentHashMap<>();
+      this.snapshots = new ConcurrentHashMap<>();
+      this.appendLock = new ReentrantLock();
+      this.globalOffset = new AtomicLong(0);
+    } else {
+      this.globalStream = shared.globalStream;
+      this.streams = shared.streams;
+      this.snapshots = shared.snapshots;
+      this.appendLock = shared.appendLock;
+      this.globalOffset = shared.globalOffset;
+      this.commandInbox = shared.commandInbox;
+    }
   }
 
   /**
@@ -224,12 +249,44 @@ public final class InMemoryEventStore implements EventStore {
    */
   public static InMemoryEventStore serializing(
       EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
+    return new InMemoryEventStore(serializingMapper(cryptoEngine), typeRegistry);
+  }
+
+  /**
+   * A new serializing store over the same stored data as {@code source} — its events, snapshots and
+   * global offset counter, and the command inbox wired into it — as a deployment restarted with
+   * another registry or crypto engine sees the data. Appends through either store are ordered by
+   * one lock. The new store starts with no upcasters, migrations, saga store, tracing or append
+   * listeners; wire them as on a fresh store. Stored events keep the schema versions they were
+   * stamped with, so the upcaster chain of the new store reads them as a restarted deployment's
+   * chain would.
+   *
+   * @param source a store in serializing mode
+   * @param typeRegistry resolves event and state classes on read (required)
+   * @param cryptoEngine crypto engine for {@code @Encrypted} fields (optional, may be null)
+   * @throws IllegalArgumentException if {@code source} keeps its data by reference
+   */
+  static InMemoryEventStore sharingStorageOf(
+      InMemoryEventStore source, EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
+    Objects.requireNonNull(source, "source is required");
+    if (source.objectMapper == null) {
+      throw new IllegalArgumentException(
+          "a store that keeps its data by reference cannot be reopened in serializing mode");
+    }
+    return new InMemoryEventStore(
+        serializingMapper(cryptoEngine),
+        Objects.requireNonNull(typeRegistry, "typeRegistry is required"),
+        source);
+  }
+
+  /** The mapper {@code PostgresEventStore.create()} configures, for the serializing mode. */
+  private static ObjectMapper serializingMapper(CryptoEngine cryptoEngine) {
     var mapper = new ObjectMapper();
     mapper.registerModule(new JavaTimeModule());
     if (cryptoEngine != null) {
       mapper.registerModule(new CryptoShreddingModule(cryptoEngine));
     }
-    return new InMemoryEventStore(mapper, typeRegistry);
+    return mapper;
   }
 
   /** Wires the inbox so {@link #appendWithKey} can dedup. Tests call this after construction. */

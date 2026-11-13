@@ -10,7 +10,9 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.LongStream;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.CommandInbox;
 import org.streamrune.core.CommandInbox.InboxResult;
@@ -29,8 +31,15 @@ import org.streamrune.core.types.Version;
 /**
  * The contract every {@link CommandInbox} must honour, together with the {@link EventStore} that
  * writes its rows. Run by {@code InMemoryCommandInboxContractTest} and {@code
- * PostgresCommandInboxContractTest}; extend it and implement {@link #inbox()} and {@link
- * #eventStore()} to prove a custom inbox.
+ * PostgresCommandInboxContractTest}. To prove a custom inbox, extend it and implement the two
+ * hooks:
+ *
+ * <ul>
+ *   <li>{@link #newStore()} — an empty inbox and the event store whose keyed append records into
+ *       it, as one {@link Inboxed} pair.
+ *   <li>{@link #setProcessedAt(Inboxed, IdempotencyKey, Instant)} — moves a recorded row's
+ *       processed time, so the retention cases age rows deterministically instead of waiting.
+ * </ul>
  *
  * <p>The inbox has no write method of its own: a row is written by {@link EventStore#appendWithKey}
  * in the same atomic step as the command's events. The contract therefore writes through that
@@ -53,14 +62,37 @@ import org.streamrune.core.types.Version;
  */
 public abstract class CommandInboxContract {
 
-  /** The inbox under test; the same instance throughout one test, fresh and empty for each test. */
-  protected abstract CommandInbox inbox();
+  /**
+   * An inbox and the event store that writes its rows.
+   *
+   * @param store the event store whose {@link EventStore#appendWithKey} records into {@code inbox}
+   * @param inbox the inbox under test
+   */
+  public record Inboxed(EventStore store, CommandInbox inbox) {
+    public Inboxed {
+      Objects.requireNonNull(store, "store is required");
+      Objects.requireNonNull(inbox, "inbox is required");
+    }
+  }
 
   /**
-   * An event store whose {@link EventStore#appendWithKey} records into {@link #inbox()}'s rows; the
-   * same instance throughout one test, with empty storage for each test.
+   * A new pair over empty storage: an inbox with no rows and an event store with no events whose
+   * {@link EventStore#appendWithKey} records each processed command into that inbox, in the same
+   * atomic step as the command's events, as the store's production wiring does. The suite calls it
+   * once before each test.
    */
-  protected abstract EventStore eventStore();
+  protected abstract Inboxed newStore();
+
+  /**
+   * Sets the processed time of the row recorded under {@code key} in {@code inboxed}'s inbox to
+   * {@code processedAt}, leaving the rest of the row as it was; afterwards {@link
+   * CommandInbox#find} reports {@code processedAt} and {@link CommandInbox#deleteProcessedBefore}
+   * compares it with its cutoff. The suite calls it only for a recorded key, with whole-second
+   * instants any timestamp column stores exactly. It is the only way the suite ages a row; a store
+   * reaches it through whatever its storage offers (an {@code UPDATE} of the timestamp column, a
+   * test-only method of an in-memory inbox), never through the inbox's public API.
+   */
+  protected abstract void setProcessedAt(Inboxed inboxed, IdempotencyKey key, Instant processedAt);
 
   /** The event the contract's commands append. */
   public record InboxEvent(String value) implements DomainEvent {
@@ -81,6 +113,27 @@ public abstract class CommandInboxContract {
       StreamId.of(AggregateType.of("inbox_inventory"), AggregateId.of("p-1"));
 
   protected static final String COMMAND_TYPE = "com.example.inbox.CreateProduct";
+
+  /** A fixed processed time the retention cases age rows to and cut off around. */
+  protected static final Instant AGED = Instant.parse("2026-01-01T00:00:00Z");
+
+  /** The pair under test; fresh and empty for each test. */
+  protected Inboxed inboxed;
+
+  @BeforeEach
+  void freshStore() {
+    inboxed = newStore();
+  }
+
+  /** The inbox under test. */
+  protected final CommandInbox inbox() {
+    return inboxed.inbox();
+  }
+
+  /** The event store that writes the rows of {@link #inbox()}. */
+  protected final EventStore eventStore() {
+    return inboxed.store();
+  }
 
   protected static List<EventEnvelope> events(StreamId streamId, long fromVersion, int count) {
     return LongStream.range(fromVersion, fromVersion + count)
@@ -159,11 +212,37 @@ public abstract class CommandInboxContract {
   }
 
   @Test
-  public void deleteProcessedBeforeDeletesEveryRowProcessedBeforeTheCutoff() {
-    process(IdempotencyKey.of("inbox-old-1"), STREAM, 0, 1);
-    process(IdempotencyKey.of("inbox-old-2"), STREAM_OTHER_TYPE, 0, 1);
+  public void aRowIsFoundWithTheProcessedTimeItWasAgedTo() {
+    IdempotencyKey key = IdempotencyKey.of("inbox-aged");
+    process(key, STREAM, 0, 1);
+    InboxResult recorded = inbox().find(key).orElseThrow();
 
-    int deleted = inbox().deleteProcessedBefore(Instant.now().plusSeconds(86_400));
+    setProcessedAt(inboxed, key, AGED);
+
+    InboxResult aged = inbox().find(key).orElseThrow();
+    assertEquals(AGED, aged.processedAt());
+    assertEquals(
+        new InboxResult(
+            recorded.key(),
+            recorded.commandType(),
+            recorded.streamId(),
+            recorded.finalVersion(),
+            recorded.globalOffsets(),
+            AGED),
+        aged,
+        "only the processed time changed");
+  }
+
+  @Test
+  public void deleteProcessedBeforeDeletesEveryRowProcessedBeforeTheCutoff() {
+    IdempotencyKey first = IdempotencyKey.of("inbox-old-1");
+    IdempotencyKey second = IdempotencyKey.of("inbox-old-2");
+    process(first, STREAM, 0, 1);
+    process(second, STREAM_OTHER_TYPE, 0, 1);
+    setProcessedAt(inboxed, first, AGED);
+    setProcessedAt(inboxed, second, AGED.plusSeconds(1));
+
+    int deleted = inbox().deleteProcessedBefore(AGED.plusSeconds(2));
 
     assertEquals(2, deleted);
     assertTrue(inbox().find(IdempotencyKey.of("inbox-old-1")).isEmpty());
@@ -183,21 +262,22 @@ public abstract class CommandInboxContract {
   }
 
   @Test
-  public void deleteProcessedBeforeKeepsRowsProcessedAfterTheCutoff() throws InterruptedException {
+  public void deleteProcessedBeforeKeepsRowsProcessedAfterTheCutoff() {
     IdempotencyKey older = IdempotencyKey.of("inbox-older");
+    IdempotencyKey atCutoff = IdempotencyKey.of("inbox-at-aged-cutoff");
     IdempotencyKey newer = IdempotencyKey.of("inbox-newer");
     process(older, STREAM, 0, 1);
-    Thread.sleep(20);
-    process(newer, STREAM, 1, 1);
-    Instant newerAt = inbox().find(newer).orElseThrow().processedAt();
-    assertTrue(
-        inbox().find(older).orElseThrow().processedAt().isBefore(newerAt),
-        "the second command was processed later");
+    process(atCutoff, STREAM, 1, 1);
+    process(newer, STREAM, 2, 1);
+    setProcessedAt(inboxed, older, AGED.minusSeconds(1));
+    setProcessedAt(inboxed, atCutoff, AGED);
+    setProcessedAt(inboxed, newer, AGED.plusSeconds(1));
 
-    int deleted = inbox().deleteProcessedBefore(newerAt);
+    int deleted = inbox().deleteProcessedBefore(AGED);
 
     assertEquals(1, deleted);
     assertTrue(inbox().find(older).isEmpty());
+    assertTrue(inbox().find(atCutoff).isPresent(), "a row processed at the cutoff stays");
     assertTrue(inbox().find(newer).isPresent());
   }
 

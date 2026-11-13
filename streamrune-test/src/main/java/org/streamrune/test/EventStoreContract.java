@@ -14,6 +14,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -29,7 +30,11 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStore.AppendResult;
 import org.streamrune.core.EventStore.IdempotentAppendResult;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.OptimisticLockException;
+import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.SnapshotMigration;
+import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.AggregateId;
@@ -39,12 +44,25 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
+import org.streamrune.core.upcasting.EventUpcaster;
 
 /**
  * The contract every {@link EventStore} must honour, so callers can switch backends without a
- * change in behaviour. Run by {@code InMemoryEventStoreContractTest} and {@code
- * PostgresEventStoreContractTest}; extend it and implement {@link #newStore()} to prove a custom
- * store.
+ * change in behaviour. Run by {@code InMemoryEventStoreContractTest}, {@code
+ * InMemoryEventStoreWithoutInboxContractTest}, {@code MinimalEventStoreContractTest} and {@code
+ * PostgresEventStoreContractTest}. To prove a custom store, extend it and implement the two
+ * abstract hooks:
+ *
+ * <ul>
+ *   <li>{@link #newStore(Setup)} — a store over empty storage, built with a {@link Setup}: the type
+ *       registry, crypto engine, event upcasters and snapshot migrations a deployment configures.
+ *   <li>{@link #reopen(EventStore, Setup)} — a new store over the same data as an earlier one,
+ *       built with a possibly different setup: what a deployment restarted with other upcasters,
+ *       migrations or crypto sees of the data stored before.
+ * </ul>
+ *
+ * <p>and override, for a store that leaves a capability out, its {@code supports…()} hook, and, for
+ * a store that keeps a purge record, {@link #purgeSnapshot(StreamId)}.
  *
  * <p>The promises, as the {@link EventStore} javadoc states them:
  *
@@ -97,18 +115,45 @@ import org.streamrune.core.types.Version;
  *       has a {@code supports…()} hook, {@code true} by default; a store that leaves one out
  *       overrides its hook to return {@code false}, its cases are skipped, and the contract checks
  *       that the store refuses it instead of answering wrongly.
+ *   <li><b>Durability across a restart.</b> A store reopened over the same data ({@link
+ *       #reopen(EventStore, Setup)}) reads the events, snapshots, purge records and recorded keys
+ *       stored before, under the same offsets and versions, and continues every stream and the
+ *       global order.
  * </ol>
  *
  * <p>The contract appends {@link ContractEvent}s under {@link #EVENT_TYPE} and saves {@link
- * ContractState} snapshots: a store that resolves types through a registry must resolve both.
+ * ContractState} snapshots; the registry of {@link Setup#defaults()} resolves both, and a store
+ * that resolves types through a registry must use the registry of its {@link Setup}.
  */
 public abstract class EventStoreContract {
 
   /**
-   * A fresh store with empty storage for each test; with a command inbox when {@link
-   * #supportsIdempotentAppend()}.
+   * A new store over empty storage, built with {@code setup}; the suite calls it once before each
+   * test with {@link Setup#defaults()} and may call it again with another setup.
+   *
+   * <p>Empty storage means no stored events, snapshots, purge records or command-inbox rows, and a
+   * global offset counter that hands out {@code 1} to the first event appended, as a freshly
+   * created database does. The store must resolve stored types through {@code setup.registry()},
+   * protect {@code @Encrypted} fields with {@code setup.crypto()} when it is not {@code null},
+   * upcast events read back through {@code setup.upcasters()} and migrate snapshots loaded back
+   * through {@code setup.migrations()}, exactly as the store's production configuration would. When
+   * {@link #supportsIdempotentAppend()} it has a command inbox, so {@code appendWithKey} records
+   * its keys.
    */
-  protected abstract EventStore newStore();
+  protected abstract EventStore newStore(Setup setup);
+
+  /**
+   * A new store instance over the same data as {@code store}, built with {@code setup} in place of
+   * the setup {@code store} was built with; {@code store} is not used again by the case.
+   *
+   * <p>It models a deployment restarted with another configuration over the same database: the new
+   * store reads every event, snapshot, purge record and command-inbox row {@code store} stored,
+   * with the offsets and versions it stored them under, and its next append continues the global
+   * order. Nothing stored is rewritten: each event keeps the schema version it was appended with,
+   * so the new store's upcasters, migrations, registry and crypto engine apply to it on read as
+   * they would in that deployment. It must not empty the storage.
+   */
+  protected abstract EventStore reopen(EventStore store, Setup setup);
 
   /** Whether the store implements {@code appendWithKey}; {@code true} by default. */
   protected boolean supportsIdempotentAppend() {
@@ -150,6 +195,64 @@ public abstract class EventStoreContract {
     return false;
   }
 
+  /**
+   * How a store is configured: what {@link #newStore(Setup)} and {@link #reopen(EventStore, Setup)}
+   * build it with.
+   *
+   * @param registry resolves the stored event types by {@link EventType} name and snapshot state
+   *     types by simple class name (required)
+   * @param crypto the crypto engine of {@code @Encrypted} fields; {@code null} for none
+   * @param upcasters the event upcasters, applied on read; empty for none
+   * @param migrations the snapshot migrations, applied on load; empty for none
+   */
+  public record Setup(
+      EventTypeRegistry registry,
+      CryptoEngine crypto,
+      List<EventUpcaster> upcasters,
+      List<SnapshotMigration> migrations) {
+
+    private static final EventTypeRegistry CONTRACT_REGISTRY =
+        SimpleEventTypeRegistry.builder()
+            .registerEvent(EVENT_TYPE, ContractEvent.class)
+            .registerState(ContractState.class.getSimpleName(), ContractState.class)
+            .build();
+
+    public Setup {
+      Objects.requireNonNull(registry, "registry is required");
+      upcasters = List.copyOf(Objects.requireNonNull(upcasters, "upcasters is required"));
+      migrations = List.copyOf(Objects.requireNonNull(migrations, "migrations is required"));
+    }
+
+    /**
+     * The setup of every case that names none: a registry resolving {@link ContractEvent} under
+     * {@link #EVENT_TYPE} and {@link ContractState} under its simple class name, no crypto engine,
+     * no upcasters and no migrations.
+     */
+    public static Setup defaults() {
+      return new Setup(CONTRACT_REGISTRY, null, List.of(), List.of());
+    }
+
+    /** This setup with {@code registry} in place of its registry. */
+    public Setup withRegistry(EventTypeRegistry registry) {
+      return new Setup(registry, crypto, upcasters, migrations);
+    }
+
+    /** This setup with {@code crypto} in place of its crypto engine; {@code null} for none. */
+    public Setup withCrypto(CryptoEngine crypto) {
+      return new Setup(registry, crypto, upcasters, migrations);
+    }
+
+    /** This setup with {@code upcasters} in place of its upcasters. */
+    public Setup withUpcasters(List<EventUpcaster> upcasters) {
+      return new Setup(registry, crypto, upcasters, migrations);
+    }
+
+    /** This setup with {@code migrations} in place of its snapshot migrations. */
+    public Setup withMigrations(List<SnapshotMigration> migrations) {
+      return new Setup(registry, crypto, upcasters, migrations);
+    }
+  }
+
   /** The event the contract appends. */
   public record ContractEvent(String value) implements DomainEvent {
     @JsonCreator
@@ -184,7 +287,7 @@ public abstract class EventStoreContract {
 
   @BeforeEach
   void freshStore() {
-    store = newStore();
+    store = newStore(Setup.defaults());
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
@@ -1243,5 +1346,91 @@ public abstract class EventStoreContract {
         () -> appendWithKey(A, 0, 1, IdempotencyKey.of("key-unsupported"), COMMAND_TYPE));
 
     assertTrue(stored(A).isEmpty());
+  }
+
+  // ── Reopening over the same data ────────────────────────────────────────────────────────────
+
+  @Test
+  public void aReopenedStoreSeesTheStoredEvents() {
+    AppendResult first = store.append(A, events(A, 1, 2), Version.initial());
+    AppendResult second = store.append(B, events(B, 1, 1), Version.initial());
+
+    EventStore reopened = reopen(store, Setup.defaults());
+
+    AggregateHistory history = reopened.load(A);
+    assertEquals(List.of(1L, 2L), versions(history.events()));
+    assertEquals(List.of("order-A@1", "order-A@2"), values(history.events()));
+    assertEquals(first.globalOffsets(), offsets(history.events()));
+    List<EventEnvelope> all = reopened.readGlobalStream(GlobalOffset.initial(), 100);
+    assertEquals(List.of("order-A@1", "order-A@2", "order-B@1"), values(all));
+    assertEquals(
+        List.of(
+            first.globalOffsets().get(0),
+            first.globalOffsets().get(1),
+            second.globalOffsets().getFirst()),
+        offsets(all));
+  }
+
+  @Test
+  public void aReopenedStoreContinuesTheStreamAndTheGlobalOrder() {
+    AppendResult before = store.append(A, events(A, 1, 2), Version.initial());
+
+    EventStore reopened = reopen(store, Setup.defaults());
+    assertThrows(
+        OptimisticLockException.class,
+        () -> reopened.append(A, events(A, 1, 1), Version.initial()),
+        "the reopened store knows the stream's head");
+    AppendResult after = reopened.append(A, events(A, 3, 1), new Version(2));
+
+    assertEquals(new Version(3), after.finalVersion());
+    assertTrue(
+        after.globalOffsets().getFirst().value() > before.globalOffsets().getLast().value(),
+        "an append after the reopen lies above every offset stored before it");
+    assertEquals(List.of(1L, 2L, 3L), versions(reopened.load(A).events()));
+  }
+
+  @Test
+  public void aReopenedStoreSeesTheStoredSnapshot() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 3), Version.initial());
+    store.saveSnapshot(A, new Version(2), new ContractState("before-reopen"));
+
+    AggregateHistory history = reopen(store, Setup.defaults()).load(A);
+
+    assertEquals(new ContractState("before-reopen"), history.snapshotState());
+    assertEquals(new Version(2), history.lastSnapshotVersion());
+    assertEquals(List.of(3L), versions(history.events()));
+  }
+
+  @Test
+  public void aReopenedStoreSeesTheRecordedKeys() {
+    assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
+    IdempotencyKey key = IdempotencyKey.of("key-before-reopen");
+    var first = appendWithKey(A, 0, 2, key, COMMAND_TYPE);
+
+    EventStore reopened = reopen(store, Setup.defaults());
+    var replay = reopened.appendWithKey(A, events(A, 1, 2), Version.initial(), key, COMMAND_TYPE);
+
+    assertTrue(replay.alreadyApplied(), "the key recorded before the reopen is a replay after it");
+    assertEquals(first.globalOffsets(), replay.globalOffsets());
+    assertEquals(2, reopened.readStream(A, Version.initial(), 100).size());
+  }
+
+  @Test
+  public void aReopenedStoreKeepsThePurgeRecord() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    AggregateHistory beforePurge = snapshottedThenPurged();
+
+    EventStore reopened = reopen(store, Setup.defaults());
+
+    assertNull(reopened.load(A).snapshotState(), "the purged snapshot stays purged");
+    assertFalse(
+        reopened.saveSnapshot(
+            A,
+            new Version(3),
+            new ContractState("stale"),
+            1,
+            beforePurge.snapshotPurgeGeneration()),
+        "a save from a load before the purge writes nothing after the reopen either");
   }
 }
