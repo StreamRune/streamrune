@@ -78,12 +78,22 @@ public final class ApiSurfaceCheckTest {
                   public Prot prot() { return null; }
                 }
                 """,
+                "org/streamrune/fx/api/SecretException.java",
+                """
+                package org.streamrune.fx.api;
+                /** @hidden */
+                @org.streamrune.core.Internal
+                public class SecretException extends Exception {}
+                """,
                 "org/streamrune/fx/api/Exposes.java",
                 """
                 package org.streamrune.fx.api;
                 import java.util.List;
                 import java.util.function.Supplier;
                 public class Exposes {
+                  public Secret field;
+                  public void fails() throws SecretException {}
+                  public <X extends Exception> void genericFails() throws X, SecretException {}
                   public Exposes(Secret secret) {}
                   public List<? super Secret> wildcard() { return null; }
                   public <T extends Supplier<Secret[]>> void bound(T value) {}
@@ -98,6 +108,22 @@ public final class ApiSurfaceCheckTest {
         "a constructor parameter",
         result);
     expect(result.err.contains("wildcard()\n      " + names), "a wildcard bound", result);
+    expect(
+        result.err.contains("public org.streamrune.fx.api.Secret field\n      " + names),
+        "a field type",
+        result);
+    expect(
+        result.err.contains(
+            "fails() throws org.streamrune.fx.api.SecretException\n      names"
+                + " org.streamrune.fx.api.SecretException, which is marked @Internal"),
+        "a throws clause",
+        result);
+    expect(
+        result.err.contains(
+            "genericFails() throws X, org.streamrune.fx.api.SecretException\n      names"
+                + " org.streamrune.fx.api.SecretException, which is marked @Internal"),
+        "a throws clause in a generic signature",
+        result);
     expect(result.err.contains("bound(T)\n      " + names), "a type-parameter bound", result);
     expect(
         result.err.contains(
@@ -175,6 +201,18 @@ public final class ApiSurfaceCheckTest {
                   public void method() {}
                 }
                 """,
+                "org/streamrune/fx/LocalMarker.java",
+                """
+                package org.streamrune.fx;
+                import org.streamrune.core.Internal;
+                public class LocalMarker {
+                  public void method() {
+                    /** Tagged, but inside a method body. @hidden */
+                    @Internal
+                    class Helper {}
+                  }
+                }
+                """,
                 "org/streamrune/fx/OtherMarker.java",
                 """
                 package org.streamrune.fx;
@@ -199,7 +237,17 @@ public final class ApiSurfaceCheckTest {
         result);
     expect(!result.err.contains("Tagged.java"), "a tagged declaration passes", result);
     expect(!result.err.contains("OtherMarker"), "another framework's Internal is ignored", result);
-    expect(!result.err.contains("source reading found"), "the counts agree", result);
+    expect(
+        result.err.contains(
+            "org/streamrune/fx/LocalMarker.java: the class files mark 1 declaration(s)"
+                + " [org.streamrune.fx.LocalMarker$1Helper] @Internal, the source reading found 0"),
+        "a marker the source reading cannot see fails through the count",
+        result);
+    expect(
+        result.err.indexOf("source reading found")
+            == result.err.lastIndexOf("source reading found"),
+        "the counts agree for every other file",
+        result);
   }
 
   /** A StreamRune type a listed signature names but the class path lacks fails the run. */
@@ -231,6 +279,8 @@ public final class ApiSurfaceCheckTest {
         compile(
             dir.resolve("before"),
             Map.of(
+                "org/streamrune/core/Internal.java",
+                MARKER,
                 "org/streamrune/d/R1.java",
                 "package org.streamrune.d; public record R1(int a) {}",
                 "org/streamrune/d/R2.java",
@@ -259,6 +309,10 @@ public final class ApiSurfaceCheckTest {
                 public class Holder {
                   public class Inner { public Inner(int x) {} }
                   public void kept() {}
+                  @Deprecated public void old() {}
+                  /** @hidden */
+                  @org.streamrune.core.Internal
+                  public void internal() {}
                 }
                 """));
     Path baseline = dir.resolve("api.txt");
@@ -274,6 +328,8 @@ public final class ApiSurfaceCheckTest {
         "the retention and targets of an annotation type",
         dump);
     expect(api.contains("  constants RED, GREEN"), "the order of enum constants", dump);
+    expect(api.contains("  @Deprecated public void old()"), "a deprecated member", dump);
+    expect(!api.contains("internal()"), "an @Internal member is left out", dump);
     expect(api.contains("public enum org.streamrune.d.Op\n"), "an enum with bodies, plain", dump);
     expect(!api.contains("Op$1"), "an enum constant body is not listed", dump);
     expect(
@@ -290,6 +346,8 @@ public final class ApiSurfaceCheckTest {
         compile(
             dir.resolve("after"),
             Map.of(
+                "org/streamrune/core/Internal.java",
+                MARKER,
                 "org/streamrune/d/R1.java",
                 "package org.streamrune.d; public record R1(int b) {}",
                 "org/streamrune/d/R2.java",
@@ -318,6 +376,10 @@ public final class ApiSurfaceCheckTest {
                 public class Holder {
                   public class Inner { public Inner(int x) {} }
                   public void kept() {}
+                  @Deprecated public void old() {}
+                  /** @hidden */
+                  @org.streamrune.core.Internal
+                  public void internal() {}
                   public void added() {}
                 }
                 """));

@@ -1168,6 +1168,9 @@ subprojects {
                         .withPathSensitivity(PathSensitivity.RELATIVE)
                     inputs.files(apiClasspath).withPropertyName("classpath")
                         .withNormalizer(ClasspathNormalizer::class.java)
+                    // The JDK's class-file and compiler APIs read the classes and sources: a new
+                    // toolchain runs the check again.
+                    inputs.property("jdk", apiLauncher.map { it.metadata.javaRuntimeVersion })
                     outputs.file(apiReport).withPropertyName("report")
                     if (mode == "check") {
                         inputs.files(apiBaseline).withPropertyName("baseline")
@@ -2054,6 +2057,7 @@ val testApiSurfaceCheck =
             javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) }
         inputs.files(fileTree(checkerDir) { include("*.java") }).withPropertyName("checker")
             .withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.property("jdk", launcher.map { it.metadata.javaRuntimeVersion })
         outputs.file(marker).withPropertyName("marker")
         argumentProviders.add(
             CommandLineArgumentProvider {

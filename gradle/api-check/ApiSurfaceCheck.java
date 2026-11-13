@@ -491,11 +491,12 @@ public final class ApiSurfaceCheck {
     List<String> constants = new ArrayList<>();
     for (FieldModel field : info.model().fields()) {
       AccessFlags flags = field.flags();
+      if (flags.has(AccessFlag.ENUM)) {
+        // Every constant, @Internal ones included: each takes an ordinal.
+        constants.add(field.fieldName().stringValue());
+      }
       if (!visible(flags, finalType) || flags.has(AccessFlag.SYNTHETIC) || isMarked(field)) {
         continue;
-      }
-      if (flags.has(AccessFlag.ENUM)) {
-        constants.add(field.fieldName().stringValue());
       }
       StringBuilder line = new StringBuilder("  ");
       modifier(line, isDeprecated(field), "@Deprecated");
@@ -928,7 +929,9 @@ public final class ApiSurfaceCheck {
                 + " declaration(s) "
                 + e.getValue()
                 + " @Internal, the source reading found "
-                + inSource);
+                + inSource
+                + " (it does not look inside method bodies or initializers, where a local or"
+                + " anonymous class is declared)");
       }
     }
     return violations;

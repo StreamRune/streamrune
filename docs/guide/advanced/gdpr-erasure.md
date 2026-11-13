@@ -844,10 +844,9 @@ touched. A custom `EventTypeRegistry` that does not implement `registeredTypes()
 too, because it cannot be checked. Each integration additionally validates its command types on
 boot.
 
-One path is not checked: command types registered with the plain-Java `StreamRune` builder are not
-scanned: a dead-lettered command's `@Encrypted` components are
-encrypted only when the bus's `.objectMapper(...)` is
-`DeadLetterRetryRunner.createObjectMapper(cryptoEngine)`.
+One path is not checked. Command types registered with the plain-Java `StreamRune` builder are not
+scanned, so a dead-lettered command's `@Encrypted` components are encrypted only when the bus's
+`.objectMapper(...)` is `DeadLetterRetryRunner.createObjectMapper(cryptoEngine)`.
 
 This is deliberate: an `@Encrypted` field with no engine is a compliance bug, so StreamRune refuses to
 start rather than leak.
