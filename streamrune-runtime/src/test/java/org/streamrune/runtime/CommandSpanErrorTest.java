@@ -88,15 +88,12 @@ class CommandSpanErrorTest {
   }
 
   private static VirtualThreadCommandBus bus(CommandInterceptor... interceptors) {
-    VirtualThreadCommandBus.Builder builder =
-        VirtualThreadCommandBus.builder()
-            .eventStore(new InMemoryEventStore())
-            .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
-            .tracing(tracing());
-    for (CommandInterceptor interceptor : interceptors) {
-      builder.interceptor(interceptor);
-    }
-    return builder.build();
+    return VirtualThreadCommandBus.builder()
+        .eventStore(new InMemoryEventStore())
+        .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+        .tracing(tracing())
+        .interceptors(interceptors)
+        .build();
   }
 
   private static List<SpanData> commandSpans() {
