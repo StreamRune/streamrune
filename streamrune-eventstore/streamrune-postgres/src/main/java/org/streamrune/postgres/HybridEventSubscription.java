@@ -61,6 +61,9 @@ public final class HybridEventSubscription
   private final PollingEventSubscription pollingSubscription;
   private final PgNotificationListener notificationListener;
 
+  /** A handed {@link ListenDataSource} that no listener holds, closed with this subscription. */
+  private final ListenDataSource unusedListenDataSource;
+
   // The contributor this subscription registers itself with on start() and leaves on close(); NOOP
   // registers nothing. The Hybrid registers itself, not the polling subscription inside it, so the
   // contributor reads the push-path health from the Hybrid.
@@ -323,6 +326,14 @@ public final class HybridEventSubscription
                         .metrics(metrics))
                 .build()
             : null;
+    // A handed ListenDataSource belongs to whoever holds it (see ListenDataSource). With
+    // LISTEN/NOTIFY on, that is the listener, which closes it; without a listener this
+    // subscription holds it and closes it on close(), so its pool and the connection it keeps do
+    // not outlive the subscription.
+    this.unusedListenDataSource =
+        notificationListener == null && dataSource instanceof ListenDataSource listen
+            ? listen
+            : null;
   }
 
   /**
@@ -482,9 +493,13 @@ public final class HybridEventSubscription
   public void close() {
     try {
       pollingSubscription.close();
-      // Null when LISTEN/NOTIFY is disabled (pollingOnly) — nothing to close.
+      // Null when LISTEN/NOTIFY is disabled (pollingOnly): the handed ListenDataSource, if any,
+      // has no listener to close it.
       if (notificationListener != null) {
         notificationListener.close();
+      }
+      if (unusedListenDataSource != null) {
+        unusedListenDataSource.close();
       }
     } finally {
       healthContributor.unregister(subscriptionName);
@@ -522,7 +537,11 @@ public final class HybridEventSubscription
       return this;
     }
 
-    /** Sets the JDBC data source for LISTEN/NOTIFY (required). */
+    /**
+     * Sets the JDBC data source for LISTEN/NOTIFY (required). A {@link ListenDataSource} is closed
+     * with the subscription: by its listener, or by the subscription itself when its {@link
+     * SubscriptionConfig} disables LISTEN/NOTIFY and no listener is built.
+     */
     public Builder dataSource(DataSource ds) {
       this.dataSource = ds;
       return this;

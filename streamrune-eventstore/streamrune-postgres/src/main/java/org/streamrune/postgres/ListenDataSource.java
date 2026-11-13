@@ -12,10 +12,11 @@ import javax.sql.DataSource;
  * <ul>
  *   <li>{@link PostgresNotificationSubscription.Builder#listenDataSource(DataSource)}: the
  *       subscription closes it on {@code close()};
- *   <li>{@link PgNotificationListener.Builder#dataSource(DataSource)}, and so {@link
- *       HybridEventSubscription.Builder#dataSource(DataSource)}, whose listener it reaches: the
- *       listener closes it on {@code close()}, started or not, and does not wrap it in another
- *       pool.
+ *   <li>{@link PgNotificationListener.Builder#dataSource(DataSource)}: the listener closes it on
+ *       {@code close()}, started or not, and does not wrap it in another pool;
+ *   <li>{@link HybridEventSubscription.Builder#dataSource(DataSource)}: its listener closes it, as
+ *       above; with LISTEN/NOTIFY disabled ({@code SubscriptionConfig.pollingOnly}) no listener is
+ *       built, and the subscription closes it on {@code close()}, started or not.
  * </ul>
  *
  * <p>Hand one instance to one holder. One that is never handed to a holder is closed by the

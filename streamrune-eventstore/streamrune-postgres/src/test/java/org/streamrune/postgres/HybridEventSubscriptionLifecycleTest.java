@@ -217,6 +217,64 @@ class HybridEventSubscriptionLifecycleTest {
     }
   }
 
+  /**
+   * A polling-only subscription builds no listener, so the {@link ListenDataSource} it was handed
+   * has no listener to close it: the subscription closes it, started or not, and its pool does not
+   * outlive the subscription.
+   */
+  @Test
+  void pollingOnly_closesAHandedListenDataSource_startedOrNot() {
+    var started = new ClosableListenDataSource();
+    var subscription = pollingOnlyOn(started);
+    subscription.start();
+    subscription.close();
+    assertEquals(1, started.closes.get(), "closed with the started subscription");
+
+    var neverStarted = new ClosableListenDataSource();
+    pollingOnlyOn(neverStarted).close();
+    assertEquals(1, neverStarted.closes.get(), "closed although the subscription never started");
+  }
+
+  /** A data source that is not a {@link ListenDataSource} belongs to the application: left open. */
+  @Test
+  void pollingOnly_leavesAPlainDataSourceOpen() {
+    var plain = new ClosableDataSource();
+    pollingOnlyOn(plain).close();
+    assertEquals(0, plain.closes.get());
+  }
+
+  private HybridEventSubscription pollingOnlyOn(DataSource dataSource) {
+    return HybridEventSubscription.builder()
+        .subscriptionName(SubscriptionName.of("polling-only-owner"))
+        .dataSource(dataSource)
+        .eventStore(mockEventStore())
+        .offsetStore(mockOffsetStore())
+        .listener(mockListener())
+        .config(SubscriptionConfig.pollingOnly(Duration.ofMillis(50)))
+        .build();
+  }
+
+  /** A listen data source whose connections are the mock's, counting its closes. */
+  private static final class ClosableListenDataSource extends MockDataSource
+      implements ListenDataSource {
+    final AtomicInteger closes = new AtomicInteger();
+
+    @Override
+    public void close() {
+      closes.incrementAndGet();
+    }
+  }
+
+  /** A closable data source that is not a listen data source. */
+  private static final class ClosableDataSource extends MockDataSource implements AutoCloseable {
+    final AtomicInteger closes = new AtomicInteger();
+
+    @Override
+    public void close() {
+      closes.incrementAndGet();
+    }
+  }
+
   // ── Idempotent close ─────────────────────────────────────────────────────
 
   @Test
