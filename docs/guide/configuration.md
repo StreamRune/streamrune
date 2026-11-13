@@ -35,8 +35,12 @@ names the property and the value:
   (`2592000000ms`; write `30d`) among them.
 - **A switch spelled other than `true` or `false`**, in lower case: `TRUE`, `yes`, `on` and `1`
   are refused, because the frameworks read them differently and a bean condition can read a
-  spelling one way while the bound setting reads it the other. Spring and Micronaut refuse an empty
-  switch too; Quarkus reads it as not set. The per-projection switches
+  spelling one way while the bound setting reads it the other. That holds for a value that reaches
+  the integration as text: a properties file, an environment variable, a system property or quoted
+  YAML. Spring's and Micronaut's YAML parser reads an unquoted `yes`, `on`, `no` or `off` as a YAML
+  boolean before StreamRune sees it, so there it arrives as `true` or `false` and is accepted;
+  Quarkus's YAML parser keeps it as text and refuses it. Spring and Micronaut refuse an empty switch
+  too; Quarkus reads it as not set. The per-projection switches
   (`streamrune.projections.<name>.enabled`, `streamrune.projections.auto-discovery.enabled`) and
   `streamrune.subscription.single-active-consumer.enabled` are read by one parser on all three,
   for the setting and the bean condition alike, which takes `true`/`false`, `on`/`off`, `yes`/`no`,

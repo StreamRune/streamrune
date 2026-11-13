@@ -3,7 +3,6 @@ package org.streamrune.spring;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -19,33 +18,7 @@ class ConfigurationSpellingCheckTest {
   private static List<String> problems(Map<String, String> properties) {
     MockEnvironment environment = new MockEnvironment();
     properties.forEach(environment::setProperty);
-    return ConfigurationSpellingCheck.problems(
-        environment, ConfigurationSpellingCheckTest.class.getClassLoader());
-  }
-
-  @Test
-  void theBoundPropertiesAreNamedAsSpringNamesThem() {
-    var bound = ConfigurationSpellingCheck.boundProperties();
-    assertEquals(int.class, bound.get("streamrune.snapshot-every-n-events"));
-    assertEquals(Duration.class, bound.get("streamrune.outbox.flush-interval"));
-    assertEquals(boolean.class, bound.get("streamrune.crypto.cache.enabled"));
-    assertEquals(boolean.class, bound.get("streamrune.tracing.event-store.enabled"));
-    assertEquals(String.class, bound.get("streamrune.subscription.single-active-consumer.enabled"));
-  }
-
-  /** A switch only a condition reads, such as a crypto backend's, is found in the class files. */
-  @Test
-  void theConditionSwitchesAreReadFromTheAutoConfigurations() {
-    var switches = ConfigurationSpellingCheck.conditionSwitches(getClass().getClassLoader());
-    for (String key :
-        List.of(
-            "streamrune.sse.enabled",
-            "streamrune.validation-enabled",
-            "streamrune.query-cache.enabled",
-            "streamrune.crypto.filesystem.enabled",
-            "streamrune.crypto.aws.enabled")) {
-      assertTrue(switches.contains(key), key + " in " + switches);
-    }
+    return ConfigurationSpellingCheck.problems(environment);
   }
 
   @Test
