@@ -154,7 +154,9 @@ public interface EventStore {
    *       commit atomically with the events, so with no events there is nothing to commit them
    *       with.
    *   <li><b>Atomicity.</b> A multi-event append is all-or-nothing: either every event is persisted
-   *       or none is.
+   *       or none is, and its events become readable together. No read ({@link #load}, {@link
+   *       #readStream}, {@link #readGlobalStream}) returns some events of an append without the
+   *       others.
    *   <li><b>No idempotence by default.</b> {@code metadata().eventId()} uniqueness is not
    *       enforced; re-appending an envelope with the same eventId stores a new event. Use {@link
    *       #appendWithKey} for an idempotent, effectively-once append: {@code appendWithKey} claims
@@ -339,12 +341,12 @@ public interface EventStore {
    * IllegalArgumentException}: {@code 0} is reserved by {@link #load(StreamId, int)} as the
    * skip-the-check value and must never be persisted as a schema version.
    *
-   * <p>A store that reads the state back through an {@link EventTypeRegistry} stores its type as
-   * the simple name of its class, and refuses with {@link EventStoreException}, storing nothing, a
-   * state whose simple name does not resolve with {@link EventTypeRegistry#resolveStateType} or
-   * resolves to another class: the snapshot could not be read back as the class it was saved from.
-   * A stored type that does not resolve when the stream is loaded discards the snapshot (see {@link
-   * #load(StreamId, int)}).
+   * <p>A store that reads the state back through an {@link EventTypeRegistry} stores with it a type
+   * name that {@link EventTypeRegistry#resolveStateType} resolves back to the state's class (the
+   * shipped stores use the simple name of the class), and refuses with {@link EventStoreException},
+   * storing nothing, a state whose type name does not resolve or resolves to another class: the
+   * snapshot could not be read back as the class it was saved from. A stored type that does not
+   * resolve when the stream is loaded discards the snapshot (see {@link #load(StreamId, int)}).
    *
    * @param streamId the stream to snapshot
    * @param version the event version at which the snapshot was taken
