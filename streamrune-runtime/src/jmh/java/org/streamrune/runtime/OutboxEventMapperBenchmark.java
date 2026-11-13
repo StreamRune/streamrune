@@ -35,9 +35,10 @@ import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 
 /**
- * Micro-benchmark for the outbox emit hot-path: cost of {@link OutboxEventMapper#toOutbox} for a
- * SKIPPED event (type-check only, returns empty list) vs a PUBLISHED event (one Jackson {@code
- * writeValueAsString} call). No database — pure CPU, laptop-reproducible.
+ * Micro-benchmark for the outbox emit hot-path: cost of {@link OutboxEventMapper#toOutbox} for an
+ * event that produces an outbox entry (one Jackson {@code writeValueAsString} call and {@link
+ * OutboxEntry#pending}). An event the mapper skips costs one type check and an empty list, which is
+ * no StreamRune code to measure. No database — pure CPU, laptop-reproducible.
  *
  * <p>Run: {@code ./gradlew :streamrune-runtime:jmh -PjmhIncludes=OutboxEventMapperBenchmark}
  */
@@ -53,16 +54,12 @@ public class OutboxEventMapperBenchmark {
   record OrderPlaced(String orderId, String customerId, long amountCents, String currency)
       implements DomainEvent {}
 
-  /** Domain event marker for the "skipped" type (no outbox entry should be produced). */
-  record OrderDraftCreated(String orderId) implements DomainEvent {}
-
   @State(Scope.Benchmark)
   public static class MapperState {
 
     ObjectMapper objectMapper;
     OutboxEventMapper mapper;
     EventEnvelope publishedEnvelope;
-    EventEnvelope skippedEnvelope;
 
     @Setup
     public void setup() {
@@ -107,26 +104,7 @@ public class OutboxEventMapperBenchmark {
               EventType.fromClass(OrderPlaced.class),
               new OrderPlaced("order-abc-123", "cust-xyz-456", 4999L, "USD"),
               metadata);
-
-      skippedEnvelope =
-          new EventEnvelope(
-              GlobalOffset.of(2L),
-              StreamId.of(TYPE, AggregateId.of("order-abc-123")),
-              new Version(2L),
-              EventType.fromClass(OrderDraftCreated.class),
-              new OrderDraftCreated("order-abc-123"),
-              metadata);
     }
-  }
-
-  @Benchmark
-  @BenchmarkMode(Mode.AverageTime)
-  @OutputTimeUnit(TimeUnit.NANOSECONDS)
-  @Warmup(iterations = 3, time = 1)
-  @Measurement(iterations = 5, time = 1)
-  @Fork(1)
-  public void mapSkippedEvent(MapperState s, Blackhole bh) {
-    bh.consume(s.mapper.toOutbox(s.skippedEnvelope));
   }
 
   @Benchmark

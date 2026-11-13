@@ -15,8 +15,8 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Runs the repository's CI scripts ({@code .github/scripts}) and reads its workflow and release
- * files, for the tests of this package. The scripts run under {@code bash} with the commands they
- * call replaced by stand-ins the test writes, so nothing reaches the network.
+ * files, for the tests of this package. The shell scripts run under {@code bash} with the commands
+ * they call replaced by stand-ins the test writes, so nothing reaches the network.
  */
 final class RepositoryScripts {
 
@@ -65,8 +65,24 @@ final class RepositoryScripts {
    * environment {@code env} and the arguments {@code args}. Skips the test where there is no bash.
    */
   static Result runScript(String script, Path workDir, Map<String, String> env, String... args) {
+    return run("bash", script, workDir, env, args);
+  }
+
+  /**
+   * Runs the repository's Python script {@code script} with {@code python3 -I} in {@code workDir}
+   * with the arguments {@code args}. Skips the test where there is no python3.
+   */
+  static Result runPython(String script, Path workDir, String... args) {
+    return run("python3", script, workDir, Map.of(), args);
+  }
+
+  private static Result run(
+      String interpreter, String script, Path workDir, Map<String, String> env, String... args) {
     List<String> command = new ArrayList<>();
-    command.add("bash");
+    command.add(interpreter);
+    if (interpreter.equals("python3")) {
+      command.add("-I");
+    }
     command.add(repositoryRoot().resolve(script).toString());
     command.addAll(List.of(args));
     ProcessBuilder builder = new ProcessBuilder(command).directory(workDir.toFile());
@@ -77,7 +93,7 @@ final class RepositoryScripts {
     try {
       process = builder.start();
     } catch (IOException e) {
-      assumeTrue(false, "bash is not available: " + e.getMessage());
+      assumeTrue(false, interpreter + " is not available: " + e.getMessage());
       throw new AssertionError(e);
     }
     try {
