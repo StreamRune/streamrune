@@ -190,7 +190,8 @@ public final class GuardedTracing implements StreamRuneTracing {
    * Runs {@code wrapped}, the delegate's wrapper around {@code task}. The task runs exactly once: a
    * wrapper that throws before it reaches the task (the context it captured cannot be made current)
    * is replaced by the task itself, and one that throws after the task returned is dropped. A
-   * throwable of the task itself passes through.
+   * throwable of the task itself passes through. A wrapper that returns normally is taken at its
+   * word, whether the task ran on this thread or not: the guard never runs a task a second time.
    */
   private void runPropagated(Runnable task, Runnable wrapped) {
     PropagatedRun outer = CURRENT_RUN.get();
@@ -211,15 +212,8 @@ public final class GuardedTracing implements StreamRuneTracing {
         restore(outer);
         task.run();
       }
-      return;
     } finally {
       restore(outer);
-    }
-    if (!run.started) {
-      // A wrapper that returned without running the task: the task is still owed its run.
-      failed(
-          "propagating", new IllegalStateException("the propagating wrapper never ran its task"));
-      task.run();
     }
   }
 

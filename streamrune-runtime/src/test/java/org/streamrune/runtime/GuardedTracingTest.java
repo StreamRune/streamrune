@@ -241,11 +241,19 @@ class GuardedTracingTest {
   }
 
   @Test
-  void aWrapperThatReturnsWithoutRunningTheTaskStillRunsItOnce() {
+  void aWrapperThatReturnsNormallyIsNeverFollowedByASecondRun() throws Exception {
     AtomicInteger runs = new AtomicInteger();
-    StreamRuneTracing guarded = GuardedTracing.of(propagatingThrough(task -> () -> {}));
+    // A wrapper that hands the task to another thread and returns: the guard sees no run on its
+    // own thread and must not add one.
+    java.util.List<Thread> threads = new java.util.concurrent.CopyOnWriteArrayList<>();
+    StreamRuneTracing guarded =
+        GuardedTracing.of(
+            propagatingThrough(task -> () -> threads.add(Thread.ofVirtual().start(task))));
 
     guarded.propagating(runs::incrementAndGet).run();
+    for (Thread thread : threads) {
+      thread.join(10_000);
+    }
 
     assertThat(runs.get()).isEqualTo(1);
   }
