@@ -24,8 +24,11 @@ import org.junit.jupiter.api.Test;
  * its environment ({@code SIGNING_KEY}, {@code SIGNING_PASSWORD}, {@code MAVEN_CENTRAL_USERNAME},
  * {@code MAVEN_CENTRAL_PASSWORD}) neither reads nor writes the Gradle caches: a cached Gradle home
  * holds plugin jars, compiled build scripts and the Gradle distribution, which the build executes,
- * and every workflow on {@code main} writes such entries. The wrapper pins its distribution by
- * checksum, since those jobs download it.
+ * and every workflow on {@code main} writes such entries; so it has no {@code actions/cache} step,
+ * no {@code setup-java} {@code cache:} and a {@code setup-gradle} with {@code cache-disabled:
+ * true}. A secret named above the jobs reaches every job, and no workflow passes its secrets on
+ * whole ({@code secrets: inherit}). The wrapper pins its distribution by checksum, since those jobs
+ * download it.
  */
 class WorkflowSupplyChainTest {
 
@@ -65,34 +68,125 @@ class WorkflowSupplyChainTest {
   @Test
   void aJobWithAReleaseSecretNeitherReadsNorWritesTheGradleCaches() throws IOException {
     Map<String, List<String>> secretJobs = new TreeMap<>();
-    List<String> cached = new ArrayList<>();
-    workflows()
-        .forEach(
-            (name, lines) ->
-                jobs(lines)
-                    .forEach(
-                        (job, body) -> {
-                          if (body.stream().noneMatch(l -> RELEASE_SECRET.matcher(l).find())) {
-                            return;
-                          }
-                          secretJobs.computeIfAbsent(name, k -> new ArrayList<>()).add(job);
-                          for (int i = 0; i < body.size(); i++) {
-                            String line = body.get(i);
-                            if (line.contains("uses: actions/cache")) {
-                              cached.add(name + " " + job + ": actions/cache");
-                            }
-                            if (line.contains("uses: gradle/actions/setup-gradle@")
-                                && !step(body, i).contains("cache-disabled: true")) {
-                              cached.add(
-                                  name + " " + job + ": setup-gradle without cache-disabled");
-                            }
-                          }
-                        }));
+    List<String> problems = cacheProblems(workflows(), secretJobs);
     // The rule holds for the jobs it is meant for: a parser that found none would pass vacuously.
     assertThat(secretJobs)
         .containsEntry("publish-snapshot.yml", List.of("publish-snapshot"))
         .containsEntry("release.yml", List.of("verify", "rehearse-signing", "publish"));
-    assertThat(cached).isEmpty();
+    assertThat(problems).isEmpty();
+  }
+
+  @Test
+  void theCacheRuleRefusesEveryWayAJobCouldRestoreAGradleHome() {
+    String job =
+        """
+        on: push
+        jobs:
+          publish:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+                with:
+                  java-version: '25'
+                  %s
+              - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+                with:
+                  %s
+              - run: ./gradlew publish
+                env:
+                  TOKEN: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        """;
+    assertThat(problems(job.formatted("distribution: temurin", "cache-disabled: true"))).isEmpty();
+    assertThat(problems(job.formatted("cache: 'gradle'", "cache-disabled: true")))
+        .containsExactly("w.yml publish: setup-java with cache:");
+    assertThat(problems(job.formatted("distribution: temurin", "cache-read-only: true")))
+        .containsExactly("w.yml publish: setup-gradle without cache-disabled");
+    assertThat(
+            problems(
+                job.formatted("distribution: temurin", "cache-disabled: true")
+                    + "      - uses: actions/cache/restore@0123456789abcdef0123456789abcdef01234567 # v4.2.0\n"))
+        .containsExactly("w.yml publish: actions/cache");
+  }
+
+  @Test
+  void aReleaseSecretAtTheTopOfAWorkflowMakesEveryJobOneThatHoldsIt() {
+    String workflow =
+        """
+        on: push
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        jobs:
+          build:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        """;
+    Map<String, List<String>> secretJobs = new TreeMap<>();
+    assertThat(cacheProblems(Map.of("w.yml", workflow.lines().toList()), secretJobs))
+        .containsExactly("w.yml build: setup-gradle without cache-disabled");
+    assertThat(secretJobs).containsEntry("w.yml", List.of("build"));
+  }
+
+  @Test
+  void noWorkflowHandsItsSecretsToAnotherOneWhole() throws IOException {
+    List<String> inherit = new ArrayList<>();
+    workflows()
+        .forEach(
+            (name, lines) -> {
+              for (int i = 0; i < lines.size(); i++) {
+                if (lines.get(i).matches("\\s*secrets:\\s*inherit\\s*(#.*)?")) {
+                  inherit.add(name + ":" + (i + 1));
+                }
+              }
+            });
+    assertThat(inherit).as("pass a called workflow the secrets it needs by name").isEmpty();
+  }
+
+  private static List<String> problems(String workflow) {
+    return cacheProblems(Map.of("w.yml", workflow.lines().toList()), new TreeMap<>());
+  }
+
+  /**
+   * What lets a job that holds a release secret read or write a cache: {@code actions/cache} (its
+   * restore and save actions included), {@code setup-java} with {@code cache:}, {@code
+   * setup-gradle} without {@code cache-disabled: true}. A job holds a release secret when its body
+   * names one, or when the workflow names one above its jobs (a workflow-level {@code env:}). The
+   * jobs that hold one are added to {@code secretJobs}.
+   */
+  static List<String> cacheProblems(
+      Map<String, List<String>> workflows, Map<String, List<String>> secretJobs) {
+    List<String> problems = new ArrayList<>();
+    workflows.forEach(
+        (name, lines) -> {
+          int jobsAt = lines.indexOf("jobs:");
+          boolean workflowLevel =
+              lines.subList(0, Math.max(jobsAt, 0)).stream()
+                  .anyMatch(l -> RELEASE_SECRET.matcher(l).find());
+          jobs(lines)
+              .forEach(
+                  (job, body) -> {
+                    if (!workflowLevel
+                        && body.stream().noneMatch(l -> RELEASE_SECRET.matcher(l).find())) {
+                      return;
+                    }
+                    secretJobs.computeIfAbsent(name, k -> new ArrayList<>()).add(job);
+                    for (int i = 0; i < body.size(); i++) {
+                      String line = body.get(i);
+                      if (line.contains("uses: actions/cache")) {
+                        problems.add(name + " " + job + ": actions/cache");
+                      }
+                      if (line.contains("uses: actions/setup-java@")
+                          && step(body, i).lines().anyMatch(l -> l.trim().startsWith("cache:"))) {
+                        problems.add(name + " " + job + ": setup-java with cache:");
+                      }
+                      if (line.contains("uses: gradle/actions/setup-gradle@")
+                          && !step(body, i).contains("cache-disabled: true")) {
+                        problems.add(name + " " + job + ": setup-gradle without cache-disabled");
+                      }
+                    }
+                  });
+        });
+    return problems;
   }
 
   @Test
