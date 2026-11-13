@@ -118,13 +118,20 @@ class InMemoryEventStoreAppendWithKeyTest {
   }
 
   @Test
-  void appendWithKey_withNoInboxWired_throwsIllegalStateException() {
+  void appendWithKey_withNoInboxWired_isUnsupported_beforeItsArgumentsAreChecked() {
     var unwiredStore = new InMemoryEventStore();
+    var ex =
+        assertThrows(
+            UnsupportedOperationException.class,
+            () ->
+                unwiredStore.appendWithKey(
+                    streamId, List.of(envelope("A")), Version.initial(), key, "PlaceOrder"));
+    assertEquals("No InMemoryCommandInbox wired; call withCommandInbox(...)", ex.getMessage());
     assertThrows(
-        IllegalStateException.class,
-        () ->
-            unwiredStore.appendWithKey(
-                streamId, List.of(envelope("A")), Version.initial(), key, "PlaceOrder"));
+        UnsupportedOperationException.class,
+        () -> unwiredStore.appendWithKey(null, null, null, null, null),
+        "the missing inbox is reported before a missing argument");
+    assertTrue(unwiredStore.readStream(streamId, Version.initial(), 10).isEmpty());
   }
 
   @Test

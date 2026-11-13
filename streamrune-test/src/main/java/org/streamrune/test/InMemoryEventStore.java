@@ -693,7 +693,8 @@ public final class InMemoryEventStore implements EventStore {
    * #withSagaStore} under that saga's read lock, taken after this store's append lock and held
    * until the events and the inbox row are stored.
    *
-   * @throws UnsupportedOperationException if {@code forwardOf} is given and no saga store is wired
+   * @throws UnsupportedOperationException if no command inbox is wired (see {@link
+   *     #withCommandInbox}), or if {@code forwardOf} is given and no saga store is wired
    */
   @Override
   public IdempotentAppendResult appendWithKey(
@@ -703,15 +704,18 @@ public final class InMemoryEventStore implements EventStore {
       IdempotencyKey idempotencyKey,
       String commandType,
       SagaOrigin forwardOf) {
+    // A store without an inbox does not support the keyed append: refused first, before the
+    // arguments are checked, as PostgresEventStore built without a command inbox refuses it.
+    if (commandInbox == null) {
+      throw new UnsupportedOperationException(
+          "No InMemoryCommandInbox wired; call withCommandInbox(...)");
+    }
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
     Objects.requireNonNull(expectedVersion, "expectedVersion is required");
     Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
     Objects.requireNonNull(commandType, "commandType is required");
 
-    if (commandInbox == null) {
-      throw new IllegalStateException("No InMemoryCommandInbox wired; call withCommandInbox(...)");
-    }
     InMemorySagaStore rows = sagaStore;
     if (forwardOf != null && rows == null) {
       throw new UnsupportedOperationException(
